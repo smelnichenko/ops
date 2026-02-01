@@ -183,25 +183,25 @@ tasks:
   # ============== DEPLOY ==============
   deploy:dev:
     desc: Deploy to development k8s
-    dir: backend/deploy/ansible
+    dir: deploy/ansible
     cmds:
       - ansible-playbook deploy.yml -e @vars/development.yml
 
   deploy:prod:
     desc: "Deploy to production (Pi 5). Override host: task deploy:prod PI5_HOST=mypi.local"
-    dir: backend/deploy/ansible
+    dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:full:
     desc: "Full deployment - setup k0s + deploy app. Override: task deploy:full PI5_HOST=mypi.local"
-    dir: backend/deploy/ansible
+    dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/full-deploy.yml
 
   deploy:k0s:
     desc: "Setup k0s only. Override: task deploy:k0s PI5_HOST=mypi.local"
-    dir: backend/deploy/ansible
+    dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/setup-k0s.yml
 

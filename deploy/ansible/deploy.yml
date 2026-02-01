@@ -1,0 +1,50 @@
+---
+# Monitor Application Deployment Playbook
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
+#
+- name: Deploy Monitor Application
+  hosts: all
+  become: true
+  gather_facts: false
+
+  pre_tasks:
+    - name: Verify Helm is installed
+      ansible.builtin.command: helm version --short
+      register: helm_version
+      changed_when: false
+      failed_when: helm_version.rc != 0
+      environment:
+        KUBECONFIG: /var/lib/k0s/pki/admin.conf
+
+    - name: Display Helm version
+      ansible.builtin.debug:
+        msg: "Using Helm {{ helm_version.stdout }}"
+
+    - name: Verify kubectl connectivity
+      ansible.builtin.command: k0s kubectl cluster-info
+      register: kubectl_info
+      changed_when: false
+      failed_when: kubectl_info.rc != 0
+
+  roles:
+    - monitor
+
+  post_tasks:
+    - name: Display access information
+      ansible.builtin.debug:
+        msg: |
+
+          Monitor application deployed successfully!
+
+          Namespace: {{ monitor_namespace }}
+          Release: {{ monitor_release_name }}
+
+          Access the application:
+            kubectl port-forward svc/{{ monitor_release_name }}-monitor-app 8080:8080 -n {{ monitor_namespace }}
+            Then open: http://localhost:8080/api/actuator/health
+
+          Access Grafana:
+            kubectl port-forward svc/{{ monitor_release_name }}-monitor-grafana 3000:3000 -n {{ monitor_namespace }}
+            Then open: http://localhost:3000 (admin/admin)

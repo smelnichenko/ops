@@ -1,0 +1,127 @@
+---
+# Production environment variables - Raspberry Pi 5 (8GB RAM)
+# Usage: ansible-playbook deploy.yml -e @vars/production.yml
+#
+# REQUIRED: Set these environment variables before deployment:
+#   export MONITOR_DB_PASSWORD=your-secure-password
+#   export GRAFANA_ADMIN_PASSWORD=your-secure-password
+
+monitor_release_name: monitor
+monitor_namespace: monitor
+
+monitor_values:
+  # Enable network policies for pod isolation in production
+  networkPolicies:
+    enabled: false
+
+  frontend:
+    enabled: true
+    image:
+      repository: ghcr.io/schnappy/monitor-frontend
+      tag: "latest"
+      pullPolicy: Never
+    replicas: 1
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "25m"
+      limits:
+        memory: "64Mi"
+        cpu: "100m"
+
+  app:
+    image:
+      repository: ghcr.io/schnappy/monitor
+      tag: "latest"
+      pullPolicy: Never
+    replicas: 1  # Single replica for Pi 5
+    resources:
+      requests:
+        memory: "384Mi"
+        cpu: "250m"
+      limits:
+        memory: "768Mi"
+        cpu: "1500m"  # Allow burst to ~1.5 cores
+    ingress:
+      enabled: true
+      className: traefik
+      host: ""  # Empty = accept any host
+      annotations: {}
+
+  monitor:
+    enabled: true
+    pages:
+      - name: cv.ee
+        url: "https://cv.ee/et/search?limit=20&offset=0&categories%5B0%5D=INFORMATION_TECHNOLOGY&towns%5B0%5D=312"
+        pattern: '"total":([0-9]+)'
+        cron: "0 0 * * * *"
+      - name: gold-eur
+        url: "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/EUR"
+        pattern: '"bid":([0-9.]+)'
+        cron: "0 0 * * * *"
+    http:
+      connectTimeout: 10s
+      readTimeout: 30s
+      userAgent: "MonitorBot/1.0"
+
+  postgres:
+    enabled: true
+    image: postgres:17
+    database: monitor
+    username: monitor_user
+    password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    storage:
+      size: 5Gi
+      storageClass: "local-path"  # k0s default storage class
+
+  prometheus:
+    enabled: false
+    image: prom/prometheus:v2.48.0
+    retention: 15d  # Reduced retention for SD card longevity
+    scrapeInterval: 30s  # Less frequent scraping
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    storage:
+      size: 5Gi
+      storageClass: "local-path"  # k0s default storage class
+
+  grafana:
+    enabled: false
+    image: grafana/grafana:10.2.0
+    adminUser: admin
+    adminPassword: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('CHANGE_ME', true) }}"
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "50m"
+      limits:
+        memory: "256Mi"
+        cpu: "300m"
+    storage:
+      size: 1Gi
+      storageClass: "local-path"  # k0s default storage class
+    service:
+      type: NodePort
+
+# Total resource allocation (~8GB Pi 5):
+# - Frontend:   64Mi limit
+# - App:        768Mi limit
+# - Postgres:   512Mi limit
+# - Prometheus: 512Mi limit
+# - Grafana:    256Mi limit
+# - k0s system: ~1Gi
+# - OS:         ~512Mi
+# -------------------------
+# Total:        ~3.6Gi (leaves headroom for bursts)

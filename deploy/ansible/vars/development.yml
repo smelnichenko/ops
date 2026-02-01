@@ -1,0 +1,83 @@
+---
+# Development environment variables
+# Usage: ansible-playbook deploy.yml -e @vars/development.yml
+#
+# NOTE: Development uses simple passwords for convenience.
+# Never use these values in production!
+
+monitor_release_name: monitor
+monitor_namespace: monitor-dev
+
+monitor_values:
+  # Network policies disabled in dev for easier debugging
+  networkPolicies:
+    enabled: false
+
+  frontend:
+    enabled: true
+    image:
+      repository: ghcr.io/schnappy/monitor-frontend
+      tag: latest
+      pullPolicy: Always
+    replicas: 1
+
+  app:
+    image:
+      repository: ghcr.io/schnappy/monitor
+      tag: latest
+      pullPolicy: Always
+    replicas: 1
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+    ingress:
+      enabled: true
+      # Use 'traefik' for k3s, 'nginx' for nginx-ingress
+      className: traefik
+      host: monitor.local
+
+  monitor:
+    enabled: true
+    pages:
+      - name: cv.ee
+        url: "https://cv.ee/et/search?limit=20&offset=0&categories%5B0%5D=INFORMATION_TECHNOLOGY&towns%5B0%5D=312"
+        pattern: '"total":([0-9]+)'
+        cron: "0 */5 * * * *"  # Every 5 minutes for dev testing
+    http:
+      connectTimeout: 10s
+      readTimeout: 30s
+      userAgent: "MonitorBot/1.0-dev"
+
+  postgres:
+    enabled: true
+    image: postgres:17
+    database: monitor
+    username: postgres
+    password: devpassword
+    storage:
+      size: 1Gi
+      storageClass: ""
+
+  prometheus:
+    enabled: true
+    image: prom/prometheus:latest
+    retention: 7d
+    scrapeInterval: 15s
+    storage:
+      size: 2Gi
+      storageClass: ""
+
+  grafana:
+    enabled: true
+    image: grafana/grafana:latest
+    adminUser: admin
+    adminPassword: admin
+    storage:
+      size: 1Gi
+      storageClass: ""
+    service:
+      type: NodePort
