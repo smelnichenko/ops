@@ -1,0 +1,232 @@
+version: '3'
+
+dotenv: ['.env']
+
+vars:
+  BACKEND_IMAGE: ghcr.io/schnappy/monitor
+  FRONTEND_IMAGE: ghcr.io/schnappy/monitor-frontend
+  VERSION: '{{.VERSION | default "latest"}}'
+  # Target host - override with: task deploy:prod PI5_HOST=mypi.local
+  PI5_HOST: '{{.PI5_HOST | default "192.168.1.100"}}'
+  PI5_USER: '{{.PI5_USER | default "pi"}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # ============== BUILD ==============
+  build:
+    desc: Build everything (backend, frontend, helm)
+    deps: [build:backend, build:frontend, build:helm]
+
+  build:backend:
+    desc: Build backend JAR
+    dir: backend
+    cmds:
+      - ./gradlew bootJar -x test
+
+  build:frontend:
+    desc: Build frontend
+    dir: frontend
+    cmds:
+      - npm ci
+      - npm run build
+
+  build:helm:
+    desc: Package Helm chart
+    dir: backend
+    cmds:
+      - helm lint helm/monitor --set postgres.password=test --set grafana.adminPassword=test
+      - mkdir -p build/helm
+      - helm package helm/monitor --destination build/helm
+
+  # ============== DOCKER ==============
+  docker:
+    desc: Build all Docker images
+    deps: [docker:backend, docker:frontend]
+
+  docker:backend:
+    desc: Build backend Docker image
+    dir: backend
+    cmds:
+      - docker build -t {{.BACKEND_IMAGE}}:{{.VERSION}} .
+
+  docker:frontend:
+    desc: Build frontend Docker image
+    dir: frontend
+    cmds:
+      - docker build -t {{.FRONTEND_IMAGE}}:{{.VERSION}} .
+
+  docker:push:
+    desc: Push Docker images to registry
+    deps: [docker]
+    cmds:
+      - docker push {{.BACKEND_IMAGE}}:{{.VERSION}}
+      - docker push {{.FRONTEND_IMAGE}}:{{.VERSION}}
+
+  docker:buildx:
+    desc: Build and push multi-arch images (amd64, arm64)
+    cmds:
+      - docker buildx build --platform linux/amd64,linux/arm64 -t {{.BACKEND_IMAGE}}:{{.VERSION}} --push backend
+      - docker buildx build --platform linux/amd64,linux/arm64 -t {{.FRONTEND_IMAGE}}:{{.VERSION}} --push frontend
+
+  # ============== LOCAL DEV ==============
+  dev:
+    desc: Start local development environment
+    cmds:
+      - docker compose up -d
+      - echo ""
+      - echo "=== Development Environment Started ==="
+      - echo "Frontend http://localhost:3000"
+      - echo "Backend API http://localhost:8080/api"
+
+  dev:build:
+    desc: Build and start local dev environment
+    cmds:
+      - task: docker
+      - task: dev
+
+  dev:logs:
+    desc: Tail logs from all containers
+    cmds:
+      - docker compose logs -f
+
+  dev:stop:
+    desc: Stop local development environment
+    cmds:
+      - docker compose down
+
+  dev:clean:
+    desc: Stop and remove all data
+    cmds:
+      - docker compose down -v
+
+  dev:monitoring:
+    desc: Start with Prometheus and Grafana
+    cmds:
+      - docker compose --profile monitoring up -d
+      - echo ""
+      - echo "=== Development Environment with Monitoring ==="
+      - echo "Frontend http://localhost:3000"
+      - echo "Backend API http://localhost:8080/api"
+      - echo "Prometheus http://localhost:9090"
+      - echo "Grafana http://localhost:3001 (admin/admin)"
+
+  # ============== TEST ==============
+  test:
+    desc: Run all tests
+    cmds:
+      - task: test:backend
+      - task: test:e2e
+
+  test:backend:
+    desc: Run backend tests
+    dir: backend
+    cmds:
+      - ./gradlew test
+
+  test:e2e:
+    desc: Run E2E tests with Playwright (requires running app)
+    dir: frontend
+    cmds:
+      - npx playwright test
+
+  test:e2e:ui:
+    desc: Run E2E tests with Playwright UI
+    dir: frontend
+    cmds:
+      - npx playwright test --ui
+
+  # ============== LOAD TEST ==============
+  test:load:
+    desc: Run k6 load test (requires running app)
+    cmds:
+      - k6 run k6/load-test.js
+
+  test:load:stress:
+    desc: Run k6 stress test
+    cmds:
+      - k6 run k6/stress-test.js
+
+  test:load:spike:
+    desc: Run k6 spike test
+    cmds:
+      - k6 run k6/spike-test.js
+
+  test:load:smoke:
+    desc: Quick k6 smoke test
+    cmds:
+      - k6 run --vus 1 --duration 10s k6/load-test.js
+
+  # ============== DEPLOY ==============
+  deploy:dev:
+    desc: Deploy to development k8s
+    dir: backend/deploy/ansible
+    cmds:
+      - ansible-playbook deploy.yml -e @vars/development.yml
+
+  deploy:prod:
+    desc: "Deploy to production (Pi 5). Override host: task deploy:prod PI5_HOST=mypi.local"
+    dir: backend/deploy/ansible
+    cmds:
+      - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
+
+  deploy:full:
+    desc: "Full deployment - setup k0s + deploy app. Override: task deploy:full PI5_HOST=mypi.local"
+    dir: backend/deploy/ansible
+    cmds:
+      - ansible-playbook -i inventory/production.yml playbooks/full-deploy.yml
+
+  deploy:k0s:
+    desc: "Setup k0s only. Override: task deploy:k0s PI5_HOST=mypi.local"
+    dir: backend/deploy/ansible
+    cmds:
+      - ansible-playbook -i inventory/production.yml playbooks/setup-k0s.yml
+
+  deploy:undeploy:
+    desc: "Uninstall monitor from Pi 5 (keeps namespace and PVCs)"
+    cmds:
+      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /var/lib/k0s/pki/admin.conf"
+      - 'echo "Uninstalled. To also delete data, run task deploy:undeploy:full"'
+
+  deploy:undeploy:full:
+    desc: "Uninstall monitor AND delete namespace (DELETES ALL DATA)"
+    cmds:
+      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /var/lib/k0s/pki/admin.conf || true"
+      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo k0s kubectl delete namespace monitor"
+      - 'echo "Fully uninstalled. All data deleted."'
+
+  deploy:status:
+    desc: Check deployment status on Pi 5
+    cmds:
+      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo k0s kubectl get pods,svc,ingress -n monitor"
+
+  deploy:ping:
+    desc: Test connectivity to target host
+    cmds:
+      - echo "Testing connection to {{.PI5_HOST}} as {{.PI5_USER}}..."
+      - ssh -o ConnectTimeout=5 {{.PI5_USER}}@{{.PI5_HOST}} "hostname && uname -a"
+
+  # ============== ALL-IN-ONE ==============
+  release:
+    desc: Full release - build, test, push images, deploy to prod
+    cmds:
+      - task: test
+      - task: docker:buildx
+      - task: deploy:prod
+
+  release:dev:
+    desc: Build images and start local dev
+    cmds:
+      - task: docker
+      - task: dev
+
+  # ============== CLEAN ==============
+  clean:
+    desc: Clean all build artifacts
+    cmds:
+      - rm -rf backend/build
+      - rm -rf frontend/dist frontend/node_modules
+      - docker compose down -v --remove-orphans 2>/dev/null || true
