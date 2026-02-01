@@ -44,6 +44,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        GIT_HASH: ${GIT_HASH:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-}
     container_name: monitor-frontend
     environment:
       API_BACKEND_HOST: backend

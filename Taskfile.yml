@@ -56,8 +56,13 @@ tasks:
   docker:frontend:
     desc: Build frontend Docker image
     dir: frontend
+    vars:
+      GIT_HASH:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      BUILD_TIME:
+        sh: date -u +%Y-%m-%dT%H:%M:%SZ
     cmds:
-      - docker build -t {{.FRONTEND_IMAGE}}:{{.VERSION}} .
+      - docker build --build-arg GIT_HASH={{.GIT_HASH}} --build-arg BUILD_TIME={{.BUILD_TIME}} -t {{.FRONTEND_IMAGE}}:{{.VERSION}} .
 
   docker:push:
     desc: Push Docker images to registry
@@ -68,15 +73,25 @@ tasks:
 
   docker:buildx:
     desc: Build and push multi-arch images (amd64, arm64)
+    vars:
+      GIT_HASH:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      BUILD_TIME:
+        sh: date -u +%Y-%m-%dT%H:%M:%SZ
     cmds:
       - docker buildx build --platform linux/amd64,linux/arm64 -t {{.BACKEND_IMAGE}}:{{.VERSION}} --push backend
-      - docker buildx build --platform linux/amd64,linux/arm64 -t {{.FRONTEND_IMAGE}}:{{.VERSION}} --push frontend
+      - docker buildx build --platform linux/amd64,linux/arm64 --build-arg GIT_HASH={{.GIT_HASH}} --build-arg BUILD_TIME={{.BUILD_TIME}} -t {{.FRONTEND_IMAGE}}:{{.VERSION}} --push frontend
 
   # ============== LOCAL DEV ==============
   dev:
     desc: Start local development environment
+    vars:
+      GIT_HASH:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      BUILD_TIME:
+        sh: date -u +%Y-%m-%dT%H:%M:%SZ
     cmds:
-      - docker compose up -d
+      - GIT_HASH={{.GIT_HASH}} BUILD_TIME={{.BUILD_TIME}} docker compose up -d --build
       - echo ""
       - echo "=== Development Environment Started ==="
       - echo "Frontend http://localhost:3000"
@@ -105,8 +120,13 @@ tasks:
 
   dev:monitoring:
     desc: Start with Prometheus and Grafana
+    vars:
+      GIT_HASH:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+      BUILD_TIME:
+        sh: date -u +%Y-%m-%dT%H:%M:%SZ
     cmds:
-      - docker compose --profile monitoring up -d
+      - GIT_HASH={{.GIT_HASH}} BUILD_TIME={{.BUILD_TIME}} docker compose --profile monitoring up -d --build
       - echo ""
       - echo "=== Development Environment with Monitoring ==="
       - echo "Frontend http://localhost:3000"
