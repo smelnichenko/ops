@@ -4,7 +4,7 @@
 #
 # REQUIRED: Set these environment variables before deployment:
 #   export POSTGRES_USERNAME=monitor_user        # optional, defaults to monitor_user
-#   export POSTGRES_PASSWORD=your-secure-password
+#   export MONITOR_DB_PASSWORD=your-secure-password
 #   export GRAFANA_ADMIN_USER=admin              # optional, defaults to admin
 #   export GRAFANA_ADMIN_PASSWORD=your-secure-password
 
@@ -61,6 +61,19 @@ monitor_values:
         url: "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/EUR"
         pattern: '"bid":([0-9.]+)'
         cron: "0 0 * * * *"
+    rssFeeds:
+      - name: err-news
+        url: "https://www.err.ee/rss"
+        collections:
+          - name: "Eesti"
+            metrics:
+              - name: "Majandus"
+                keywords: [majandus, ettevõt, pank, raha, turg, investeer]
+              - name: "Välismaa"
+                keywords: [ukraina, venemaa, nato, euroopa, usa, sõda]
+        cron: "0 0 * * * *"
+        fetchContent: false
+        maxArticles: 50
     http:
       connectTimeout: 10s
       readTimeout: 30s
@@ -71,7 +84,7 @@ monitor_values:
     image: postgres:17
     database: monitor
     username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}"
-    password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default('CHANGE_ME', true) }}"
+    password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
     resources:
       requests:
         memory: "256Mi"
