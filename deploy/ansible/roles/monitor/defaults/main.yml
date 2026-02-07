@@ -46,8 +46,8 @@ monitor_values:
     enabled: true
     image: postgres:17
     database: monitor
-    username: postgres
-    password: postgres
+    username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('postgres', true) }}"
+    password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default('postgres', true) }}"
     storage:
       size: 1Gi
       storageClass: ""
@@ -64,8 +64,8 @@ monitor_values:
   grafana:
     enabled: true
     image: grafana/grafana:latest
-    adminUser: admin
-    adminPassword: admin
+    adminUser: "{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}"
+    adminPassword: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
     storage:
       size: 1Gi
       storageClass: ""

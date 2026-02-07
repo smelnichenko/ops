@@ -3,7 +3,9 @@
 # Usage: ansible-playbook deploy.yml -e @vars/production.yml
 #
 # REQUIRED: Set these environment variables before deployment:
-#   export MONITOR_DB_PASSWORD=your-secure-password
+#   export POSTGRES_USERNAME=monitor_user        # optional, defaults to monitor_user
+#   export POSTGRES_PASSWORD=your-secure-password
+#   export GRAFANA_ADMIN_USER=admin              # optional, defaults to admin
 #   export GRAFANA_ADMIN_PASSWORD=your-secure-password
 
 monitor_release_name: monitor
@@ -68,8 +70,8 @@ monitor_values:
     enabled: true
     image: postgres:17
     database: monitor
-    username: monitor_user
-    password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
+    username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}"
+    password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default('CHANGE_ME', true) }}"
     resources:
       requests:
         memory: "256Mi"
@@ -100,7 +102,7 @@ monitor_values:
   grafana:
     enabled: false
     image: grafana/grafana:10.2.0
-    adminUser: admin
+    adminUser: "{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}"
     adminPassword: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('CHANGE_ME', true) }}"
     resources:
       requests:
