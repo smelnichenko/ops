@@ -278,7 +278,9 @@
     helm upgrade --install {{ monitor_release_name }} /tmp/monitor-helm-chart \
       --namespace {{ monitor_namespace }} \
       --create-namespace \
-      --values /tmp/monitor-values-{{ monitor_release_name }}.yml
+      --values /tmp/monitor-values-{{ monitor_release_name }}.yml \
+      --set "app.gitHash={{ build_git_hash | default('unknown') }}" \
+      --set "app.buildTime={{ build_time | default('') }}"
   environment:
     KUBECONFIG: /var/lib/k0s/pki/admin.conf
 
