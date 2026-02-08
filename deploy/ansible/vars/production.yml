@@ -49,7 +49,7 @@ monitor_values:
         cpu: "250m"
       limits:
         memory: "2Gi"
-        cpu: "1500m"  # Allow burst to ~1.5 cores
+        cpu: "2500m"  # Allow burst to ~2.5 cores
     ingress:
       enabled: true
       className: traefik
@@ -85,8 +85,8 @@ monitor_values:
         memory: "512Mi"
         cpu: "100m"
       limits:
-        memory: "1Gi"
-        cpu: "500m"
+        memory: "2Gi"
+        cpu: "1000m"
     storage:
       size: 5Gi
       storageClass: "local-path"  # k0s default storage class
@@ -129,10 +129,10 @@ monitor_values:
 # - Frontend:   128Mi limit
 # - App:        2Gi limit
 # - Redis:      256Mi limit
-# - Postgres:   1Gi limit
+# - Postgres:   2Gi limit
 # - Prometheus: 512Mi limit
 # - Grafana:    256Mi limit
 # - k0s system: ~1Gi
 # - OS:         ~512Mi
 # -------------------------
-# Total:        ~5.6Gi (leaves headroom for bursts)
+# Total:        ~6.6Gi (leaves headroom for bursts)
