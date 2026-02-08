@@ -31,11 +31,11 @@ monitor_values:
     replicas: 1
     resources:
       requests:
-        memory: "32Mi"
-        cpu: "25m"
-      limits:
         memory: "64Mi"
-        cpu: "100m"
+        cpu: "50m"
+      limits:
+        memory: "128Mi"
+        cpu: "200m"
 
   app:
     image:
@@ -115,10 +115,10 @@ monitor_values:
     resources:
       requests:
         memory: "128Mi"
-        cpu: "50m"
+        cpu: "100m"
       limits:
         memory: "256Mi"
-        cpu: "300m"
+        cpu: "500m"
     storage:
       size: 1Gi
       storageClass: "local-path"  # k0s default storage class
@@ -126,7 +126,7 @@ monitor_values:
       type: NodePort
 
 # Total resource allocation (~8GB Pi 5):
-# - Frontend:   64Mi limit
+# - Frontend:   128Mi limit
 # - App:        2Gi limit
 # - Redis:      256Mi limit
 # - Postgres:   1Gi limit
@@ -135,4 +135,4 @@ monitor_values:
 # - k0s system: ~1Gi
 # - OS:         ~512Mi
 # -------------------------
-# Total:        ~5.5Gi (leaves headroom for bursts)
+# Total:        ~5.6Gi (leaves headroom for bursts)
