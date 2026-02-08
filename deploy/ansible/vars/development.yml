@@ -54,7 +54,7 @@ monitor_values:
 
   postgres:
     enabled: true
-    image: postgres:17
+    image: postgres:latest
     database: monitor
     username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('postgres', true) }}"
     password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default('devpassword', true) }}"

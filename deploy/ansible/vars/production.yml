@@ -45,10 +45,10 @@ monitor_values:
     replicas: 1  # Single replica for Pi 5
     resources:
       requests:
-        memory: "384Mi"
+        memory: "512Mi"
         cpu: "250m"
       limits:
-        memory: "768Mi"
+        memory: "2Gi"
         cpu: "1500m"  # Allow burst to ~1.5 cores
     ingress:
       enabled: true
@@ -63,18 +63,29 @@ monitor_values:
       readTimeout: 30s
       userAgent: "MonitorBot/1.0"
 
+  redis:
+    enabled: true
+    image: redis:latest
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "25m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+
   postgres:
     enabled: true
-    image: postgres:17
+    image: postgres:latest
     database: monitor
     username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}"
     password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
     resources:
       requests:
-        memory: "256Mi"
+        memory: "512Mi"
         cpu: "100m"
       limits:
-        memory: "512Mi"
+        memory: "1Gi"
         cpu: "500m"
     storage:
       size: 5Gi
@@ -116,11 +127,12 @@ monitor_values:
 
 # Total resource allocation (~8GB Pi 5):
 # - Frontend:   64Mi limit
-# - App:        768Mi limit
-# - Postgres:   512Mi limit
+# - App:        2Gi limit
+# - Redis:      256Mi limit
+# - Postgres:   1Gi limit
 # - Prometheus: 512Mi limit
 # - Grafana:    256Mi limit
 # - k0s system: ~1Gi
 # - OS:         ~512Mi
 # -------------------------
-# Total:        ~3.6Gi (leaves headroom for bursts)
+# Total:        ~5.5Gi (leaves headroom for bursts)
