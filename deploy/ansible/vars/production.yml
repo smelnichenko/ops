@@ -15,12 +15,12 @@ monitor_namespace: monitor
 monitor_values:
   auth:
     jwtSecret: "{{ lookup('env', 'JWT_SECRET') | default('CHANGE_ME_GENERATE_A_SECURE_32_CHAR_SECRET', true) }}"
-    tokenExpiration: 24h
+    tokenExpiration: 1h
     registrationEnabled: true
 
-  # Enable network policies for pod isolation in production
+  # Network policies for pod isolation in production
   networkPolicies:
-    enabled: false
+    enabled: true
 
   frontend:
     enabled: true
