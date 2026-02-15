@@ -6,9 +6,9 @@ vars:
   BACKEND_IMAGE: ghcr.io/schnappy/monitor
   FRONTEND_IMAGE: ghcr.io/schnappy/monitor-frontend
   VERSION: '{{.VERSION | default "latest"}}'
-  # Target host - override with: task deploy:prod PI5_HOST=mypi.local
-  PI5_HOST: '{{.PI5_HOST | default "192.168.1.100"}}'
-  PI5_USER: '{{.PI5_USER | default "pi"}}'
+  # Target host - override with: task deploy:prod TARGET_HOST=mypi.local
+  TARGET_HOST: '{{.TARGET_HOST | default "192.168.1.100"}}'
+  TARGET_USER: '{{.TARGET_USER | default "pi"}}'
 
 tasks:
   default:
@@ -188,46 +188,46 @@ tasks:
       - ansible-playbook deploy.yml -e @vars/development.yml
 
   deploy:prod:
-    desc: "Deploy to production (Pi 5). Override host: task deploy:prod PI5_HOST=mypi.local"
+    desc: "Deploy to production. Override host: task deploy:prod TARGET_HOST=mypi.local"
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:full:
-    desc: "Full deployment - setup k0s + deploy app. Override: task deploy:full PI5_HOST=mypi.local"
+    desc: "Full deployment - setup k3s + deploy app. Override: task deploy:full TARGET_HOST=mypi.local"
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/full-deploy.yml
 
-  deploy:k0s:
-    desc: "Setup k0s only. Override: task deploy:k0s PI5_HOST=mypi.local"
+  deploy:k3s:
+    desc: "Setup k3s only. Override: task deploy:k3s TARGET_HOST=mypi.local"
     dir: deploy/ansible
     cmds:
-      - ansible-playbook -i inventory/production.yml playbooks/setup-k0s.yml
+      - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
 
   deploy:undeploy:
-    desc: "Uninstall monitor from Pi 5 (keeps namespace and PVCs)"
+    desc: "Uninstall monitor from target (keeps namespace and PVCs)"
     cmds:
-      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /var/lib/k0s/pki/admin.conf"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /etc/rancher/k3s/k3s.yaml"
       - 'echo "Uninstalled. To also delete data, run task deploy:undeploy:full"'
 
   deploy:undeploy:full:
     desc: "Uninstall monitor AND delete namespace (DELETES ALL DATA)"
     cmds:
-      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /var/lib/k0s/pki/admin.conf || true"
-      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo k0s kubectl delete namespace monitor"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /etc/rancher/k3s/k3s.yaml || true"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl delete namespace monitor"
       - 'echo "Fully uninstalled. All data deleted."'
 
   deploy:status:
-    desc: Check deployment status on Pi 5
+    desc: Check deployment status on target
     cmds:
-      - ssh {{.PI5_USER}}@{{.PI5_HOST}} "sudo k0s kubectl get pods,svc,ingress -n monitor"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl get pods,svc,ingress -n monitor"
 
   deploy:ping:
     desc: Test connectivity to target host
     cmds:
-      - echo "Testing connection to {{.PI5_HOST}} as {{.PI5_USER}}..."
-      - ssh -o ConnectTimeout=5 {{.PI5_USER}}@{{.PI5_HOST}} "hostname && uname -a"
+      - echo "Testing connection to {{.TARGET_HOST}} as {{.TARGET_USER}}..."
+      - ssh -o ConnectTimeout=5 {{.TARGET_USER}}@{{.TARGET_HOST}} "hostname && uname -a"
 
   # ============== ALL-IN-ONE ==============
   release:

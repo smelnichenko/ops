@@ -1,0 +1,194 @@
+---
+# Setup k3s on a fresh target host
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+#
+- name: Setup k3s on target host
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - apt-transport-https
+          - ca-certificates
+        state: present
+
+    - name: Install Docker (for building images)
+      block:
+        - name: Check if Docker is installed
+          ansible.builtin.stat:
+            path: /usr/bin/docker
+          register: docker_binary
+
+        - name: Install Docker via convenience script
+          ansible.builtin.shell: |
+            curl -fsSL https://get.docker.com | sh
+          args:
+            creates: /usr/bin/docker
+          when: not docker_binary.stat.exists
+
+        - name: Add user to docker group
+          ansible.builtin.user:
+            name: "{{ ansible_user }}"
+            groups: docker
+            append: true
+
+    - name: Enable cgroups for ARM64
+      ansible.builtin.lineinfile:
+        path: /boot/firmware/cmdline.txt
+        regexp: '^(.*)$'
+        line: '\1 cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory'
+        backrefs: true
+      register: cgroups_enabled
+      when: ansible_architecture == "aarch64"
+
+    - name: Reboot if cgroups were enabled
+      ansible.builtin.reboot:
+        msg: "Rebooting to enable cgroups"
+        reboot_timeout: 300
+      when: cgroups_enabled.changed
+
+    - name: Check if k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Install k3s
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | sh -
+      when: not k3s_binary.stat.exists
+
+    - name: Wait for k3s to be ready
+      ansible.builtin.shell: k3s kubectl get nodes
+      register: k3s_ready
+      until: k3s_ready.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Wait for node to be Ready
+      ansible.builtin.shell: |
+        k3s kubectl get nodes -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+      register: node_ready
+      until: node_ready.stdout == "True"
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Wait for Traefik to be ready
+      ansible.builtin.shell: |
+        k3s kubectl get deployment traefik -n kube-system -o jsonpath='{.status.availableReplicas}'
+      register: traefik_ready
+      until: traefik_ready.stdout | default('0') | int >= 1
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Configure local-path-provisioner to use /mnt/nvme
+      ansible.builtin.shell: |
+        k3s kubectl apply -f - <<'EOF'
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: local-path-config
+          namespace: kube-system
+        data:
+          config.json: |-
+            {
+              "nodePathMap": [
+                {
+                  "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+                  "paths": ["/mnt/nvme"]
+                }
+              ]
+            }
+          setup: |-
+            #!/bin/sh
+            set -eu
+            mkdir -m 0777 -p "$VOL_DIR"
+          teardown: |-
+            #!/bin/sh
+            set -eu
+            rm -rf "$VOL_DIR"
+          helperPod.yaml: |-
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: helper-pod
+            spec:
+              containers:
+              - name: helper-pod
+                image: busybox:1.36
+        EOF
+      changed_when: false
+
+    - name: Restart local-path-provisioner to pick up config
+      ansible.builtin.shell: |
+        k3s kubectl rollout restart deployment local-path-provisioner -n kube-system
+      changed_when: false
+
+    - name: Install Helm
+      block:
+        - name: Check if Helm is installed
+          ansible.builtin.command: which helm
+          register: helm_check
+          ignore_errors: true
+          changed_when: false
+
+        - name: Download and install Helm
+          ansible.builtin.shell: |
+            curl -sSLf https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          args:
+            creates: /usr/local/bin/helm
+          when: helm_check.rc != 0
+
+    - name: Create .kube directory for user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy kubeconfig for user
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+        remote_src: true
+
+    - name: Update kubeconfig server address
+      ansible.builtin.replace:
+        path: "/home/{{ ansible_user }}/.kube/config"
+        regexp: 'https://127.0.0.1:6443'
+        replace: "https://{{ ansible_host }}:6443"
+
+    - name: Fetch kubeconfig to local machine
+      ansible.builtin.fetch:
+        src: "/home/{{ ansible_user }}/.kube/config"
+        dest: "{{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}"
+        flat: true
+
+    - name: Display k3s status
+      ansible.builtin.debug:
+        msg: |
+          k3s installed successfully!
+
+          Traefik ingress controller is ready (bundled with k3s).
+          local-path-provisioner configured to use /mnt/nvme.
+
+          To use kubectl locally:
+            export KUBECONFIG={{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}
+            kubectl get nodes

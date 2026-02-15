@@ -2,7 +2,7 @@
 # vi: set ft=ruby :
 #
 # Test environment for Monitor application
-# Target: Raspberry Pi 5 with 8GB RAM running Raspbian Trixie Lite
+# Target: 8GB RAM host running Debian Trixie
 #
 # Requirements:
 #   - Vagrant with libvirt provider (for ARM64 emulation)
@@ -16,14 +16,14 @@
 Vagrant.configure("2") do |config|
   # Debian Trixie ARM64 (closest to Raspbian Trixie Lite)
   config.vm.box = "debian/trixie64"
-  config.vm.hostname = "monitor-pi5-test"
+  config.vm.hostname = "monitor-test"
 
   # Network
   config.vm.network "forwarded_port", guest: 80, host: 8080
   config.vm.network "forwarded_port", guest: 6443, host: 6443   # k3s API
   config.vm.network "forwarded_port", guest: 30000, host: 30000 # Grafana NodePort
 
-  # Simulate Pi 5 8GB resources
+  # Simulate target 8GB resources
   config.vm.provider "libvirt" do |lv|
     lv.memory = 8192
     lv.cpus = 4
@@ -34,7 +34,7 @@ Vagrant.configure("2") do |config|
   config.vm.provider "virtualbox" do |vb|
     vb.memory = "8192"
     vb.cpus = 4
-    vb.name = "monitor-pi5-test"
+    vb.name = "monitor-test"
   end
 
   # Sync project

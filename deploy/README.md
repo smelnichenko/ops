@@ -1,6 +1,6 @@
 # Monitor Application Deployment
 
-Deploy the Monitor application using Helm charts via Ansible on k0s.
+Deploy the Monitor application using Helm charts via Ansible on k3s.
 
 ## Directory Structure
 
@@ -13,10 +13,10 @@ deploy/
 │   ├── requirements.yml        # Ansible collection dependencies
 │   ├── inventory/
 │   │   ├── localhost.yml       # Local inventory (development)
-│   │   └── production.yml      # Production inventory (Pi 5)
+│   │   └── production.yml      # Production inventory
 │   ├── playbooks/
-│   │   ├── setup-k0s.yml       # Setup k0s with Traefik on fresh Pi
-│   │   └── full-deploy.yml     # Full deployment (k0s + app)
+│   │   ├── setup-k3s.yml       # Setup k3s on fresh target
+│   │   └── full-deploy.yml     # Full deployment (k3s + app)
 │   ├── roles/
 │   │   └── monitor/            # Monitor deployment role
 │   │       ├── tasks/main.yml
@@ -59,15 +59,16 @@ ansible-playbook deploy.yml
 ansible-playbook deploy.yml -e @vars/development.yml
 ```
 
-### Deploy to production (Raspberry Pi 5)
+### Deploy to production
 
 ```bash
-# Configure Pi 5 address (edit inventory/production.yml or use env vars)
-export PI5_HOST=192.168.1.100
-export PI5_USER=pi
+# Configure target address (edit inventory/production.yml or use env vars)
+export TARGET_HOST=192.168.1.100
+export TARGET_USER=pi
 
 # Set credentials
 export MONITOR_DB_PASSWORD=your-secure-password
+export JWT_SECRET=your-jwt-secret-at-least-32-chars
 export GRAFANA_ADMIN_PASSWORD=your-secure-password
 
 # Deploy using Ansible
@@ -77,20 +78,21 @@ ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 ./gradlew deployProd
 ```
 
-### Fresh Pi 5 Setup (Full Deployment)
+### Fresh Target Setup (Full Deployment)
 
-For a fresh Raspberry Pi 5 without k0s installed:
+For a fresh target host without k3s installed:
 
 ```bash
-# Configure Pi 5 address
-export PI5_HOST=192.168.1.100
-export PI5_USER=pi
+# Configure target address
+export TARGET_HOST=192.168.1.100
+export TARGET_USER=pi
 
 # Set credentials
 export MONITOR_DB_PASSWORD=your-secure-password
+export JWT_SECRET=your-jwt-secret-at-least-32-chars
 export GRAFANA_ADMIN_PASSWORD=your-secure-password
 
-# Full deployment: installs k0s + Traefik + deploys the app
+# Full deployment: installs k3s + deploys the app
 ./gradlew fullDeploy
 
 # Or using Ansible directly
@@ -98,36 +100,21 @@ ansible-playbook -i inventory/production.yml playbooks/full-deploy.yml
 ```
 
 This will:
-1. Install k0s (single-node mode with controller + worker)
-2. Install Traefik ingress controller via Helm
-3. Wait for Traefik to be ready
-4. Install Helm
-5. Deploy the Monitor application
-6. Display access instructions
+1. Install k3s (single-node, bundles Traefik + local-path-provisioner)
+2. Install Docker and Helm
+3. Deploy the Monitor application
+4. Display access instructions
 
-### Setup k0s Only
+### Setup k3s Only
 
-To only setup k0s without deploying the app:
+To only setup k3s without deploying the app:
 
 ```bash
-./gradlew setupK0s
+./gradlew setupK3s
 
 # Or
-ansible-playbook -i inventory/production.yml playbooks/setup-k0s.yml
+ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
 ```
-
-## k0s vs k3s
-
-This deployment uses **k0s** instead of k3s. Key differences:
-
-| Feature | k0s | k3s |
-|---------|-----|-----|
-| Architecture | Single binary, all components bundled | Single binary, SQLite by default |
-| Storage Class | `openebs-hostpath` | `local-path` |
-| Ingress | Traefik (installed via Helm) | Traefik (bundled) |
-| Config Location | `/etc/k0s/k0s.yaml` | `/etc/rancher/k3s/` |
-| Kubeconfig | `/var/lib/k0s/pki/admin.conf` | `/etc/rancher/k3s/k3s.yaml` |
-| kubectl | `k0s kubectl` | `k3s kubectl` |
 
 ## Configuration
 
@@ -165,13 +152,11 @@ ansible-playbook deploy.yml -e monitor_namespace=my-namespace
 - Lower resource limits
 - Latest image tags
 - NodePort for Grafana
-- 5-minute monitoring interval
 
-**Production** (`vars/production.yml`) - optimized for Raspberry Pi 5 (8GB):
+**Production** (`vars/production.yml`):
 - Single replica (single node)
-- Conservative memory limits (~3.6Gi total)
-- Pinned image versions
-- `openebs-hostpath` storage class (k0s)
+- Conservative memory limits
+- `local-path` storage class (k3s)
 - Reduced Prometheus retention (15d) for SD card longevity
 - Credentials from environment variables
 
@@ -188,13 +173,11 @@ ansible-playbook uninstall.yml -e monitor_delete_pvcs=true
 ansible-playbook uninstall.yml -e monitor_delete_pvcs=true -e monitor_delete_namespace=true
 ```
 
-### Uninstall k0s
+### Uninstall k3s
 
 ```bash
-# On the Pi 5
-sudo k0s stop
-sudo k0s reset
-sudo rm -rf /var/lib/k0s /etc/k0s
+# On the target host
+/usr/local/bin/k3s-uninstall.sh
 ```
 
 ## Helm Chart
@@ -211,6 +194,7 @@ helm install monitor ../helm/monitor -n monitor --create-namespace
 # With custom values
 helm install monitor ../helm/monitor -n monitor --create-namespace \
   --set postgres.password=secret \
+  --set auth.jwtSecret=secret \
   --set grafana.adminPassword=secret
 ```
 
@@ -220,69 +204,39 @@ After deployment:
 
 1. **Access the Frontend**:
    ```bash
-   k0s kubectl port-forward svc/monitor-monitor-frontend 8080:8080 -n monitor
+   k3s kubectl port-forward svc/monitor-monitor-frontend 8080:8080 -n monitor
    # Open http://localhost:8080
    ```
 
 2. **Access the API**:
    ```bash
-   k0s kubectl port-forward svc/monitor-monitor-app 8080:8080 -n monitor
+   k3s kubectl port-forward svc/monitor-monitor-app 8080:8080 -n monitor
    # Open http://localhost:8080/api/actuator/health
    ```
 
 3. **Access Grafana**:
    ```bash
-   k0s kubectl port-forward svc/monitor-monitor-grafana 3000:3000 -n monitor
+   k3s kubectl port-forward svc/monitor-monitor-grafana 3000:3000 -n monitor
    # Open http://localhost:3000 (admin/admin by default)
    ```
 
 4. **View logs**:
    ```bash
-   k0s kubectl logs -f deployment/monitor-monitor-app -n monitor
+   k3s kubectl logs -f deployment/monitor-monitor-app -n monitor
    ```
-
-## Building the Docker Images
-
-Before deploying, build and push the Docker images:
-
-### Backend
-
-```bash
-cd backend
-
-# Build for local architecture
-docker build -t ghcr.io/schnappy/monitor:latest .
-
-# Build multi-arch and push
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/schnappy/monitor:latest --push .
-```
-
-### Frontend
-
-```bash
-cd frontend
-
-# Build for local architecture
-docker build -t ghcr.io/schnappy/monitor-frontend:latest .
-
-# Build multi-arch and push
-docker buildx build --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/schnappy/monitor-frontend:latest --push .
-```
 
 ## Troubleshooting
 
-### Check k0s status
+### Check k3s status
 ```bash
-sudo k0s status
-sudo systemctl status k0scontroller
+sudo systemctl status k3s
+k3s kubectl get nodes
 ```
 
 ### Check deployment status
 ```bash
-k0s kubectl get pods -n monitor
-k0s kubectl get svc -n monitor
+k3s kubectl get pods -n monitor
+k3s kubectl get svc -n monitor
 ```
 
 ### View Helm release
@@ -293,23 +247,18 @@ helm status monitor -n monitor
 
 ### Check application logs
 ```bash
-k0s kubectl logs -f deployment/monitor-monitor-app -n monitor
-k0s kubectl logs -f deployment/monitor-monitor-frontend -n monitor
-```
-
-### Check Traefik logs
-```bash
-k0s kubectl logs -f deployment/traefik -n traefik
+k3s kubectl logs -f deployment/monitor-monitor-app -n monitor
+k3s kubectl logs -f deployment/monitor-monitor-frontend -n monitor
 ```
 
 ### Restart deployment
 ```bash
-k0s kubectl rollout restart deployment/monitor-monitor-app -n monitor
-k0s kubectl rollout restart deployment/monitor-monitor-frontend -n monitor
+k3s kubectl rollout restart deployment/monitor-monitor-app -n monitor
+k3s kubectl rollout restart deployment/monitor-monitor-frontend -n monitor
 ```
 
 ### Check storage
 ```bash
-k0s kubectl get pvc -n monitor
-k0s kubectl get pv
+k3s kubectl get pvc -n monitor
+k3s kubectl get pv
 ```

@@ -16,14 +16,14 @@
       changed_when: false
       failed_when: helm_version.rc != 0
       environment:
-        KUBECONFIG: /var/lib/k0s/pki/admin.conf
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
     - name: Display Helm version
       ansible.builtin.debug:
         msg: "Using Helm {{ helm_version.stdout }}"
 
     - name: Verify kubectl connectivity
-      ansible.builtin.command: k0s kubectl cluster-info
+      ansible.builtin.command: k3s kubectl cluster-info
       register: kubectl_info
       changed_when: false
       failed_when: kubectl_info.rc != 0
