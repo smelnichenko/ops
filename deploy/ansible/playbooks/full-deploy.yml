@@ -110,6 +110,26 @@
             mode: '0600'
             remote_src: true
 
+    # ==================== PERFORMANCE TUNING ====================
+    - name: Setup performance profile
+      become: true
+      block:
+        - name: Install tuned
+          ansible.builtin.apt:
+            name: tuned
+            state: present
+
+        - name: Enable and start tuned
+          ansible.builtin.systemd:
+            name: tuned
+            enabled: true
+            state: started
+
+        - name: Set throughput-performance profile
+          ansible.builtin.command: tuned-adm profile throughput-performance
+          register: tuned_result
+          changed_when: "'already active' not in tuned_result.stdout"
+
     # ==================== HELM SETUP ====================
     - name: Setup Helm
       become: true
