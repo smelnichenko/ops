@@ -1,5 +1,5 @@
 ---
-# Production environment variables - Raspberry Pi 5 (8GB RAM)
+# Production environment variables (64GB target)
 # Usage: ansible-playbook deploy.yml -e @vars/production.yml
 #
 # REQUIRED: Set these environment variables before deployment:
@@ -32,24 +32,31 @@ monitor_values:
     resources:
       requests:
         memory: "64Mi"
-        cpu: "50m"
+        cpu: "100m"
       limits:
-        memory: "128Mi"
-        cpu: "200m"
+        memory: "256Mi"
+        cpu: "500m"
 
   app:
     image:
       repository: ghcr.io/schnappy/monitor
       tag: "latest"
       pullPolicy: Never
-    replicas: 1  # Single replica for Pi 5
+    replicas: 1
+    javaOpts: "-Xmx6g -XX:+UseZGC"
+    hikari:
+      minimumIdle: 5
+      maximumPoolSize: 20
+      idleTimeout: 300000
+      maxLifetime: 1200000
+      connectionTimeout: 20000
     resources:
       requests:
-        memory: "512Mi"
-        cpu: "250m"
-      limits:
         memory: "2Gi"
-        cpu: "2500m"  # Allow burst to ~2.5 cores
+        cpu: "500m"
+      limits:
+        memory: "8Gi"
+        cpu: "6000m"
     ingress:
       enabled: true
       className: traefik
@@ -68,11 +75,11 @@ monitor_values:
     image: redis:latest
     resources:
       requests:
-        memory: "64Mi"
-        cpu: "25m"
-      limits:
         memory: "256Mi"
-        cpu: "200m"
+        cpu: "100m"
+      limits:
+        memory: "4Gi"
+        cpu: "1000m"
 
   postgres:
     enabled: true
@@ -80,32 +87,41 @@ monitor_values:
     database: monitor
     username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}"
     password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
+    sharedBuffers: "4GB"
+    effectiveCacheSize: "12GB"
+    workMem: "64MB"
+    maintenanceWorkMem: "512MB"
+    maxParallelWorkersPerGather: 4
+    maxParallelWorkers: 6
+    maxWorkerProcesses: 10
+    effectiveIoConcurrency: 200
+    randomPageCost: "1.1"
     resources:
       requests:
-        memory: "512Mi"
-        cpu: "100m"
+        memory: "4Gi"
+        cpu: "500m"
       limits:
-        memory: "2Gi"
-        cpu: "1000m"
+        memory: "16Gi"
+        cpu: "6000m"
     storage:
-      size: 5Gi
-      storageClass: "local-path"  # k0s default storage class
+      size: 20Gi
+      storageClass: "local-path"
 
   prometheus:
     enabled: false
     image: prom/prometheus:v2.48.0
-    retention: 15d  # Reduced retention for SD card longevity
-    scrapeInterval: 30s  # Less frequent scraping
+    retention: 30d
+    scrapeInterval: 15s
     resources:
       requests:
-        memory: "256Mi"
-        cpu: "100m"
-      limits:
         memory: "512Mi"
-        cpu: "500m"
+        cpu: "250m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
     storage:
-      size: 5Gi
-      storageClass: "local-path"  # k0s default storage class
+      size: 20Gi
+      storageClass: "local-path"
 
   grafana:
     enabled: false
@@ -114,25 +130,25 @@ monitor_values:
     adminPassword: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('CHANGE_ME', true) }}"
     resources:
       requests:
-        memory: "128Mi"
+        memory: "256Mi"
         cpu: "100m"
       limits:
-        memory: "256Mi"
-        cpu: "500m"
+        memory: "1Gi"
+        cpu: "1000m"
     storage:
-      size: 1Gi
-      storageClass: "local-path"  # k0s default storage class
+      size: 5Gi
+      storageClass: "local-path"
     service:
       type: NodePort
 
-# Total resource allocation (~8GB Pi 5):
-# - Frontend:   128Mi limit
-# - App:        2Gi limit
-# - Redis:      256Mi limit
-# - Postgres:   2Gi limit
-# - Prometheus: 512Mi limit
-# - Grafana:    256Mi limit
-# - k0s system: ~1Gi
-# - OS:         ~512Mi
-# -------------------------
-# Total:        ~6.6Gi (leaves headroom for bursts)
+# Total resource allocation (10-core / 64GB target):
+#                 CPU limit    Memory limit
+# - Frontend:     500m         256Mi
+# - App:          6000m        8Gi    (JVM heap 6GB + ZGC + metaspace/native)
+# - Redis:        1000m        4Gi
+# - Postgres:     6000m        16Gi   (shared_buffers 4GB, effective_cache_size 12GB)
+# - Prometheus:   2000m        4Gi    (disabled by default)
+# - Grafana:      1000m        1Gi    (disabled by default)
+# - k3s system:   ~1000m       ~2Gi
+# ------------------------------------------------
+# Active total:   ~14500m      ~27Gi  (leaves headroom for OS cache + bursts)
