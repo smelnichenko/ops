@@ -20,7 +20,7 @@ Vagrant.configure("2") do |config|
 
   # Network
   config.vm.network "forwarded_port", guest: 80, host: 8080
-  config.vm.network "forwarded_port", guest: 6443, host: 6443   # k0s API
+  config.vm.network "forwarded_port", guest: 6443, host: 6443   # k3s API
   config.vm.network "forwarded_port", guest: 30000, host: 30000 # Grafana NodePort
 
   # Simulate Pi 5 8GB resources
@@ -41,23 +41,25 @@ Vagrant.configure("2") do |config|
   config.vm.synced_folder ".", "/vagrant", type: "rsync",
     rsync__exclude: [".git/", "node_modules/", "build/", "dist/", ".gradle/"]
 
-  # Install k0s and dependencies
+  # Install system dependencies
   config.vm.provision "shell", name: "install-deps", inline: <<-SHELL
     set -e
     export DEBIAN_FRONTEND=noninteractive
 
     echo "=== Installing dependencies ==="
     apt-get update
-    apt-get install -y curl wget gnupg2 ca-certificates
+    apt-get install -y curl wget gnupg2 ca-certificates zip unzip
 
-    # Install Docker
-    echo "=== Installing Docker ==="
-    curl -fsSL https://get.docker.com | sh
-    usermod -aG docker vagrant
+    # Install k3s (includes Traefik ingress and local-path-provisioner)
+    echo "=== Installing k3s ==="
+    curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
 
-    # Install k0s
-    echo "=== Installing k0s ==="
-    curl -sSLf https://get.k0s.sh | sh
+    # Install nerdctl + buildkit (containerd-native image builder, no Docker daemon needed)
+    echo "=== Installing nerdctl + buildkit ==="
+    NERDCTL_VERSION=2.0.4
+    ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+    curl -sSL "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-${ARCH}.tar.gz" | tar -xz -C /usr/local
+    systemctl enable --now buildkit
 
     # Install Helm
     echo "=== Installing Helm ==="
@@ -66,19 +68,37 @@ Vagrant.configure("2") do |config|
     echo "=== Dependencies installed ==="
   SHELL
 
-  # Setup k0s cluster
-  config.vm.provision "shell", name: "setup-k0s", inline: <<-SHELL
+  # Install sdkman + Java and nvm + Node.js for vagrant user
+  config.vm.provision "shell", name: "install-sdks", privileged: false, inline: <<-SHELL
     set -e
 
-    echo "=== Setting up k0s cluster ==="
-    k0s install controller --single
-    k0s start
+    # Install SDKMAN and Java
+    echo "=== Installing SDKMAN ==="
+    curl -s "https://get.sdkman.io" | bash
+    source "$HOME/.sdkman/bin/sdkman-init.sh"
+    echo "=== Installing Java 25 ==="
+    sdk install java 25-open
 
-    # Wait for k0s
-    echo "Waiting for k0s to be ready..."
-    sleep 30
+    # Install nvm and Node.js
+    echo "=== Installing nvm ==="
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+    echo "=== Installing Node.js 22 ==="
+    nvm install 22
+
+    echo "=== SDKs installed ==="
+    java -version
+    node --version
+  SHELL
+
+  # Setup k3s cluster
+  config.vm.provision "shell", name: "setup-k3s", inline: <<-SHELL
+    set -e
+
+    echo "=== Waiting for k3s to be ready ==="
     for i in $(seq 1 30); do
-      if k0s kubectl get nodes 2>/dev/null | grep -q "Ready"; then
+      if k3s kubectl get nodes 2>/dev/null | grep -q " Ready"; then
         echo "Node is ready!"
         break
       fi
@@ -88,31 +108,18 @@ Vagrant.configure("2") do |config|
 
     # Setup kubeconfig for vagrant user
     mkdir -p /home/vagrant/.kube
-    k0s kubeconfig admin > /home/vagrant/.kube/config
+    cp /etc/rancher/k3s/k3s.yaml /home/vagrant/.kube/config
     chown -R vagrant:vagrant /home/vagrant/.kube
     chmod 600 /home/vagrant/.kube/config
 
-    # Install Traefik ingress
-    echo "=== Installing Traefik ==="
-    sudo -u vagrant helm repo add traefik https://traefik.github.io/charts
-    sudo -u vagrant helm repo update
-    sudo -u vagrant helm install traefik traefik/traefik \
-      --namespace kube-system \
-      --set ports.web.hostPort=80 \
-      --set ports.websecure.hostPort=443
-
-    # Install local-path-provisioner for PVC support
-    echo "=== Installing local-path-provisioner ==="
-    k0s kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml
-
     # Configure local-path-provisioner to use /mnt/nvme (simulated in test)
     mkdir -p /mnt/nvme
-    k0s kubectl apply -f - <<'EOF'
+    k3s kubectl apply -f - <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: local-path-config
-  namespace: local-path-storage
+  namespace: kube-system
 data:
   config.json: |-
     {
@@ -142,36 +149,69 @@ data:
         image: busybox:1.36
 EOF
 
-    k0s kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-    k0s kubectl rollout restart deployment local-path-provisioner -n local-path-storage
-
-    k0s kubectl get nodes
-    k0s kubectl get sc
-    echo "=== k0s cluster ready ==="
+    k3s kubectl get nodes
+    k3s kubectl get sc
+    echo "=== k3s cluster ready ==="
   SHELL
 
-  # Build and deploy application
+  # Build artifacts locally and deploy
   config.vm.provision "shell", name: "deploy-app", privileged: false, inline: <<-SHELL
     set -e
     cd /vagrant
 
-    echo "=== Building Docker images ==="
-    sg docker -c "docker build -t ghcr.io/schnappy/monitor:latest backend/"
-    sg docker -c "docker build -t ghcr.io/schnappy/monitor-frontend:latest frontend/"
+    # Source sdkman and nvm
+    source "$HOME/.sdkman/bin/sdkman-init.sh"
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-    # Import to k0s containerd
-    echo "=== Importing images to k0s ==="
-    sg docker -c "docker save ghcr.io/schnappy/monitor:latest" | sudo k0s ctr images import -
-    sg docker -c "docker save ghcr.io/schnappy/monitor-frontend:latest" | sudo k0s ctr images import -
+    GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    # Build backend JAR
+    echo "=== Building backend JAR ==="
+    cd /vagrant/backend
+    ./gradlew bootJar --no-daemon -x test
+
+    # Build frontend dist
+    echo "=== Building frontend ==="
+    cd /vagrant/frontend
+    npm ci --silent
+    VITE_GIT_HASH=$GIT_HASH VITE_BUILD_TIME=$BUILD_TIME npm run build
+
+    # Stage artifacts and build images with nerdctl (using k3s containerd)
+    echo "=== Building container images ==="
+    STAGE=$(mktemp -d)
+
+    # Backend: copy JAR + Dockerfile.runtime
+    mkdir -p "$STAGE/backend"
+    cp /vagrant/backend/build/libs/*.jar "$STAGE/backend/app.jar"
+    cp /vagrant/backend/Dockerfile.runtime "$STAGE/backend/Dockerfile"
+
+    # Frontend: copy dist + runtime files
+    mkdir -p "$STAGE/frontend"
+    cp -r /vagrant/frontend/dist "$STAGE/frontend/"
+    cp /vagrant/frontend/Dockerfile.runtime "$STAGE/frontend/Dockerfile"
+    cp /vagrant/frontend/nginx.conf.template "$STAGE/frontend/"
+    cp /vagrant/frontend/docker-entrypoint.sh "$STAGE/frontend/"
+
+    # Build directly into k3s containerd (no Docker daemon, no import step)
+    sudo nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+      build -t ghcr.io/schnappy/monitor:latest "$STAGE/backend/"
+    sudo nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+      build -t ghcr.io/schnappy/monitor-frontend:latest "$STAGE/frontend/"
+    rm -rf "$STAGE"
 
     # Deploy with Helm
     echo "=== Deploying application ==="
-    helm upgrade --install monitor backend/helm/monitor \
+    helm upgrade --install monitor /vagrant/backend/helm/monitor \
       --namespace monitor \
       --create-namespace \
       --set postgres.password=vagrant \
       --set app.image.pullPolicy=Never \
       --set frontend.image.pullPolicy=Never \
+      --set "app.gitHash=$GIT_HASH" \
+      --set "app.buildTime=$BUILD_TIME" \
+      --set "app.ingress.host=" \
       --wait \
       --timeout 10m
 
@@ -189,9 +229,9 @@ EOF
     set -e
     cd /vagrant
 
-    echo "=== Installing Node.js for Playwright ==="
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt-get install -y nodejs
+    # Source nvm (Node.js already installed via install-sdks)
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
     echo "=== Installing Playwright dependencies ==="
     cd frontend
@@ -209,7 +249,7 @@ EOF
     done
 
     echo "=== Running E2E tests ==="
-    BASE_URL=http://localhost npx playwright test --reporter=list
+    BASE_URL=http://localhost npx playwright test --reporter=list --workers=1
 
     echo ""
     echo "=========================================="
