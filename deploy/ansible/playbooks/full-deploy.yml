@@ -125,8 +125,8 @@
             enabled: true
             state: started
 
-        - name: Set throughput-performance profile
-          ansible.builtin.command: tuned-adm profile throughput-performance
+        - name: Set powersave profile
+          ansible.builtin.command: tuned-adm profile powersave
           register: tuned_result
           changed_when: "'already active' not in tuned_result.stdout"
 
