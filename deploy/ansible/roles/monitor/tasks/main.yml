@@ -7,7 +7,7 @@
 
 - name: Create namespace
   ansible.builtin.shell: |
-    k0s kubectl create namespace {{ monitor_namespace }} --dry-run=client -o yaml | k0s kubectl apply -f -
+    k3s kubectl create namespace {{ monitor_namespace }} --dry-run=client -o yaml | k3s kubectl apply -f -
   when: monitor_create_namespace
   changed_when: false
 
@@ -137,95 +137,95 @@
         backend_jar_path: "{{ jar_files.files[0].path }}"
       when: backend_changed and jar_files.files | length > 0
 
-    # Create single archive with all artifacts (fewer round trips)
-    - name: Create deployment archive locally
+    # Build Docker images locally (native AMD64 speed)
+    - name: Build Docker images locally
       ansible.builtin.shell: |
         set -e
         cd {{ project_root }}
-        rm -rf /tmp/monitor-deploy-stage
-        mkdir -p /tmp/monitor-deploy-stage/backend
-        mkdir -p /tmp/monitor-deploy-stage/frontend
-
-        {% if backend_changed %}
-        # Backend: JAR + Dockerfile
-        cp "{{ backend_jar_path }}" /tmp/monitor-deploy-stage/backend/app.jar
-        cp backend/Dockerfile.runtime /tmp/monitor-deploy-stage/backend/Dockerfile
-        {% endif %}
-
-        {% if frontend_changed %}
-        # Frontend: dist + Dockerfile + nginx config
-        cp -r frontend/dist /tmp/monitor-deploy-stage/frontend/
-        cp frontend/Dockerfile.runtime /tmp/monitor-deploy-stage/frontend/Dockerfile
-        cp frontend/nginx.conf.template /tmp/monitor-deploy-stage/frontend/
-        cp frontend/docker-entrypoint.sh /tmp/monitor-deploy-stage/frontend/
-        {% endif %}
-
-        # Create single tarball
-        tar -czf /tmp/monitor-deploy.tar.gz -C /tmp/monitor-deploy-stage .
-        rm -rf /tmp/monitor-deploy-stage
-
-        echo "Archive created: $(du -h /tmp/monitor-deploy.tar.gz | cut -f1)"
-      delegate_to: localhost
-      become: false
-      when: backend_changed or frontend_changed
-
-    # Single transfer to Pi
-    - name: Transfer deployment archive to remote
-      ansible.builtin.copy:
-        src: /tmp/monitor-deploy.tar.gz
-        dest: /tmp/monitor-deploy.tar.gz
-        mode: '0644'
-      when: backend_changed or frontend_changed
-
-    - name: Extract archive and build images on remote
-      ansible.builtin.shell: |
-        set -e
-        cd /tmp
-        rm -rf monitor-backend-build monitor-frontend-build
-        mkdir -p monitor-backend-build monitor-frontend-build
-        tar -xzf monitor-deploy.tar.gz
-
-        # Move extracted contents
-        [ -d backend ] && mv backend/* monitor-backend-build/ 2>/dev/null || true
-        [ -d frontend ] && mv frontend/* monitor-frontend-build/ 2>/dev/null || true
-        rm -rf backend frontend monitor-deploy.tar.gz
-
-        # Build images in parallel
         pids=""
 
         {% if backend_changed %}
-        (cd /tmp/monitor-backend-build && \
+        (cd /tmp && rm -rf monitor-backend-build && mkdir monitor-backend-build && \
+         cp "{{ backend_jar_path }}" monitor-backend-build/app.jar && \
+         cp {{ project_root }}/backend/Dockerfile.runtime monitor-backend-build/Dockerfile && \
+         cd monitor-backend-build && \
          docker build -t {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} .) &
         pids="$pids $!"
         {% endif %}
 
         {% if frontend_changed %}
-        (cd /tmp/monitor-frontend-build && \
+        (cd /tmp && rm -rf monitor-frontend-build && mkdir monitor-frontend-build && \
+         cp -r {{ project_root }}/frontend/dist monitor-frontend-build/ && \
+         cp {{ project_root }}/frontend/Dockerfile.runtime monitor-frontend-build/Dockerfile && \
+         cp {{ project_root }}/frontend/nginx.conf.template monitor-frontend-build/ && \
+         cp {{ project_root }}/frontend/docker-entrypoint.sh monitor-frontend-build/ && \
+         cd monitor-frontend-build && \
          docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} .) &
         pids="$pids $!"
         {% endif %}
 
-        # Wait for builds
         for pid in $pids; do
           wait $pid || exit 1
         done
 
         echo "Docker builds complete"
+      delegate_to: localhost
+      become: false
       when: backend_changed or frontend_changed
 
-    # Import images to k0s in parallel
-    - name: Import images to k0s
+    # Save images to tarballs locally
+    - name: Save Docker images locally
       ansible.builtin.shell: |
         set -e
         pids=""
 
         {% if backend_changed %}
-        (docker save {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} | k0s ctr images import -) &
+        docker save {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} | gzip > /tmp/monitor-backend-image.tar.gz &
         pids="$pids $!"
         {% endif %}
 
         {% if frontend_changed %}
-        (docker save {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} | k0s ctr images import -) &
+        docker save {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} | gzip > /tmp/monitor-frontend-image.tar.gz &
+        pids="$pids $!"
+        {% endif %}
+
+        for pid in $pids; do
+          wait $pid || exit 1
+        done
+
+        echo "Images saved"
+      delegate_to: localhost
+      become: false
+      when: backend_changed or frontend_changed
+
+    # Transfer image tarballs to remote
+    - name: Transfer backend image to remote
+      ansible.builtin.copy:
+        src: /tmp/monitor-backend-image.tar.gz
+        dest: /tmp/monitor-backend-image.tar.gz
+        mode: '0644'
+      when: backend_changed
+
+    - name: Transfer frontend image to remote
+      ansible.builtin.copy:
+        src: /tmp/monitor-frontend-image.tar.gz
+        dest: /tmp/monitor-frontend-image.tar.gz
+        mode: '0644'
+      when: frontend_changed
+
+    # Import images to k3s on remote
+    - name: Import images to k3s
+      ansible.builtin.shell: |
+        set -e
+        pids=""
+
+        {% if backend_changed %}
+        (gunzip -c /tmp/monitor-backend-image.tar.gz | k3s ctr images import -) &
+        pids="$pids $!"
+        {% endif %}
+
+        {% if frontend_changed %}
+        (gunzip -c /tmp/monitor-frontend-image.tar.gz | k3s ctr images import -) &
         pids="$pids $!"
         {% endif %}
 
@@ -236,21 +236,25 @@
         echo "Images imported"
       when: backend_changed or frontend_changed
 
-    - name: Clean up build directories
+    - name: Clean up local build artifacts
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
         - /tmp/monitor-backend-build
         - /tmp/monitor-frontend-build
-        - /tmp/monitor-deploy.tar.gz
-
-    - name: Clean up local archive
-      ansible.builtin.file:
-        path: /tmp/monitor-deploy.tar.gz
-        state: absent
+        - /tmp/monitor-backend-image.tar.gz
+        - /tmp/monitor-frontend-image.tar.gz
       delegate_to: localhost
       become: false
+
+    - name: Clean up remote image tarballs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/monitor-backend-image.tar.gz
+        - /tmp/monitor-frontend-image.tar.gz
 
     # Save deployed commit for next run
     - name: Save deployed commit
@@ -282,15 +286,15 @@
       --set "app.gitHash={{ build_git_hash | default('unknown') }}" \
       --set "app.buildTime={{ build_time | default('') }}"
   environment:
-    KUBECONFIG: /var/lib/k0s/pki/admin.conf
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
 - name: Restart deployments to pick up new images
   ansible.builtin.shell: |
     {% if backend_changed | default(true) %}
-    k0s kubectl rollout restart deployment/{{ monitor_release_name }}-app -n {{ monitor_namespace }}
+    k3s kubectl rollout restart deployment/{{ monitor_release_name }}-app -n {{ monitor_namespace }}
     {% endif %}
     {% if frontend_changed | default(true) %}
-    k0s kubectl rollout restart deployment/{{ monitor_release_name }}-frontend -n {{ monitor_namespace }}
+    k3s kubectl rollout restart deployment/{{ monitor_release_name }}-frontend -n {{ monitor_namespace }}
     {% endif %}
     echo "Restarted changed deployments"
   when: monitor_build_locally | default(true)
@@ -306,7 +310,7 @@
 
 - name: Get deployment status
   ansible.builtin.shell: |
-    k0s kubectl get deployments -n {{ monitor_namespace }} -l "app.kubernetes.io/instance={{ monitor_release_name }}" -o json
+    k3s kubectl get deployments -n {{ monitor_namespace }} -l "app.kubernetes.io/instance={{ monitor_release_name }}" -o json
   register: monitor_deployments
   changed_when: false
 
