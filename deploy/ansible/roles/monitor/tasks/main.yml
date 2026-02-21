@@ -22,16 +22,26 @@
   vars:
     project_root: "{{ playbook_dir }}/../.."
   block:
-    - name: Get build info
+    - name: Get build environment
       ansible.builtin.shell: |
-        echo "$(git -C {{ project_root }} rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      register: build_info_result
+        . "$HOME/.nvm/nvm.sh" 2>/dev/null || true
+        . "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || true
+        echo "PATH=$PATH"
+        echo "JAVA_HOME=$JAVA_HOME"
+        echo "GIT_HASH=$(git -C {{ project_root }} rev-parse --short HEAD)"
+        echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      args:
+        executable: /bin/bash
+      register: build_env_result
       changed_when: false
+      become: false
 
-    - name: Set build info facts
+    - name: Set build facts
       ansible.builtin.set_fact:
-        build_git_hash: "{{ build_info_result.stdout.split()[0] }}"
-        build_time: "{{ build_info_result.stdout.split()[1] }}"
+        build_path: "{{ (build_env_result.stdout_lines | select('match', '^PATH=') | first).split('=', 1)[1] }}"
+        build_java_home: "{{ (build_env_result.stdout_lines | select('match', '^JAVA_HOME=') | first).split('=', 1)[1] }}"
+        build_git_hash: "{{ (build_env_result.stdout_lines | select('match', '^GIT_HASH=') | first).split('=', 1)[1] }}"
+        build_time: "{{ (build_env_result.stdout_lines | select('match', '^BUILD_TIME=') | first).split('=', 1)[1] }}"
         project_root: "{{ project_root }}"
 
     - name: Get last deployed commit
@@ -55,6 +65,7 @@
         done
       register: changes_result
       changed_when: false
+      become: false
 
     - name: Set change detection facts
       ansible.builtin.set_fact:
@@ -68,6 +79,7 @@
 
     - name: Export Godot game
       ansible.builtin.shell: cd {{ project_root }} && task game:export --force
+      become: false
       when: game_changed
 
     - name: Build artifacts in parallel
@@ -89,6 +101,10 @@
         for pid in $pids; do
           wait $pid || exit 1
         done
+      environment:
+        PATH: "{{ build_path }}"
+        JAVA_HOME: "{{ build_java_home }}"
+      become: false
       when: backend_changed or frontend_changed
 
     - name: Find backend JAR
@@ -98,25 +114,26 @@
         excludes: "*-plain.jar"
       register: jar_files
       when: backend_changed
+      become: false
 
     - name: Set JAR path
       ansible.builtin.set_fact:
         backend_jar_path: "{{ jar_files.files[0].path }}"
       when: backend_changed and jar_files.files | length > 0
 
-    # Build Docker images and pipe directly into k3s (same machine, no tarballs)
-    - name: Build and import backend image
+    # Build Docker images (as user — sm is in docker group), then import to k3s (needs root)
+    - name: Build backend image
       ansible.builtin.shell: |
         set -e
         staging=$(mktemp -d)
         cp "{{ backend_jar_path }}" "$staging/app.jar"
         cp {{ project_root }}/backend/Dockerfile.runtime "$staging/Dockerfile"
         docker build -t {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} "$staging"
-        docker save {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} | k3s ctr images import -
         rm -rf "$staging"
+      become: false
       when: backend_changed
 
-    - name: Build and import frontend image
+    - name: Build frontend image
       ansible.builtin.shell: |
         set -e
         staging=$(mktemp -d)
@@ -126,9 +143,19 @@
         cp {{ project_root }}/frontend/security-headers.conf "$staging/"
         cp {{ project_root }}/frontend/docker-entrypoint.sh "$staging/"
         docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} "$staging"
-        docker save {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} | k3s ctr images import -
         rm -rf "$staging"
+      become: false
       when: frontend_changed
+
+    - name: Import images to k3s
+      ansible.builtin.shell: |
+        {% if backend_changed %}
+        docker save {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} | k3s ctr images import -
+        {% endif %}
+        {% if frontend_changed %}
+        docker save {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} | k3s ctr images import -
+        {% endif %}
+      when: backend_changed or frontend_changed
 
     - name: Save deployed commit
       ansible.builtin.copy:
