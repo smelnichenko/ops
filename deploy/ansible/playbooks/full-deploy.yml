@@ -173,9 +173,9 @@
             helm upgrade --install {{ monitor_release_name }}
             /tmp/monitor-chart
             --namespace {{ monitor_namespace }}
-            --set postgres.password={{ lookup('env', 'MONITOR_DB_PASSWORD') | default('monitor123', true) }}
-            --set auth.jwtSecret={{ lookup('env', 'JWT_SECRET') | default('CHANGE_ME_GENERATE_A_SECURE_32_CHAR_SECRET', true) }}
-            --set grafana.adminPassword={{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin123', true) }}
+            --set postgres.password={{ lookup('env', 'MONITOR_DB_PASSWORD') | mandatory('MONITOR_DB_PASSWORD env var is required') }}
+            --set auth.jwtSecret={{ lookup('env', 'JWT_SECRET') | mandatory('JWT_SECRET env var is required') }}
+            --set grafana.adminPassword={{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | mandatory('GRAFANA_ADMIN_PASSWORD env var is required') }}
             --set app.ingress.className=traefik
             --set app.ingress.host=
             --set postgres.storage.storageClass=local-path
