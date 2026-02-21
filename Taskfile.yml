@@ -243,6 +243,19 @@ tasks:
       - task: docker
       - task: dev
 
+  # ============== GAME ==============
+  game:export:
+    desc: Export Godot game to frontend public directory
+    dir: game
+    cmds:
+      - mkdir -p ../frontend/public/game
+      - godot --headless --export-release "Web" ../frontend/public/game/index.html
+
+  game:clean:
+    desc: Clean exported game files
+    cmds:
+      - rm -rf frontend/public/game
+
   # ============== CLEAN ==============
   clean:
     desc: Clean all build artifacts
