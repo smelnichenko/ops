@@ -68,6 +68,15 @@ monitor_values:
         secretName: "pmon-dev-tls"
         clusterIssuer: "letsencrypt-prod"
 
+  mail:
+    enabled: "{{ lookup('env', 'MAIL_ENABLED') | default('false', true) | bool }}"
+    host: "{{ lookup('env', 'MAIL_HOST') | default('smtp.gmail.com', true) }}"
+    port: "{{ lookup('env', 'MAIL_PORT') | default('587', true) }}"
+    username: "{{ lookup('env', 'MAIL_USERNAME') | default('', true) }}"
+    password: "{{ lookup('env', 'MAIL_PASSWORD') | default('', true) }}"
+    fromAddress: "{{ lookup('env', 'MAIL_FROM') | default('noreply@example.com', true) }}"
+    appUrl: "{{ lookup('env', 'APP_URL') | default('https://pmon.dev', true) }}"
+
   ai:
     enabled: true
     apiKey: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
