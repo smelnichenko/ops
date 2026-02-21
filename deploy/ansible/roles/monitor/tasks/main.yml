@@ -5,9 +5,18 @@
   ansible.builtin.debug:
     msg: "Deploying Monitor application using Helm to namespace {{ monitor_namespace }}"
 
-- name: Create namespace
+- name: Create namespace with Pod Security Standards
   ansible.builtin.shell: |
-    k3s kubectl create namespace {{ monitor_namespace }} --dry-run=client -o yaml | k3s kubectl apply -f -
+    cat <<EOF | k3s kubectl apply -f -
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: {{ monitor_namespace }}
+      labels:
+        pod-security.kubernetes.io/enforce: baseline
+        pod-security.kubernetes.io/audit: restricted
+        pod-security.kubernetes.io/warn: restricted
+    EOF
   when: monitor_create_namespace
   changed_when: false
 

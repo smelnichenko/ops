@@ -17,6 +17,7 @@ monitor_values:
     jwtSecret: "{{ lookup('env', 'JWT_SECRET') | default('CHANGE_ME_GENERATE_A_SECURE_32_CHAR_SECRET', true) }}"
     tokenExpiration: 1h
     registrationEnabled: true
+    secureCookies: true
 
   # Network policies for pod isolation in production
   networkPolicies:
@@ -60,8 +61,12 @@ monitor_values:
     ingress:
       enabled: true
       className: traefik
-      host: ""  # Empty = accept any host
+      host: "pmon.dev"
       annotations: {}
+      tls:
+        enabled: true
+        secretName: "pmon-dev-tls"
+        clusterIssuer: "letsencrypt-prod"
 
   ai:
     enabled: true

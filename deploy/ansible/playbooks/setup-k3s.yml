@@ -181,6 +181,45 @@
         dest: "{{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}"
         flat: true
 
+    - name: Install cert-manager
+      block:
+        - name: Check if cert-manager is installed
+          ansible.builtin.shell: |
+            k3s kubectl get namespace cert-manager
+          register: certmanager_ns
+          ignore_errors: true
+          changed_when: false
+
+        - name: Install cert-manager CRDs and resources
+          ansible.builtin.shell: |
+            k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+          when: certmanager_ns.rc != 0
+
+        - name: Wait for cert-manager webhook to be ready
+          ansible.builtin.shell: |
+            k3s kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=120s
+          changed_when: false
+
+        - name: Create Let's Encrypt ClusterIssuer
+          ansible.builtin.shell: |
+            k3s kubectl apply -f - <<'EOF'
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: letsencrypt-prod
+            spec:
+              acme:
+                server: https://acme-v02.api.letsencrypt.org/directory
+                email: sergei.melnichenko@gmail.com
+                privateKeySecretRef:
+                  name: letsencrypt-prod
+                solvers:
+                  - http01:
+                      ingress:
+                        ingressClassName: traefik
+            EOF
+          changed_when: false
+
     - name: Display k3s status
       ansible.builtin.debug:
         msg: |
@@ -188,6 +227,7 @@
 
           Traefik ingress controller is ready (bundled with k3s).
           local-path-provisioner configured to use /mnt/nvme.
+          cert-manager installed with Let's Encrypt ClusterIssuer.
 
           To use kubectl locally:
             export KUBECONFIG={{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}
