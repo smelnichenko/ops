@@ -89,14 +89,39 @@
       register: frontend_changed_check
       changed_when: false
 
+    - name: Check if game changed
+      ansible.builtin.shell: |
+        if [ -z "{{ last_deployed_commit }}" ]; then
+          echo "changed"
+        elif git diff --quiet {{ last_deployed_commit }} HEAD -- game/; then
+          echo "unchanged"
+        else
+          echo "changed"
+        fi
+      args:
+        chdir: "{{ project_root }}"
+      delegate_to: localhost
+      become: false
+      register: game_changed_check
+      changed_when: false
+
     - name: Set change detection facts
       ansible.builtin.set_fact:
         backend_changed: "{{ backend_changed_check.stdout == 'changed' }}"
-        frontend_changed: "{{ frontend_changed_check.stdout == 'changed' }}"
+        game_changed: "{{ game_changed_check.stdout == 'changed' }}"
+        frontend_changed: "{{ frontend_changed_check.stdout == 'changed' or game_changed_check.stdout == 'changed' }}"
 
     - name: Display what will be built
       ansible.builtin.debug:
-        msg: "Building - Backend: {{ backend_changed }}, Frontend: {{ frontend_changed }} (last deploy: {{ last_deployed_commit | default('never') }})"
+        msg: "Building - Backend: {{ backend_changed }}, Frontend: {{ frontend_changed }}, Game: {{ game_changed }} (last deploy: {{ last_deployed_commit | default('never') }})"
+
+    # Export Godot game to frontend/public/game/ when game sources changed
+    - name: Export Godot game
+      ansible.builtin.shell: |
+        cd {{ project_root }} && task game:export
+      delegate_to: localhost
+      become: false
+      when: game_changed
 
     # Build artifacts locally in parallel (native speed)
     - name: Build artifacts locally in parallel
