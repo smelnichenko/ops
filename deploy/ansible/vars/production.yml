@@ -82,7 +82,7 @@ monitor_values:
 
   redis:
     enabled: true
-    image: redis:7-alpine
+    image: redis:latest
     password: "{{ lookup('env', 'REDIS_PASSWORD') | default('', true) }}"
     resources:
       requests:
@@ -94,7 +94,7 @@ monitor_values:
 
   postgres:
     enabled: true
-    image: postgres:17
+    image: postgres:latest
     database: monitor
     username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}"
     password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
