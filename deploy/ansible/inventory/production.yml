@@ -10,7 +10,7 @@
 all:
   hosts:
     target:
-      ansible_host: "{{ lookup('env', 'TARGET_HOST') | default('192.168.1.100', true) }}"
-      ansible_user: "{{ lookup('env', 'TARGET_USER') | default('pi', true) }}"
-      ansible_ssh_private_key_file: "{{ lookup('env', 'TARGET_SSH_KEY') | default('~/.ssh/id_rsa', true) }}"
+      ansible_host: "{{ lookup('env', 'TARGET_HOST') | default('192.168.11.2', true) }}"
+      ansible_user: "{{ lookup('env', 'TARGET_USER') | default('sm', true) }}"
+      ansible_ssh_private_key_file: "{{ lookup('env', 'TARGET_SSH_KEY') | default('~/.ssh/id_ed25519', true) }}"
       ansible_python_interpreter: /usr/bin/python3

@@ -3,12 +3,8 @@ version: '3'
 dotenv: ['.env']
 
 vars:
-  BACKEND_IMAGE: ghcr.io/schnappy/monitor
-  FRONTEND_IMAGE: ghcr.io/schnappy/monitor-frontend
-  VERSION: '{{.VERSION | default "latest"}}'
-  # Target host - override with: task deploy:prod TARGET_HOST=mypi.local
-  TARGET_HOST: '{{.TARGET_HOST | default "192.168.1.100"}}'
-  TARGET_USER: '{{.TARGET_USER | default "pi"}}'
+  TARGET_HOST: '{{.TARGET_HOST | default "192.168.11.2"}}'
+  TARGET_USER: '{{.TARGET_USER | default "sm"}}'
 
 tasks:
   default:
@@ -18,8 +14,8 @@ tasks:
 
   # ============== BUILD ==============
   build:
-    desc: Build everything (backend, frontend, helm)
-    deps: [build:backend, build:frontend, build:helm]
+    desc: Build everything
+    deps: [build:backend, build:frontend]
 
   build:backend:
     desc: Build backend JAR
@@ -28,59 +24,33 @@ tasks:
       - ./gradlew bootJar -x test
 
   build:frontend:
-    desc: Build frontend
+    desc: Build frontend (includes game export)
+    deps: [game:export]
     dir: frontend
     cmds:
       - npm ci
       - npm run build
 
-  build:helm:
-    desc: Package Helm chart
-    dir: backend
+  # ============== GAME ==============
+  game:export:
+    desc: Export Godot game to frontend public directory
+    dir: game
+    sources:
+      - scripts/**/*.gd
+      - scenes/**/*.tscn
+      - project.godot
+      - export_presets.cfg
+    generates:
+      - ../frontend/public/game/index.wasm
     cmds:
-      - helm lint helm/monitor --set postgres.password=test --set grafana.adminPassword=test
-      - mkdir -p build/helm
-      - helm package helm/monitor --destination build/helm
+      - mkdir -p ../frontend/public/game
+      - godot --headless --export-release "Web" ../frontend/public/game/index.html
+      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../frontend/public/game/index.html
 
-  # ============== DOCKER ==============
-  docker:
-    desc: Build all Docker images
-    deps: [docker:backend, docker:frontend]
-
-  docker:backend:
-    desc: Build backend Docker image
-    dir: backend
+  game:clean:
+    desc: Clean exported game files
     cmds:
-      - docker build -t {{.BACKEND_IMAGE}}:{{.VERSION}} .
-
-  docker:frontend:
-    desc: Build frontend Docker image
-    dir: frontend
-    vars:
-      GIT_HASH:
-        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
-      BUILD_TIME:
-        sh: date -u +%Y-%m-%dT%H:%M:%SZ
-    cmds:
-      - docker build --build-arg GIT_HASH={{.GIT_HASH}} --build-arg BUILD_TIME={{.BUILD_TIME}} -t {{.FRONTEND_IMAGE}}:{{.VERSION}} .
-
-  docker:push:
-    desc: Push Docker images to registry
-    deps: [docker]
-    cmds:
-      - docker push {{.BACKEND_IMAGE}}:{{.VERSION}}
-      - docker push {{.FRONTEND_IMAGE}}:{{.VERSION}}
-
-  docker:buildx:
-    desc: Build and push multi-arch images (amd64, arm64)
-    vars:
-      GIT_HASH:
-        sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
-      BUILD_TIME:
-        sh: date -u +%Y-%m-%dT%H:%M:%SZ
-    cmds:
-      - docker buildx build --platform linux/amd64,linux/arm64 -t {{.BACKEND_IMAGE}}:{{.VERSION}} --push backend
-      - docker buildx build --platform linux/amd64,linux/arm64 --build-arg GIT_HASH={{.GIT_HASH}} --build-arg BUILD_TIME={{.BUILD_TIME}} -t {{.FRONTEND_IMAGE}}:{{.VERSION}} --push frontend
+      - rm -rf frontend/public/game
 
   # ============== LOCAL DEV ==============
   dev:
@@ -97,27 +67,6 @@ tasks:
       - echo "Frontend http://localhost:3000"
       - echo "Backend API http://localhost:8080/api"
 
-  dev:build:
-    desc: Build and start local dev environment
-    cmds:
-      - task: docker
-      - task: dev
-
-  dev:logs:
-    desc: Tail logs from all containers
-    cmds:
-      - docker compose logs -f
-
-  dev:stop:
-    desc: Stop local development environment
-    cmds:
-      - docker compose down
-
-  dev:clean:
-    desc: Stop and remove all data
-    cmds:
-      - docker compose down -v
-
   dev:monitoring:
     desc: Start with Prometheus and Grafana
     vars:
@@ -133,6 +82,21 @@ tasks:
       - echo "Backend API http://localhost:8080/api"
       - echo "Prometheus http://localhost:9090"
       - echo "Grafana http://localhost:3001 (admin/admin)"
+
+  dev:logs:
+    desc: Tail logs from all containers
+    cmds:
+      - docker compose logs -f
+
+  dev:stop:
+    desc: Stop local development environment
+    cmds:
+      - docker compose down
+
+  dev:clean:
+    desc: Stop and remove all data
+    cmds:
+      - docker compose down -v
 
   # ============== TEST ==============
   test:
@@ -181,42 +145,28 @@ tasks:
       - k6 run --vus 1 --duration 10s k6/load-test.js
 
   # ============== DEPLOY ==============
-  deploy:dev:
-    desc: Deploy to development k8s
-    dir: deploy/ansible
-    cmds:
-      - ansible-playbook deploy.yml -e @vars/development.yml
-
   deploy:prod:
-    desc: "Deploy to production. Override host: task deploy:prod TARGET_HOST=mypi.local"
+    desc: Deploy to production
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:full:
-    desc: "Full deployment - setup k3s + deploy app. Override: task deploy:full TARGET_HOST=mypi.local"
+    desc: Full deployment - setup k3s + deploy app
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/full-deploy.yml
 
   deploy:k3s:
-    desc: "Setup k3s only. Override: task deploy:k3s TARGET_HOST=mypi.local"
+    desc: Setup k3s only
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
 
   deploy:undeploy:
-    desc: "Uninstall monitor from target (keeps namespace and PVCs)"
+    desc: Uninstall monitor from target (keeps PVCs)
     cmds:
       - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /etc/rancher/k3s/k3s.yaml"
-      - 'echo "Uninstalled. To also delete data, run task deploy:undeploy:full"'
-
-  deploy:undeploy:full:
-    desc: "Uninstall monitor AND delete namespace (DELETES ALL DATA)"
-    cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /etc/rancher/k3s/k3s.yaml || true"
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl delete namespace monitor"
-      - 'echo "Fully uninstalled. All data deleted."'
 
   deploy:status:
     desc: Check deployment status on target
@@ -226,41 +176,11 @@ tasks:
   deploy:ping:
     desc: Test connectivity to target host
     cmds:
-      - echo "Testing connection to {{.TARGET_HOST}} as {{.TARGET_USER}}..."
       - ssh -o ConnectTimeout=5 {{.TARGET_USER}}@{{.TARGET_HOST}} "hostname && uname -a"
-
-  # ============== ALL-IN-ONE ==============
-  release:
-    desc: Full release - build, test, push images, deploy to prod
-    cmds:
-      - task: test
-      - task: docker:buildx
-      - task: deploy:prod
-
-  release:dev:
-    desc: Build images and start local dev
-    cmds:
-      - task: docker
-      - task: dev
-
-  # ============== GAME ==============
-  game:export:
-    desc: Export Godot game to frontend public directory
-    dir: game
-    cmds:
-      - mkdir -p ../frontend/public/game
-      - godot --headless --export-release "Web" ../frontend/public/game/index.html
-      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../frontend/public/game/index.html
-
-  game:clean:
-    desc: Clean exported game files
-    cmds:
-      - rm -rf frontend/public/game
 
   # ============== CLEAN ==============
   clean:
     desc: Clean all build artifacts
     cmds:
-      - rm -rf backend/build
-      - rm -rf frontend/dist frontend/node_modules
+      - rm -rf backend/build frontend/dist frontend/node_modules frontend/public/game
       - docker compose down -v --remove-orphans 2>/dev/null || true
