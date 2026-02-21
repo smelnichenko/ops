@@ -1,9 +1,6 @@
 ---
 # Monitor Helm chart deployment tasks
-
-- name: Deploying Monitor application
-  ansible.builtin.debug:
-    msg: "Deploying Monitor application using Helm to namespace {{ monitor_namespace }}"
+# NOTE: Build machine and k3s target are the same host — no remote transfers needed
 
 - name: Create namespace with Pod Security Standards
   ansible.builtin.shell: |
@@ -20,33 +17,23 @@
   when: monitor_create_namespace
   changed_when: false
 
-# Build artifacts locally (fast - native AMD64) then build images on Pi (fast - just copy)
 - name: Build and import images
   when: monitor_build_locally | default(true)
+  vars:
+    project_root: "{{ playbook_dir }}/../.."
   block:
-    - name: Get git hash for build info
-      ansible.builtin.command: git rev-parse --short HEAD
-      args:
-        chdir: "{{ playbook_dir }}/../.."
-      delegate_to: localhost
-      become: false
-      register: git_hash_result
-      changed_when: false
-
-    - name: Get build timestamp
-      ansible.builtin.command: date -u +%Y-%m-%dT%H:%M:%SZ
-      delegate_to: localhost
-      become: false
-      register: build_time_result
+    - name: Get build info
+      ansible.builtin.shell: |
+        echo "$(git -C {{ project_root }} rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      register: build_info_result
       changed_when: false
 
     - name: Set build info facts
       ansible.builtin.set_fact:
-        build_git_hash: "{{ git_hash_result.stdout }}"
-        build_time: "{{ build_time_result.stdout }}"
-        project_root: "{{ playbook_dir }}/../.."
+        build_git_hash: "{{ build_info_result.stdout.split()[0] }}"
+        build_time: "{{ build_info_result.stdout.split()[1] }}"
+        project_root: "{{ project_root }}"
 
-    # Check what changed since last deploy (skip unchanged components)
     - name: Get last deployed commit
       ansible.builtin.slurp:
         src: /var/lib/monitor-deploy-commit
@@ -57,112 +44,58 @@
       ansible.builtin.set_fact:
         last_deployed_commit: "{{ (last_commit_file.content | default('') | b64decode | trim) if last_commit_file.content is defined else '' }}"
 
-    - name: Check if backend changed
+    - name: Detect changes
       ansible.builtin.shell: |
-        if [ -z "{{ last_deployed_commit }}" ]; then
-          echo "changed"
-        elif git diff --quiet {{ last_deployed_commit }} HEAD -- backend/; then
-          echo "unchanged"
-        else
-          echo "changed"
-        fi
-      args:
-        chdir: "{{ project_root }}"
-      delegate_to: localhost
-      become: false
-      register: backend_changed_check
-      changed_when: false
-
-    - name: Check if frontend changed
-      ansible.builtin.shell: |
-        if [ -z "{{ last_deployed_commit }}" ]; then
-          echo "changed"
-        elif git diff --quiet {{ last_deployed_commit }} HEAD -- frontend/; then
-          echo "unchanged"
-        else
-          echo "changed"
-        fi
-      args:
-        chdir: "{{ project_root }}"
-      delegate_to: localhost
-      become: false
-      register: frontend_changed_check
-      changed_when: false
-
-    - name: Check if game changed
-      ansible.builtin.shell: |
-        if [ -z "{{ last_deployed_commit }}" ]; then
-          echo "changed"
-        elif git diff --quiet {{ last_deployed_commit }} HEAD -- game/; then
-          echo "unchanged"
-        else
-          echo "changed"
-        fi
-      args:
-        chdir: "{{ project_root }}"
-      delegate_to: localhost
-      become: false
-      register: game_changed_check
+        cd {{ project_root }}
+        last="{{ last_deployed_commit }}"
+        for component in backend frontend game; do
+          if [ -z "$last" ] || ! git diff --quiet "$last" HEAD -- "$component/"; then
+            echo "$component"
+          fi
+        done
+      register: changes_result
       changed_when: false
 
     - name: Set change detection facts
       ansible.builtin.set_fact:
-        backend_changed: "{{ backend_changed_check.stdout == 'changed' }}"
-        game_changed: "{{ game_changed_check.stdout == 'changed' }}"
-        frontend_changed: "{{ frontend_changed_check.stdout == 'changed' or game_changed_check.stdout == 'changed' }}"
+        backend_changed: "{{ 'backend' in changes_result.stdout_lines }}"
+        game_changed: "{{ 'game' in changes_result.stdout_lines }}"
+        frontend_changed: "{{ 'frontend' in changes_result.stdout_lines or 'game' in changes_result.stdout_lines }}"
 
     - name: Display what will be built
       ansible.builtin.debug:
         msg: "Building - Backend: {{ backend_changed }}, Frontend: {{ frontend_changed }}, Game: {{ game_changed }} (last deploy: {{ last_deployed_commit | default('never') }})"
 
-    # Export Godot game to frontend/public/game/ when game sources changed
     - name: Export Godot game
-      ansible.builtin.shell: |
-        cd {{ project_root }} && task game:export
-      delegate_to: localhost
-      become: false
+      ansible.builtin.shell: cd {{ project_root }} && task game:export --force
       when: game_changed
 
-    # Build artifacts locally in parallel (native speed)
-    - name: Build artifacts locally in parallel
+    - name: Build artifacts in parallel
       ansible.builtin.shell: |
         set -e
         cd {{ project_root }}
-
-        # Track PIDs for parallel builds
         pids=""
 
-        # Build backend if changed
         {% if backend_changed %}
         (cd backend && ./gradlew bootJar --no-daemon -x test) &
         pids="$pids $!"
         {% endif %}
 
-        # Build frontend if changed
         {% if frontend_changed %}
         (cd frontend && npm ci --silent && VITE_GIT_HASH={{ build_git_hash }} VITE_BUILD_TIME={{ build_time }} npm run build) &
         pids="$pids $!"
         {% endif %}
 
-        # Wait for all builds
         for pid in $pids; do
           wait $pid || exit 1
         done
-
-        echo "Builds complete"
-      delegate_to: localhost
-      become: false
-      register: parallel_build
       when: backend_changed or frontend_changed
 
-    # Find the JAR dynamically (not hardcoded)
     - name: Find backend JAR
       ansible.builtin.find:
         paths: "{{ project_root }}/backend/build/libs"
         patterns: "*.jar"
         excludes: "*-plain.jar"
-      delegate_to: localhost
-      become: false
       register: jar_files
       when: backend_changed
 
@@ -171,130 +104,35 @@
         backend_jar_path: "{{ jar_files.files[0].path }}"
       when: backend_changed and jar_files.files | length > 0
 
-    # Build Docker images locally (native AMD64 speed)
-    - name: Build Docker images locally
+    # Build Docker images and pipe directly into k3s (same machine, no tarballs)
+    - name: Build and import backend image
       ansible.builtin.shell: |
         set -e
-        cd {{ project_root }}
-        pids=""
-
-        {% if backend_changed %}
-        (cd /tmp && rm -rf monitor-backend-build && mkdir monitor-backend-build && \
-         cp "{{ backend_jar_path }}" monitor-backend-build/app.jar && \
-         cp {{ project_root }}/backend/Dockerfile.runtime monitor-backend-build/Dockerfile && \
-         cd monitor-backend-build && \
-         docker build -t {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} .) &
-        pids="$pids $!"
-        {% endif %}
-
-        {% if frontend_changed %}
-        (cd /tmp && rm -rf monitor-frontend-build && mkdir monitor-frontend-build && \
-         cp -r {{ project_root }}/frontend/dist monitor-frontend-build/ && \
-         cp {{ project_root }}/frontend/Dockerfile.runtime monitor-frontend-build/Dockerfile && \
-         cp {{ project_root }}/frontend/nginx.conf.template monitor-frontend-build/ && \
-         cp {{ project_root }}/frontend/security-headers.conf monitor-frontend-build/ && \
-         cp {{ project_root }}/frontend/docker-entrypoint.sh monitor-frontend-build/ && \
-         cd monitor-frontend-build && \
-         docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} .) &
-        pids="$pids $!"
-        {% endif %}
-
-        for pid in $pids; do
-          wait $pid || exit 1
-        done
-
-        echo "Docker builds complete"
-      delegate_to: localhost
-      become: false
-      when: backend_changed or frontend_changed
-
-    # Save images to tarballs locally
-    - name: Save Docker images locally
-      ansible.builtin.shell: |
-        set -e
-        pids=""
-
-        {% if backend_changed %}
-        docker save {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} | gzip > /tmp/monitor-backend-image.tar.gz &
-        pids="$pids $!"
-        {% endif %}
-
-        {% if frontend_changed %}
-        docker save {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} | gzip > /tmp/monitor-frontend-image.tar.gz &
-        pids="$pids $!"
-        {% endif %}
-
-        for pid in $pids; do
-          wait $pid || exit 1
-        done
-
-        echo "Images saved"
-      delegate_to: localhost
-      become: false
-      when: backend_changed or frontend_changed
-
-    # Transfer image tarballs to remote
-    - name: Transfer backend image to remote
-      ansible.builtin.copy:
-        src: /tmp/monitor-backend-image.tar.gz
-        dest: /tmp/monitor-backend-image.tar.gz
-        mode: '0644'
+        staging=$(mktemp -d)
+        cp "{{ backend_jar_path }}" "$staging/app.jar"
+        cp {{ project_root }}/backend/Dockerfile.runtime "$staging/Dockerfile"
+        docker build -t {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} "$staging"
+        docker save {{ monitor_values.app.image.repository }}:{{ monitor_values.app.image.tag }} | k3s ctr images import -
+        rm -rf "$staging"
       when: backend_changed
 
-    - name: Transfer frontend image to remote
-      ansible.builtin.copy:
-        src: /tmp/monitor-frontend-image.tar.gz
-        dest: /tmp/monitor-frontend-image.tar.gz
-        mode: '0644'
-      when: frontend_changed
-
-    # Import images to k3s on remote
-    - name: Import images to k3s
+    - name: Build and import frontend image
       ansible.builtin.shell: |
         set -e
-        pids=""
+        staging=$(mktemp -d)
+        cp -r {{ project_root }}/frontend/dist "$staging/"
+        cp {{ project_root }}/frontend/Dockerfile.runtime "$staging/Dockerfile"
+        cp {{ project_root }}/frontend/nginx.conf.template "$staging/"
+        cp {{ project_root }}/frontend/security-headers.conf "$staging/"
+        cp {{ project_root }}/frontend/docker-entrypoint.sh "$staging/"
+        docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} "$staging"
+        docker save {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} | k3s ctr images import -
+        rm -rf "$staging"
+      when: frontend_changed
 
-        {% if backend_changed %}
-        (gunzip -c /tmp/monitor-backend-image.tar.gz | k3s ctr images import -) &
-        pids="$pids $!"
-        {% endif %}
-
-        {% if frontend_changed %}
-        (gunzip -c /tmp/monitor-frontend-image.tar.gz | k3s ctr images import -) &
-        pids="$pids $!"
-        {% endif %}
-
-        for pid in $pids; do
-          wait $pid || exit 1
-        done
-
-        echo "Images imported"
-      when: backend_changed or frontend_changed
-
-    - name: Clean up local build artifacts
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /tmp/monitor-backend-build
-        - /tmp/monitor-frontend-build
-        - /tmp/monitor-backend-image.tar.gz
-        - /tmp/monitor-frontend-image.tar.gz
-      delegate_to: localhost
-      become: false
-
-    - name: Clean up remote image tarballs
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /tmp/monitor-backend-image.tar.gz
-        - /tmp/monitor-frontend-image.tar.gz
-
-    # Save deployed commit for next run
     - name: Save deployed commit
       ansible.builtin.copy:
-        content: "{{ git_hash_result.stdout }}"
+        content: "{{ build_git_hash }}"
         dest: /var/lib/monitor-deploy-commit
         mode: '0644'
 
@@ -305,16 +143,9 @@
     mode: '0600'
   changed_when: false
 
-- name: Copy Helm chart to remote
-  ansible.builtin.synchronize:
-    src: "{{ playbook_dir }}/../../backend/helm/monitor/"
-    dest: "/tmp/monitor-helm-chart/"
-    delete: true
-    recursive: true
-
 - name: Deploy Monitor Helm chart
   ansible.builtin.shell: |
-    helm upgrade --install {{ monitor_release_name }} /tmp/monitor-helm-chart \
+    helm upgrade --install {{ monitor_release_name }} {{ playbook_dir }}/../../backend/helm/monitor \
       --namespace {{ monitor_namespace }} \
       --create-namespace \
       --values /tmp/monitor-values-{{ monitor_release_name }}.yml \
@@ -323,30 +154,21 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
-- name: Restart deployments to pick up new images
+- name: Restart changed deployments
   ansible.builtin.shell: |
-    {% if backend_changed | default(true) %}
+    {% if backend_changed | default(false) %}
     k3s kubectl rollout restart deployment/{{ monitor_release_name }}-app -n {{ monitor_namespace }}
     {% endif %}
-    {% if frontend_changed | default(true) %}
+    {% if frontend_changed | default(false) %}
     k3s kubectl rollout restart deployment/{{ monitor_release_name }}-frontend -n {{ monitor_namespace }}
     {% endif %}
-    echo "Restarted changed deployments"
-  when: monitor_build_locally | default(true)
+    echo "done"
+  when: (backend_changed | default(false)) or (frontend_changed | default(false))
 
-- name: Clean up temporary files
+- name: Clean up
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "/tmp/monitor-values-{{ monitor_release_name }}.yml"
     state: absent
-  loop:
-    - "/tmp/monitor-values-{{ monitor_release_name }}.yml"
-    - "/tmp/monitor-helm-chart"
-  changed_when: false
-
-- name: Get deployment status
-  ansible.builtin.shell: |
-    k3s kubectl get deployments -n {{ monitor_namespace }} -l "app.kubernetes.io/instance={{ monitor_release_name }}" -o json
-  register: monitor_deployments
   changed_when: false
 
 - name: Display deployment status
