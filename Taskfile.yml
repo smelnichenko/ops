@@ -46,8 +46,8 @@ tasks:
       - mkdir -p ../frontend/public/game
       - godot --headless --export-release "Web" ../frontend/public/game/index.html
       - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../frontend/public/game/index.html
-      # Inject postMessage bridge before Godot engine script
-      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type){window._gameInbox=e.data;}});</script>\n\t\t<script src="index.js"></script>|' ../frontend/public/game/index.html
+      # Inject postMessage bridge — calls _godotReceive(json) registered by Godot WASM
+      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type\&\&window._godotReceive){window._godotReceive(JSON.stringify(e.data));}});</script>\n\t\t<script src="index.js"></script>|' ../frontend/public/game/index.html
 
   game:clean:
     desc: Clean exported game files
