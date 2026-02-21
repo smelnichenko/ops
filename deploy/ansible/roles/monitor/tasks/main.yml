@@ -167,6 +167,7 @@
          cp -r {{ project_root }}/frontend/dist monitor-frontend-build/ && \
          cp {{ project_root }}/frontend/Dockerfile.runtime monitor-frontend-build/Dockerfile && \
          cp {{ project_root }}/frontend/nginx.conf.template monitor-frontend-build/ && \
+         cp {{ project_root }}/frontend/security-headers.conf monitor-frontend-build/ && \
          cp {{ project_root }}/frontend/docker-entrypoint.sh monitor-frontend-build/ && \
          cd monitor-frontend-build && \
          docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} .) &
