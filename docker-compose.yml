@@ -76,7 +76,7 @@ services:
 
   # Prometheus (optional - for metrics)
   prometheus:
-    image: prom/prometheus:v2.48.0
+    image: prom/prometheus:v3.9.1
     container_name: monitor-prometheus
     ports:
       - "9090:9090"
@@ -94,7 +94,7 @@ services:
 
   # Grafana (optional - for dashboards)
   grafana:
-    image: grafana/grafana:10.2.0
+    image: grafana/grafana:12.4.0
     container_name: monitor-grafana
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
