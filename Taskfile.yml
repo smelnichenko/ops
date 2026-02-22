@@ -146,6 +146,13 @@ tasks:
     cmds:
       - k6 run --vus 1 --duration 10s k6/load-test.js
 
+  # ============== JOOQ ==============
+  jooq:generate:
+    desc: Generate jOOQ classes from database (requires running postgres)
+    dir: backend
+    cmds:
+      - ./gradlew jooqCodegen
+
   # ============== DEPLOY ==============
   deploy:prod:
     desc: Deploy to production
