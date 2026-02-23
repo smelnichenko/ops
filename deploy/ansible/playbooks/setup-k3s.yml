@@ -220,6 +220,92 @@
             EOF
           changed_when: false
 
+    - name: Configure asymmetric routing fix for multi-homed k3s
+      block:
+        - name: Install k3s routing fix service
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/k3s-routing-fix.service
+            mode: '0644'
+            content: |
+              [Unit]
+              Description=Fix asymmetric routing for k3s on multi-homed host
+              After=k3s.service
+              Wants=k3s.service
+
+              [Service]
+              Type=oneshot
+              RemainAfterExit=yes
+              ExecStart=/usr/local/bin/k3s-routing-fix.sh
+              ExecStop=/usr/local/bin/k3s-routing-fix.sh stop
+
+              [Install]
+              WantedBy=multi-user.target
+
+        - name: Install k3s routing fix script
+          ansible.builtin.copy:
+            dest: /usr/local/bin/k3s-routing-fix.sh
+            mode: '0755'
+            content: |
+              #!/bin/bash
+              # Fix asymmetric routing for k3s external traffic on multi-homed hosts.
+              #
+              # Problem: External traffic arrives on enp1s0f1, gets DNATted to a pod,
+              # but reply packets route via enp1s0f0 (default gateway) instead of back
+              # through enp1s0f1. This uses CONNMARK to remember the ingress interface
+              # and route replies correctly.
+              set -e
+
+              IFACE=enp1s0f1
+              TABLE=100
+              MARK=0x100
+
+              case "${1:-start}" in
+                start)
+                  # Restore connection mark on all packets
+                  iptables -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null ||
+                    iptables -t mangle -A PREROUTING -j CONNMARK --restore-mark
+
+                  # Mark new connections arriving on external interface
+                  iptables -t mangle -C PREROUTING -i "$IFACE" -m conntrack --ctstate NEW -j MARK --set-mark "$MARK" 2>/dev/null ||
+                    iptables -t mangle -A PREROUTING -i "$IFACE" -m conntrack --ctstate NEW -j MARK --set-mark "$MARK"
+
+                  # Save mark to connection tracking
+                  iptables -t mangle -C PREROUTING -i "$IFACE" -m conntrack --ctstate NEW -j CONNMARK --save-mark 2>/dev/null ||
+                    iptables -t mangle -A PREROUTING -i "$IFACE" -m conntrack --ctstate NEW -j CONNMARK --save-mark
+
+                  # Policy routing rule for marked packets
+                  ip rule show | grep -q "fwmark ${MARK}/${MARK}" ||
+                    ip rule add fwmark "${MARK}/${MARK}" lookup "$TABLE" priority 32764
+
+                  # Wait for cni0 to appear (k3s creates it)
+                  for i in $(seq 1 30); do
+                    ip link show cni0 &>/dev/null && break
+                    sleep 2
+                  done
+
+                  # Add pod/service network routes to table so DNATted traffic reaches pods
+                  ip route replace 10.42.0.0/24 dev cni0 table "$TABLE" 2>/dev/null || true
+                  ip route replace 10.43.0.0/16 dev cni0 table "$TABLE" 2>/dev/null || true
+
+                  echo "k3s routing fix applied"
+                  ;;
+                stop)
+                  iptables -t mangle -D PREROUTING -j CONNMARK --restore-mark 2>/dev/null || true
+                  iptables -t mangle -D PREROUTING -i "$IFACE" -m conntrack --ctstate NEW -j MARK --set-mark "$MARK" 2>/dev/null || true
+                  iptables -t mangle -D PREROUTING -i "$IFACE" -m conntrack --ctstate NEW -j CONNMARK --save-mark 2>/dev/null || true
+                  ip rule del fwmark "${MARK}/${MARK}" lookup "$TABLE" 2>/dev/null || true
+                  ip route del 10.42.0.0/24 dev cni0 table "$TABLE" 2>/dev/null || true
+                  ip route del 10.43.0.0/16 dev cni0 table "$TABLE" 2>/dev/null || true
+                  echo "k3s routing fix removed"
+                  ;;
+              esac
+
+        - name: Enable k3s routing fix service
+          ansible.builtin.systemd:
+            name: k3s-routing-fix
+            enabled: true
+            daemon_reload: true
+
     - name: Display k3s status
       ansible.builtin.debug:
         msg: |
@@ -228,6 +314,7 @@
           Traefik ingress controller is ready (bundled with k3s).
           local-path-provisioner configured to use /mnt/nvme.
           cert-manager installed with Let's Encrypt ClusterIssuer.
+          Asymmetric routing fix installed for multi-homed ingress.
 
           To use kubectl locally:
             export KUBECONFIG={{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}
