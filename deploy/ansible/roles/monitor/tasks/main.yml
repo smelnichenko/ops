@@ -111,6 +111,7 @@
           cp Dockerfile.runtime "$staging/Dockerfile"
           cp nginx.conf.template "$staging/"
           cp security-headers.conf "$staging/"
+          cp security-headers-base.conf "$staging/"
           cp docker-entrypoint.sh "$staging/"
           docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_values.frontend.image.tag }} "$staging"
           rm -rf "$staging"
