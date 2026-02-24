@@ -164,7 +164,8 @@ tasks:
     desc: Full deployment - setup k3s + deploy app
     dir: deploy/ansible
     cmds:
-      - ansible-playbook -i inventory/production.yml playbooks/full-deploy.yml
+      - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+      - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:k3s:
     desc: Setup k3s only
