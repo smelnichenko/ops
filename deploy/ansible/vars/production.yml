@@ -82,6 +82,23 @@ monitor_values:
     signingSecret: "{{ lookup('env', 'RESEND_WEBHOOK_SECRET') | default('', true) }}"
     apiKey: "{{ lookup('env', 'RESEND_API_KEY') | default('', true) }}"
 
+  minio:
+    enabled: "{{ lookup('env', 'MINIO_ENABLED') | default('false', true) | bool }}"
+    image: "quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z"
+    accessKey: "{{ lookup('env', 'MINIO_ROOT_USER') | default('', true) }}"
+    secretKey: "{{ lookup('env', 'MINIO_ROOT_PASSWORD') | default('', true) }}"
+    bucket: "email-attachments"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "1Gi"
+        cpu: "1000m"
+    storage:
+      size: 20Gi
+      storageClass: "local-path"
+
   ai:
     enabled: true
     apiKey: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
