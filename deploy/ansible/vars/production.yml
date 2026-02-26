@@ -77,6 +77,11 @@ monitor_values:
     fromAddress: "{{ lookup('env', 'MAIL_FROM') | default('noreply@example.com', true) }}"
     appUrl: "{{ lookup('env', 'APP_URL') | default('https://pmon.dev', true) }}"
 
+  webhook:
+    enabled: "{{ lookup('env', 'RESEND_WEBHOOK_ENABLED') | default('false', true) | bool }}"
+    signingSecret: "{{ lookup('env', 'RESEND_WEBHOOK_SECRET') | default('', true) }}"
+    apiKey: "{{ lookup('env', 'RESEND_API_KEY') | default('', true) }}"
+
   ai:
     enabled: true
     apiKey: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
