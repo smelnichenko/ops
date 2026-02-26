@@ -109,6 +109,7 @@
           staging=$(mktemp -d)
           cp -r dist "$staging/"
           cp Dockerfile.runtime "$staging/Dockerfile"
+          cp nginx.conf "$staging/"
           cp nginx.conf.template "$staging/"
           cp security-headers.conf "$staging/"
           cp security-headers-base.conf "$staging/"
