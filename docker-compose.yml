@@ -34,7 +34,7 @@ services:
 
   # MinIO (S3-compatible object storage for email attachments)
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z
+    image: quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z
     container_name: monitor-minio
     command: server /data
     environment:

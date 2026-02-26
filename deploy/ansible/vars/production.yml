@@ -84,7 +84,7 @@ monitor_values:
 
   minio:
     enabled: "{{ lookup('env', 'MINIO_ENABLED') | default('false', true) | bool }}"
-    image: "quay.io/minio/minio:RELEASE.2024-11-07T00-52-20Z"
+    image: "quay.io/minio/minio:RELEASE.2025-10-15T17-29-55Z"
     accessKey: "{{ lookup('env', 'MINIO_ROOT_USER') | default('', true) }}"
     secretKey: "{{ lookup('env', 'MINIO_ROOT_PASSWORD') | default('', true) }}"
     bucket: "email-attachments"
