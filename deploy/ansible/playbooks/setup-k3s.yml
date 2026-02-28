@@ -94,49 +94,13 @@
       delay: 10
       changed_when: false
 
-    - name: Configure local-path-provisioner to use /mnt/storage/k3s-pvcs
-      ansible.builtin.shell: |
-        k3s kubectl apply -f - <<'EOF'
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          name: local-path-config
-          namespace: kube-system
-        data:
-          config.json: |-
-            {
-              "nodePathMap": [
-                {
-                  "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
-                  "paths": ["/mnt/storage/k3s-pvcs"]
-                }
-              ]
-            }
-          setup: |-
-            #!/bin/sh
-            set -eu
-            mkdir -p "$VOL_DIR"
-            chmod 0755 "$VOL_DIR"
-          teardown: |-
-            #!/bin/sh
-            set -eu
-            rm -rf "$VOL_DIR"
-          helperPod.yaml: |-
-            apiVersion: v1
-            kind: Pod
-            metadata:
-              name: helper-pod
-            spec:
-              containers:
-              - name: helper-pod
-                image: busybox:1.36
-        EOF
-      changed_when: false
-
-    - name: Restart local-path-provisioner to pick up config
-      ansible.builtin.shell: |
-        k3s kubectl rollout restart deployment local-path-provisioner -n kube-system
-      changed_when: false
+    - name: Patch k3s local-storage manifest (path + permissions)
+      ansible.builtin.copy:
+        src: ../../k8s/local-storage.yaml
+        dest: /mnt/storage/k3s/server/manifests/local-storage.yaml
+        owner: root
+        group: root
+        mode: "0600"
 
     - name: Install Helm
       block:
