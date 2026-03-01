@@ -23,7 +23,7 @@
     forgejo_host: "git.pmon.dev"
     forgejo_chart_version: "16.2.0"
     forgejo_storage_size: "20Gi"
-    forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('admin', true) }}"
+    forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('forgejo_admin', true) }}"
     forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
     forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
     forgejo_runner_secret: "{{ lookup('env', 'FORGEJO_RUNNER_SECRET') }}"
@@ -212,7 +212,7 @@
             level: info
           runner:
             capacity: 1
-            timeout: 3600
+            timeout: 1h
             labels:
               - "self-hosted:host"
           container:
