@@ -161,10 +161,12 @@ tasks:
       - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:full:
-    desc: Full deployment - setup k3s + deploy app
+    desc: Full deployment - setup k3s + forgejo + velero + deploy app
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+      - ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+      - ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
       - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:k3s:
@@ -172,6 +174,28 @@ tasks:
     dir: deploy/ansible
     cmds:
       - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+
+  deploy:forgejo:
+    desc: Deploy Forgejo (self-hosted Git forge)
+    dir: deploy/ansible
+    cmds:
+      - ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+
+  deploy:velero:
+    desc: Deploy Velero + Backup MinIO
+    dir: deploy/ansible
+    cmds:
+      - ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
+
+  deploy:backup:
+    desc: Trigger a manual Velero backup of monitor namespace
+    cmds:
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup create manual-$(date +%Y%m%d-%H%M) --include-namespaces monitor --default-volumes-to-fs-backup --kubeconfig /etc/rancher/k3s/k3s.yaml"
+
+  deploy:backup:status:
+    desc: Check Velero backup status
+    cmds:
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup get --kubeconfig /etc/rancher/k3s/k3s.yaml"
 
   deploy:undeploy:
     desc: Uninstall monitor from target (keeps PVCs)

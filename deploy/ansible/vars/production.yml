@@ -183,14 +183,32 @@ monitor_values:
     service:
       type: NodePort
 
+# Forgejo (self-hosted Git forge)
+forgejo_host: "git.pmon.dev"
+forgejo_chart_version: "16.2.0"
+forgejo_storage_size: "20Gi"
+forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('admin', true) }}"
+forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
+forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
+forgejo_runner_secret: "{{ lookup('env', 'FORGEJO_RUNNER_SECRET') }}"
+
+# Velero + Backup MinIO
+velero_backup_path: "/mnt/storage/backups"
+velero_minio_storage_size: "100Gi"
+velero_minio_access_key: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"
+velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
+
 # Total resource allocation (10-core / 64GB target):
-#                 CPU limit    Memory limit
-# - Frontend:     500m         256Mi
-# - App:          6000m        8Gi    (JVM heap 6GB + ZGC + metaspace/native)
-# - Redis:        1000m        4Gi
-# - Postgres:     6000m        16Gi   (shared_buffers 4GB, effective_cache_size 12GB)
-# - Prometheus:   2000m        4Gi    (disabled by default)
-# - Grafana:      1000m        1Gi    (disabled by default)
-# - k3s system:   ~1000m       ~2Gi
+#                     CPU limit    Memory limit
+# - Frontend:         500m         256Mi
+# - App:              6000m        8Gi    (JVM heap 6GB + ZGC + metaspace/native)
+# - Redis:            1000m        4Gi
+# - Postgres:         6000m        16Gi   (shared_buffers 4GB, effective_cache_size 12GB)
+# - Forgejo:          2000m        1Gi
+# - Backup MinIO:     500m         512Mi
+# - Velero:           1000m        512Mi
+# - Prometheus:       2000m        4Gi    (disabled by default)
+# - Grafana:          1000m        1Gi    (disabled by default)
+# - k3s system:       ~1000m       ~2Gi
 # ------------------------------------------------
-# Active total:   ~14500m      ~27Gi  (leaves headroom for OS cache + bursts)
+# Active total:       ~18000m      ~30Gi  (leaves headroom for OS cache + bursts)

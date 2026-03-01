@@ -1,0 +1,374 @@
+---
+# Setup Velero + Backup MinIO for k8s cluster backups
+#
+# Prerequisites:
+#   - k3s running (setup-k3s.yml)
+#   - /mnt/storage exists (NVMe)
+#
+# Environment variables required:
+#   VELERO_MINIO_ACCESS_KEY, VELERO_MINIO_SECRET_KEY
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
+#
+- name: Setup Velero + Backup MinIO
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    velero_namespace: velero
+    velero_chart_version: "11.4.0"
+    velero_backup_path: "/mnt/storage/backups"
+    velero_minio_storage_size: "100Gi"
+    velero_minio_access_key: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"
+    velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
+    minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Create namespace and backup directory
+    # ================================================================
+
+    - name: Create velero namespace
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ velero_namespace }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      changed_when: false
+
+    - name: Create backup directory on host
+      ansible.builtin.file:
+        path: "{{ velero_backup_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # ================================================================
+    # Phase 2: Deploy Backup MinIO (HostPath for predictable location)
+    # ================================================================
+
+    - name: Deploy backup MinIO
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        ---
+        apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: minio-backup-pv
+          labels:
+            app: minio-backup
+        spec:
+          capacity:
+            storage: {{ velero_minio_storage_size }}
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: manual
+          hostPath:
+            path: {{ velero_backup_path }}
+            type: DirectoryOrCreate
+          persistentVolumeReclaimPolicy: Retain
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: minio-backup-pvc
+          namespace: {{ velero_namespace }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: manual
+          resources:
+            requests:
+              storage: {{ velero_minio_storage_size }}
+          selector:
+            matchLabels:
+              app: minio-backup
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: minio-backup-secret
+          namespace: {{ velero_namespace }}
+        type: Opaque
+        stringData:
+          MINIO_ROOT_USER: "{{ velero_minio_access_key }}"
+          MINIO_ROOT_PASSWORD: "{{ velero_minio_secret_key }}"
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: minio-backup
+          namespace: {{ velero_namespace }}
+          labels:
+            app: minio-backup
+        spec:
+          replicas: 1
+          strategy:
+            type: Recreate
+          selector:
+            matchLabels:
+              app: minio-backup
+          template:
+            metadata:
+              labels:
+                app: minio-backup
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                fsGroup: 1000
+                fsGroupChangePolicy: OnRootMismatch
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: minio
+                  image: {{ minio_image }}
+                  command: ["minio", "server", "/data", "--console-address", ":9001"]
+                  envFrom:
+                    - secretRef:
+                        name: minio-backup-secret
+                  ports:
+                    - containerPort: 9000
+                      name: api
+                    - containerPort: 9001
+                      name: console
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                      drop:
+                        - ALL
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 128Mi
+                    limits:
+                      cpu: 500m
+                      memory: 512Mi
+                  volumeMounts:
+                    - name: data
+                      mountPath: /data
+                  livenessProbe:
+                    httpGet:
+                      path: /minio/health/live
+                      port: 9000
+                    initialDelaySeconds: 10
+                    periodSeconds: 30
+                  readinessProbe:
+                    httpGet:
+                      path: /minio/health/ready
+                      port: 9000
+                    initialDelaySeconds: 5
+                    periodSeconds: 10
+              volumes:
+                - name: data
+                  persistentVolumeClaim:
+                    claimName: minio-backup-pvc
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: minio-backup
+          namespace: {{ velero_namespace }}
+        spec:
+          selector:
+            app: minio-backup
+          ports:
+            - name: api
+              port: 9000
+              targetPort: 9000
+            - name: console
+              port: 9001
+              targetPort: 9001
+        EOF
+      changed_when: false
+
+    - name: Wait for backup MinIO to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/minio-backup -n {{ velero_namespace }} --timeout=120s
+      changed_when: false
+
+    - name: Create velero bucket in MinIO
+      ansible.builtin.shell: |
+        # Run mc client as ephemeral pod to create the bucket
+        k3s kubectl run minio-setup --rm -i --restart=Never \
+          -n {{ velero_namespace }} \
+          --image=quay.io/minio/mc:latest \
+          --overrides='{
+            "spec": {
+              "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
+              "containers": [{
+                "name": "minio-setup",
+                "image": "quay.io/minio/mc:latest",
+                "command": ["sh", "-c", "mc alias set backup http://minio-backup.{{ velero_namespace }}.svc:9000 {{ velero_minio_access_key }} {{ velero_minio_secret_key }} && mc mb --ignore-existing backup/velero"],
+                "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
+              }]
+            }
+          }' 2>&1 || true
+      changed_when: false
+
+    # ================================================================
+    # Phase 3: Deploy Velero
+    # ================================================================
+
+    - name: Add vmware-tanzu Helm repo
+      ansible.builtin.shell: |
+        helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>/dev/null || true
+        helm repo update vmware-tanzu
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Create Velero credentials secret
+      ansible.builtin.shell: |
+        cat <<EOF | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: velero-credentials
+          namespace: {{ velero_namespace }}
+        type: Opaque
+        stringData:
+          cloud: |
+            [default]
+            aws_access_key_id={{ velero_minio_access_key }}
+            aws_secret_access_key={{ velero_minio_secret_key }}
+        EOF
+      changed_when: false
+
+    - name: Deploy Velero via Helm
+      ansible.builtin.shell: |
+        helm upgrade --install velero vmware-tanzu/velero \
+          --version {{ velero_chart_version }} \
+          --namespace {{ velero_namespace }} \
+          --values - <<'HELMEOF'
+        initContainers:
+          - name: velero-plugin-for-aws
+            image: velero/velero-plugin-for-aws:v1.11.1
+            volumeMounts:
+              - name: plugins
+                mountPath: /target
+        credentials:
+          useSecret: true
+          existingSecret: velero-credentials
+        configuration:
+          backupStorageLocation:
+            - name: default
+              provider: aws
+              bucket: velero
+              config:
+                region: us-east-1
+                s3ForcePathStyle: "true"
+                s3Url: http://minio-backup.{{ velero_namespace }}.svc:9000
+          volumeSnapshotLocation: []
+          defaultVolumesToFsBackup: true
+          features: ""
+        deployNodeAgent: true
+        snapshotsEnabled: false
+        schedules:
+          monitor-daily:
+            disabled: false
+            schedule: "0 2 * * *"
+            useOwnerReferencesInBackup: false
+            template:
+              ttl: 168h
+              includedNamespaces:
+                - monitor
+              defaultVolumesToFsBackup: true
+          full-weekly:
+            disabled: false
+            schedule: "0 3 * * 0"
+            useOwnerReferencesInBackup: false
+            template:
+              ttl: 720h
+              includedNamespaces:
+                - "*"
+              defaultVolumesToFsBackup: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Wait for Velero deployment to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/velero -n {{ velero_namespace }} --timeout=120s
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Network policies
+    # ================================================================
+
+    - name: Apply network policies for velero namespace
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: velero-default-deny
+          namespace: {{ velero_namespace }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: velero-to-minio
+          namespace: {{ velero_namespace }}
+        spec:
+          podSelector:
+            matchLabels:
+              app: minio-backup
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: velero
+              ports:
+                - protocol: TCP
+                  port: 9000
+            - from:
+                - podSelector:
+                    matchLabels:
+                      name: node-agent
+              ports:
+                - protocol: TCP
+                  port: 9000
+        EOF
+      changed_when: false
+
+    - name: Display Velero status
+      ansible.builtin.debug:
+        msg: |
+          Velero + Backup MinIO deployed successfully!
+
+          Namespace: {{ velero_namespace }}
+          Backup storage: {{ velero_backup_path }}
+          MinIO bucket: velero
+
+          Scheduled backups:
+            - monitor-daily: 2 AM UTC, monitor namespace, 7-day retention
+            - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
+
+          Commands:
+            velero backup get
+            velero backup create manual-test --include-namespaces monitor
+            velero restore create --from-backup manual-test

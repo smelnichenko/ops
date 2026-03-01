@@ -1,0 +1,289 @@
+---
+# Setup Forgejo (self-hosted Git forge) + Forgejo Runner for CI/CD
+#
+# Prerequisites:
+#   - k3s running (setup-k3s.yml)
+#   - cert-manager installed
+#   - DNS: git.pmon.dev -> 192.168.11.2
+#
+# Environment variables required:
+#   FORGEJO_ADMIN_USER, FORGEJO_ADMIN_PASSWORD, FORGEJO_ADMIN_EMAIL
+#   FORGEJO_RUNNER_SECRET (openssl rand -hex 20)
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+#
+- name: Setup Forgejo + Runner
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    forgejo_namespace: forgejo
+    forgejo_host: "git.pmon.dev"
+    forgejo_chart_version: "16.2.0"
+    forgejo_storage_size: "20Gi"
+    forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('admin', true) }}"
+    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
+    forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
+    forgejo_runner_secret: "{{ lookup('env', 'FORGEJO_RUNNER_SECRET') }}"
+    forgejo_runner_version: "12.7.1"
+    runner_user: "{{ ansible_user }}"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Deploy Forgejo via Helm
+    # ================================================================
+
+    - name: Create forgejo namespace with Pod Security Standards
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ forgejo_namespace }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      changed_when: false
+
+    - name: Deploy Forgejo via Helm
+      ansible.builtin.shell: |
+        helm upgrade --install forgejo \
+          oci://code.forgejo.org/forgejo-helm/forgejo \
+          --version {{ forgejo_chart_version }} \
+          --namespace {{ forgejo_namespace }} \
+          --values - <<'HELMEOF'
+        gitea:
+          admin:
+            username: "{{ forgejo_admin_user }}"
+            password: "{{ forgejo_admin_password }}"
+            email: "{{ forgejo_admin_email }}"
+          config:
+            server:
+              DOMAIN: "{{ forgejo_host }}"
+              ROOT_URL: "https://{{ forgejo_host }}/"
+              SSH_DOMAIN: "{{ forgejo_host }}"
+              DISABLE_SSH: true
+              LFS_START_SERVER: true
+            database:
+              DB_TYPE: sqlite3
+            service:
+              DISABLE_REGISTRATION: true
+            actions:
+              ENABLED: true
+              DEFAULT_ACTIONS_URL: github
+            repository:
+              DEFAULT_BRANCH: master
+            log:
+              LEVEL: Warn
+        image:
+          rootless: true
+        ingress:
+          enabled: true
+          className: traefik
+          hosts:
+            - host: "{{ forgejo_host }}"
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: forgejo-tls
+              hosts:
+                - "{{ forgejo_host }}"
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 2000m
+            memory: 1Gi
+        persistence:
+          enabled: true
+          size: "{{ forgejo_storage_size }}"
+          storageClass: local-path
+        redis-cluster:
+          enabled: false
+        postgresql:
+          enabled: false
+        postgresql-ha:
+          enabled: false
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Wait for Forgejo deployment to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/forgejo -n {{ forgejo_namespace }} --timeout=180s
+      changed_when: false
+
+    - name: Apply network policies for Forgejo
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: forgejo-default-deny
+          namespace: {{ forgejo_namespace }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: forgejo-allow-ingress
+          namespace: {{ forgejo_namespace }}
+        spec:
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: forgejo
+          policyTypes:
+            - Ingress
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 3000
+        EOF
+      changed_when: false
+
+    # ================================================================
+    # Phase 2: Install and configure Forgejo Runner
+    # ================================================================
+
+    - name: Download forgejo-runner binary
+      ansible.builtin.get_url:
+        url: "https://code.forgejo.org/forgejo/runner/releases/download/v{{ forgejo_runner_version }}/forgejo-runner-{{ forgejo_runner_version }}-linux-amd64"
+        dest: /usr/local/bin/forgejo-runner
+        mode: '0755'
+        force: false
+
+    - name: Create runner working directory
+      ansible.builtin.file:
+        path: "/home/{{ runner_user }}/.forgejo-runner"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: '0755'
+
+    - name: Register runner server-side via forgejo-cli
+      ansible.builtin.shell: |
+        # Check if runner is already registered
+        existing=$(k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
+          forgejo-cli actions register --name host-runner --labels self-hosted 2>&1 || true)
+        if echo "$existing" | grep -q 'token:'; then
+          echo "$existing" | grep 'token:' | awk '{print $2}'
+        else
+          k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
+            forgejo-cli actions register --name host-runner --labels self-hosted | grep 'token:' | awk '{print $2}'
+        fi
+      register: runner_token_result
+      changed_when: false
+
+    - name: Create runner .runner file via create-runner-file
+      ansible.builtin.shell: |
+        cd /home/{{ runner_user }}/.forgejo-runner
+        forgejo-runner create-runner-file \
+          --instance "https://{{ forgejo_host }}" \
+          --secret "{{ forgejo_runner_secret }}" \
+          --name host-runner
+      args:
+        creates: "/home/{{ runner_user }}/.forgejo-runner/.runner"
+      become: true
+      become_user: "{{ runner_user }}"
+
+    - name: Create runner config
+      ansible.builtin.copy:
+        dest: "/home/{{ runner_user }}/.forgejo-runner/config.yaml"
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: '0644'
+        content: |
+          log:
+            level: info
+          runner:
+            capacity: 1
+            timeout: 3600
+            labels:
+              - "self-hosted:host"
+          container:
+            # Host execution — no containers, runner executes directly
+            network: ""
+
+    - name: Create runner wrapper script
+      ansible.builtin.copy:
+        dest: "/home/{{ runner_user }}/.forgejo-runner/run.sh"
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Source toolchain managers so builds have access to Java/Node
+          export HOME="/home/{{ runner_user }}"
+          . "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || true
+          . "$HOME/.nvm/nvm.sh" 2>/dev/null || true
+          cd /home/{{ runner_user }}/.forgejo-runner
+          exec forgejo-runner daemon --config config.yaml
+
+    - name: Create systemd service for forgejo-runner
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/forgejo-runner.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Forgejo Actions Runner
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ runner_user }}
+          Group={{ runner_user }}
+          WorkingDirectory=/home/{{ runner_user }}/.forgejo-runner
+          ExecStart=/home/{{ runner_user }}/.forgejo-runner/run.sh
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Add sudoers entry for runner user
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/forgejo-runner
+        mode: '0440'
+        content: |
+          # Allow forgejo-runner to import images and manage k3s
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s ctr images import *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s kubectl *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm *
+        validate: visudo -cf %s
+
+    - name: Enable and start forgejo-runner
+      ansible.builtin.systemd:
+        name: forgejo-runner
+        enabled: true
+        state: restarted
+        daemon_reload: true
+
+    - name: Display Forgejo status
+      ansible.builtin.debug:
+        msg: |
+          Forgejo deployed successfully!
+
+          URL: https://{{ forgejo_host }}/
+          Admin user: {{ forgejo_admin_user }}
+
+          Runner: host-runner (systemd service: forgejo-runner)
+
+          Next steps:
+            1. Add DNS A record: {{ forgejo_host }} -> 192.168.11.2
+            2. Create repository: git remote add forgejo https://{{ forgejo_host }}/{{ forgejo_admin_user }}/monitor.git
+            3. Push: git push forgejo master --all --tags
