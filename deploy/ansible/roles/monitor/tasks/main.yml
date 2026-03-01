@@ -18,7 +18,7 @@
   changed_when: false
 
 - name: Build and import images
-  when: monitor_build_locally | default(true) and not (monitor_skip_build | default(false))
+  when: (monitor_build_locally | default(true) | bool) and not (monitor_skip_build | default(false) | bool)
   vars:
     project_root: "{{ playbook_dir }}/../.."
   block:
@@ -179,7 +179,7 @@
     k3s kubectl rollout restart deployment/{{ monitor_release_name }}-frontend -n {{ monitor_namespace }}
     {% endif %}
     echo "done"
-  when: (backend_changed | default(false)) or (frontend_changed | default(false))
+  when: (backend_changed | default(false) | bool) or (frontend_changed | default(false) | bool)
 
 - name: Clean up
   ansible.builtin.file:
