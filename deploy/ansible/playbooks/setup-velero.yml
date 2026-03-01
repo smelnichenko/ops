@@ -38,9 +38,9 @@
         metadata:
           name: {{ velero_namespace }}
           labels:
-            pod-security.kubernetes.io/enforce: baseline
-            pod-security.kubernetes.io/audit: restricted
-            pod-security.kubernetes.io/warn: restricted
+            pod-security.kubernetes.io/enforce: privileged
+            pod-security.kubernetes.io/audit: privileged
+            pod-security.kubernetes.io/warn: privileged
         EOF
       changed_when: false
 
@@ -48,8 +48,8 @@
       ansible.builtin.file:
         path: "{{ velero_backup_path }}"
         state: directory
-        owner: root
-        group: root
+        owner: "1000"
+        group: "1000"
         mode: '0755'
 
     # ================================================================
@@ -245,11 +245,30 @@
         EOF
       changed_when: false
 
+    - name: Install Velero CRDs
+      ansible.builtin.shell: |
+        k3s kubectl apply --server-side -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backups.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backupstoragelocations.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/deletebackuprequests.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/downloadrequests.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/podvolumebackups.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/podvolumerestores.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/restores.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/schedules.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/serverstatusrequests.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/volumesnapshotlocations.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/datadownloads.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/datauploads.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backuprepositories.yaml
+      changed_when: false
+
     - name: Deploy Velero via Helm
       ansible.builtin.shell: |
         helm upgrade --install velero vmware-tanzu/velero \
           --version {{ velero_chart_version }} \
           --namespace {{ velero_namespace }} \
+          --skip-crds \
+          --no-hooks \
           --values - <<'HELMEOF'
         initContainers:
           - name: velero-plugin-for-aws
@@ -339,16 +358,7 @@
             - Ingress
           ingress:
             - from:
-                - podSelector:
-                    matchLabels:
-                      app.kubernetes.io/name: velero
-              ports:
-                - protocol: TCP
-                  port: 9000
-            - from:
-                - podSelector:
-                    matchLabels:
-                      name: node-agent
+                - podSelector: {}
               ports:
                 - protocol: TCP
                   port: 9000
