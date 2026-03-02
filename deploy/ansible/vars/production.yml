@@ -193,7 +193,7 @@ forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@p
 forgejo_runner_secret: "{{ lookup('env', 'FORGEJO_RUNNER_SECRET') }}"
 
 # Velero + Backup MinIO
-velero_backup_path: "/mnt/storage/backups"
+velero_backup_path: "/mnt/backups/minio"
 velero_minio_storage_size: "100Gi"
 velero_minio_access_key: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"
 velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
