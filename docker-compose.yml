@@ -61,6 +61,7 @@ services:
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USERNAME:-postgres}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-please-change-in-production}
     ports:
       - "8080:8080"
     depends_on:
