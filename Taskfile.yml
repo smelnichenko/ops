@@ -113,15 +113,23 @@ tasks:
     cmds:
       - ./gradlew test
 
+  test:e2e:install:
+    desc: Install Playwright browsers (run once after npm install or Playwright version bump)
+    dir: frontend
+    cmds:
+      - npx playwright install chromium
+
   test:e2e:
     desc: Run E2E tests with Playwright (requires running app)
     dir: frontend
+    deps: [test:e2e:install]
     cmds:
       - npx playwright test
 
   test:e2e:ui:
     desc: Run E2E tests with Playwright UI
     dir: frontend
+    deps: [test:e2e:install]
     cmds:
       - npx playwright test --ui
 
