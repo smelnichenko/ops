@@ -162,38 +162,53 @@ tasks:
       - ./gradlew jooqCodegen
 
   # ============== DEPLOY ==============
+  deploy:install:
+    desc: Create project-local Ansible venv and install dependencies
+    dir: deploy/ansible
+    status:
+      - test -f venv/bin/ansible-playbook
+    cmds:
+      - python3 -m venv venv
+      - venv/bin/pip install -q -r requirements.txt
+      - venv/bin/ansible-galaxy collection install -r requirements.yml
+
   deploy:prod:
     desc: Deploy to production
     dir: deploy/ansible
+    deps: [deploy:install]
     cmds:
-      - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:full:
     desc: Full deployment - setup k3s + forgejo + velero + deploy app
     dir: deploy/ansible
+    deps: [deploy:install]
     cmds:
-      - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
-      - ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
-      - ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
-      - ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
 
   deploy:k3s:
     desc: Setup k3s only
     dir: deploy/ansible
+    deps: [deploy:install]
     cmds:
-      - ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
 
   deploy:forgejo:
     desc: Deploy Forgejo (self-hosted Git forge)
     dir: deploy/ansible
+    deps: [deploy:install]
     cmds:
-      - ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
 
   deploy:velero:
     desc: Deploy Velero + Backup MinIO
     dir: deploy/ansible
+    deps: [deploy:install]
     cmds:
-      - ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
 
   deploy:backup:
     desc: Trigger a manual Velero backup of monitor namespace
