@@ -1,0 +1,45 @@
+---
+# Vagrant inventory — two-VM test environment
+#
+# VMs:
+#   k3s       192.168.56.10  — k3s node (setup-k3s, setup-forgejo, setup-velero, deploy.yml)
+#   vault-pi  192.168.56.20  — simulates Raspberry Pi unseal Vault
+#
+# SSH keys are written by Vagrant to .vagrant/machines/{name}/libvirt/private_key
+#
+# Usage:
+#   vagrant up
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#
+# vault-vagrant.yml overrides vault.yml production IPs/arch with Vagrant values.
+# Extra vars always win over inventory vars, so overrides must be passed last via -e.
+
+all:
+  vars:
+    ansible_user: vagrant
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+
+  hosts:
+    target:
+      ansible_host: 192.168.56.10
+      ansible_ssh_private_key_file: "{{ playbook_dir }}/../../../.vagrant/machines/k3s/libvirt/private_key"
+      ansible_python_interpreter: /usr/bin/python3
+
+    vault_pi:
+      ansible_host: 192.168.56.20
+      ansible_ssh_private_key_file: "{{ playbook_dir }}/../../../.vagrant/machines/vault-pi/libvirt/private_key"
+      ansible_python_interpreter: /usr/bin/python3
+      # Overrides for Vagrant (x86_64, different IPs)
+      vault_arch: amd64
+      vault_pi_ip: "192.168.56.20"
+      vault_pi_dns: "vault.schnappy.io"  # resolved via /etc/hosts injection in k3s VM
+      # UFW: allow SSH from private network (host→192.168.56.1, k3s→192.168.56.10)
+      # and from NAT network (192.168.121.0/24) so 'vagrant ssh' works
+      vault_pi_ssh_allow_ipv4: "192.168.56.0/24"
+      vault_pi_ssh_allow_ipv6: ""          # no IPv6 in Vagrant private network
+      vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"  # Vagrant NAT (for vagrant ssh)
+      vault_k3s_ip: "192.168.56.10"
+      vault_k3s_ipv6: ""                   # no IPv6 in Vagrant

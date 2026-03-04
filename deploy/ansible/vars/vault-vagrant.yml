@@ -1,0 +1,20 @@
+---
+# Vagrant-specific overrides — pass with -e @vars/vault-vagrant.yml for local Vagrant testing.
+# These override the production values in vars/vault.yml.
+#
+# Usage (both playbooks):
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+vault_arch: "amd64"                   # x86_64 Vagrant VM (arm64 in production)
+vault_pi_ip: "192.168.56.20"          # Vagrant private network (192.168.11.4 in production)
+vault_pi_dns: "vault.schnappy.io"     # same as production (resolved via CoreDNS patch)
+vault_k3s_ip: "192.168.56.10"         # Vagrant k3s node IP (192.168.11.2 in production)
+vault_k3s_ipv6: ""                    # no IPv6 in Vagrant private network
+
+# UFW rules for vault-pi VM (allow from Vagrant private + NAT networks)
+vault_pi_ssh_allow_ipv4: "192.168.56.0/24"
+vault_pi_ssh_allow_ipv6: ""
+vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"  # Vagrant NAT (for 'vagrant ssh')

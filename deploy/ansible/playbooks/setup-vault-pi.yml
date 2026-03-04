@@ -1,0 +1,562 @@
+---
+# Setup Vault Unseal Pi (transit auto-unseal server)
+#
+# Idempotent: safe to re-run. Re-running generates a new autounseal token and
+# overwrites vault-pi-runtime.yml — run setup-vault.yml afterwards to apply
+# the new token to the k3s cluster.
+#
+# Prerequisites:
+#   - Debian Trixie target (Pi or Vagrant VM)
+#   - SSH access with become (sudo)
+#   - vars/vault.yml for non-secret config
+#
+# Produces:
+#   vars/vault-pi-runtime.yml  (gitignored, read by setup-vault.yml)
+#     - vault_pi_autounseal_token: "<hvs...>"
+#     - vault_pi_ca_cert: "<PEM>"
+#
+# Usage:
+#   # Production (Pi)
+#   ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
+#
+#   # Vagrant (x86_64, different IP)
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
+#     -e @vars/vault.yml -e vault_arch=amd64 -e vault_pi_ip=192.168.56.20
+
+- name: Setup Vault Unseal Pi
+  hosts: vault_pi
+  become: true
+  gather_facts: false
+
+  # Variables with defaults — set these in inventory host_vars to override per environment:
+  #   vault_pi_ssh_allow_ipv4     — SSH source CIDR (default: 192.168.11.0/24 production LAN)
+  #   vault_pi_ssh_allow_ipv6     — SSH source IPv6 CIDR (default: fd0a:../64; set "" to skip)
+  #   vault_pi_ssh_allow_extra_ipv4 — Extra SSH source (default: ""; e.g. "192.168.121.0/24" for Vagrant)
+  #   vault_k3s_ip                — k3s node IPv4 allowed to reach Vault port (default: 192.168.11.2)
+  #   vault_k3s_ipv6              — k3s node IPv6 (default: fd0a:../::2; set "" to skip)
+
+  environment:
+    VAULT_ADDR: "https://{{ vault_pi_ip }}:8200"
+    VAULT_CACERT: /etc/vault.d/tls/vault-cert.pem
+
+  pre_tasks:
+    - name: Wait for SSH to be available (handles slow VM boot / network config)
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 120
+
+  tasks:
+    # ================================================================
+    # Phase 1: System setup
+    # ================================================================
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - unzip
+          - jq
+          - ufw
+          - openssl
+          - python3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create vault group
+      ansible.builtin.group:
+        name: vault
+        system: true
+        state: present
+
+    - name: Create vault user
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /bin/false
+        home: /var/lib/vault
+        create_home: false
+        state: present
+
+    - name: Create vault directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: vault
+        group: vault
+        mode: '0750'
+      loop:
+        - /etc/vault.d
+        - /etc/vault.d/tls
+        - /var/lib/vault
+        - /var/lib/vault/data
+
+    - name: Configure UFW — default deny
+      community.general.ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Configure UFW — allow SSH from LAN IPv4
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ vault_pi_ssh_allow_ipv4 | default('192.168.11.0/24') }}"
+        port: "22"
+        proto: tcp
+
+    - name: Configure UFW — allow SSH from LAN IPv6
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ vault_pi_ssh_allow_ipv6 | default('fd0a:94e6:20b4:9f6b::/64') }}"
+        port: "22"
+        proto: tcp
+      when: (vault_pi_ssh_allow_ipv6 | default('fd0a:94e6:20b4:9f6b::/64')) | length > 0
+
+    - name: Configure UFW — allow SSH from extra range (e.g. Vagrant NAT)
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ vault_pi_ssh_allow_extra_ipv4 }}"
+        port: "22"
+        proto: tcp
+      when: vault_pi_ssh_allow_extra_ipv4 is defined and vault_pi_ssh_allow_extra_ipv4 | length > 0
+
+    - name: Configure UFW — allow Vault from k3s node (IPv4)
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ vault_k3s_ip | default('192.168.11.2') }}"
+        port: "8200"
+        proto: tcp
+
+    - name: Configure UFW — allow Vault from k3s node (IPv6)
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ vault_k3s_ipv6 | default('fd0a:94e6:20b4:9f6b::2') }}"
+        port: "8200"
+        proto: tcp
+      when: (vault_k3s_ipv6 | default('fd0a:94e6:20b4:9f6b::2')) | length > 0
+
+    # ================================================================
+    # Phase 2: Vault binary
+    # ================================================================
+
+    - name: Check current Vault version
+      ansible.builtin.command: /usr/local/bin/vault version
+      register: current_vault_version
+      failed_when: false
+      changed_when: false
+
+    - name: Download and install Vault binary
+      when: vault_version not in (current_vault_version.stdout | default(''))
+      block:
+        - name: Download Vault zip
+          ansible.builtin.get_url:
+            url: "https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_linux_{{ vault_arch }}.zip"
+            dest: /tmp/vault.zip
+            mode: '0644'
+
+        - name: Unzip Vault binary
+          ansible.builtin.unarchive:
+            src: /tmp/vault.zip
+            dest: /usr/local/bin/
+            remote_src: true
+            creates: /usr/local/bin/vault
+
+        - name: Set Vault binary permissions
+          ansible.builtin.file:
+            path: /usr/local/bin/vault
+            mode: '0755'
+            owner: root
+            group: root
+
+        - name: Remove Vault zip
+          ansible.builtin.file:
+            path: /tmp/vault.zip
+            state: absent
+
+    # ================================================================
+    # Phase 3: TLS certificate (ECDSA P-384, self-signed, 10-year)
+    # ================================================================
+
+    - name: Check if TLS cert exists
+      ansible.builtin.stat:
+        path: /etc/vault.d/tls/vault-cert.pem
+      register: vault_cert_stat
+
+    - name: Generate TLS certificate (skip if exists)
+      when: not vault_cert_stat.stat.exists
+      ansible.builtin.shell: |
+        openssl req -x509 \
+          -newkey ec \
+          -pkeyopt ec_paramgen_curve:P-384 \
+          -days 3650 -nodes \
+          -keyout /etc/vault.d/tls/vault-key.pem \
+          -out /etc/vault.d/tls/vault-cert.pem \
+          -subj "/CN={{ vault_pi_dns }}" \
+          -addext "subjectAltName=DNS:{{ vault_pi_dns }},IP:{{ vault_pi_ip }}"
+      changed_when: true
+
+    - name: Set TLS cert/key ownership and permissions
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: vault
+        group: vault
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /etc/vault.d/tls/vault-cert.pem, mode: '0644' }
+        - { path: /etc/vault.d/tls/vault-key.pem, mode: '0640' }
+
+    # ================================================================
+    # Phase 4: Vault config + systemd service
+    # ================================================================
+
+    - name: Write vault.hcl config
+      ansible.builtin.copy:
+        dest: /etc/vault.d/vault.hcl
+        owner: vault
+        group: vault
+        mode: '0640'
+        content: |
+          ui = false
+          # disable_mlock required (no IPC_LOCK capability without setcap)
+          disable_mlock = true
+
+          storage "file" {
+            path = "/var/lib/vault/data"
+          }
+
+          listener "tcp" {
+            # [::] = dual-stack IPv4+IPv6 (Linux net.ipv6.bindv6only=0 default)
+            address       = "[::]:8200"
+            tls_cert_file = "/etc/vault.d/tls/vault-cert.pem"
+            tls_key_file  = "/etc/vault.d/tls/vault-key.pem"
+          }
+
+          # Must match DNS name or IP used to connect (must have matching SAN in TLS cert)
+          api_addr = "https://{{ vault_pi_dns }}:8200"
+      notify: Restart vault
+
+    - name: Write vault systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vault.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Vault Unseal Server
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=vault
+          Group=vault
+          ExecStart=/usr/local/bin/vault server -config=/etc/vault.d/vault.hcl
+          ExecReload=/bin/kill --signal HUP $MAINPID
+          KillMode=process
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd and restart vault
+
+    - name: Flush handlers before waiting for API
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start vault service
+      ansible.builtin.systemd:
+        name: vault
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # ================================================================
+    # Phase 5: Wait for Vault API
+    # ================================================================
+
+    - name: Wait for Vault API to respond
+      ansible.builtin.shell: |
+        vault operator init -status
+      register: vault_api_wait
+      retries: 12
+      delay: 5
+      # rc=0: initialized+unsealed, rc=2: not initialized — vault is up
+      # rc=1: error/unreachable — keep retrying
+      until: vault_api_wait.rc in [0, 2]
+      changed_when: false
+      failed_when: vault_api_wait.rc not in [0, 1, 2]
+
+    # ================================================================
+    # Phase 6: Initialize (idempotent — skip if already initialized)
+    # ================================================================
+
+    - name: Check Vault init status
+      ansible.builtin.shell: vault operator init -status
+      register: vault_init_status
+      failed_when: vault_init_status.rc not in [0, 1, 2]
+      changed_when: false
+      # vault operator init -status exit codes:
+      #   rc=0: Vault is initialized (unsealed)
+      #   rc=1: Error (connection issue, unexpected error)
+      #   rc=2: Vault is NOT initialized (ready to initialize)
+
+    - name: Initialize Vault (first time only)
+      ansible.builtin.shell: |
+        vault operator init \
+          -key-shares={{ vault_unseal_shares }} \
+          -key-threshold={{ vault_unseal_threshold }} \
+          -format=json
+      register: vault_init_output
+      when: vault_init_status.rc == 2
+      changed_when: true
+      no_log: true
+
+    - name: Save init output to /tmp/vault-init.json on Pi
+      ansible.builtin.copy:
+        content: "{{ vault_init_output.stdout }}"
+        dest: /tmp/vault-init.json
+        mode: '0600'
+        owner: root
+      when: vault_init_output is changed
+      no_log: true
+
+    - name: IMPORTANT — copy vault-init.json offline before continuing
+      ansible.builtin.pause:
+        prompt: |
+          ============================================================
+          VAULT INITIALIZED. Save /tmp/vault-init.json OFFLINE now:
+
+            scp {{ ansible_host }}:/tmp/vault-init.json ./vault-keys-OFFLINE.json
+
+          Store the unseal keys and root token physically (USB/safe/paper).
+          NEVER store on the Pi filesystem or in the k3s cluster.
+
+          Press ENTER when done.
+          ============================================================
+      when: vault_init_output is changed
+
+    - name: Unseal Vault with init keys
+      ansible.builtin.shell: "vault operator unseal {{ item }}"
+      loop: "{{ (vault_init_output.stdout | from_json).unseal_keys_b64[:vault_unseal_threshold] }}"
+      when: vault_init_output is changed
+      no_log: true
+      changed_when: true
+
+    - name: Set root token fact (from init)
+      ansible.builtin.set_fact:
+        vault_pi_root_token: "{{ (vault_init_output.stdout | from_json).root_token }}"
+      when: vault_init_output is changed
+      no_log: true
+
+    # ================================================================
+    # Phase 7: Transit engine + autounseal token
+    # ================================================================
+
+    - name: Check if transit secrets engine is enabled
+      ansible.builtin.shell: |
+        VAULT_TOKEN="{{ vault_pi_root_token | default('') }}" \
+          vault secrets list -format=json 2>/dev/null | jq -r 'has("transit/")'
+      register: transit_enabled
+      changed_when: false
+      failed_when: transit_enabled.rc != 0 and vault_init_output is not changed
+      # Skip if vault was not just initialized (root token unknown)
+      when: vault_init_output is changed
+
+    - name: Enable transit secrets engine
+      ansible.builtin.shell: |
+        VAULT_TOKEN="{{ vault_pi_root_token }}" vault secrets enable transit
+      when: vault_init_output is changed and transit_enabled.stdout == "false"
+      changed_when: true
+
+    - name: Create autounseal transit key (idempotent)
+      ansible.builtin.shell: |
+        VAULT_TOKEN="{{ vault_pi_root_token }}" \
+          vault write -f transit/keys/vault-autounseal type=aes256-gcm96
+      when: vault_init_output is changed
+      changed_when: true
+
+    - name: Write autounseal policy
+      ansible.builtin.shell: |
+        VAULT_TOKEN="{{ vault_pi_root_token }}" vault policy write autounseal - <<'POLICY'
+        path "transit/encrypt/vault-autounseal" {
+          capabilities = ["update"]
+        }
+        path "transit/decrypt/vault-autounseal" {
+          capabilities = ["update"]
+        }
+        POLICY
+      when: vault_init_output is changed
+      changed_when: true
+
+    - name: Tune token max_lease_ttl to allow long-lived tokens
+      ansible.builtin.shell: |
+        VAULT_TOKEN="{{ vault_pi_root_token }}" \
+          vault write sys/auth/token/tune max_lease_ttl={{ vault_token_ttl }}
+      when: vault_init_output is changed
+      changed_when: true
+
+    - name: Create autounseal token
+      ansible.builtin.shell: |
+        VAULT_TOKEN="{{ vault_pi_root_token }}" \
+          vault token create \
+          -policy=autounseal \
+          -ttl={{ vault_token_ttl }} \
+          -explicit-max-ttl={{ vault_token_ttl }} \
+          -orphan \
+          -no-default-policy \
+          -display-name=vault-autounseal \
+          -format=json
+      register: autounseal_token_output
+      when: vault_init_output is changed
+      no_log: true
+      changed_when: true
+
+    # ================================================================
+    # Phase 8: Write runtime vars to local controller
+    # ================================================================
+
+    - name: Fetch vault CA cert from Pi
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tls/vault-cert.pem
+      register: vault_ca_cert_b64
+      when: vault_init_output is changed
+
+    - name: Write vault-pi-runtime.yml to local controller
+      ansible.builtin.copy:
+        content: |
+          # Generated by setup-vault-pi.yml — DO NOT COMMIT (gitignored)
+          # Run setup-vault.yml after this to apply to k3s cluster
+          vault_pi_autounseal_token: "{{ (autounseal_token_output.stdout | from_json).auth.client_token }}"
+          vault_pi_ca_cert: |
+            {{ vault_ca_cert_b64.content | b64decode | indent(2) }}
+        dest: "{{ playbook_dir }}/../vars/vault-pi-runtime.yml"
+        mode: '0600'
+      delegate_to: localhost
+      become: false
+      when: vault_init_output is changed
+      no_log: true
+
+    - name: Check if vault-pi-runtime.yml already exists on controller
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../vars/vault-pi-runtime.yml"
+      delegate_to: localhost
+      become: false
+      register: runtime_vars_file
+      when: vault_init_output is not changed
+
+    - name: Note — runtime vars not updated (Vault was already initialized, file exists)
+      ansible.builtin.debug:
+        msg: |
+          Vault was already initialized — vault-pi-runtime.yml already exists, no changes needed.
+      when: vault_init_output is not changed and runtime_vars_file.stat is defined and runtime_vars_file.stat.exists
+
+    - name: FAIL — Vault initialized but vault-pi-runtime.yml is missing
+      ansible.builtin.fail:
+        msg: |
+          Vault is already initialized but vault-pi-runtime.yml is missing!
+
+          To recover:
+            1. SSH to vault-pi and obtain a root token (or create a new autounseal token manually):
+               vault token create -policy=autounseal -ttl=876000h -orphan -no-default-policy -format=json
+            2. Write vault-pi-runtime.yml manually:
+               vault_pi_autounseal_token: "<token>"
+               vault_pi_ca_cert: |
+                 <contents of /etc/vault.d/tls/vault-cert.pem>
+
+          For Vagrant test environments, the easiest fix is:
+               vagrant destroy -f vault-pi && vagrant up vault-pi
+          Then re-run this playbook to get a fresh initialization.
+      when: vault_init_output is not changed and runtime_vars_file.stat is defined and not runtime_vars_file.stat.exists
+
+    # ================================================================
+    # Phase 9: Health check cron
+    # ================================================================
+
+    - name: Write vault health check script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/vault-health-check.sh
+        mode: '0755'
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          # Vault unseal server health check — logs to syslog on seal/unreachable
+          HEALTH=$(curl -s --cacert /etc/vault.d/tls/vault-cert.pem \
+            https://{{ vault_pi_ip }}:8200/v1/sys/health \
+            -o /tmp/vault-health.json -w "%{http_code}" 2>/dev/null)
+          SEALED=$(jq -r '.sealed // true' /tmp/vault-health.json 2>/dev/null)
+          if [ "$SEALED" != "false" ]; then
+            logger -t vault-unseal "ALERT: Vault is sealed or unreachable, HTTP $HEALTH"
+          fi
+
+    - name: Add vault health check cron
+      ansible.builtin.copy:
+        dest: /etc/cron.d/vault-health
+        mode: '0644'
+        content: |
+          */5 * * * * root /usr/local/bin/vault-health-check.sh
+
+    # ================================================================
+    # Phase 10: Local data backup cron (Pi-local, keeps last 90 copies)
+    # Pi 5 has 2TB NVMe SSD — 90-day retention is generous and safe
+    # ================================================================
+
+    - name: Write vault local backup script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/vault-backup.sh
+        mode: '0755'
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          TIMESTAMP=$(date +%Y%m%d)
+          BACKUP_DIR="/var/backups/vault"
+          mkdir -p "$BACKUP_DIR"
+          tar czf "${BACKUP_DIR}/unseal-vault-${TIMESTAMP}.tar.gz" /var/lib/vault/data 2>/dev/null
+          # Keep last 90 daily backups (Pi 5 has 2TB NVMe — plenty of space)
+          ls -t "${BACKUP_DIR}"/unseal-vault-*.tar.gz 2>/dev/null | tail -n +91 | xargs -r rm
+          echo "Backup complete: ${BACKUP_DIR}/unseal-vault-${TIMESTAMP}.tar.gz"
+
+    - name: Add vault local backup cron (2 AM daily)
+      ansible.builtin.copy:
+        dest: /etc/cron.d/vault-backup
+        mode: '0644'
+        content: |
+          0 2 * * * root /usr/local/bin/vault-backup.sh
+
+    # ================================================================
+    # Summary
+    # ================================================================
+
+    - name: Display setup summary
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Vault Unseal Pi setup complete!
+
+          Vault API:     https://{{ vault_pi_ip }}:8200
+          DNS:           {{ vault_pi_dns }}
+          Version:       {{ vault_version }} ({{ vault_arch }})
+          TLS cert:      /etc/vault.d/tls/vault-cert.pem
+          Data dir:      /var/lib/vault/data
+
+          {% if vault_init_output is changed %}
+          Runtime vars written to: deploy/ansible/vars/vault-pi-runtime.yml
+          Next step: run setup-vault.yml to deploy k3s Vault cluster
+          {% else %}
+          Vault was already initialized — no changes to autounseal token.
+          vault-pi-runtime.yml NOT updated.
+          {% endif %}
+          ====================================================
+
+  handlers:
+    - name: Reload systemd and restart vault
+      ansible.builtin.systemd:
+        name: vault
+        daemon_reload: true
+        state: restarted
+
+    - name: Restart vault
+      ansible.builtin.systemd:
+        name: vault
+        state: restarted

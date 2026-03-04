@@ -1,0 +1,37 @@
+---
+# Vault shared variables — used by setup-vault-pi.yml and setup-vault.yml
+#
+# Override per-environment via:
+#   -e vault_arch=amd64          (Vagrant x86_64)
+#   -e vault_pi_ip=192.168.56.20 (Vagrant vault-pi IP)
+#   -e vault_pi_dns=vault.schnappy.io (same for both envs)
+
+# ── Vault binary ──────────────────────────────────────────────────────────────
+vault_version: "1.21.3"
+vault_arch: "arm64"            # arm64 for Pi, amd64 for Vagrant/x86_64
+
+# ── Vault Pi (unseal server) ──────────────────────────────────────────────────
+vault_pi_ip: "192.168.11.4"    # IPv4 of unseal Pi (must match TLS cert SAN)
+vault_pi_dns: "vault.schnappy.io"  # DNS name (must match TLS cert SAN)
+
+# ── Vault Pi init ─────────────────────────────────────────────────────────────
+vault_unseal_shares: 3
+vault_unseal_threshold: 2
+
+# ── Vault k3s cluster ─────────────────────────────────────────────────────────
+vault_k3s_namespace: "vault"
+vault_k3s_helm_version: "0.29.1"  # hashicorp/vault Helm chart version
+vault_image_tag: "1.21.3"         # pin — Vault has breaking changes between versions
+
+# ── Vault k3s init ────────────────────────────────────────────────────────────
+vault_recovery_shares: 5
+vault_recovery_threshold: 3
+
+# ── Long-lived tokens (autounseal + service accounts) ────────────────────────
+vault_token_ttl: "876000h"  # ~100 years; requires tuning sys/auth/token/tune first
+
+# ── External Secrets Operator ─────────────────────────────────────────────────
+vault_eso_chart_version: "2.0.1"
+
+# ── Sealed Secrets ────────────────────────────────────────────────────────────
+vault_sealed_secrets_chart_version: "2.16.1"
