@@ -150,10 +150,12 @@ monitor_values:
       storageClass: "local-path"
 
   prometheus:
-    enabled: false
+    enabled: true
     image: prom/prometheus:v3.9.1
     retention: 30d
     scrapeInterval: 15s
+    vault:
+      enabled: true
     resources:
       requests:
         memory: "512Mi"
