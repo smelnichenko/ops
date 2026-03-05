@@ -497,7 +497,21 @@
           */5 * * * * root /usr/local/bin/vault-health-check.sh
 
     # ================================================================
-    # Phase 10: Local data backup cron (Pi-local, keeps last 90 copies)
+    # Phase 10: Offsite backup directory (receives rsync from k3s node)
+    # Pi 5 has 2TB NVMe — serves as 3rd copy of MinIO backup data
+    # (1st copy: k3s SATA SSD /mnt/backups, 2nd copy: MinIO PVC, 3rd: here)
+    # ================================================================
+
+    - name: Create offsite backup directory
+      ansible.builtin.file:
+        path: /mnt/backups/offsite
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0750'
+
+    # ================================================================
+    # Phase 11: Local data backup cron (Pi-local, keeps last 90 copies)
     # Pi 5 has 2TB NVMe SSD — 90-day retention is generous and safe
     # ================================================================
 

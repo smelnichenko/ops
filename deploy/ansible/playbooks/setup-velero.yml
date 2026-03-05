@@ -365,6 +365,82 @@
         EOF
       changed_when: false
 
+    # ================================================================
+    # Phase 5: Offsite backup replication (rsync to Vault Pi)
+    # Syncs /mnt/backups/minio → Pi:/mnt/backups/offsite daily at 4 AM
+    # Runs after Velero daily (2 AM) and Vault snapshots (every 6h)
+    # ================================================================
+
+    - name: Install rsync
+      ansible.builtin.apt:
+        name: rsync
+        state: present
+      when: offsite_backup_enabled | default(true) | bool
+
+    - name: Write offsite backup rsync script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/offsite-backup-sync.sh
+        mode: '0755'
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          # Sync MinIO backup data to Vault Pi as offsite 3rd copy
+          # Runs as root, SSH as {{ offsite_backup_user | default('sm') }}
+          set -euo pipefail
+
+          REMOTE="{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.4') }}"
+          SRC="{{ velero_backup_path }}/"
+          DEST="${REMOTE}:/mnt/backups/offsite/"
+
+          logger -t offsite-backup "Starting rsync to ${REMOTE}"
+          rsync -az --delete \
+            -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}" \
+            "$SRC" "$DEST" 2>&1 | logger -t offsite-backup
+          logger -t offsite-backup "Rsync complete"
+      when: offsite_backup_enabled | default(true) | bool
+
+    - name: Create offsite backup systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/offsite-backup.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Rsync backups to Vault Pi (offsite copy)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/offsite-backup-sync.sh
+          TimeoutStartSec=1800
+      when: offsite_backup_enabled | default(true) | bool
+
+    - name: Create offsite backup systemd timer (4 AM daily)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/offsite-backup.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Daily offsite backup sync
+
+          [Timer]
+          OnCalendar=*-*-* 04:00:00
+          Persistent=true
+          RandomizedDelaySec=300
+
+          [Install]
+          WantedBy=timers.target
+      when: offsite_backup_enabled | default(true) | bool
+
+    - name: Enable and start offsite backup timer
+      ansible.builtin.systemd:
+        name: offsite-backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: offsite_backup_enabled | default(true) | bool
+
     - name: Display Velero status
       ansible.builtin.debug:
         msg: |
@@ -377,6 +453,13 @@
           Scheduled backups:
             - monitor-daily: 2 AM UTC, monitor namespace, 7-day retention
             - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
+
+          Offsite replication:
+            - Target: {{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/offsite/
+            - Schedule: 4 AM daily (systemd timer)
+            - Check: systemctl status offsite-backup.timer
+            - Manual run: systemctl start offsite-backup.service
+            - Logs: journalctl -u offsite-backup.service
 
           Commands:
             velero backup get

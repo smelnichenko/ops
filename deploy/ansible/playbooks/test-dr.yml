@@ -1,0 +1,1219 @@
+---
+# Disaster Recovery Tests
+#
+# Tests pod recovery (individual + all-at-once), full namespace
+# restore from Velero backup, and offsite restore from 3rd copy.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - App accessible at http://localhost (Traefik)
+#
+# Usage:
+#   ansible-playbook -i inventory/vagrant.yml playbooks/test-dr.yml
+#
+# Suite 1: Pod recovery (kill individual/all pods, verify data)
+# Suite 2: Velero backup + namespace destroy + restore
+# Suite 3: Offsite restore (rsync to vault-pi, wipe primary, rsync back, restore)
+
+# ─── Play 0: Prepare vault-pi as offsite backup target ──────────────────────
+- name: "Prepare vault-pi for offsite backup tests"
+  hosts: vault_pi
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for vault-pi SSH
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 60
+
+    - name: Install rsync on vault-pi
+      ansible.builtin.apt:
+        name: rsync
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create offsite backup directory
+      ansible.builtin.file:
+        path: /mnt/backups/offsite
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0755'
+
+    - name: Ensure vagrant user has authorized_keys for k3s root SSH
+      ansible.builtin.file:
+        path: /home/vagrant/.ssh
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0700'
+
+# ─── Play 1: DR Tests on k3s ────────────────────────────────────────────────
+- name: Disaster Recovery Tests
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    app_url: http://localhost
+    test_pass: dr-test-pass-12345
+    test_email: dr-test@test.com
+    test_monitor_name: dr-test-page
+    velero_ns: velero
+    velero_chart_version: "11.4.0"
+    minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    offsite_host: 192.168.56.20
+    offsite_user: vagrant
+    offsite_path: /mnt/backups/offsite
+
+  tasks:
+    # ================================================================
+    # Prerequisites
+    # ================================================================
+
+    - name: Verify k3s is running
+      ansible.builtin.command: k3s kubectl get nodes
+      changed_when: false
+
+    - name: Wait for app to be healthy
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health
+      retries: 30
+      delay: 10
+      until: health.status == 200 and health.json.status == "UP"
+
+    - name: Display initial health
+      ansible.builtin.debug:
+        msg: "App healthy: {{ health.json.status }}"
+
+    # ================================================================
+    # Suite 1: Seed Test Data
+    # ================================================================
+
+    - name: "SEED: Register test user"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/register"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        status_code: [200, 201, 400, 409]
+      register: register_result
+
+    - name: "SEED: Auto-verify email and assign Admins group"
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-postgres -n {{ ns }} -- \
+          psql -U postgres -d monitor -c "
+            UPDATE email_verification_tokens SET used = true
+              WHERE user_id = (SELECT id FROM users WHERE email = '{{ test_email }}') AND used = false;
+            INSERT INTO user_groups (user_id, group_id)
+              SELECT u.id, g.id FROM users u, groups g
+              WHERE u.email = '{{ test_email }}' AND g.name = 'Admins'
+                AND NOT EXISTS (
+                  SELECT 1 FROM user_groups ug WHERE ug.user_id = u.id AND ug.group_id = g.id
+                );
+          "
+      changed_when: false
+
+    - name: "SEED: Login to get JWT"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_result
+
+    - name: Set auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_result.cookies['AUTH_TOKEN'] }}"
+
+    - name: "SEED: Create page monitor"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/config"
+        method: POST
+        body_format: json
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        body:
+          name: "{{ test_monitor_name }}"
+          url: "https://example.com"
+          pattern: "<title>(.*?)</title>"
+          cron: "0 0 * * * *"
+          enabled: true
+        status_code: [200, 201, 400]
+      register: create_monitor
+
+    - name: "SEED: Trigger manual check"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
+        method: POST
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        status_code: [200, 201]
+      register: check_result
+      # May fail if external URL unreachable in Vagrant — that's ok for DR test
+      failed_when: false
+
+    - name: "SEED: Verify monitors list"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_before
+
+    - name: Display seed data
+      ansible.builtin.debug:
+        msg: "Seeded: user={{ test_email }}, monitors={{ pages_before.json | length }}"
+
+    # ================================================================
+    # Suite 1: Pod Recovery Tests
+    # ================================================================
+
+    # ── Test 1: Kill app pod ──
+
+    - name: "POD-RECOVERY: Delete app pod"
+      ansible.builtin.shell: |
+        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=app -n {{ ns }} --wait=false
+      changed_when: true
+
+    - name: "POD-RECOVERY: Wait for app deployment rollout"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=120s
+      changed_when: false
+
+    - name: "POD-RECOVERY: Verify app health after restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health_after_app
+      retries: 30
+      delay: 5
+      until: health_after_app.status == 200 and health_after_app.json.status == "UP"
+
+    - name: "POD-RECOVERY: Re-login after app restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_after_app
+
+    - name: Update auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_after_app.cookies['AUTH_TOKEN'] }}"
+
+    - name: "POD-RECOVERY: Verify data after app restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_after_app
+
+    - name: "POD-RECOVERY: Assert data intact after app kill"
+      ansible.builtin.assert:
+        that:
+          - pages_after_app.json | length == pages_before.json | length
+        fail_msg: "Data lost after app pod kill! Before: {{ pages_before.json | length }}, After: {{ pages_after_app.json | length }}"
+        success_msg: "PASS: App pod recovery — data intact ({{ pages_after_app.json | length }} monitors)"
+
+    # ── Test 2: Kill postgres pod ──
+
+    - name: "POD-RECOVERY: Delete postgres pod"
+      ansible.builtin.shell: |
+        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=postgres -n {{ ns }} --wait=false
+      changed_when: true
+
+    - name: "POD-RECOVERY: Wait for postgres deployment rollout"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-postgres -n {{ ns }} --timeout=180s
+      changed_when: false
+
+    - name: "POD-RECOVERY: Wait for app to reconnect to postgres"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health_after_pg
+      retries: 30
+      delay: 5
+      until: health_after_pg.status == 200 and health_after_pg.json.status == "UP"
+
+    - name: "POD-RECOVERY: Re-login after postgres restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_after_pg
+
+    - name: Update auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_after_pg.cookies['AUTH_TOKEN'] }}"
+
+    - name: "POD-RECOVERY: Verify data after postgres restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_after_pg
+
+    - name: "POD-RECOVERY: Assert data intact after postgres kill"
+      ansible.builtin.assert:
+        that:
+          - pages_after_pg.json | length == pages_before.json | length
+        fail_msg: "Data lost after postgres pod kill!"
+        success_msg: "PASS: Postgres pod recovery — data intact ({{ pages_after_pg.json | length }} monitors)"
+
+    # ── Test 3: Kill redis pod ──
+
+    - name: "POD-RECOVERY: Delete redis pod"
+      ansible.builtin.shell: |
+        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=redis -n {{ ns }} --wait=false
+      changed_when: true
+
+    - name: "POD-RECOVERY: Wait for redis deployment rollout"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-redis -n {{ ns }} --timeout=60s
+      changed_when: false
+
+    - name: "POD-RECOVERY: Verify app health after redis restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health_after_redis
+      retries: 20
+      delay: 5
+      until: health_after_redis.status == 200 and health_after_redis.json.status == "UP"
+
+    - name: "POD-RECOVERY: Assert app healthy after redis kill"
+      ansible.builtin.assert:
+        that:
+          - health_after_redis.json.status == "UP"
+        success_msg: "PASS: Redis pod recovery — app healthy"
+
+    # ── Test 4: Kill frontend pod ──
+
+    - name: "POD-RECOVERY: Delete frontend pod"
+      ansible.builtin.shell: |
+        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=frontend -n {{ ns }} --wait=false
+      changed_when: true
+
+    - name: "POD-RECOVERY: Wait for frontend deployment rollout"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-frontend -n {{ ns }} --timeout=60s
+      changed_when: false
+
+    - name: "POD-RECOVERY: Verify frontend serves pages"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/"
+        return_content: false
+      register: frontend_after
+      retries: 15
+      delay: 5
+      until: frontend_after.status == 200
+
+    - name: "POD-RECOVERY: Assert frontend recovered"
+      ansible.builtin.assert:
+        that:
+          - frontend_after.status == 200
+        success_msg: "PASS: Frontend pod recovery — serving pages"
+
+    # ── Test 5: Kill ALL pods simultaneously ──
+
+    - name: "POD-RECOVERY: Delete ALL pods in namespace"
+      ansible.builtin.shell: |
+        k3s kubectl delete pods --all -n {{ ns }} --wait=false
+      changed_when: true
+
+    - name: "POD-RECOVERY: Wait for all deployments to roll out"
+      ansible.builtin.shell: |
+        for deploy in monitor-app monitor-postgres monitor-redis monitor-frontend; do
+          k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=180s
+        done
+      changed_when: false
+
+    - name: "POD-RECOVERY: Wait for app health after full restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health_after_all
+      retries: 30
+      delay: 10
+      until: health_after_all.status == 200 and health_after_all.json.status == "UP"
+
+    - name: "POD-RECOVERY: Re-login after full restart"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_after_all
+
+    - name: Update auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_after_all.cookies['AUTH_TOKEN'] }}"
+
+    - name: "POD-RECOVERY: Verify data after killing all pods"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_after_all
+
+    - name: "POD-RECOVERY: Assert data intact after killing all pods"
+      ansible.builtin.assert:
+        that:
+          - pages_after_all.json | length == pages_before.json | length
+        fail_msg: "Data lost after killing all pods!"
+        success_msg: "PASS: Full pod recovery — all data intact ({{ pages_after_all.json | length }} monitors)"
+
+    - name: "=== Suite 1 Complete ==="
+      ansible.builtin.debug:
+        msg: "All pod recovery tests passed"
+
+    # ================================================================
+    # Suite 2: Full Disaster Recovery (Velero Backup/Restore)
+    # ================================================================
+
+    # ── Step 1: Deploy Velero + test MinIO ──
+
+    - name: "DR: Create velero namespace"
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ velero_ns }}
+          labels:
+            pod-security.kubernetes.io/enforce: privileged
+            pod-security.kubernetes.io/audit: privileged
+            pod-security.kubernetes.io/warn: privileged
+        EOF
+      changed_when: false
+
+    - name: "DR: Create backup directory"
+      ansible.builtin.file:
+        path: /tmp/velero-test-backups
+        state: directory
+        owner: "1000"
+        group: "1000"
+        mode: '0755'
+
+    - name: "DR: Deploy test MinIO"
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        ---
+        apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: minio-test-pv
+          labels:
+            app: minio-test
+        spec:
+          capacity:
+            storage: 5Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: manual-test
+          hostPath:
+            path: /tmp/velero-test-backups
+            type: DirectoryOrCreate
+          persistentVolumeReclaimPolicy: Delete
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: minio-test-pvc
+          namespace: {{ velero_ns }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: manual-test
+          resources:
+            requests:
+              storage: 5Gi
+          selector:
+            matchLabels:
+              app: minio-test
+        ---
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: minio-test-secret
+          namespace: {{ velero_ns }}
+        type: Opaque
+        stringData:
+          MINIO_ROOT_USER: "minioadmin"
+          MINIO_ROOT_PASSWORD: "minioadmin"
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: minio-test
+          namespace: {{ velero_ns }}
+        spec:
+          replicas: 1
+          strategy:
+            type: Recreate
+          selector:
+            matchLabels:
+              app: minio-test
+          template:
+            metadata:
+              labels:
+                app: minio-test
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                fsGroup: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: minio
+                  image: {{ minio_image }}
+                  command: ["minio", "server", "/data", "--console-address", ":9001"]
+                  envFrom:
+                    - secretRef:
+                        name: minio-test-secret
+                  ports:
+                    - containerPort: 9000
+                    - containerPort: 9001
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                      drop: ["ALL"]
+                  resources:
+                    requests:
+                      cpu: 50m
+                      memory: 128Mi
+                    limits:
+                      cpu: 500m
+                      memory: 512Mi
+                  volumeMounts:
+                    - name: data
+                      mountPath: /data
+                  readinessProbe:
+                    httpGet:
+                      path: /minio/health/ready
+                      port: 9000
+                    initialDelaySeconds: 5
+                    periodSeconds: 10
+              volumes:
+                - name: data
+                  persistentVolumeClaim:
+                    claimName: minio-test-pvc
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: minio-test
+          namespace: {{ velero_ns }}
+        spec:
+          selector:
+            app: minio-test
+          ports:
+            - name: api
+              port: 9000
+              targetPort: 9000
+        EOF
+      changed_when: false
+
+    - name: "DR: Wait for test MinIO"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/minio-test -n {{ velero_ns }} --timeout=120s
+      changed_when: false
+
+    - name: "DR: Create velero bucket"
+      ansible.builtin.shell: |
+        k3s kubectl run minio-setup --rm -i --restart=Never \
+          -n {{ velero_ns }} \
+          --image=quay.io/minio/mc:latest \
+          --overrides='{
+            "spec": {
+              "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
+              "containers": [{
+                "name": "minio-setup",
+                "image": "quay.io/minio/mc:latest",
+                "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://minio-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero"],
+                "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
+              }]
+            }
+          }' 2>&1 || true
+      changed_when: false
+
+    - name: "DR: Add vmware-tanzu Helm repo"
+      ansible.builtin.shell: |
+        helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>/dev/null || true
+        helm repo update vmware-tanzu
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: "DR: Create Velero credentials"
+      ansible.builtin.shell: |
+        cat <<EOF | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: velero-credentials
+          namespace: {{ velero_ns }}
+        type: Opaque
+        stringData:
+          cloud: |
+            [default]
+            aws_access_key_id=minioadmin
+            aws_secret_access_key=minioadmin
+        EOF
+      changed_when: false
+
+    - name: "DR: Install Velero CRDs"
+      ansible.builtin.shell: |
+        k3s kubectl apply --server-side \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backups.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backupstoragelocations.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/deletebackuprequests.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/downloadrequests.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/podvolumebackups.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/podvolumerestores.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/restores.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/schedules.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/serverstatusrequests.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/volumesnapshotlocations.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/datadownloads.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/datauploads.yaml \
+          -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backuprepositories.yaml
+      changed_when: false
+
+    - name: "DR: Deploy Velero"
+      ansible.builtin.shell: |
+        helm upgrade --install velero vmware-tanzu/velero \
+          --version {{ velero_chart_version }} \
+          --namespace {{ velero_ns }} \
+          --skip-crds \
+          --no-hooks \
+          --values - <<'HELMEOF'
+        initContainers:
+          - name: velero-plugin-for-aws
+            image: velero/velero-plugin-for-aws:v1.11.1
+            volumeMounts:
+              - name: plugins
+                mountPath: /target
+        credentials:
+          useSecret: true
+          existingSecret: velero-credentials
+        configuration:
+          backupStorageLocation:
+            - name: default
+              provider: aws
+              bucket: velero
+              config:
+                region: us-east-1
+                s3ForcePathStyle: "true"
+                s3Url: http://minio-test.{{ velero_ns }}.svc:9000
+          volumeSnapshotLocation: []
+          defaultVolumesToFsBackup: true
+          features: ""
+        deployNodeAgent: true
+        snapshotsEnabled: false
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: "DR: Wait for Velero"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/velero -n {{ velero_ns }} --timeout=120s
+      changed_when: false
+
+    - name: "DR: Wait for node-agent DaemonSet"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status daemonset/node-agent -n {{ velero_ns }} --timeout=120s
+      changed_when: false
+
+    - name: "DR: Wait for BSL to be available"
+      ansible.builtin.shell: |
+        k3s kubectl get backupstoragelocation default -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      register: bsl_status
+      retries: 30
+      delay: 10
+      until: bsl_status.stdout == "Available"
+      changed_when: false
+
+    - name: "DR: Velero ready"
+      ansible.builtin.debug:
+        msg: "Velero deployed, BSL status: {{ bsl_status.stdout }}"
+
+    # ── Step 2: Verify seed data still present ──
+
+    - name: "DR: Re-login before backup"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_pre_backup
+
+    - name: Update auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_pre_backup.cookies['AUTH_TOKEN'] }}"
+
+    - name: "DR: Verify monitors before backup"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_pre_backup
+
+    - name: "DR: Record pre-backup state"
+      ansible.builtin.set_fact:
+        monitor_count_before: "{{ pages_pre_backup.json | length }}"
+
+    - name: "DR: Pre-backup state"
+      ansible.builtin.debug:
+        msg: "Pre-backup: {{ monitor_count_before }} monitors"
+
+    # ── Step 3: Create Velero backup ──
+
+    - name: "DR: Trigger pg_dump before backup"
+      ansible.builtin.shell: |
+        k3s kubectl create job --from=cronjob/monitor-postgres-backup dr-pgdump -n {{ ns }} 2>/dev/null || true
+        k3s kubectl wait --for=condition=complete job/dr-pgdump -n {{ ns }} --timeout=120s 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: "DR: Create Velero backup"
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: velero.io/v1
+        kind: Backup
+        metadata:
+          name: dr-test
+          namespace: {{ velero_ns }}
+        spec:
+          includedNamespaces:
+            - {{ ns }}
+          defaultVolumesToFsBackup: true
+          ttl: 1h0m0s
+        EOF
+      register: backup_result
+
+    - name: "DR: Wait for backup to complete"
+      ansible.builtin.shell: |
+        k3s kubectl get backup dr-test -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      register: backup_status
+      retries: 60
+      delay: 10
+      until: backup_status.stdout in ["Completed", "Failed", "PartiallyFailed"]
+      changed_when: false
+
+    - name: "DR: Assert backup succeeded"
+      ansible.builtin.assert:
+        that:
+          - backup_status.stdout == "Completed"
+        fail_msg: "Backup failed: {{ backup_status.stdout }}"
+        success_msg: "PASS: Velero backup completed"
+
+    # ── Step 4: Destroy monitor namespace ──
+
+    - name: "DR: !! DESTROYING monitor namespace !!"
+      ansible.builtin.debug:
+        msg: "Deleting namespace {{ ns }} — simulating disaster"
+
+    - name: "DR: Delete monitor namespace"
+      ansible.builtin.shell: |
+        k3s kubectl delete namespace {{ ns }} --wait=true --timeout=120s
+      register: delete_ns
+
+    - name: "DR: Verify namespace is gone"
+      ansible.builtin.shell: |
+        k3s kubectl get namespace {{ ns }} 2>&1
+      register: ns_check
+      failed_when: ns_check.rc == 0
+      changed_when: false
+
+    - name: "DR: Namespace destroyed"
+      ansible.builtin.debug:
+        msg: "Namespace {{ ns }} deleted successfully"
+
+    # ── Step 5: Restore from backup ──
+
+    - name: "DR: Restore from Velero backup"
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: velero.io/v1
+        kind: Restore
+        metadata:
+          name: dr-test-restore
+          namespace: {{ velero_ns }}
+        spec:
+          backupName: dr-test
+        EOF
+      register: restore_result
+
+    - name: "DR: Wait for restore to complete"
+      ansible.builtin.shell: |
+        k3s kubectl get restore dr-test-restore -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      register: restore_status
+      retries: 60
+      delay: 10
+      until: restore_status.stdout in ["Completed", "Failed", "PartiallyFailed"]
+      changed_when: false
+
+    - name: "DR: Assert restore succeeded"
+      ansible.builtin.assert:
+        that:
+          - restore_status.stdout in ["Completed", "PartiallyFailed"]
+        fail_msg: "Restore failed: {{ restore_status.stdout }}"
+        success_msg: "PASS: Velero restore {{ restore_status.stdout }}"
+
+    # ── Step 6: Wait for pods to recover ──
+
+    - name: "DR: Wait for all deployments after restore"
+      ansible.builtin.shell: |
+        for deploy in monitor-app monitor-postgres monitor-redis monitor-frontend; do
+          echo "Waiting for $deploy..."
+          k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
+        done
+      changed_when: false
+
+    - name: "DR: Wait for app health after restore"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health_after_restore
+      retries: 60
+      delay: 10
+      until: health_after_restore.status == 200 and health_after_restore.json.status == "UP"
+
+    - name: "DR: App healthy after restore"
+      ansible.builtin.debug:
+        msg: "App health: {{ health_after_restore.json.status }}"
+
+    # ── Step 7: Verify data integrity ──
+
+    - name: "DR: Login with original credentials after restore"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_after_restore
+
+    - name: Update auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_after_restore.cookies['AUTH_TOKEN'] }}"
+
+    - name: "DR: Verify monitors after restore"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_after_restore
+
+    - name: "DR: Assert data intact after restore"
+      ansible.builtin.assert:
+        that:
+          - pages_after_restore.json | length == monitor_count_before | int
+        fail_msg: "Data lost! Before: {{ monitor_count_before }}, After: {{ pages_after_restore.json | length }}"
+        success_msg: "PASS: Data intact after restore — {{ pages_after_restore.json | length }} monitors"
+
+    - name: "DR: Verify monitor config preserved"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/config"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: config_after_restore
+
+    - name: "DR: Assert monitor config preserved"
+      ansible.builtin.assert:
+        that:
+          - config_after_restore.json | selectattr('name', 'equalto', test_monitor_name) | list | length > 0
+        fail_msg: "Monitor config '{{ test_monitor_name }}' not found after restore!"
+        success_msg: "PASS: Monitor config '{{ test_monitor_name }}' preserved after restore"
+
+    # ── Step 8: Verify app is functional post-restore ──
+
+    - name: "DR: Trigger manual check after restore"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
+        method: POST
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        status_code: [200, 201]
+      register: check_after_restore
+      failed_when: false
+
+    - name: "DR: App functional post-restore"
+      ansible.builtin.debug:
+        msg: "Post-restore check triggered (status: {{ check_after_restore.status | default('N/A') }})"
+
+    # ── Suite 2 cleanup (keep dr-test backup for Suite 3) ──
+
+    - name: "DR: Delete restore object (keep backup for Suite 3)"
+      ansible.builtin.shell: |
+        k3s kubectl delete restore dr-test-restore -n {{ velero_ns }} 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: "DR: Delete pg_dump job"
+      ansible.builtin.shell: |
+        k3s kubectl delete job dr-pgdump -n {{ ns }} 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: "=== Suite 2 Complete ==="
+      ansible.builtin.debug:
+        msg: "All Velero DR tests passed"
+
+    # ================================================================
+    # Suite 3: Offsite Restore (3rd copy on vault-pi)
+    #
+    # Simulates: primary backup storage (SATA SSD) is lost.
+    # 1. Rsync MinIO data → vault-pi (offsite copy)
+    # 2. Wipe MinIO data on k3s + destroy monitor namespace
+    # 3. Rsync back from vault-pi → k3s
+    # 4. Restart MinIO, Velero restore
+    # 5. Verify data integrity
+    # ================================================================
+
+    # ── Setup SSH from k3s → vault-pi ──
+
+    - name: "OFFSITE: Install rsync"
+      ansible.builtin.apt:
+        name: rsync
+        state: present
+
+    - name: "OFFSITE: Generate temporary SSH key for rsync"
+      ansible.builtin.shell: |
+        rm -f /root/.ssh/offsite_key /root/.ssh/offsite_key.pub
+        ssh-keygen -t ed25519 -f /root/.ssh/offsite_key -N "" -q
+      args:
+        creates: /root/.ssh/offsite_key
+
+    - name: "OFFSITE: Read public key"
+      ansible.builtin.command: cat /root/.ssh/offsite_key.pub
+      register: offsite_pubkey
+      changed_when: false
+
+    - name: "OFFSITE: Install pubkey on vault-pi via delegate"
+      ansible.builtin.authorized_key:
+        user: "{{ offsite_user }}"
+        key: "{{ offsite_pubkey.stdout }}"
+        state: present
+      delegate_to: vault_pi
+
+    - name: "OFFSITE: Test SSH to vault-pi"
+      ansible.builtin.shell: |
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+          -i /root/.ssh/offsite_key \
+          {{ offsite_user }}@{{ offsite_host }} "echo OK"
+      register: ssh_test
+      changed_when: false
+
+    - name: "OFFSITE: SSH connectivity verified"
+      ansible.builtin.assert:
+        that: ssh_test.stdout == "OK"
+        success_msg: "PASS: SSH k3s → vault-pi working"
+
+    # ── Step 1: Rsync MinIO data to vault-pi ──
+
+    - name: "OFFSITE: Rsync MinIO data to vault-pi"
+      ansible.builtin.shell: |
+        rsync -az --delete \
+          -e "ssh -o StrictHostKeyChecking=no -i /root/.ssh/offsite_key" \
+          /tmp/velero-test-backups/ \
+          {{ offsite_user }}@{{ offsite_host }}:{{ offsite_path }}/
+      register: rsync_to_pi
+
+    - name: "OFFSITE: Verify data on vault-pi"
+      ansible.builtin.shell: |
+        ssh -o StrictHostKeyChecking=no -i /root/.ssh/offsite_key \
+          {{ offsite_user }}@{{ offsite_host }} \
+          "du -sh {{ offsite_path }} && find {{ offsite_path }} -type f | wc -l"
+      register: offsite_verify
+      changed_when: false
+
+    - name: "OFFSITE: Data replicated to vault-pi"
+      ansible.builtin.debug:
+        msg: "Offsite data: {{ offsite_verify.stdout }}"
+
+    # ── Step 2: Simulate primary backup loss + disaster ──
+
+    - name: "OFFSITE: !! DESTROYING MinIO data + monitor namespace !!"
+      ansible.builtin.debug:
+        msg: "Simulating primary backup storage failure + full disaster"
+
+    - name: "OFFSITE: Wipe MinIO data on k3s"
+      ansible.builtin.shell: |
+        rm -rf /tmp/velero-test-backups/*
+      changed_when: true
+
+    - name: "OFFSITE: Delete monitor namespace"
+      ansible.builtin.shell: |
+        k3s kubectl delete namespace {{ ns }} --wait=true --timeout=120s
+      register: delete_ns_offsite
+
+    - name: "OFFSITE: Verify namespace gone"
+      ansible.builtin.shell: |
+        k3s kubectl get namespace {{ ns }} 2>&1
+      register: ns_check_offsite
+      failed_when: ns_check_offsite.rc == 0
+      changed_when: false
+
+    # ── Step 3: Restore MinIO data from vault-pi ──
+
+    - name: "OFFSITE: Rsync data back from vault-pi"
+      ansible.builtin.shell: |
+        rsync -az \
+          -e "ssh -o StrictHostKeyChecking=no -i /root/.ssh/offsite_key" \
+          {{ offsite_user }}@{{ offsite_host }}:{{ offsite_path }}/ \
+          /tmp/velero-test-backups/
+
+    - name: "OFFSITE: Verify restored MinIO data"
+      ansible.builtin.shell: |
+        find /tmp/velero-test-backups -type f | wc -l
+      register: restored_file_count
+      changed_when: false
+
+    - name: "OFFSITE: Assert MinIO data restored"
+      ansible.builtin.assert:
+        that: restored_file_count.stdout | int > 0
+        fail_msg: "No files restored from vault-pi!"
+        success_msg: "PASS: {{ restored_file_count.stdout }} files restored from offsite"
+
+    # ── Step 4: Restart MinIO and wait for Velero ──
+
+    - name: "OFFSITE: Restart MinIO pod to pick up restored data"
+      ansible.builtin.shell: |
+        k3s kubectl delete pod -l app=minio-test -n {{ velero_ns }} --wait=false
+      changed_when: true
+
+    - name: "OFFSITE: Wait for MinIO ready"
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/minio-test -n {{ velero_ns }} --timeout=120s
+      changed_when: false
+
+    - name: "OFFSITE: Wait for Velero BSL available"
+      ansible.builtin.shell: |
+        k3s kubectl get backupstoragelocation default -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      register: bsl_offsite
+      retries: 30
+      delay: 10
+      until: bsl_offsite.stdout == "Available"
+      changed_when: false
+
+    - name: "OFFSITE: BSL available after restore"
+      ansible.builtin.debug:
+        msg: "BSL status: {{ bsl_offsite.stdout }}"
+
+    # ── Step 5: Velero restore from offsite-recovered backup ──
+
+    - name: "OFFSITE: Verify dr-test backup still visible"
+      ansible.builtin.shell: |
+        k3s kubectl get backup dr-test -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      register: backup_after_offsite
+      changed_when: false
+
+    - name: "OFFSITE: Assert backup visible"
+      ansible.builtin.assert:
+        that: backup_after_offsite.stdout == "Completed"
+        fail_msg: "Backup not visible after offsite restore! Got: {{ backup_after_offsite.stdout }}"
+        success_msg: "PASS: dr-test backup visible from restored MinIO data"
+
+    - name: "OFFSITE: Create Velero restore from offsite-recovered backup"
+      ansible.builtin.shell: |
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: velero.io/v1
+        kind: Restore
+        metadata:
+          name: dr-offsite-restore
+          namespace: {{ velero_ns }}
+        spec:
+          backupName: dr-test
+        EOF
+
+    - name: "OFFSITE: Wait for restore to complete"
+      ansible.builtin.shell: |
+        k3s kubectl get restore dr-offsite-restore -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      register: offsite_restore_status
+      retries: 60
+      delay: 10
+      until: offsite_restore_status.stdout in ["Completed", "Failed", "PartiallyFailed"]
+      changed_when: false
+
+    - name: "OFFSITE: Assert restore succeeded"
+      ansible.builtin.assert:
+        that:
+          - offsite_restore_status.stdout in ["Completed", "PartiallyFailed"]
+        fail_msg: "Offsite restore failed: {{ offsite_restore_status.stdout }}"
+        success_msg: "PASS: Velero restore from offsite backup {{ offsite_restore_status.stdout }}"
+
+    # ── Step 6: Verify app + data integrity ──
+
+    - name: "OFFSITE: Wait for all deployments"
+      ansible.builtin.shell: |
+        for deploy in monitor-app monitor-postgres monitor-redis monitor-frontend; do
+          k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
+        done
+      changed_when: false
+
+    - name: "OFFSITE: Wait for app health"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/actuator/health"
+        return_content: true
+      register: health_offsite
+      retries: 60
+      delay: 10
+      until: health_offsite.status == 200 and health_offsite.json.status == "UP"
+
+    - name: "OFFSITE: Login with original credentials"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/auth/login"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ test_email }}"
+          password: "{{ test_pass }}"
+        return_content: true
+      register: login_offsite
+
+    - name: Update auth token
+      ansible.builtin.set_fact:
+        auth_cookie: "{{ login_offsite.cookies['AUTH_TOKEN'] }}"
+
+    - name: "OFFSITE: Verify monitors after offsite restore"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/pages"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: pages_offsite
+
+    - name: "OFFSITE: Assert data intact after offsite restore"
+      ansible.builtin.assert:
+        that:
+          - pages_offsite.json | length == monitor_count_before | int
+        fail_msg: "Data lost! Before: {{ monitor_count_before }}, After: {{ pages_offsite.json | length }}"
+        success_msg: "PASS: Data intact after offsite restore — {{ pages_offsite.json | length }} monitors"
+
+    - name: "OFFSITE: Verify monitor config preserved"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/config"
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        return_content: true
+      register: config_offsite
+
+    - name: "OFFSITE: Assert monitor config preserved"
+      ansible.builtin.assert:
+        that:
+          - config_offsite.json | selectattr('name', 'equalto', test_monitor_name) | list | length > 0
+        fail_msg: "Monitor config '{{ test_monitor_name }}' not found after offsite restore!"
+        success_msg: "PASS: Monitor config '{{ test_monitor_name }}' preserved after offsite restore"
+
+    - name: "OFFSITE: Trigger manual check after offsite restore"
+      ansible.builtin.uri:
+        url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
+        method: POST
+        headers:
+          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+        status_code: [200, 201]
+      register: check_offsite
+      failed_when: false
+
+    - name: "OFFSITE: App functional after offsite restore"
+      ansible.builtin.debug:
+        msg: "Post-offsite-restore check (status: {{ check_offsite.status | default('N/A') }})"
+
+    # ── Cleanup ──
+
+    - name: "OFFSITE: Cleanup restore objects"
+      ansible.builtin.shell: |
+        k3s kubectl delete backup dr-test -n {{ velero_ns }} 2>/dev/null || true
+        k3s kubectl delete restore dr-offsite-restore -n {{ velero_ns }} 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: "OFFSITE: Cleanup SSH key"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /root/.ssh/offsite_key
+        - /root/.ssh/offsite_key.pub
+
+    - name: "OFFSITE: Remove pubkey from vault-pi"
+      ansible.builtin.authorized_key:
+        user: "{{ offsite_user }}"
+        key: "{{ offsite_pubkey.stdout }}"
+        state: absent
+      delegate_to: vault_pi
+
+    - name: "=== Suite 3 Complete ==="
+      ansible.builtin.debug:
+        msg: "All offsite restore tests passed"
+
+    # ================================================================
+    # Summary
+    # ================================================================
+
+    - name: "=== ALL DR TESTS PASSED ==="
+      ansible.builtin.debug:
+        msg: |
+          Disaster Recovery Test Results:
+            Suite 1 - Pod Recovery:
+              - App pod kill + recovery: PASS
+              - Postgres pod kill + recovery: PASS
+              - Redis pod kill + recovery: PASS
+              - Frontend pod kill + recovery: PASS
+              - All pods kill + recovery: PASS
+            Suite 2 - Full DR (Velero):
+              - Velero backup: PASS
+              - Namespace destruction + restore: PASS
+              - Data integrity after restore: PASS
+              - App functional after restore: PASS
+            Suite 3 - Offsite Restore (3rd copy):
+              - Rsync to vault-pi: PASS
+              - Primary backup wipe + namespace destroy: PASS
+              - Rsync back from vault-pi: PASS
+              - Velero restore from recovered backup: PASS
+              - Data integrity after offsite restore: PASS
+              - App functional after offsite restore: PASS

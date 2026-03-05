@@ -206,12 +206,19 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
 
   test:vault:
-    desc: Test Vault end-to-end in Vagrant (requires vagrant up)
-    dir: deploy/ansible
-    deps: [deploy:install]
+    desc: Test Vault end-to-end in Vagrant
+    deps: [deploy:install, vagrant:up]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+  test:dr:
+    desc: Test pod recovery + disaster recovery in Vagrant
+    deps: [deploy:install, vagrant:up]
+    cmds:
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-dr.yml
 
   deploy:k3s:
     desc: Setup k3s only
@@ -258,6 +265,22 @@ tasks:
     desc: Test connectivity to target host
     cmds:
       - ssh -o ConnectTimeout=5 {{.TARGET_USER}}@{{.TARGET_HOST}} "hostname && uname -a"
+
+  # ============== VAGRANT ==============
+  vagrant:up:
+    desc: Start Vagrant VMs
+    cmds:
+      - vagrant up
+
+  vagrant:halt:
+    desc: Stop Vagrant VMs
+    cmds:
+      - vagrant halt
+
+  vagrant:destroy:
+    desc: Destroy Vagrant VMs
+    cmds:
+      - vagrant destroy -f
 
   # ============== CLEAN ==============
   clean:

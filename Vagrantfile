@@ -8,7 +8,8 @@
 #
 # Host requirements:
 #   - Vagrant with libvirt or VirtualBox provider
-#   - Recommended: Intel Core 125H dev laptop with 32GB RAM
+#   - Tuned for: Intel Core Ultra 125H (14C/18T) + 32GB RAM
+#     k3s: 10 CPUs, 20GB — vault-pi: 2 CPUs, 2GB — leaves 6 threads + 10GB for host
 #
 # Usage:
 #   vagrant up                          # Start both VMs
@@ -45,14 +46,14 @@ Vagrant.configure("2") do |config|
     vpi.vm.network "forwarded_port", guest: 8200, host: 8300
 
     vpi.vm.provider "libvirt" do |lv|
-      lv.memory = 1024
-      lv.cpus = 1
+      lv.memory = 2048
+      lv.cpus = 2
       lv.driver = "kvm"
     end
 
     vpi.vm.provider "virtualbox" do |vb|
-      vb.memory = 1024
-      vb.cpus = 1
+      vb.memory = 2048
+      vb.cpus = 2
       vb.name = "vault-pi"
     end
 
@@ -96,17 +97,18 @@ EOF
     # Private network for k3s ↔ vault-pi communication
     k3s.vm.network "private_network", ip: "192.168.56.10"
 
-    # Sized for 32GB dev machine — leaves ~8GB for host OS and other apps
+    # Sized for Core Ultra 125H (14C/18T) + 32GB: 10 CPUs + 20GB for k3s
     k3s.vm.provider "libvirt" do |lv|
-      lv.memory = 20480  # 20GB — enough for k3s + Vault + full monitor stack
-      lv.cpus = 8
+      lv.memory = 20480  # 20GB — k3s + Vault + full monitor stack
+      lv.cpus = 10       # 10 of 18 threads — leaves 7 for host + 1 for vault-pi
       lv.driver = "kvm"
       lv.machine_type = "q35"
+      lv.cpu_mode = "host-passthrough"  # expose AVX/SSE for JVM + postgres
     end
 
     k3s.vm.provider "virtualbox" do |vb|
       vb.memory = 20480
-      vb.cpus = 8
+      vb.cpus = 10
       vb.name = "monitor-test"
     end
 
