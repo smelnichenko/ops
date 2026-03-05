@@ -511,7 +511,34 @@
         mode: '0750'
 
     # ================================================================
-    # Phase 11: Local data backup cron (Pi-local, keeps last 90 copies)
+    # Phase 11: Git mirror bare repo (receives push from k3s offsite backup)
+    # Ensures source code survives even if Forgejo + k3s node are lost
+    # ================================================================
+
+    - name: Install git
+      ansible.builtin.apt:
+        name: git
+        state: present
+
+    - name: Create git mirror directory
+      ansible.builtin.file:
+        path: /mnt/backups/git-mirror
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0750'
+
+    - name: Initialize bare git repo for monitor mirror
+      ansible.builtin.shell: |
+        if [ ! -f /mnt/backups/git-mirror/monitor.git/HEAD ]; then
+          git init --bare /mnt/backups/git-mirror/monitor.git
+          chown -R {{ ansible_user }}:{{ ansible_user }} /mnt/backups/git-mirror/monitor.git
+        fi
+      register: git_init
+      changed_when: "'Initialized' in git_init.stdout"
+
+    # ================================================================
+    # Phase 12: Local data backup cron (Pi-local, keeps last 90 copies)
     # Pi 5 has 2TB NVMe SSD — 90-day retention is generous and safe
     # ================================================================
 

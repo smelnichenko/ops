@@ -24,6 +24,13 @@
     velero_minio_access_key: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"
     velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    # Git mirror: push repo to Pi as additional backup
+    git_mirror_enabled: true
+    git_mirror_host: "git.pmon.dev"
+    git_mirror_repo: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('admin', true) }}/monitor"
+    git_mirror_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('admin', true) }}"
+    git_mirror_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('', true) }}"
+    git_mirror_local_path: "/var/lib/git-mirror/monitor.git"
 
   tasks:
     # ================================================================
@@ -371,11 +378,40 @@
     # Runs after Velero daily (2 AM) and Vault snapshots (every 6h)
     # ================================================================
 
-    - name: Install rsync
+    - name: Install rsync and git
       ansible.builtin.apt:
-        name: rsync
+        name:
+          - rsync
+          - git
         state: present
       when: offsite_backup_enabled | default(true) | bool
+
+    - name: Create local git mirror directory
+      ansible.builtin.file:
+        path: "{{ git_mirror_local_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: git_mirror_enabled | default(true) | bool
+
+    - name: Initialize local bare mirror from Forgejo
+      ansible.builtin.shell: |
+        if [ ! -f "{{ git_mirror_local_path }}/HEAD" ]; then
+          git clone --mirror \
+            "https://{{ git_mirror_user }}:{{ git_mirror_password }}@{{ git_mirror_host }}/{{ git_mirror_repo }}.git" \
+            "{{ git_mirror_local_path }}"
+          # Add Pi as push target
+          git -C "{{ git_mirror_local_path }}" remote add pi \
+            "{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/git-mirror/monitor.git"
+          # Configure SSH key for Pi remote
+          git -C "{{ git_mirror_local_path }}" config \
+            core.sshCommand "ssh -o StrictHostKeyChecking=no -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
+        fi
+      register: git_mirror_init
+      changed_when: "'Cloning' in git_mirror_init.stdout"
+      no_log: true
+      when: git_mirror_enabled | default(true) | bool
 
     - name: Write offsite backup rsync script
       ansible.builtin.copy:
@@ -385,19 +421,31 @@
         group: root
         content: |
           #!/bin/bash
-          # Sync MinIO backup data to Vault Pi as offsite 3rd copy
+          # Sync MinIO backup data + git mirror to Vault Pi as offsite copy
           # Runs as root, SSH as {{ offsite_backup_user | default('sm') }}
           set -euo pipefail
 
+          SSH_KEY="{{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
+          SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i $SSH_KEY"
           REMOTE="{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.4') }}"
-          SRC="{{ velero_backup_path }}/"
-          DEST="${REMOTE}:/mnt/backups/offsite/"
 
-          logger -t offsite-backup "Starting rsync to ${REMOTE}"
+          # 1. Rsync MinIO backup data
+          logger -t offsite-backup "Starting MinIO rsync to ${REMOTE}"
           rsync -az --delete \
-            -e "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}" \
-            "$SRC" "$DEST" 2>&1 | logger -t offsite-backup
-          logger -t offsite-backup "Rsync complete"
+            -e "ssh $SSH_OPTS" \
+            "{{ velero_backup_path }}/" "${REMOTE}:/mnt/backups/offsite/" 2>&1 | logger -t offsite-backup
+          logger -t offsite-backup "MinIO rsync complete"
+
+          # 2. Git mirror push (fetch from Forgejo, push to Pi)
+          MIRROR="{{ git_mirror_local_path }}"
+          if [ -d "$MIRROR" ]; then
+            logger -t offsite-backup "Starting git mirror sync"
+            git -C "$MIRROR" fetch --prune origin 2>&1 | logger -t offsite-backup || \
+              logger -t offsite-backup "WARNING: git fetch from Forgejo failed (Forgejo down?)"
+            git -C "$MIRROR" push --mirror pi 2>&1 | logger -t offsite-backup || \
+              logger -t offsite-backup "WARNING: git push to Pi failed"
+            logger -t offsite-backup "Git mirror sync complete"
+          fi
       when: offsite_backup_enabled | default(true) | bool
 
     - name: Create offsite backup systemd service
@@ -456,6 +504,7 @@
 
           Offsite replication:
             - Target: {{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/offsite/
+            - Git mirror: {{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/git-mirror/monitor.git
             - Schedule: 4 AM daily (systemd timer)
             - Check: systemctl status offsite-backup.timer
             - Manual run: systemctl start offsite-backup.service
