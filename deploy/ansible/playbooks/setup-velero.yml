@@ -12,7 +12,7 @@
 #   ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
 #
 - name: Setup Velero + Backup MinIO
-  hosts: all
+  hosts: target
   become: true
   gather_facts: false
 
@@ -390,9 +390,9 @@
       ansible.builtin.file:
         path: "{{ git_mirror_local_path | dirname }}"
         state: directory
-        owner: root
-        group: root
-        mode: '0700'
+        owner: "{{ offsite_backup_user | default('sm') }}"
+        group: "{{ offsite_backup_user | default('sm') }}"
+        mode: '0750'
       when: git_mirror_enabled | default(true) | bool
 
     - name: Initialize local bare mirror from Forgejo
@@ -408,6 +408,7 @@
           git -C "{{ git_mirror_local_path }}" config \
             core.sshCommand "ssh -o StrictHostKeyChecking=no -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
         fi
+      become_user: "{{ offsite_backup_user | default('sm') }}"
       register: git_mirror_init
       changed_when: "'Cloning' in git_mirror_init.stdout"
       no_log: true
@@ -437,12 +438,13 @@
           logger -t offsite-backup "MinIO rsync complete"
 
           # 2. Git mirror push (fetch from Forgejo, push to Pi)
+          # Runs as {{ offsite_backup_user | default('sm') }} who owns the mirror and SSH key
           MIRROR="{{ git_mirror_local_path }}"
           if [ -d "$MIRROR" ]; then
             logger -t offsite-backup "Starting git mirror sync"
-            git -C "$MIRROR" fetch --prune origin 2>&1 | logger -t offsite-backup || \
+            sudo -u {{ offsite_backup_user | default('sm') }} git -C "$MIRROR" fetch --prune origin 2>&1 | logger -t offsite-backup || \
               logger -t offsite-backup "WARNING: git fetch from Forgejo failed (Forgejo down?)"
-            git -C "$MIRROR" push --mirror pi 2>&1 | logger -t offsite-backup || \
+            sudo -u {{ offsite_backup_user | default('sm') }} git -C "$MIRROR" push --mirror pi 2>&1 | logger -t offsite-backup || \
               logger -t offsite-backup "WARNING: git push to Pi failed"
             logger -t offsite-backup "Git mirror sync complete"
           fi
