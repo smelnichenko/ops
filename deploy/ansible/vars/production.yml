@@ -2,19 +2,20 @@
 # Production environment variables (64GB target)
 # Usage: ansible-playbook deploy.yml -e @vars/production.yml
 #
-# REQUIRED: Set these environment variables before deployment:
-#   export POSTGRES_USERNAME=monitor_user        # optional, defaults to monitor_user
-#   export MONITOR_DB_PASSWORD=your-secure-password
-#   export JWT_SECRET=your-jwt-secret-at-least-32-chars
-#   export GRAFANA_ADMIN_USER=admin              # optional, defaults to admin
-#   export GRAFANA_ADMIN_PASSWORD=your-secure-password
+# Secrets are managed by Vault + External Secrets Operator.
+# Non-secret config (hosts, ports, feature flags) stays here.
+# To fall back to .env-based secrets, remove existingSecret and set values directly.
 
 monitor_release_name: monitor
 monitor_namespace: monitor
 
 monitor_values:
+  # Vault integration — ESO syncs secrets from Vault KV into k8s Secrets
+  vault:
+    secretsEnabled: true
+
   auth:
-    jwtSecret: "{{ lookup('env', 'JWT_SECRET') | default('CHANGE_ME_GENERATE_A_SECURE_32_CHAR_SECRET', true) }}"
+    existingSecret: "monitor-auth"
     tokenExpiration: 1h
     registrationEnabled: true
     secureCookies: true
@@ -69,24 +70,22 @@ monitor_values:
         clusterIssuer: "letsencrypt-prod"
 
   mail:
-    enabled: "{{ lookup('env', 'MAIL_ENABLED') | default('false', true) | bool }}"
-    host: "{{ lookup('env', 'MAIL_HOST') | default('smtp.gmail.com', true) }}"
-    port: "{{ lookup('env', 'MAIL_PORT') | default('587', true) }}"
-    username: "{{ lookup('env', 'MAIL_USERNAME') | default('', true) }}"
-    password: "{{ lookup('env', 'MAIL_PASSWORD') | default('', true) }}"
-    fromAddress: "{{ lookup('env', 'MAIL_FROM') | default('noreply@example.com', true) }}"
-    appUrl: "{{ lookup('env', 'APP_URL') | default('https://pmon.dev', true) }}"
+    enabled: true
+    existingSecret: "monitor-mail"
+    host: "smtp.resend.com"
+    port: "587"
+    username: "resend"
+    fromAddress: "noreply@pmon.dev"
+    appUrl: "https://pmon.dev"
 
   webhook:
-    enabled: "{{ lookup('env', 'RESEND_WEBHOOK_ENABLED') | default('false', true) | bool }}"
-    signingSecret: "{{ lookup('env', 'RESEND_WEBHOOK_SECRET') | default('', true) }}"
-    apiKey: "{{ lookup('env', 'RESEND_API_KEY') | default('', true) }}"
+    enabled: true
+    existingSecret: "monitor-webhook"
 
   minio:
-    enabled: "{{ lookup('env', 'MINIO_ENABLED') | default('false', true) | bool }}"
+    enabled: true
     image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
-    accessKey: "{{ lookup('env', 'MINIO_ROOT_USER') | default('', true) }}"
-    secretKey: "{{ lookup('env', 'MINIO_ROOT_PASSWORD') | default('', true) }}"
+    existingSecret: "monitor-minio"
     bucket: "email-attachments"
     resources:
       requests:
@@ -101,7 +100,7 @@ monitor_values:
 
   ai:
     enabled: true
-    apiKey: "{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
+    existingSecret: "monitor-ai"
     model: "claude-haiku-4-5-20251001"
 
   monitor:
@@ -114,7 +113,7 @@ monitor_values:
   redis:
     enabled: true
     image: redis:7-alpine
-    password: "{{ lookup('env', 'REDIS_PASSWORD') | default('', true) }}"
+    existingSecret: "monitor-redis"
     resources:
       requests:
         memory: "256Mi"
@@ -126,9 +125,7 @@ monitor_values:
   postgres:
     enabled: true
     image: postgres:17-alpine
-    database: monitor
-    username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}"
-    password: "{{ lookup('env', 'MONITOR_DB_PASSWORD') | default('CHANGE_ME', true) }}"
+    existingSecret: "monitor-postgres"
     sharedBuffers: "4GB"
     effectiveCacheSize: "12GB"
     workMem: "64MB"
@@ -170,8 +167,7 @@ monitor_values:
   grafana:
     enabled: false
     image: grafana/grafana:12.4.0
-    adminUser: "{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}"
-    adminPassword: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('CHANGE_ME', true) }}"
+    existingSecret: "monitor-grafana"
     resources:
       requests:
         memory: "256Mi"
@@ -185,7 +181,7 @@ monitor_values:
     service:
       type: NodePort
 
-# Forgejo (self-hosted Git forge)
+# Forgejo (self-hosted Git forge) — these are deploy-time only, not runtime secrets
 forgejo_host: "git.pmon.dev"
 forgejo_chart_version: "16.2.0"
 forgejo_storage_size: "20Gi"
@@ -194,7 +190,7 @@ forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
 forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
 forgejo_runner_secret: "{{ lookup('env', 'FORGEJO_RUNNER_SECRET') }}"
 
-# Velero + Backup MinIO
+# Velero + Backup MinIO — deploy-time only
 velero_backup_path: "/mnt/backups/minio"
 velero_minio_storage_size: "100Gi"
 velero_minio_access_key: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"

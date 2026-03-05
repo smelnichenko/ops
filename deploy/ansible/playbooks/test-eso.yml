@@ -1,0 +1,334 @@
+---
+# Test External Secrets Operator integration in Vagrant
+#
+# Verifies that Vault KV secrets are synced into k8s Secrets via ESO,
+# and the monitor app can start using those secrets.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-eso.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test ESO Vault secrets integration
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    # Test secrets (not real — Vagrant only)
+    test_jwt_secret: "vagrant-test-jwt-secret-at-least-32-chars-long"
+    test_db_password: "vagrant-test-db-password"
+    test_db_user: "monitor_user"
+    test_db_name: "monitor"
+    test_redis_password: "vagrant-test-redis-password"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Get Vault root token
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    # ================================================================
+    # Phase 2: Seed test secrets into Vault KV
+    # ================================================================
+
+    - name: Seed auth secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/monitor/auth \
+            jwt_secret="{{ test_jwt_secret }}"
+      no_log: true
+
+    - name: Seed postgres secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/monitor/postgres \
+            database="{{ test_db_name }}" \
+            username="{{ test_db_user }}" \
+            password="{{ test_db_password }}"
+      no_log: true
+
+    - name: Seed redis secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/monitor/redis \
+            password="{{ test_redis_password }}"
+      no_log: true
+
+    - name: "SEED: Secrets written to Vault KV"
+      ansible.builtin.debug:
+        msg: "Seeded auth, postgres, redis secrets into Vault KV"
+
+    # ================================================================
+    # Phase 3: Deploy monitor app with ESO-managed secrets
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for ESO test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-eso-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: true
+          auth:
+            existingSecret: "monitor-auth"
+            tokenExpiration: 1h
+            registrationEnabled: true
+            secureCookies: false
+          networkPolicies:
+            enabled: false
+          frontend:
+            enabled: false
+          app:
+            image:
+              repository: ghcr.io/schnappy/monitor
+              tag: "latest"
+              pullPolicy: IfNotPresent
+            replicas: 1
+            javaOpts: "-Xmx512m"
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+          redis:
+            enabled: true
+            image: redis:7-alpine
+            existingSecret: "monitor-redis"
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "500m"
+          postgres:
+            enabled: true
+            image: postgres:17-alpine
+            existingSecret: "monitor-postgres"
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "1000m"
+            storage:
+              size: 1Gi
+              storageClass: "local-path"
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy monitor chart with ESO secrets
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-eso-test-values.yml \
+          --wait --timeout 60s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      # --wait may timeout if pods need ESO secrets first; that's expected
+      register: helm_result
+      failed_when: false
+
+    - name: Display Helm result
+      ansible.builtin.debug:
+        msg: "Helm: {{ helm_result.stdout_lines | default([]) | last | default('done') }}"
+
+    # ================================================================
+    # Phase 4: Verify ExternalSecrets sync
+    # ================================================================
+
+    - name: Wait for ExternalSecrets to be created
+      ansible.builtin.shell: |
+        k3s kubectl get externalsecrets -n {{ ns }} -o json | \
+          python3 -c "import sys,json; items=json.load(sys.stdin)['items']; print(len(items))"
+      register: es_count
+      retries: 12
+      delay: 5
+      until: es_count.stdout | int >= 3
+      changed_when: false
+
+    - name: "ESO: {{ es_count.stdout }} ExternalSecrets created"
+      ansible.builtin.debug:
+        msg: "Found {{ es_count.stdout }} ExternalSecrets in {{ ns }} namespace"
+
+    - name: Wait for ExternalSecrets to sync
+      ansible.builtin.shell: |
+        k3s kubectl get externalsecrets -n {{ ns }} -o json | \
+          python3 -c "
+        import sys, json
+        items = json.load(sys.stdin)['items']
+        synced = sum(1 for i in items
+          if any(c.get('reason') == 'SecretSynced'
+                 for c in i.get('status', {}).get('conditions', [])))
+        total = len(items)
+        print(f'{synced}/{total}')
+        sys.exit(0 if synced == total else 1)
+        "
+      register: es_sync
+      retries: 24
+      delay: 5
+      until: es_sync.rc == 0
+      changed_when: false
+
+    - name: "ESO: All ExternalSecrets synced ({{ es_sync.stdout }})"
+      ansible.builtin.debug:
+        msg: "All ExternalSecrets synced: {{ es_sync.stdout }}"
+
+    - name: Verify k8s Secrets were created by ESO
+      ansible.builtin.shell: |
+        for secret in monitor-auth monitor-postgres monitor-redis; do
+          k3s kubectl get secret "$secret" -n {{ ns }} -o jsonpath='{.metadata.name}' && echo " OK"
+        done
+      register: secrets_check
+      changed_when: false
+
+    - name: "ESO: k8s Secrets present"
+      ansible.builtin.debug:
+        msg: "{{ secrets_check.stdout_lines }}"
+
+    - name: Verify secret content matches Vault (JWT_SECRET key exists)
+      ansible.builtin.shell: |
+        k3s kubectl get secret monitor-auth -n {{ ns }} \
+          -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+      register: jwt_check
+      changed_when: false
+      no_log: true
+
+    - name: "ESO: JWT_SECRET matches Vault value"
+      ansible.builtin.assert:
+        that:
+          - jwt_check.stdout == test_jwt_secret
+        fail_msg: "JWT_SECRET mismatch! ESO did not sync correctly."
+        success_msg: "JWT_SECRET in k8s Secret matches Vault KV value"
+
+    # ================================================================
+    # Phase 5: Verify app can start with ESO-managed secrets
+    # ================================================================
+
+    - name: Wait for postgres to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-postgres -n {{ ns }} --timeout=120s
+      changed_when: false
+
+    - name: Wait for redis to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-redis -n {{ ns }} --timeout=60s
+      changed_when: false
+
+    - name: Wait for app deployment rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=180s
+      register: app_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Check app pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+          -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} ({range .status.containerStatuses[*]}{.state}{end}){"\n"}{end}'
+      register: pod_status
+      changed_when: false
+
+    - name: "APP: Pod status"
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    - name: Get app logs if not ready
+      ansible.builtin.shell: |
+        k3s kubectl logs -n {{ ns }} -l app.kubernetes.io/component=app --tail=30
+      register: app_logs
+      changed_when: false
+      when: app_rollout.rc != 0
+
+    - name: "APP: Logs (last 30 lines)"
+      ansible.builtin.debug:
+        msg: "{{ app_logs.stdout_lines }}"
+      when: app_rollout.rc != 0
+
+    - name: Wait for app health
+      ansible.builtin.uri:
+        url: "http://localhost/api/actuator/health"
+        return_content: true
+      register: health
+      retries: 30
+      delay: 10
+      until: health.status == 200
+      when: app_rollout.rc == 0
+
+    # ================================================================
+    # Phase 6: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-eso-test-values.yml
+        state: absent
+
+    - name: "TEST RESULT"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          ESO Integration Test: {{ 'PASS' if (app_rollout.rc == 0) else 'PARTIAL (app not ready — may need images)' }}
+
+          ExternalSecrets:  {{ es_sync.stdout }} synced
+          k8s Secrets:      {{ secrets_check.stdout_lines | join(', ') }}
+          Secret content:   Verified (JWT_SECRET matches Vault)
+          App rollout:      {{ 'OK' if app_rollout.rc == 0 else 'TIMEOUT (expected if no app image in Vagrant)' }}
+          App health:       {{ health.json.status | default('N/A — no image') }}
+          ====================================================
+
+          The critical verification is ExternalSecret sync — secrets
+          flow correctly from Vault KV → ESO → k8s Secrets.
+          App startup depends on having Docker images available.

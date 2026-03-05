@@ -26,6 +26,8 @@
 
     # vault_pi_autounseal_token and vault_pi_ca_cert come from vault-pi-runtime.yml
     # vault_* config vars come from vars/vault.yml
+    # For secret seeding (Phase 12): pass -e vault_seed_secrets=true -e vault_seed_token=<root_token>
+    vault_seed_token: "{{ lookup('env', 'VAULT_ROOT_TOKEN') | default('', true) }}"
 
   tasks:
     # ================================================================
@@ -413,6 +415,17 @@
       ansible.builtin.set_fact:
         k3s_vault_root_token: "{{ (k3s_vault_init.stdout | from_json).root_token }}"
       when: k3s_vault_init is changed
+      no_log: true
+
+    - name: Store root token as k8s secret (Vagrant/test only)
+      ansible.builtin.shell: |
+        k3s kubectl create secret generic vault-root-token \
+          -n {{ vault_k3s_namespace }} \
+          --from-literal=token="{{ k3s_vault_root_token }}" \
+          --dry-run=client -o yaml | k3s kubectl apply -f -
+      when:
+        - k3s_vault_init is changed
+        - vault_store_root_token | default(false) | bool
       no_log: true
 
     - name: Wait for vault-0 to be Ready after init (auto-unseal via transit)
@@ -1004,6 +1017,109 @@
       delay: 10
       until: css_ready.stdout == "True"
       changed_when: false
+
+    # ================================================================
+    # Phase 12: Seed monitor app secrets into Vault KV
+    # Reads from environment variables (source .env before running)
+    # Only runs when vault_seed_secrets=true
+    # ================================================================
+
+    - name: Seed monitor auth secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/auth \
+            jwt_secret="{{ lookup('env', 'JWT_SECRET') }}"
+      no_log: true
+      when: vault_seed_secrets | default(false) | bool
+
+    - name: Seed monitor postgres secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/postgres \
+            database="{{ lookup('env', 'POSTGRES_DATABASE') | default('monitor', true) }}" \
+            username="{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}" \
+            password="{{ lookup('env', 'MONITOR_DB_PASSWORD') }}"
+      no_log: true
+      when: vault_seed_secrets | default(false) | bool
+
+    - name: Seed monitor redis secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/redis \
+            password="{{ lookup('env', 'REDIS_PASSWORD') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'REDIS_PASSWORD') | length > 0
+
+    - name: Seed monitor mail secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/mail \
+            password="{{ lookup('env', 'MAIL_PASSWORD') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'MAIL_PASSWORD') | length > 0
+
+    - name: Seed monitor AI secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/ai \
+            api_key="{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'ANTHROPIC_API_KEY') | length > 0
+
+    - name: Seed monitor webhook secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/webhook \
+            signing_secret="{{ lookup('env', 'RESEND_WEBHOOK_SECRET') }}" \
+            api_key="{{ lookup('env', 'RESEND_API_KEY') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'RESEND_WEBHOOK_SECRET') | length > 0
+
+    - name: Seed monitor minio secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/minio \
+            access_key="{{ lookup('env', 'MINIO_ROOT_USER') }}" \
+            secret_key="{{ lookup('env', 'MINIO_ROOT_PASSWORD') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'MINIO_ROOT_USER') | length > 0
+
+    - name: Seed monitor grafana secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/grafana \
+            admin_user="{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}" \
+            admin_password="{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'GRAFANA_ADMIN_PASSWORD') | length > 0
 
     - name: Display setup summary
       ansible.builtin.debug:
