@@ -958,12 +958,20 @@
     # Phase 10: Prometheus monitoring secrets in monitor namespace
     # ================================================================
 
+    - name: Check if monitor namespace exists (for Prometheus secrets)
+      ansible.builtin.shell: |
+        k3s kubectl get namespace monitor -o name
+      register: monitor_ns_check
+      failed_when: false
+      changed_when: false
+
     - name: Check if vault CA cert source secret exists
       ansible.builtin.shell: |
         k3s kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} -o name
       register: vault_ca_check
       failed_when: false
       changed_when: false
+      when: monitor_ns_check.rc == 0
 
     - name: Copy vault CA cert to monitor namespace (for Prometheus TLS)
       ansible.builtin.shell: |
@@ -973,7 +981,7 @@
           -n monitor \
           --from-literal=ca.crt=/dev/stdin \
           --dry-run=client -o yaml | k3s kubectl apply -f -
-      when: vault_ca_check.rc == 0
+      when: monitor_ns_check.rc == 0 and vault_ca_check.rc == 0
       changed_when: false
 
     - name: Check if prometheus token secret exists in vault namespace
@@ -982,6 +990,7 @@
       register: prometheus_token_check
       failed_when: false
       changed_when: false
+      when: monitor_ns_check.rc == 0
 
     - name: Create vault-metrics-secret in monitor namespace
       ansible.builtin.shell: |
@@ -991,7 +1000,7 @@
           -n monitor \
           --from-literal=token="$TOKEN" \
           --dry-run=client -o yaml | k3s kubectl apply -f -
-      when: prometheus_token_check.rc == 0
+      when: monitor_ns_check.rc == 0 and prometheus_token_check.rc == 0
       changed_when: false
       no_log: true
 

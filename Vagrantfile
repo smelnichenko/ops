@@ -310,8 +310,9 @@ EOF
       echo "Access: http://localhost:8080"
     SHELL
 
-    # Run E2E tests with Playwright
-    k3s.vm.provision "shell", name: "e2e-tests", privileged: false, inline: <<-SHELL
+    # Run E2E tests with Playwright (run: "never" — invoke explicitly with:
+    #   vagrant provision k3s --provision-with e2e-tests)
+    k3s.vm.provision "shell", name: "e2e-tests", privileged: false, run: "never", inline: <<-SHELL
       set -e
       cd /vagrant
 

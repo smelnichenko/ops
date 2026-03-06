@@ -181,6 +181,53 @@ monitor_values:
     service:
       type: NodePort
 
+  elk:
+    enabled: true
+    elasticsearch:
+      image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
+      replicas: 1
+      javaOpts: "-Xms1g -Xmx1g"
+      existingSecret: "monitor-elasticsearch"
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "500m"
+        limits:
+          memory: "4Gi"
+          cpu: "4000m"
+      storage:
+        size: 50Gi
+        storageClass: "local-path"
+      retention:
+        days: 30
+    kibana:
+      image: docker.elastic.co/kibana/kibana:8.17.4
+      replicas: 1
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "1000m"
+      ingress:
+        enabled: true
+        className: traefik
+        host: "logs.pmon.dev"
+        tls:
+          enabled: true
+          secretName: "logs-pmon-dev-tls"
+          clusterIssuer: "letsencrypt-prod"
+    filebeat:
+      image: docker.elastic.co/beats/filebeat:8.17.4
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "50m"
+        limits:
+          memory: "128Mi"
+          cpu: "200m"
+
 # Forgejo (self-hosted Git forge) — these are deploy-time only, not runtime secrets
 forgejo_host: "git.pmon.dev"
 forgejo_chart_version: "16.2.0"
@@ -202,11 +249,14 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - App:              6000m        8Gi    (JVM heap 6GB + ZGC + metaspace/native)
 # - Redis:            1000m        4Gi
 # - Postgres:         6000m        16Gi   (shared_buffers 4GB, effective_cache_size 12GB)
+# - Elasticsearch:    4000m        4Gi    (JVM heap 1GB + Lucene)
+# - Kibana:           1000m        512Mi
+# - Filebeat:         200m         128Mi
 # - Forgejo:          2000m        1Gi
 # - Backup MinIO:     500m         512Mi
 # - Velero:           1000m        512Mi
-# - Prometheus:       2000m        4Gi    (disabled by default)
+# - Prometheus:       2000m        4Gi
 # - Grafana:          1000m        1Gi    (disabled by default)
 # - k3s system:       ~1000m       ~2Gi
 # ------------------------------------------------
-# Active total:       ~18000m      ~30Gi  (leaves headroom for OS cache + bursts)
+# Active total:       ~23200m      ~35Gi  (leaves ~30GB for OS cache + bursts)

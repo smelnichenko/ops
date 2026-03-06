@@ -18,3 +18,6 @@ vault_k3s_ipv6: ""                    # no IPv6 in Vagrant private network
 vault_pi_ssh_allow_ipv4: "192.168.56.0/24"
 vault_pi_ssh_allow_ipv6: ""
 vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"  # Vagrant NAT (for 'vagrant ssh')
+
+# Store root token as k8s secret (for test playbooks to retrieve it)
+vault_store_root_token: true
