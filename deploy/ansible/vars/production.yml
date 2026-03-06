@@ -250,7 +250,7 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Redis:            1000m        4Gi
 # - Postgres:         6000m        16Gi   (shared_buffers 4GB, effective_cache_size 12GB)
 # - Elasticsearch:    4000m        8Gi    (JVM heap 2GB + Lucene file cache)
-# - Kibana:           1000m        2Gi
+# - Kibana:           1000m        2Gi    (Node.js + v8, needs ~1Gi minimum)
 # - Filebeat:         200m         256Mi
 # - Forgejo:          2000m        1Gi
 # - Backup MinIO:     500m         512Mi
