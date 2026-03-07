@@ -261,9 +261,14 @@
         mode: '0440'
         content: |
           # Allow forgejo-runner to import images and manage k3s
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s ctr images import *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s ctr images import -
           {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s kubectl *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm upgrade --install *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm version *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm lint *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm rollback *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm status *
+          {{ runner_user }} ALL=(root) NOPASSWD: /usr/bin/tee /var/lib/monitor-deploy-commit
         validate: visudo -cf %s
 
     - name: Enable and start forgejo-runner
