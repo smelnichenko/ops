@@ -165,7 +165,7 @@
             k3s kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=120s
           changed_when: false
 
-        - name: Create Let's Encrypt ClusterIssuer
+        - name: Create Let's Encrypt HTTP-01 ClusterIssuer
           ansible.builtin.shell: |
             k3s kubectl apply -f - <<'EOF'
             apiVersion: cert-manager.io/v1
@@ -185,6 +185,90 @@
             EOF
           changed_when: false
 
+    - name: Setup Porkbun DNS-01 webhook for internal hosts
+      when: porkbun_api_key | default('') | length > 0
+      block:
+        - name: Add cert-manager-webhook-porkbun Helm repo
+          ansible.builtin.shell: |
+            helm repo add cert-manager-webhook-porkbun https://talinx.github.io/cert-manager-webhook-porkbun && \
+            helm repo update cert-manager-webhook-porkbun
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          changed_when: false
+
+        - name: Check if Porkbun webhook is installed
+          ansible.builtin.shell: |
+            helm status cert-manager-webhook-porkbun -n cert-manager 2>/dev/null
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          register: porkbun_webhook_status
+          ignore_errors: true
+          changed_when: false
+
+        - name: Install Porkbun webhook Helm chart
+          ansible.builtin.shell: |
+            helm install cert-manager-webhook-porkbun \
+              cert-manager-webhook-porkbun/cert-manager-webhook-porkbun \
+              -n cert-manager --wait --timeout 120s
+          environment:
+            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          when: porkbun_webhook_status.rc != 0
+
+        - name: Create Porkbun API credentials secret
+          ansible.builtin.shell: |
+            k3s kubectl apply -f - <<'EOF'
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: porkbun-secret
+              namespace: cert-manager
+            type: Opaque
+            stringData:
+              PORKBUN_API_KEY: "{{ porkbun_api_key }}"
+              PORKBUN_SECRET_API_KEY: "{{ porkbun_secret_key }}"
+            EOF
+          no_log: true
+
+        - name: Create Let's Encrypt DNS-01 ClusterIssuer
+          ansible.builtin.shell: |
+            k3s kubectl apply -f - <<'EOF'
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: letsencrypt-dns
+            spec:
+              acme:
+                server: https://acme-v02.api.letsencrypt.org/directory
+                email: sergei.melnichenko@gmail.com
+                privateKeySecretRef:
+                  name: letsencrypt-dns
+                solvers:
+                  - selector:
+                      dnsZones:
+                        - pmon.dev
+                    dns01:
+                      webhook:
+                        groupName: porkbun.talinx.dev
+                        solverName: porkbun
+                        config:
+                          apiKey:
+                            key: PORKBUN_API_KEY
+                            name: porkbun-secret
+                          secretApiKey:
+                            key: PORKBUN_SECRET_API_KEY
+                            name: porkbun-secret
+            EOF
+          changed_when: false
+
+        - name: Wait for DNS-01 ClusterIssuer to be ready
+          ansible.builtin.shell: |
+            k3s kubectl get clusterissuer letsencrypt-dns -o jsonpath='{.status.conditions[0].status}'
+          register: dns_issuer_ready
+          retries: 12
+          delay: 5
+          until: dns_issuer_ready.stdout == "True"
+          changed_when: false
+
     - name: Display k3s status
       ansible.builtin.debug:
         msg: |
@@ -193,6 +277,7 @@
           Traefik ingress controller is ready (bundled with k3s).
           local-path-provisioner configured to use /mnt/storage/k3s-pvcs.
           cert-manager installed with Let's Encrypt ClusterIssuer.
+          {{ 'Porkbun DNS-01 webhook installed (letsencrypt-dns issuer ready).' if porkbun_api_key | default('') | length > 0 else 'Porkbun DNS-01 webhook skipped (no API key provided).' }}
 
           To use kubectl locally:
             export KUBECONFIG={{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}

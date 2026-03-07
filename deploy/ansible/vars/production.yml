@@ -165,7 +165,7 @@ monitor_values:
       storageClass: "local-path"
 
   grafana:
-    enabled: false
+    enabled: true
     image: grafana/grafana:12.4.0
     existingSecret: "monitor-grafana"
     resources:
@@ -179,7 +179,15 @@ monitor_values:
       size: 5Gi
       storageClass: "local-path"
     service:
-      type: NodePort
+      type: ClusterIP
+    ingress:
+      enabled: true
+      className: traefik
+      host: "grafana.pmon.dev"
+      tls:
+        enabled: true
+        secretName: "grafana-pmon-dev-tls"
+        clusterIssuer: "letsencrypt-dns"
 
   elk:
     enabled: true
@@ -217,7 +225,7 @@ monitor_values:
         tls:
           enabled: true
           secretName: "logs-pmon-dev-tls"
-          clusterIssuer: "letsencrypt-prod"
+          clusterIssuer: "letsencrypt-dns"
     filebeat:
       image: docker.elastic.co/beats/filebeat:8.17.4
       resources:
@@ -236,6 +244,10 @@ forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('admin', t
 forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
 forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
 forgejo_runner_secret: "{{ lookup('env', 'FORGEJO_RUNNER_SECRET') }}"
+
+# Porkbun DNS-01 (cert-manager webhook) — deploy-time only
+porkbun_api_key: "{{ lookup('env', 'PORKBUN_API_KEY') }}"
+porkbun_secret_key: "{{ lookup('env', 'PORKBUN_SECRET_KEY') }}"
 
 # Velero + Backup MinIO — deploy-time only
 velero_backup_path: "/mnt/backups/minio"
@@ -256,7 +268,7 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Backup MinIO:     500m         512Mi
 # - Velero:           1000m        512Mi
 # - Prometheus:       2000m        4Gi
-# - Grafana:          1000m        1Gi    (disabled by default)
+# - Grafana:          1000m        1Gi
 # - k3s system:       ~1000m       ~2Gi
 # ------------------------------------------------
-# Active total:       ~23200m      ~41Gi  (leaves ~23GB for OS cache + bursts)
+# Active total:       ~24200m      ~42Gi  (leaves ~22GB for OS cache + bursts)

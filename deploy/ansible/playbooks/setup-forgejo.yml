@@ -94,7 +94,7 @@
               hosts:
                 - "{{ forgejo_host }}"
           annotations:
-            cert-manager.io/cluster-issuer: letsencrypt-prod
+            cert-manager.io/cluster-issuer: letsencrypt-dns
         resources:
           requests:
             cpu: 100m

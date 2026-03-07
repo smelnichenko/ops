@@ -1,0 +1,301 @@
+---
+# Test Grafana deployment in Vagrant
+#
+# Verifies Grafana deploys correctly with Prometheus datasource,
+# ExternalSecret syncs from Vault, and dashboard is accessible.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-grafana.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test Grafana integration
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    test_grafana_user: "admin"
+    test_grafana_password: "vagrant-test-grafana-password"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Seed Grafana credentials into Vault
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    - name: Seed grafana secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/monitor/grafana \
+            admin_user="{{ test_grafana_user }}" \
+            admin_password="{{ test_grafana_password }}"
+      no_log: true
+
+    - name: "SEED: Grafana credentials written to Vault KV"
+      ansible.builtin.debug:
+        msg: "Seeded grafana secret into Vault KV"
+
+    # ================================================================
+    # Phase 2: Deploy chart with Grafana + Prometheus enabled
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for Grafana test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-grafana-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: true
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+          networkPolicies:
+            enabled: false
+          frontend:
+            enabled: false
+          app:
+            replicas: 0
+          redis:
+            enabled: false
+          postgres:
+            enabled: false
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: true
+            image: prom/prometheus:v3.9.1
+            retention: 1d
+            scrapeInterval: 30s
+            vault:
+              enabled: false
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+            storage:
+              size: 1Gi
+              storageClass: "local-path"
+          grafana:
+            enabled: true
+            image: grafana/grafana:12.4.0
+            existingSecret: "monitor-grafana"
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+            storage:
+              size: 1Gi
+              storageClass: "local-path"
+            service:
+              type: ClusterIP
+              port: 3000
+            ingress:
+              enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with Grafana + Prometheus
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-grafana-test-values.yml \
+          --wait --timeout 300s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 3: Verify Grafana
+    # ================================================================
+
+    - name: Wait for Grafana deployment rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-grafana -n {{ ns }} --timeout=120s
+      register: grafana_rollout
+      changed_when: false
+
+    - name: Verify ExternalSecret synced for grafana
+      ansible.builtin.shell: |
+        k3s kubectl get externalsecret monitor-grafana -n {{ ns }} \
+          -o jsonpath='{.status.conditions[0].reason}'
+      register: grafana_secret_sync
+      retries: 12
+      delay: 5
+      until: grafana_secret_sync.stdout == "SecretSynced"
+      changed_when: false
+
+    - name: Check Grafana HTTP health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+          curl -sf -o /dev/null -w '%{http_code}' http://localhost:3000/api/health
+      register: grafana_health
+      retries: 12
+      delay: 10
+      until: grafana_health.stdout | default('') == '200'
+      changed_when: false
+
+    - name: "Grafana health: HTTP {{ grafana_health.stdout | default('unreachable') }}"
+      ansible.builtin.debug:
+        msg: "{{ 'PASS — Grafana responding' if grafana_health.stdout | default('') == '200' else 'FAIL — Grafana not ready' }}"
+
+    # ================================================================
+    # Phase 4: Verify Grafana login with Vault credentials
+    # ================================================================
+
+    - name: Test Grafana login with seeded credentials
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -u {{ test_grafana_user }}:{{ test_grafana_password }} \
+          http://localhost:3000/api/org
+      register: grafana_login
+      retries: 6
+      delay: 5
+      until: grafana_login.stdout | default('') == '200'
+      changed_when: false
+      failed_when: false
+
+    - name: "Grafana login: {{ 'PASS' if grafana_login.stdout | default('') == '200' else 'FAIL — HTTP ' + grafana_login.stdout | default('N/A') }}"
+      ansible.builtin.debug:
+        msg: "{{ 'Vault credentials work' if grafana_login.stdout | default('') == '200' else 'Login failed with Vault credentials' }}"
+
+    # ================================================================
+    # Phase 5: Verify Prometheus datasource
+    # ================================================================
+
+    - name: Check Grafana datasources
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+          curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }} \
+          http://localhost:3000/api/datasources
+      register: grafana_datasources
+      retries: 6
+      delay: 5
+      until: grafana_datasources.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Check Prometheus datasource exists
+      ansible.builtin.set_fact:
+        datasource_ok: "{{ 'prometheus' in (grafana_datasources.stdout | default('') | lower) }}"
+
+    - name: "Datasource: {{ 'PASS — Prometheus configured' if datasource_ok else 'FAIL — no Prometheus datasource' }}"
+      ansible.builtin.debug:
+        msg: "Datasources: {{ grafana_datasources.stdout | default('N/A') }}"
+
+    # ================================================================
+    # Phase 6: Verify dashboard exists
+    # ================================================================
+
+    - name: Search for dashboards
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+          curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }} \
+          'http://localhost:3000/api/search?type=dash-db'
+      register: grafana_dashboards
+      retries: 6
+      delay: 5
+      until: grafana_dashboards.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Check dashboard loaded
+      ansible.builtin.set_fact:
+        dashboard_ok: "{{ 'Web Page Monitor' in (grafana_dashboards.stdout | default('')) }}"
+
+    - name: "Dashboard: {{ 'PASS — Web Page Monitor dashboard loaded' if dashboard_ok else 'FAIL — dashboard not found' }}"
+      ansible.builtin.debug:
+        msg: "Dashboards: {{ grafana_dashboards.stdout | default('N/A') }}"
+
+    # ================================================================
+    # Phase 7: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-grafana-test-values.yml
+        state: absent
+
+    - name: Set result facts
+      ansible.builtin.set_fact:
+        grafana_running: "{{ grafana_rollout.rc is defined and grafana_rollout.rc == 0 }}"
+        secret_synced: "{{ grafana_secret_sync.stdout == 'SecretSynced' }}"
+        health_pass: "{{ grafana_health.stdout | default('') == '200' }}"
+        login_pass: "{{ grafana_login.stdout | default('') == '200' }}"
+
+    - name: "TEST RESULT"
+      vars:
+        all_pass: "{{ grafana_running and secret_synced and health_pass and login_pass and datasource_ok and dashboard_ok }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Grafana Integration Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          [{{ 'PASS' if grafana_running else 'FAIL' }}] Grafana deployment running
+          [{{ 'PASS' if secret_synced else 'FAIL' }}] ExternalSecret synced from Vault
+          [{{ 'PASS' if health_pass else 'FAIL' }}] Grafana health endpoint (HTTP 200)
+          [{{ 'PASS' if login_pass else 'FAIL' }}] Login with Vault credentials
+          [{{ 'PASS' if datasource_ok else 'FAIL' }}] Prometheus datasource configured
+          [{{ 'PASS' if dashboard_ok else 'FAIL' }}] Web Page Monitor dashboard loaded
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical Grafana checks failed — see summary above"
+      when: not (grafana_running and secret_synced and health_pass and login_pass)
