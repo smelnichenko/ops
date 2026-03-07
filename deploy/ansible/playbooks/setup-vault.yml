@@ -1117,6 +1117,18 @@
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'MINIO_ROOT_USER') | length > 0
 
+    - name: Seed monitor kafka secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/kafka \
+            cluster_id="{{ lookup('env', 'KAFKA_CLUSTER_ID') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'KAFKA_CLUSTER_ID') | length > 0
+
     - name: Seed monitor grafana secret
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \

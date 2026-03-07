@@ -189,6 +189,53 @@ monitor_values:
         secretName: "grafana-pmon-dev-tls"
         clusterIssuer: "letsencrypt-dns"
 
+  kafka:
+    enabled: true
+    image: apache/kafka:3.9.0
+    existingSecret: "monitor-kafka"
+    javaOpts: "-Xmx1g -Xms1g"
+    retention:
+      hours: 168
+      bytes: "10737418240"
+    topics:
+      - name: chat.messages
+        partitions: 12
+        replicationFactor: 1
+      - name: chat.events
+        partitions: 6
+        replicationFactor: 1
+      - name: chat.notifications
+        partitions: 3
+        replicationFactor: 1
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "250m"
+      limits:
+        memory: "2Gi"
+        cpu: "2000m"
+    storage:
+      size: 10Gi
+      storageClass: "local-path"
+
+  scylla:
+    enabled: true
+    image: scylladb/scylla:6.2
+    args:
+      - "--smp=2"
+      - "--memory=2G"
+      - "--overprovisioned=1"
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "500m"
+      limits:
+        memory: "4Gi"
+        cpu: "4000m"
+    storage:
+      size: 20Gi
+      storageClass: "local-path"
+
   elk:
     enabled: true
     elasticsearch:
@@ -261,6 +308,8 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - App:              6000m        8Gi    (JVM heap 6GB + ZGC + metaspace/native)
 # - Redis:            1000m        4Gi
 # - Postgres:         6000m        16Gi   (shared_buffers 4GB, effective_cache_size 12GB)
+# - Kafka:            2000m        2Gi    (JVM heap 1GB)
+# - ScyllaDB:         4000m        4Gi    (smp=2, memory=2G)
 # - Elasticsearch:    4000m        8Gi    (JVM heap 2GB + Lucene file cache)
 # - Kibana:           1000m        2Gi    (Node.js + v8, needs ~1Gi minimum)
 # - Filebeat:         200m         256Mi
@@ -271,4 +320,4 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Grafana:          1000m        1Gi
 # - k3s system:       ~1000m       ~2Gi
 # ------------------------------------------------
-# Active total:       ~24200m      ~42Gi  (leaves ~22GB for OS cache + bursts)
+# Active total:       ~30200m      ~48Gi  (leaves ~16GB for OS cache + bursts)
