@@ -155,7 +155,7 @@
     - name: Wait for Kafka broker to respond
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
-          kafka-broker-api-versions.sh --bootstrap-server localhost:9092
+          /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
       register: kafka_broker
       retries: 30
       delay: 10
@@ -210,7 +210,7 @@
     - name: Wait for ScyllaDB CQL to respond
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} monitor-scylla-0 -- \
-          cqlsh localhost 9042 -e "SELECT now() FROM system.local"
+          sh -c 'cqlsh "$(hostname -i)" 9042 -e "SELECT now() FROM system.local"'
       register: scylla_cql
       retries: 30
       delay: 10
@@ -235,7 +235,7 @@
     - name: Check chat keyspace exists
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} monitor-scylla-0 -- \
-          cqlsh localhost 9042 -e "DESCRIBE KEYSPACE chat"
+          sh -c 'cqlsh "$(hostname -i)" 9042 -e "DESCRIBE KEYSPACE chat"'
       register: scylla_keyspace
       retries: 6
       delay: 10
@@ -246,7 +246,7 @@
     - name: Check chat tables exist
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} monitor-scylla-0 -- \
-          cqlsh localhost 9042 -e "SELECT table_name FROM system_schema.tables WHERE keyspace_name='chat'"
+          sh -c "cqlsh \$(hostname -i) 9042 -e \"SELECT table_name FROM system_schema.tables WHERE keyspace_name='chat'\""
       register: scylla_tables
       changed_when: false
       failed_when: false
