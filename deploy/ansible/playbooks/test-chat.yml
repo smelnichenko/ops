@@ -1,0 +1,356 @@
+---
+# Test chat infrastructure (Kafka + ScyllaDB) deployment in Vagrant
+#
+# Verifies Kafka and ScyllaDB deploy correctly, topics and schema
+# are created by Helm hook Jobs, and network policies are in place.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-chat.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test chat infrastructure (Kafka + ScyllaDB)
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    test_kafka_cluster_id: "vagrant-test-kafka-cluster-id00"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Deploy chart with Kafka + ScyllaDB enabled
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for chat test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-chat-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: false
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+          networkPolicies:
+            enabled: true
+          frontend:
+            enabled: false
+          app:
+            replicas: 0
+          redis:
+            enabled: false
+          postgres:
+            enabled: false
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+          kafka:
+            enabled: true
+            image: apache/kafka:3.9.0
+            clusterId: "{{ test_kafka_cluster_id }}"
+            javaOpts: "-Xmx256m -Xms256m"
+            retention:
+              hours: 168
+              bytes: "1073741824"
+            topics:
+              - name: chat.messages
+                partitions: 3
+                replicationFactor: 1
+              - name: chat.events
+                partitions: 3
+                replicationFactor: 1
+              - name: chat.notifications
+                partitions: 3
+                replicationFactor: 1
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+            storage:
+              size: 2Gi
+              storageClass: "local-path"
+          scylla:
+            enabled: true
+            image: scylladb/scylla:6.2
+            args:
+              - "--smp=1"
+              - "--memory=512M"
+              - "--overprovisioned=1"
+              - "--developer-mode=1"
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+            storage:
+              size: 2Gi
+              storageClass: "local-path"
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with Kafka + ScyllaDB enabled
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-chat-test-values.yml \
+          --wait --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 2: Verify Kafka
+    # ================================================================
+
+    - name: Wait for Kafka StatefulSet rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/monitor-kafka -n {{ ns }} --timeout=300s
+      register: kafka_rollout
+      changed_when: false
+
+    - name: Wait for Kafka broker to respond
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
+          kafka-broker-api-versions.sh --bootstrap-server localhost:9092
+      register: kafka_broker
+      retries: 30
+      delay: 10
+      until: kafka_broker.rc == 0
+      changed_when: false
+
+    - name: "Kafka broker: {{ 'PASS — responding' if kafka_broker.rc == 0 else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "Kafka broker is accepting connections on port 9092"
+
+    # ================================================================
+    # Phase 3: Verify Kafka topics (created by Helm hook Job)
+    # ================================================================
+
+    - name: Wait for topics Job to complete
+      ansible.builtin.shell: |
+        k3s kubectl wait --for=condition=complete job/monitor-kafka-topics -n {{ ns }} --timeout=300s
+      register: topics_job
+      changed_when: false
+      failed_when: false
+
+    - name: List Kafka topics
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+      register: kafka_topics
+      retries: 6
+      delay: 10
+      until: kafka_topics.rc == 0
+      changed_when: false
+
+    - name: "Kafka topics listed"
+      ansible.builtin.debug:
+        msg: "{{ kafka_topics.stdout_lines }}"
+
+    - name: Check expected topics exist
+      ansible.builtin.set_fact:
+        topic_messages: "{{ 'chat.messages' in kafka_topics.stdout }}"
+        topic_events: "{{ 'chat.events' in kafka_topics.stdout }}"
+        topic_notifications: "{{ 'chat.notifications' in kafka_topics.stdout }}"
+
+    # ================================================================
+    # Phase 4: Verify ScyllaDB
+    # ================================================================
+
+    - name: Wait for ScyllaDB StatefulSet rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/monitor-scylla -n {{ ns }} --timeout=300s
+      register: scylla_rollout
+      changed_when: false
+
+    - name: Wait for ScyllaDB CQL to respond
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-scylla-0 -- \
+          cqlsh localhost 9042 -e "SELECT now() FROM system.local"
+      register: scylla_cql
+      retries: 30
+      delay: 10
+      until: scylla_cql.rc == 0
+      changed_when: false
+
+    - name: "ScyllaDB CQL: {{ 'PASS — responding' if scylla_cql.rc == 0 else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "ScyllaDB is accepting CQL connections on port 9042"
+
+    # ================================================================
+    # Phase 5: Verify ScyllaDB schema (created by Helm hook Job)
+    # ================================================================
+
+    - name: Wait for schema Job to complete
+      ansible.builtin.shell: |
+        k3s kubectl wait --for=condition=complete job/monitor-scylla-schema -n {{ ns }} --timeout=300s
+      register: schema_job
+      changed_when: false
+      failed_when: false
+
+    - name: Check chat keyspace exists
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-scylla-0 -- \
+          cqlsh localhost 9042 -e "DESCRIBE KEYSPACE chat"
+      register: scylla_keyspace
+      retries: 6
+      delay: 10
+      until: scylla_keyspace.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Check chat tables exist
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-scylla-0 -- \
+          cqlsh localhost 9042 -e "SELECT table_name FROM system_schema.tables WHERE keyspace_name='chat'"
+      register: scylla_tables
+      changed_when: false
+      failed_when: false
+
+    - name: "ScyllaDB tables"
+      ansible.builtin.debug:
+        msg: "{{ scylla_tables.stdout_lines | default(['no output']) }}"
+
+    - name: Set schema result facts
+      ansible.builtin.set_fact:
+        schema_keyspace: "{{ scylla_keyspace.rc == 0 }}"
+        schema_messages_by_channel: "{{ 'messages_by_channel' in (scylla_tables.stdout | default('')) }}"
+        schema_messages_by_user: "{{ 'messages_by_user' in (scylla_tables.stdout | default('')) }}"
+        schema_reactions_by_message: "{{ 'reactions_by_message' in (scylla_tables.stdout | default('')) }}"
+        schema_attachments_by_message: "{{ 'attachments_by_message' in (scylla_tables.stdout | default('')) }}"
+
+    # ================================================================
+    # Phase 6: Verify network policies
+    # ================================================================
+
+    - name: Check Kafka network policy exists
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy monitor-kafka -n {{ ns }} -o name
+      register: kafka_np
+      changed_when: false
+      failed_when: false
+
+    - name: Check ScyllaDB network policy exists
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy monitor-scylla -n {{ ns }} -o name
+      register: scylla_np
+      changed_when: false
+      failed_when: false
+
+    - name: Set network policy facts
+      ansible.builtin.set_fact:
+        kafka_np_exists: "{{ kafka_np.rc == 0 }}"
+        scylla_np_exists: "{{ scylla_np.rc == 0 }}"
+
+    # ================================================================
+    # Phase 7: Verify services
+    # ================================================================
+
+    - name: Check Kafka service exists
+      ansible.builtin.shell: |
+        k3s kubectl get service monitor-kafka -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
+      register: kafka_svc
+      changed_when: false
+      failed_when: false
+
+    - name: Check ScyllaDB service exists
+      ansible.builtin.shell: |
+        k3s kubectl get service monitor-scylla -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
+      register: scylla_svc
+      changed_when: false
+      failed_when: false
+
+    - name: Set service facts
+      ansible.builtin.set_fact:
+        kafka_svc_ok: "{{ kafka_svc.stdout | default('') == '9092' }}"
+        scylla_svc_ok: "{{ scylla_svc.stdout | default('') == '9042' }}"
+
+    # ================================================================
+    # Phase 8: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-chat-test-values.yml
+        state: absent
+
+    - name: Set result facts
+      ansible.builtin.set_fact:
+        kafka_running: "{{ kafka_rollout.rc is defined and kafka_rollout.rc == 0 }}"
+        scylla_running: "{{ scylla_rollout.rc is defined and scylla_rollout.rc == 0 }}"
+
+    - name: "TEST RESULT"
+      vars:
+        all_pass: "{{ kafka_running and scylla_running and topic_messages and topic_events and topic_notifications and schema_keyspace and schema_messages_by_channel and schema_messages_by_user and schema_reactions_by_message and schema_attachments_by_message and kafka_np_exists and scylla_np_exists and kafka_svc_ok and scylla_svc_ok }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Chat Infrastructure Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          --- Kafka ---
+          [{{ 'PASS' if kafka_running else 'FAIL' }}] Kafka StatefulSet running
+          [{{ 'PASS' if topic_messages else 'FAIL' }}] Topic: chat.messages created
+          [{{ 'PASS' if topic_events else 'FAIL' }}] Topic: chat.events created
+          [{{ 'PASS' if topic_notifications else 'FAIL' }}] Topic: chat.notifications created
+          [{{ 'PASS' if kafka_svc_ok else 'FAIL' }}] Kafka service (port 9092)
+          [{{ 'PASS' if kafka_np_exists else 'FAIL' }}] Kafka network policy
+
+          --- ScyllaDB ---
+          [{{ 'PASS' if scylla_running else 'FAIL' }}] ScyllaDB StatefulSet running
+          [{{ 'PASS' if schema_keyspace else 'FAIL' }}] Keyspace: chat
+          [{{ 'PASS' if schema_messages_by_channel else 'FAIL' }}] Table: messages_by_channel
+          [{{ 'PASS' if schema_messages_by_user else 'FAIL' }}] Table: messages_by_user
+          [{{ 'PASS' if schema_reactions_by_message else 'FAIL' }}] Table: reactions_by_message
+          [{{ 'PASS' if schema_attachments_by_message else 'FAIL' }}] Table: attachments_by_message
+          [{{ 'PASS' if scylla_svc_ok else 'FAIL' }}] ScyllaDB service (port 9042)
+          [{{ 'PASS' if scylla_np_exists else 'FAIL' }}] ScyllaDB network policy
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical chat infrastructure checks failed — see summary above"
+      when: not (kafka_running and scylla_running and topic_messages and topic_events and topic_notifications and schema_keyspace and schema_messages_by_channel and kafka_np_exists and scylla_np_exists)

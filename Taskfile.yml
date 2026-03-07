@@ -248,6 +248,17 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-grafana.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
+  test:chat:
+    desc: Test chat infrastructure (Kafka + ScyllaDB) in Vagrant
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-chat.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
   test:dr:
     desc: Test pod recovery + disaster recovery in Vagrant
     deps: [deploy:install]
