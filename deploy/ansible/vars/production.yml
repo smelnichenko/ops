@@ -240,13 +240,13 @@ monitor_values:
     enabled: true
     image: sonarqube:26.3.0.120487-community
     existingSecret: "monitor-sonarqube"
-    javaOpts: "-Xms512m -Xmx512m"
+    javaOpts: "-Xms1g -Xmx1g"
     resources:
       requests:
-        memory: "2Gi"
+        memory: "3Gi"
         cpu: "500m"
       limits:
-        memory: "4Gi"
+        memory: "6Gi"
         cpu: "4000m"
     storage:
       size: 10Gi
@@ -349,7 +349,7 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Elasticsearch:    4000m        8Gi    (JVM heap 2GB + Lucene file cache)
 # - Kibana:           1000m        2Gi    (Node.js + v8, needs ~1Gi minimum)
 # - Filebeat:         200m         256Mi
-# - SonarQube:        4000m        4Gi    (3x JVM heaps: web/ce/search, 512m each)
+# - SonarQube:        4000m        6Gi    (3x JVM heaps: web/ce/search, 1g each)
 # - SonarQube PG:     1000m        512Mi
 # - Forgejo:          2000m        1Gi
 # - Backup MinIO:     500m         512Mi
@@ -358,4 +358,4 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Grafana:          1000m        1Gi
 # - k3s system:       ~1000m       ~2Gi
 # ------------------------------------------------
-# Active total:       ~35200m      ~52.5Gi  (leaves ~11.5GB for OS cache + bursts)
+# Active total:       ~35200m      ~54.5Gi  (leaves ~9.5GB for OS cache + bursts)
