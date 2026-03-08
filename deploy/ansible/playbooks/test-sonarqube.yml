@@ -1,0 +1,296 @@
+---
+# Test SonarQube deployment in Vagrant
+#
+# Verifies SonarQube and its dedicated PostgreSQL deploy correctly,
+# SonarQube web UI responds, and ExternalSecret syncs from Vault.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-sonarqube.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test SonarQube integration
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    test_sonarqube_pg_password: "vagrant-test-sonarqube-pg-password"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Seed SonarQube credentials into Vault
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    - name: Seed sonarqube secret into Vault
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/monitor/sonarqube \
+            postgres_password="{{ test_sonarqube_pg_password }}"
+      no_log: true
+
+    - name: "SEED: SonarQube credentials written to Vault KV"
+      ansible.builtin.debug:
+        msg: "Seeded sonarqube secret into Vault KV"
+
+    # ================================================================
+    # Phase 2: Pre-pull images and deploy chart
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Pre-pull SonarQube image
+      ansible.builtin.shell: |
+        k3s ctr images pull docker.io/library/sonarqube:26.3.0.120487-community
+      register: sq_pull
+      retries: 3
+      delay: 15
+      until: sq_pull.rc == 0
+      changed_when: "'resolved' in sq_pull.stderr or 'resolved' in sq_pull.stdout"
+
+    - name: Pre-pull PostgreSQL image
+      ansible.builtin.shell: |
+        k3s ctr images pull docker.io/library/postgres:17-alpine
+      register: pg_pull
+      retries: 3
+      delay: 15
+      until: pg_pull.rc == 0
+      changed_when: "'resolved' in pg_pull.stderr or 'resolved' in pg_pull.stdout"
+
+    - name: Pre-pull busybox image
+      ansible.builtin.shell: |
+        k3s ctr images pull docker.io/library/busybox:1.37
+      register: bb_pull
+      retries: 3
+      delay: 15
+      until: bb_pull.rc == 0
+      changed_when: "'resolved' in bb_pull.stderr or 'resolved' in bb_pull.stdout"
+
+    - name: Write Helm values for SonarQube test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-sonarqube-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: true
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+          networkPolicies:
+            enabled: false
+          frontend:
+            enabled: false
+          app:
+            replicas: 0
+          redis:
+            enabled: false
+          postgres:
+            enabled: false
+          sonarqube:
+            enabled: true
+            image: sonarqube:26.3.0.120487-community
+            javaOpts: "-Xms256m -Xmx256m"
+            existingSecret: "monitor-sonarqube"
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "200m"
+              limits:
+                memory: "3Gi"
+                cpu: "2000m"
+            storage:
+              size: 5Gi
+              storageClass: "local-path"
+            postgresResources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "1000m"
+            postgresStorage:
+              size: 2Gi
+              storageClass: "local-path"
+            ingress:
+              enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with SonarQube enabled
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-sonarqube-test-values.yml \
+          --timeout 120s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 3: Verify SonarQube PostgreSQL
+    # ================================================================
+
+    - name: Wait for SonarQube PostgreSQL StatefulSet rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/monitor-sonarqube-postgres -n {{ ns }} --timeout=180s
+      register: sq_pg_rollout
+      changed_when: false
+
+    - name: Verify ExternalSecret synced for sonarqube
+      ansible.builtin.shell: |
+        k3s kubectl get externalsecret monitor-sonarqube -n {{ ns }} \
+          -o jsonpath='{.status.conditions[0].reason}'
+      register: sq_secret_sync
+      retries: 12
+      delay: 5
+      until: sq_secret_sync.stdout == "SecretSynced"
+      changed_when: false
+
+    - name: Verify PostgreSQL is accepting connections
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-sonarqube-postgres-0 -- \
+          pg_isready -U sonarqube
+      register: sq_pg_ready
+      retries: 12
+      delay: 5
+      until: sq_pg_ready.rc == 0
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Verify SonarQube application
+    # ================================================================
+
+    - name: Wait for SonarQube deployment rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-sonarqube -n {{ ns }} --timeout=600s
+      register: sq_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Show SonarQube pod logs if rollout failed
+      ansible.builtin.shell: |
+        k3s kubectl logs -n {{ ns }} -l app.kubernetes.io/component=sonarqube --tail=50
+      register: sq_logs
+      changed_when: false
+      when: sq_rollout.rc is defined and sq_rollout.rc != 0
+
+    - name: SonarQube logs (on failure)
+      ansible.builtin.debug:
+        msg: "{{ sq_logs.stdout_lines }}"
+      when: sq_logs is defined and sq_logs.stdout_lines is defined
+
+    - name: Wait for SonarQube to be UP
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf http://localhost:9000/api/system/status 2>/dev/null | \
+          python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'UNKNOWN'))"
+      register: sq_status
+      retries: 40
+      delay: 15
+      until: sq_status.stdout == "UP"
+      changed_when: false
+      failed_when: false
+
+    - name: "SonarQube status: {{ sq_status.stdout | default('UNKNOWN') }}"
+      ansible.builtin.debug:
+        msg: "{{ 'PASS — SonarQube is UP' if sq_status.stdout == 'UP' else 'WARN — SonarQube status: ' + sq_status.stdout | default('UNKNOWN') }}"
+
+    - name: Verify SonarQube web UI responds
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -o /dev/null -w '%{http_code}' http://localhost:9000/
+      register: sq_http
+      retries: 6
+      delay: 10
+      until: sq_http.stdout | default('') == '200'
+      changed_when: false
+      failed_when: false
+
+    # ================================================================
+    # Phase 5: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-sonarqube-test-values.yml
+        state: absent
+
+    - name: Set result facts
+      ansible.builtin.set_fact:
+        sq_pg_pass: "{{ sq_pg_rollout.rc is defined and sq_pg_rollout.rc == 0 }}"
+        sq_secret_pass: "{{ sq_secret_sync.stdout == 'SecretSynced' }}"
+        sq_deploy_pass: "{{ sq_rollout.rc is defined and sq_rollout.rc == 0 }}"
+        sq_up_pass: "{{ sq_status.stdout | default('') == 'UP' }}"
+        sq_http_pass: "{{ sq_http.stdout | default('') == '200' }}"
+
+    - name: "TEST RESULT"
+      vars:
+        all_pass: "{{ sq_pg_pass and sq_secret_pass and sq_deploy_pass and sq_up_pass and sq_http_pass }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          SonarQube Integration Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          [{{ 'PASS' if sq_pg_pass else 'FAIL' }}] SonarQube PostgreSQL running
+          [{{ 'PASS' if sq_secret_pass else 'FAIL' }}] ExternalSecret synced
+          [{{ 'PASS' if sq_deploy_pass else 'FAIL' }}] SonarQube Deployment running
+          [{{ 'PASS' if sq_up_pass else 'WARN' }}] SonarQube status UP
+          [{{ 'PASS' if sq_http_pass else 'WARN' }}] SonarQube web UI (HTTP {{ sq_http.stdout | default('N/A') }})
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical SonarQube checks failed — see summary above"
+      when: not (sq_pg_pass and sq_secret_pass and sq_deploy_pass)

@@ -1142,6 +1142,18 @@
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'GRAFANA_ADMIN_PASSWORD') | length > 0
 
+    - name: Seed monitor sonarqube secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/monitor/sonarqube \
+            postgres_password="{{ lookup('env', 'SONARQUBE_DB_PASSWORD') }}"
+      no_log: true
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'SONARQUBE_DB_PASSWORD') | length > 0
+
     - name: Display setup summary
       ansible.builtin.debug:
         msg: |

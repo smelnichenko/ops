@@ -236,6 +236,42 @@ monitor_values:
       size: 20Gi
       storageClass: "local-path"
 
+  sonarqube:
+    enabled: true
+    image: sonarqube:26.3.0.120487-community
+    existingSecret: "monitor-sonarqube"
+    javaOpts: "-Xms512m -Xmx512m"
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "500m"
+      limits:
+        memory: "4Gi"
+        cpu: "4000m"
+    storage:
+      size: 10Gi
+      storageClass: "local-path"
+    postgres:
+      image: postgres:17-alpine
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "1000m"
+      storage:
+        size: 5Gi
+        storageClass: "local-path"
+    ingress:
+      enabled: true
+      className: traefik
+      host: "sonar.pmon.dev"
+      tls:
+        enabled: true
+        secretName: "sonar-pmon-dev-tls"
+        clusterIssuer: "letsencrypt-dns"
+
   elk:
     enabled: true
     elasticsearch:
@@ -313,6 +349,8 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Elasticsearch:    4000m        8Gi    (JVM heap 2GB + Lucene file cache)
 # - Kibana:           1000m        2Gi    (Node.js + v8, needs ~1Gi minimum)
 # - Filebeat:         200m         256Mi
+# - SonarQube:        4000m        4Gi    (3x JVM heaps: web/ce/search, 512m each)
+# - SonarQube PG:     1000m        512Mi
 # - Forgejo:          2000m        1Gi
 # - Backup MinIO:     500m         512Mi
 # - Velero:           1000m        512Mi
@@ -320,4 +358,4 @@ velero_minio_secret_key: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
 # - Grafana:          1000m        1Gi
 # - k3s system:       ~1000m       ~2Gi
 # ------------------------------------------------
-# Active total:       ~30200m      ~48Gi  (leaves ~16GB for OS cache + bursts)
+# Active total:       ~35200m      ~52.5Gi  (leaves ~11.5GB for OS cache + bursts)
