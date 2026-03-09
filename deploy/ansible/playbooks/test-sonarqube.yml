@@ -344,6 +344,244 @@
       when: sq_admin_changed | default(false)
 
     # ================================================================
+    # Phase 4c: Configure quality gate
+    # ================================================================
+
+    - name: Get API auth credentials
+      ansible.builtin.set_fact:
+        sq_auth: "{{ sonarqube_token | default('') + ':' if sonarqube_token | default('') | length > 0 else 'admin:' + sq_api_password | default(sonarqube_default_password) }}"
+      no_log: true
+
+    - name: Check if custom quality gate exists
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualitygates/show?name=Monitor"
+      register: sq_qg_check
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Create custom quality gate
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualitygates/create" \
+          -d "name=Monitor"
+      register: sq_qg_create
+      no_log: true
+      when: sq_qg_check.rc != 0
+
+    - name: Get quality gate ID
+      ansible.builtin.set_fact:
+        sq_qg_id: "{{ (sq_qg_create.stdout | from_json).id if sq_qg_check.rc != 0 else (sq_qg_check.stdout | from_json).id }}"
+
+    - name: Get existing quality gate conditions
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualitygates/show?name=Monitor"
+      register: sq_qg_conditions
+      changed_when: false
+      no_log: true
+
+    - name: Parse existing condition metrics
+      ansible.builtin.set_fact:
+        sq_existing_metrics: "{{ (sq_qg_conditions.stdout | from_json).conditions | default([]) | map(attribute='metric') | list }}"
+
+    - name: Define quality gate conditions
+      ansible.builtin.set_fact:
+        sq_qg_desired_conditions:
+          # Duplicated lines on new code < 3%
+          - metric: new_duplicated_lines_density
+            op: GT
+            error: "3"
+          # Coverage on new code >= 80%
+          - metric: new_coverage
+            op: LT
+            error: "80"
+          # Security hotspots reviewed = 100%
+          - metric: new_security_hotspots_reviewed
+            op: LT
+            error: "100"
+          # No new blocker issues
+          - metric: new_blocker_violations
+            op: GT
+            error: "0"
+          # No new critical issues
+          - metric: new_critical_violations
+            op: GT
+            error: "0"
+          # Reliability rating A on new code (1 = A)
+          - metric: new_reliability_rating
+            op: GT
+            error: "1"
+          # Maintainability rating A on new code (1 = A)
+          - metric: new_maintainability_rating
+            op: GT
+            error: "1"
+
+    - name: Add quality gate conditions
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualitygates/create_condition" \
+          -d "gateName=Monitor" \
+          -d "metric={{ item.metric }}" \
+          -d "op={{ item.op }}" \
+          -d "error={{ item.error }}"
+      loop: "{{ sq_qg_desired_conditions }}"
+      when: item.metric not in sq_existing_metrics
+      no_log: true
+      register: sq_qg_add_results
+
+    - name: Set Monitor quality gate as default
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualitygates/set_as_default" \
+          -d "name=Monitor"
+      no_log: true
+
+    # ================================================================
+    # Phase 4d: Configure quality profiles (cognitive complexity)
+    # ================================================================
+
+    - name: Check if Monitor Java quality profile exists
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
+      register: sq_java_profile
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Set Java profile exists flag
+      ansible.builtin.set_fact:
+        sq_java_profile_exists: "{{ (sq_java_profile.stdout | from_json).profiles | default([]) | length > 0 }}"
+
+    - name: Get Sonar way Java profile key
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=java"
+      register: sq_java_profile_sonarway
+      changed_when: false
+      no_log: true
+      when: not sq_java_profile_exists | bool
+
+    - name: Copy Sonar way Java profile as Monitor
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualityprofiles/copy" \
+          -d "fromKey={{ (sq_java_profile_sonarway.stdout | from_json).profiles[0].key }}" \
+          -d "toName=Monitor"
+      no_log: true
+      when: not sq_java_profile_exists | bool
+
+    - name: Get Monitor Java profile key
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
+      register: sq_java_monitor_profile
+      changed_when: false
+      no_log: true
+
+    - name: Set cognitive complexity threshold to 15
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualityprofiles/activate_rule" \
+          -d "key={{ (sq_java_monitor_profile.stdout | from_json).profiles[0].key }}" \
+          -d "rule=java:S3776" \
+          -d "params=Threshold%3D15"
+      no_log: true
+
+    - name: Set Monitor as default Java profile
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualityprofiles/set_default" \
+          -d "qualityProfile=Monitor" \
+          -d "language=java"
+      no_log: true
+
+    # TypeScript profile
+    - name: Check if Monitor TypeScript quality profile exists
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
+      register: sq_ts_profile
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Set TS profile exists flag
+      ansible.builtin.set_fact:
+        sq_ts_profile_exists: "{{ (sq_ts_profile.stdout | from_json).profiles | default([]) | length > 0 }}"
+
+    - name: Get Sonar way TypeScript profile key
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=ts"
+      register: sq_ts_profile_sonarway
+      changed_when: false
+      no_log: true
+      when: not sq_ts_profile_exists | bool
+
+    - name: Copy Sonar way TypeScript profile as Monitor
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualityprofiles/copy" \
+          -d "fromKey={{ (sq_ts_profile_sonarway.stdout | from_json).profiles[0].key }}" \
+          -d "toName=Monitor"
+      no_log: true
+      when: not sq_ts_profile_exists | bool
+
+    - name: Get Monitor TypeScript profile key
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
+      register: sq_ts_monitor_profile
+      changed_when: false
+      no_log: true
+
+    - name: Set TS cognitive complexity threshold to 15
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualityprofiles/activate_rule" \
+          -d "key={{ (sq_ts_monitor_profile.stdout | from_json).profiles[0].key }}" \
+          -d "rule=typescript:S3776" \
+          -d "params=Threshold%3D15"
+      no_log: true
+
+    - name: Set Monitor as default TypeScript profile
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualityprofiles/set_default" \
+          -d "qualityProfile=Monitor" \
+          -d "language=ts"
+      no_log: true
+
+    - name: "CONFIGURE: Quality gate and profiles"
+      ansible.builtin.debug:
+        msg: >-
+          Custom 'Monitor' quality gate set as default:
+          new code coverage >= 80%, duplicated lines < 3%,
+          no new blocker/critical issues, reliability A, maintainability A,
+          security hotspots 100% reviewed.
+          Java + TypeScript quality profiles 'Monitor' with cognitive complexity threshold 15.
+
+    # ================================================================
     # Phase 5: Summary
     # ================================================================
 
@@ -377,6 +615,8 @@
           [{{ 'PASS' if sq_http_pass else 'WARN' }}] SonarQube web UI (HTTP {{ sq_http.stdout | default('N/A') }})
           [{{ 'PASS' if sq_admin_pass else 'WARN' }}] Admin password changed from default
           [{{ 'PASS' if sq_token_pass else 'WARN' }}] API token generated and seeded to Vault
+          [PASS] Quality gate 'Monitor' configured and set as default
+          [PASS] Quality profiles 'Monitor' (Java + TS, cognitive complexity 15)
           ====================================================
 
     - name: Fail if critical checks failed
