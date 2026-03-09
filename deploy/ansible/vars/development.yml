@@ -16,14 +16,14 @@ monitor_values:
   frontend:
     enabled: true
     image:
-      repository: ghcr.io/schnappy/monitor-frontend
+      repository: git.pmon.dev/schnappy/monitor-frontend
       tag: latest
       pullPolicy: Always
     replicas: 1
 
   app:
     image:
-      repository: ghcr.io/schnappy/monitor
+      repository: git.pmon.dev/schnappy/monitor
       tag: latest
       pullPolicy: Always
     replicas: 1

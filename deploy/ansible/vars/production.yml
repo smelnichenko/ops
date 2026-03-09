@@ -27,9 +27,9 @@ monitor_values:
   frontend:
     enabled: true
     image:
-      repository: ghcr.io/schnappy/monitor-frontend
+      repository: git.pmon.dev/schnappy/monitor-frontend
       tag: "latest"
-      pullPolicy: Never
+      pullPolicy: IfNotPresent
     replicas: 1
     resources:
       requests:
@@ -41,9 +41,9 @@ monitor_values:
 
   app:
     image:
-      repository: ghcr.io/schnappy/monitor
+      repository: git.pmon.dev/schnappy/monitor
       tag: "latest"
-      pullPolicy: Never
+      pullPolicy: IfNotPresent
     replicas: 1
     javaOpts: "-Xmx6g -XX:+UseZGC"
     hikari:

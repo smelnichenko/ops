@@ -260,8 +260,7 @@
         dest: /etc/sudoers.d/forgejo-runner
         mode: '0440'
         content: |
-          # Allow forgejo-runner to import images and manage k3s
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s ctr images import -
+          # Allow forgejo-runner to manage k3s
           {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s kubectl *
           {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm upgrade --install *
           {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm version *
