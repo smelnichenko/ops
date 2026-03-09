@@ -9,6 +9,9 @@
 monitor_release_name: monitor
 monitor_namespace: monitor
 
+# Registry pull-through cache on Pi (setup-registry-mirror.yml)
+registry_mirror_ip: "192.168.11.4"
+
 monitor_values:
   # Vault integration — ESO syncs secrets from Vault KV into k8s Secrets
   vault:

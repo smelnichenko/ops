@@ -132,7 +132,24 @@ EOF
       apt-get update
       apt-get install -y curl wget gnupg2 ca-certificates zip unzip
 
+      # Registry mirror — cache Docker Hub, Elastic, Quay via Pi pull-through cache
+      echo "=== Configuring registry mirrors ==="
+      mkdir -p /etc/rancher/k3s
+      cat > /etc/rancher/k3s/registries.yaml << 'REGEOF'
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://192.168.11.4:5000"
+  docker.elastic.co:
+    endpoint:
+      - "http://192.168.11.4:5001"
+  quay.io:
+    endpoint:
+      - "http://192.168.11.4:5002"
+REGEOF
+
       # Install k3s (includes Traefik ingress and local-path-provisioner)
+      # k3s reads registries.yaml on startup and configures containerd mirrors
       echo "=== Installing k3s ==="
       curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
 

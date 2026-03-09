@@ -184,7 +184,8 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-registry-mirror.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml -e registry_mirror_ip=192.168.11.4
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
@@ -288,12 +289,19 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-dr.yml
 
+  deploy:registry-mirror:
+    desc: Deploy Docker Hub pull-through cache on Pi
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-registry-mirror.yml
+
   deploy:k3s:
     desc: Setup k3s only
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml -e registry_mirror_ip=192.168.11.4
 
   deploy:forgejo:
     desc: Deploy Forgejo (self-hosted Git forge)

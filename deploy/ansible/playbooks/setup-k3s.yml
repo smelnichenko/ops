@@ -63,6 +63,38 @@
         path: /usr/local/bin/k3s
       register: k3s_binary
 
+    - name: Configure registry mirrors (pull-through cache on Pi)
+      when: registry_mirror_ip | default('') | length > 0
+      block:
+        - name: Create k3s config directory
+          ansible.builtin.file:
+            path: /etc/rancher/k3s
+            state: directory
+            mode: "0755"
+
+        - name: Write registries.yaml
+          ansible.builtin.copy:
+            dest: /etc/rancher/k3s/registries.yaml
+            mode: "0644"
+            content: |
+              mirrors:
+                docker.io:
+                  endpoint:
+                    - "http://{{ registry_mirror_ip }}:5000"
+                docker.elastic.co:
+                  endpoint:
+                    - "http://{{ registry_mirror_ip }}:5001"
+                quay.io:
+                  endpoint:
+                    - "http://{{ registry_mirror_ip }}:5002"
+          register: registries_yaml
+
+        - name: Restart k3s to pick up registry config
+          ansible.builtin.systemd:
+            name: k3s
+            state: restarted
+          when: registries_yaml.changed and k3s_binary.stat.exists
+
     - name: Install k3s
       ansible.builtin.shell: |
         curl -sfL https://get.k3s.io | sh -
