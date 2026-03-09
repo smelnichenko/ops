@@ -1148,7 +1148,9 @@
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/monitor/sonarqube \
-            postgres_password="{{ lookup('env', 'SONARQUBE_DB_PASSWORD') }}"
+            postgres_password="{{ lookup('env', 'SONARQUBE_DB_PASSWORD') }}" \
+            admin_password="{{ lookup('env', 'SONARQUBE_ADMIN_PASSWORD') }}" \
+            token="{{ lookup('env', 'SONARQUBE_TOKEN') }}"
       no_log: true
       when:
         - vault_seed_secrets | default(false) | bool
