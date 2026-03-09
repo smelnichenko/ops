@@ -281,9 +281,9 @@ EOF
 
       # Build directly into k3s containerd (no Docker daemon, no import step)
       sudo nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
-        build -t ghcr.io/schnappy/monitor:latest "$STAGE/backend/"
+        build -t monitor:local "$STAGE/backend/"
       sudo nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
-        build -t ghcr.io/schnappy/monitor-frontend:latest "$STAGE/frontend/"
+        build -t monitor-frontend:local "$STAGE/frontend/"
       rm -rf "$STAGE"
 
       # Deploy with Helm
@@ -293,7 +293,11 @@ EOF
         --create-namespace \
         --set postgres.password=vagrant \
         --set "auth.jwtSecret=vagrant-test-secret-at-least-32-chars" \
+        --set app.image.repository=monitor \
+        --set app.image.tag=local \
         --set app.image.pullPolicy=Never \
+        --set frontend.image.repository=monitor-frontend \
+        --set frontend.image.tag=local \
         --set frontend.image.pullPolicy=Never \
         --set "app.gitHash=$GIT_HASH" \
         --set "app.buildTime=$BUILD_TIME" \

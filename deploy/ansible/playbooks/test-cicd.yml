@@ -1,0 +1,418 @@
+---
+# Test CI/CD pipeline with Forgejo container registry in Vagrant
+#
+# Tests the full flow: Forgejo deploy → registry push → helm deploy → pod pull
+# Validates that images are served from Forgejo registry (not local containerd).
+#
+# Prerequisites:
+#   - vagrant up (k3s VM provisioned with nerdctl, Java, Node.js)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-cicd.yml
+
+- name: Test CI/CD with Forgejo container registry
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    forgejo_ns: forgejo
+    forgejo_host: "git.vagrant.test"
+    forgejo_admin_user: "testadmin"
+    forgejo_admin_password: "TestPassword123!"
+    forgejo_admin_email: "admin@vagrant.test"
+    forgejo_chart_version: "16.2.0"
+    forgejo_storage_size: "5Gi"
+    runner_user: vagrant
+    test_image_tag: "test-abc1234"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Deploy Forgejo
+    # ================================================================
+
+    - name: "PHASE 1: Deploy Forgejo"
+      ansible.builtin.debug:
+        msg: "Deploying Forgejo to Vagrant k3s"
+
+    - name: Create forgejo namespace
+      ansible.builtin.shell: |
+        cat <<EOF | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ forgejo_ns }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      changed_when: false
+
+    - name: Add DNS entry for Forgejo
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ forgejo_host }}"
+        state: present
+
+    - name: Add DNS to CoreDNS for in-cluster resolution
+      ansible.builtin.shell: |
+        EXISTING=$(k3s kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
+        if ! echo "$EXISTING" | grep -q "{{ forgejo_host }}"; then
+          UPDATED="${EXISTING}
+        $(k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}') {{ forgejo_host }}"
+          k3s kubectl patch configmap coredns -n kube-system --type merge \
+            -p "{\"data\":{\"NodeHosts\":\"${UPDATED}\"}}"
+          k3s kubectl rollout restart deployment coredns -n kube-system
+          echo "CoreDNS updated with {{ forgejo_host }}"
+        else
+          echo "CoreDNS already has {{ forgejo_host }}"
+        fi
+      changed_when: false
+
+    - name: Deploy Forgejo via Helm
+      ansible.builtin.shell: |
+        helm upgrade --install forgejo oci://code.forgejo.org/forgejo-helm/forgejo \
+          --namespace {{ forgejo_ns }} \
+          --version {{ forgejo_chart_version }} \
+          --set gitea.admin.username={{ forgejo_admin_user }} \
+          --set gitea.admin.password={{ forgejo_admin_password }} \
+          --set gitea.admin.email={{ forgejo_admin_email }} \
+          --set persistence.size={{ forgejo_storage_size }} \
+          --set gitea.config.server.DOMAIN={{ forgejo_host }} \
+          --set gitea.config.server.ROOT_URL=https://{{ forgejo_host }} \
+          --set gitea.config.server.PROTOCOL=http \
+          --set gitea.config.server.HTTP_PORT=3000 \
+          --set gitea.config.packages.ENABLED=true \
+          --set gitea.config.registry.ENABLED=true \
+          --set gitea.config.service.DISABLE_REGISTRATION=true \
+          --set service.http.type=ClusterIP \
+          --set service.http.port=3000 \
+          --set service.ssh.enabled=false \
+          --set ingress.enabled=true \
+          --set ingress.className=traefik \
+          --set ingress.hosts[0].host={{ forgejo_host }} \
+          --set ingress.hosts[0].paths[0].path=/ \
+          --set ingress.hosts[0].paths[0].pathType=Prefix \
+          --set resources.requests.memory=256Mi \
+          --set resources.requests.cpu=100m \
+          --set resources.limits.memory=1Gi \
+          --set resources.limits.cpu=2000m \
+          --wait --timeout 5m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Wait for Forgejo to be ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          STATUS=$(curl -sf http://{{ forgejo_host }}/api/v1/settings/api 2>/dev/null && echo "ok" || echo "not ready")
+          if [ "$STATUS" = "ok" ]; then
+            echo "Forgejo is ready"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Forgejo not ready after 5 minutes"
+        exit 1
+      changed_when: false
+
+    - name: Verify Forgejo API responds
+      ansible.builtin.shell: |
+        curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+          "http://{{ forgejo_host }}/api/v1/user" | python3 -c "
+        import sys, json
+        user = json.load(sys.stdin)
+        assert user['login'] == '{{ forgejo_admin_user }}', f'Wrong user: {user[\"login\"]}'
+        print(f'Forgejo admin user verified: {user[\"login\"]}')
+        "
+      changed_when: false
+
+    - name: "RESULT: Forgejo deployed"
+      ansible.builtin.debug:
+        msg: "Forgejo running at http://{{ forgejo_host }}"
+
+    # ================================================================
+    # Phase 2: Configure container registry
+    # ================================================================
+
+    - name: "PHASE 2: Configure container registry"
+      ansible.builtin.debug:
+        msg: "Setting up Forgejo container registry + k3s pull access"
+
+    - name: Create Forgejo access token for registry
+      ansible.builtin.shell: |
+        curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+          -X POST "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens" \
+          -H "Content-Type: application/json" \
+          -d '{"name": "registry-test", "scopes": ["write:package"]}' \
+          | python3 -c "import sys,json; print(json.load(sys.stdin)['sha1'])"
+      register: registry_token_result
+      changed_when: false
+
+    - name: Set registry token fact
+      ansible.builtin.set_fact:
+        registry_token: "{{ registry_token_result.stdout }}"
+      no_log: true
+
+    - name: Configure k3s registry access
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: '0600'
+        content: |
+          mirrors:
+            {{ forgejo_host }}:
+              endpoint:
+                - "http://{{ forgejo_host }}"
+          configs:
+            "{{ forgejo_host }}":
+              auth:
+                username: {{ forgejo_admin_user }}
+                password: {{ registry_token }}
+      no_log: true
+
+    - name: Restart k3s to pick up registry config
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+
+    - name: Wait for k3s to be ready after restart
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          if k3s kubectl get nodes 2>/dev/null | grep -q " Ready"; then
+            echo "k3s ready"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "k3s not ready"
+        exit 1
+      changed_when: false
+
+    - name: "RESULT: Registry configured"
+      ansible.builtin.debug:
+        msg: "k3s configured to pull from {{ forgejo_host }} registry"
+
+    # ================================================================
+    # Phase 3: Build and push images to registry
+    # ================================================================
+
+    - name: "PHASE 3: Build and push images"
+      ansible.builtin.debug:
+        msg: "Building app images and pushing to Forgejo registry"
+
+    - name: Log in to Forgejo registry via nerdctl
+      ansible.builtin.shell: |
+        echo "{{ registry_token }}" | nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+          login {{ forgejo_host }} -u {{ forgejo_admin_user }} --password-stdin 2>&1
+      no_log: true
+      register: nerdctl_login
+      failed_when: "'Login Succeeded' not in nerdctl_login.stdout and 'login successful' not in nerdctl_login.stdout.lower()"
+
+    - name: Build and push backend image
+      ansible.builtin.shell: |
+        set -e
+        cd /vagrant
+
+        # Source build tools
+        . /home/vagrant/.sdkman/bin/sdkman-init.sh
+        export NVM_DIR="/home/vagrant/.nvm"
+        . "$NVM_DIR/nvm.sh"
+
+        # Build JAR
+        cd /vagrant/backend
+        ./gradlew bootJar --no-daemon -x test
+
+        # Stage and build image
+        STAGE=$(mktemp -d)
+        cp build/libs/*.jar "$STAGE/app.jar"
+        cp Dockerfile.runtime "$STAGE/Dockerfile"
+
+        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+          build -t {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} "$STAGE"
+        rm -rf "$STAGE"
+
+        # Push to registry
+        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+          push {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} --insecure-registry
+      environment:
+        PATH: "/home/vagrant/.sdkman/candidates/java/current/bin:/home/vagrant/.nvm/versions/node/v22.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        JAVA_HOME: "/home/vagrant/.sdkman/candidates/java/current"
+      timeout: 600
+
+    - name: Build and push frontend image
+      ansible.builtin.shell: |
+        set -e
+        cd /vagrant
+
+        export NVM_DIR="/home/vagrant/.nvm"
+        . "$NVM_DIR/nvm.sh"
+
+        # Build frontend
+        cd /vagrant/frontend
+        npm ci --silent
+        VITE_GIT_HASH={{ test_image_tag }} VITE_BUILD_TIME="2026-01-01T00:00:00Z" npm run build
+
+        # Stage and build image
+        STAGE=$(mktemp -d)
+        cp -r dist "$STAGE/"
+        cp Dockerfile.runtime "$STAGE/Dockerfile"
+        cp nginx.conf "$STAGE/"
+        cp nginx.conf.template "$STAGE/"
+        cp security-headers.conf "$STAGE/"
+        cp security-headers-base.conf "$STAGE/"
+        cp docker-entrypoint.sh "$STAGE/"
+
+        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+          build -t {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} "$STAGE"
+        rm -rf "$STAGE"
+
+        # Push to registry
+        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+          push {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} --insecure-registry
+      environment:
+        PATH: "/home/vagrant/.nvm/versions/node/v22.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      timeout: 600
+
+    - name: Verify images exist in Forgejo registry
+      ansible.builtin.shell: |
+        for pkg in monitor monitor-frontend; do
+          RESULT=$(curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+            "http://{{ forgejo_host }}/api/v1/packages/{{ forgejo_admin_user }}/container/$pkg/{{ test_image_tag }}" 2>/dev/null)
+          if [ -z "$RESULT" ]; then
+            echo "FAIL: $pkg:{{ test_image_tag }} not found in registry"
+            exit 1
+          fi
+          echo "OK: $pkg:{{ test_image_tag }} exists in registry"
+        done
+      changed_when: false
+
+    - name: "RESULT: Images pushed"
+      ansible.builtin.debug:
+        msg: "Both images pushed to {{ forgejo_host }} registry with tag {{ test_image_tag }}"
+
+    # ================================================================
+    # Phase 4: Remove local images, deploy via Helm, verify pull
+    # ================================================================
+
+    - name: "PHASE 4: Deploy and verify registry pull"
+      ansible.builtin.debug:
+        msg: "Deploying with registry images (pullPolicy: Always to force pull)"
+
+    - name: Remove local images from containerd to force registry pull
+      ansible.builtin.shell: |
+        k3s ctr images rm {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} 2>/dev/null || true
+        k3s ctr images rm {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} 2>/dev/null || true
+        echo "Local images removed"
+      changed_when: false
+
+    - name: Create monitor namespace
+      ansible.builtin.shell: |
+        cat <<EOF | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ ns }}
+          labels:
+            pod-security.kubernetes.io/enforce: privileged
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      changed_when: false
+
+    - name: Deploy via Helm with registry images
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+          --namespace {{ ns }} \
+          --set "app.image.repository={{ forgejo_host }}/{{ forgejo_admin_user }}/monitor" \
+          --set "app.image.tag={{ test_image_tag }}" \
+          --set "app.image.pullPolicy=Always" \
+          --set "frontend.image.repository={{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend" \
+          --set "frontend.image.tag={{ test_image_tag }}" \
+          --set "frontend.image.pullPolicy=Always" \
+          --set "postgres.password=vagrant" \
+          --set "auth.jwtSecret=vagrant-test-secret-at-least-32-chars" \
+          --set "networkPolicies.enabled=false" \
+          --set "app.gitHash={{ test_image_tag }}" \
+          --set "app.buildTime=2026-01-01T00:00:00Z" \
+          --set "app.ingress.host=" \
+          --wait --timeout 5m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Verify pods are running
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+        APP_STATUS=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app -o jsonpath='{.items[0].status.phase}')
+        FE_STATUS=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=frontend -o jsonpath='{.items[0].status.phase}')
+        if [ "$APP_STATUS" != "Running" ] || [ "$FE_STATUS" != "Running" ]; then
+          echo "FAIL: pods not running (app=$APP_STATUS, frontend=$FE_STATUS)"
+          exit 1
+        fi
+        echo "OK: Both pods running"
+      changed_when: false
+
+    - name: Verify images were pulled from registry (not local)
+      ansible.builtin.shell: |
+        for component in app frontend; do
+          IMAGE=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
+            -o jsonpath='{.items[0].status.containerStatuses[0].image}')
+          IMAGE_ID=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
+            -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
+          echo "$component: image=$IMAGE imageID=$IMAGE_ID"
+          if ! echo "$IMAGE" | grep -q "{{ forgejo_host }}"; then
+            echo "FAIL: $component image not from registry: $IMAGE"
+            exit 1
+          fi
+          if ! echo "$IMAGE" | grep -q "{{ test_image_tag }}"; then
+            echo "FAIL: $component image wrong tag: $IMAGE"
+            exit 1
+          fi
+          echo "OK: $component pulled from {{ forgejo_host }} with tag {{ test_image_tag }}"
+        done
+      changed_when: false
+
+    - name: Verify app health endpoint responds
+      ansible.builtin.shell: |
+        APP_IP=$(k3s kubectl get svc monitor-app -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
+        for i in $(seq 1 30); do
+          STATUS=$(curl -sf "http://$APP_IP:8080/api/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
+          if [ "$STATUS" = "UP" ]; then
+            echo "OK: App health check passed"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "FAIL: App not healthy after 150s"
+        exit 1
+      changed_when: false
+
+    - name: Verify build-info returns correct tag
+      ansible.builtin.shell: |
+        APP_IP=$(k3s kubectl get svc monitor-app -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
+        GIT_HASH=$(curl -sf "http://$APP_IP:8080/api/build-info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('gitHash',''))")
+        if [ "$GIT_HASH" != "{{ test_image_tag }}" ]; then
+          echo "FAIL: build-info gitHash=$GIT_HASH, expected {{ test_image_tag }}"
+          exit 1
+        fi
+        echo "OK: build-info gitHash={{ test_image_tag }}"
+      changed_when: false
+
+    # ================================================================
+    # Summary
+    # ================================================================
+
+    - name: "ALL TESTS PASSED"
+      ansible.builtin.debug:
+        msg: |
+          CI/CD Registry Test Results:
+            ✓ Forgejo deployed with container registry enabled
+            ✓ k3s configured to pull from Forgejo registry
+            ✓ Backend image built and pushed to registry
+            ✓ Frontend image built and pushed to registry
+            ✓ Local images removed (forced registry pull)
+            ✓ Helm deploy with registry images succeeded
+            ✓ Both pods running with correct registry images
+            ✓ App health check passed
+            ✓ Build-info returns correct git hash tag
