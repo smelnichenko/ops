@@ -43,14 +43,28 @@
         vault_root_token: "{{ vault_token_result.stdout }}"
       no_log: true
 
+    - name: Check if sonarqube secret exists in Vault
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv get secret/monitor/sonarqube
+      register: sq_vault_check
+      changed_when: false
+      failed_when: false
+      no_log: true
+
     - name: Seed sonarqube secret into Vault
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/monitor/sonarqube \
-            postgres_password="{{ test_sonarqube_pg_password }}"
+            postgres_password="{{ test_sonarqube_pg_password }}" \
+            admin_password="placeholder" \
+            token="placeholder"
       no_log: true
+      when: sq_vault_check.rc != 0
 
     - name: "SEED: SonarQube credentials written to Vault KV"
       ansible.builtin.debug:
@@ -272,42 +286,64 @@
       changed_when: false
       failed_when: false
 
+    - name: Fetch admin password from Vault (if default no longer works)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv get -field=admin_password secret/monitor/sonarqube
+      register: sq_vault_admin_pw
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: "'true' not in sq_default_auth.stdout | default('')"
+
+    - name: Validate Vault admin password
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "admin:{{ sq_vault_admin_pw.stdout }}" \
+          http://localhost:9000/api/authentication/validate
+      register: sq_vault_auth
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: sq_vault_admin_pw.stdout | default('') not in ['', 'placeholder']
+
+    - name: Set admin state
+      ansible.builtin.set_fact:
+        sq_admin_changed: "{{ 'true' in sq_default_auth.stdout | default('') }}"
+        sq_api_password: >-
+          {{ sonarqube_default_password
+             if 'true' in sq_default_auth.stdout | default('')
+             else sq_vault_admin_pw.stdout | default(sonarqube_default_password) }}
+      no_log: true
+
     - name: Generate SonarQube admin password
       ansible.builtin.set_fact:
-        sonarqube_admin_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}!#SQ"
-      when: "'true' in sq_default_auth.stdout | default('')"
+        sonarqube_admin_password: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') }}@Sq1"
+      when: sq_admin_changed | bool
 
     - name: Change admin password from default
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
           curl -sf -u "admin:{{ sonarqube_default_password }}" \
           -X POST "http://localhost:9000/api/users/change_password" \
-          -d "login=admin" \
-          -d "previousPassword={{ sonarqube_default_password }}" \
-          -d "password={{ sonarqube_admin_password }}"
+          --data-urlencode "login=admin" \
+          --data-urlencode "previousPassword={{ sonarqube_default_password }}" \
+          --data-urlencode "password={{ sonarqube_admin_password }}"
       no_log: true
-      when: sonarqube_admin_password is defined
+      when: sq_admin_changed | bool
+
+    - name: Update API password after change
+      ansible.builtin.set_fact:
+        sq_api_password: "{{ sonarqube_admin_password }}"
+      no_log: true
+      when: sq_admin_changed | bool
 
     - name: "CONFIGURE: Admin password changed"
       ansible.builtin.debug:
         msg: "Admin password changed from default"
-      when: sonarqube_admin_password is defined
-
-    - name: Set admin password fact (already changed)
-      ansible.builtin.set_fact:
-        sonarqube_admin_password: "already-configured"
-        sq_admin_changed: false
-      when: sonarqube_admin_password is not defined
-
-    - name: Set admin changed flag
-      ansible.builtin.set_fact:
-        sq_admin_changed: true
-      when: sonarqube_admin_password is defined and sonarqube_admin_password != 'already-configured'
-
-    - name: Get current admin password for API calls
-      ansible.builtin.set_fact:
-        sq_api_password: "{{ sonarqube_admin_password if sq_admin_changed | default(false) else sonarqube_default_password }}"
-      no_log: true
+      when: sq_admin_changed | bool
 
     - name: Generate API token for CI
       ansible.builtin.shell: |
@@ -318,13 +354,13 @@
           -d "type=GLOBAL_ANALYSIS_TOKEN"
       register: sq_token_result
       no_log: true
-      when: sq_admin_changed | default(false)
+      when: sq_admin_changed | bool
 
     - name: Extract token value
       ansible.builtin.set_fact:
         sonarqube_token: "{{ (sq_token_result.stdout | from_json).token }}"
       no_log: true
-      when: sq_admin_changed | default(false) and sq_token_result.rc == 0
+      when: sq_admin_changed | bool and sq_token_result.rc == 0
 
     - name: Seed sonarqube credentials into Vault
       ansible.builtin.shell: |
@@ -336,20 +372,20 @@
             admin_password="{{ sonarqube_admin_password }}" \
             token="{{ sonarqube_token | default('') }}"
       no_log: true
-      when: sq_admin_changed | default(false)
+      when: sq_admin_changed | bool
 
     - name: "CONFIGURE: Credentials seeded to Vault"
       ansible.builtin.debug:
         msg: "Admin password and API token stored in Vault KV secret/monitor/sonarqube"
-      when: sq_admin_changed | default(false)
+      when: sq_admin_changed | bool
 
     # ================================================================
     # Phase 4c: Configure quality gate
     # ================================================================
 
-    - name: Get API auth credentials
+    - name: Get API auth credentials (admin password needed for gate/profile config)
       ansible.builtin.set_fact:
-        sq_auth: "{{ sonarqube_token | default('') + ':' if sonarqube_token | default('') | length > 0 else 'admin:' + sq_api_password | default(sonarqube_default_password) }}"
+        sq_auth: "admin:{{ sq_api_password | default(sonarqube_default_password) }}"
       no_log: true
 
     - name: Check if custom quality gate exists
@@ -368,13 +404,8 @@
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualitygates/create" \
           -d "name=Monitor"
-      register: sq_qg_create
       no_log: true
       when: sq_qg_check.rc != 0
-
-    - name: Get quality gate ID
-      ansible.builtin.set_fact:
-        sq_qg_id: "{{ (sq_qg_create.stdout | from_json).id if sq_qg_check.rc != 0 else (sq_qg_check.stdout | from_json).id }}"
 
     - name: Get existing quality gate conditions
       ansible.builtin.shell: |
@@ -597,8 +628,8 @@
         sq_deploy_pass: "{{ sq_rollout.rc is defined and sq_rollout.rc == 0 }}"
         sq_up_pass: "{{ sq_status.stdout | default('') == 'UP' }}"
         sq_http_pass: "{{ sq_http.stdout | default('') == '200' }}"
-        sq_admin_pass: "{{ sq_admin_changed | default(false) or not ('true' in sq_default_auth.stdout | default('')) }}"
-        sq_token_pass: "{{ sonarqube_token is defined and sonarqube_token | length > 0 or not sq_admin_changed | default(false) }}"
+        sq_admin_pass: "{{ sq_admin_changed | bool or ('true' not in sq_default_auth.stdout | default('')) }}"
+        sq_token_pass: "{{ sonarqube_token is defined and sonarqube_token | length > 0 or not sq_admin_changed | bool }}"
 
     - name: "TEST RESULT"
       vars:
