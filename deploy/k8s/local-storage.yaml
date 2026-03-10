@@ -14,7 +14,7 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["endpoints", "persistentvolumes", "pods"]
-  verbs: ["*"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch"]
@@ -68,6 +68,13 @@ spec:
       - name: local-path-provisioner
         image: "rancher/local-path-provisioner:v0.0.34"
         imagePullPolicy: IfNotPresent
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+            ephemeral-storage: 64Mi
+          limits:
+            memory: 128Mi
         command:
         - local-path-provisioner
         - start
