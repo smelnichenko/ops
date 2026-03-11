@@ -211,7 +211,7 @@
           log:
             level: info
           runner:
-            capacity: 1
+            capacity: 4
             timeout: 1h
             labels:
               - "self-hosted:host"
