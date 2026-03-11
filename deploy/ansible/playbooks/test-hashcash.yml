@@ -117,7 +117,7 @@
 
     - name: Deploy chart with captcha enabled
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/deploy/helm \
+        helm upgrade --install monitor /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/monitor-hashcash-test-values.yml \

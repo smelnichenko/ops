@@ -170,7 +170,7 @@
 
     - name: Deploy monitor chart with ESO secrets
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/deploy/helm \
+        helm upgrade --install monitor /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/monitor-eso-test-values.yml \

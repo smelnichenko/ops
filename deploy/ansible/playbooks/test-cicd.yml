@@ -323,7 +323,7 @@
 
     - name: Deploy via Helm with registry images
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/deploy/helm \
+        helm upgrade --install monitor /vagrant/infra/helm \
           --namespace {{ ns }} \
           --set "app.image.repository={{ forgejo_host }}/{{ forgejo_admin_user }}/monitor" \
           --set "app.image.tag={{ test_image_tag }}" \
