@@ -1,0 +1,99 @@
+{{- if eq (.Values.sonarqube.enabled | toString) "true" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitor.sonarqube.serviceName" . }}
+  labels:
+    {{- include "monitor.sonarqube.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "monitor.sonarqube.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.sonarqube.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-sysctl
+          image: busybox:1.37
+          command: ["sh", "-c", "sysctl -w vm.max_map_count=524288 || true"]
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            runAsNonRoot: false
+      containers:
+        - name: sonarqube
+          image: {{ .Values.sonarqube.image }}
+          env:
+            - name: SONAR_JDBC_URL
+              value: "jdbc:postgresql://{{ include "monitor.sonarqube.postgres.serviceName" . }}:5432/sonarqube"
+            - name: SONAR_JDBC_USERNAME
+              value: sonarqube
+            - name: SONAR_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.sonarqube.secretName" . }}
+                  key: SONARQUBE_POSTGRES_PASSWORD
+            - name: SONAR_CE_JAVAOPTS
+              value: {{ .Values.sonarqube.javaOpts | quote }}
+            - name: SONAR_WEB_JAVAOPTS
+              value: {{ .Values.sonarqube.javaOpts | quote }}
+            - name: SONAR_SEARCH_JAVAOPTS
+              value: {{ .Values.sonarqube.javaOpts | quote }}
+          ports:
+            - containerPort: 9000
+              name: http
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /opt/sonarqube/data
+            - name: extensions
+              mountPath: /opt/sonarqube/extensions
+            - name: logs
+              mountPath: /opt/sonarqube/logs
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.sonarqube.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /api/system/status
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /api/system/status
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: extensions
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "monitor.sonarqube.serviceName" . }}-data
+{{- end }}

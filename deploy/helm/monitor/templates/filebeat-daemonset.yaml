@@ -1,0 +1,82 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "monitor.fullname" . }}-filebeat
+  labels:
+    {{- include "monitor.filebeat.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "monitor.filebeat.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.filebeat.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/filebeat-configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "monitor.fullname" . }}-filebeat
+      # Filebeat needs root to read /var/log/pods
+      securityContext:
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: filebeat
+          image: {{ .Values.elk.filebeat.image }}
+          args:
+            - "-c"
+            - "/etc/filebeat/filebeat.yml"
+            - "-e"
+          env:
+            - name: ELASTICSEARCH_HOST
+              value: "http://{{ include "monitor.elasticsearch.serviceName" . }}.{{ .Release.Namespace }}.svc:9200"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.elasticsearch.secretName" . }}
+                  key: ELASTICSEARCH_PASSWORD
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: config
+              mountPath: /etc/filebeat/filebeat.yml
+              subPath: filebeat.yml
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
+            - name: varlogcontainers
+              mountPath: /var/log/containers
+              readOnly: true
+            - name: data
+              mountPath: /usr/share/filebeat/data
+          resources:
+            {{- toYaml .Values.elk.filebeat.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - DAC_READ_SEARCH
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "monitor.fullname" . }}-filebeat-config
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
+        - name: varlogcontainers
+          hostPath:
+            path: /var/log/containers
+        - name: data
+          hostPath:
+            path: /var/lib/filebeat-data
+            type: DirectoryOrCreate
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+{{- end }}

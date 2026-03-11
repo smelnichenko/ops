@@ -1,0 +1,17 @@
+{{- if eq (.Values.sonarqube.enabled | toString) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitor.sonarqube.postgres.serviceName" . }}
+  labels:
+    {{- include "monitor.sonarqube.postgres.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      protocol: TCP
+      name: postgres
+  selector:
+    {{- include "monitor.sonarqube.postgres.selectorLabels" . | nindent 4 }}
+{{- end }}

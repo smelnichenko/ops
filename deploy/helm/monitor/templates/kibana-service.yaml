@@ -1,0 +1,17 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitor.kibana.serviceName" . }}
+  labels:
+    {{- include "monitor.kibana.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5601
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "monitor.kibana.selectorLabels" . | nindent 4 }}
+{{- end }}

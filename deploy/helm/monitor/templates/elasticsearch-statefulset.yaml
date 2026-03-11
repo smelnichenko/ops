@@ -1,0 +1,120 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "monitor.elasticsearch.serviceName" . }}
+  labels:
+    {{- include "monitor.elasticsearch.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "monitor.elasticsearch.serviceName" . }}
+  replicas: {{ .Values.elk.elasticsearch.replicas }}
+  selector:
+    matchLabels:
+      {{- include "monitor.elasticsearch.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.elasticsearch.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/elasticsearch-configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-config
+          image: {{ .Values.elk.elasticsearch.image }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              cp -a /usr/share/elasticsearch/config/* /config-writable/ 2>/dev/null || true
+              cp /config-source/elasticsearch.yml /config-writable/elasticsearch.yml
+          volumeMounts:
+            - name: config-source
+              mountPath: /config-source
+            - name: config
+              mountPath: /config-writable
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: elasticsearch
+          image: {{ .Values.elk.elasticsearch.image }}
+          env:
+            - name: ES_JAVA_OPTS
+              value: {{ .Values.elk.elasticsearch.javaOpts | quote }}
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.elasticsearch.secretName" . }}
+                  key: ELASTICSEARCH_PASSWORD
+          ports:
+            - containerPort: 9200
+              name: http
+              protocol: TCP
+            - containerPort: 9300
+              name: transport
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+            - name: config
+              mountPath: /usr/share/elasticsearch/config
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /usr/share/elasticsearch/logs
+          resources:
+            {{- toYaml .Values.elk.elasticsearch.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'echo "-u elastic:${ELASTIC_PASSWORD}" | curl -sf -K - http://localhost:9200/_cluster/health?local=true >/dev/null'
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'echo "-u elastic:${ELASTIC_PASSWORD}" | curl -sf -K - http://localhost:9200/_cluster/health?local=true >/dev/null'
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: config
+          emptyDir: {}
+        - name: config-source
+          configMap:
+            name: {{ include "monitor.fullname" . }}-elasticsearch-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.elk.elasticsearch.storage.storageClass }}
+        storageClassName: {{ .Values.elk.elasticsearch.storage.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.elk.elasticsearch.storage.size }}
+{{- end }}

@@ -1,0 +1,94 @@
+{{- if eq (.Values.sonarqube.enabled | toString) "true" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "monitor.sonarqube.postgres.serviceName" . }}
+  labels:
+    {{- include "monitor.sonarqube.postgres.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "monitor.sonarqube.postgres.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "monitor.sonarqube.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.sonarqube.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          env:
+            - name: POSTGRES_DB
+              value: sonarqube
+            - name: POSTGRES_USER
+              value: sonarqube
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.sonarqube.secretName" . }}
+                  key: SONARQUBE_POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /var/run/postgresql
+          resources:
+            {{- toYaml .Values.sonarqube.postgresResources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - sonarqube
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - sonarqube
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.sonarqube.postgresStorage.storageClass }}
+        storageClassName: {{ .Values.sonarqube.postgresStorage.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.sonarqube.postgresStorage.size }}
+{{- end }}

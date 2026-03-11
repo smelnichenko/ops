@@ -1,0 +1,62 @@
+{{- if .Values.app.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "monitor.fullname" . }}-app
+  labels:
+    {{- include "monitor.app.labels" . | nindent 4 }}
+  {{- $annotations := dict }}
+  {{- if and .Values.app.ingress.tls .Values.app.ingress.tls.enabled }}
+  {{- $_ := set $annotations "cert-manager.io/cluster-issuer" (.Values.app.ingress.tls.clusterIssuer | default "letsencrypt-prod") }}
+  {{- end }}
+  {{- if .Values.app.ingress.annotations }}
+  {{- $annotations = merge $annotations .Values.app.ingress.annotations }}
+  {{- end }}
+  {{- if $annotations }}
+  annotations:
+    {{- toYaml $annotations | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.app.ingress.className }}
+  ingressClassName: {{ .Values.app.ingress.className }}
+  {{- end }}
+  {{- if and .Values.app.ingress.tls .Values.app.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.app.ingress.host }}
+      {{- if .Values.app.ingress.tls.secretName }}
+      secretName: {{ .Values.app.ingress.tls.secretName }}
+      {{- end }}
+  {{- end }}
+  rules:
+    - {{ if .Values.app.ingress.host }}host: {{ .Values.app.ingress.host }}{{ end }}
+      http:
+        paths:
+          # API routes go to backend
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "monitor.app.serviceName" . }}
+                port:
+                  number: {{ .Values.app.service.port }}
+          {{- if .Values.frontend.enabled }}
+          # All other routes go to frontend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "monitor.frontend.serviceName" . }}
+                port:
+                  number: {{ .Values.frontend.service.port }}
+          {{- else }}
+          # No frontend, serve API at root
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "monitor.app.serviceName" . }}
+                port:
+                  number: {{ .Values.app.service.port }}
+          {{- end }}
+{{- end }}

@@ -1,0 +1,17 @@
+{{- if eq (.Values.sonarqube.enabled | toString) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitor.sonarqube.serviceName" . }}
+  labels:
+    {{- include "monitor.sonarqube.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.sonarqube.service.type }}
+  ports:
+    - port: {{ .Values.sonarqube.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "monitor.sonarqube.selectorLabels" . | nindent 4 }}
+{{- end }}

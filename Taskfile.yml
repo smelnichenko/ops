@@ -137,17 +137,17 @@ tasks:
   test:load:
     desc: Run k6 load test (requires running app)
     cmds:
-      - k6 run k6/load-test.js
+      - k6 run tests/k6/load-test.js
 
   test:load:stress:
     desc: Run k6 stress test
     cmds:
-      - k6 run k6/stress-test.js
+      - k6 run tests/k6/stress-test.js
 
   test:load:spike:
     desc: Run k6 spike test
     cmds:
-      - k6 run k6/spike-test.js
+      - k6 run tests/k6/spike-test.js
 
   test:load:smoke:
     desc: Quick k6 smoke test
@@ -270,6 +270,17 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-sonarqube.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+  test:hashcash:
+    desc: Test Hashcash PoW captcha in Vagrant
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-hashcash.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:cicd:
     desc: Test CI/CD pipeline with Forgejo registry in Vagrant

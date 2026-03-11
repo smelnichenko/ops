@@ -1,0 +1,19 @@
+{{- if eq (.Values.minio.enabled | toString) "true" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "monitor.fullname" . }}-minio
+  labels:
+    {{- include "monitor.minio.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.minio.storage.size }}
+  {{- if .Values.minio.storage.storageClass }}
+  storageClassName: {{ .Values.minio.storage.storageClass }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,15 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitor.fullname" . }}-kibana-config
+  labels:
+    {{- include "monitor.kibana.labels" . | nindent 4 }}
+data:
+  kibana.yml: |
+    server.host: "::"
+    server.name: "kibana"
+    elasticsearch.hosts: ["http://{{ include "monitor.elasticsearch.serviceName" . }}:9200"]
+    xpack.encryptedSavedObjects.encryptionKey: "a]3{W`G:kj`m2~dEd;'L&Cx:f4{!&3fhMn(+Y-change-me"
+    telemetry.enabled: false
+{{- end }}

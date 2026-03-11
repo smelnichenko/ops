@@ -1,0 +1,16 @@
+{{- if eq (.Values.sonarqube.enabled | toString) "true" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "monitor.sonarqube.serviceName" . }}-data
+  labels:
+    {{- include "monitor.sonarqube.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.sonarqube.storage.storageClass }}
+  storageClassName: {{ .Values.sonarqube.storage.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.sonarqube.storage.size }}
+{{- end }}

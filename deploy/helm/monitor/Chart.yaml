@@ -1,0 +1,13 @@
+apiVersion: v2
+name: monitor
+description: A Helm chart for deploying the Web Page Monitor application with PostgreSQL, Prometheus, and Grafana
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - monitoring
+  - web
+  - prometheus
+  - grafana
+maintainers:
+  - name: schnappy

@@ -1,0 +1,17 @@
+{{- if eq (.Values.kafka.enabled | toString) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitor.kafka.serviceName" . }}
+  labels:
+    {{- include "monitor.kafka.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9092
+      targetPort: client
+      protocol: TCP
+      name: client
+  selector:
+    {{- include "monitor.kafka.selectorLabels" . | nindent 4 }}
+{{- end }}

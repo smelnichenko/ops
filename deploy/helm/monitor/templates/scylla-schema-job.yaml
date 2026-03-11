@@ -1,0 +1,114 @@
+{{- if eq (.Values.scylla.enabled | toString) "true" }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "monitor.scylla.serviceName" . }}-schema
+  labels:
+    {{- include "monitor.scylla.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scylla-job
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scylla-schema
+          image: {{ .Values.scylla.image }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "Waiting for ScyllaDB to be ready..."
+              until cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 -e "SELECT now() FROM system.local" 2>/dev/null; do
+                echo "ScyllaDB not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "ScyllaDB is ready. Applying schema..."
+              cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 <<'EOF'
+              CREATE KEYSPACE IF NOT EXISTS chat WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
+
+              CREATE TABLE IF NOT EXISTS chat.messages_by_channel (
+                  channel_id bigint,
+                  bucket text,
+                  message_id timeuuid,
+                  user_id bigint,
+                  username text,
+                  content text,
+                  parent_message_id timeuuid,
+                  edited boolean,
+                  deleted boolean,
+                  hash text,
+                  prev_hash text,
+                  key_version int,
+                  PRIMARY KEY ((channel_id, bucket), message_id)
+              ) WITH CLUSTERING ORDER BY (message_id DESC)
+                AND gc_grace_seconds = 864000;
+
+              CREATE TABLE IF NOT EXISTS chat.messages_by_user (
+                  user_id bigint,
+                  message_id timeuuid,
+                  channel_id bigint,
+                  bucket text,
+                  content text,
+                  PRIMARY KEY (user_id, message_id)
+              ) WITH CLUSTERING ORDER BY (message_id DESC);
+
+              CREATE TABLE IF NOT EXISTS chat.message_edits (
+                  channel_id bigint,
+                  bucket text,
+                  message_id timeuuid,
+                  edit_id timeuuid,
+                  user_id bigint,
+                  content text,
+                  hash text,
+                  key_version int,
+                  PRIMARY KEY ((channel_id, bucket, message_id), edit_id)
+              ) WITH CLUSTERING ORDER BY (edit_id DESC);
+
+              CREATE TABLE IF NOT EXISTS chat.chain_heads (
+                  channel_id bigint,
+                  hash text,
+                  message_id timeuuid,
+                  PRIMARY KEY (channel_id)
+              );
+
+              CREATE TABLE IF NOT EXISTS chat.reactions_by_message (
+                  channel_id bigint,
+                  bucket text,
+                  message_id timeuuid,
+                  emoji text,
+                  user_id bigint,
+                  username text,
+                  PRIMARY KEY ((channel_id, bucket, message_id), emoji, user_id)
+              );
+
+              CREATE TABLE IF NOT EXISTS chat.attachments_by_message (
+                  channel_id bigint,
+                  bucket text,
+                  message_id timeuuid,
+                  attachment_id timeuuid,
+                  url text,
+                  filename text,
+                  content_type text,
+                  size_bytes bigint,
+                  PRIMARY KEY ((channel_id, bucket, message_id), attachment_id)
+              );
+              EOF
+              echo "Adding columns if missing..."
+              cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 -e "ALTER TABLE chat.messages_by_channel ADD hash text;" 2>/dev/null || true
+              cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 -e "ALTER TABLE chat.messages_by_channel ADD prev_hash text;" 2>/dev/null || true
+              cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 -e "ALTER TABLE chat.messages_by_channel ADD key_version int;" 2>/dev/null || true
+              cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 -e "ALTER TABLE chat.message_edits ADD hash text;" 2>/dev/null || true
+              cqlsh {{ include "monitor.scylla.serviceName" . }} 9042 -e "ALTER TABLE chat.message_edits ADD key_version int;" 2>/dev/null || true
+              echo "Schema applied successfully."
+      restartPolicy: OnFailure
+{{- end }}

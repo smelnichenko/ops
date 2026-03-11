@@ -1,0 +1,84 @@
+{{- if eq (.Values.scylla.enabled | toString) "true" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "monitor.scylla.serviceName" . }}
+  labels:
+    {{- include "monitor.scylla.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "monitor.scylla.serviceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "monitor.scylla.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.scylla.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scylla
+          image: {{ .Values.scylla.image }}
+          args:
+            {{- toYaml .Values.scylla.args | nindent 12 }}
+          ports:
+            - containerPort: 9042
+              name: cql
+              protocol: TCP
+            - containerPort: 7000
+              name: inter-node
+              protocol: TCP
+            - containerPort: 7001
+              name: inter-node-ssl
+              protocol: TCP
+            - containerPort: 7199
+              name: jmx
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/scylla
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.scylla.resources | nindent 12 }}
+          livenessProbe:
+            tcpSocket:
+              port: cql
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - 'cqlsh $(hostname -i) 9042 -e "SELECT now() FROM system.local"'
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - SYS_NICE
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.scylla.storage.storageClass }}
+        storageClassName: {{ .Values.scylla.storage.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.scylla.storage.size }}
+{{- end }}

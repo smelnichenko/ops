@@ -1,0 +1,678 @@
+{{- if .Values.networkPolicies.enabled -}}
+# Default deny all ingress and egress traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-default-deny
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # Allow DNS resolution for all pods
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# App (API backend) network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-app
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.app.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Allow from frontend (nginx proxy to API)
+    {{- if .Values.frontend.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.frontend.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+    # Allow Prometheus scraping
+    {{- if .Values.prometheus.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.prometheus.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # App → PostgreSQL
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.postgres.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    # App → Redis
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.redis.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+    # App → MinIO
+    {{- if eq (.Values.minio.enabled | toString) "true" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.minio.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9000
+    {{- end }}
+    # App → Elasticsearch
+    {{- if eq (.Values.elk.enabled | toString) "true" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.elasticsearch.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+    {{- end }}
+    # App → Kafka
+    {{- if eq (.Values.kafka.enabled | toString) "true" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.kafka.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+    {{- end }}
+    # App → ScyllaDB
+    {{- if eq (.Values.scylla.enabled | toString) "true" }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.scylla.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9042
+    {{- end }}
+    # App → external HTTPS (SMTP, AI API, URL monitoring, webhooks)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 587
+        - protocol: TCP
+          port: 80
+---
+{{- if .Values.frontend.enabled }}
+# Frontend network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-frontend
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.frontend.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Frontend → App (nginx proxy_pass)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+{{- end }}
+{{- if .Values.postgres.enabled }}
+# PostgreSQL network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-postgres
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.postgres.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# PostgreSQL backup CronJob network policy
+# Backup runs pg_dump via kubectl exec (no direct postgres connection)
+# Only needs Kubernetes API access (port 6443)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-postgres-backup
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "monitor.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: postgres-backup
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kubernetes API (kubectl get/exec)
+    # ClusterIP service listens on 443, DNAT to 6443 — allow both
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+{{- end }}
+{{- if .Values.redis.enabled }}
+# Redis network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-redis
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.redis.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress:
+    # DNS only — Redis doesn't initiate connections
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+{{- end }}
+{{- if .Values.prometheus.enabled }}
+# Prometheus network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-prometheus
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.prometheus.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.grafana.enabled }}
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.grafana.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9090
+    {{- end }}
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Prometheus → App (scrape)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Prometheus → Vault (scrape via service DNS)
+    {{- if .Values.prometheus.vault.enabled }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+      ports:
+        - protocol: TCP
+          port: 8200
+    {{- end }}
+---
+{{- end }}
+{{- if eq (.Values.minio.enabled | toString) "true" }}
+# MinIO network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-minio
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.minio.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9000
+  egress:
+    # DNS only — MinIO doesn't initiate connections
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+{{- end }}
+{{- if .Values.grafana.enabled }}
+# Grafana network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-grafana
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.grafana.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Grafana → Prometheus (datasource)
+    {{- if .Values.prometheus.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.prometheus.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9090
+    {{- end }}
+{{- end }}
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+---
+# Elasticsearch network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-elasticsearch
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.elasticsearch.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from app
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+    # Allow from Kibana
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.kibana.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+    # Allow from Filebeat
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.filebeat.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+  egress:
+    # DNS only — Elasticsearch doesn't initiate external connections
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Kibana network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-kibana
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.kibana.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 5601
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kibana → Elasticsearch
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.elasticsearch.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+---
+# Filebeat network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-filebeat
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.filebeat.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Filebeat → Elasticsearch
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.elasticsearch.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9200
+{{- end }}
+{{- if eq (.Values.kafka.enabled | toString) "true" }}
+---
+# Kafka network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-kafka
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.kafka.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka-job
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.kafka.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kafka self (KRaft controller + broker via advertised listeners)
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.kafka.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 9093
+{{- end }}
+{{- if eq (.Values.scylla.enabled | toString) "true" }}
+---
+# ScyllaDB network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-scylla
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "monitor.scylla.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.app.selectorLabels" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scylla-job
+      ports:
+        - protocol: TCP
+          port: 9042
+  egress:
+    # DNS only
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}
+{{- if eq (.Values.kafka.enabled | toString) "true" }}
+---
+# Kafka topics job network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-kafka-job
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka-job
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Kafka broker
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.kafka.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+{{- end }}
+{{- if eq (.Values.scylla.enabled | toString) "true" }}
+---
+# ScyllaDB schema job network policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "monitor.fullname" . }}-scylla-job
+  labels:
+    {{- include "monitor.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: scylla-job
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # ScyllaDB CQL
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "monitor.scylla.selectorLabels" . | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9042
+{{- end }}
+{{- end }}

@@ -1,0 +1,35 @@
+{{- if .Values.prometheus.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitor.fullname" . }}-prometheus-config
+  labels:
+    {{- include "monitor.prometheus.labels" . | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.prometheus.scrapeInterval }}
+      evaluation_interval: {{ .Values.prometheus.scrapeInterval }}
+
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      - job_name: 'monitor-app'
+        metrics_path: '/api/actuator/prometheus'
+        static_configs:
+          - targets: ['{{ include "monitor.app.serviceName" . }}:{{ .Values.app.service.port }}']
+{{- if .Values.prometheus.vault.enabled }}
+      - job_name: 'vault'
+        metrics_path: '/v1/sys/metrics'
+        params:
+          format: ['prometheus']
+        scheme: https
+        tls_config:
+          ca_file: /vault/tls/ca.crt
+        bearer_token_file: /var/run/secrets/vault-metrics/token
+        static_configs:
+          - targets: ['vault.vault.svc:8200']
+{{- end }}
+{{- end }}

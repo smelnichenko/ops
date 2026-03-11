@@ -1,0 +1,56 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitor.fullname" . }}-filebeat-config
+  labels:
+    {{- include "monitor.filebeat.labels" . | nindent 4 }}
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: container
+        paths:
+          - /var/log/containers/*.log
+        processors:
+          - add_kubernetes_metadata:
+              host: ${NODE_NAME}
+              matchers:
+                - logs_path:
+                    logs_path: "/var/log/containers/"
+          - drop_event:
+              when:
+                equals:
+                  kubernetes.container.name: "filebeat"
+
+    output.elasticsearch:
+      hosts: ["${ELASTICSEARCH_HOST}"]
+      username: "elastic"
+      password: "${ELASTICSEARCH_PASSWORD}"
+      index: "filebeat-%{+yyyy.MM.dd}"
+
+    setup.template.name: "filebeat"
+    setup.template.pattern: "filebeat-*"
+    setup.template.settings:
+      index.number_of_shards: 1
+      index.number_of_replicas: 0
+
+    setup.ilm.enabled: true
+    setup.ilm.rollover_alias: "filebeat"
+    setup.ilm.pattern: "{now/d}-000001"
+    setup.ilm.policy_name: "logs-{{ .Values.elk.elasticsearch.retention.days }}d-retention"
+    setup.ilm.overwrite: true
+    setup.ilm.policy:
+      phases:
+        hot:
+          actions:
+            rollover:
+              max_age: "1d"
+              max_primary_shard_size: "5gb"
+        delete:
+          min_age: "{{ .Values.elk.elasticsearch.retention.days }}d"
+          actions:
+            delete: {}
+
+    logging.level: warning
+    logging.to_stderr: true
+{{- end }}

@@ -1,0 +1,74 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+== Monitor Application ==
+
+{{- if .Values.app.ingress.enabled }}
+The application is accessible at:
+  http://{{ .Values.app.ingress.host }}
+
+Make sure to add the following to your /etc/hosts (or DNS):
+  <INGRESS_IP> {{ .Values.app.ingress.host }}
+{{- else }}
+To access the application, run:
+  kubectl port-forward svc/{{ include "monitor.app.serviceName" . }} {{ .Values.app.service.port }}:{{ .Values.app.service.port }} -n {{ .Release.Namespace }}
+
+Then open: http://localhost:{{ .Values.app.service.port }}
+{{- end }}
+
+API Endpoints:
+  GET  /api/monitor/results           - Get all monitoring results
+  GET  /api/monitor/pages             - List monitored pages
+  GET  /api/monitor/config            - Get configuration
+  POST /api/monitor/check/{pageName}  - Trigger manual check
+  GET  /api/actuator/health           - Health check
+  GET  /api/actuator/prometheus       - Prometheus metrics
+
+{{- if .Values.grafana.enabled }}
+
+== Grafana ==
+
+{{- if eq .Values.grafana.service.type "NodePort" }}
+Grafana is accessible via NodePort. Get the URL:
+  export NODE_PORT=$(kubectl get -n {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "monitor.fullname" . }}-grafana)
+  export NODE_IP=$(kubectl get nodes -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "Grafana URL: http://${NODE_IP}:${NODE_PORT}"
+{{- else }}
+To access Grafana, run:
+  kubectl port-forward svc/{{ include "monitor.fullname" . }}-grafana {{ .Values.grafana.service.port }}:{{ .Values.grafana.service.port }} -n {{ .Release.Namespace }}
+
+Then open: http://localhost:{{ .Values.grafana.service.port }}
+{{- end }}
+
+Default credentials:
+  Username: {{ .Values.grafana.adminUser }}
+  Password: (stored in secret {{ include "monitor.grafana.secretName" . }})
+
+To get the password:
+  kubectl get secret {{ include "monitor.grafana.secretName" . }} -n {{ .Release.Namespace }} -o jsonpath="{.data.admin-password}" | base64 -d
+{{- end }}
+
+{{- if .Values.prometheus.enabled }}
+
+== Prometheus ==
+
+To access Prometheus, run:
+  kubectl port-forward svc/{{ include "monitor.prometheus.serviceName" . }} 9090:9090 -n {{ .Release.Namespace }}
+
+Then open: http://localhost:9090
+{{- end }}
+
+== Useful Commands ==
+
+Check pod status:
+  kubectl get pods -n {{ .Release.Namespace }}
+
+View application logs:
+  kubectl logs -f deployment/{{ include "monitor.app.serviceName" . }} -n {{ .Release.Namespace }}
+
+{{- if .Values.postgres.enabled }}
+
+Connect to PostgreSQL:
+  kubectl exec -it deployment/{{ include "monitor.postgres.serviceName" . }} -n {{ .Release.Namespace }} -- psql -U {{ .Values.postgres.username }} -d {{ .Values.postgres.database }}
+{{- end }}

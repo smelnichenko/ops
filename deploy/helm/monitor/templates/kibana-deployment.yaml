@@ -1,0 +1,128 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitor.kibana.serviceName" . }}
+  labels:
+    {{- include "monitor.kibana.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.elk.kibana.replicas }}
+  selector:
+    matchLabels:
+      {{- include "monitor.kibana.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.kibana.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/kibana-configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: setup-kibana-user
+          image: curlimages/curl:8.12.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Elasticsearch..."
+              until curl -sf -u "elastic:${ELASTIC_PASSWORD}" "http://{{ include "monitor.elasticsearch.serviceName" . }}:9200/_cluster/health" >/dev/null 2>&1; do
+                echo "ES not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Setting kibana_system password..."
+              curl -sf -X POST -u "elastic:${ELASTIC_PASSWORD}" \
+                -H "Content-Type: application/json" \
+                "http://{{ include "monitor.elasticsearch.serviceName" . }}:9200/_security/user/kibana_system/_password" \
+                -d "{\"password\":\"${KIBANA_PASSWORD}\"}"
+              echo ""
+              echo "kibana_system password set."
+          env:
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.elasticsearch.secretName" . }}
+                  key: ELASTICSEARCH_PASSWORD
+            - name: KIBANA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.elasticsearch.secretName" . }}
+                  key: KIBANA_PASSWORD
+        - name: init-config
+          image: {{ .Values.elk.kibana.image }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              cp -a /usr/share/kibana/config/* /config-writable/ 2>/dev/null || true
+              cp /config-source/kibana.yml /config-writable/kibana.yml
+          volumeMounts:
+            - name: config-source
+              mountPath: /config-source
+            - name: config
+              mountPath: /config-writable
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: kibana
+          image: {{ .Values.elk.kibana.image }}
+          env:
+            - name: ELASTICSEARCH_USERNAME
+              value: "kibana_system"
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.elasticsearch.secretName" . }}
+                  key: KIBANA_PASSWORD
+          ports:
+            - containerPort: 5601
+              name: http
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/kibana/config
+            - name: tmp
+              mountPath: /tmp
+            - name: kibana-data
+              mountPath: /usr/share/kibana/data
+          resources:
+            {{- toYaml .Values.elk.kibana.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: 5601
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: 5601
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: kibana-data
+          emptyDir: {}
+        - name: config
+          emptyDir: {}
+        - name: config-source
+          configMap:
+            name: {{ include "monitor.fullname" . }}-kibana-config
+{{- end }}

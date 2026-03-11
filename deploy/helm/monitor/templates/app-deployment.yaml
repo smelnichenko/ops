@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitor.app.serviceName" . }}
+  labels:
+    {{- include "monitor.app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.app.replicas }}
+  selector:
+    matchLabels:
+      {{- include "monitor.app.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.app.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/api/actuator/prometheus"
+        prometheus.io/port: "8080"
+        checksum/config: {{ include (print $.Template.BasePath "/app-configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+            - name: tmp
+              mountPath: /tmp
+          env:
+            - name: SPRING_CONFIG_LOCATION
+              value: "classpath:/,file:/app/config/"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.postgres.secretName" . }}
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.postgres.secretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: JAVA_OPTS
+              value: {{ .Values.app.javaOpts | default "-Xmx1536m" | quote }}
+            - name: GIT_HASH
+              value: {{ .Values.app.gitHash | default "unknown" | quote }}
+            - name: BUILD_TIME
+              value: {{ .Values.app.buildTime | default "" | quote }}
+            {{- if or .Values.auth.jwtSecret .Values.auth.existingSecret }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.auth.secretName" . }}
+                  key: JWT_SECRET
+            {{- end }}
+            {{- if or .Values.redis.password .Values.redis.existingSecret }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.redis.secretName" . }}
+                  key: REDIS_PASSWORD
+            {{- end }}
+            {{- if or .Values.ai.apiKey .Values.ai.existingSecret }}
+            - name: AI_ENABLED
+              value: "true"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.ai.secretName" . }}
+                  key: ANTHROPIC_API_KEY
+            {{- end }}
+            {{- if eq (.Values.mail.enabled | toString) "true" }}
+            - name: MAIL_ENABLED
+              value: "true"
+            - name: MAIL_HOST
+              value: {{ .Values.mail.host | quote }}
+            - name: MAIL_PORT
+              value: {{ .Values.mail.port | quote }}
+            - name: MAIL_USERNAME
+              value: {{ .Values.mail.username | quote }}
+            - name: MAIL_FROM
+              value: {{ .Values.mail.fromAddress | quote }}
+            - name: APP_URL
+              value: {{ .Values.mail.appUrl | quote }}
+            {{- if or .Values.mail.password .Values.mail.existingSecret }}
+            - name: MAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.mail.secretName" . }}
+                  key: MAIL_PASSWORD
+            {{- end }}
+            {{- end }}
+            {{- if eq (.Values.webhook.enabled | toString) "true" }}
+            - name: RESEND_WEBHOOK_ENABLED
+              value: "true"
+            - name: RESEND_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.webhook.secretName" . }}
+                  key: RESEND_WEBHOOK_SECRET
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.webhook.secretName" . }}
+                  key: RESEND_API_KEY
+            {{- end }}
+            {{- if eq (.Values.minio.enabled | toString) "true" }}
+            - name: MINIO_ENABLED
+              value: "true"
+            - name: MINIO_ENDPOINT
+              value: "http://{{ include "monitor.fullname" . }}-minio:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.minio.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "monitor.minio.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+            - name: MINIO_BUCKET
+              value: {{ .Values.minio.bucket | default "email-attachments" | quote }}
+            {{- end }}
+            {{- if eq (.Values.kafka.enabled | toString) "true" }}
+            - name: CHAT_ENABLED
+              value: "true"
+            {{- if eq (.Values.chat.e2eEnabled | toString) "true" }}
+            - name: CHAT_E2E_ENABLED
+              value: "true"
+            {{- end }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "{{ include "monitor.kafka.serviceName" . }}:9092"
+            {{- end }}
+            {{- if eq (.Values.scylla.enabled | toString) "true" }}
+            - name: SCYLLA_CONTACT_POINTS
+              value: {{ include "monitor.scylla.serviceName" . }}
+            - name: SCYLLA_PORT
+              value: "9042"
+            - name: SCYLLA_DATACENTER
+              value: "datacenter1"
+            {{- end }}
+            {{- if eq (.Values.captcha.enabled | toString) "true" }}
+            - name: CAPTCHA_ENABLED
+              value: "true"
+            {{- end }}
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /api/actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            timeoutSeconds: 3
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "monitor.fullname" . }}-app-config
+        - name: tmp
+          emptyDir: {}

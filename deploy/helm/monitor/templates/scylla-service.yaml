@@ -1,0 +1,21 @@
+{{- if eq (.Values.scylla.enabled | toString) "true" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "monitor.scylla.serviceName" . }}
+  labels:
+    {{- include "monitor.scylla.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9042
+      targetPort: cql
+      protocol: TCP
+      name: cql
+    - port: 7000
+      targetPort: inter-node
+      protocol: TCP
+      name: inter-node
+  selector:
+    {{- include "monitor.scylla.selectorLabels" . | nindent 4 }}
+{{- end }}

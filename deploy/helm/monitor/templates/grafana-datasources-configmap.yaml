@@ -1,0 +1,19 @@
+{{- if .Values.grafana.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitor.fullname" . }}-grafana-datasources
+  labels:
+    {{- include "monitor.grafana.labels" . | nindent 4 }}
+data:
+  datasources.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://{{ include "monitor.prometheus.serviceName" . }}:9090
+        isDefault: true
+        editable: false
+{{- end }}

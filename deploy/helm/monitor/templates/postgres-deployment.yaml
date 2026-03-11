@@ -1,0 +1,127 @@
+{{- if .Values.postgres.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "monitor.postgres.serviceName" . }}
+  labels:
+    {{- include "monitor.postgres.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "monitor.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "monitor.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init-db
+          image: {{ .Values.postgres.image }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              # Fix setgid bit that fsGroup may have added (PostgreSQL requires 0700 or 0750)
+              if [ -d /var/lib/postgresql/data/pgdata ]; then
+                chmod 700 /var/lib/postgresql/data/pgdata
+              fi
+              if [ ! -f /var/lib/postgresql/data/pgdata/PG_VERSION ]; then
+                echo "Initializing database..."
+                initdb -D /var/lib/postgresql/data/pgdata -U "$POSTGRES_USER" --auth-host=scram-sha-256 --auth-local=trust
+                echo "host all all 0.0.0.0/0 scram-sha-256" >> /var/lib/postgresql/data/pgdata/pg_hba.conf
+                echo "listen_addresses='*'" >> /var/lib/postgresql/data/pgdata/postgresql.conf
+                pg_ctl -D /var/lib/postgresql/data/pgdata -w start -o "-c listen_addresses=''"
+                psql -U "$POSTGRES_USER" -d template1 -c "ALTER USER \"$POSTGRES_USER\" PASSWORD '$POSTGRES_PASSWORD';"
+                psql -U "$POSTGRES_USER" -d template1 -c "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'" | grep -q 1 || \
+                  psql -U "$POSTGRES_USER" -d template1 -c "CREATE DATABASE \"$POSTGRES_DB\";"
+                pg_ctl -D /var/lib/postgresql/data/pgdata -w stop
+              else
+                echo "Database already initialized"
+              fi
+          envFrom:
+            - secretRef:
+                name: {{ include "monitor.postgres.secretName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          command: ["postgres"]
+          args:
+            - -D
+            - /var/lib/postgresql/data/pgdata
+            - -c
+            - shared_buffers={{ .Values.postgres.sharedBuffers | default "512MB" }}
+            - -c
+            - effective_cache_size={{ .Values.postgres.effectiveCacheSize | default "1536MB" }}
+            - -c
+            - work_mem={{ .Values.postgres.workMem | default "16MB" }}
+            - -c
+            - maintenance_work_mem={{ .Values.postgres.maintenanceWorkMem | default "128MB" }}
+            - -c
+            - max_parallel_workers_per_gather={{ .Values.postgres.maxParallelWorkersPerGather | default 2 }}
+            - -c
+            - max_parallel_workers={{ .Values.postgres.maxParallelWorkers | default 8 }}
+            - -c
+            - max_worker_processes={{ .Values.postgres.maxWorkerProcesses | default 8 }}
+            - -c
+            - effective_io_concurrency={{ .Values.postgres.effectiveIoConcurrency | default 1 }}
+            - -c
+            - random_page_cost={{ .Values.postgres.randomPageCost | default "4.0" }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 5432
+              name: postgres
+          envFrom:
+            - secretRef:
+                name: {{ include "monitor.postgres.secretName" . }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.username }}
+                - -d
+                - {{ .Values.postgres.database }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.postgres.username }}
+                - -d
+                - {{ .Values.postgres.database }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "monitor.fullname" . }}-postgres
+{{- end }}

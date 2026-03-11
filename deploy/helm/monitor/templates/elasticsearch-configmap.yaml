@@ -1,0 +1,20 @@
+{{- if eq (.Values.elk.enabled | toString) "true" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitor.fullname" . }}-elasticsearch-config
+  labels:
+    {{- include "monitor.elasticsearch.labels" . | nindent 4 }}
+data:
+  elasticsearch.yml: |
+    cluster.name: "monitor-logs"
+    network.host: "0.0.0.0"
+    network.publish_host: "_site_"
+    http.host: "0.0.0.0"
+    transport.host: "0.0.0.0"
+    discovery.type: single-node
+    xpack.security.enabled: true
+    xpack.security.http.ssl.enabled: false
+    xpack.security.transport.ssl.enabled: false
+    xpack.license.self_generated.type: basic
+{{- end }}

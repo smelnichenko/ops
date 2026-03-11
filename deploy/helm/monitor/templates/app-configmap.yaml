@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "monitor.fullname" . }}-app-config
+  labels:
+    {{- include "monitor.app.labels" . | nindent 4 }}
+data:
+  application.yml: |
+    server:
+      port: 8080
+      address: 0.0.0.0
+      servlet:
+        context-path: /api
+      shutdown: graceful
+
+    spring:
+      threads:
+        virtual:
+          enabled: true
+      {{- if eq (.Values.mail.enabled | toString) "true" }}
+      mail:
+        host: ${MAIL_HOST:localhost}
+        port: ${MAIL_PORT:587}
+        username: ${MAIL_USERNAME:}
+        password: ${MAIL_PASSWORD:}
+        properties:
+          mail:
+            smtp:
+              auth: true
+              starttls:
+                enable: true
+      {{- end }}
+      datasource:
+        url: jdbc:postgresql://{{ include "monitor.postgres.serviceName" . }}:5432/{{ .Values.postgres.database }}
+        # Credentials injected via environment variables from Secret
+        username: ${DB_USERNAME}
+        password: ${DB_PASSWORD}
+        hikari:
+          minimum-idle: {{ .Values.app.hikari.minimumIdle | default 2 }}
+          maximum-pool-size: {{ .Values.app.hikari.maximumPoolSize | default 25 }}
+          idle-timeout: {{ .Values.app.hikari.idleTimeout | default 300000 }}
+          max-lifetime: {{ .Values.app.hikari.maxLifetime | default 1200000 }}
+          connection-timeout: {{ .Values.app.hikari.connectionTimeout | default 20000 }}
+          leak-detection-threshold: 60000
+      jpa:
+        hibernate:
+          ddl-auto: none
+        open-in-view: false
+      data:
+          redis:
+            host: {{ include "monitor.redis.serviceName" . }}
+            port: 6379
+            {{- if .Values.redis.password }}
+            password: ${REDIS_PASSWORD}
+            {{- end }}
+      liquibase:
+        enabled: true
+        change-log: classpath:db/changelog/db.changelog-master.xml
+
+    logging:
+      level:
+        root: INFO
+        io.schnappy: INFO
+
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,prometheus
+          base-path: /actuator
+      endpoint:
+        health:
+          show-details: never
+      prometheus:
+        metrics:
+          export:
+            enabled: true
+
+    info:
+      git-hash: ${GIT_HASH:unknown}
+      build-time: ${BUILD_TIME:}
+
+    monitor:
+      auth:
+        jwt-secret: ${JWT_SECRET}
+        token-expiration: {{ .Values.auth.tokenExpiration | default "24h" }}
+        registration-enabled: {{ .Values.auth.registrationEnabled | default true }}
+        secure-cookies: {{ .Values.auth.secureCookies | default false }}
+      enabled: {{ .Values.monitor.enabled }}
+      http:
+        connect-timeout: {{ .Values.monitor.http.connectTimeout }}
+        read-timeout: {{ .Values.monitor.http.readTimeout }}
+        user-agent: {{ .Values.monitor.http.userAgent | quote }}
+      ai:
+        enabled: {{ .Values.ai.enabled }}
+        model: {{ .Values.ai.model | default "claude-sonnet-4-5-20250929" | quote }}
+      mail:
+        enabled: ${MAIL_ENABLED:false}
+        from-address: ${MAIL_FROM:noreply@example.com}
+        app-url: ${APP_URL:http://localhost:3000}
+      webhook:
+        resend:
+          enabled: ${RESEND_WEBHOOK_ENABLED:false}
+          signing-secret: ${RESEND_WEBHOOK_SECRET:}
+          api-key: ${RESEND_API_KEY:}
+      minio:
+        enabled: ${MINIO_ENABLED:false}
+        endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+        access-key: ${MINIO_ACCESS_KEY:minioadmin}
+        secret-key: ${MINIO_SECRET_KEY:minioadmin}
+        bucket: ${MINIO_BUCKET:email-attachments}
+      chat:
+        enabled: ${CHAT_ENABLED:false}
+        e2e-enabled: ${CHAT_E2E_ENABLED:false}
+        scylla:
+          contact-points: ${SCYLLA_CONTACT_POINTS:localhost}
+          port: ${SCYLLA_PORT:9042}
+          datacenter: ${SCYLLA_DATACENTER:datacenter1}
+          keyspace: chat
+      rate-limit:
+        enabled: true
+        requests-per-minute: 300
+        burst-capacity: 50
+
+    {{- if eq (.Values.kafka.enabled | toString) "true" }}
+    spring.kafka:
+      bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+      producer:
+        key-serializer: org.apache.kafka.common.serialization.StringSerializer
+        value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      consumer:
+        group-id: monitor-chat
+        auto-offset-reset: earliest
+        key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+        value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+        properties:
+          spring.json.trusted.packages: io.schnappy.monitor.chat.dto
+    {{- end }}
+

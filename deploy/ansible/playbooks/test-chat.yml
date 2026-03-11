@@ -123,7 +123,7 @@
 
     - name: Deploy chart with Kafka + ScyllaDB enabled
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+        helm upgrade --install monitor /vagrant/deploy/helm/monitor \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/monitor-chat-test-values.yml \
