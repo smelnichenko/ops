@@ -3,6 +3,7 @@ exclude_paths:
   - venv/
   - .cache/
   - vars/vault-pi-runtime.yml
+  - vars/sealed-secrets-key-backup.yaml
 kinds:
   - playbook: "playbooks/*.yml"
   - playbook: "deploy.yml"

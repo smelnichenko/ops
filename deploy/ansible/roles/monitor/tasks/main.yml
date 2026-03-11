@@ -4,6 +4,7 @@
 
 - name: Create namespace with Pod Security Standards
   ansible.builtin.shell: |
+    set -o pipefail
     cat <<EOF | k3s kubectl apply -f -
     apiVersion: v1
     kind: Namespace
@@ -14,13 +15,15 @@
         pod-security.kubernetes.io/audit: restricted
         pod-security.kubernetes.io/warn: restricted
     EOF
+  args:
+    executable: /bin/bash
   when: monitor_create_namespace
   changed_when: false
 
 - name: Build and import images
   when: (monitor_build_locally | default(true) | bool) and not (monitor_skip_build | default(false) | bool)
   vars:
-    project_root: "{{ playbook_dir }}/../.."
+    monitor_project_root: "{{ playbook_dir }}/../.."
   block:
     - name: Get build environment
       ansible.builtin.shell: |
@@ -28,85 +31,93 @@
         . "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || true
         echo "PATH=$PATH"
         echo "JAVA_HOME=$JAVA_HOME"
-        echo "GIT_HASH=$(git -C {{ project_root }} rev-parse --short HEAD)"
+        echo "GIT_HASH=$(git -C {{ monitor_project_root }} rev-parse --short HEAD)"
         echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       args:
         executable: /bin/bash
-      register: build_env_result
+      register: monitor_build_env_result
       changed_when: false
       become: false
 
     - name: Set build facts
       ansible.builtin.set_fact:
-        build_path: "{{ (build_env_result.stdout_lines | select('match', '^PATH=') | first).split('=', 1)[1] }}"
-        build_java_home: "{{ (build_env_result.stdout_lines | select('match', '^JAVA_HOME=') | first).split('=', 1)[1] }}"
-        build_git_hash: "{{ (build_env_result.stdout_lines | select('match', '^GIT_HASH=') | first).split('=', 1)[1] }}"
-        build_time: "{{ (build_env_result.stdout_lines | select('match', '^BUILD_TIME=') | first).split('=', 1)[1] }}"
-        project_root: "{{ project_root }}"
+        monitor_build_path: "{{ (monitor_build_env_result.stdout_lines | select('match', '^PATH=') | first).split('=', 1)[1] }}"
+        monitor_build_java_home: "{{ (monitor_build_env_result.stdout_lines | select('match', '^JAVA_HOME=') | first).split('=', 1)[1] }}"
+        monitor_build_git_hash: "{{ (monitor_build_env_result.stdout_lines | select('match', '^GIT_HASH=') | first).split('=', 1)[1] }}"
+        monitor_build_time: "{{ (monitor_build_env_result.stdout_lines | select('match', '^BUILD_TIME=') | first).split('=', 1)[1] }}"
+        monitor_project_root: "{{ monitor_project_root }}"
 
     - name: Get last deployed commit
       ansible.builtin.slurp:
         src: /var/lib/monitor-deploy-commit
-      register: last_commit_file
+      register: monitor_last_commit_file
       failed_when: false
 
     - name: Set last deployed commit
+      vars:
+        monitor_raw_commit: "{{ monitor_last_commit_file.content | default('') | b64decode | trim }}"
       ansible.builtin.set_fact:
-        last_deployed_commit: "{{ (last_commit_file.content | default('') | b64decode | trim) if last_commit_file.content is defined else '' }}"
+        monitor_last_deployed_commit: >-
+          {{ monitor_raw_commit if monitor_last_commit_file.content is defined else '' }}
 
     - name: Detect changes
       ansible.builtin.shell: |
-        cd {{ project_root }}
-        last="{{ last_deployed_commit }}"
+        cd {{ monitor_project_root }}
+        last="{{ monitor_last_deployed_commit }}"
         for component in backend frontend game; do
           if [ -z "$last" ] || ! git diff --quiet "$last" HEAD -- "$component/"; then
             echo "$component"
           fi
         done
-      register: changes_result
+      register: monitor_changes_result
       changed_when: false
       become: false
 
     - name: Set change detection facts
       ansible.builtin.set_fact:
-        backend_changed: "{{ 'backend' in changes_result.stdout_lines }}"
-        game_changed: "{{ 'game' in changes_result.stdout_lines }}"
-        frontend_changed: "{{ 'frontend' in changes_result.stdout_lines or 'game' in changes_result.stdout_lines }}"
+        monitor_backend_changed: "{{ 'backend' in monitor_changes_result.stdout_lines }}"
+        monitor_game_changed: "{{ 'game' in monitor_changes_result.stdout_lines }}"
+        monitor_frontend_changed: "{{ 'frontend' in monitor_changes_result.stdout_lines or 'game' in monitor_changes_result.stdout_lines }}"
 
     - name: Display what will be built
       ansible.builtin.debug:
-        msg: "Building - Backend: {{ backend_changed }}, Frontend: {{ frontend_changed }}, Game: {{ game_changed }} (last deploy: {{ last_deployed_commit | default('never') }})"
+        msg: >-
+          Building -
+          Backend: {{ monitor_backend_changed }},
+          Frontend: {{ monitor_frontend_changed }},
+          Game: {{ monitor_game_changed }}
+          (last deploy: {{ monitor_last_deployed_commit | default('never') }})
 
     # Two parallel pipelines: backend (JAR→docker) and frontend (game export→npm→docker)
     - name: Build and dockerize in parallel
       ansible.builtin.shell: |
-        set -e
-        cd {{ project_root }}
+        set -eo pipefail
+        cd {{ monitor_project_root }}
         pids=""
 
-        {% if backend_changed %}
+        {% if monitor_backend_changed %}
         (
-          set -e
+          set -eo pipefail
           cd backend && ./gradlew bootJar --no-daemon -x test
           jar=$(ls build/libs/*.jar | grep -v plain | head -1)
           staging=$(mktemp -d)
           cp "$jar" "$staging/app.jar"
           cp Dockerfile.runtime "$staging/Dockerfile"
-          docker build -t {{ monitor_values.app.image.repository }}:{{ monitor_image_tag | default(build_git_hash) }} "$staging"
+          docker build -t {{ monitor_values.app.image.repository }}:{{ monitor_image_tag | default(monitor_build_git_hash) }} "$staging"
           rm -rf "$staging"
-          docker push {{ monitor_values.app.image.repository }}:{{ monitor_image_tag | default(build_git_hash) }}
+          docker push {{ monitor_values.app.image.repository }}:{{ monitor_image_tag | default(monitor_build_git_hash) }}
         ) &
         pids="$pids $!"
         {% endif %}
 
-        {% if frontend_changed %}
+        {% if monitor_frontend_changed %}
         (
-          set -e
-          {% if game_changed %}
+          set -eo pipefail
+          {% if monitor_game_changed %}
           task game:export --force
           {% endif %}
           cd frontend && npm ci --silent
-          VITE_GIT_HASH={{ build_git_hash }} VITE_BUILD_TIME={{ build_time }} npm run build
+          VITE_GIT_HASH={{ monitor_build_git_hash }} VITE_BUILD_TIME={{ monitor_build_time }} npm run build
           staging=$(mktemp -d)
           cp -r dist "$staging/"
           cp Dockerfile.runtime "$staging/Dockerfile"
@@ -115,9 +126,9 @@
           cp security-headers.conf "$staging/"
           cp security-headers-base.conf "$staging/"
           cp docker-entrypoint.sh "$staging/"
-          docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_image_tag | default(build_git_hash) }} "$staging"
+          docker build -t {{ monitor_values.frontend.image.repository }}:{{ monitor_image_tag | default(monitor_build_git_hash) }} "$staging"
           rm -rf "$staging"
-          docker push {{ monitor_values.frontend.image.repository }}:{{ monitor_image_tag | default(build_git_hash) }}
+          docker push {{ monitor_values.frontend.image.repository }}:{{ monitor_image_tag | default(monitor_build_git_hash) }}
         ) &
         pids="$pids $!"
         {% endif %}
@@ -125,15 +136,18 @@
         for pid in $pids; do
           wait $pid || exit 1
         done
+      args:
+        executable: /bin/bash
       environment:
-        PATH: "{{ build_path }}"
-        JAVA_HOME: "{{ build_java_home }}"
+        PATH: "{{ monitor_build_path }}"
+        JAVA_HOME: "{{ monitor_build_java_home }}"
       become: false
-      when: backend_changed or frontend_changed
+      when: monitor_backend_changed or monitor_frontend_changed
+      changed_when: true
 
     - name: Save deployed commit
       ansible.builtin.copy:
-        content: "{{ build_git_hash }}"
+        content: "{{ monitor_build_git_hash }}"
         dest: /var/lib/monitor-deploy-commit
         mode: '0644'
 
@@ -145,17 +159,21 @@
   changed_when: false
 
 - name: Deploy Monitor Helm chart
+  vars:
+    monitor_effective_git_hash: "{{ monitor_build_git_hash | default(build_git_hash | default('unknown')) }}"
+    monitor_effective_build_time: "{{ monitor_build_time | default(build_time | default('')) }}"
   ansible.builtin.shell: |
     helm upgrade --install {{ monitor_release_name }} {{ playbook_dir }}/../../../infra/helm \
       --namespace {{ monitor_namespace }} \
       --create-namespace \
       --values /tmp/monitor-values-{{ monitor_release_name }}.yml \
-      --set "app.gitHash={{ build_git_hash | default('unknown') }}" \
-      --set "app.buildTime={{ build_time | default('') }}" \
-      --set "app.image.tag={{ monitor_image_tag | default(build_git_hash | default('latest')) }}" \
-      --set "frontend.image.tag={{ monitor_image_tag | default(build_git_hash | default('latest')) }}"
+      --set "app.gitHash={{ monitor_effective_git_hash }}" \
+      --set "app.buildTime={{ monitor_effective_build_time }}" \
+      --set "app.image.tag={{ monitor_image_tag | default(monitor_effective_git_hash | default('latest')) }}" \
+      --set "frontend.image.tag={{ monitor_image_tag | default(monitor_effective_git_hash | default('latest')) }}"
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  changed_when: false
 
 - name: Clean up
   ansible.builtin.file:

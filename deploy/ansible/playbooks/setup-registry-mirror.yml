@@ -78,8 +78,11 @@
             registry_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
 
         - name: Download registry tarball
+          vars:
+            registry_base: "https://github.com/distribution/distribution/releases/download"
+            registry_file: "registry_{{ registry_version }}_linux_{{ registry_arch }}.tar.gz"
           ansible.builtin.get_url:
-            url: "https://github.com/distribution/distribution/releases/download/v{{ registry_version }}/registry_{{ registry_version }}_linux_{{ registry_arch }}.tar.gz"
+            url: "{{ registry_base }}/v{{ registry_version }}/{{ registry_file }}"
             dest: /tmp/registry.tar.gz
             mode: "0644"
 
@@ -150,7 +153,7 @@
           http:
             addr: :{{ item.port }}
       loop: "{{ registry_registries }}"
-      register: registry_configs
+      notify: Restart registry services
 
     - name: Create systemd service files
       ansible.builtin.copy:
@@ -172,12 +175,10 @@
           [Install]
           WantedBy=multi-user.target
       loop: "{{ registry_registries }}"
-      register: registry_services
+      notify: Reload systemd for registry
 
-    - name: Reload systemd
-      ansible.builtin.systemd:
-        daemon_reload: true
-      when: registry_services.changed
+    - name: Flush handlers before starting services
+      ansible.builtin.meta: flush_handlers
 
     - name: Enable and start registry services
       ansible.builtin.systemd:
@@ -186,14 +187,6 @@
         enabled: true
       loop: "{{ registry_registries }}"
 
-    - name: Restart registry services (config changed)
-      ansible.builtin.systemd:
-        name: "registry-{{ item.item.name }}"
-        state: restarted
-      loop: "{{ registry_configs.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-      when: item.changed
 
     # ================================================================
     # Phase 4: UFW firewall
@@ -258,3 +251,14 @@
       loop: "{{ catalog_check.results }}"
       loop_control:
         label: "{{ item.item.name }}"
+
+  handlers:
+    - name: Reload systemd for registry
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart registry services
+      ansible.builtin.systemd:
+        name: "registry-{{ item.name }}"
+        state: restarted
+      loop: "{{ registry_registries }}"

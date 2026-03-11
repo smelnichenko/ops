@@ -37,6 +37,7 @@
 
     - name: Create forgejo namespace with Pod Security Standards
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: v1
         kind: Namespace
@@ -47,6 +48,8 @@
             pod-security.kubernetes.io/audit: restricted
             pod-security.kubernetes.io/warn: restricted
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Deploy Forgejo via Helm
@@ -113,6 +116,7 @@
         postgresql-ha:
           enabled: false
         HELMEOF
+      changed_when: false
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
@@ -123,6 +127,7 @@
 
     - name: Apply network policies for Forgejo
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
@@ -154,6 +159,8 @@
                 - protocol: TCP
                   port: 3000
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     # ================================================================
@@ -177,6 +184,7 @@
 
     - name: Register runner server-side via forgejo-cli
       ansible.builtin.shell: |
+        set -o pipefail
         # Check if runner is already registered
         existing=$(k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
           forgejo-cli actions register --name host-runner --labels self-hosted 2>&1 || true)
@@ -186,6 +194,8 @@
           k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
             forgejo-cli actions register --name host-runner --labels self-hosted | grep 'token:' | awk '{print $2}'
         fi
+      args:
+        executable: /bin/bash
       register: runner_token_result
       changed_when: false
 
@@ -269,6 +279,13 @@
           {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm status *
           {{ runner_user }} ALL=(root) NOPASSWD: /usr/bin/tee /var/lib/monitor-deploy-commit
         validate: visudo -cf %s
+
+    - name: Install ansible-lint for CI pipeline
+      ansible.builtin.command:
+        cmd: pipx install ansible-lint
+        creates: "/home/{{ runner_user }}/.local/bin/ansible-lint"
+      become: true
+      become_user: "{{ runner_user }}"
 
     - name: Enable and start forgejo-runner
       ansible.builtin.systemd:

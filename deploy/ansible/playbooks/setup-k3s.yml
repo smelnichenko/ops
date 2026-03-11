@@ -9,6 +9,12 @@
   become: true
   gather_facts: true
 
+  handlers:
+    - name: Reboot for cgroups
+      ansible.builtin.reboot:
+        msg: "Rebooting to enable cgroups"
+        reboot_timeout: 300
+
   tasks:
     - name: Update apt cache
       ansible.builtin.apt:
@@ -30,12 +36,22 @@
             path: /usr/bin/docker
           register: docker_binary
 
-        - name: Install Docker via convenience script
-          ansible.builtin.shell: |
-            curl -fsSL https://get.docker.com | sh
-          args:
-            creates: /usr/bin/docker
+        - name: Download Docker install script
+          ansible.builtin.get_url:
+            url: https://get.docker.com
+            dest: /tmp/get-docker.sh
+            mode: '0755'
           when: not docker_binary.stat.exists
+
+        - name: Run Docker install script
+          ansible.builtin.command: /tmp/get-docker.sh
+          when: not docker_binary.stat.exists
+          changed_when: true
+
+        - name: Clean up Docker install script
+          ansible.builtin.file:
+            path: /tmp/get-docker.sh
+            state: absent
 
         - name: Add user to docker group
           ansible.builtin.user:
@@ -49,14 +65,8 @@
         regexp: '^(.*)$'
         line: '\1 cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory'
         backrefs: true
-      register: cgroups_enabled
+      notify: Reboot for cgroups
       when: ansible_architecture == "aarch64"
-
-    - name: Reboot if cgroups were enabled
-      ansible.builtin.reboot:
-        msg: "Rebooting to enable cgroups"
-        reboot_timeout: 300
-      when: cgroups_enabled.changed
 
     - name: Check if k3s is already installed
       ansible.builtin.stat:
@@ -95,13 +105,25 @@
             state: restarted
           when: registries_yaml.changed and k3s_binary.stat.exists
 
-    - name: Install k3s
-      ansible.builtin.shell: |
-        curl -sfL https://get.k3s.io | sh -
+    - name: Download k3s install script
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /tmp/get-k3s.sh
+        mode: '0755'
       when: not k3s_binary.stat.exists
 
+    - name: Install k3s
+      ansible.builtin.command: /tmp/get-k3s.sh
+      when: not k3s_binary.stat.exists
+      changed_when: true
+
+    - name: Clean up k3s install script
+      ansible.builtin.file:
+        path: /tmp/get-k3s.sh
+        state: absent
+
     - name: Wait for k3s to be ready
-      ansible.builtin.shell: k3s kubectl get nodes
+      ansible.builtin.command: k3s kubectl get nodes
       register: k3s_ready
       until: k3s_ready.rc == 0
       retries: 30
@@ -142,12 +164,22 @@
           ignore_errors: true
           changed_when: false
 
-        - name: Download and install Helm
-          ansible.builtin.shell: |
-            curl -sSLf https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          args:
-            creates: /usr/local/bin/helm
+        - name: Download Helm install script
+          ansible.builtin.get_url:
+            url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+            dest: /tmp/get-helm-3.sh
+            mode: '0755'
           when: helm_check.rc != 0
+
+        - name: Run Helm install script
+          ansible.builtin.command: /tmp/get-helm-3.sh
+          when: helm_check.rc != 0
+          changed_when: true
+
+        - name: Clean up Helm install script
+          ansible.builtin.file:
+            path: /tmp/get-helm-3.sh
+            state: absent
 
     - name: Create .kube directory for user
       ansible.builtin.file:
@@ -191,6 +223,7 @@
           ansible.builtin.shell: |
             k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
           when: certmanager_ns.rc != 0
+          changed_when: true
 
         - name: Wait for cert-manager webhook to be ready
           ansible.builtin.shell: |
@@ -245,6 +278,7 @@
           environment:
             KUBECONFIG: /etc/rancher/k3s/k3s.yaml
           when: porkbun_webhook_status.rc != 0
+          changed_when: true
 
         - name: Create Porkbun API credentials secret
           ansible.builtin.shell: |
@@ -260,6 +294,7 @@
               PORKBUN_SECRET_API_KEY: "{{ porkbun_secret_key }}"
             EOF
           no_log: true
+          changed_when: false
 
         - name: Create Let's Encrypt DNS-01 ClusterIssuer
           ansible.builtin.shell: |
@@ -302,6 +337,11 @@
           changed_when: false
 
     - name: Display k3s status
+      vars:
+        porkbun_msg: >-
+          {{ 'Porkbun DNS-01 webhook installed (letsencrypt-dns issuer ready).'
+          if porkbun_api_key | default('') | length > 0
+          else 'Porkbun DNS-01 webhook skipped (no API key provided).' }}
       ansible.builtin.debug:
         msg: |
           k3s installed successfully!
@@ -309,7 +349,7 @@
           Traefik ingress controller is ready (bundled with k3s).
           local-path-provisioner configured to use /mnt/storage/k3s-pvcs.
           cert-manager installed with Let's Encrypt ClusterIssuer.
-          {{ 'Porkbun DNS-01 webhook installed (letsencrypt-dns issuer ready).' if porkbun_api_key | default('') | length > 0 else 'Porkbun DNS-01 webhook skipped (no API key provided).' }}
+          {{ porkbun_msg }}
 
           To use kubectl locally:
             export KUBECONFIG={{ playbook_dir }}/../kubeconfig-{{ inventory_hostname }}

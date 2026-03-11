@@ -53,11 +53,13 @@
       ansible.builtin.shell: |
         k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
       when: certmanager_check.rc != 0
+      changed_when: true
 
     - name: Wait for cert-manager webhook to be ready
       ansible.builtin.shell: |
         k3s kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=120s
       when: certmanager_check.rc != 0
+      changed_when: false
 
     - name: Add HashiCorp Helm repo
       ansible.builtin.shell: |
@@ -113,6 +115,7 @@
 
     - name: Create vault namespace
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: v1
         kind: Namespace
@@ -123,23 +126,31 @@
             pod-security.kubernetes.io/audit: privileged
             pod-security.kubernetes.io/warn: privileged
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Create vault-unseal-ca secret (Pi TLS cert)
       ansible.builtin.shell: |
+        set -o pipefail
         k3s kubectl create secret generic vault-unseal-ca \
           -n {{ vault_k3s_namespace }} \
           --from-literal=ca.pem="{{ vault_pi_ca_cert }}" \
           --dry-run=client -o yaml | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
       changed_when: false
       no_log: true
 
     - name: Create vault-unseal-token secret (autounseal token)
       ansible.builtin.shell: |
+        set -o pipefail
         k3s kubectl create secret generic vault-unseal-token \
           -n {{ vault_k3s_namespace }} \
           --from-literal=token="{{ vault_pi_autounseal_token }}" \
           --dry-run=client -o yaml | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
       changed_when: false
       no_log: true
 
@@ -149,6 +160,7 @@
 
     - name: Apply cert-manager TLS resources
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         ---
         apiVersion: cert-manager.io/v1
@@ -203,6 +215,8 @@
           ipAddresses:
             - "127.0.0.1"
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Wait for vault-tls certificate to be Ready
@@ -387,234 +401,243 @@
       changed_when: true
       no_log: true
 
-    - name: Save k3s Vault init output to local controller
-      ansible.builtin.copy:
-        content: "{{ k3s_vault_init.stdout }}"
-        dest: "{{ playbook_dir }}/../vars/vault-k3s-init.json"
-        mode: '0600'
-      delegate_to: localhost
-      become: false
-      when: k3s_vault_init is changed
-      no_log: true
-
-    - name: IMPORTANT — save recovery keys offline before continuing
-      ansible.builtin.pause:
-        prompt: |
-          ============================================================
-          VAULT INITIALIZED. Recovery keys written to:
-            deploy/ansible/vars/vault-k3s-init.json
-
-          Save root_token and recovery_keys_b64 OFFLINE (USB/safe/paper).
-          NEVER commit this file to git (it is gitignored).
-
-          Press ENTER when done.
-          ============================================================
-      when: k3s_vault_init is changed
-
-    - name: Set k3s Vault root token fact
+    - name: Set vault_just_initialized flag
       ansible.builtin.set_fact:
-        k3s_vault_root_token: "{{ (k3s_vault_init.stdout | from_json).root_token }}"
-      when: k3s_vault_init is changed
-      no_log: true
+        vault_just_initialized: "{{ k3s_vault_init is changed }}"
 
-    - name: Store root token as k8s secret (Vagrant/test only)
-      ansible.builtin.shell: |
-        k3s kubectl create secret generic vault-root-token \
-          -n {{ vault_k3s_namespace }} \
-          --from-literal=token="{{ k3s_vault_root_token }}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
-      when:
-        - k3s_vault_init is changed
-        - vault_store_root_token | default(false) | bool
-      no_log: true
+    - name: Configure newly initialized Vault
+      when: vault_just_initialized | bool
+      block:
+        - name: Save k3s Vault init output to local controller
+          ansible.builtin.copy:
+            content: "{{ k3s_vault_init.stdout }}"
+            dest: "{{ playbook_dir }}/../vars/vault-k3s-init.json"
+            mode: '0600'
+          delegate_to: localhost
+          become: false
+          no_log: true
 
-    - name: Wait for vault-0 to be Ready after init (auto-unseal via transit)
-      ansible.builtin.shell: |
-        k3s kubectl wait -n {{ vault_k3s_namespace }} pod/vault-0 \
-          --for=condition=ready --timeout=120s
-      when: k3s_vault_init is changed
-      changed_when: false
+        - name: IMPORTANT — save recovery keys offline before continuing
+          ansible.builtin.pause:
+            prompt: |
+              ============================================================
+              VAULT INITIALIZED. Recovery keys written to:
+                deploy/ansible/vars/vault-k3s-init.json
 
-    # ================================================================
-    # Phase 5: Configure Vault (only when just initialized)
-    # ================================================================
+              Save root_token and recovery_keys_b64 OFFLINE (USB/safe/paper).
+              NEVER commit this file to git (it is gitignored).
 
-    - name: Enable KV v2 secrets engine
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault secrets enable -path=secret kv-v2
-      when: k3s_vault_init is changed
-      changed_when: true
+              Press ENTER when done.
+              ============================================================
 
-    - name: Enable Kubernetes auth
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault auth enable kubernetes
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Set k3s Vault root token fact
+          ansible.builtin.set_fact:
+            k3s_vault_root_token: "{{ (k3s_vault_init.stdout | from_json).root_token }}"
+          no_log: true
 
-    - name: Configure Kubernetes auth (only kubernetes_host — no explicit token reviewer)
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault write auth/kubernetes/config \
-          kubernetes_host="https://kubernetes.default.svc:443"
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Store root token as k8s secret (Vagrant/test only)
+          ansible.builtin.shell: |
+            set -o pipefail
+            k3s kubectl create secret generic vault-root-token \
+              -n {{ vault_k3s_namespace }} \
+              --from-literal=token="{{ k3s_vault_root_token }}" \
+              --dry-run=client -o yaml | k3s kubectl apply -f -
+          args:
+            executable: /bin/bash
+          when: vault_store_root_token | default(false) | bool
+          no_log: true
+          changed_when: true
 
-    - name: Write monitor policy
-      ansible.builtin.shell: |
-        cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault policy write monitor -
-        path "secret/data/monitor/*" {
-          capabilities = ["read"]
-        }
-        path "secret/metadata/monitor/*" {
-          capabilities = ["read", "list"]
-        }
-        POLICY
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Wait for vault-0 to be Ready after init (auto-unseal via transit)
+          ansible.builtin.shell: |
+            k3s kubectl wait -n {{ vault_k3s_namespace }} pod/vault-0 \
+              --for=condition=ready --timeout=120s
+          changed_when: false
 
-    - name: Write eso policy
-      ansible.builtin.shell: |
-        cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault policy write eso-policy -
-        path "secret/data/*" {
-          capabilities = ["read"]
-        }
-        path "secret/metadata/*" {
-          capabilities = ["read", "list"]
-        }
-        POLICY
-      when: k3s_vault_init is changed
-      changed_when: true
+        # ================================================================
+        # Phase 5: Configure Vault (only when just initialized)
+        # ================================================================
 
-    - name: Write vault-backup policy
-      ansible.builtin.shell: |
-        cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault policy write vault-backup -
-        path "sys/storage/raft/snapshot" {
-          capabilities = ["read"]
-        }
-        POLICY
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Enable KV v2 secrets engine
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault secrets enable -path=secret kv-v2
+          changed_when: true
 
-    - name: Write prometheus policy
-      ansible.builtin.shell: |
-        cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault policy write prometheus -
-        path "sys/metrics" {
-          capabilities = ["read"]
-        }
-        POLICY
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Enable Kubernetes auth
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault auth enable kubernetes
+          changed_when: true
 
-    - name: Tune token max_lease_ttl for long-lived service tokens
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault write sys/auth/token/tune max_lease_ttl={{ vault_token_ttl }}
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Configure Kubernetes auth (only kubernetes_host — no explicit token reviewer)
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault write auth/kubernetes/config \
+              kubernetes_host="https://kubernetes.default.svc:443"
+          changed_when: true
 
-    - name: Create Kubernetes auth role for monitor app
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault write auth/kubernetes/role/monitor \
-          bound_service_account_names=monitor \
-          bound_service_account_namespaces=monitor \
-          policies=monitor \
-          ttl=1h
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Write monitor policy
+          ansible.builtin.shell: |
+            set -o pipefail
+            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault policy write monitor -
+            path "secret/data/monitor/*" {
+              capabilities = ["read"]
+            }
+            path "secret/metadata/monitor/*" {
+              capabilities = ["read", "list"]
+            }
+            POLICY
+          args:
+            executable: /bin/bash
+          changed_when: true
 
-    - name: Create Kubernetes auth role for ESO
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault write auth/kubernetes/role/eso-role \
-          bound_service_account_names=external-secrets \
-          bound_service_account_namespaces=external-secrets \
-          policies=eso-policy \
-          ttl=1h
-      when: k3s_vault_init is changed
-      changed_when: true
+        - name: Write eso policy
+          ansible.builtin.shell: |
+            set -o pipefail
+            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault policy write eso-policy -
+            path "secret/data/*" {
+              capabilities = ["read"]
+            }
+            path "secret/metadata/*" {
+              capabilities = ["read", "list"]
+            }
+            POLICY
+          args:
+            executable: /bin/bash
+          changed_when: true
 
-    - name: Create vault-backup service token
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault token create \
-          -policy=vault-backup \
-          -ttl={{ vault_token_ttl }} \
-          -explicit-max-ttl={{ vault_token_ttl }} \
-          -orphan \
-          -no-default-policy \
-          -display-name=vault-backup \
-          -format=json
-      register: vault_backup_token_output
-      when: k3s_vault_init is changed
-      no_log: true
-      changed_when: true
+        - name: Write vault-backup policy
+          ansible.builtin.shell: |
+            set -o pipefail
+            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault policy write vault-backup -
+            path "sys/storage/raft/snapshot" {
+              capabilities = ["read"]
+            }
+            POLICY
+          args:
+            executable: /bin/bash
+          changed_when: true
 
-    - name: Store vault-backup-token as k8s secret in vault namespace
-      ansible.builtin.shell: |
-        k3s kubectl create secret generic vault-backup-token \
-          -n {{ vault_k3s_namespace }} \
-          --from-literal=token="{{ (vault_backup_token_output.stdout | from_json).auth.client_token }}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
-      when: k3s_vault_init is changed
-      no_log: true
-      changed_when: true
+        - name: Write prometheus policy
+          ansible.builtin.shell: |
+            set -o pipefail
+            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault policy write prometheus -
+            path "sys/metrics" {
+              capabilities = ["read"]
+            }
+            POLICY
+          args:
+            executable: /bin/bash
+          changed_when: true
 
-    - name: Create prometheus service token
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
-          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ k3s_vault_root_token }}" \
-          vault token create \
-          -policy=prometheus \
-          -ttl={{ vault_token_ttl }} \
-          -explicit-max-ttl={{ vault_token_ttl }} \
-          -orphan \
-          -no-default-policy \
-          -display-name=vault-prometheus \
-          -format=json
-      register: vault_prometheus_token_output
-      when: k3s_vault_init is changed
-      no_log: true
-      changed_when: true
+        - name: Tune token max_lease_ttl for long-lived service tokens
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault write sys/auth/token/tune max_lease_ttl={{ vault_token_ttl }}
+          changed_when: true
 
-    - name: Store prometheus token as k8s secret in vault namespace
-      ansible.builtin.shell: |
-        k3s kubectl create secret generic vault-prometheus-token \
-          -n {{ vault_k3s_namespace }} \
-          --from-literal=token="{{ (vault_prometheus_token_output.stdout | from_json).auth.client_token }}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
-      when: k3s_vault_init is changed
-      no_log: true
-      changed_when: true
+        - name: Create Kubernetes auth role for monitor app
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault write auth/kubernetes/role/monitor \
+              bound_service_account_names=monitor \
+              bound_service_account_namespaces=monitor \
+              policies=monitor \
+              ttl=1h
+          changed_when: true
+
+        - name: Create Kubernetes auth role for ESO
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault write auth/kubernetes/role/eso-role \
+              bound_service_account_names=external-secrets \
+              bound_service_account_namespaces=external-secrets \
+              policies=eso-policy \
+              ttl=1h
+          changed_when: true
+
+        - name: Create vault-backup service token
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault token create \
+              -policy=vault-backup \
+              -ttl={{ vault_token_ttl }} \
+              -explicit-max-ttl={{ vault_token_ttl }} \
+              -orphan \
+              -no-default-policy \
+              -display-name=vault-backup \
+              -format=json
+          register: vault_backup_token_output
+          no_log: true
+          changed_when: true
+
+        - name: Store vault-backup-token as k8s secret in vault namespace
+          ansible.builtin.shell: |
+            set -o pipefail
+            k3s kubectl create secret generic vault-backup-token \
+              -n {{ vault_k3s_namespace }} \
+              --from-literal=token="{{ (vault_backup_token_output.stdout | from_json).auth.client_token }}" \
+              --dry-run=client -o yaml | k3s kubectl apply -f -
+          args:
+            executable: /bin/bash
+          no_log: true
+          changed_when: true
+
+        - name: Create prometheus service token
+          ansible.builtin.shell: |
+            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+              env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+              VAULT_TOKEN="{{ k3s_vault_root_token }}" \
+              vault token create \
+              -policy=prometheus \
+              -ttl={{ vault_token_ttl }} \
+              -explicit-max-ttl={{ vault_token_ttl }} \
+              -orphan \
+              -no-default-policy \
+              -display-name=vault-prometheus \
+              -format=json
+          register: vault_prometheus_token_output
+          no_log: true
+          changed_when: true
+
+        - name: Store prometheus token as k8s secret in vault namespace
+          ansible.builtin.shell: |
+            set -o pipefail
+            k3s kubectl create secret generic vault-prometheus-token \
+              -n {{ vault_k3s_namespace }} \
+              --from-literal=token="{{ (vault_prometheus_token_output.stdout | from_json).auth.client_token }}" \
+              --dry-run=client -o yaml | k3s kubectl apply -f -
+          args:
+            executable: /bin/bash
+          no_log: true
+          changed_when: true
 
     # ================================================================
     # Phase 6: External Secrets Operator
@@ -647,6 +670,7 @@
 
     - name: Apply ClusterSecretStore (Vault backend)
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: external-secrets.io/v1
         kind: ClusterSecretStore
@@ -671,6 +695,8 @@
                     name: external-secrets
                     namespace: external-secrets
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     # ================================================================
@@ -699,19 +725,26 @@
       block:
         - name: Get latest kubeseal version
           ansible.builtin.shell: |
+            set -o pipefail
             curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest \
               | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/'
+          args:
+            executable: /bin/bash
           register: kubeseal_version
           changed_when: false
 
         - name: Download and install kubeseal binary
           ansible.builtin.shell: |
+            set -o pipefail
             ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+            VERSION="{{ kubeseal_version.stdout }}"
             curl -Lo /tmp/kubeseal.tar.gz \
-              "https://github.com/bitnami-labs/sealed-secrets/releases/download/v{{ kubeseal_version.stdout }}/kubeseal-{{ kubeseal_version.stdout }}-linux-${ARCH}.tar.gz"
+              "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${VERSION}/kubeseal-${VERSION}-linux-${ARCH}.tar.gz"
             tar -xzf /tmp/kubeseal.tar.gz -C /tmp kubeseal
             install -m 755 /tmp/kubeseal /usr/local/bin/kubeseal
             rm -f /tmp/kubeseal.tar.gz /tmp/kubeseal
+          args:
+            executable: /bin/bash
           changed_when: true
 
     - name: Wait for Sealed Secrets controller to be ready
@@ -757,16 +790,20 @@
 
     - name: Create vault-minio-secret for snapshot uploads
       ansible.builtin.shell: |
+        set -o pipefail
         k3s kubectl create secret generic vault-minio-secret \
           -n {{ vault_k3s_namespace }} \
           --from-literal=access_key="{{ vault_minio_access_key }}" \
           --from-literal=secret_key="{{ vault_minio_secret_key }}" \
           --dry-run=client -o yaml | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
       changed_when: false
       no_log: true
 
     - name: Apply Vault Raft snapshot CronJob
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<EOF | k3s kubectl apply -f -
         apiVersion: batch/v1
         kind: CronJob
@@ -845,6 +882,8 @@
                       emptyDir: {}
                   restartPolicy: OnFailure
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Label vault namespace to exclude from Velero (use Raft snapshots instead)
@@ -859,6 +898,7 @@
 
     - name: Apply vault network policy
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<EOF | k3s kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
@@ -919,6 +959,8 @@
                 - port: 53
                   protocol: TCP
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Check if velero namespace exists (for Raft snapshot network policy)
@@ -930,6 +972,7 @@
 
     - name: Apply vault-to-minio network policy (for Raft snapshot CronJob)
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
@@ -951,6 +994,8 @@
                 - protocol: TCP
                   port: 9000
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
       when: velero_ns_check.rc == 0
 
@@ -975,12 +1020,15 @@
 
     - name: Copy vault CA cert to monitor namespace (for Prometheus TLS)
       ansible.builtin.shell: |
+        set -o pipefail
         k3s kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} \
           -o jsonpath="{.data.ca\.crt}" | base64 -d | \
         k3s kubectl create secret generic vault-ca-monitor \
           -n monitor \
           --from-literal=ca.crt=/dev/stdin \
           --dry-run=client -o yaml | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
       when: monitor_ns_check.rc == 0 and vault_ca_check.rc == 0
       changed_when: false
 
@@ -994,12 +1042,15 @@
 
     - name: Create vault-metrics-secret in monitor namespace
       ansible.builtin.shell: |
+        set -o pipefail
         TOKEN=$(k3s kubectl get secret vault-prometheus-token \
           -n {{ vault_k3s_namespace }} -o jsonpath='{.data.token}' | base64 -d)
         k3s kubectl create secret generic vault-metrics-secret \
           -n monitor \
           --from-literal=token="$TOKEN" \
           --dry-run=client -o yaml | k3s kubectl apply -f -
+      args:
+        executable: /bin/bash
       when: monitor_ns_check.rc == 0 and prometheus_token_check.rc == 0
       changed_when: false
       no_log: true
@@ -1010,9 +1061,12 @@
 
     - name: Verify Vault is unsealed
       ansible.builtin.shell: |
+        set -o pipefail
         k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           vault status | grep "Sealed"
+      args:
+        executable: /bin/bash
       register: vault_sealed_check
       changed_when: false
       failed_when: "'false' not in vault_sealed_check.stdout"
@@ -1041,6 +1095,7 @@
           vault kv put secret/monitor/auth \
             jwt_secret="{{ lookup('env', 'JWT_SECRET') }}"
       no_log: true
+      changed_when: false
       when: vault_seed_secrets | default(false) | bool
 
     - name: Seed monitor postgres secret
@@ -1053,6 +1108,7 @@
             username="{{ lookup('env', 'POSTGRES_USERNAME') | default('monitor_user', true) }}" \
             password="{{ lookup('env', 'MONITOR_DB_PASSWORD') }}"
       no_log: true
+      changed_when: false
       when: vault_seed_secrets | default(false) | bool
 
     - name: Seed monitor redis secret
@@ -1063,6 +1119,7 @@
           vault kv put secret/monitor/redis \
             password="{{ lookup('env', 'REDIS_PASSWORD') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'REDIS_PASSWORD') | length > 0
@@ -1075,6 +1132,7 @@
           vault kv put secret/monitor/mail \
             password="{{ lookup('env', 'MAIL_PASSWORD') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'MAIL_PASSWORD') | length > 0
@@ -1087,6 +1145,7 @@
           vault kv put secret/monitor/ai \
             api_key="{{ lookup('env', 'ANTHROPIC_API_KEY') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'ANTHROPIC_API_KEY') | length > 0
@@ -1100,6 +1159,7 @@
             signing_secret="{{ lookup('env', 'RESEND_WEBHOOK_SECRET') }}" \
             api_key="{{ lookup('env', 'RESEND_API_KEY') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'RESEND_WEBHOOK_SECRET') | length > 0
@@ -1113,6 +1173,7 @@
             access_key="{{ lookup('env', 'MINIO_ROOT_USER') }}" \
             secret_key="{{ lookup('env', 'MINIO_ROOT_PASSWORD') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'MINIO_ROOT_USER') | length > 0
@@ -1125,6 +1186,7 @@
           vault kv put secret/monitor/kafka \
             cluster_id="{{ lookup('env', 'KAFKA_CLUSTER_ID') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'KAFKA_CLUSTER_ID') | length > 0
@@ -1138,6 +1200,7 @@
             admin_user="{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}" \
             admin_password="{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'GRAFANA_ADMIN_PASSWORD') | length > 0
@@ -1152,6 +1215,7 @@
             admin_password="{{ lookup('env', 'SONARQUBE_ADMIN_PASSWORD') }}" \
             token="{{ lookup('env', 'SONARQUBE_TOKEN') }}"
       no_log: true
+      changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'SONARQUBE_DB_PASSWORD') | length > 0
