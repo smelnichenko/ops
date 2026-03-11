@@ -34,20 +34,20 @@ tasks:
   # ============== GAME ==============
   game:export:
     desc: Export Godot game to frontend public directory
-    dir: game
+    dir: games/scp
     sources:
       - scripts/**/*.gd
       - scenes/**/*.tscn
       - project.godot
       - export_presets.cfg
     generates:
-      - ../frontend/public/game/index.wasm
+      - ../../frontend/public/game/index.wasm
     cmds:
-      - mkdir -p ../frontend/public/game
-      - godot --headless --export-release "Web" ../frontend/public/game/index.html
-      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../frontend/public/game/index.html
+      - mkdir -p ../../frontend/public/game
+      - godot --headless --export-release "Web" ../../frontend/public/game/index.html
+      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../../frontend/public/game/index.html
       # Inject bridge: React→Godot (postMessage→_godotReceive) + Godot→React (CustomEvent→parent.postMessage)
-      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type\&\&window._godotReceive){window._godotReceive(JSON.stringify(e.data));}});window.addEventListener("godotMessage",function(e){window.parent.postMessage(e.detail,"*");});</script>\n\t\t<script src="index.js"></script>|' ../frontend/public/game/index.html
+      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type\&\&window._godotReceive){window._godotReceive(JSON.stringify(e.data));}});window.addEventListener("godotMessage",function(e){window.parent.postMessage(e.detail,"*");});</script>\n\t\t<script src="index.js"></script>|' ../../frontend/public/game/index.html
 
   game:clean:
     desc: Clean exported game files
