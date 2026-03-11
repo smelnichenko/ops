@@ -39,6 +39,7 @@
 
     - name: Create velero namespace
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: v1
         kind: Namespace
@@ -49,6 +50,8 @@
             pod-security.kubernetes.io/audit: privileged
             pod-security.kubernetes.io/warn: privileged
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Create backup directory on host
@@ -65,6 +68,7 @@
 
     - name: Deploy backup MinIO
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         ---
         apiVersion: v1
@@ -197,6 +201,8 @@
               port: 9001
               targetPort: 9001
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Wait for backup MinIO to be ready
@@ -205,22 +211,37 @@
       changed_when: false
 
     - name: Create velero bucket in MinIO
+      vars:
+        mc_image: "quay.io/minio/mc:latest"
+        minio_url: "http://minio-backup.{{ velero_namespace }}.svc:9000"
+        mc_cmd: >-
+          mc alias set backup {{ minio_url }}
+          {{ velero_minio_access_key }}
+          {{ velero_minio_secret_key }}
+          && mc mb --ignore-existing backup/velero
+        pod_overrides:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: minio-setup
+                image: "{{ mc_image }}"
+                command: ["sh", "-c", "{{ mc_cmd }}"]
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
       ansible.builtin.shell: |
         # Run mc client as ephemeral pod to create the bucket
-        k3s kubectl run minio-setup --rm -i --restart=Never \
+        k3s kubectl run minio-setup --rm -i \
+          --restart=Never \
           -n {{ velero_namespace }} \
-          --image=quay.io/minio/mc:latest \
-          --overrides='{
-            "spec": {
-              "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
-              "containers": [{
-                "name": "minio-setup",
-                "image": "quay.io/minio/mc:latest",
-                "command": ["sh", "-c", "mc alias set backup http://minio-backup.{{ velero_namespace }}.svc:9000 {{ velero_minio_access_key }} {{ velero_minio_secret_key }} && mc mb --ignore-existing backup/velero"],
-                "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
-              }]
-            }
-          }' 2>&1 || true
+          --image={{ mc_image }} \
+          --overrides='{{ pod_overrides | to_json }}' \
+          2>&1 || true
       changed_when: false
 
     # ================================================================
@@ -237,6 +258,7 @@
 
     - name: Create Velero credentials secret
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<EOF | k3s kubectl apply -f -
         apiVersion: v1
         kind: Secret
@@ -250,6 +272,8 @@
             aws_access_key_id={{ velero_minio_access_key }}
             aws_secret_access_key={{ velero_minio_secret_key }}
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Install Velero CRDs
@@ -327,8 +351,11 @@
             cpu: 1000m
             memory: 512Mi
         HELMEOF
+      args:
+        executable: /bin/bash
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
 
     - name: Wait for Velero deployment to be ready
       ansible.builtin.shell: |
@@ -341,6 +368,7 @@
 
     - name: Apply network policies for velero namespace
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
@@ -370,6 +398,8 @@
                 - protocol: TCP
                   port: 9000
         EOF
+      args:
+        executable: /bin/bash
       changed_when: false
 
     # ================================================================
@@ -408,6 +438,7 @@
           git -C "{{ git_mirror_local_path }}" config \
             core.sshCommand "ssh -o StrictHostKeyChecking=no -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
         fi
+      become: true
       become_user: "{{ offsite_backup_user | default('sm') }}"
       register: git_mirror_init
       changed_when: "'Cloning' in git_mirror_init.stdout"
