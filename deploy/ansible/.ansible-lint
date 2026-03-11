@@ -1,0 +1,13 @@
+profile: production
+exclude_paths:
+  - venv/
+  - .cache/
+  - vars/vault-pi-runtime.yml
+kinds:
+  - playbook: "playbooks/*.yml"
+  - playbook: "deploy.yml"
+  - playbook: "uninstall.yml"
+  - vars: "vars/*.yml"
+  - tasks: "roles/*/tasks/*.yml"
+  - handlers: "roles/*/handlers/*.yml"
+  - meta: "roles/*/meta/*.yml"
