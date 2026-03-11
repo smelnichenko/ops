@@ -141,7 +141,7 @@
 
     - name: Deploy chart with Grafana + Prometheus
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+        helm upgrade --install monitor /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/monitor-grafana-test-values.yml \

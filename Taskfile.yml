@@ -34,20 +34,20 @@ tasks:
   # ============== GAME ==============
   game:export:
     desc: Export Godot game to frontend public directory
-    dir: game
+    dir: games/scp
     sources:
       - scripts/**/*.gd
       - scenes/**/*.tscn
       - project.godot
       - export_presets.cfg
     generates:
-      - ../frontend/public/game/index.wasm
+      - ../../frontend/public/game/index.wasm
     cmds:
-      - mkdir -p ../frontend/public/game
-      - godot --headless --export-release "Web" ../frontend/public/game/index.html
-      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../frontend/public/game/index.html
+      - mkdir -p ../../frontend/public/game
+      - godot --headless --export-release "Web" ../../frontend/public/game/index.html
+      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../../frontend/public/game/index.html
       # Inject bridge: React→Godot (postMessage→_godotReceive) + Godot→React (CustomEvent→parent.postMessage)
-      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type\&\&window._godotReceive){window._godotReceive(JSON.stringify(e.data));}});window.addEventListener("godotMessage",function(e){window.parent.postMessage(e.detail,"*");});</script>\n\t\t<script src="index.js"></script>|' ../frontend/public/game/index.html
+      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type\&\&window._godotReceive){window._godotReceive(JSON.stringify(e.data));}});window.addEventListener("godotMessage",function(e){window.parent.postMessage(e.detail,"*");});</script>\n\t\t<script src="index.js"></script>|' ../../frontend/public/game/index.html
 
   game:clean:
     desc: Clean exported game files
@@ -137,17 +137,17 @@ tasks:
   test:load:
     desc: Run k6 load test (requires running app)
     cmds:
-      - k6 run k6/load-test.js
+      - k6 run tests/k6/load-test.js
 
   test:load:stress:
     desc: Run k6 stress test
     cmds:
-      - k6 run k6/stress-test.js
+      - k6 run tests/k6/stress-test.js
 
   test:load:spike:
     desc: Run k6 spike test
     cmds:
-      - k6 run k6/spike-test.js
+      - k6 run tests/k6/spike-test.js
 
   test:load:smoke:
     desc: Quick k6 smoke test
@@ -225,7 +225,7 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-eso.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-eso.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:elk:
     desc: Test ELK stack in Vagrant
@@ -236,7 +236,7 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-elk.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-elk.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:grafana:
     desc: Test Grafana + Prometheus in Vagrant
@@ -247,7 +247,7 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-grafana.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-grafana.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:chat:
     desc: Test chat infrastructure (Kafka + ScyllaDB) in Vagrant
@@ -258,7 +258,7 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-chat.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-chat.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:sonarqube:
     desc: Test SonarQube in Vagrant
@@ -269,7 +269,18 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-sonarqube.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-sonarqube.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+  test:hashcash:
+    desc: Test Hashcash PoW captcha in Vagrant
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-hashcash.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:cicd:
     desc: Test CI/CD pipeline with Forgejo registry in Vagrant
@@ -278,7 +289,7 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up k3s
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-cicd.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cicd.yml
 
   test:dr:
     desc: Test pod recovery + disaster recovery in Vagrant
@@ -287,7 +298,7 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-dr.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml
 
   deploy:registry-mirror:
     desc: Deploy Docker Hub pull-through cache on Pi

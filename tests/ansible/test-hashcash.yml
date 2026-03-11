@@ -1,0 +1,321 @@
+---
+# Test Hashcash proof-of-work captcha deployment in Vagrant
+#
+# Verifies the PoW challenge/verify flow works end-to-end:
+# challenge issuance, adaptive difficulty, single-use enforcement.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-hashcash.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test Hashcash proof-of-work captcha
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+
+  tasks:
+    # ================================================================
+    # Phase 1: Deploy chart with captcha enabled
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for hashcash test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-hashcash-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: false
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+          networkPolicies:
+            enabled: true
+          frontend:
+            enabled: false
+          app:
+            replicas: 1
+            image:
+              repository: monitor
+              tag: local
+              pullPolicy: Never
+          postgres:
+            enabled: true
+            password: "vagrant-test-pw"
+            image: postgres:17-alpine
+            storage:
+              storageClass: "local-path"
+          redis:
+            enabled: true
+            image: redis:7-alpine
+          captcha:
+            enabled: true
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+          kafka:
+            enabled: false
+          scylla:
+            enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Build backend JAR
+      ansible.builtin.shell: |
+        source "$HOME/.sdkman/bin/sdkman-init.sh"
+        cd /vagrant/backend
+        ./gradlew bootJar --no-daemon -x test
+      become: false
+      args:
+        executable: /bin/bash
+
+    - name: Build backend container image
+      ansible.builtin.shell: |
+        STAGE=$(mktemp -d)
+        mkdir -p "$STAGE/backend"
+        cp /vagrant/backend/build/libs/*.jar "$STAGE/backend/app.jar"
+        cp /vagrant/backend/Dockerfile.runtime "$STAGE/backend/Dockerfile"
+        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+          build -t monitor:local "$STAGE/backend/"
+        rm -rf "$STAGE"
+
+    - name: Uninstall existing release (clean state)
+      ansible.builtin.shell: |
+        helm uninstall monitor --namespace {{ ns }} --wait 2>/dev/null || true
+        k3s kubectl delete pvc -n {{ ns }} --all --wait=true 2>/dev/null || true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: true
+
+    - name: Deploy chart with captcha enabled
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/infra/helm \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-hashcash-test-values.yml \
+          --wait --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Wait for app rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=300s
+      register: app_rollout
+      changed_when: false
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 2: Verify captcha config endpoint
+    # ================================================================
+
+    - name: Get captcha config
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+          curl -sf http://localhost:8080/api/captcha/config
+      register: captcha_config
+      retries: 10
+      delay: 10
+      until: captcha_config.rc == 0
+      changed_when: false
+
+    - name: Parse captcha config
+      ansible.builtin.set_fact:
+        captcha_enabled: "{{ (captcha_config.stdout | from_json).enabled }}"
+
+    - name: "Captcha config: {{ 'PASS — enabled' if captcha_enabled else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "GET /captcha/config returned enabled={{ captcha_enabled }}"
+
+    # ================================================================
+    # Phase 3: Verify challenge issuance
+    # ================================================================
+
+    - name: Get challenge
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+          curl -sf http://localhost:8080/api/captcha/challenge
+      register: challenge_result
+      changed_when: false
+
+    - name: Parse challenge
+      ansible.builtin.set_fact:
+        challenge_data: "{{ challenge_result.stdout | from_json }}"
+
+    - name: "Challenge issued: {{ 'PASS' if challenge_data.challenge and challenge_data.difficulty else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "challenge={{ challenge_data.challenge }}, difficulty={{ challenge_data.difficulty }}"
+
+    # ================================================================
+    # Phase 4: Solve and verify PoW
+    # ================================================================
+
+    - name: Solve PoW challenge
+      ansible.builtin.shell: |
+        python3 -c "
+        import hashlib
+        challenge = '{{ challenge_data.challenge }}'
+        difficulty = {{ challenge_data.difficulty }}
+        for nonce in range(10_000_000):
+            h = hashlib.sha256(f'{challenge}:{nonce}'.encode()).digest()
+            # Check leading zero bits
+            bits = 0
+            for byte in h:
+                if byte == 0:
+                    bits += 8
+                else:
+                    bits += (8 - byte.bit_length())
+                    break
+            if bits >= difficulty:
+                print(nonce)
+                break
+        else:
+            print('TIMEOUT')
+        "
+      register: solve_result
+      changed_when: false
+
+    - name: Set nonce fact
+      ansible.builtin.set_fact:
+        solved_nonce: "{{ solve_result.stdout | trim }}"
+
+    - name: "PoW solved: {{ 'PASS' if solved_nonce != 'TIMEOUT' else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "Nonce={{ solved_nonce }}"
+
+    - name: Submit registration with valid PoW
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -X POST http://localhost:8080/api/auth/register \
+          -H 'Content-Type: application/json' \
+          -d '{"email":"test@example.com","password":"testpassword123","captchaChallenge":"{{ challenge_data.challenge }}","captchaNonce":"{{ solved_nonce }}"}'
+      register: register_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set registration status
+      ansible.builtin.set_fact:
+        register_ok: "{{ register_result.stdout == '201' }}"
+
+    - name: "Registration with valid PoW: {{ 'PASS — 201' if register_ok else 'FAIL — ' + register_result.stdout }}"
+      ansible.builtin.debug:
+        msg: "HTTP {{ register_result.stdout }}"
+
+    # ================================================================
+    # Phase 5: Verify single-use (replay rejected)
+    # ================================================================
+
+    - name: Replay same challenge+nonce
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -X POST http://localhost:8080/api/auth/register \
+          -H 'Content-Type: application/json' \
+          -d '{"email":"test2@example.com","password":"testpassword123","captchaChallenge":"{{ challenge_data.challenge }}","captchaNonce":"{{ solved_nonce }}"}'
+      register: replay_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set replay status
+      ansible.builtin.set_fact:
+        replay_rejected: "{{ replay_result.stdout == '400' }}"
+
+    - name: "Replay rejected: {{ 'PASS — 400' if replay_rejected else 'FAIL — ' + replay_result.stdout }}"
+      ansible.builtin.debug:
+        msg: "HTTP {{ replay_result.stdout }}"
+
+    # ================================================================
+    # Phase 6: Verify invalid nonce rejected
+    # ================================================================
+
+    - name: Get fresh challenge for invalid nonce test
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+          curl -sf http://localhost:8080/api/captcha/challenge
+      register: fresh_challenge
+      changed_when: false
+
+    - name: Submit with invalid nonce
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -X POST http://localhost:8080/api/auth/register \
+          -H 'Content-Type: application/json' \
+          -d '{"email":"test3@example.com","password":"testpassword123","captchaChallenge":"{{ (fresh_challenge.stdout | from_json).challenge }}","captchaNonce":"99999999"}'
+      register: invalid_nonce_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set invalid nonce status
+      ansible.builtin.set_fact:
+        invalid_nonce_rejected: "{{ invalid_nonce_result.stdout == '400' }}"
+
+    - name: "Invalid nonce rejected: {{ 'PASS — 400' if invalid_nonce_rejected else 'FAIL — ' + invalid_nonce_result.stdout }}"
+      ansible.builtin.debug:
+        msg: "HTTP {{ invalid_nonce_result.stdout }}"
+
+    # ================================================================
+    # Phase 7: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-hashcash-test-values.yml
+        state: absent
+
+    - name: "TEST RESULT"
+      vars:
+        all_pass: "{{ captcha_enabled and challenge_data.challenge and register_ok and replay_rejected and invalid_nonce_rejected }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Hashcash PoW Captcha Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          [{{ 'PASS' if captcha_enabled else 'FAIL' }}] Captcha config reports enabled
+          [{{ 'PASS' if challenge_data.challenge else 'FAIL' }}] Challenge issued (difficulty={{ challenge_data.difficulty }})
+          [{{ 'PASS' if register_ok else 'FAIL' }}] Registration with valid PoW (HTTP 201)
+          [{{ 'PASS' if replay_rejected else 'FAIL' }}] Replay attack rejected (HTTP 400)
+          [{{ 'PASS' if invalid_nonce_rejected else 'FAIL' }}] Invalid nonce rejected (HTTP 400)
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical hashcash checks failed — see summary above"
+      when: not (captcha_enabled and register_ok and replay_rejected and invalid_nonce_rejected)

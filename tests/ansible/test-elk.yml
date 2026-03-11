@@ -147,7 +147,7 @@
 
     - name: Deploy chart with ELK enabled
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/backend/helm/monitor \
+        helm upgrade --install monitor /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/monitor-elk-test-values.yml \

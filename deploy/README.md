@@ -126,7 +126,7 @@ The default configuration is in `roles/monitor/defaults/main.yml`. Key settings:
 |----------|---------|-------------|
 | `monitor_release_name` | monitor | Helm release name |
 | `monitor_namespace` | monitor | Kubernetes namespace |
-| `monitor_chart_path` | ../helm/monitor | Path to Helm chart |
+| `monitor_chart_path` | helm/monitor | Path to Helm chart |
 | `monitor_wait` | true | Wait for deployment |
 | `monitor_wait_timeout` | 600s | Deployment timeout |
 
@@ -182,17 +182,17 @@ ansible-playbook uninstall.yml -e monitor_delete_pvcs=true -e monitor_delete_nam
 
 ## Helm Chart
 
-The Helm chart is located at `../helm/monitor/`. You can also use it directly:
+The Helm chart is located at `helm/monitor/`. You can also use it directly:
 
 ```bash
 # Using Gradle
 ./gradlew helmPackage
 
 # Using Helm directly
-helm install monitor ../helm/monitor -n monitor --create-namespace
+helm install monitor helm/monitor -n monitor --create-namespace
 
 # With custom values
-helm install monitor ../helm/monitor -n monitor --create-namespace \
+helm install monitor helm/monitor -n monitor --create-namespace \
   --set postgres.password=secret \
   --set auth.jwtSecret=secret \
   --set grafana.adminPassword=secret
