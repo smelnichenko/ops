@@ -305,7 +305,7 @@ EOF
 
       # Deploy with Helm
       echo "=== Deploying application ==="
-      helm upgrade --install monitor /vagrant/deploy/helm/monitor \
+      helm upgrade --install monitor /vagrant/deploy/helm \
         --namespace monitor \
         --create-namespace \
         --set postgres.password=vagrant \
