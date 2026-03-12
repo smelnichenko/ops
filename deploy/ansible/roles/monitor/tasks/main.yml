@@ -163,7 +163,7 @@
     monitor_effective_git_hash: "{{ monitor_build_git_hash | default(build_git_hash | default('unknown')) }}"
     monitor_effective_build_time: "{{ monitor_build_time | default(build_time | default('')) }}"
   ansible.builtin.shell: |
-    helm upgrade --install {{ monitor_release_name }} {{ playbook_dir }}/../../../infra/helm \
+    helm upgrade --install {{ monitor_release_name }} {{ monitor_chart_path }} \
       --namespace {{ monitor_namespace }} \
       --create-namespace \
       --values /tmp/monitor-values-{{ monitor_release_name }}.yml \
