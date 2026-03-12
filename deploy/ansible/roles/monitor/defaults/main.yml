@@ -7,7 +7,7 @@ monitor_namespace: monitor
 monitor_create_namespace: true
 
 # Chart location (relative to playbook or absolute path)
-monitor_chart_path: "{{ playbook_dir }}/../../../infra/helm"
+monitor_chart_path: "{{ playbook_dir }}/../../infra/helm"
 
 # Helm chart values
 monitor_values:
