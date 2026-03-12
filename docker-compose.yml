@@ -50,6 +50,54 @@ services:
       timeout: 5s
       retries: 5
 
+  # Kafka (KRaft mode, for chat messaging)
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: monitor-kafka
+    hostname: kafka
+    environment:
+      CLUSTER_ID: local-dev-cluster-id-000
+    ports:
+      - "127.0.0.1:9092:9092"
+      - "127.0.0.1:19092:19092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+      - ./infra/kafka/server.properties:/mnt/shared/config/server.properties:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ScyllaDB (chat message storage)
+  scylla:
+    image: scylladb/scylla:6.2
+    container_name: monitor-scylla
+    command: ["--smp=1", "--memory=512M", "--developer-mode=1", "--overprovisioned=1"]
+    ports:
+      - "127.0.0.1:9042:9042"
+    volumes:
+      - scylla_data:/var/lib/scylla
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ScyllaDB schema init
+  scylla-init:
+    image: scylladb/scylla:6.2
+    container_name: monitor-scylla-init
+    depends_on:
+      scylla:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["cqlsh", "scylla", "-f", "/schema.cql"]
+    volumes:
+      - ./infra/scylla/schema.cql:/schema.cql:ro
+
   # Backend API
   backend:
     build:
@@ -61,6 +109,8 @@ services:
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USERNAME:-postgres}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SCYLLA_CONTACT_POINTS: scylla
       JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-please-change-in-production}
     ports:
       - "8080:8080"
@@ -69,6 +119,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      scylla-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/actuator/health"]
       interval: 30s
@@ -131,5 +185,7 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  kafka_data:
+  scylla_data:
   prometheus_data:
   grafana_data:

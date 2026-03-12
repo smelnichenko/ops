@@ -69,6 +69,21 @@ tasks:
       - echo "Frontend http://localhost:3000"
       - echo "Backend API http://localhost:8080/api"
 
+  dev:infra:
+    desc: Start only infrastructure (postgres, redis, kafka, scylla, minio) for IDE debugging
+    cmds:
+      - docker compose up -d postgres redis kafka scylla minio
+      - docker compose up scylla-init
+      - echo ""
+      - echo "=== Infrastructure Started ==="
+      - echo "PostgreSQL localhost:5432"
+      - echo "Redis      localhost:6379"
+      - echo "Kafka      localhost:9092"
+      - echo "ScyllaDB   localhost:9042"
+      - echo "MinIO      localhost:9000"
+      - echo ""
+      - echo "Run backend from IDE with ./gradlew bootRun"
+
   dev:monitoring:
     desc: Start with Prometheus and Grafana
     vars:
