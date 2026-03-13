@@ -182,18 +182,11 @@
         group: "{{ runner_user }}"
         mode: '0755'
 
-    - name: Register runner server-side via forgejo-cli
+    - name: Generate runner registration token
       ansible.builtin.shell: |
         set -o pipefail
-        # Check if runner is already registered
-        existing=$(k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
-          forgejo-cli actions register --name host-runner --labels self-hosted 2>&1 || true)
-        if echo "$existing" | grep -q 'token:'; then
-          echo "$existing" | grep 'token:' | awk '{print $2}'
-        else
-          k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
-            forgejo-cli actions register --name host-runner --labels self-hosted | grep 'token:' | awk '{print $2}'
-        fi
+        k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
+          forgejo actions generate-runner-token | tail -1
       args:
         executable: /bin/bash
       register: runner_token_result
