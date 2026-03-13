@@ -312,6 +312,10 @@ monitor_values:
           enabled: true
           secretName: "logs-pmon-dev-tls"
           clusterIssuer: "letsencrypt-dns"
+    ciLogs:
+      enabled: true
+      retention:
+        days: 90
     filebeat:
       image: docker.elastic.co/beats/filebeat:8.17.4
       resources:
