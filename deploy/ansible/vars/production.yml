@@ -312,8 +312,8 @@ monitor_values:
           enabled: true
           secretName: "logs-pmon-dev-tls"
           clusterIssuer: "letsencrypt-dns"
-    filebeat:
-      image: docker.elastic.co/beats/filebeat:8.17.4
+    fluentbit:
+      image: cr.fluentbit.io/fluent/fluent-bit:3.2
       resources:
         requests:
           memory: "128Mi"
