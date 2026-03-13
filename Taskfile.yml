@@ -192,7 +192,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml -e @vars/ci-runner.yml
 
   deploy:full:
     desc: Full deployment - setup k3s + forgejo + velero + vault + deploy app
@@ -205,7 +205,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml -e @vars/ci-runner.yml
 
   deploy:vault-pi:
     desc: Setup Vault unseal Pi (transit engine + autounseal token)

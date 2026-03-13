@@ -1,0 +1,10 @@
+# CI runner configuration
+# Currently runs on ten alongside k3s; will move to dedicated machine later.
+# Loaded as extra vars: -e @vars/ci-runner.yml
+
+# CI log shipping to ELK (requires elk.enabled=true on the k3s cluster)
+elk:
+  ciLogs:
+    enabled: true
+    retention:
+      days: 90
