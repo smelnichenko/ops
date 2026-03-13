@@ -225,6 +225,7 @@
           container:
             network: "host"
             privileged: false
+            options: "--log-driver=fluentd --log-opt fluentd-address=localhost:24224 --log-opt fluentd-async=true --log-opt tag=ci"
             valid_volumes:
               - /var/run/docker.sock
 
