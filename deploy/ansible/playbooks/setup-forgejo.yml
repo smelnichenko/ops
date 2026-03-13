@@ -182,18 +182,11 @@
         group: "{{ runner_user }}"
         mode: '0755'
 
-    - name: Register runner server-side via forgejo-cli
+    - name: Generate runner registration token
       ansible.builtin.shell: |
         set -o pipefail
-        # Check if runner is already registered
-        existing=$(k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
-          forgejo-cli actions register --name host-runner --labels self-hosted 2>&1 || true)
-        if echo "$existing" | grep -q 'token:'; then
-          echo "$existing" | grep 'token:' | awk '{print $2}'
-        else
-          k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
-            forgejo-cli actions register --name host-runner --labels self-hosted | grep 'token:' | awk '{print $2}'
-        fi
+        k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
+          forgejo actions generate-runner-token | tail -1
       args:
         executable: /bin/bash
       register: runner_token_result
@@ -225,9 +218,13 @@
             timeout: 1h
             labels:
               - "self-hosted:host"
+              - "ci-java:docker://{{ forgejo_host }}/schnappy/ci-java:latest"
+              - "ci-node:docker://{{ forgejo_host }}/schnappy/ci-node:latest"
           container:
-            # Host execution — no containers, runner executes directly
-            network: ""
+            network: "host"
+            privileged: false
+            valid_volumes:
+              - /var/run/docker.sock
 
     - name: Create runner wrapper script
       ansible.builtin.copy:
@@ -286,6 +283,46 @@
         creates: "/home/{{ runner_user }}/.local/bin/ansible-lint"
       become: true
       become_user: "{{ runner_user }}"
+
+    # ================================================================
+    # Build and push CI Docker images to Forgejo registry
+    # ================================================================
+
+    - name: Check if CI Java image exists in registry
+      ansible.builtin.shell: |
+        docker manifest inspect {{ forgejo_host }}/schnappy/ci-java:latest 2>/dev/null
+      register: ci_java_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Build CI Java image
+      ansible.builtin.shell: |
+        docker build -t {{ forgejo_host }}/schnappy/ci-java:latest \
+          /home/{{ runner_user }}/src/monitor/infra/ci-images/java/
+      when: ci_java_exists.rc != 0
+
+    - name: Push CI Java image
+      ansible.builtin.shell: |
+        docker push {{ forgejo_host }}/schnappy/ci-java:latest
+      when: ci_java_exists.rc != 0
+
+    - name: Check if CI Node image exists in registry
+      ansible.builtin.shell: |
+        docker manifest inspect {{ forgejo_host }}/schnappy/ci-node:latest 2>/dev/null
+      register: ci_node_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Build CI Node image
+      ansible.builtin.shell: |
+        docker build -t {{ forgejo_host }}/schnappy/ci-node:latest \
+          /home/{{ runner_user }}/src/monitor/infra/ci-images/node/
+      when: ci_node_exists.rc != 0
+
+    - name: Push CI Node image
+      ansible.builtin.shell: |
+        docker push {{ forgejo_host }}/schnappy/ci-node:latest
+      when: ci_node_exists.rc != 0
 
     - name: Enable and start forgejo-runner
       ansible.builtin.systemd:
