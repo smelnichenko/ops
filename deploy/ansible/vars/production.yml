@@ -321,6 +321,10 @@ monitor_values:
         limits:
           memory: "256Mi"
           cpu: "200m"
+    ciLogs:
+      enabled: true
+      retention:
+        days: 90
 
 # Forgejo (self-hosted Git forge) — these are deploy-time only, not runtime secrets
 forgejo_host: "git.pmon.dev"
