@@ -225,11 +225,11 @@
       ansible.builtin.pause:
         seconds: 60
 
-    - name: Query filebeat-* index for document count
+    - name: Query podlogs-* index for document count
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} \
-            'http://localhost:9200/filebeat-*/_count' 2>/dev/null | \
+            'http://localhost:9200/podlogs-*/_count' 2>/dev/null | \
           python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))"
       register: fb_count
       retries: 18
