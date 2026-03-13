@@ -1,8 +1,9 @@
 ---
-# Test CI/CD log shipping to ELK via Docker containers
+# Test CI/CD log shipping to ELK via Fluent-bit forward protocol
 #
 # Verifies that Docker container logs (simulating CI jobs) are shipped
-# to Elasticsearch under the ci-logs-* index by Filebeat.
+# to Elasticsearch under the ci-logs-* index via Fluent-bit's forward input.
+# Docker containers use --log-driver=fluentd to stream logs in real-time.
 #
 # Prerequisites:
 #   - vagrant up (k3s + vault-pi VMs)
@@ -136,8 +137,8 @@
                   cpu: "1000m"
               ingress:
                 enabled: false
-            filebeat:
-              image: docker.elastic.co/beats/filebeat:8.17.4
+            fluentbit:
+              image: cr.fluentbit.io/fluent/fluent-bit:3.2
               resources:
                 requests:
                   memory: "128Mi"
@@ -228,66 +229,59 @@
         msg: "{{ es_health.stdout_lines }}"
 
     # ================================================================
-    # Phase 5: Verify Filebeat is running with Docker volumes
+    # Phase 5: Verify Fluent-bit is running with forward input
     # ================================================================
 
-    - name: Wait for Filebeat DaemonSet ready
+    - name: Wait for Fluent-bit DaemonSet ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status daemonset/monitor-filebeat -n {{ ns }} --timeout=120s
-      register: fb_rollout
+        k3s kubectl rollout status daemonset/monitor-fluentbit -n {{ ns }} --timeout=120s
+      register: fluentbit_rollout
       changed_when: false
 
-    - name: Verify Filebeat has Docker volume mounts
+    - name: Verify Fluent-bit has hostPort 24224
       ansible.builtin.shell: |
-        k3s kubectl get daemonset monitor-filebeat -n {{ ns }} -o json | \
+        k3s kubectl get daemonset monitor-fluentbit -n {{ ns }} -o json | \
           python3 -c "
         import sys, json
         ds = json.load(sys.stdin)
-        vols = [v['name'] for v in ds['spec']['template']['spec']['volumes']]
-        assert 'docker-containers' in vols, 'Missing docker-containers volume'
-        assert 'docker-sock' in vols, 'Missing docker-sock volume'
-        print('Docker volumes present: docker-containers, docker-sock')
+        ports = ds['spec']['template']['spec']['containers'][0].get('ports', [])
+        forward_ports = [p for p in ports if p.get('hostPort') == 24224]
+        assert forward_ports, 'Missing hostPort 24224 for forward input'
+        print('Forward input hostPort 24224 configured')
         "
-      register: fb_volumes
+      register: fluentbit_port
       changed_when: false
 
-    - name: "Filebeat Docker volumes"
+    - name: "Fluent-bit forward port"
       ansible.builtin.debug:
-        msg: "{{ fb_volumes.stdout }}"
+        msg: "{{ fluentbit_port.stdout }}"
 
     # ================================================================
-    # Phase 6: Generate test Docker container logs
+    # Phase 6: Generate test Docker container logs via forward protocol
     # ================================================================
-
-    # Restart Filebeat so it picks up the Docker hostPath now that Docker is installed
-    - name: Restart Filebeat DaemonSet
-      ansible.builtin.shell: |
-        k3s kubectl rollout restart daemonset/monitor-filebeat -n {{ ns }}
-      changed_when: true
-
-    - name: Wait for Filebeat DaemonSet ready after restart
-      ansible.builtin.shell: |
-        k3s kubectl rollout status daemonset/monitor-filebeat -n {{ ns }} --timeout=120s
-      changed_when: false
 
     - name: Wait for pod logs to be shipped first
       ansible.builtin.pause:
         seconds: 30
 
-    - name: Run test Docker container with unique marker
+    - name: Run test Docker container with fluentd log driver
       ansible.builtin.shell: |
-        docker run --name ci-log-test alpine echo "{{ test_marker }}"
+        docker run --rm \
+          --log-driver=fluentd \
+          --log-opt fluentd-address=localhost:24224 \
+          --log-opt fluentd-async=true \
+          --log-opt tag=ci \
+          alpine echo "{{ test_marker }}"
       register: docker_run
       changed_when: true
-      failed_when: docker_run.rc != 0 and 'already in use' not in docker_run.stderr
 
     - name: "Test container output"
       ansible.builtin.debug:
         msg: "{{ docker_run.stdout }}"
 
-    - name: Wait for Docker logs to be picked up by Filebeat
+    - name: Wait for CI logs to be shipped to ES
       ansible.builtin.pause:
-        seconds: 30
+        seconds: 15
 
     # ================================================================
     # Phase 7: Verify CI logs in Elasticsearch
@@ -337,19 +331,39 @@
           curl -sf -u elastic:{{ test_es_password }} \
             'http://localhost:9200/filebeat-*/_count' 2>/dev/null | \
           python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))"
-      register: fb_count
+      register: pod_log_count
       retries: 18
       delay: 10
-      until: (fb_count.stdout | default('0') | int) > 0
+      until: (pod_log_count.stdout | default('0') | int) > 0
       changed_when: false
       failed_when: false
 
-    - name: "Pod logs: {{ fb_count.stdout | default('0') }} documents indexed"
+    - name: "Pod logs: {{ pod_log_count.stdout | default('0') }} documents indexed"
       ansible.builtin.debug:
-        msg: "{{ 'PASS — pod logs still flowing' if (fb_count.stdout | default('0') | int) > 0 else 'WARN — no pod logs yet' }}"
+        msg: "{{ 'PASS — pod logs still flowing' if (pod_log_count.stdout | default('0') | int) > 0 else 'WARN — no pod logs yet' }}"
 
     # ================================================================
-    # Phase 9: Summary
+    # Phase 9: Verify ILM policies
+    # ================================================================
+
+    - name: Check CI logs ILM policy exists
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+          curl -sf -u elastic:{{ test_es_password }} \
+            'http://localhost:9200/_ilm/policy/ci-logs-90d-retention' 2>/dev/null
+      register: ci_ilm_check
+      retries: 12
+      delay: 5
+      until: ci_ilm_check.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: "CI logs ILM policy: {{ 'exists' if ci_ilm_check.rc == 0 else 'missing' }}"
+      ansible.builtin.debug:
+        msg: "{{ ci_ilm_check.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 10: Summary
     # ================================================================
 
     - name: Clean up values file
@@ -361,16 +375,17 @@
       ansible.builtin.set_fact:
         es_pass: "{{ es_rollout.rc is defined and es_rollout.rc == 0 }}"
         es_secret_pass: "{{ es_secret_sync.stdout == 'SecretSynced' }}"
-        fb_pass: "{{ fb_rollout.rc is defined and fb_rollout.rc == 0 }}"
-        fb_volumes_pass: "{{ fb_volumes.rc is defined and fb_volumes.rc == 0 }}"
+        fluentbit_pass: "{{ fluentbit_rollout.rc is defined and fluentbit_rollout.rc == 0 }}"
+        fluentbit_port_pass: "{{ fluentbit_port.rc is defined and fluentbit_port.rc == 0 }}"
         ci_logs_pass: "{{ (ci_count.stdout | default('0') | int) > 0 }}"
-        marker_pass: "{{ (marker_search.stdout | default('0') | trim | int) > 0 }}"
-        pod_logs_pass: "{{ (fb_count.stdout | default('0') | int) > 0 }}"
+        marker_pass: "{{ (marker_search.stdout_lines | last | default('0') | int) > 0 }}"
+        pod_logs_pass: "{{ (pod_log_count.stdout | default('0') | int) > 0 }}"
+        ci_ilm_pass: "{{ ci_ilm_check.rc is defined and ci_ilm_check.rc == 0 }}"
 
     - name: "TEST RESULT"
       vars:
-        critical_pass: "{{ es_pass and es_secret_pass and fb_pass and fb_volumes_pass }}"
-        all_pass: "{{ es_pass and es_secret_pass and fb_pass and fb_volumes_pass and ci_logs_pass and marker_pass and pod_logs_pass }}"
+        critical_pass: "{{ es_pass and es_secret_pass and fluentbit_pass and fluentbit_port_pass }}"
+        all_pass: "{{ es_pass and es_secret_pass and fluentbit_pass and fluentbit_port_pass and ci_logs_pass and marker_pass and pod_logs_pass }}"
       ansible.builtin.debug:
         msg: |
           ====================================================
@@ -378,14 +393,15 @@
 
           [{{ 'PASS' if es_pass else 'FAIL' }}] Elasticsearch StatefulSet running
           [{{ 'PASS' if es_secret_pass else 'FAIL' }}] ExternalSecret synced
-          [{{ 'PASS' if fb_pass else 'FAIL' }}] Filebeat DaemonSet running
-          [{{ 'PASS' if fb_volumes_pass else 'FAIL' }}] Filebeat Docker volume mounts
+          [{{ 'PASS' if fluentbit_pass else 'FAIL' }}] Fluent-bit DaemonSet running
+          [{{ 'PASS' if fluentbit_port_pass else 'FAIL' }}] Fluent-bit forward port 24224
           [{{ 'PASS' if ci_logs_pass else 'WARN' }}] CI logs indexed ({{ ci_count.stdout | default('0') }} docs)
           [{{ 'PASS' if marker_pass else 'WARN' }}] Test marker found in ci-logs
-          [{{ 'PASS' if pod_logs_pass else 'WARN' }}] Pod logs still flowing ({{ fb_count.stdout | default('0') }} docs)
+          [{{ 'PASS' if pod_logs_pass else 'WARN' }}] Pod logs still flowing ({{ pod_log_count.stdout | default('0') }} docs)
+          [{{ 'PASS' if ci_ilm_pass else 'INFO' }}] CI logs ILM policy (90d retention)
           ====================================================
 
     - name: Fail if critical checks failed
       ansible.builtin.fail:
         msg: "Critical CI log shipping checks failed — see summary above"
-      when: not (es_pass and es_secret_pass and fb_pass and fb_volumes_pass)
+      when: not (es_pass and es_secret_pass and fluentbit_pass and fluentbit_port_pass)
