@@ -2,7 +2,7 @@
 # Currently runs on ten alongside k3s; will move to dedicated machine later.
 # Loaded as extra vars: -e @vars/ci-runner.yml
 
-# CI log shipping to ELK (requires elk.enabled=true on the k3s cluster)
-# Note: monitor_values from production.yml is merged with this via Ansible hash_behaviour
-# Since hash merging is deprecated, we use combine filter in the deploy role instead.
-# For now, ciLogs must be in production.yml under monitor_values.elk
+# CI log shipping config (ciLogs) is in production.yml under monitor_values.elk
+# Runner container.options (--log-driver=fluentd) is in setup-forgejo.yml
+---
+{}
