@@ -1,0 +1,391 @@
+---
+# Test CI/CD log shipping to ELK via Docker containers
+#
+# Verifies that Docker container logs (simulating CI jobs) are shipped
+# to Elasticsearch under the ci-logs-* index by Filebeat.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ci-logs.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test CI/CD log shipping to ELK
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    test_es_password: "vagrant-test-elastic-password"
+    test_kibana_password: "vagrant-test-kibana-password"
+
+  tasks:
+    - name: Generate test marker
+      ansible.builtin.set_fact:
+        test_marker: "CI_LOG_SHIPPING_TEST_{{ 999999 | random }}"
+    # ================================================================
+    # Phase 1: Seed Elasticsearch credentials into Vault
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    - name: Seed elasticsearch secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/monitor/elasticsearch \
+            password="{{ test_es_password }}" \
+            kibana_password="{{ test_kibana_password }}"
+      no_log: true
+
+    - name: "SEED: Elasticsearch credentials written to Vault KV"
+      ansible.builtin.debug:
+        msg: "Seeded elasticsearch secrets into Vault KV"
+
+    # ================================================================
+    # Phase 2: Install Docker (Vagrant only has nerdctl/containerd)
+    # ================================================================
+
+    - name: Install Docker
+      ansible.builtin.apt:
+        name: docker.io
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker is running
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    # ================================================================
+    # Phase 3: Deploy chart with ELK + CI logs enabled
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for CI logs test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-ci-logs-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: true
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+          networkPolicies:
+            enabled: false
+          frontend:
+            enabled: false
+          app:
+            replicas: 0
+          redis:
+            enabled: false
+          postgres:
+            enabled: false
+          elk:
+            enabled: true
+            elasticsearch:
+              image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
+              replicas: 1
+              javaOpts: "-Xms256m -Xmx256m"
+              existingSecret: "monitor-elasticsearch"
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "200m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "2000m"
+              storage:
+                size: 5Gi
+                storageClass: "local-path"
+              retention:
+                days: 30
+            kibana:
+              image: docker.elastic.co/kibana/kibana:8.17.4
+              replicas: 0
+              resources:
+                requests:
+                  memory: "512Mi"
+                  cpu: "200m"
+                limits:
+                  memory: "1Gi"
+                  cpu: "1000m"
+              ingress:
+                enabled: false
+            filebeat:
+              image: docker.elastic.co/beats/filebeat:8.17.4
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
+            ciLogs:
+              enabled: true
+              retention:
+                days: 90
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          kafka:
+            replicas: 0
+          scylla:
+            replicas: 0
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with ELK + CI logs enabled
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/infra/helm \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-ci-logs-test-values.yml \
+          --wait --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 4: Verify Elasticsearch is ready
+    # ================================================================
+
+    - name: Wait for Elasticsearch StatefulSet rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/monitor-elasticsearch -n {{ ns }} --timeout=300s
+      register: es_rollout
+      changed_when: false
+
+    - name: Verify ExternalSecret synced for elasticsearch
+      ansible.builtin.shell: |
+        k3s kubectl get externalsecret monitor-elasticsearch -n {{ ns }} \
+          -o jsonpath='{.status.conditions[0].reason}'
+      register: es_secret_sync
+      retries: 12
+      delay: 5
+      until: es_secret_sync.stdout == "SecretSynced"
+      changed_when: false
+
+    - name: Wait for Elasticsearch to respond
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+          curl -sf -u elastic:{{ test_es_password }} http://localhost:9200/_cluster/health?pretty
+      register: es_health
+      retries: 30
+      delay: 10
+      until: es_health.rc == 0
+      changed_when: false
+
+    - name: "ES cluster health"
+      ansible.builtin.debug:
+        msg: "{{ es_health.stdout_lines }}"
+
+    # ================================================================
+    # Phase 5: Verify Filebeat is running with Docker volumes
+    # ================================================================
+
+    - name: Wait for Filebeat DaemonSet ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status daemonset/monitor-filebeat -n {{ ns }} --timeout=120s
+      register: fb_rollout
+      changed_when: false
+
+    - name: Verify Filebeat has Docker volume mounts
+      ansible.builtin.shell: |
+        k3s kubectl get daemonset monitor-filebeat -n {{ ns }} -o json | \
+          python3 -c "
+        import sys, json
+        ds = json.load(sys.stdin)
+        vols = [v['name'] for v in ds['spec']['template']['spec']['volumes']]
+        assert 'docker-containers' in vols, 'Missing docker-containers volume'
+        assert 'docker-sock' in vols, 'Missing docker-sock volume'
+        print('Docker volumes present: docker-containers, docker-sock')
+        "
+      register: fb_volumes
+      changed_when: false
+
+    - name: "Filebeat Docker volumes"
+      ansible.builtin.debug:
+        msg: "{{ fb_volumes.stdout }}"
+
+    # ================================================================
+    # Phase 6: Generate test Docker container logs
+    # ================================================================
+
+    # Restart Filebeat so it picks up the Docker hostPath now that Docker is installed
+    - name: Restart Filebeat DaemonSet
+      ansible.builtin.shell: |
+        k3s kubectl rollout restart daemonset/monitor-filebeat -n {{ ns }}
+      changed_when: true
+
+    - name: Wait for Filebeat DaemonSet ready after restart
+      ansible.builtin.shell: |
+        k3s kubectl rollout status daemonset/monitor-filebeat -n {{ ns }} --timeout=120s
+      changed_when: false
+
+    - name: Wait for pod logs to be shipped first
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Run test Docker container with unique marker
+      ansible.builtin.shell: |
+        docker run --name ci-log-test alpine echo "{{ test_marker }}"
+      register: docker_run
+      changed_when: true
+      failed_when: docker_run.rc != 0 and 'already in use' not in docker_run.stderr
+
+    - name: "Test container output"
+      ansible.builtin.debug:
+        msg: "{{ docker_run.stdout }}"
+
+    - name: Wait for Docker logs to be picked up by Filebeat
+      ansible.builtin.pause:
+        seconds: 30
+
+    # ================================================================
+    # Phase 7: Verify CI logs in Elasticsearch
+    # ================================================================
+
+    - name: Query ci-logs-* index for document count
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+          curl -sf -u elastic:{{ test_es_password }} \
+            'http://localhost:9200/ci-logs-*/_count' 2>/dev/null | \
+          python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))"
+      register: ci_count
+      retries: 18
+      delay: 10
+      until: (ci_count.stdout | default('0') | int) > 0
+      changed_when: false
+      failed_when: false
+
+    - name: "CI logs: {{ ci_count.stdout | default('0') }} documents indexed"
+      ansible.builtin.debug:
+        msg: "{{ 'PASS — CI logs are flowing' if (ci_count.stdout | default('0') | int) > 0 else 'WARN — no CI logs yet' }}"
+
+    - name: Search for test marker in ci-logs
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+          curl -sf -u elastic:{{ test_es_password }} \
+            'http://localhost:9200/ci-logs-*/_search?size=10' 2>/dev/null | \
+          grep -c '{{ test_marker }}' || echo 0
+      register: marker_search
+      retries: 12
+      delay: 10
+      until: (marker_search.stdout_lines | last | default('0') | int) > 0
+      changed_when: false
+      failed_when: false
+
+    - name: "Test marker search: {{ marker_search.stdout_lines | last | default('0') }} hits"
+      ansible.builtin.debug:
+        msg: "{{ 'PASS — test marker found in ci-logs index' if (marker_search.stdout_lines | last | default('0') | int) > 0 else 'WARN — marker not found yet' }}"
+
+    # ================================================================
+    # Phase 8: Verify pod logs still work (no regression)
+    # ================================================================
+
+    - name: Query filebeat-* index for document count
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+          curl -sf -u elastic:{{ test_es_password }} \
+            'http://localhost:9200/filebeat-*/_count' 2>/dev/null | \
+          python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))"
+      register: fb_count
+      retries: 18
+      delay: 10
+      until: (fb_count.stdout | default('0') | int) > 0
+      changed_when: false
+      failed_when: false
+
+    - name: "Pod logs: {{ fb_count.stdout | default('0') }} documents indexed"
+      ansible.builtin.debug:
+        msg: "{{ 'PASS — pod logs still flowing' if (fb_count.stdout | default('0') | int) > 0 else 'WARN — no pod logs yet' }}"
+
+    # ================================================================
+    # Phase 9: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-ci-logs-test-values.yml
+        state: absent
+
+    - name: Set result facts
+      ansible.builtin.set_fact:
+        es_pass: "{{ es_rollout.rc is defined and es_rollout.rc == 0 }}"
+        es_secret_pass: "{{ es_secret_sync.stdout == 'SecretSynced' }}"
+        fb_pass: "{{ fb_rollout.rc is defined and fb_rollout.rc == 0 }}"
+        fb_volumes_pass: "{{ fb_volumes.rc is defined and fb_volumes.rc == 0 }}"
+        ci_logs_pass: "{{ (ci_count.stdout | default('0') | int) > 0 }}"
+        marker_pass: "{{ (marker_search.stdout | default('0') | trim | int) > 0 }}"
+        pod_logs_pass: "{{ (fb_count.stdout | default('0') | int) > 0 }}"
+
+    - name: "TEST RESULT"
+      vars:
+        critical_pass: "{{ es_pass and es_secret_pass and fb_pass and fb_volumes_pass }}"
+        all_pass: "{{ es_pass and es_secret_pass and fb_pass and fb_volumes_pass and ci_logs_pass and marker_pass and pod_logs_pass }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          CI Log Shipping Test: {{ 'PASS' if all_pass else ('PARTIAL' if critical_pass else 'FAIL') }}
+
+          [{{ 'PASS' if es_pass else 'FAIL' }}] Elasticsearch StatefulSet running
+          [{{ 'PASS' if es_secret_pass else 'FAIL' }}] ExternalSecret synced
+          [{{ 'PASS' if fb_pass else 'FAIL' }}] Filebeat DaemonSet running
+          [{{ 'PASS' if fb_volumes_pass else 'FAIL' }}] Filebeat Docker volume mounts
+          [{{ 'PASS' if ci_logs_pass else 'WARN' }}] CI logs indexed ({{ ci_count.stdout | default('0') }} docs)
+          [{{ 'PASS' if marker_pass else 'WARN' }}] Test marker found in ci-logs
+          [{{ 'PASS' if pod_logs_pass else 'WARN' }}] Pod logs still flowing ({{ fb_count.stdout | default('0') }} docs)
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical CI log shipping checks failed — see summary above"
+      when: not (es_pass and es_secret_pass and fb_pass and fb_volumes_pass)

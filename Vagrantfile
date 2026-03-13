@@ -303,32 +303,12 @@ EOF
         build -t monitor-frontend:local "$STAGE/frontend/"
       rm -rf "$STAGE"
 
-      # Deploy with Helm
-      echo "=== Deploying application ==="
-      helm upgrade --install monitor /vagrant/infra/helm \
-        --namespace monitor \
-        --create-namespace \
-        --set postgres.password=vagrant \
-        --set "auth.jwtSecret=vagrant-test-secret-at-least-32-chars" \
-        --set app.image.repository=monitor \
-        --set app.image.tag=local \
-        --set app.image.pullPolicy=Never \
-        --set frontend.image.repository=monitor-frontend \
-        --set frontend.image.tag=local \
-        --set frontend.image.pullPolicy=Never \
-        --set "app.gitHash=$GIT_HASH" \
-        --set "app.buildTime=$BUILD_TIME" \
-        --set "app.ingress.host=" \
-        --wait \
-        --timeout 10m
-
+      # Images built — test playbooks handle their own helm deploys
       echo ""
       echo "=========================================="
-      echo "  Deployment complete!"
+      echo "  Provisioning complete! Images built."
+      echo "  Test playbooks will deploy via Helm."
       echo "=========================================="
-      kubectl get pods -n monitor
-      echo ""
-      echo "Access: http://localhost:8080"
     SHELL
 
     # Run E2E tests with Playwright (run: "never" — invoke explicitly with:
