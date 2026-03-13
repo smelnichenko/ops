@@ -186,19 +186,21 @@
       ansible.builtin.shell: |
         set -o pipefail
         k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
-          forgejo actions generate-runner-token | tail -1
+          forgejo actions generate-runner-token 2>/dev/null | tail -1
       args:
         executable: /bin/bash
       register: runner_token_result
       changed_when: false
 
-    - name: Create runner .runner file via create-runner-file
+    - name: Register runner with Forgejo
       ansible.builtin.shell: |
         cd /home/{{ runner_user }}/.forgejo-runner
-        forgejo-runner create-runner-file \
+        forgejo-runner register \
           --instance "https://{{ forgejo_host }}" \
-          --secret "{{ forgejo_runner_secret }}" \
-          --name host-runner
+          --token "{{ runner_token_result.stdout | trim }}" \
+          --name host-runner \
+          --labels "self-hosted:host,ci-java:docker://{{ forgejo_host }}/schnappy/ci-java:latest,ci-node:docker://{{ forgejo_host }}/schnappy/ci-node:latest" \
+          --no-interactive
       args:
         creates: "/home/{{ runner_user }}/.forgejo-runner/.runner"
       become: true
