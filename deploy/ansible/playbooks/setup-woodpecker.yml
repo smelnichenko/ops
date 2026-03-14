@@ -507,6 +507,16 @@
                   port: 443
                 - protocol: TCP
                   port: 6443
+            # To Kubernetes API (default namespace, ClusterIP 10.43.0.1:443)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: default
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 6443
             # To SonarQube (monitor namespace)
             - to:
                 - namespaceSelector:
