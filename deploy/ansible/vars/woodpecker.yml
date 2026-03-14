@@ -1,0 +1,10 @@
+---
+# Woodpecker CI configuration
+# Used by: setup-woodpecker.yml
+#
+# Override in production with extra vars or production.yml
+
+woodpecker_ns: woodpecker
+woodpecker_domain: "ci.pmon.dev"
+woodpecker_version: "3.5.1"
+woodpecker_cluster_issuer: letsencrypt-dns

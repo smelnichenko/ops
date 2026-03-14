@@ -78,6 +78,8 @@
             actions:
               ENABLED: true
               DEFAULT_ACTIONS_URL: github
+            webhook:
+              ALLOWED_HOST_LIST: private
             repository:
               DEFAULT_BRANCH: master
             log:
@@ -163,177 +165,6 @@
         executable: /bin/bash
       changed_when: false
 
-    # ================================================================
-    # Phase 2: Install and configure Forgejo Runner
-    # ================================================================
-
-    - name: Download forgejo-runner binary
-      ansible.builtin.get_url:
-        url: "https://code.forgejo.org/forgejo/runner/releases/download/v{{ forgejo_runner_version }}/forgejo-runner-{{ forgejo_runner_version }}-linux-amd64"
-        dest: /usr/local/bin/forgejo-runner
-        mode: '0755'
-        force: false
-
-    - name: Create runner working directory
-      ansible.builtin.file:
-        path: "/home/{{ runner_user }}/.forgejo-runner"
-        state: directory
-        owner: "{{ runner_user }}"
-        group: "{{ runner_user }}"
-        mode: '0755'
-
-    - name: Generate runner registration token
-      ansible.builtin.shell: |
-        set -o pipefail
-        k3s kubectl exec deploy/forgejo -n {{ forgejo_namespace }} -- \
-          forgejo actions generate-runner-token 2>/dev/null | tail -1
-      args:
-        executable: /bin/bash
-      register: runner_token_result
-      changed_when: false
-
-    - name: Register runner with Forgejo
-      ansible.builtin.shell: |
-        cd /home/{{ runner_user }}/.forgejo-runner
-        forgejo-runner register \
-          --instance "https://{{ forgejo_host }}" \
-          --token "{{ runner_token_result.stdout | trim }}" \
-          --name host-runner \
-          --labels "self-hosted:host,ci-java:docker://{{ forgejo_host }}/schnappy/ci-java:latest,ci-node:docker://{{ forgejo_host }}/schnappy/ci-node:latest" \
-          --no-interactive
-      args:
-        creates: "/home/{{ runner_user }}/.forgejo-runner/.runner"
-      become: true
-      become_user: "{{ runner_user }}"
-
-    - name: Create runner config
-      ansible.builtin.copy:
-        dest: "/home/{{ runner_user }}/.forgejo-runner/config.yaml"
-        owner: "{{ runner_user }}"
-        group: "{{ runner_user }}"
-        mode: '0644'
-        content: |
-          log:
-            level: info
-          runner:
-            capacity: 4
-            timeout: 1h
-            labels:
-              - "self-hosted:host"
-              - "ci-java:docker://{{ forgejo_host }}/schnappy/ci-java:latest"
-              - "ci-node:docker://{{ forgejo_host }}/schnappy/ci-node:latest"
-          container:
-            network: "host"
-            privileged: false
-            options: "--log-driver=fluentd --log-opt fluentd-address=localhost:24224 --log-opt fluentd-async=true --log-opt tag=ci"
-            valid_volumes:
-              - /var/run/docker.sock
-
-    - name: Create runner wrapper script
-      ansible.builtin.copy:
-        dest: "/home/{{ runner_user }}/.forgejo-runner/run.sh"
-        owner: "{{ runner_user }}"
-        group: "{{ runner_user }}"
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          # Source toolchain managers so builds have access to Java/Node
-          export HOME="/home/{{ runner_user }}"
-          . "$HOME/.sdkman/bin/sdkman-init.sh" 2>/dev/null || true
-          . "$HOME/.nvm/nvm.sh" 2>/dev/null || true
-          cd /home/{{ runner_user }}/.forgejo-runner
-          exec forgejo-runner daemon --config config.yaml
-
-    - name: Create systemd service for forgejo-runner
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/forgejo-runner.service
-        mode: '0644'
-        content: |
-          [Unit]
-          Description=Forgejo Actions Runner
-          After=network.target
-
-          [Service]
-          Type=simple
-          User={{ runner_user }}
-          Group={{ runner_user }}
-          WorkingDirectory=/home/{{ runner_user }}/.forgejo-runner
-          ExecStart=/home/{{ runner_user }}/.forgejo-runner/run.sh
-          Restart=on-failure
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-
-    - name: Add sudoers entry for runner user
-      ansible.builtin.copy:
-        dest: /etc/sudoers.d/forgejo-runner
-        mode: '0440'
-        content: |
-          # Allow forgejo-runner to manage k3s
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/k3s kubectl *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm upgrade --install *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm version *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm lint *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm rollback *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/local/bin/helm status *
-          {{ runner_user }} ALL=(root) NOPASSWD: /usr/bin/tee /var/lib/monitor-deploy-commit
-        validate: visudo -cf %s
-
-    - name: Install ansible-lint for CI pipeline
-      ansible.builtin.command:
-        cmd: pipx install ansible-lint
-        creates: "/home/{{ runner_user }}/.local/bin/ansible-lint"
-      become: true
-      become_user: "{{ runner_user }}"
-
-    # ================================================================
-    # Build and push CI Docker images to Forgejo registry
-    # ================================================================
-
-    - name: Check if CI Java image exists in registry
-      ansible.builtin.shell: |
-        docker manifest inspect {{ forgejo_host }}/schnappy/ci-java:latest 2>/dev/null
-      register: ci_java_exists
-      changed_when: false
-      failed_when: false
-
-    - name: Build CI Java image
-      ansible.builtin.shell: |
-        docker build -t {{ forgejo_host }}/schnappy/ci-java:latest \
-          /home/{{ runner_user }}/src/monitor/infra/ci-images/java/
-      when: ci_java_exists.rc != 0
-
-    - name: Push CI Java image
-      ansible.builtin.shell: |
-        docker push {{ forgejo_host }}/schnappy/ci-java:latest
-      when: ci_java_exists.rc != 0
-
-    - name: Check if CI Node image exists in registry
-      ansible.builtin.shell: |
-        docker manifest inspect {{ forgejo_host }}/schnappy/ci-node:latest 2>/dev/null
-      register: ci_node_exists
-      changed_when: false
-      failed_when: false
-
-    - name: Build CI Node image
-      ansible.builtin.shell: |
-        docker build -t {{ forgejo_host }}/schnappy/ci-node:latest \
-          /home/{{ runner_user }}/src/monitor/infra/ci-images/node/
-      when: ci_node_exists.rc != 0
-
-    - name: Push CI Node image
-      ansible.builtin.shell: |
-        docker push {{ forgejo_host }}/schnappy/ci-node:latest
-      when: ci_node_exists.rc != 0
-
-    - name: Enable and start forgejo-runner
-      ansible.builtin.systemd:
-        name: forgejo-runner
-        enabled: true
-        state: restarted
-        daemon_reload: true
-
     - name: Display Forgejo status
       ansible.builtin.debug:
         msg: |
@@ -342,7 +173,7 @@
           URL: https://{{ forgejo_host }}/
           Admin user: {{ forgejo_admin_user }}
 
-          Runner: host-runner (systemd service: forgejo-runner)
+          CI/CD: Woodpecker CI (separate deployment via setup-woodpecker.yml)
 
           Next steps:
             1. Add DNS A record: {{ forgejo_host }} -> 192.168.11.2

@@ -1,0 +1,992 @@
+---
+# Test Woodpecker CI deployment in Vagrant
+#
+# Deploys Forgejo + Woodpecker, creates a test repo, triggers a pipeline,
+# and verifies the pipeline runs successfully with the Kubernetes backend.
+#
+# Prerequisites:
+#   - vagrant up k3s
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-woodpecker.yml
+
+- name: Test Woodpecker CI deployment
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    woodpecker_ns: woodpecker
+    forgejo_ns: forgejo
+    forgejo_host: "git.vagrant.test"
+    forgejo_admin_user: "testadmin"
+    forgejo_admin_password: "TestPassword123"
+    forgejo_admin_email: "admin@vagrant.test"
+    forgejo_chart_version: "16.2.0"
+    woodpecker_host: "ci.vagrant.test"
+    woodpecker_chart: "oci://ghcr.io/woodpecker-ci/helm/woodpecker"
+    woodpecker_chart_version: "3.5.1"
+    test_repo_name: "woodpecker-test"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Deploy Forgejo (same pattern as test-cicd.yml)
+    # ================================================================
+
+    - name: "PHASE 1: Deploy Forgejo"
+      ansible.builtin.debug:
+        msg: "Deploying Forgejo to Vagrant k3s"
+
+    - name: Create forgejo namespace
+      ansible.builtin.shell: |
+        cat <<EOF | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ forgejo_ns }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      changed_when: false
+
+    - name: Add DNS for Forgejo and Woodpecker
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "127.0.0.1 {{ item }}"
+        state: present
+      loop:
+        - "{{ forgejo_host }}"
+        - "{{ woodpecker_host }}"
+
+    - name: Add custom DNS for Forgejo and Woodpecker via CoreDNS
+      ansible.builtin.shell: |
+        NODE_IP=$(k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+
+        k3s kubectl create configmap coredns-custom -n kube-system \
+          --from-literal="vagrant.test.server=vagrant.test:53 {
+          hosts {
+            ${NODE_IP} {{ forgejo_host }}
+            ${NODE_IP} {{ woodpecker_host }}
+            fallthrough
+          }
+          whoami
+        }" --dry-run=client -o yaml | k3s kubectl apply -f -
+
+        k3s kubectl rollout restart deployment coredns -n kube-system
+        k3s kubectl rollout status deployment coredns -n kube-system --timeout=60s
+      changed_when: false
+
+    - name: Deploy Forgejo via Helm
+      ansible.builtin.shell: |
+        helm upgrade --install forgejo oci://code.forgejo.org/forgejo-helm/forgejo \
+          --namespace {{ forgejo_ns }} \
+          --version {{ forgejo_chart_version }} \
+          --set gitea.admin.username={{ forgejo_admin_user }} \
+          --set gitea.admin.password={{ forgejo_admin_password }} \
+          --set gitea.admin.email={{ forgejo_admin_email }} \
+          --set persistence.size=5Gi \
+          --set gitea.config.server.DOMAIN={{ forgejo_host }} \
+          --set gitea.config.server.ROOT_URL=http://{{ forgejo_host }} \
+          --set gitea.config.server.PROTOCOL=http \
+          --set gitea.config.server.HTTP_PORT=3000 \
+          --set gitea.config.service.DISABLE_REGISTRATION=true \
+          --set 'gitea.config.webhook.ALLOWED_HOST_LIST=private' \
+          --set service.http.type=ClusterIP \
+          --set service.http.port=3000 \
+          --set service.ssh.enabled=false \
+          --set ingress.enabled=true \
+          --set ingress.className=traefik \
+          --set 'ingress.hosts[0].host={{ forgejo_host }}' \
+          --set 'ingress.hosts[0].paths[0].path=/' \
+          --set 'ingress.hosts[0].paths[0].pathType=Prefix' \
+          --set resources.requests.memory=256Mi \
+          --set resources.requests.cpu=100m \
+          --set resources.limits.memory=1Gi \
+          --set resources.limits.cpu=2000m \
+          --wait --timeout 5m
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Wait for Forgejo to be ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          if curl -sf -o /dev/null http://{{ forgejo_host }}/api/v1/settings/api 2>/dev/null; then
+            echo "Forgejo is ready"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Forgejo not ready after 5 minutes"
+        exit 1
+      changed_when: false
+
+    - name: Get Forgejo ClusterIP for internal access
+      ansible.builtin.shell: |
+        k3s kubectl get svc forgejo-http -n {{ forgejo_ns }} \
+          -o jsonpath='{.spec.clusterIP}'
+      register: forgejo_clusterip_result
+      changed_when: false
+
+    - name: Set Forgejo internal URL fact
+      ansible.builtin.set_fact:
+        forgejo_internal_url: "http://{{ forgejo_clusterip_result.stdout }}:3000"
+
+    - name: Clear must_change_password flag on admin user
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/forgejo -n {{ forgejo_ns }} -- \
+          gitea admin user change-password \
+          -u {{ forgejo_admin_user }} \
+          -p '{{ forgejo_admin_password }}' \
+          --must-change-password=false
+      changed_when: false
+
+    - name: Verify Forgejo API auth works
+      ansible.builtin.shell: |
+        curl -sf "http://{{ forgejo_host }}/api/v1/user" \
+          -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}"
+      changed_when: false
+
+    # ================================================================
+    # Phase 2: Deploy Woodpecker
+    # ================================================================
+
+    - name: "PHASE 2: Deploy Woodpecker CI"
+      ansible.builtin.debug:
+        msg: "Deploying Woodpecker server + agent"
+
+    - name: Create woodpecker namespace
+      ansible.builtin.shell: |
+        cat <<EOF | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ woodpecker_ns }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      changed_when: false
+
+    - name: Delete all existing Woodpecker OAuth2 apps
+      ansible.builtin.shell: |
+        curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+          "http://{{ forgejo_host }}/api/v1/user/applications/oauth2" \
+          | python3 -c "
+        import sys, json
+        apps = json.load(sys.stdin)
+        for a in apps:
+            if a['name'] == 'Woodpecker CI':
+                print(a['id'])
+        " | while read APP_ID; do
+          curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+            -X DELETE "http://{{ forgejo_host }}/api/v1/user/applications/oauth2/$APP_ID"
+          echo "Deleted OAuth app $APP_ID"
+        done
+      changed_when: false
+
+    - name: Register Woodpecker OAuth2 app in Forgejo
+      ansible.builtin.shell: |
+        curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+          -X POST "http://{{ forgejo_host }}/api/v1/user/applications/oauth2" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "Woodpecker CI",
+            "confidential_client": true,
+            "redirect_uris": ["http://{{ woodpecker_host }}/authorize"]
+          }'
+      register: oauth_result
+      changed_when: false
+
+    - name: Parse OAuth credentials
+      ansible.builtin.set_fact:
+        oauth_client_id: "{{ (oauth_result.stdout | from_json).client_id }}"
+        oauth_client_secret: "{{ (oauth_result.stdout | from_json).client_secret }}"
+
+    - name: Create Woodpecker Forgejo OAuth secret
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: woodpecker-forgejo-secret
+          namespace: {{ woodpecker_ns }}
+        type: Opaque
+        stringData:
+          WOODPECKER_FORGEJO_CLIENT: "{{ oauth_client_id }}"
+          WOODPECKER_FORGEJO_SECRET: "{{ oauth_client_secret }}"
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Deploy Woodpecker (unified chart)
+      ansible.builtin.shell: |
+        helm upgrade --install woodpecker \
+          {{ woodpecker_chart }} \
+          --version {{ woodpecker_chart_version }} \
+          --namespace {{ woodpecker_ns }} \
+          --values - <<'HELMEOF'
+        server:
+          env:
+            WOODPECKER_HOST: "http://{{ woodpecker_host }}"
+            WOODPECKER_FORGEJO: "true"
+            WOODPECKER_FORGEJO_URL: "{{ forgejo_internal_url }}"
+            WOODPECKER_FORGEJO_SKIP_VERIFY: "true"
+            WOODPECKER_ADMIN: "{{ forgejo_admin_user }}"
+            WOODPECKER_LOG_LEVEL: "debug"
+            WOODPECKER_OPEN: "true"
+          extraSecretNamesForEnvFrom:
+            - woodpecker-forgejo-secret
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - host: "{{ woodpecker_host }}"
+                paths:
+                  - path: /
+                    backend:
+                      serviceName: woodpecker-server
+                      servicePort: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          persistentVolume:
+            enabled: true
+            size: 1Gi
+            storageClass: local-path
+        agent:
+          replicaCount: 1
+          env:
+            WOODPECKER_SERVER: "woodpecker-server:9000"
+            WOODPECKER_BACKEND: "kubernetes"
+            WOODPECKER_BACKEND_K8S_NAMESPACE: "{{ woodpecker_ns }}"
+            WOODPECKER_BACKEND_K8S_STORAGE_CLASS: "local-path"
+            WOODPECKER_BACKEND_K8S_VOLUME_SIZE: "2Gi"
+            WOODPECKER_MAX_WORKFLOWS: "2"
+            WOODPECKER_LOG_LEVEL: "debug"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Restart Woodpecker server to pick up fresh OAuth secret
+      ansible.builtin.shell: |
+        k3s kubectl rollout restart statefulset/woodpecker-server -n {{ woodpecker_ns }}
+      changed_when: false
+
+    - name: Wait for Woodpecker server to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/woodpecker-server -n {{ woodpecker_ns }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for Woodpecker agent to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/woodpecker-agent -n {{ woodpecker_ns }} --timeout=300s
+      changed_when: false
+
+    - name: Create deployer RBAC
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        ---
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: woodpecker-deployer
+          namespace: {{ woodpecker_ns }}
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: woodpecker-deployer
+        rules:
+          - apiGroups: [""]
+            resources: [namespaces, nodes]
+            verbs: [get, list, watch]
+          - apiGroups: [""]
+            resources: [configmaps, secrets, services, serviceaccounts, persistentvolumeclaims, pods]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: ["apps"]
+            resources: [deployments, statefulsets, daemonsets, replicasets]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: ["batch"]
+            resources: [jobs, cronjobs]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: ["networking.k8s.io"]
+            resources: [ingresses, networkpolicies]
+            verbs: [get, list, watch, create, update, patch, delete]
+          - apiGroups: ["rbac.authorization.k8s.io"]
+            resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+            verbs: [get, list, watch, create, update, patch, delete]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: woodpecker-deployer
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: woodpecker-deployer
+        subjects:
+          - kind: ServiceAccount
+            name: woodpecker-deployer
+            namespace: {{ woodpecker_ns }}
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Create deploy state ConfigMap
+      ansible.builtin.shell: |
+        k3s kubectl create configmap woodpecker-deploy-state \
+          --namespace {{ woodpecker_ns }} \
+          --from-literal=last-deployed-commit="" \
+          --dry-run=client -o yaml | k3s kubectl apply -f -
+      changed_when: false
+
+    # ================================================================
+    # Phase 3: Verify Woodpecker infrastructure
+    # ================================================================
+
+    - name: "PHASE 3: Verify Woodpecker infrastructure"
+      ansible.builtin.debug:
+        msg: "Checking server and agent pods"
+
+    - name: Check Woodpecker server pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ woodpecker_ns }} -l app.kubernetes.io/name=server \
+          -o jsonpath='{.items[0].status.phase}'
+      register: server_pod_status
+      changed_when: false
+
+    - name: Check Woodpecker agent pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ woodpecker_ns }} -l app.kubernetes.io/name=agent \
+          -o jsonpath='{.items[0].status.phase}'
+      register: agent_pod_status
+      changed_when: false
+
+    - name: Verify Woodpecker API responds
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' "http://{{ woodpecker_host }}/api/healthz" 2>/dev/null || echo "000")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Woodpecker API healthy"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Woodpecker API not responding after 150s"
+        exit 1
+      changed_when: false
+
+    - name: Set infrastructure result facts
+      ansible.builtin.set_fact:
+        server_running: "{{ server_pod_status.stdout == 'Running' }}"
+        agent_running: "{{ agent_pod_status.stdout == 'Running' }}"
+
+    # ================================================================
+    # Phase 4: Create test repo and trigger pipeline
+    # ================================================================
+
+    - name: "PHASE 4: Create test repo and trigger pipeline"
+      ansible.builtin.debug:
+        msg: "Creating test repo in Forgejo, activating in Woodpecker, pushing pipeline"
+
+    - name: Get Forgejo API token
+      ansible.builtin.shell: |
+        set -o pipefail
+        # Delete existing token via API (basic auth works after must_change_password cleared)
+        curl -sf -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
+          -X DELETE "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/woodpecker-test-token" \
+          2>/dev/null || true
+        # Create fresh token via CLI (more reliable than API)
+        k3s kubectl exec deploy/forgejo -n {{ forgejo_ns }} -- \
+          gitea admin user generate-access-token \
+          -u {{ forgejo_admin_user }} \
+          --token-name woodpecker-test-token \
+          --scopes all 2>/dev/null | grep -oP 'created:\s*\K[a-f0-9]+'
+      args:
+        executable: /bin/bash
+      register: forgejo_token_result
+      changed_when: false
+
+    - name: Set Forgejo token fact
+      ansible.builtin.set_fact:
+        forgejo_token: "{{ forgejo_token_result.stdout }}"
+      no_log: true
+
+    - name: Authenticate with Woodpecker via OAuth flow
+      ansible.builtin.shell: |
+        python3 << 'PYEOF'
+        import re, sys, requests
+        from urllib.parse import urljoin
+
+        forgejo = "{{ forgejo_internal_url }}"
+        woodpecker = "http://{{ woodpecker_host }}"
+
+        # Step 1: Login to Forgejo (via ClusterIP, accessible from host and pods)
+        s = requests.Session()
+        s.get(f"{forgejo}/user/login")
+        s.post(f"{forgejo}/user/login", data={
+            "user_name": "{{ forgejo_admin_user }}",
+            "password": "{{ forgejo_admin_password }}",
+        }, allow_redirects=True)
+
+        # Step 2: Complete OAuth flow with Woodpecker
+        # Forgejo ROOT_URL is http://git.vagrant.test but we connect via ClusterIP.
+        # Rewrite any git.vagrant.test redirects to ClusterIP so cookies match.
+        forgejo_ext = "http://{{ forgejo_host }}"
+        resp = s.get(f"{woodpecker}/authorize", allow_redirects=False)
+        for _ in range(20):
+            location = resp.headers.get("Location", "")
+            if not location:
+                break
+            if not location.startswith("http"):
+                location = urljoin(resp.url, location)
+            if location.startswith(forgejo_ext):
+                location = location.replace(forgejo_ext, forgejo, 1)
+            resp = s.get(location, allow_redirects=False)
+            if resp.status_code == 200 and "authorize-app" in resp.text:
+                hidden = dict(re.findall(
+                    r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"', resp.text))
+                m = re.search(r'action="(/login/oauth/grant)"', resp.text)
+                form_url = urljoin(forgejo + "/", m.group(1)) if m else location
+                hidden["granted"] = "true"
+                resp = s.post(form_url, data=hidden, allow_redirects=False)
+                continue
+            if resp.status_code < 300 or resp.status_code >= 400:
+                break
+
+        token = s.cookies.get("user_sess", domain="{{ woodpecker_host }}")
+        if not token:
+            token = s.cookies.get("user_sess")
+        if not token:
+            print("ERROR: no user_sess cookie after OAuth flow", file=sys.stderr)
+            sys.exit(1)
+
+        # Step 3: Get CSRF token from web-config.js (Woodpecker v3 requires CSRF for POST)
+        config = s.get(f"{woodpecker}/web-config.js")
+        csrf_match = re.search(r'WOODPECKER_CSRF\s*=\s*"([^"]*)"', config.text)
+        csrf = csrf_match.group(1) if csrf_match else ""
+        if not csrf:
+            print("ERROR: no CSRF token in web-config.js", file=sys.stderr)
+            sys.exit(1)
+
+        # Step 4: Generate API token (type: "user") using session + CSRF
+        api_resp = s.post(f"{woodpecker}/api/user/token",
+            headers={"X-Csrf-Token": csrf})
+        if api_resp.status_code != 200:
+            print(f"ERROR: POST /api/user/token returned {api_resp.status_code}", file=sys.stderr)
+            sys.exit(1)
+
+        api_token = api_resp.text.strip().strip('"')
+        print(api_token)
+        PYEOF
+      register: wp_token_result
+      changed_when: false
+
+    - name: Set Woodpecker token fact
+      ansible.builtin.set_fact:
+        wp_token: "{{ wp_token_result.stdout | trim }}"
+      no_log: true
+
+    - name: Create test repository in Forgejo
+      ansible.builtin.shell: |
+        HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' \
+          -H "Authorization: token {{ forgejo_token }}" \
+          "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}" 2>/dev/null)
+
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "Repo already exists"
+          exit 0
+        fi
+
+        curl -sf -X POST "http://{{ forgejo_host }}/api/v1/user/repos" \
+          -H "Authorization: token {{ forgejo_token }}" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "{{ test_repo_name }}",
+            "auto_init": true,
+            "default_branch": "main"
+          }'
+      register: create_repo
+      changed_when: false
+
+    - name: Activate repo in Woodpecker via API
+      ansible.builtin.shell: |
+        REPO_LOOKUP=$(curl -sf -H "Authorization: Bearer {{ wp_token }}" \
+          "http://{{ woodpecker_host }}/api/repos/lookup/{{ forgejo_admin_user }}/{{ test_repo_name }}" 2>/dev/null || echo "")
+
+        if [ -n "$REPO_LOOKUP" ]; then
+          echo "Repo already known to Woodpecker"
+          echo "$REPO_LOOKUP"
+          exit 0
+        fi
+
+        FORGEJO_REPO_ID=$(curl -sf -H "Authorization: token {{ forgejo_token }}" \
+          "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+        RESULT=$(curl -sf -X POST -H "Authorization: Bearer {{ wp_token }}" \
+          "http://{{ woodpecker_host }}/api/repos?forge_remote_id=${FORGEJO_REPO_ID}" 2>&1)
+
+        echo "Activation result: $RESULT"
+      register: activate_result
+      changed_when: false
+
+    - name: Patch Forgejo webhook to use internal Woodpecker URL
+      ansible.builtin.shell: |
+        set -e
+        # Get the webhook ID
+        HOOK_ID=$(curl -sf -H "Authorization: token {{ forgejo_token }}" \
+          "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}/hooks" \
+          | python3 -c "import sys,json; hooks=json.load(sys.stdin); print(hooks[0]['id'])" 2>/dev/null)
+
+        if [ -z "$HOOK_ID" ]; then
+          echo "No webhook found"
+          exit 1
+        fi
+
+        # Get current webhook URL and replace external host with internal service DNS
+        OLD_URL=$(curl -sf -H "Authorization: token {{ forgejo_token }}" \
+          "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}/hooks" \
+          | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['url'])")
+
+        NEW_URL=$(echo "$OLD_URL" | sed 's|http://{{ woodpecker_host }}|http://woodpecker-server.{{ woodpecker_ns }}.svc|')
+
+        echo "Patching webhook $HOOK_ID: $OLD_URL -> $NEW_URL"
+
+        curl -sf -X PATCH -H "Authorization: token {{ forgejo_token }}" \
+          -H "Content-Type: application/json" \
+          "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}/hooks/$HOOK_ID" \
+          -d "{\"config\":{\"url\":\"$NEW_URL\",\"content_type\":\"json\"}}"
+      changed_when: false
+
+    - name: Wait for webhook to settle
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Clone test repo and push pipeline
+      ansible.builtin.shell: |
+        set -e
+        WORKDIR=$(mktemp -d)
+        cd "$WORKDIR"
+
+        git clone "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_host }}/{{ forgejo_admin_user }}/{{ test_repo_name }}.git" repo
+        cd repo
+
+        git config user.email "test@vagrant.test"
+        git config user.name "Test"
+
+        mkdir -p .woodpecker
+        cat > .woodpecker/ci.yaml <<'PIPELINE'
+        when:
+          - event: push
+
+        steps:
+          - name: hello
+            image: alpine:3.20
+            commands:
+              - echo "Hello from Woodpecker CI!"
+              - echo "Pipeline executed successfully"
+              - date
+        PIPELINE
+        sed -i 's/^        //' .woodpecker/ci.yaml
+
+        git add .woodpecker/ci.yaml
+        git diff --cached --quiet && echo "trigger-$(date +%s)" > .woodpecker-trigger && git add .woodpecker-trigger
+        git commit -m "Add Woodpecker CI pipeline"
+        git push origin main
+
+        rm -rf "$WORKDIR"
+        echo "Pipeline pushed to {{ test_repo_name }}"
+      changed_when: false
+
+    - name: Wait for pipeline to complete
+      ansible.builtin.shell: |
+        python3 << 'PYEOF'
+        import urllib.request, json, time, sys
+
+        wp_url = "http://{{ woodpecker_host }}"
+
+        # Look up repo ID
+        try:
+            req = urllib.request.Request(f"{wp_url}/api/repos/lookup/{{ forgejo_admin_user }}/{{ test_repo_name }}")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                repo = json.loads(resp.read())
+                repo_id = repo["id"]
+        except Exception as e:
+            print(f"Could not look up repo ID: {e}")
+            sys.exit(1)
+
+        print(f"Woodpecker repo ID: {repo_id}")
+
+        for i in range(1, 61):
+            try:
+                req = urllib.request.Request(f"{wp_url}/api/repos/{repo_id}/pipelines")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    raw = resp.read()
+                    pipelines = json.loads(raw)
+            except Exception as e:
+                print(f"API error (attempt {i}/60): {e}")
+                time.sleep(10)
+                continue
+
+            if len(pipelines) > 0:
+                latest = pipelines[0]
+                status = latest.get("status", "unknown")
+                print(f"Pipeline count: {len(pipelines)}, latest status: {status}")
+
+                if status == "success":
+                    print("Pipeline completed successfully!")
+                    sys.exit(0)
+                elif status in ("failure", "error", "killed"):
+                    print(f"Pipeline failed with status: {status}")
+                    sys.exit(1)
+
+                print("Still running, waiting...")
+            else:
+                print(f"No pipelines found yet (attempt {i}/60)")
+
+            time.sleep(10)
+
+        print("Pipeline did not complete within 10 minutes")
+        sys.exit(1)
+        PYEOF
+      register: pipeline_result
+      changed_when: false
+      failed_when: false
+
+    - name: Debug pipeline result
+      ansible.builtin.debug:
+        msg: |
+          rc: {{ pipeline_result.rc }}
+          stdout: {{ pipeline_result.stdout_lines | default([]) | join('\n') }}
+          stderr: {{ pipeline_result.stderr_lines | default([]) | join('\n') }}
+
+    - name: Set pipeline result fact
+      ansible.builtin.set_fact:
+        pipeline_passed: "{{ pipeline_result.rc == 0 }}"
+
+    # ================================================================
+    # Phase 5: Verify RBAC
+    # ================================================================
+
+    - name: "PHASE 5: Verify RBAC"
+      ansible.builtin.debug:
+        msg: "Checking deployer ServiceAccount permissions"
+
+    - name: Check deployer can list deployments in default namespace
+      ansible.builtin.shell: |
+        k3s kubectl auth can-i list deployments \
+          --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
+      register: rbac_list_deploy
+      changed_when: false
+      failed_when: false
+
+    - name: Check deployer can create configmaps
+      ansible.builtin.shell: |
+        k3s kubectl auth can-i create configmaps \
+          --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
+      register: rbac_create_cm
+      changed_when: false
+      failed_when: false
+
+    - name: Check deployer can patch configmaps in woodpecker namespace
+      ansible.builtin.shell: |
+        k3s kubectl auth can-i patch configmaps -n {{ woodpecker_ns }} \
+          --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
+      register: rbac_patch_cm
+      changed_when: false
+      failed_when: false
+
+    - name: Check deployer can create deployments
+      ansible.builtin.shell: |
+        k3s kubectl auth can-i create deployments \
+          --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
+      register: rbac_create_deploy
+      changed_when: false
+      failed_when: false
+
+    - name: Set RBAC result facts
+      ansible.builtin.set_fact:
+        rbac_list_ok: "{{ rbac_list_deploy.stdout | default('') == 'yes' }}"
+        rbac_create_cm_ok: "{{ rbac_create_cm.stdout | default('') == 'yes' }}"
+        rbac_patch_cm_ok: "{{ rbac_patch_cm.stdout | default('') == 'yes' }}"
+        rbac_create_deploy_ok: "{{ rbac_create_deploy.stdout | default('') == 'yes' }}"
+
+    # ================================================================
+    # Phase 6: Verify network policies
+    # ================================================================
+
+    - name: "PHASE 6: Apply and verify network policies"
+      ansible.builtin.debug:
+        msg: "Applying Woodpecker network policies"
+
+    - name: Apply Woodpecker network policies
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: woodpecker-default-deny
+          namespace: {{ woodpecker_ns }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+          egress:
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: woodpecker-server
+          namespace: {{ woodpecker_ns }}
+        spec:
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server
+          policyTypes:
+            - Ingress
+            - Egress
+          ingress:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 8000
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: {{ forgejo_ns }}
+              ports:
+                - protocol: TCP
+                  port: 8000
+            - from:
+                - podSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: agent
+              ports:
+                - protocol: TCP
+                  port: 9000
+          egress:
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: {{ forgejo_ns }}
+              ports:
+                - protocol: TCP
+                  port: 3000
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: woodpecker-agent
+          namespace: {{ woodpecker_ns }}
+        spec:
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: agent
+          policyTypes:
+            - Egress
+          egress:
+            - to:
+                - podSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: server
+              ports:
+                - protocol: TCP
+                  port: 9000
+            - ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 6443
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: woodpecker-pipeline
+          namespace: {{ woodpecker_ns }}
+        spec:
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: NotIn
+                values: [server, agent]
+          policyTypes:
+            - Ingress
+            - Egress
+          ingress:
+            - from:
+                - podSelector: {}
+          egress:
+            - ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 6443
+            - to:
+                - ipBlock:
+                    cidr: 0.0.0.0/0
+                    except:
+                      - 10.0.0.0/8
+                      - 172.16.0.0/12
+                      - 192.168.0.0/16
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 80
+            - to:
+                - podSelector: {}
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Check network policies exist
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy -n {{ woodpecker_ns }} -o name
+      register: np_list
+      changed_when: false
+
+    - name: Set network policy facts
+      ansible.builtin.set_fact:
+        np_default_deny: "{{ 'woodpecker-default-deny' in np_list.stdout }}"
+        np_server: "{{ 'woodpecker-server' in np_list.stdout }}"
+        np_agent: "{{ 'woodpecker-agent' in np_list.stdout }}"
+        np_pipeline: "{{ 'woodpecker-pipeline' in np_list.stdout }}"
+
+    # ================================================================
+    # Phase 7: Verify deploy state ConfigMap
+    # ================================================================
+
+    - name: "PHASE 7: Verify ConfigMap state tracking"
+      ansible.builtin.debug:
+        msg: "Testing ConfigMap-based deploy state"
+
+    - name: Read deploy state ConfigMap
+      ansible.builtin.shell: |
+        k3s kubectl get configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
+          -o jsonpath='{.data.last-deployed-commit}'
+      register: deploy_state
+      changed_when: false
+
+    - name: Update deploy state ConfigMap
+      ansible.builtin.shell: |
+        k3s kubectl patch configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
+          --type merge -p '{"data":{"last-deployed-commit":"abc1234"}}'
+      changed_when: false
+
+    - name: Read updated deploy state
+      ansible.builtin.shell: |
+        k3s kubectl get configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
+          -o jsonpath='{.data.last-deployed-commit}'
+      register: deploy_state_updated
+      changed_when: false
+
+    - name: Set ConfigMap result facts
+      ansible.builtin.set_fact:
+        cm_exists: "{{ deploy_state.rc == 0 }}"
+        cm_update_works: "{{ deploy_state_updated.stdout == 'abc1234' }}"
+
+    # ================================================================
+    # Summary
+    # ================================================================
+
+    - name: Show all pods in woodpecker namespace
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ woodpecker_ns }} -o wide
+      register: final_pods
+      changed_when: false
+
+    - name: Pod listing
+      ansible.builtin.debug:
+        msg: "{{ final_pods.stdout_lines }}"
+
+    - name: "TEST RESULTS"
+      vars:
+        all_pass: >-
+          {{ server_running and agent_running
+             and pipeline_passed
+             and rbac_list_ok and rbac_create_cm_ok and rbac_patch_cm_ok and rbac_create_deploy_ok
+             and np_default_deny and np_server and np_agent and np_pipeline
+             and cm_exists and cm_update_works }}
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Woodpecker CI Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          --- Infrastructure ---
+          [{{ 'PASS' if server_running else 'FAIL' }}] Woodpecker server running
+          [{{ 'PASS' if agent_running else 'FAIL' }}] Woodpecker agent running
+
+          --- Pipeline ---
+          [{{ 'PASS' if pipeline_passed else 'FAIL' }}] Pipeline triggered and completed
+
+          --- RBAC ---
+          [{{ 'PASS' if rbac_list_ok else 'FAIL' }}] Deployer can list deployments
+          [{{ 'PASS' if rbac_create_cm_ok else 'FAIL' }}] Deployer can create configmaps
+          [{{ 'PASS' if rbac_patch_cm_ok else 'FAIL' }}] Deployer can patch configmaps
+          [{{ 'PASS' if rbac_create_deploy_ok else 'FAIL' }}] Deployer can create deployments
+
+          --- Network Policies ---
+          [{{ 'PASS' if np_default_deny else 'FAIL' }}] Default deny policy
+          [{{ 'PASS' if np_server else 'FAIL' }}] Server network policy
+          [{{ 'PASS' if np_agent else 'FAIL' }}] Agent network policy
+          [{{ 'PASS' if np_pipeline else 'FAIL' }}] Pipeline network policy
+
+          --- State Tracking ---
+          [{{ 'PASS' if cm_exists else 'FAIL' }}] Deploy state ConfigMap exists
+          [{{ 'PASS' if cm_update_works else 'FAIL' }}] Deploy state ConfigMap writable
+          ====================================================
+
+    - name: Fail if critical checks failed
+      vars:
+        critical_pass: "{{ server_running and agent_running and rbac_list_ok and rbac_create_cm_ok and cm_exists }}"
+      ansible.builtin.fail:
+        msg: "Critical Woodpecker CI checks failed — see summary above"
+      when: not critical_pass
