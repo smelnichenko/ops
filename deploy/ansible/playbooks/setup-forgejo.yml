@@ -76,8 +76,7 @@
             service:
               DISABLE_REGISTRATION: true
             actions:
-              ENABLED: true
-              DEFAULT_ACTIONS_URL: github
+              ENABLED: false
             webhook:
               ALLOWED_HOST_LIST: private
             repository:
@@ -105,8 +104,8 @@
             cpu: 100m
             memory: 256Mi
           limits:
-            cpu: 2000m
-            memory: 1Gi
+            cpu: 1000m
+            memory: 512Mi
         persistence:
           enabled: true
           size: "{{ forgejo_storage_size }}"
