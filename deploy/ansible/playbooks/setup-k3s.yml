@@ -73,37 +73,67 @@
         path: /usr/local/bin/k3s
       register: k3s_binary
 
-    - name: Configure registry mirrors (pull-through cache on Pi)
-      when: registry_mirror_ip | default('') | length > 0
-      block:
-        - name: Create k3s config directory
-          ansible.builtin.file:
-            path: /etc/rancher/k3s
-            state: directory
-            mode: "0755"
+    - name: Create k3s config directory
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
 
-        - name: Write registries.yaml
-          ansible.builtin.copy:
-            dest: /etc/rancher/k3s/registries.yaml
-            mode: "0644"
-            content: |
-              mirrors:
-                docker.io:
-                  endpoint:
-                    - "http://{{ registry_mirror_ip }}:5000"
-                docker.elastic.co:
-                  endpoint:
-                    - "http://{{ registry_mirror_ip }}:5001"
-                quay.io:
-                  endpoint:
-                    - "http://{{ registry_mirror_ip }}:5002"
-          register: registries_yaml
+    - name: Read Forgejo registry credentials from Vault
+      ansible.builtin.shell: |
+        k3s kubectl exec -n vault vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="$(k3s kubectl get secret vault-root-token -n vault -o jsonpath='{.data.token}' | base64 -d)" \
+          vault kv get -format=json secret/monitor/registry
+      register: vault_registry
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: k3s_binary.stat.exists
 
-        - name: Restart k3s to pick up registry config
-          ansible.builtin.systemd:
-            name: k3s
-            state: restarted
-          when: registries_yaml.changed and k3s_binary.stat.exists
+    - name: Parse Forgejo registry credentials
+      ansible.builtin.set_fact:
+        forgejo_pull_user: "{{ (vault_registry.stdout | from_json).data.data.pull_user }}"
+        forgejo_pull_token: "{{ (vault_registry.stdout | from_json).data.data.pull_token }}"
+      when: vault_registry is not skipped and vault_registry.rc == 0
+      no_log: true
+
+    - name: Write registries.yaml
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        mode: "0600"
+        content: |
+          {% if registry_mirror_ip | default('') | length > 0 %}
+          mirrors:
+            docker.io:
+              endpoint:
+                - "http://{{ registry_mirror_ip }}:5000"
+            docker.elastic.co:
+              endpoint:
+                - "http://{{ registry_mirror_ip }}:5001"
+            quay.io:
+              endpoint:
+                - "http://{{ registry_mirror_ip }}:5002"
+          {% if forgejo_pull_token | default('') | length > 0 %}
+            {{ forgejo_host }}:
+              endpoint:
+                - "https://{{ forgejo_host }}"
+          {% endif %}
+          {% endif %}
+          {% if forgejo_pull_token | default('') | length > 0 %}
+          configs:
+            "{{ forgejo_host }}":
+              auth:
+                username: "{{ forgejo_pull_user }}"
+                password: "{{ forgejo_pull_token }}"
+          {% endif %}
+      register: registries_yaml
+
+    - name: Restart k3s to pick up registry config
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+      when: registries_yaml.changed and k3s_binary.stat.exists
 
     - name: Download k3s install script
       ansible.builtin.get_url:
