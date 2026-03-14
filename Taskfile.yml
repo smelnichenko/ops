@@ -192,8 +192,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml -e @vars/ci-runner.yml
-
+      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
   deploy:full:
     desc: Full deployment - setup k3s + forgejo + velero + vault + deploy app
     dir: deploy/ansible
@@ -202,11 +201,11 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-registry-mirror.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml -e registry_mirror_ip=192.168.11.4
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/production.yml -e @vars/woodpecker.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml -e @vars/ci-runner.yml
-
+      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
   deploy:vault-pi:
     desc: Setup Vault unseal Pi (transit engine + autounseal token)
     dir: deploy/ansible
@@ -306,24 +305,15 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cicd.yml
 
-  test:ci-logs:
-    desc: Test CI/CD log shipping to ELK in Vagrant
+  test:woodpecker:
+    desc: Test Woodpecker CI deployment in Vagrant
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up
+      - cmd: vagrant up k3s
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ci-logs.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-
-  ci:build-images:
-    desc: Build and push CI Docker images to Forgejo registry
-    cmds:
-      - docker build -t git.pmon.dev/schnappy/ci-java:latest infra/ci-images/java/
-      - docker build -t git.pmon.dev/schnappy/ci-node:latest infra/ci-images/node/
-      - docker push git.pmon.dev/schnappy/ci-java:latest
-      - docker push git.pmon.dev/schnappy/ci-node:latest
+      - cmd: ssh-keygen -f "$HOME/.ssh/known_hosts" -R 192.168.56.10 2>/dev/null; true
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-woodpecker.yml
 
   test:dr:
     desc: Test pod recovery + disaster recovery in Vagrant
@@ -354,6 +344,13 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+
+  deploy:woodpecker:
+    desc: Deploy Woodpecker CI
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/production.yml -e @vars/woodpecker.yml
 
   deploy:velero:
     desc: Deploy Velero + Backup MinIO

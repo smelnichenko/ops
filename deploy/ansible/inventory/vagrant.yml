@@ -25,12 +25,12 @@ all:
   hosts:
     target:
       ansible_host: 192.168.56.10
-      ansible_ssh_private_key_file: "{{ playbook_dir }}/../../../.vagrant/machines/k3s/libvirt/private_key"
+      ansible_ssh_private_key_file: "{{ inventory_dir }}/../../../.vagrant/machines/k3s/libvirt/private_key"
       ansible_python_interpreter: /usr/bin/python3
 
     vault_pi:
       ansible_host: 192.168.56.20
-      ansible_ssh_private_key_file: "{{ playbook_dir }}/../../../.vagrant/machines/vault-pi/libvirt/private_key"
+      ansible_ssh_private_key_file: "{{ inventory_dir }}/../../../.vagrant/machines/vault-pi/libvirt/private_key"
       ansible_python_interpreter: /usr/bin/python3
       # Overrides for Vagrant (x86_64, different IPs)
       vault_arch: amd64

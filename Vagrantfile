@@ -130,7 +130,7 @@ EOF
 
       echo "=== Installing dependencies ==="
       apt-get update
-      apt-get install -y curl wget gnupg2 ca-certificates zip unzip
+      apt-get install -y curl wget gnupg2 ca-certificates zip unzip git
 
       # Registry mirror — cache Docker Hub, Elastic, Quay via Pi pull-through cache
       echo "=== Configuring registry mirrors ==="
