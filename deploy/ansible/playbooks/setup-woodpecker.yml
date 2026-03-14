@@ -491,8 +491,18 @@
             - from:
                 - podSelector: {}
           egress:
-            # To Kubernetes API (deploy step, configmap reads)
-            - ports:
+            # To Traefik / k8s API (kube-system namespace)
+            # NB: NP matches target ports, not service ports.
+            # Traefik: svc 443->pod 8443, svc 80->pod 8000.
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 8443
+                - protocol: TCP
+                  port: 8000
                 - protocol: TCP
                   port: 443
                 - protocol: TCP
