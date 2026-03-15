@@ -536,6 +536,15 @@
               ports:
                 - protocol: TCP
                   port: 3000
+            # To Nexus on Pi (caching proxy for Maven, npm, PyPI, Docker)
+            - to:
+                - ipBlock:
+                    cidr: {{ nexus_host | default('192.168.11.4') }}/32
+              ports:
+                - protocol: TCP
+                  port: {{ nexus_port | default('8081') }}
+                - protocol: TCP
+                  port: {{ nexus_docker_port | default('8082') }}
             # External HTTPS (Maven Central, npm, Docker Hub for Kaniko)
             - to:
                 - ipBlock:
