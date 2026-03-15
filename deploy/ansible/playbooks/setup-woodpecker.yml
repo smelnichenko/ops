@@ -136,6 +136,16 @@
       changed_when: false
       when: woodpecker_oauth_client_secret | length > 0
 
+    - name: Fetch SonarQube token from monitor namespace secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret monitor-sonarqube -n monitor \
+          -o jsonpath='{.data.SONARQUBE_TOKEN}' 2>/dev/null | base64 -d
+      args:
+        executable: /bin/bash
+      register: sonar_token_lookup
+      changed_when: false
+      failed_when: false
+
     - name: Create CI pipeline secrets (SonarQube, registry credentials)
       ansible.builtin.shell: |
         set -o pipefail
@@ -147,8 +157,8 @@
           namespace: {{ woodpecker_namespace }}
         type: Opaque
         stringData:
-          sonar_token: "{{ woodpecker_sonar_token | default('') }}"
-          sonar_host_url: "{{ woodpecker_sonar_host_url | default('') }}"
+          sonar_token: "{{ woodpecker_sonar_token | default(sonar_token_lookup.stdout | default('')) }}"
+          sonar_host_url: "{{ woodpecker_sonar_host_url | default('https://sonar.pmon.dev') }}"
           registry_user: "{{ woodpecker_registry_user | default(forgejo_admin_user) }}"
           registry_token: "{{ woodpecker_registry_token | default(forgejo_admin_password) }}"
           nexus_url: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}"
@@ -510,17 +520,13 @@
                   port: 443
                 - protocol: TCP
                   port: 6443
-            # To Kubernetes API (default namespace — ClusterIP DNAT means ipBlock alone doesn't work)
+            # To Kubernetes API (node IP + ClusterIP, belt-and-suspenders)
             - to:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: default
+                - ipBlock:
+                    cidr: {{ target_host | default('192.168.11.2') }}/32
               ports:
                 - protocol: TCP
-                  port: 443
-                - protocol: TCP
                   port: 6443
-            # To Kubernetes API (ClusterIP 10.43.0.1, belt-and-suspenders with above)
             - to:
                 - ipBlock:
                     cidr: 10.43.0.1/32
