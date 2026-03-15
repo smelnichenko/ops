@@ -298,14 +298,20 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password"
         method: PUT
-        user: admin
-        password: "{{ current_admin_password }}"
+        url_username: admin
+        url_password: "{{ current_admin_password }}"
         force_basic_auth: true
         body: "{{ nexus_admin_password }}"
         headers:
           Content-Type: "text/plain"
         status_code: [204, 403]
       register: password_change
+      when: initial_password_file.stat.exists
+
+    - name: Delete initial admin password file
+      ansible.builtin.file:
+        path: "{{ nexus_data_dir }}/admin.password"
+        state: absent
       when: initial_password_file.stat.exists
 
     # ================================================================
@@ -316,8 +322,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/system/eula"
         method: GET
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         return_content: true
       register: eula_status
@@ -326,8 +332,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/system/eula"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -340,8 +346,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/anonymous"
         method: PUT
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -358,8 +364,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
         method: GET
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         return_content: true
       register: active_realms
@@ -368,8 +374,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
         method: PUT
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body: >-
@@ -393,8 +399,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
         method: GET
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         return_content: true
       register: existing_repos
@@ -408,8 +414,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -442,8 +448,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -475,8 +481,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -508,8 +514,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -535,8 +541,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/proxy"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -566,8 +572,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/group"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -590,8 +596,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/npm/proxy"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -618,8 +624,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/npm/group"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -639,8 +645,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/proxy"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -667,8 +673,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -691,8 +697,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/cleanup-policies"
         method: POST
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
         body:
@@ -766,8 +772,8 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
         method: GET
-        user: admin
-        password: "{{ nexus_admin_password }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         return_content: true
       register: final_repos
