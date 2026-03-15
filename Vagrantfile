@@ -139,13 +139,13 @@ EOF
 mirrors:
   docker.io:
     endpoint:
-      - "http://192.168.11.4:5000"
+      - "http://192.168.11.4:8082"
   docker.elastic.co:
     endpoint:
-      - "http://192.168.11.4:5001"
+      - "http://192.168.11.4:8082"
   quay.io:
     endpoint:
-      - "http://192.168.11.4:5002"
+      - "http://192.168.11.4:8082"
 REGEOF
 
       # Install k3s (includes Traefik ingress and local-path-provisioner)

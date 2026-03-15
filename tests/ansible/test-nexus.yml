@@ -52,14 +52,15 @@
     # ================================================================
 
     - name: "CHECK: List all repositories"
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
-        method: GET
-        user: admin
-        password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        return_content: true
-      register: repos
+      ansible.builtin.shell: |
+        curl -sf -u "admin:{{ nexus_admin_password }}" \
+          "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
+      register: repos_raw
+      changed_when: false
+
+    - name: Parse repository list
+      ansible.builtin.set_fact:
+        repos: "{{ {'json': repos_raw.stdout | from_json} }}"
 
     - name: "CHECK: Expected repositories exist"
       ansible.builtin.assert:
@@ -101,14 +102,15 @@
     # ================================================================
 
     - name: "CHECK: Active security realms"
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
-        method: GET
-        user: admin
-        password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        return_content: true
-      register: realms
+      ansible.builtin.shell: |
+        curl -sf -u "admin:{{ nexus_admin_password }}" \
+          "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
+      register: realms_raw
+      changed_when: false
+
+    - name: Parse realms list
+      ansible.builtin.set_fact:
+        realms: "{{ {'json': realms_raw.stdout | from_json} }}"
 
     - name: "CHECK: DockerToken realm is active"
       ansible.builtin.assert:

@@ -112,7 +112,7 @@
             enabled: false
           app:
             image:
-              repository: ghcr.io/schnappy/monitor
+              repository: git.pmon.dev/schnappy/monitor
               tag: "latest"
               pullPolicy: IfNotPresent
             replicas: 1
