@@ -5,7 +5,7 @@
 #   ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
 #
 - name: Setup k3s on target host
-  hosts: all
+  hosts: target
   become: true
   gather_facts: true
 
