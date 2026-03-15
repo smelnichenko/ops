@@ -510,7 +510,17 @@
                   port: 443
                 - protocol: TCP
                   port: 6443
-            # To Kubernetes API (ClusterIP 10.43.0.1, not a pod so ipBlock required)
+            # To Kubernetes API (default namespace — ClusterIP DNAT means ipBlock alone doesn't work)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: default
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 6443
+            # To Kubernetes API (ClusterIP 10.43.0.1, belt-and-suspenders with above)
             - to:
                 - ipBlock:
                     cidr: 10.43.0.1/32
