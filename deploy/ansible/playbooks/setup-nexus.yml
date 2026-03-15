@@ -295,17 +295,16 @@
         current_admin_password: "{{ (initial_password.content | b64decode) if initial_password_file.stat.exists else nexus_admin_password }}"
 
     - name: Change admin password
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password"
-        method: PUT
-        url_username: admin
-        url_password: "{{ current_admin_password }}"
-        force_basic_auth: true
-        body: "{{ nexus_admin_password }}"
-        headers:
-          Content-Type: "text/plain"
-        status_code: [204, 403]
+      ansible.builtin.shell: |
+        HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' \
+          -u "admin:{{ current_admin_password }}" \
+          -X PUT -H "Content-Type: text/plain" \
+          -d "{{ nexus_admin_password }}" \
+          "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password")
+        echo "Password change HTTP status: $HTTP_CODE"
+        [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "403" ]
       register: password_change
+      changed_when: "'204' in password_change.stdout"
       when: initial_password_file.stat.exists
 
     - name: Delete initial admin password file
