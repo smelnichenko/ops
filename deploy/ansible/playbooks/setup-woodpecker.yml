@@ -220,6 +220,7 @@
             WOODPECKER_ADMIN: "{{ woodpecker_admin }}"
             WOODPECKER_LOG_LEVEL: "warn"
             WOODPECKER_PIPELINE_CANCEL_RUNNING: "false"
+            WOODPECKER_PIPELINE_DEFAULT_CLONE_DEPTH: "100"
           extraSecretNamesForEnvFrom:
             - woodpecker-forgejo-secret
           ingress:
