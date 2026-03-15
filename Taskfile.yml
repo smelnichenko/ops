@@ -198,7 +198,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-registry-mirror.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml -e registry_mirror_ip=192.168.11.4
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/production.yml -e @vars/woodpecker.yml
@@ -315,6 +315,16 @@ tasks:
       - cmd: ssh-keygen -f "$HOME/.ssh/known_hosts" -R 192.168.56.10 2>/dev/null; true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-woodpecker.yml
 
+  test:nexus:
+    desc: Test Nexus repository manager in Vagrant
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up vault-pi
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-nexus.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-nexus.yml
+
   test:dr:
     desc: Test pod recovery + disaster recovery in Vagrant
     deps: [deploy:install]
@@ -324,8 +334,15 @@ tasks:
       - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml
 
+  deploy:nexus:
+    desc: Deploy Nexus repository manager on Pi
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
+
   deploy:registry-mirror:
-    desc: Deploy Docker Hub pull-through cache on Pi
+    desc: Deploy Docker Hub pull-through cache on Pi (legacy, replaced by deploy:nexus)
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:

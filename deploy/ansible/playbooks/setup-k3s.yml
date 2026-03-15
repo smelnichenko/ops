@@ -107,13 +107,13 @@
           mirrors:
             docker.io:
               endpoint:
-                - "http://{{ registry_mirror_ip }}:5000"
+                - "http://{{ registry_mirror_ip }}:{{ nexus_docker_port | default('8082') }}"
             docker.elastic.co:
               endpoint:
-                - "http://{{ registry_mirror_ip }}:5001"
+                - "http://{{ registry_mirror_ip }}:{{ nexus_docker_port | default('8082') }}"
             quay.io:
               endpoint:
-                - "http://{{ registry_mirror_ip }}:5002"
+                - "http://{{ registry_mirror_ip }}:{{ nexus_docker_port | default('8082') }}"
           {% if forgejo_pull_token | default('') | length > 0 %}
             {{ forgejo_host }}:
               endpoint:

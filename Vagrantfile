@@ -9,7 +9,7 @@
 # Host requirements:
 #   - Vagrant with libvirt or VirtualBox provider
 #   - Tuned for: Intel Core Ultra 125H (14C/18T) + 32GB RAM
-#     k3s: 10 CPUs, 20GB — vault-pi: 2 CPUs, 2GB — leaves 6 threads + 10GB for host
+#     k3s: 10 CPUs, 20GB — vault-pi: 2 CPUs, 4GB — leaves 6 threads + 8GB for host
 #
 # Usage:
 #   vagrant up                          # Start both VMs
@@ -46,13 +46,13 @@ Vagrant.configure("2") do |config|
     vpi.vm.network "forwarded_port", guest: 8200, host: 8300
 
     vpi.vm.provider "libvirt" do |lv|
-      lv.memory = 2048
+      lv.memory = 4096
       lv.cpus = 2
       lv.driver = "kvm"
     end
 
     vpi.vm.provider "virtualbox" do |vb|
-      vb.memory = 2048
+      vb.memory = 4096
       vb.cpus = 2
       vb.name = "vault-pi"
     end

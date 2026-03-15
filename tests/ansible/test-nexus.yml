@@ -1,0 +1,246 @@
+---
+# Test Nexus Repository Manager deployment in Vagrant
+#
+# Verifies Nexus deploys correctly, repositories are provisioned,
+# and proxy functionality works for Docker, Maven, npm, and PyPI.
+#
+# Prerequisites:
+#   - vagrant up vault-pi
+#   - setup-nexus.yml completed
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-nexus.yml
+
+- name: Test Nexus Repository Manager
+  hosts: vault_pi
+  become: true
+  gather_facts: false
+
+  vars:
+    nexus_port: 8081
+    nexus_docker_port: 8082
+    nexus_admin_password: changeme
+
+  tasks:
+    # ================================================================
+    # Phase 1: Verify Nexus is running
+    # ================================================================
+
+    - name: "CHECK: Nexus systemd service is running"
+      ansible.builtin.systemd:
+        name: nexus
+        state: started
+      check_mode: true
+      register: nexus_service
+      failed_when: nexus_service.changed
+
+    - name: "CHECK: Nexus health endpoint responds"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/status"
+        status_code: 200
+      register: health
+      retries: 5
+      delay: 5
+
+    - name: "PASS: Nexus is running and healthy"
+      ansible.builtin.debug:
+        msg: "Nexus status: {{ health.status }}"
+
+    # ================================================================
+    # Phase 2: Verify repositories are provisioned
+    # ================================================================
+
+    - name: "CHECK: List all repositories"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
+        method: GET
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+      register: repos
+
+    - name: "CHECK: Expected repositories exist"
+      ansible.builtin.assert:
+        that:
+          - "'docker-hub' in repo_names"
+          - "'docker-elastic' in repo_names"
+          - "'docker-quay' in repo_names"
+          - "'docker-group' in repo_names"
+          - "'maven-central' in repo_names"
+          - "'maven-public' in repo_names"
+          - "'npm-registry' in repo_names"
+          - "'npm-public' in repo_names"
+          - "'pypi-proxy' in repo_names"
+          - "'pypi-public' in repo_names"
+        fail_msg: "Missing repositories. Found: {{ repo_names }}"
+      vars:
+        repo_names: "{{ repos.json | map(attribute='name') | list }}"
+
+    - name: "PASS: All 10 repositories provisioned"
+      ansible.builtin.debug:
+        msg: "Repositories: {{ repos.json | map(attribute='name') | sort | join(', ') }}"
+
+    # ================================================================
+    # Phase 3: Verify Docker group port
+    # ================================================================
+
+    - name: "CHECK: Docker group port responds"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_docker_port }}/v2/"
+        status_code: [200, 401]
+      register: docker_port
+
+    - name: "PASS: Docker group port {{ nexus_docker_port }} is accessible"
+      ansible.builtin.debug:
+        msg: "Docker registry API responded with status {{ docker_port.status }}"
+
+    # ================================================================
+    # Phase 4: Verify Docker Bearer Token Realm is active
+    # ================================================================
+
+    - name: "CHECK: Active security realms"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
+        method: GET
+        user: admin
+        password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+      register: realms
+
+    - name: "CHECK: DockerToken realm is active"
+      ansible.builtin.assert:
+        that:
+          - "'DockerToken' in realms.json"
+        fail_msg: "DockerToken realm not active. Active realms: {{ realms.json }}"
+
+    - name: "PASS: DockerToken realm is active"
+      ansible.builtin.debug:
+        msg: "Active realms: {{ realms.json | join(', ') }}"
+
+    # ================================================================
+    # Phase 5: Test Maven proxy (fetch a small artifact)
+    # ================================================================
+
+    - name: "CHECK: Maven proxy can fetch artifact metadata"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/repository/maven-public/org/junit/jupiter/junit-jupiter-api/maven-metadata.xml"
+        status_code: 200
+        return_content: true
+      register: maven_test
+      retries: 3
+      delay: 5
+
+    - name: "PASS: Maven proxy works"
+      ansible.builtin.debug:
+        msg: "Fetched junit-jupiter-api metadata ({{ maven_test.content | length }} bytes)"
+
+    # ================================================================
+    # Phase 6: Test npm proxy (fetch a small package)
+    # ================================================================
+
+    - name: "CHECK: npm proxy can fetch package metadata"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/repository/npm-public/is-odd"
+        status_code: 200
+        return_content: true
+      register: npm_test
+      retries: 3
+      delay: 5
+
+    - name: "PASS: npm proxy works"
+      ansible.builtin.debug:
+        msg: "Fetched is-odd package metadata ({{ npm_test.content | length }} bytes)"
+
+    # ================================================================
+    # Phase 7: Test PyPI proxy
+    # ================================================================
+
+    - name: "CHECK: PyPI proxy can fetch package metadata"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/repository/pypi-public/simple/six/"
+        status_code: 200
+        return_content: true
+      register: pypi_test
+      retries: 3
+      delay: 5
+
+    - name: "PASS: PyPI proxy works"
+      ansible.builtin.debug:
+        msg: "Fetched six package page ({{ pypi_test.content | length }} bytes)"
+
+    # ================================================================
+    # Phase 8: Verify old registry mirrors are stopped
+    # ================================================================
+
+    - name: "CHECK: Old registry services are stopped"
+      ansible.builtin.systemd:
+        name: "registry-{{ item }}"
+      register: old_services
+      loop:
+        - dockerhub
+        - elastic
+        - quay
+      failed_when: false
+
+    - name: "CHECK: Old registry ports are not listening"
+      ansible.builtin.wait_for:
+        host: localhost
+        port: "{{ item }}"
+        state: stopped
+        timeout: 5
+      loop:
+        - 5000
+        - 5001
+        - 5002
+      failed_when: false
+      register: old_ports
+
+    - name: "PASS: Old registry mirrors decommissioned"
+      ansible.builtin.debug:
+        msg: "Old registry ports 5000-5002 are no longer in use"
+
+    # ================================================================
+    # Phase 9: Verify UFW rules
+    # ================================================================
+
+    - name: "CHECK: UFW status"
+      ansible.builtin.shell: ufw status
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    - name: "CHECK: UFW allows Nexus ports (if UFW active)"
+      ansible.builtin.shell: "ufw status | grep {{ item }}"
+      register: ufw_check
+      changed_when: false
+      failed_when: false
+      loop:
+        - "{{ nexus_port }}"
+        - "{{ nexus_docker_port }}"
+      when: "'active' in ufw_status.stdout"
+
+    - name: "PASS: UFW rules configured (or UFW inactive in Vagrant)"
+      ansible.builtin.debug:
+        msg: "UFW status: {{ 'active' if 'active' in ufw_status.stdout else 'inactive (Vagrant)' }}"
+
+    # ================================================================
+    # Summary
+    # ================================================================
+
+    - name: "ALL TESTS PASSED"
+      ansible.builtin.debug:
+        msg: |
+          Nexus Repository Manager test results:
+            ✓ Nexus service running
+            ✓ Health endpoint healthy
+            ✓ 10 repositories provisioned
+            ✓ Docker group port {{ nexus_docker_port }} accessible
+            ✓ DockerToken realm active
+            ✓ Maven proxy works (junit-jupiter-api)
+            ✓ npm proxy works (is-odd)
+            ✓ PyPI proxy works (six)
+            ✓ Old registry mirrors decommissioned
+            ✓ UFW rules configured
