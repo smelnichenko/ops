@@ -33,7 +33,6 @@
     nexus_user: nexus
     nexus_port: 8081
     nexus_docker_port: 8082
-    nexus_java_opts: "-Xms512m -Xmx{{ nexus_heap_max | default('4g') }} -XX:+UseG1GC -XX:MaxDirectMemorySize={{ nexus_direct_memory_max | default('2g') }}"
     nexus_admin_password: "{{ lookup('env', 'NEXUS_ADMIN_PASSWORD') | default('changeme', true) }}"
     nexus_checksums:
       aarch_64: "sha256:e8aa707821fdf09838b1db5826b21753d926c1f9c692012fe061fba544241ae6"
@@ -196,7 +195,10 @@
           -Djava.io.tmpdir={{ nexus_data_dir }}/tmp
           -Dkaraf.startLocalConsole=false
           -Dkaraf.startRemoteShell=false
-          {{ nexus_java_opts }}
+          -Xms512m
+          -Xmx{{ nexus_heap_max | default('4g') }}
+          -XX:+UseG1GC
+          -XX:MaxDirectMemorySize={{ nexus_direct_memory_max | default('2g') }}
       notify: Restart nexus
 
     - name: Set Nexus port
