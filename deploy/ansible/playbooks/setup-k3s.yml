@@ -16,6 +16,14 @@
         reboot_timeout: 300
 
   tasks:
+    - name: Configure apt proxy (apt-cacher-ng on Pi)
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/02proxy
+        mode: "0644"
+        content: |
+          Acquire::http { Proxy "http://{{ registry_mirror_ip | default('192.168.11.4') }}:3142"; };
+      when: registry_mirror_ip | default('') | length > 0
+
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
