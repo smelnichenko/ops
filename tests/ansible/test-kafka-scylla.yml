@@ -70,7 +70,7 @@
             enabled: false
           kafka:
             enabled: true
-            image: apache/kafka:3.9.0
+            image: apache/kafka:4.2.0
             clusterId: "{{ test_kafka_cluster_id }}"
             javaOpts: "-Xmx256m -Xms256m"
             retention:

@@ -52,7 +52,7 @@ services:
 
   # Kafka (KRaft mode, for chat messaging)
   kafka:
-    image: apache/kafka:3.9.0
+    image: apache/kafka:4.2.0
     container_name: monitor-kafka
     hostname: kafka
     environment:

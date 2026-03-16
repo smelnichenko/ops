@@ -118,7 +118,7 @@
               ingress:
                 enabled: false
             fluentbit:
-              image: cr.fluentbit.io/fluent/fluent-bit:3.2
+              image: cr.fluentbit.io/fluent/fluent-bit:4.2.3
               resources:
                 requests:
                   memory: "128Mi"

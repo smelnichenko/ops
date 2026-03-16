@@ -194,7 +194,7 @@ monitor_values:
 
   kafka:
     enabled: true
-    image: apache/kafka:3.9.0
+    image: apache/kafka:4.2.0
     existingSecret: "monitor-kafka"
     javaOpts: "-Xmx1g -Xms1g"
     retention:
@@ -313,7 +313,7 @@ monitor_values:
           secretName: "logs-pmon-dev-tls"
           clusterIssuer: "letsencrypt-dns"
     fluentbit:
-      image: cr.fluentbit.io/fluent/fluent-bit:3.2
+      image: cr.fluentbit.io/fluent/fluent-bit:4.2.3
       resources:
         requests:
           memory: "128Mi"
