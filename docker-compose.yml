@@ -1,7 +1,7 @@
 services:
   # PostgreSQL Database
   postgres:
-    image: postgres:latest
+    image: postgres:17-alpine
     container_name: monitor-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-monitor}
@@ -19,7 +19,7 @@ services:
 
   # Redis (volatile cache)
   redis:
-    image: redis:latest
+    image: redis:7-alpine
     container_name: monitor-redis
     command: ["redis-server", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
     ports:

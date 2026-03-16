@@ -54,7 +54,7 @@ monitor_values:
 
   postgres:
     enabled: true
-    image: postgres:latest
+    image: postgres:17-alpine
     database: monitor
     username: "{{ lookup('env', 'POSTGRES_USERNAME') | default('postgres', true) }}"
     password: "{{ lookup('env', 'POSTGRES_PASSWORD') | default('devpassword', true) }}"
@@ -64,7 +64,7 @@ monitor_values:
 
   prometheus:
     enabled: true
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.9.1
     retention: 7d
     scrapeInterval: 15s
     storage:
@@ -73,7 +73,7 @@ monitor_values:
 
   grafana:
     enabled: true
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.4.0
     adminUser: "{{ lookup('env', 'GRAFANA_ADMIN_USER') | default('admin', true) }}"
     adminPassword: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('admin', true) }}"
     storage:
