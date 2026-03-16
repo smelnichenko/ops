@@ -121,15 +121,31 @@
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/monitor-hashcash-test-values.yml \
-          --wait --timeout 600s
+          --set "scylla.args[0]=--developer-mode=1" \
+          --set "scylla.args[1]=--smp=1" \
+          --timeout 600s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
-    - name: Wait for app rollout
+    - name: Wait for app to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=300s
+        for i in $(seq 1 60); do
+          READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+          if [ "$READY" = "true" ]; then
+            echo "OK: App pod ready"
+            exit 0
+          fi
+          echo "Waiting... ready=$READY (attempt $i/60)"
+          sleep 10
+        done
+        echo "FAIL: app not ready after 10 minutes"
+        k3s kubectl get pods -n {{ ns }} -o wide
+        k3s kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+        exit 1
       register: app_rollout
       changed_when: false
+      timeout: 660
 
     - name: Show pod status
       ansible.builtin.shell: |

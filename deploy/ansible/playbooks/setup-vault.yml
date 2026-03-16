@@ -1020,12 +1020,11 @@
 
     - name: Copy vault CA cert to monitor namespace (for Prometheus TLS)
       ansible.builtin.shell: |
-        set -o pipefail
-        k3s kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} \
-          -o jsonpath="{.data.ca\.crt}" | base64 -d | \
+        CA_CERT=$(k3s kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} \
+          -o jsonpath="{.data.ca\.crt}" | base64 -d)
         k3s kubectl create secret generic vault-ca-monitor \
           -n monitor \
-          --from-literal=ca.crt=/dev/stdin \
+          --from-literal="ca.crt=${CA_CERT}" \
           --dry-run=client -o yaml | k3s kubectl apply -f -
       args:
         executable: /bin/bash

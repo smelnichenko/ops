@@ -290,6 +290,7 @@
         k3s kubectl logs -n {{ ns }} -l app.kubernetes.io/component=app --tail=30
       register: app_logs
       changed_when: false
+      failed_when: false
       when: app_rollout.rc != 0
 
     - name: "APP: Logs (last 30 lines)"

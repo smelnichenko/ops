@@ -51,22 +51,6 @@
     # Phase 2: Verify repositories are provisioned
     # ================================================================
 
-    - name: "DEBUG: Test admin auth"
-      ansible.builtin.shell: |
-        echo "Testing password: {{ nexus_admin_password }}"
-        curl -v -u "admin:{{ nexus_admin_password }}" \
-          "http://localhost:{{ nexus_port }}/service/rest/v1/status" 2>&1
-        echo "---"
-        curl -v -u "admin:{{ nexus_admin_password }}" \
-          "http://localhost:{{ nexus_port }}/service/rest/v1/repositories" 2>&1
-      register: debug_auth
-      changed_when: false
-      failed_when: false
-
-    - name: "DEBUG: Auth result"
-      ansible.builtin.debug:
-        msg: "{{ debug_auth.stdout_lines }}"
-
     - name: "CHECK: List all repositories"
       ansible.builtin.shell: |
         curl -sf -u "admin:{{ nexus_admin_password }}" \
