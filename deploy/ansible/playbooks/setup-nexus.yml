@@ -279,6 +279,27 @@
     # Phase 5: Initial admin password setup
     # ================================================================
 
+    - name: Wait for admin password file or verify auth works
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          if [ -f "{{ nexus_data_dir }}/admin.password" ]; then
+            echo "admin.password file found"
+            exit 0
+          fi
+          # File gone = password already changed; verify auth works
+          HTTP=$(curl -sf -o /dev/null -w '%{http_code}' \
+            -u "admin:{{ nexus_admin_password }}" \
+            "http://localhost:{{ nexus_port }}/service/rest/v1/status")
+          if [ "$HTTP" = "200" ]; then
+            echo "auth works with configured password"
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "FAIL: neither admin.password nor configured password works"
+        exit 1
+      changed_when: false
+
     - name: Check if initial admin password file exists
       ansible.builtin.stat:
         path: "{{ nexus_data_dir }}/admin.password"
@@ -302,7 +323,7 @@
           -d "{{ nexus_admin_password }}" \
           "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password")
         echo "Password change HTTP status: $HTTP_CODE"
-        [ "$HTTP_CODE" = "204" ] || [ "$HTTP_CODE" = "403" ]
+        [ "$HTTP_CODE" = "204" ]
       register: password_change
       changed_when: "'204' in password_change.stdout"
       when: initial_password_file.stat.exists
