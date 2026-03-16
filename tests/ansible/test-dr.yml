@@ -71,12 +71,107 @@
 
   tasks:
     # ================================================================
-    # Prerequisites
+    # Prerequisites: Deploy the app
     # ================================================================
 
     - name: Verify k3s is running
       ansible.builtin.command: k3s kubectl get nodes
       changed_when: false
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for DR test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-dr-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: false
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+            registrationApproval:
+              mode: skip
+          networkPolicies:
+            enabled: false
+          frontend:
+            enabled: true
+            image:
+              repository: monitor-frontend
+              tag: local
+              pullPolicy: Never
+          app:
+            replicas: 1
+            image:
+              repository: monitor
+              tag: local
+              pullPolicy: Never
+            ingress:
+              enabled: true
+              className: traefik
+              host: ""
+          postgres:
+            enabled: true
+            password: "vagrant-test-pw"
+            image: postgres:17-alpine
+            storage:
+              storageClass: "local-path"
+          redis:
+            enabled: true
+            image: redis:7-alpine
+          captcha:
+            enabled: false
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+          kafka:
+            enabled: false
+          scylla:
+            enabled: false
+
+    - name: Deploy chart for DR test
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/infra/helm \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-dr-test-values.yml \
+          --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Wait for app to be ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+          if [ "$READY" = "true" ]; then
+            echo "OK: App pod ready"
+            exit 0
+          fi
+          echo "Waiting... ready=$READY (attempt $i/60)"
+          sleep 10
+        done
+        echo "FAIL: app not ready after 10 minutes"
+        k3s kubectl get pods -n {{ ns }} -o wide
+        k3s kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+        exit 1
+      register: app_readiness
+      changed_when: false
+      timeout: 660
 
     - name: Wait for app to be healthy
       ansible.builtin.uri:
@@ -1194,6 +1289,11 @@
     # ================================================================
     # Summary
     # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-dr-test-values.yml
+        state: absent
 
     - name: "=== ALL DR TESTS PASSED ==="
       ansible.builtin.debug:

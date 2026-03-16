@@ -20,7 +20,7 @@
   vars:
     nexus_port: 8081
     nexus_docker_port: 8082
-    nexus_admin_password: changeme
+    nexus_admin_password: "{{ lookup('env', 'NEXUS_ADMIN_PASSWORD') | default('changeme', true) }}"
 
   tasks:
     # ================================================================
@@ -52,15 +52,17 @@
     # ================================================================
 
     - name: "CHECK: List all repositories"
-      ansible.builtin.shell: |
-        curl -sf -u "admin:{{ nexus_admin_password }}" \
-          "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
-      register: repos_raw
-      changed_when: false
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+      register: repos
 
-    - name: Parse repository list
+    - name: Parse repository list (normalize to .json key)
       ansible.builtin.set_fact:
-        repos: "{{ {'json': repos_raw.stdout | from_json} }}"
+        repos: "{{ {'json': repos.json} }}"
 
     - name: "CHECK: Expected repositories exist"
       ansible.builtin.assert:
@@ -102,15 +104,17 @@
     # ================================================================
 
     - name: "CHECK: Active security realms"
-      ansible.builtin.shell: |
-        curl -sf -u "admin:{{ nexus_admin_password }}" \
-          "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
-      register: realms_raw
-      changed_when: false
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+      register: realms
 
-    - name: Parse realms list
+    - name: Parse realms list (normalize to .json key)
       ansible.builtin.set_fact:
-        realms: "{{ {'json': realms_raw.stdout | from_json} }}"
+        realms: "{{ {'json': realms.json} }}"
 
     - name: "CHECK: DockerToken realm is active"
       ansible.builtin.assert:
