@@ -163,7 +163,6 @@
           registry_token: "{{ woodpecker_registry_token | default(forgejo_admin_password) }}"
           nexus_url: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}"
           nexus_npm_registry: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}/repository/npm-public/"
-          apt_proxy: "http://{{ nexus_host | default('192.168.11.4') }}:3142"
         EOF
       args:
         executable: /bin/bash
