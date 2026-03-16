@@ -98,7 +98,7 @@
             enabled: false
           prometheus:
             enabled: true
-            image: prom/prometheus:v3.9.1
+            image: prom/prometheus:v3.10.0
             retention: 1d
             scrapeInterval: 30s
             vault:
