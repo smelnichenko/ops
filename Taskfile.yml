@@ -401,6 +401,36 @@ tasks:
     cmds:
       - ssh -o ConnectTimeout=5 {{.TARGET_USER}}@{{.TARGET_HOST}} "hostname && uname -a"
 
+  # ============== VAGRANT TESTS (ALL) ==============
+  test:vagrant-all:
+    desc: Run all Vagrant integration tests sequentially
+    deps: [deploy:install]
+    cmds:
+      - echo "=== [1/11] test:vault ==="
+      - task: test:vault
+      - echo "=== [2/11] test:eso ==="
+      - task: test:eso
+      - echo "=== [3/11] test:elk ==="
+      - task: test:elk
+      - echo "=== [4/11] test:grafana ==="
+      - task: test:grafana
+      - echo "=== [5/11] test:kafka-scylla ==="
+      - task: test:kafka-scylla
+      - echo "=== [6/11] test:hashcash ==="
+      - task: test:hashcash
+      - echo "=== [7/11] test:sonarqube ==="
+      - task: test:sonarqube
+      - echo "=== [8/10] test:dr ==="
+      - task: test:dr
+      - echo "=== [9/11] test:cicd ==="
+      - task: test:cicd
+      - echo "=== [10/11] test:nexus ==="
+      - task: test:nexus
+      - echo "=== [11/11] test:woodpecker ==="
+      - task: test:woodpecker
+      - echo ""
+      - echo "=== All Vagrant tests complete ==="
+
   # ============== VAGRANT ==============
   vagrant:up:
     desc: Start Vagrant VMs
