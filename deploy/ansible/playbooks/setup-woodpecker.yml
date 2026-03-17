@@ -552,6 +552,17 @@
               ports:
                 - protocol: TCP
                   port: 3000
+            # To apt-cacher-ng (monitor namespace)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: {{ monitor_namespace }}
+                  podSelector:
+                    matchLabels:
+                      app.kubernetes.io/component: apt-cache
+              ports:
+                - protocol: TCP
+                  port: 3142
             # To Nexus on Pi (caching proxy for Maven, npm, PyPI, Docker)
             - to:
                 - ipBlock:

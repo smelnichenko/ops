@@ -786,70 +786,6 @@
         from_ip: fd0a:94e6:20b4:9f6b::/64
 
     # ================================================================
-    # Phase 11: apt-cacher-ng
-    # ================================================================
-
-    - name: Install apt-cacher-ng
-      ansible.builtin.apt:
-        name: apt-cacher-ng
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-
-    - name: Configure apt-cacher-ng
-      ansible.builtin.copy:
-        dest: /etc/apt-cacher-ng/zzz_custom.conf
-        mode: "0644"
-        content: |
-          # Custom configuration — managed by Ansible
-          CacheDir: /mnt/data/apt-cacher-ng
-          Port: 3142
-          BindAddress: 0.0.0.0
-          ExTreshold: 30
-          PassThroughPattern: .*
-      notify: Restart apt-cacher-ng
-
-    - name: Create apt-cacher-ng cache directory
-      ansible.builtin.file:
-        path: /mnt/data/apt-cacher-ng
-        state: directory
-        owner: apt-cacher-ng
-        group: apt-cacher-ng
-        mode: "0755"
-
-    - name: Flush handlers before starting apt-cacher-ng
-      ansible.builtin.meta: flush_handlers
-
-    - name: Enable and start apt-cacher-ng
-      ansible.builtin.systemd:
-        name: apt-cacher-ng
-        state: started
-        enabled: true
-
-    - name: Allow apt-cacher-ng port from LAN (IPv4)
-      community.general.ufw:
-        rule: allow
-        port: "3142"
-        proto: tcp
-        from_ip: 192.168.11.0/24
-
-    - name: Allow apt-cacher-ng port from LAN (IPv6)
-      community.general.ufw:
-        rule: allow
-        port: "3142"
-        proto: tcp
-        from_ip: fd0a:94e6:20b4:9f6b::/64
-
-    - name: Wait for apt-cacher-ng to be ready
-      ansible.builtin.uri:
-        url: "http://localhost:3142/acng-report.html"
-        status_code: 200
-      register: acng_health
-      retries: 5
-      delay: 2
-      until: acng_health.status == 200
-
-    # ================================================================
     # Verify
     # ================================================================
 
@@ -881,7 +817,6 @@
             Maven:      http://{{ ansible_host }}:{{ nexus_port }}/repository/maven-public/
             npm:        http://{{ ansible_host }}:{{ nexus_port }}/repository/npm-public/
             PyPI:       http://{{ ansible_host }}:{{ nexus_port }}/repository/pypi-public/simple/
-            apt:        http://{{ ansible_host }}:3142/
 
   handlers:
     - name: Reload systemd
@@ -893,7 +828,3 @@
         name: nexus
         state: restarted
 
-    - name: Restart apt-cacher-ng
-      ansible.builtin.systemd:
-        name: apt-cacher-ng
-        state: restarted

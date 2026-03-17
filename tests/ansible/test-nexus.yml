@@ -209,37 +209,6 @@
         msg: "Old registry ports 5000-5002 are no longer in use"
 
     # ================================================================
-    # Phase 9: Verify apt-cacher-ng
-    # ================================================================
-
-    - name: "CHECK: apt-cacher-ng service is running"
-      ansible.builtin.systemd:
-        name: apt-cacher-ng
-        state: started
-      check_mode: true
-      register: acng_service
-      failed_when: acng_service.changed
-
-    - name: "CHECK: apt-cacher-ng report page responds"
-      ansible.builtin.uri:
-        url: "http://localhost:3142/acng-report.html"
-        status_code: 200
-      register: acng_health
-
-    - name: "CHECK: apt-cacher-ng can proxy a package index"
-      ansible.builtin.uri:
-        url: "http://localhost:3142/deb.debian.org/debian/dists/trixie/Release"
-        status_code: 200
-        return_content: false
-      register: acng_proxy
-      retries: 3
-      delay: 5
-
-    - name: "PASS: apt-cacher-ng works"
-      ansible.builtin.debug:
-        msg: "apt-cacher-ng running on port 3142, proxy fetch successful"
-
-    # ================================================================
     # Phase 10: Verify UFW rules
     # ================================================================
 
@@ -280,5 +249,4 @@
             ✓ npm proxy works (is-odd)
             ✓ PyPI proxy works (six)
             ✓ Old registry mirrors decommissioned
-            ✓ apt-cacher-ng running and proxying
             ✓ UFW rules configured
