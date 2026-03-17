@@ -218,6 +218,7 @@
             WOODPECKER_FORGEJO: "true"
             WOODPECKER_FORGEJO_URL: "https://{{ forgejo_host }}"
             WOODPECKER_ADMIN: "{{ woodpecker_admin }}"
+            WOODPECKER_OPEN: "true"
             WOODPECKER_LOG_LEVEL: "warn"
             WOODPECKER_PIPELINE_CANCEL_RUNNING: "false"
           extraSecretNamesForEnvFrom:
