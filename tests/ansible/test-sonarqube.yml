@@ -613,6 +613,81 @@
           Java + TypeScript quality profiles 'Monitor' with cognitive complexity threshold 15.
 
     # ================================================================
+    # Phase 4e: Create microservice SonarQube projects
+    # ================================================================
+
+    - name: Define SonarQube projects
+      ansible.builtin.set_fact:
+        sq_projects:
+          - key: monitor-backend
+            name: "Monitor Backend (Core)"
+          - key: monitor-admin
+            name: "Monitor Admin (User Service)"
+          - key: monitor-chat
+            name: "Monitor Chat Service"
+          - key: monitor-chess
+            name: "Monitor Chess Service"
+          - key: monitor-gateway
+            name: "Monitor API Gateway"
+          - key: monitor-frontend
+            name: "Monitor Frontend"
+          - key: monitor-infra
+            name: "Monitor Infrastructure"
+
+    - name: Create SonarQube projects
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/projects/create" \
+          -d "name={{ item.name }}" \
+          -d "project={{ item.key }}" \
+          -d "mainBranch=master"
+      loop: "{{ sq_projects }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: sq_project_create
+      failed_when: false
+      no_log: true
+
+    - name: Set quality gate for each project
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          -X POST "http://localhost:9000/api/qualitygates/select" \
+          -d "projectKey={{ item.key }}" \
+          -d "gateName=Monitor"
+      loop: "{{ sq_projects }}"
+      loop_control:
+        label: "{{ item.key }}"
+      no_log: true
+
+    - name: List all SonarQube projects
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-sonarqube -- \
+          curl -sf -u "{{ sq_auth }}" \
+          "http://localhost:9000/api/projects/search" | \
+          python3 -c "import sys,json; comps=json.load(sys.stdin).get('components',[]); [print(c['key']) for c in comps]"
+      register: sq_project_list
+      changed_when: false
+      no_log: true
+
+    - name: Set project result facts
+      ansible.builtin.set_fact:
+        sq_project_count: "{{ sq_project_list.stdout_lines | default([]) | length }}"
+        sq_projects_pass: "{{ sq_project_list.stdout_lines | default([]) | length >= 7 }}"
+        sq_project_backend: "{{ 'monitor-backend' in sq_project_list.stdout | default('') }}"
+        sq_project_admin: "{{ 'monitor-admin' in sq_project_list.stdout | default('') }}"
+        sq_project_chat: "{{ 'monitor-chat' in sq_project_list.stdout | default('') }}"
+        sq_project_chess: "{{ 'monitor-chess' in sq_project_list.stdout | default('') }}"
+        sq_project_gateway: "{{ 'monitor-gateway' in sq_project_list.stdout | default('') }}"
+        sq_project_frontend: "{{ 'monitor-frontend' in sq_project_list.stdout | default('') }}"
+        sq_project_infra: "{{ 'monitor-infra' in sq_project_list.stdout | default('') }}"
+
+    - name: "CONFIGURE: Microservice projects"
+      ansible.builtin.debug:
+        msg: "Created {{ sq_project_count }}/7 SonarQube projects with Monitor quality gate"
+
+    # ================================================================
     # Phase 5: Summary
     # ================================================================
 
@@ -633,21 +708,33 @@
 
     - name: "TEST RESULT"
       vars:
-        all_pass: "{{ sq_pg_pass and sq_secret_pass and sq_deploy_pass and sq_up_pass and sq_http_pass and sq_admin_pass }}"
+        all_pass: "{{ sq_pg_pass and sq_secret_pass and sq_deploy_pass and sq_up_pass and sq_http_pass and sq_admin_pass and sq_projects_pass }}"
       ansible.builtin.debug:
         msg: |
           ====================================================
           SonarQube Integration Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
 
+          --- Infrastructure ---
           [{{ 'PASS' if sq_pg_pass else 'FAIL' }}] SonarQube PostgreSQL running
           [{{ 'PASS' if sq_secret_pass else 'FAIL' }}] ExternalSecret synced
           [{{ 'PASS' if sq_deploy_pass else 'FAIL' }}] SonarQube Deployment running
           [{{ 'PASS' if sq_up_pass else 'WARN' }}] SonarQube status UP
           [{{ 'PASS' if sq_http_pass else 'WARN' }}] SonarQube web UI (HTTP {{ sq_http.stdout | default('N/A') }})
+
+          --- Configuration ---
           [{{ 'PASS' if sq_admin_pass else 'WARN' }}] Admin password changed from default
           [{{ 'PASS' if sq_token_pass else 'WARN' }}] API token generated and seeded to Vault
           [PASS] Quality gate 'Monitor' configured and set as default
           [PASS] Quality profiles 'Monitor' (Java + TS, cognitive complexity 15)
+
+          --- Projects ({{ sq_project_count }}/7) ---
+          [{{ 'PASS' if sq_project_backend else 'FAIL' }}] Project: monitor-backend (Core)
+          [{{ 'PASS' if sq_project_admin else 'FAIL' }}] Project: monitor-admin (User Service)
+          [{{ 'PASS' if sq_project_chat else 'FAIL' }}] Project: monitor-chat (Chat Service)
+          [{{ 'PASS' if sq_project_chess else 'FAIL' }}] Project: monitor-chess (Chess Service)
+          [{{ 'PASS' if sq_project_gateway else 'FAIL' }}] Project: monitor-gateway (API Gateway)
+          [{{ 'PASS' if sq_project_frontend else 'FAIL' }}] Project: monitor-frontend (Frontend)
+          [{{ 'PASS' if sq_project_infra else 'FAIL' }}] Project: monitor-infra (Infrastructure)
           ====================================================
 
     - name: Fail if critical checks failed

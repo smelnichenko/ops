@@ -1,0 +1,244 @@
+---
+# Setup Linkerd service mesh on k3s
+#
+# Installs Linkerd control plane, injects sidecars into monitor namespace,
+# and optionally installs Linkerd Viz for observability.
+#
+# Prerequisites:
+#   - k3s cluster running (setup-k3s.yml)
+#   - Monitor namespace exists
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-linkerd.yml
+
+- name: Setup Linkerd service mesh
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    linkerd_version: "stable-2.17.0"
+    linkerd_viz: true
+    monitor_namespace: monitor
+    k3s_kubectl: "k3s kubectl"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Install Linkerd CLI
+    # ================================================================
+
+    - name: Check if Linkerd CLI is installed
+      ansible.builtin.command: linkerd version --client --short
+      register: linkerd_cli_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install Linkerd CLI
+      when: linkerd_cli_check.rc != 0 or linkerd_version not in (linkerd_cli_check.stdout | default(''))
+      block:
+        - name: Download Linkerd install script
+          ansible.builtin.get_url:
+            url: https://run.linkerd.io/install
+            dest: /tmp/linkerd-install.sh
+            mode: '0755'
+
+        - name: Run Linkerd install script
+          ansible.builtin.shell: |
+            set -o pipefail
+            LINKERD2_VERSION={{ linkerd_version }} /tmp/linkerd-install.sh
+          args:
+            executable: /bin/bash
+          environment:
+            LINKERD2_VERSION: "{{ linkerd_version }}"
+
+        - name: Add Linkerd to PATH
+          ansible.builtin.copy:
+            content: |
+              export PATH=$HOME/.linkerd2/bin:$PATH
+            dest: /etc/profile.d/linkerd.sh
+            mode: '0644'
+
+        - name: Clean up install script
+          ansible.builtin.file:
+            path: /tmp/linkerd-install.sh
+            state: absent
+
+    - name: Verify Linkerd CLI version
+      ansible.builtin.command: $HOME/.linkerd2/bin/linkerd version --client --short
+      register: linkerd_version_result
+      changed_when: false
+
+    - name: Display Linkerd CLI version
+      ansible.builtin.debug:
+        msg: "Linkerd CLI: {{ linkerd_version_result.stdout }}"
+
+    # ================================================================
+    # Phase 2: Install Linkerd CRDs + Control Plane
+    # ================================================================
+
+    - name: Check if Linkerd control plane is installed
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ k3s_kubectl }} get namespace linkerd 2>/dev/null && echo "installed" || echo "not_installed"
+      args:
+        executable: /bin/bash
+      register: linkerd_ns_check
+      changed_when: false
+
+    - name: Install Linkerd CRDs
+      when: "'not_installed' in linkerd_ns_check.stdout"
+      ansible.builtin.shell: |
+        set -o pipefail
+        $HOME/.linkerd2/bin/linkerd install --crds | {{ k3s_kubectl }} apply -f -
+      args:
+        executable: /bin/bash
+      register: linkerd_crds_result
+      changed_when: "'created' in linkerd_crds_result.stdout"
+
+    - name: Install Linkerd control plane
+      when: "'not_installed' in linkerd_ns_check.stdout"
+      ansible.builtin.shell: |
+        set -o pipefail
+        $HOME/.linkerd2/bin/linkerd install | {{ k3s_kubectl }} apply -f -
+      args:
+        executable: /bin/bash
+      register: linkerd_install_result
+      changed_when: "'created' in linkerd_install_result.stdout"
+
+    - name: Wait for Linkerd control plane to be ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        $HOME/.linkerd2/bin/linkerd check --wait 5m 2>&1
+      args:
+        executable: /bin/bash
+      register: linkerd_check_result
+      changed_when: false
+      retries: 3
+      delay: 10
+      until: linkerd_check_result.rc == 0
+
+    - name: Display Linkerd check result
+      ansible.builtin.debug:
+        msg: "Linkerd control plane ready"
+
+    # ================================================================
+    # Phase 3: Annotate monitor namespace for sidecar injection
+    # ================================================================
+
+    - name: Annotate monitor namespace for Linkerd injection
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ k3s_kubectl }} annotate namespace {{ monitor_namespace }} \
+          linkerd.io/inject=enabled --overwrite
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Restart deployments to inject sidecars
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ k3s_kubectl }} rollout restart deploy -n {{ monitor_namespace }}
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Wait for rollouts to complete
+      ansible.builtin.shell: |
+        set -o pipefail
+        for deploy in $({{ k3s_kubectl }} get deploy -n {{ monitor_namespace }} -o name 2>/dev/null); do
+          {{ k3s_kubectl }} rollout status "$deploy" -n {{ monitor_namespace }} --timeout=120s || true
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Install Linkerd Viz (optional)
+    # ================================================================
+
+    - name: Install Linkerd Viz
+      when: linkerd_viz | bool
+      block:
+        - name: Check if Linkerd Viz is installed
+          ansible.builtin.shell: |
+            set -o pipefail
+            {{ k3s_kubectl }} get namespace linkerd-viz 2>/dev/null && echo "installed" || echo "not_installed"
+          args:
+            executable: /bin/bash
+          register: linkerd_viz_check
+          changed_when: false
+
+        - name: Install Linkerd Viz extension
+          when: "'not_installed' in linkerd_viz_check.stdout"
+          ansible.builtin.shell: |
+            set -o pipefail
+            $HOME/.linkerd2/bin/linkerd viz install | {{ k3s_kubectl }} apply -f -
+          args:
+            executable: /bin/bash
+          register: linkerd_viz_install
+          changed_when: "'created' in linkerd_viz_install.stdout"
+
+        - name: Wait for Linkerd Viz to be ready
+          ansible.builtin.shell: |
+            set -o pipefail
+            $HOME/.linkerd2/bin/linkerd viz check --wait 3m 2>&1
+          args:
+            executable: /bin/bash
+          changed_when: false
+          retries: 3
+          delay: 10
+          until: linkerd_viz_ready.rc == 0
+          register: linkerd_viz_ready
+
+    # ================================================================
+    # Phase 5: Verify sidecar injection
+    # ================================================================
+
+    - name: Check sidecar injection in monitor namespace
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ k3s_kubectl }} get pods -n {{ monitor_namespace }} \
+          -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .spec.containers[*]}{.name}{","}{end}{"\n"}{end}'
+      args:
+        executable: /bin/bash
+      register: pod_containers
+      changed_when: false
+
+    - name: Display pod containers (should show linkerd-proxy)
+      ansible.builtin.debug:
+        msg: "{{ pod_containers.stdout_lines }}"
+
+    - name: Verify mTLS is active
+      when: linkerd_viz | bool
+      ansible.builtin.shell: |
+        set -o pipefail
+        $HOME/.linkerd2/bin/linkerd viz edges deployment -n {{ monitor_namespace }} 2>&1 || true
+      args:
+        executable: /bin/bash
+      register: mtls_edges
+      changed_when: false
+
+    - name: Display mTLS edges
+      when: linkerd_viz | bool
+      ansible.builtin.debug:
+        msg: "{{ mtls_edges.stdout_lines }}"
+
+    # ================================================================
+    # Phase 6: Summary
+    # ================================================================
+
+    - name: Linkerd setup summary
+      ansible.builtin.debug:
+        msg: |
+          Linkerd service mesh setup complete:
+            - CLI version: {{ linkerd_version }}
+            - Control plane: installed
+            - Namespace injection: {{ monitor_namespace }} annotated
+            - Viz dashboard: {{ 'installed' if (linkerd_viz | bool) else 'skipped' }}
+            - Sidecar injection: restart triggered
+
+          To verify mTLS:
+            linkerd viz edges deployment -n {{ monitor_namespace }}
+
+          To open dashboard:
+            linkerd viz dashboard

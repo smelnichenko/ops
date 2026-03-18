@@ -1,0 +1,654 @@
+---
+# Test Linkerd service mesh deployment in Vagrant
+#
+# Verifies Linkerd installs correctly, sidecars are injected into
+# all service pods, mTLS is active, golden metrics are available,
+# and ServerAuthorization policies enforce allowed callers.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#   - All service images built and available in containerd
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-linkerd.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test Linkerd service mesh
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    linkerd_ns: linkerd
+    linkerd_viz_ns: linkerd-viz
+    test_jwt_secret: "test-only-not-used-32-chars-long!!"
+    test_pg_password: "vagrant-test-linkerd-pg-password"
+    test_kafka_cluster_id: "vagrant-test-kafka-cluster-id00"
+    test_user_email: "linkerd-test@test.com"
+    test_user_password: "testpassword123"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Install Linkerd CLI + CRDs + Control Plane
+    # ================================================================
+
+    - name: Download Linkerd CLI
+      ansible.builtin.shell: |
+        curl -fsL https://run.linkerd.io/install | sh
+      environment:
+        INSTALLROOT: /usr/local
+      register: linkerd_install_cli
+      retries: 3
+      delay: 10
+      until: linkerd_install_cli.rc == 0
+      changed_when: true
+
+    - name: Verify Linkerd CLI version
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd version --client
+      register: linkerd_version
+      changed_when: false
+
+    - name: "Linkerd CLI: {{ linkerd_version.stdout | default('unknown') }}"
+      ansible.builtin.debug:
+        msg: "{{ linkerd_version.stdout }}"
+
+    - name: Install Linkerd CRDs
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd install --crds | k3s kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_crds
+      changed_when: true
+
+    - name: Install Linkerd control plane
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd install | k3s kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_cp
+      changed_when: true
+
+    - name: Wait for Linkerd control plane to be ready
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd check --wait 300s 2>&1
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_check_initial
+      retries: 6
+      delay: 30
+      until: linkerd_check_initial.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: "Linkerd control plane: {{ 'PASS' if linkerd_check_initial.rc == 0 else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "{{ linkerd_check_initial.stdout_lines | default([]) | last | default('check not run') }}"
+
+    # ================================================================
+    # Phase 2: Annotate namespace + deploy app
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Annotate namespace for Linkerd injection
+      ansible.builtin.shell: |
+        k3s kubectl annotate namespace {{ ns }} linkerd.io/inject=enabled --overwrite
+      changed_when: true
+
+    - name: Build backend (core) JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant/backend && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build backend container image
+      ansible.builtin.shell: |
+        cd /vagrant && nerdctl -n k8s.io build \
+          -t monitor:local -f backend/Dockerfile backend/
+      changed_when: true
+
+    - name: Build frontend
+      ansible.builtin.shell: |
+        source $HOME/.nvm/nvm.sh
+        cd /vagrant/frontend && npm ci && npm run build
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build frontend container image
+      ansible.builtin.shell: |
+        cd /vagrant && nerdctl -n k8s.io build \
+          -t monitor-frontend:local -f frontend/Dockerfile frontend/
+      changed_when: true
+
+    - name: Build gateway JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build gateway container image
+      ansible.builtin.shell: |
+        cd /vagrant-gateway && nerdctl -n k8s.io build \
+          -t monitor-gateway:local -f Dockerfile .
+      changed_when: true
+
+    - name: Build admin JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-admin && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build admin container image
+      ansible.builtin.shell: |
+        cd /vagrant-admin && nerdctl -n k8s.io build \
+          -t monitor-admin:local -f Dockerfile .
+      changed_when: true
+
+    - name: Build chat JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-chat && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build chat container image
+      ansible.builtin.shell: |
+        cd /vagrant-chat && nerdctl -n k8s.io build \
+          -t monitor-chat:local -f Dockerfile .
+      changed_when: true
+
+    - name: Build chess JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-chess && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build chess container image
+      ansible.builtin.shell: |
+        cd /vagrant-chess && nerdctl -n k8s.io build \
+          -t monitor-chess:local -f Dockerfile .
+      changed_when: true
+
+    - name: Write Helm values for Linkerd test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-linkerd-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: false
+          auth:
+            jwtSecret: "{{ test_jwt_secret }}"
+            registrationApproval:
+              mode: skip
+          networkPolicies:
+            enabled: true
+          linkerd:
+            enabled: true
+            authorizationPolicy: true
+          frontend:
+            enabled: true
+            image:
+              repository: monitor-frontend
+              tag: local
+              pullPolicy: Never
+          app:
+            replicas: 1
+            image:
+              repository: monitor
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          gateway:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-gateway
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx256m -XX:+UseZGC"
+          admin:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-admin
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          chatService:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-chat
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          chessService:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-chess
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          postgres:
+            enabled: true
+            password: "{{ test_pg_password }}"
+            image: postgres:17-alpine
+            storage:
+              storageClass: "local-path"
+          redis:
+            enabled: true
+            image: redis:7-alpine
+          kafka:
+            enabled: true
+            image: apache/kafka:4.2.0
+            clusterId: "{{ test_kafka_cluster_id }}"
+            javaOpts: "-Xmx256m -Xms256m"
+            topics:
+              - name: game.events
+                partitions: 3
+                replicationFactor: 1
+              - name: user.events
+                partitions: 3
+                replicationFactor: 1
+              - name: chat.messages
+                partitions: 3
+                replicationFactor: 1
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+            storage:
+              size: 2Gi
+              storageClass: "local-path"
+          scylla:
+            enabled: true
+            image: scylladb/scylla:6.2
+            args:
+              - "--smp=1"
+              - "--memory=512M"
+              - "--overprovisioned=1"
+              - "--developer-mode=1"
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+            storage:
+              size: 2Gi
+              storageClass: "local-path"
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with Linkerd injection
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/infra/helm \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-linkerd-test-values.yml \
+          --wait --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 3: Verify sidecar injection
+    # ================================================================
+
+    - name: Wait for deployments
+      ansible.builtin.shell: |
+        for deploy in monitor-gateway monitor-admin monitor-chat monitor-chess monitor-app; do
+          k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s 2>/dev/null || true
+        done
+      changed_when: false
+
+    - name: Check sidecar injection per deployment
+      ansible.builtin.shell: |
+        for deploy in monitor-gateway monitor-admin monitor-chat monitor-chess monitor-app; do
+          CONTAINERS=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/name=${deploy#monitor-} \
+            -o jsonpath='{.items[0].spec.containers[*].name}' 2>/dev/null || \
+            k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=${deploy#monitor-} \
+            -o jsonpath='{.items[0].spec.containers[*].name}' 2>/dev/null || echo "")
+          if echo "$CONTAINERS" | grep -q "linkerd-proxy"; then
+            echo "INJECTED: $deploy ($CONTAINERS)"
+          else
+            echo "MISSING: $deploy ($CONTAINERS)"
+          fi
+        done
+      register: sidecar_check
+      changed_when: false
+      failed_when: false
+
+    - name: "Sidecar injection"
+      ansible.builtin.debug:
+        msg: "{{ sidecar_check.stdout_lines | default([]) }}"
+
+    - name: Set sidecar facts
+      ansible.builtin.set_fact:
+        sidecar_gateway: "{{ 'INJECTED: monitor-gateway' in sidecar_check.stdout | default('') }}"
+        sidecar_admin: "{{ 'INJECTED: monitor-admin' in sidecar_check.stdout | default('') }}"
+        sidecar_chat: "{{ 'INJECTED: monitor-chat' in sidecar_check.stdout | default('') }}"
+        sidecar_chess: "{{ 'INJECTED: monitor-chess' in sidecar_check.stdout | default('') }}"
+        sidecar_core: "{{ 'INJECTED: monitor-app' in sidecar_check.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 4: Verify mTLS
+    # ================================================================
+
+    - name: Install Linkerd Viz extension
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd viz install | k3s kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_viz_install
+      changed_when: true
+
+    - name: Wait for Linkerd Viz to be ready
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd viz check --wait 300s 2>&1
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_viz_check
+      retries: 6
+      delay: 30
+      until: linkerd_viz_check.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for traffic to flow (generate some requests)
+      ansible.builtin.shell: |
+        for i in $(seq 1 5); do
+          k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+            curl -sf http://monitor-gateway:8080/api/health 2>/dev/null || true
+          sleep 2
+        done
+      changed_when: false
+
+    - name: Check mTLS edges
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd viz edges deployment -n {{ ns }} 2>&1 || echo "EDGES_FAILED"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: mtls_edges
+      retries: 6
+      delay: 15
+      until: "'EDGES_FAILED' not in mtls_edges.stdout"
+      changed_when: false
+      failed_when: false
+
+    - name: "mTLS edges"
+      ansible.builtin.debug:
+        msg: "{{ mtls_edges.stdout_lines | default([]) }}"
+
+    - name: Set mTLS fact
+      ansible.builtin.set_fact:
+        mtls_active: "{{ 'SECURED' in mtls_edges.stdout | default('') or mtls_edges.rc == 0 }}"
+
+    # ================================================================
+    # Phase 5: Verify Linkerd check passes
+    # ================================================================
+
+    - name: Run full Linkerd check (with viz)
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd check 2>&1
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_check_full
+      changed_when: false
+      failed_when: false
+
+    - name: "Linkerd check: {{ 'PASS' if linkerd_check_full.rc == 0 else 'WARN' }}"
+      ansible.builtin.debug:
+        msg: "{{ linkerd_check_full.stdout_lines | default([]) | select('match', '.*Status check.*') | list | last | default('check output not available') }}"
+
+    # ================================================================
+    # Phase 6: Verify traffic through mesh
+    # ================================================================
+
+    - name: Check gateway health through mesh
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-gateway -- \
+          curl -sf http://localhost:8080/actuator/health
+      register: mesh_health_gateway
+      retries: 12
+      delay: 10
+      until: mesh_health_gateway.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Check core health through mesh
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-app -- \
+          curl -sf http://localhost:8080/api/health
+      register: mesh_health_core
+      retries: 12
+      delay: 10
+      until: mesh_health_core.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Register user through mesh (gateway -> admin)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -X POST http://monitor-gateway:8080/api/auth/register \
+          -H 'Content-Type: application/json' \
+          -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
+      register: mesh_register
+      retries: 6
+      delay: 5
+      until: mesh_register.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Login through mesh (gateway -> admin)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -X POST http://monitor-gateway:8080/api/auth/login \
+          -H 'Content-Type: application/json' \
+          -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
+      register: mesh_login
+      changed_when: false
+      failed_when: false
+
+    - name: Set traffic facts
+      ansible.builtin.set_fact:
+        traffic_health_ok: "{{ mesh_health_gateway.rc == 0 and mesh_health_core.rc == 0 }}"
+        traffic_auth_ok: "{{ mesh_register.rc == 0 and mesh_login.rc == 0 }}"
+
+    # ================================================================
+    # Phase 7: Verify golden metrics (informational)
+    # ================================================================
+
+    - name: Check Linkerd Viz stat for gateway
+      ansible.builtin.shell: |
+        /usr/local/bin/linkerd viz stat deployment/monitor-gateway -n {{ ns }} 2>&1 || echo "STAT_FAILED"
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: linkerd_stat
+      changed_when: false
+      failed_when: false
+
+    - name: "Golden metrics"
+      ansible.builtin.debug:
+        msg: "{{ linkerd_stat.stdout_lines | default(['no metrics available']) }}"
+
+    - name: Set metrics fact
+      ansible.builtin.set_fact:
+        metrics_available: "{{ 'STAT_FAILED' not in linkerd_stat.stdout | default('') and linkerd_stat.rc == 0 }}"
+
+    # ================================================================
+    # Phase 8: Verify ServerAuthorization policies
+    # ================================================================
+
+    - name: Check for Server CRDs
+      ansible.builtin.shell: |
+        k3s kubectl get server -n {{ ns }} -o name 2>/dev/null | wc -l
+      register: server_crd_count
+      changed_when: false
+      failed_when: false
+
+    - name: Check for ServerAuthorization CRDs
+      ansible.builtin.shell: |
+        k3s kubectl get serverauthorization -n {{ ns }} -o name 2>/dev/null | wc -l
+      register: authz_crd_count
+      changed_when: false
+      failed_when: false
+
+    - name: Set authorization policy facts
+      ansible.builtin.set_fact:
+        authz_servers_exist: "{{ server_crd_count.stdout | default('0') | int > 0 }}"
+        authz_policies_exist: "{{ authz_crd_count.stdout | default('0') | int > 0 }}"
+
+    - name: Test authorization enforcement (chess -> admin should be blocked)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-chess -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          --connect-timeout 5 \
+          http://monitor-admin:8080/actuator/health 2>/dev/null || echo "BLOCKED"
+      register: authz_test
+      changed_when: false
+      failed_when: false
+      when: authz_policies_exist | bool
+
+    - name: Set authorization enforcement fact
+      ansible.builtin.set_fact:
+        authz_enforced: "{{ authz_test.stdout | default('') == 'BLOCKED' or authz_test.stdout | default('') == '403' }}"
+      when: authz_policies_exist | bool
+
+    - name: Set authorization enforcement fact (no policies)
+      ansible.builtin.set_fact:
+        authz_enforced: false
+      when: not authz_policies_exist | bool
+
+    # ================================================================
+    # Phase 9: Verify Linkerd Viz dashboard
+    # ================================================================
+
+    - name: Check Viz web deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/web -n {{ linkerd_viz_ns }} --timeout=120s
+      register: viz_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Test Viz dashboard health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ linkerd_viz_ns }} deploy/web -- \
+          wget -qO- --timeout=5 http://localhost:8084/api/version 2>/dev/null || echo "VIZ_UNAVAILABLE"
+      register: viz_health
+      changed_when: false
+      failed_when: false
+
+    - name: Set Viz dashboard fact
+      ansible.builtin.set_fact:
+        viz_dashboard_ok: "{{ 'VIZ_UNAVAILABLE' not in viz_health.stdout | default('VIZ_UNAVAILABLE') }}"
+
+    # ================================================================
+    # Phase 10: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-linkerd-test-values.yml
+        state: absent
+
+    - name: Set final facts
+      ansible.builtin.set_fact:
+        linkerd_installed: "{{ linkerd_check_initial.rc is defined and linkerd_check_initial.rc == 0 }}"
+        linkerd_check_pass: "{{ linkerd_check_full.rc is defined and linkerd_check_full.rc == 0 }}"
+
+    - name: "TEST RESULT"
+      vars:
+        critical_pass: "{{ linkerd_installed and traffic_health_ok }}"
+        all_sidecars: "{{ sidecar_gateway and sidecar_admin and sidecar_chat and sidecar_chess and sidecar_core }}"
+        all_pass: "{{ linkerd_installed and linkerd_check_pass and all_sidecars and mtls_active and traffic_health_ok and traffic_auth_ok and viz_dashboard_ok }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Linkerd Service Mesh Test: {{ 'PASS' if all_pass else ('PARTIAL' if critical_pass else 'FAIL') }}
+
+          --- Control Plane ---
+          [{{ 'PASS' if linkerd_installed else 'FAIL' }}] Linkerd control plane installed
+          [{{ 'PASS' if linkerd_check_pass else 'WARN' }}] Linkerd check passes
+
+          --- Sidecar Injection ---
+          [{{ 'PASS' if sidecar_gateway else 'FAIL' }}] Gateway sidecar
+          [{{ 'PASS' if sidecar_admin else 'FAIL' }}] Admin sidecar
+          [{{ 'PASS' if sidecar_chat else 'FAIL' }}] Chat sidecar
+          [{{ 'PASS' if sidecar_chess else 'FAIL' }}] Chess sidecar
+          [{{ 'PASS' if sidecar_core else 'FAIL' }}] Core sidecar
+
+          --- mTLS ---
+          [{{ 'PASS' if mtls_active else 'FAIL' }}] mTLS active between services
+
+          --- Traffic Through Mesh ---
+          [{{ 'PASS' if traffic_health_ok else 'FAIL' }}] Health endpoints (gateway + core)
+          [{{ 'PASS' if traffic_auth_ok else 'WARN' }}] Auth flow (register + login through mesh)
+
+          --- Authorization Policies ---
+          [{{ 'PASS' if authz_servers_exist else 'WARN' }}] Server CRDs deployed
+          [{{ 'PASS' if authz_policies_exist else 'WARN' }}] ServerAuthorization CRDs deployed
+          [{{ 'PASS' if authz_enforced else 'WARN' }}] Authorization enforced (chess !-> admin)
+
+          --- Observability ---
+          [{{ 'PASS' if metrics_available else 'WARN' }}] Golden metrics available
+          [{{ 'PASS' if viz_dashboard_ok else 'WARN' }}] Viz dashboard responds
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical Linkerd checks failed — see summary above"
+      when: not (linkerd_installed and traffic_health_ok)

@@ -1,0 +1,766 @@
+---
+# Test full microservice deployment in Vagrant
+#
+# Verifies all 4 services (admin, chat, chess, core) deploy behind
+# the API gateway, routes work correctly, JWT validation is local
+# per service, databases are isolated, and Kafka event flow works.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#   - All service images built and available in containerd
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-microservices.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test full microservice deployment
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: monitor
+    vault_ns: vault
+    test_jwt_secret: "test-only-not-used-32-chars-long!!"
+    test_pg_password: "vagrant-test-microservices-pg-pw"
+    test_kafka_cluster_id: "vagrant-test-kafka-cluster-id00"
+    test_user_email: "microservice-test@test.com"
+    test_user_password: "testpassword123"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Build all images and deploy
+    # ================================================================
+
+    - name: Create monitor namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Build backend (core) JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant/backend && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      register: backend_build
+      changed_when: true
+
+    - name: Build backend container image
+      ansible.builtin.shell: |
+        cd /vagrant && nerdctl -n k8s.io build \
+          -t monitor:local -f backend/Dockerfile backend/
+      changed_when: true
+
+    - name: Build frontend
+      ansible.builtin.shell: |
+        source $HOME/.nvm/nvm.sh
+        cd /vagrant/frontend && npm ci && npm run build
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build frontend container image
+      ansible.builtin.shell: |
+        cd /vagrant && nerdctl -n k8s.io build \
+          -t monitor-frontend:local -f frontend/Dockerfile frontend/
+      changed_when: true
+
+    - name: Build gateway JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build gateway container image
+      ansible.builtin.shell: |
+        cd /vagrant-gateway && nerdctl -n k8s.io build \
+          -t monitor-gateway:local -f Dockerfile .
+      changed_when: true
+
+    - name: Build admin JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-admin && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build admin container image
+      ansible.builtin.shell: |
+        cd /vagrant-admin && nerdctl -n k8s.io build \
+          -t monitor-admin:local -f Dockerfile .
+      changed_when: true
+
+    - name: Build chat JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-chat && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build chat container image
+      ansible.builtin.shell: |
+        cd /vagrant-chat && nerdctl -n k8s.io build \
+          -t monitor-chat:local -f Dockerfile .
+      changed_when: true
+
+    - name: Build chess JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-chess && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Build chess container image
+      ansible.builtin.shell: |
+        cd /vagrant-chess && nerdctl -n k8s.io build \
+          -t monitor-chess:local -f Dockerfile .
+      changed_when: true
+
+    - name: Write Helm values for microservices test
+      ansible.builtin.copy:
+        dest: /tmp/monitor-microservices-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: false
+          auth:
+            jwtSecret: "{{ test_jwt_secret }}"
+            registrationApproval:
+              mode: skip
+          networkPolicies:
+            enabled: true
+          frontend:
+            enabled: true
+            image:
+              repository: monitor-frontend
+              tag: local
+              pullPolicy: Never
+          app:
+            replicas: 1
+            image:
+              repository: monitor
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          gateway:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-gateway
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx256m -XX:+UseZGC"
+          admin:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-admin
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          chatService:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-chat
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          chessService:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-chess
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx384m -XX:+UseZGC"
+          postgres:
+            enabled: true
+            password: "{{ test_pg_password }}"
+            image: postgres:17-alpine
+            storage:
+              storageClass: "local-path"
+          redis:
+            enabled: true
+            image: redis:7-alpine
+          kafka:
+            enabled: true
+            image: apache/kafka:4.2.0
+            clusterId: "{{ test_kafka_cluster_id }}"
+            javaOpts: "-Xmx256m -Xms256m"
+            topics:
+              - name: game.events
+                partitions: 3
+                replicationFactor: 1
+              - name: user.events
+                partitions: 3
+                replicationFactor: 1
+              - name: chat.messages
+                partitions: 3
+                replicationFactor: 1
+              - name: chat.events
+                partitions: 3
+                replicationFactor: 1
+              - name: chat.notifications
+                partitions: 3
+                replicationFactor: 1
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+            storage:
+              size: 2Gi
+              storageClass: "local-path"
+          scylla:
+            enabled: true
+            image: scylladb/scylla:6.2
+            args:
+              - "--smp=1"
+              - "--memory=512M"
+              - "--overprovisioned=1"
+              - "--developer-mode=1"
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "200m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"
+            storage:
+              size: 2Gi
+              storageClass: "local-path"
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: false
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with all microservices
+      ansible.builtin.shell: |
+        helm upgrade --install monitor /vagrant/infra/helm \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/monitor-microservices-test-values.yml \
+          --wait --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 2: Verify all services running
+    # ================================================================
+
+    - name: Wait for gateway deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-gateway -n {{ ns }} --timeout=300s
+      register: gateway_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for admin deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-admin -n {{ ns }} --timeout=300s
+      register: admin_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for chat deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-chat -n {{ ns }} --timeout=300s
+      register: chat_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for chess deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-chess -n {{ ns }} --timeout=300s
+      register: chess_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for core deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=300s
+      register: core_rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for frontend deployment
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/monitor-frontend -n {{ ns }} --timeout=300s
+      register: frontend_rollout
+      changed_when: false
+      failed_when: false
+
+    # ================================================================
+    # Phase 3: Verify gateway routing (auth flow)
+    # ================================================================
+
+    - name: Wait for admin service health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-admin -- \
+          curl -sf http://localhost:8080/actuator/health
+      register: admin_health
+      retries: 30
+      delay: 10
+      until: admin_health.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Register user through gateway -> admin
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -X POST http://monitor-gateway:8080/api/auth/register \
+          -H 'Content-Type: application/json' \
+          -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
+      register: register_result
+      retries: 6
+      delay: 5
+      until: register_result.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Login through gateway -> admin and capture JWT
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -X POST http://monitor-gateway:8080/api/auth/login \
+          -H 'Content-Type: application/json' \
+          -D /dev/stderr \
+          -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}' \
+          2>&1 | grep -i 'AUTH_TOKEN' | sed 's/.*AUTH_TOKEN=//;s/;.*//'
+      register: login_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set JWT token fact
+      ansible.builtin.set_fact:
+        jwt_token: "{{ login_result.stdout | default('') | trim }}"
+
+    - name: "Auth flow: {{ 'PASS — JWT obtained' if jwt_token | length > 0 else 'FAIL — no JWT' }}"
+      ansible.builtin.debug:
+        msg: "JWT token length: {{ jwt_token | length }}"
+
+    # ================================================================
+    # Phase 4: Verify gateway routing per service
+    # ================================================================
+
+    - name: Test route to admin (/api/auth/approval-mode)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          http://monitor-gateway:8080/api/auth/approval-mode
+      register: route_admin
+      changed_when: false
+      failed_when: false
+
+    - name: Test route to chat (/api/chat/channels)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -H "Authorization: Bearer {{ jwt_token }}" \
+          http://monitor-gateway:8080/api/chat/channels
+      register: route_chat
+      changed_when: false
+      failed_when: false
+
+    - name: Test route to chess (/api/chess/games)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -H "Authorization: Bearer {{ jwt_token }}" \
+          http://monitor-gateway:8080/api/chess/games
+      register: route_chess
+      changed_when: false
+      failed_when: false
+
+    - name: Test route to core (/api/monitor/pages)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
+          curl -sf -o /dev/null -w '%{http_code}' \
+          -H "Authorization: Bearer {{ jwt_token }}" \
+          http://monitor-gateway:8080/api/monitor/pages
+      register: route_core
+      changed_when: false
+      failed_when: false
+
+    - name: Set routing facts
+      ansible.builtin.set_fact:
+        # Any response other than 401 means JWT was validated and routing worked
+        route_admin_ok: "{{ route_admin.stdout | default('') != '401' and route_admin.stdout | default('') | length > 0 }}"
+        route_chat_ok: "{{ route_chat.stdout | default('') != '401' and route_chat.stdout | default('') | length > 0 }}"
+        route_chess_ok: "{{ route_chess.stdout | default('') != '401' and route_chess.stdout | default('') | length > 0 }}"
+        route_core_ok: "{{ route_core.stdout | default('') != '401' and route_core.stdout | default('') | length > 0 }}"
+
+    # ================================================================
+    # Phase 5: Verify local JWT validation
+    # ================================================================
+
+    - name: "JWT validation (admin): HTTP {{ route_admin.stdout | default('N/A') }} — {{ 'PASS' if route_admin_ok else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "Admin service accepted JWT (non-401 response)"
+
+    - name: "JWT validation (chat): HTTP {{ route_chat.stdout | default('N/A') }} — {{ 'PASS' if route_chat_ok else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "Chat service accepted JWT (non-401 response)"
+
+    - name: "JWT validation (chess): HTTP {{ route_chess.stdout | default('N/A') }} — {{ 'PASS' if route_chess_ok else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "Chess service accepted JWT (non-401 response)"
+
+    - name: "JWT validation (core): HTTP {{ route_core.stdout | default('N/A') }} — {{ 'PASS' if route_core_ok else 'FAIL' }}"
+      ansible.builtin.debug:
+        msg: "Core service accepted JWT (non-401 response)"
+
+    # ================================================================
+    # Phase 6: Verify database isolation
+    # ================================================================
+
+    - name: List PostgreSQL databases
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-postgres-0 -- \
+          psql -U postgres -t -c "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
+      register: pg_databases
+      changed_when: false
+      failed_when: false
+
+    - name: "Databases found"
+      ansible.builtin.debug:
+        msg: "{{ pg_databases.stdout_lines | default([]) }}"
+
+    - name: Set database isolation facts
+      ansible.builtin.set_fact:
+        db_core_exists: "{{ 'monitor' in pg_databases.stdout | default('') }}"
+        db_admin_exists: "{{ 'monitor_admin' in pg_databases.stdout | default('') }}"
+        db_chat_exists: "{{ 'monitor_chat' in pg_databases.stdout | default('') }}"
+        db_chess_exists: "{{ 'monitor_chess' in pg_databases.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 7: Verify Kafka topics
+    # ================================================================
+
+    - name: Wait for Kafka broker
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
+          /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
+      register: kafka_broker
+      retries: 30
+      delay: 10
+      until: kafka_broker.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: List Kafka topics
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+      register: kafka_topics
+      retries: 6
+      delay: 10
+      until: kafka_topics.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: "Kafka topics"
+      ansible.builtin.debug:
+        msg: "{{ kafka_topics.stdout_lines | default([]) }}"
+
+    - name: Set Kafka topic facts
+      ansible.builtin.set_fact:
+        topic_game_events: "{{ 'game.events' in kafka_topics.stdout | default('') }}"
+        topic_user_events: "{{ 'user.events' in kafka_topics.stdout | default('') }}"
+        topic_chat_messages: "{{ 'chat.messages' in kafka_topics.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 8: Verify Kafka event flow
+    # ================================================================
+
+    - name: Produce test event to game.events topic
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
+          sh -c 'echo "{\"type\":\"TEST\",\"gameUuid\":\"test-uuid\",\"timestamp\":\"$(date -u +%FT%TZ)\"}" | \
+          /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic game.events'
+      register: kafka_produce
+      changed_when: false
+      failed_when: false
+
+    - name: Consume test event from game.events topic
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} monitor-kafka-0 -- \
+          timeout 10 /opt/kafka/bin/kafka-console-consumer.sh \
+          --bootstrap-server localhost:9092 \
+          --topic game.events \
+          --from-beginning \
+          --max-messages 1
+      register: kafka_consume
+      changed_when: false
+      failed_when: false
+
+    - name: Set Kafka event flow fact
+      ansible.builtin.set_fact:
+        kafka_event_flow_ok: "{{ kafka_produce.rc == 0 and 'test-uuid' in kafka_consume.stdout | default('') }}"
+
+    - name: "Kafka event flow: {{ 'PASS' if kafka_event_flow_ok else 'WARN' }}"
+      ansible.builtin.debug:
+        msg: "{{ kafka_consume.stdout | default('no event consumed') }}"
+
+    # ================================================================
+    # Phase 9: Verify service DNS resolution
+    # ================================================================
+
+    - name: Test DNS resolution from gateway pod
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-gateway -- \
+          sh -c 'for svc in monitor-admin monitor-chat monitor-chess monitor-app; do
+            if getent hosts $svc.{{ ns }}.svc.cluster.local >/dev/null 2>&1; then
+              echo "OK: $svc"
+            else
+              echo "FAIL: $svc"
+            fi
+          done'
+      register: dns_resolution
+      changed_when: false
+      failed_when: false
+
+    - name: "DNS resolution"
+      ansible.builtin.debug:
+        msg: "{{ dns_resolution.stdout_lines | default([]) }}"
+
+    - name: Set DNS resolution facts
+      ansible.builtin.set_fact:
+        dns_admin_ok: "{{ 'OK: monitor-admin' in dns_resolution.stdout | default('') }}"
+        dns_chat_ok: "{{ 'OK: monitor-chat' in dns_resolution.stdout | default('') }}"
+        dns_chess_ok: "{{ 'OK: monitor-chess' in dns_resolution.stdout | default('') }}"
+        dns_core_ok: "{{ 'OK: monitor-app' in dns_resolution.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 10: Verify health endpoints per service
+    # ================================================================
+
+    - name: Check gateway health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-gateway -- \
+          curl -sf http://localhost:8080/actuator/health
+      register: health_gateway
+      changed_when: false
+      failed_when: false
+
+    - name: Check admin health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-admin -- \
+          curl -sf http://localhost:8080/actuator/health
+      register: health_admin
+      changed_when: false
+      failed_when: false
+
+    - name: Check chat health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-chat -- \
+          curl -sf http://localhost:8080/actuator/health
+      register: health_chat
+      changed_when: false
+      failed_when: false
+
+    - name: Check chess health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-chess -- \
+          curl -sf http://localhost:8080/actuator/health
+      register: health_chess
+      changed_when: false
+      failed_when: false
+
+    - name: Check core health
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/monitor-app -- \
+          curl -sf http://localhost:8080/api/health
+      register: health_core
+      changed_when: false
+      failed_when: false
+
+    # ================================================================
+    # Phase 11: Verify network policies
+    # ================================================================
+
+    - name: Check network policies for all services
+      ansible.builtin.shell: |
+        for np in monitor-gateway monitor-admin monitor-chat monitor-chess monitor-app; do
+          if k3s kubectl get networkpolicy $np -n {{ ns }} -o name 2>/dev/null; then
+            echo "OK: $np"
+          else
+            echo "MISSING: $np"
+          fi
+        done
+      register: np_check
+      changed_when: false
+      failed_when: false
+
+    - name: Set network policy facts
+      ansible.builtin.set_fact:
+        np_gateway: "{{ 'OK: monitor-gateway' in np_check.stdout | default('') }}"
+        np_admin: "{{ 'OK: monitor-admin' in np_check.stdout | default('') }}"
+        np_chat: "{{ 'OK: monitor-chat' in np_check.stdout | default('') }}"
+        np_chess: "{{ 'OK: monitor-chess' in np_check.stdout | default('') }}"
+        np_core: "{{ 'OK: monitor-app' in np_check.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 12: Verify services on correct ports
+    # ================================================================
+
+    - name: Check service ports
+      ansible.builtin.shell: |
+        for svc in monitor-gateway monitor-admin monitor-chat monitor-chess monitor-app; do
+          PORT=$(k3s kubectl get service $svc -n {{ ns }} -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)
+          echo "$svc: $PORT"
+        done
+      register: svc_ports
+      changed_when: false
+      failed_when: false
+
+    - name: "Service ports"
+      ansible.builtin.debug:
+        msg: "{{ svc_ports.stdout_lines | default([]) }}"
+
+    - name: Set service port facts
+      ansible.builtin.set_fact:
+        svc_gateway_ok: "{{ 'monitor-gateway: 8080' in svc_ports.stdout | default('') }}"
+        svc_admin_ok: "{{ 'monitor-admin: 8080' in svc_ports.stdout | default('') }}"
+        svc_chat_ok: "{{ 'monitor-chat: 8080' in svc_ports.stdout | default('') }}"
+        svc_chess_ok: "{{ 'monitor-chess: 8080' in svc_ports.stdout | default('') }}"
+        svc_core_ok: "{{ 'monitor-app: 8080' in svc_ports.stdout | default('') }}"
+
+    # ================================================================
+    # Phase 13: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/monitor-microservices-test-values.yml
+        state: absent
+
+    - name: Set deployment facts
+      ansible.builtin.set_fact:
+        gateway_running: "{{ gateway_rollout.rc is defined and gateway_rollout.rc == 0 }}"
+        admin_running: "{{ admin_rollout.rc is defined and admin_rollout.rc == 0 }}"
+        chat_running: "{{ chat_rollout.rc is defined and chat_rollout.rc == 0 }}"
+        chess_running: "{{ chess_rollout.rc is defined and chess_rollout.rc == 0 }}"
+        core_running: "{{ core_rollout.rc is defined and core_rollout.rc == 0 }}"
+        frontend_running: "{{ frontend_rollout.rc is defined and frontend_rollout.rc == 0 }}"
+        health_gateway_ok: "{{ health_gateway.rc is defined and health_gateway.rc == 0 }}"
+        health_admin_ok: "{{ health_admin.rc is defined and health_admin.rc == 0 }}"
+        health_chat_ok: "{{ health_chat.rc is defined and health_chat.rc == 0 }}"
+        health_chess_ok: "{{ health_chess.rc is defined and health_chess.rc == 0 }}"
+        health_core_ok: "{{ health_core.rc is defined and health_core.rc == 0 }}"
+
+    - name: "TEST RESULT"
+      vars:
+        all_services_running: "{{ gateway_running and admin_running and chat_running and chess_running and core_running and frontend_running }}"
+        all_routes_ok: "{{ route_admin_ok and route_chat_ok and route_chess_ok and route_core_ok }}"
+        all_dbs_ok: "{{ db_core_exists and db_admin_exists and db_chat_exists and db_chess_exists }}"
+        all_topics_ok: "{{ topic_game_events and topic_user_events and topic_chat_messages }}"
+        all_dns_ok: "{{ dns_admin_ok and dns_chat_ok and dns_chess_ok and dns_core_ok }}"
+        all_health_ok: "{{ health_gateway_ok and health_admin_ok and health_chat_ok and health_chess_ok and health_core_ok }}"
+        all_np_ok: "{{ np_gateway and np_admin and np_chat and np_chess and np_core }}"
+        all_svc_ok: "{{ svc_gateway_ok and svc_admin_ok and svc_chat_ok and svc_chess_ok and svc_core_ok }}"
+        critical_pass: "{{ all_services_running and all_routes_ok }}"
+        all_pass: "{{ all_services_running and all_routes_ok and all_dbs_ok and all_topics_ok and all_dns_ok and all_health_ok and all_np_ok and all_svc_ok and kafka_event_flow_ok }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Microservices Integration Test: {{ 'PASS' if all_pass else ('PARTIAL' if critical_pass else 'FAIL') }}
+
+          --- Services Running ---
+          [{{ 'PASS' if gateway_running else 'FAIL' }}] Gateway
+          [{{ 'PASS' if admin_running else 'FAIL' }}] Admin (User Service)
+          [{{ 'PASS' if chat_running else 'FAIL' }}] Chat
+          [{{ 'PASS' if chess_running else 'FAIL' }}] Chess
+          [{{ 'PASS' if core_running else 'FAIL' }}] Core
+          [{{ 'PASS' if frontend_running else 'FAIL' }}] Frontend
+
+          --- Gateway Routing ---
+          [{{ 'PASS' if jwt_token | length > 0 else 'FAIL' }}] Auth flow (register + login -> JWT)
+          [{{ 'PASS' if route_admin_ok else 'FAIL' }}] Route: /api/auth/** -> admin (HTTP {{ route_admin.stdout | default('N/A') }})
+          [{{ 'PASS' if route_chat_ok else 'FAIL' }}] Route: /api/chat/** -> chat (HTTP {{ route_chat.stdout | default('N/A') }})
+          [{{ 'PASS' if route_chess_ok else 'FAIL' }}] Route: /api/chess/** -> chess (HTTP {{ route_chess.stdout | default('N/A') }})
+          [{{ 'PASS' if route_core_ok else 'FAIL' }}] Route: /api/monitor/** -> core (HTTP {{ route_core.stdout | default('N/A') }})
+
+          --- Database Isolation ---
+          [{{ 'PASS' if db_core_exists else 'FAIL' }}] Database: monitor (core)
+          [{{ 'PASS' if db_admin_exists else 'FAIL' }}] Database: monitor_admin
+          [{{ 'PASS' if db_chat_exists else 'FAIL' }}] Database: monitor_chat
+          [{{ 'PASS' if db_chess_exists else 'FAIL' }}] Database: monitor_chess
+
+          --- Kafka Topics ---
+          [{{ 'PASS' if topic_game_events else 'FAIL' }}] Topic: game.events
+          [{{ 'PASS' if topic_user_events else 'FAIL' }}] Topic: user.events
+          [{{ 'PASS' if topic_chat_messages else 'FAIL' }}] Topic: chat.messages
+          [{{ 'PASS' if kafka_event_flow_ok else 'WARN' }}] Kafka event produce/consume flow
+
+          --- DNS Resolution ---
+          [{{ 'PASS' if dns_admin_ok else 'FAIL' }}] monitor-admin.{{ ns }}.svc.cluster.local
+          [{{ 'PASS' if dns_chat_ok else 'FAIL' }}] monitor-chat.{{ ns }}.svc.cluster.local
+          [{{ 'PASS' if dns_chess_ok else 'FAIL' }}] monitor-chess.{{ ns }}.svc.cluster.local
+          [{{ 'PASS' if dns_core_ok else 'FAIL' }}] monitor-app.{{ ns }}.svc.cluster.local
+
+          --- Health Endpoints ---
+          [{{ 'PASS' if health_gateway_ok else 'FAIL' }}] Gateway health
+          [{{ 'PASS' if health_admin_ok else 'FAIL' }}] Admin health
+          [{{ 'PASS' if health_chat_ok else 'FAIL' }}] Chat health
+          [{{ 'PASS' if health_chess_ok else 'FAIL' }}] Chess health
+          [{{ 'PASS' if health_core_ok else 'FAIL' }}] Core health
+
+          --- Network Policies ---
+          [{{ 'PASS' if np_gateway else 'WARN' }}] Gateway NP
+          [{{ 'PASS' if np_admin else 'WARN' }}] Admin NP
+          [{{ 'PASS' if np_chat else 'WARN' }}] Chat NP
+          [{{ 'PASS' if np_chess else 'WARN' }}] Chess NP
+          [{{ 'PASS' if np_core else 'WARN' }}] Core NP
+
+          --- Services (port 8080) ---
+          [{{ 'PASS' if svc_gateway_ok else 'FAIL' }}] monitor-gateway
+          [{{ 'PASS' if svc_admin_ok else 'FAIL' }}] monitor-admin
+          [{{ 'PASS' if svc_chat_ok else 'FAIL' }}] monitor-chat
+          [{{ 'PASS' if svc_chess_ok else 'FAIL' }}] monitor-chess
+          [{{ 'PASS' if svc_core_ok else 'FAIL' }}] monitor-app
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical microservice checks failed — see summary above"
+      when: not (gateway_running and admin_running and chat_running and chess_running and core_running)

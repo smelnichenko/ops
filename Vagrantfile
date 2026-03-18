@@ -123,6 +123,20 @@ EOF
     k3s.vm.synced_folder ".", "/vagrant", type: "rsync",
       rsync__exclude: [".git/", "node_modules/", "build/", "dist/", ".gradle/"]
 
+    # Sync microservice repos for integration testing
+    k3s.vm.synced_folder "../api-gateway", "/vagrant-gateway", type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"],
+      create: true
+    k3s.vm.synced_folder "../admin", "/vagrant-admin", type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"],
+      create: true
+    k3s.vm.synced_folder "../chat", "/vagrant-chat", type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"],
+      create: true
+    k3s.vm.synced_folder "../chess", "/vagrant-chess", type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"],
+      create: true
+
     # Install system dependencies
     k3s.vm.provision "shell", name: "install-deps", inline: <<-SHELL
       set -e
