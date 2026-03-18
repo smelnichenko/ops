@@ -136,6 +136,55 @@
       changed_when: false
       when: woodpecker_oauth_client_secret | length > 0
 
+    - name: Check existing Forgejo tokens for infra repo PAT
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
+        method: GET
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
+        status_code: 200
+      register: existing_tokens
+      changed_when: false
+
+    - name: Find existing woodpecker-infra token
+      ansible.builtin.set_fact:
+        existing_infra_token: "{{ existing_tokens.json | selectattr('name', 'equalto', 'woodpecker-infra') | list | first | default(None) }}"
+
+    - name: Delete existing woodpecker-infra token (to get fresh secret)
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/{{ existing_infra_token.id }}"
+        method: DELETE
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
+        status_code: 204
+      when: existing_infra_token is not none
+
+    - name: Create Forgejo PAT for Woodpecker infra repo push
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
+        method: POST
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
+        body_format: json
+        body:
+          name: "woodpecker-infra"
+          scopes:
+            - "read:repository"
+            - "write:repository"
+        status_code: 201
+      register: infra_token_result
+
+    - name: Set infra repo token fact
+      ansible.builtin.set_fact:
+        woodpecker_infra_repo_token: "{{ infra_token_result.json.sha1 }}"
+      no_log: true
+
     - name: Fetch SonarQube token from monitor namespace secret
       ansible.builtin.shell: |
         k3s kubectl get secret monitor-sonarqube -n monitor \
@@ -163,6 +212,7 @@
           registry_token: "{{ woodpecker_registry_token | default(forgejo_admin_password) }}"
           nexus_url: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}"
           nexus_npm_registry: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}/repository/npm-public/"
+          infra_repo_token: "{{ woodpecker_infra_repo_token | default('') }}"
         EOF
       args:
         executable: /bin/bash
@@ -280,90 +330,6 @@
     - name: Wait for Woodpecker agent to be ready
       ansible.builtin.shell: |
         k3s kubectl rollout status statefulset/woodpecker-agent -n {{ woodpecker_namespace }} --timeout=300s
-      changed_when: false
-
-    # ================================================================
-    # Phase 5: RBAC for deploy step
-    # ================================================================
-
-    - name: "PHASE 4: Create RBAC for pipeline deploy step"
-      ansible.builtin.debug:
-        msg: "Creating ServiceAccount and RBAC for Woodpecker deployer"
-
-    - name: Create deployer RBAC
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
-        ---
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: woodpecker-deployer
-          namespace: {{ woodpecker_namespace }}
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRole
-        metadata:
-          name: woodpecker-deployer
-        rules:
-          # Helm needs to read namespaces and nodes
-          - apiGroups: [""]
-            resources: [namespaces, nodes]
-            verbs: [get, list, watch]
-          # Helm manages these resource types in the monitor namespace
-          - apiGroups: [""]
-            resources: [configmaps, secrets, services, serviceaccounts, persistentvolumeclaims, pods]
-            verbs: [get, list, watch, create, update, patch, delete]
-          - apiGroups: ["apps"]
-            resources: [deployments, statefulsets, daemonsets, replicasets]
-            verbs: [get, list, watch, create, update, patch, delete]
-          - apiGroups: ["batch"]
-            resources: [jobs, cronjobs]
-            verbs: [get, list, watch, create, update, patch, delete]
-          - apiGroups: ["networking.k8s.io"]
-            resources: [ingresses, networkpolicies]
-            verbs: [get, list, watch, create, update, patch, delete]
-          - apiGroups: ["rbac.authorization.k8s.io"]
-            resources: [roles, rolebindings, clusterroles, clusterrolebindings]
-            verbs: [get, list, watch, create, update, patch, delete]
-          - apiGroups: ["policy"]
-            resources: [poddisruptionbudgets]
-            verbs: [get, list, watch, create, update, patch, delete]
-          # For external-secrets if used
-          - apiGroups: ["external-secrets.io"]
-            resources: [externalsecrets, secretstores, clustersecretstores]
-            verbs: [get, list, watch, create, update, patch, delete]
-        ---
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRoleBinding
-        metadata:
-          name: woodpecker-deployer
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: ClusterRole
-          name: woodpecker-deployer
-        subjects:
-          - kind: ServiceAccount
-            name: woodpecker-deployer
-            namespace: {{ woodpecker_namespace }}
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
-
-    # ================================================================
-    # Phase 6: Deploy state ConfigMap
-    # ================================================================
-
-    - name: Create deploy state ConfigMap
-      ansible.builtin.shell:
-        cmd: |
-          set -o pipefail
-          k3s kubectl create configmap woodpecker-deploy-state \
-            --namespace {{ woodpecker_namespace }} \
-            --from-literal=last-deployed-commit="" \
-            --dry-run=client -o yaml | k3s kubectl apply -f -
-        executable: /bin/bash
       changed_when: false
 
     # ================================================================

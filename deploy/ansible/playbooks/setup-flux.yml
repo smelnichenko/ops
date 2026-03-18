@@ -1,0 +1,431 @@
+---
+# Setup Flux CD for GitOps-based cluster management
+#
+# Prerequisites:
+#   - k3s running (setup-k3s.yml)
+#   - Forgejo running with schnappy/infra repo created
+#   - cert-manager installed (for TLS to git.pmon.dev)
+#
+# Environment variables required (production):
+#   FORGEJO_ADMIN_PASSWORD (for creating Flux PAT)
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-flux.yml \
+#     -e @vars/vault.yml
+#
+#   # Vagrant:
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-flux.yml \
+#     -e forgejo_domain=localhost -e flux_validate_certs=false
+#
+- name: Setup Flux CD
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    flux_namespace: "{{ flux_ns | default('flux-system') }}"
+    flux_chart: "oci://ghcr.io/fluxcd-community/charts/flux2"
+    flux_chart_version: "{{ flux_version | default('2.14.1') }}"
+    forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
+    forgejo_admin_user: "{{ forgejo_admin | default('forgejo_admin') }}"
+    forgejo_admin_password: "{{ forgejo_password | default(lookup('env', 'FORGEJO_ADMIN_PASSWORD')) }}"
+    infra_repo_url: "https://{{ forgejo_host }}/schnappy/infra.git"
+    infra_repo_branch: "{{ infra_branch | default('main') }}"
+    monitor_repo_url: "https://{{ forgejo_host }}/schnappy/monitor.git"
+    monitor_repo_branch: "{{ monitor_branch | default('master') }}"
+    validate_certs: "{{ flux_validate_certs | default(true) }}"
+    target_host: "{{ ansible_host | default('192.168.11.2') }}"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Namespace
+    # ================================================================
+
+    - name: "PHASE 1: Create flux-system namespace"
+      ansible.builtin.debug:
+        msg: "Setting up Flux CD in namespace {{ flux_namespace }}"
+
+    - name: Create flux-system namespace with Pod Security Standards
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ flux_namespace }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 2: Forgejo PAT for Git access
+    # ================================================================
+
+    - name: "PHASE 2: Create Forgejo PAT for Flux"
+      ansible.builtin.debug:
+        msg: "Creating personal access token for Flux Git access"
+
+    - name: Check existing Forgejo tokens
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
+        method: GET
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        status_code: 200
+      register: existing_tokens
+      changed_when: false
+
+    - name: Find existing Flux token
+      ansible.builtin.set_fact:
+        existing_flux_token: "{{ existing_tokens.json | selectattr('name', 'equalto', 'flux-cd') | list | first | default(None) }}"
+
+    - name: Delete existing Flux token (to get fresh secret)
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/{{ existing_flux_token.id }}"
+        method: DELETE
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        status_code: 204
+      when: existing_flux_token is not none
+
+    - name: Create Forgejo PAT for Flux
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
+        method: POST
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        body_format: json
+        body:
+          name: "flux-cd"
+          scopes:
+            - "read:repository"
+        status_code: 201
+      register: flux_token_result
+
+    - name: Set Flux token fact
+      ansible.builtin.set_fact:
+        flux_git_token: "{{ flux_token_result.json.sha1 }}"
+      no_log: true
+
+    - name: Create Forgejo credentials secret for Flux
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: forgejo-credentials
+          namespace: {{ flux_namespace }}
+        type: Opaque
+        stringData:
+          username: "{{ forgejo_admin_user }}"
+          password: "{{ flux_git_token }}"
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+      no_log: true
+
+    # ================================================================
+    # Phase 3: Deploy Flux via Helm
+    # ================================================================
+
+    - name: "PHASE 3: Deploy Flux controllers"
+      ansible.builtin.debug:
+        msg: "Installing Flux via Helm (source, kustomize, helm controllers)"
+
+    - name: Deploy Flux
+      ansible.builtin.shell: |
+        helm upgrade --install flux \
+          {{ flux_chart }} \
+          --version {{ flux_chart_version }} \
+          --namespace {{ flux_namespace }} \
+          --values - <<'HELMEOF'
+        # Only enable the controllers we need
+        notificationController:
+          create: false
+        imageReflectionController:
+          create: false
+        imageAutomationController:
+          create: false
+
+        # Resource limits per controller
+        sourceController:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+        helmController:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+        kustomizeController:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for source-controller to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/source-controller -n {{ flux_namespace }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for kustomize-controller to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/kustomize-controller -n {{ flux_namespace }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for helm-controller to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/helm-controller -n {{ flux_namespace }} --timeout=300s
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Flux CRDs — GitRepository sources + root Kustomization
+    # ================================================================
+
+    - name: "PHASE 4: Create Flux sources and root Kustomization"
+      ansible.builtin.debug:
+        msg: "Configuring Flux to watch infra and monitor repos"
+
+    - name: Create GitRepository for infra repo
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        metadata:
+          name: infra
+          namespace: {{ flux_namespace }}
+        spec:
+          interval: 1m
+          url: {{ infra_repo_url }}
+          ref:
+            branch: {{ infra_repo_branch }}
+          secretRef:
+            name: forgejo-credentials
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Create GitRepository for monitor repo (chart source)
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: source.toolkit.fluxcd.io/v1
+        kind: GitRepository
+        metadata:
+          name: monitor
+          namespace: {{ flux_namespace }}
+        spec:
+          interval: 5m
+          url: {{ monitor_repo_url }}
+          ref:
+            branch: {{ monitor_repo_branch }}
+          secretRef:
+            name: forgejo-credentials
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Create root Kustomization (reconciles clusters/production/)
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: infra
+          namespace: {{ flux_namespace }}
+        spec:
+          interval: 5m
+          sourceRef:
+            kind: GitRepository
+            name: infra
+          path: ./clusters/production
+          prune: false
+          wait: true
+          timeout: 10m
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 5: Network Policies
+    # ================================================================
+
+    - name: "PHASE 5: Apply network policies"
+      ansible.builtin.debug:
+        msg: "Applying network policies for flux-system namespace"
+
+    - name: Apply Flux network policies
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        ---
+        # Default deny all ingress and egress
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: flux-default-deny
+          namespace: {{ flux_namespace }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+          egress:
+            # Allow DNS for all pods
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        ---
+        # Flux controllers: egress to Forgejo (HTTPS), k8s API, OCI registries
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: flux-controllers
+          namespace: {{ flux_namespace }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Egress
+          egress:
+            # To Forgejo (direct service access for Git clone)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: forgejo
+              ports:
+                - protocol: TCP
+                  port: 3000
+            # HTTPS egress via Traefik (git.pmon.dev resolves to Traefik ClusterIP)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 8443
+            # To Kubernetes API (for applying manifests)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 6443
+            # To Kubernetes API (node IP, belt-and-suspenders)
+            - to:
+                - ipBlock:
+                    cidr: {{ target_host }}/32
+              ports:
+                - protocol: TCP
+                  port: 6443
+            # To Kubernetes API (ClusterIP)
+            - to:
+                - ipBlock:
+                    cidr: 10.43.0.1/32
+              ports:
+                - protocol: TCP
+                  port: 443
+            # External HTTPS (OCI registries: ghcr.io for Helm charts)
+            - to:
+                - ipBlock:
+                    cidr: 0.0.0.0/0
+                    except:
+                      - 10.0.0.0/8
+                      - 172.16.0.0/12
+                      - 192.168.0.0/16
+              ports:
+                - protocol: TCP
+                  port: 443
+            # DNS
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 6: Verify
+    # ================================================================
+
+    - name: "PHASE 6: Verify deployment"
+      ansible.builtin.debug:
+        msg: "Verifying Flux CD deployment"
+
+    - name: Check Flux controller pods
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ flux_namespace }} -o wide
+      register: flux_pods
+      changed_when: false
+
+    - name: Check GitRepository sources
+      ansible.builtin.shell: |
+        k3s kubectl get gitrepositories -n {{ flux_namespace }} -o wide 2>/dev/null || echo "No GitRepository resources yet"
+      register: git_sources
+      changed_when: false
+
+    - name: Check Kustomizations
+      ansible.builtin.shell: |
+        k3s kubectl get kustomizations -n {{ flux_namespace }} -o wide 2>/dev/null || echo "No Kustomization resources yet"
+      register: kustomizations
+      changed_when: false
+
+    - name: Display Flux status
+      ansible.builtin.debug:
+        msg: |
+          Flux CD deployed successfully!
+
+          Pods:
+          {{ flux_pods.stdout }}
+
+          GitRepository sources:
+          {{ git_sources.stdout }}
+
+          Kustomizations:
+          {{ kustomizations.stdout }}
+
+          Next steps:
+            1. Push manifests to schnappy/infra clusters/production/ directory
+            2. Flux will reconcile within 1 minute (polling interval)
+            3. Monitor with: k3s kubectl get kustomizations,helmreleases -A
