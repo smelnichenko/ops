@@ -710,6 +710,34 @@
         status_code: [201]
       when: "'pypi-public' not in existing_repo_names"
 
+    # --- Gradle distributions (raw proxy) ---
+    - name: Create gradle-distributions raw proxy repository
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/raw/proxy"
+        method: POST
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: gradle-distributions
+          online: true
+          storage:
+            blobStoreName: default
+            strictContentTypeValidation: true
+          proxy:
+            remoteUrl: "https://services.gradle.org"
+            contentMaxAge: -1
+            metadataMaxAge: 1440
+          negativeCache:
+            enabled: true
+            timeToLive: 1440
+          httpClient:
+            blocked: false
+            autoBlock: true
+        status_code: [201]
+      when: "'gradle-distributions' not in existing_repo_names"
+
     # ================================================================
     # Phase 8: Configure cleanup policies
     # ================================================================
