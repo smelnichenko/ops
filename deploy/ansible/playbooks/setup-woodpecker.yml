@@ -395,6 +395,14 @@
               ports:
                 - protocol: TCP
                   port: 9000
+            # From Prometheus (metrics scraping)
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: monitor
+              ports:
+                - protocol: TCP
+                  port: 8000
           egress:
             # To Forgejo (webhooks, API — direct service access)
             - to:
