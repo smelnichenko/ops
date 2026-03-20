@@ -171,6 +171,45 @@
         executable: /bin/bash
       changed_when: false
 
+    # ============== GRAFANA OAUTH2 APP ==============
+    - name: Check if Grafana OAuth2 app exists
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/user/applications/oauth2"
+        method: GET
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ forgejo_validate_certs | default(true) }}"
+      register: oauth_apps
+      changed_when: false
+
+    - name: Create Grafana OAuth2 app
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/user/applications/oauth2"
+        method: POST
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ forgejo_validate_certs | default(true) }}"
+        body_format: json
+        body:
+          name: "Grafana"
+          confidential_client: true
+          redirect_uris:
+            - "https://{{ grafana_host | default('grafana.pmon.dev') }}/login/generic_oauth"
+        status_code: [200, 201]
+      register: oauth_app_result
+      when: oauth_apps.json | selectattr('name', 'equalto', 'Grafana') | list | length == 0
+
+    - name: Display Grafana OAuth2 credentials
+      ansible.builtin.debug:
+        msg: |
+          Grafana OAuth2 app created!
+          Client ID: {{ oauth_app_result.json.client_id }}
+          Client Secret: {{ oauth_app_result.json.client_secret }}
+          Store these in Vault at secret/monitor/grafana (oauth_client_id, oauth_client_secret)
+      when: oauth_app_result is changed
+
     - name: Display Forgejo status
       ansible.builtin.debug:
         msg: |
