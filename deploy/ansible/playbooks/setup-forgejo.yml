@@ -166,6 +166,13 @@
               ports:
                 - protocol: TCP
                   port: 3000
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: monitor
+              ports:
+                - protocol: TCP
+                  port: 3000
         EOF
       args:
         executable: /bin/bash
