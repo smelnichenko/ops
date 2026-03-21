@@ -32,7 +32,7 @@
     infra_repo_url: "https://{{ forgejo_host }}/schnappy/infra.git"
     infra_repo_branch: "{{ infra_branch | default('main') }}"
     monitor_repo_url: "https://{{ forgejo_host }}/schnappy/monitor.git"
-    monitor_repo_branch: "{{ monitor_branch | default('master') }}"
+    monitor_repo_branch: "{{ monitor_branch | default('main') }}"
     validate_certs: "{{ flux_validate_certs | default(true) }}"
     target_host: "{{ ansible_host | default('192.168.11.2') }}"
 
