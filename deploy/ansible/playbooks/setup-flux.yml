@@ -31,8 +31,8 @@
     forgejo_admin_password: "{{ forgejo_password | default(lookup('env', 'FORGEJO_ADMIN_PASSWORD')) }}"
     infra_repo_url: "https://{{ forgejo_host }}/schnappy/infra.git"
     infra_repo_branch: "{{ infra_branch | default('main') }}"
-    monitor_repo_url: "https://{{ forgejo_host }}/schnappy/monitor.git"
-    monitor_repo_branch: "{{ monitor_branch | default('main') }}"
+    platform_repo_url: "https://{{ forgejo_host }}/schnappy/platform.git"
+    platform_repo_branch: "{{ platform_branch | default('main') }}"
     validate_certs: "{{ flux_validate_certs | default(true) }}"
     target_host: "{{ ansible_host | default('192.168.11.2') }}"
 
@@ -236,20 +236,20 @@
         executable: /bin/bash
       changed_when: false
 
-    - name: Create GitRepository for monitor repo (chart source)
+    - name: Create GitRepository for platform repo (chart source)
       ansible.builtin.shell: |
         set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
         apiVersion: source.toolkit.fluxcd.io/v1
         kind: GitRepository
         metadata:
-          name: monitor
+          name: platform
           namespace: {{ flux_namespace }}
         spec:
           interval: 5m
-          url: {{ monitor_repo_url }}
+          url: {{ platform_repo_url }}
           ref:
-            branch: {{ monitor_repo_branch }}
+            branch: {{ platform_repo_branch }}
           secretRef:
             name: forgejo-credentials
         EOF
