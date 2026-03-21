@@ -5,6 +5,7 @@ dotenv: ['.env']
 vars:
   TARGET_HOST: '{{.TARGET_HOST | default "192.168.11.2"}}'
   TARGET_USER: '{{.TARGET_USER | default "sm"}}'
+  SRC_DIR: '{{.SRC_DIR | default "../"}}'
 
 tasks:
   default:
@@ -13,46 +14,11 @@ tasks:
       - task --list
 
   # ============== BUILD ==============
-  build:
-    desc: Build everything
-    deps: [build:backend, build:frontend]
-
   build:backend:
     desc: Build backend JAR
-    dir: backend
+    dir: '{{.SRC_DIR}}/monitor/backend'
     cmds:
       - ./gradlew bootJar -x test
-
-  build:frontend:
-    desc: Build frontend (includes game export)
-    deps: [game:export]
-    dir: frontend
-    cmds:
-      - npm ci
-      - npm run build
-
-  # ============== GAME ==============
-  game:export:
-    desc: Export Godot game to frontend public directory
-    dir: games/scp
-    sources:
-      - scripts/**/*.gd
-      - scenes/**/*.tscn
-      - project.godot
-      - export_presets.cfg
-    generates:
-      - ../../frontend/public/game/index.wasm
-    cmds:
-      - mkdir -p ../../frontend/public/game
-      - godot --headless --export-release "Web" ../../frontend/public/game/index.html
-      - sed -i 's/"ensureCrossOriginIsolationHeaders":true/"ensureCrossOriginIsolationHeaders":false/' ../../frontend/public/game/index.html
-      # Inject bridge: React→Godot (postMessage→_godotReceive) + Godot→React (CustomEvent→parent.postMessage)
-      - sed -i 's|<script src="index.js"></script>|<script>window.addEventListener("message",function(e){if(e.data\&\&e.data.type\&\&window._godotReceive){window._godotReceive(JSON.stringify(e.data));}});window.addEventListener("godotMessage",function(e){window.parent.postMessage(e.detail,"*");});</script>\n\t\t<script src="index.js"></script>|' ../../frontend/public/game/index.html
-
-  game:clean:
-    desc: Clean exported game files
-    cmds:
-      - rm -rf frontend/public/game
 
   # ============== LOCAL DEV ==============
   dev:
@@ -120,30 +86,29 @@ tasks:
     desc: Run all tests
     cmds:
       - task: test:backend
-      - task: test:e2e
 
   test:backend:
     desc: Run backend tests
-    dir: backend
+    dir: '{{.SRC_DIR}}/monitor/backend'
     cmds:
       - ./gradlew test
 
   test:e2e:install:
     desc: Install Playwright browsers (run once after npm install or Playwright version bump)
-    dir: frontend
+    dir: '{{.SRC_DIR}}/site'
     cmds:
       - npx playwright install chromium
 
   test:e2e:
     desc: Run E2E tests with Playwright (requires running app)
-    dir: frontend
+    dir: '{{.SRC_DIR}}/site'
     deps: [test:e2e:install]
     cmds:
       - npx playwright test
 
   test:e2e:ui:
     desc: Run E2E tests with Playwright UI
-    dir: frontend
+    dir: '{{.SRC_DIR}}/site'
     deps: [test:e2e:install]
     cmds:
       - npx playwright test --ui
@@ -172,7 +137,7 @@ tasks:
   # ============== JOOQ ==============
   jooq:generate:
     desc: Generate jOOQ classes from database (requires running postgres)
-    dir: backend
+    dir: '{{.SRC_DIR}}/monitor/backend'
     cmds:
       - ./gradlew jooqCodegen
 
@@ -379,7 +344,7 @@ tasks:
   deploy:apt-cache:
     desc: Build apt-cacher-ng image and import to k3s
     cmds:
-      - docker build -t git.pmon.dev/schnappy/apt-cacher-ng:1.0 infra/apt-cache/
+      - docker build -t git.pmon.dev/schnappy/apt-cacher-ng:1.0 {{.SRC_DIR}}/platform/apt-cache/
       - docker save git.pmon.dev/schnappy/apt-cacher-ng:1.0 | ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s ctr images import -'
       - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s kubectl rollout restart deployment/monitor-apt-cache -n monitor'
 
@@ -522,5 +487,4 @@ tasks:
   clean:
     desc: Clean all build artifacts
     cmds:
-      - rm -rf backend/build frontend/dist frontend/node_modules frontend/public/game
       - docker compose down -v --remove-orphans 2>/dev/null || true
