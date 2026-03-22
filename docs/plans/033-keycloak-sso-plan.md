@@ -1,59 +1,74 @@
 # Keycloak SSO Integration
 
-## Status: Phase 1-2 COMPLETE, Phase 5 partial (2026-03-22). Phases 3-4, 5b, 6 PENDING.
+## Status: COMPLETE (2026-03-22)
 
-## What's done
+## What was implemented
 
 ### Phase 1: Deploy Keycloak — COMPLETE
-- Keycloak 26.5.6 in schnappy namespace (`schnappy-keycloak`)
-- Ingress: `auth.pmon.dev` (HTTP-01 TLS via letsencrypt-prod)
+- Keycloak 26.5.6 custom image (`schnappy/keycloak-theme`) with schnappy branding
+- Ingress: `auth.pmon.dev` (HTTP-01 TLS — DNS-01 blocked by Porkbun API 403)
 - Database: `keycloak` in shared schnappy-postgres
-- Realm `schnappy`: roles (PLAY/CHAT/EMAIL/METRICS/MANAGE_USERS), groups (Admins/Users), clients (app/grafana/forgejo)
-- OIDC discovery: `https://auth.pmon.dev/realms/schnappy/.well-known/openid-configuration`
+- Realm `schnappy`: roles, groups (Admins/Users), clients (app/grafana/forgejo)
 
 ### Phase 2: Gateway RS256 — COMPLETE
 - Dual-auth: RS256 (Keycloak JWKS) + HS256 (admin service) fallback
-- JWKS URI injected via env var when Keycloak enabled
 - Keycloak `realm_access.roles` mapped to `X-User-Permissions`
-- Legacy `permissions` claim also supported
 
-### Phase 5a: Grafana SSO — COMPLETE
-- Grafana OAuth pointing to Keycloak (`schnappy` realm)
-- Client secret in Vault (`secret/schnappy/grafana`)
-- NP: Grafana ↔ Keycloak bidirectional
+### Phase 3: Admin OIDC Callback — COMPLETE
+- `POST /api/auth/oidc/callback` exchanges Keycloak auth code
+- OidcService: code→token exchange, ID token decoding
+- OidcUserService: upsert user from Keycloak claims
+- Existing form login preserved (dual-auth)
+
+### Phase 4: Frontend OIDC — COMPLETE
+- "Sign in with Keycloak" button on login page
+- AuthCallback page handles code exchange
+- Keycloak logout redirect on app logout
+
+### Phase 5: Tool Integrations — COMPLETE
+- **Grafana**: Generic OAuth → Keycloak (client secret in Vault)
+- **Forgejo**: OIDC source via `forgejo admin auth add-oauth`
+- **Woodpecker**: Chains via Forgejo → Keycloak (no changes needed)
+- **SonarQube/Kibana**: Deferred (CE limitation / forward-auth needed)
+
+### Keycloak Theme — COMPLETE
+- Custom Docker image: `schnappy/keycloak-theme` (extends official image)
+- Dark gradient background, blue buttons, rounded cards, SCHNAPPY header
+- Built via Woodpecker CD pipeline, versioned in Forgejo registry
 
 ## Issues resolved
-- `--optimized` flag fails on first start → removed
-- readOnlyRootFilesystem breaks Quarkus build → disabled
-- Health probes on management port 9000, not app port 8080
-- Missing `---` YAML separator between game/postgres NPs → fixed
-- Keycloak → postgres NP missing → added
-- Porkbun API returns 403 from server IP → switched to HTTP-01 for auth.pmon.dev
-- Wildcard CNAME `*.pmon.dev` interfered with DNS-01 challenge → was not root cause, restored
-- Stale TXT record from manual test → deleted
-- Duplicate `autoLogin` key in helmrelease → fixed
+- `--optimized` fails on first start → removed
+- readOnlyRootFilesystem breaks Quarkus → disabled
+- Health probes on port 9000, not 8080
+- Porkbun API returns 403 from server IP → HTTP-01 for auth.pmon.dev
+- ConfigMap theme approach → custom Docker image (cleaner)
+- `.Files.Get` only works inside chart directory
+- Keycloak theme cache requires pod restart after CSS changes
+- `KC_SPI_THEME_DEFAULT` sets ALL theme types → only set login theme via realm API
 
-## What's pending
+## Files created/modified
 
-### Phase 3: Admin service → Keycloak client — PENDING
-- Remove JWT issuer, delegate auth to Keycloak
-- Add Keycloak event listener for user sync
-- Keep AdminController for group management
+### New repos:
+- `schnappy/keycloak-theme` — Dockerfile + theme CSS + Woodpecker CD
 
-### Phase 4: Frontend OIDC — PENDING
-- Replace login form with Keycloak redirect
-- Authorization Code Flow with PKCE
-- Token in HttpOnly cookie
+### Platform repo:
+- `keycloak-deployment.yaml`, `keycloak-service.yaml`, `keycloak-ingress.yaml`
+- `keycloak-networkpolicy.yaml`, `keycloak-secret.yaml`
+- `external-secrets.yaml` — Keycloak ESO entry
+- `gateway-deployment.yaml` — JWKS_URI env var
+- `admin-deployment.yaml` — Keycloak env vars
+- `network-policies.yaml` — admin→keycloak, grafana↔keycloak, keycloak→postgres
+- `values.yaml` — keycloak section
 
-### Phase 5b: Forgejo + Woodpecker + Kibana SSO — PENDING
-- Forgejo OIDC config
-- Woodpecker chains via Forgejo
-- Kibana via forward-auth or OpenID Connect
-- SonarQube CE via HTTP Header SSO
+### Admin repo:
+- `OidcController.java`, `OidcService.java`, `OidcUserService.java`
+- `KeycloakProperties.java`, `OidcCallbackRequest.java`
 
-### Phase 6: User migration — PENDING
-- Sync existing admin DB users to Keycloak
-- Coordinated deploy (gateway + admin + frontend)
-- Remove old auth code
+### Site repo:
+- `config/oidc.ts`, `pages/AuthCallback.tsx`
+- `contexts/AuthContext.tsx` — loginWithCode, Keycloak logout
+- `pages/Login.tsx` — Keycloak button
 
-## Critical: Phases 3-4 must deploy together
+### API Gateway repo:
+- `JwtAuthFilter.java` — dual-auth (RS256 + HS256)
+- `AuthProperties.java` — jwksUri field
