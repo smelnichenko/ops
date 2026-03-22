@@ -1,92 +1,59 @@
 # Keycloak SSO Integration
 
-## Status: Phase 1 COMPLETE (2026-03-22), Phases 2-6 PENDING
+## Status: Phase 1-2 COMPLETE, Phase 5 partial (2026-03-22). Phases 3-4, 5b, 6 PENDING.
 
-## Context
+## What's done
 
-Single Keycloak identity provider for all web UIs. One user, one login, everywhere. Replaces admin service JWT issuance with Keycloak OIDC.
-
-## Phase 1: Deploy Keycloak — COMPLETE
-
-- Keycloak 26.5.6 in schnappy namespace
-- Ingress: `auth.pmon.dev` (DNS-01 TLS via letsencrypt-dns)
-- Database: `keycloak` in shared schnappy-postgres (same user, separate DB)
-- Vault secrets: `secret/schnappy/keycloak` (admin_password, db_password)
-- Health probes on management port 9000
-- readOnlyRootFilesystem: false (Quarkus build writes to /opt/keycloak/lib)
-- Realm `schnappy` configured:
-  - Roles: PLAY, CHAT, EMAIL, METRICS, MANAGE_USERS
-  - Groups: Admins (all roles), Users (METRICS+PLAY, default)
-  - Clients: `app` (public, PKCE), `grafana` (confidential), `forgejo` (confidential)
-  - Registration allowed, email verification enabled
+### Phase 1: Deploy Keycloak — COMPLETE
+- Keycloak 26.5.6 in schnappy namespace (`schnappy-keycloak`)
+- Ingress: `auth.pmon.dev` (HTTP-01 TLS via letsencrypt-prod)
+- Database: `keycloak` in shared schnappy-postgres
+- Realm `schnappy`: roles (PLAY/CHAT/EMAIL/METRICS/MANAGE_USERS), groups (Admins/Users), clients (app/grafana/forgejo)
 - OIDC discovery: `https://auth.pmon.dev/realms/schnappy/.well-known/openid-configuration`
 
-### Helm templates created:
-- `keycloak-deployment.yaml` — Recreate strategy, `start` command
-- `keycloak-service.yaml` — ClusterIP:8080
-- `keycloak-ingress.yaml` — auth.pmon.dev
-- `keycloak-networkpolicy.yaml` — Traefik/app/gateway/admin ingress, postgres/DNS/HTTPS egress
-- `keycloak-secret.yaml` — admin + DB passwords
-- `external-secrets.yaml` — Keycloak ESO entry added
-- `network-policies.yaml` — postgres ingress from keycloak added
-- `postgres-deployment.yaml` — keycloak DB in init container
+### Phase 2: Gateway RS256 — COMPLETE
+- Dual-auth: RS256 (Keycloak JWKS) + HS256 (admin service) fallback
+- JWKS URI injected via env var when Keycloak enabled
+- Keycloak `realm_access.roles` mapped to `X-User-Permissions`
+- Legacy `permissions` claim also supported
 
-### Issues encountered:
-- `--optimized` flag fails on first start (needs build phase)
-- readOnlyRootFilesystem breaks Quarkus JarResultBuildStep
-- Health endpoint on management port 9000, not app port 8080
-- Shared postgres: same monitor_user credentials, separate keycloak DB
-- Master realm tokens expire in 60s — refresh per API call batch
-- Missing YAML `---` separator between game/postgres NPs caused Kustomize post-renderer failure
+### Phase 5a: Grafana SSO — COMPLETE
+- Grafana OAuth pointing to Keycloak (`schnappy` realm)
+- Client secret in Vault (`secret/schnappy/grafana`)
+- NP: Grafana ↔ Keycloak bidirectional
 
-## Phase 2: Gateway RS256 — PENDING
+## Issues resolved
+- `--optimized` flag fails on first start → removed
+- readOnlyRootFilesystem breaks Quarkus build → disabled
+- Health probes on management port 9000, not app port 8080
+- Missing `---` YAML separator between game/postgres NPs → fixed
+- Keycloak → postgres NP missing → added
+- Porkbun API returns 403 from server IP → switched to HTTP-01 for auth.pmon.dev
+- Wildcard CNAME `*.pmon.dev` interfered with DNS-01 challenge → was not root cause, restored
+- Stale TXT record from manual test → deleted
+- Duplicate `autoLogin` key in helmrelease → fixed
 
-Switch `JwtAuthFilter` from HS256 shared secret to RS256 JWKS:
-- Fetch JWKS from `auth.pmon.dev/realms/schnappy/protocol/openid-connect/certs`
-- Cache keys, refresh on rotation
-- Map Keycloak claims → X-User-* headers
-- Dual-auth: validate both HS256 (old) and RS256 (new) during migration
-- User ID mapping: custom token mapper or admin DB lookup
+## What's pending
 
-**Files:** `api-gateway/src/main/java/io/schnappy/gateway/filter/JwtAuthFilter.java`, `AuthProperties.java`, `build.gradle`
+### Phase 3: Admin service → Keycloak client — PENDING
+- Remove JWT issuer, delegate auth to Keycloak
+- Add Keycloak event listener for user sync
+- Keep AdminController for group management
 
-## Phase 3: Admin Service → Keycloak Client — PENDING
+### Phase 4: Frontend OIDC — PENDING
+- Replace login form with Keycloak redirect
+- Authorization Code Flow with PKCE
+- Token in HttpOnly cookie
 
-- Remove JWT issuer (JwtEncoder bean)
-- Remove AuthService login/register, PasswordResetService, EmailVerificationService, HashcashService
-- Add Keycloak Admin Client for user/role management
-- Add user event listener (KC webhook → Kafka user.events)
-- Keep AdminController for group management UI
+### Phase 5b: Forgejo + Woodpecker + Kibana SSO — PENDING
+- Forgejo OIDC config
+- Woodpecker chains via Forgejo
+- Kibana via forward-auth or OpenID Connect
+- SonarQube CE via HTTP Header SSO
 
-**Files:** `admin/src/main/java/io/schnappy/admin/service/`, `admin/src/main/java/io/schnappy/admin/controller/`
+### Phase 6: User migration — PENDING
+- Sync existing admin DB users to Keycloak
+- Coordinated deploy (gateway + admin + frontend)
+- Remove old auth code
 
-## Phase 4: Frontend OIDC — PENDING
-
-- Remove Login/Register/ForgotPassword/ResetPassword pages
-- Add OIDC Authorization Code Flow with PKCE
-- Redirect to Keycloak for auth
-- Token in HttpOnly cookie (same as now)
-- Use `keycloak-js` adapter or manual OIDC
-
-**Files:** `site/src/pages/Login.tsx`, `site/src/contexts/AuthContext.tsx`
-
-## Phase 5: Tool Integrations — PENDING
-
-- **Grafana:** Enable generic OAuth → Keycloak client `grafana`
-- **Forgejo:** OIDC provider → Keycloak client `forgejo`
-- **Woodpecker:** Keep Forgejo OAuth (chains to KC)
-- **Kibana:** Traefik forward-auth or OpenID Connect
-- **SonarQube CE:** HTTP Header SSO via forward-auth
-
-## Phase 6: Migration — PENDING
-
-1. Create admin user in Keycloak matching existing
-2. Sync users from admin DB to Keycloak
-3. Switch gateway to RS256
-4. Switch frontend to OIDC
-5. Switch tool integrations
-6. Remove old auth code
-
-## Critical: Phases 2-4 must deploy together
-
-Gateway, admin service, and frontend changes are interdependent. Deploy as coordinated release.
+## Critical: Phases 3-4 must deploy together
