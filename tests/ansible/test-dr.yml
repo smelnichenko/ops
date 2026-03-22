@@ -57,7 +57,7 @@
   gather_facts: false
 
   vars:
-    ns: monitor
+    ns: schnappy
     app_url: http://localhost
     test_pass: dr-test-pass-12345
     test_email: dr-test@test.com
@@ -78,7 +78,7 @@
       ansible.builtin.command: k3s kubectl get nodes
       changed_when: false
 
-    - name: Create monitor namespace
+    - name: Create schnappy namespace
       ansible.builtin.command: k3s kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
@@ -86,7 +86,7 @@
 
     - name: Write Helm values for DR test
       ansible.builtin.copy:
-        dest: /tmp/monitor-dr-test-values.yml
+        dest: /tmp/schnappy-dr-test-values.yml
         mode: '0600'
         content: |
           vault:
@@ -145,10 +145,10 @@
 
     - name: Deploy chart for DR test
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
-          --values /tmp/monitor-dr-test-values.yml \
+          --values /tmp/schnappy-dr-test-values.yml \
           --timeout 600s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -203,7 +203,7 @@
 
     - name: "SEED: Auto-verify email and assign Admins group"
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-postgres -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-postgres -n {{ ns }} -- \
           psql -U postgres -d monitor -c "
             UPDATE email_verification_tokens SET used = true
               WHERE user_id = (SELECT id FROM users WHERE email = '{{ test_email }}') AND used = false;
@@ -278,12 +278,12 @@
 
     - name: "POD-RECOVERY: Delete app pod"
       ansible.builtin.shell: |
-        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=app -n {{ ns }} --wait=false
+        k3s kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=app -n {{ ns }} --wait=false
       changed_when: true
 
     - name: "POD-RECOVERY: Wait for app deployment rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=120s
       changed_when: false
 
     - name: "POD-RECOVERY: Verify app health after restart"
@@ -329,12 +329,12 @@
 
     - name: "POD-RECOVERY: Delete postgres pod"
       ansible.builtin.shell: |
-        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=postgres -n {{ ns }} --wait=false
+        k3s kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=postgres -n {{ ns }} --wait=false
       changed_when: true
 
     - name: "POD-RECOVERY: Wait for postgres deployment rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-postgres -n {{ ns }} --timeout=180s
+        k3s kubectl rollout status deployment/schnappy-postgres -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: "POD-RECOVERY: Wait for app to reconnect to postgres"
@@ -380,12 +380,12 @@
 
     - name: "POD-RECOVERY: Delete redis pod"
       ansible.builtin.shell: |
-        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=redis -n {{ ns }} --wait=false
+        k3s kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=redis -n {{ ns }} --wait=false
       changed_when: true
 
     - name: "POD-RECOVERY: Wait for redis deployment rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-redis -n {{ ns }} --timeout=60s
+        k3s kubectl rollout status deployment/schnappy-redis -n {{ ns }} --timeout=60s
       changed_when: false
 
     - name: "POD-RECOVERY: Verify app health after redis restart"
@@ -407,12 +407,12 @@
 
     - name: "POD-RECOVERY: Delete frontend pod"
       ansible.builtin.shell: |
-        k3s kubectl delete pod -l app.kubernetes.io/name=monitor,app.kubernetes.io/component=frontend -n {{ ns }} --wait=false
+        k3s kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=frontend -n {{ ns }} --wait=false
       changed_when: true
 
     - name: "POD-RECOVERY: Wait for frontend deployment rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-frontend -n {{ ns }} --timeout=60s
+        k3s kubectl rollout status deployment/schnappy-frontend -n {{ ns }} --timeout=60s
       changed_when: false
 
     - name: "POD-RECOVERY: Verify frontend serves pages"
@@ -439,7 +439,7 @@
 
     - name: "POD-RECOVERY: Wait for all deployments to roll out"
       ansible.builtin.shell: |
-        for deploy in monitor-app monitor-postgres monitor-redis monitor-frontend; do
+        for deploy in schnappy-app schnappy-postgres schnappy-redis schnappy-frontend; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=180s
         done
       changed_when: false
@@ -804,7 +804,7 @@
 
     - name: "DR: Trigger pg_dump before backup"
       ansible.builtin.shell: |
-        k3s kubectl create job --from=cronjob/monitor-postgres-backup dr-pgdump -n {{ ns }} 2>/dev/null || true
+        k3s kubectl create job --from=cronjob/schnappy-postgres-backup dr-pgdump -n {{ ns }} 2>/dev/null || true
         k3s kubectl wait --for=condition=complete job/dr-pgdump -n {{ ns }} --timeout=120s 2>/dev/null || true
       changed_when: false
       failed_when: false
@@ -841,13 +841,13 @@
         fail_msg: "Backup failed: {{ backup_status.stdout }}"
         success_msg: "PASS: Velero backup completed"
 
-    # ── Step 4: Destroy monitor namespace ──
+    # ── Step 4: Destroy schnappy namespace ──
 
-    - name: "DR: !! DESTROYING monitor namespace !!"
+    - name: "DR: !! DESTROYING schnappy namespace !!"
       ansible.builtin.debug:
         msg: "Deleting namespace {{ ns }} — simulating disaster"
 
-    - name: "DR: Delete monitor namespace"
+    - name: "DR: Delete schnappy namespace"
       ansible.builtin.shell: |
         k3s kubectl delete namespace {{ ns }} --wait=true --timeout=120s
       register: delete_ns
@@ -898,7 +898,7 @@
 
     - name: "DR: Wait for all deployments after restore"
       ansible.builtin.shell: |
-        for deploy in monitor-app monitor-postgres monitor-redis monitor-frontend; do
+        for deploy in schnappy-app schnappy-postgres schnappy-redis schnappy-frontend; do
           echo "Waiting for $deploy..."
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
@@ -1003,7 +1003,7 @@
     #
     # Simulates: primary backup storage (SATA SSD) is lost.
     # 1. Rsync MinIO data → vault-pi (offsite copy)
-    # 2. Wipe MinIO data on k3s + destroy monitor namespace
+    # 2. Wipe MinIO data on k3s + destroy schnappy namespace
     # 3. Rsync back from vault-pi → k3s
     # 4. Restart MinIO, Velero restore
     # 5. Verify data integrity
@@ -1072,7 +1072,7 @@
 
     # ── Step 2: Simulate primary backup loss + disaster ──
 
-    - name: "OFFSITE: !! DESTROYING MinIO data + monitor namespace !!"
+    - name: "OFFSITE: !! DESTROYING MinIO data + schnappy namespace !!"
       ansible.builtin.debug:
         msg: "Simulating primary backup storage failure + full disaster"
 
@@ -1081,7 +1081,7 @@
         rm -rf /tmp/velero-test-backups/*
       changed_when: true
 
-    - name: "OFFSITE: Delete monitor namespace"
+    - name: "OFFSITE: Delete schnappy namespace"
       ansible.builtin.shell: |
         k3s kubectl delete namespace {{ ns }} --wait=true --timeout=120s
       register: delete_ns_offsite
@@ -1185,7 +1185,7 @@
 
     - name: "OFFSITE: Wait for all deployments"
       ansible.builtin.shell: |
-        for deploy in monitor-app monitor-postgres monitor-redis monitor-frontend; do
+        for deploy in schnappy-app schnappy-postgres schnappy-redis schnappy-frontend; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
       changed_when: false
@@ -1292,7 +1292,7 @@
 
     - name: Clean up values file
       ansible.builtin.file:
-        path: /tmp/monitor-dr-test-values.yml
+        path: /tmp/schnappy-dr-test-values.yml
         state: absent
 
     - name: "=== ALL DR TESTS PASSED ==="

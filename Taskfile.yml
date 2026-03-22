@@ -346,7 +346,7 @@ tasks:
     cmds:
       - docker build -t git.pmon.dev/schnappy/apt-cacher-ng:1.0 {{.SRC_DIR}}/platform/apt-cache/
       - docker save git.pmon.dev/schnappy/apt-cacher-ng:1.0 | ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s ctr images import -'
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s kubectl rollout restart deployment/monitor-apt-cache -n monitor'
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s kubectl rollout restart deployment/schnappy-apt-cache -n schnappy'
 
   deploy:nexus:
     desc: Deploy Nexus repository manager on Pi
@@ -405,9 +405,9 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
 
   deploy:backup:
-    desc: Trigger a manual Velero backup of monitor namespace
+    desc: Trigger a manual Velero backup of schnappy namespace
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup create manual-$(date +%Y%m%d-%H%M) --include-namespaces monitor --default-volumes-to-fs-backup --kubeconfig /etc/rancher/k3s/k3s.yaml"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup create manual-$(date +%Y%m%d-%H%M) --include-namespaces schnappy --default-volumes-to-fs-backup --kubeconfig /etc/rancher/k3s/k3s.yaml"
 
   deploy:backup:status:
     desc: Check Velero backup status
@@ -415,14 +415,14 @@ tasks:
       - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup get --kubeconfig /etc/rancher/k3s/k3s.yaml"
 
   deploy:undeploy:
-    desc: Uninstall monitor from target (keeps PVCs)
+    desc: Uninstall schnappy from target (keeps PVCs)
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall monitor -n monitor --kubeconfig /etc/rancher/k3s/k3s.yaml"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall schnappy -n schnappy --kubeconfig /etc/rancher/k3s/k3s.yaml"
 
   deploy:status:
     desc: Check deployment status on target
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl get pods,svc,ingress -n monitor"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl get pods,svc,ingress -n schnappy"
 
   deploy:ping:
     desc: Test connectivity to target host

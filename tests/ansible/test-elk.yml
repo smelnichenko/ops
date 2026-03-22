@@ -20,7 +20,7 @@
   gather_facts: false
 
   vars:
-    ns: monitor
+    ns: schnappy
     vault_ns: vault
     test_es_password: "vagrant-test-elastic-password"
     test_kibana_password: "vagrant-test-kibana-password"
@@ -48,7 +48,7 @@
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/monitor/elasticsearch \
+          vault kv put secret/schnappy/elasticsearch \
             password="{{ test_es_password }}" \
             kibana_password="{{ test_kibana_password }}"
       no_log: true
@@ -61,7 +61,7 @@
     # Phase 2: Deploy chart with ELK enabled
     # ================================================================
 
-    - name: Create monitor namespace
+    - name: Create schnappy namespace
       ansible.builtin.command: k3s kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
@@ -69,7 +69,7 @@
 
     - name: Write Helm values for ELK test
       ansible.builtin.copy:
-        dest: /tmp/monitor-elk-test-values.yml
+        dest: /tmp/schnappy-elk-test-values.yml
         mode: '0600'
         content: |
           vault:
@@ -92,7 +92,7 @@
               image: docker.elastic.co/elasticsearch/elasticsearch:8.19.8
               replicas: 1
               javaOpts: "-Xms256m -Xmx256m"
-              existingSecret: "monitor-elasticsearch"
+              existingSecret: "schnappy-elasticsearch"
               resources:
                 requests:
                   memory: "512Mi"
@@ -147,10 +147,10 @@
 
     - name: Deploy chart with ELK enabled
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
-          --values /tmp/monitor-elk-test-values.yml \
+          --values /tmp/schnappy-elk-test-values.yml \
           --wait --timeout 600s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -172,13 +172,13 @@
 
     - name: Wait for Elasticsearch StatefulSet rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/monitor-elasticsearch -n {{ ns }} --timeout=300s
+        k3s kubectl rollout status statefulset/schnappy-elasticsearch -n {{ ns }} --timeout=300s
       register: es_rollout
       changed_when: false
 
     - name: Verify ExternalSecret synced for elasticsearch
       ansible.builtin.shell: |
-        k3s kubectl get externalsecret monitor-elasticsearch -n {{ ns }} \
+        k3s kubectl get externalsecret schnappy-elasticsearch -n {{ ns }} \
           -o jsonpath='{.status.conditions[0].reason}'
       register: es_secret_sync
       retries: 12
@@ -188,7 +188,7 @@
 
     - name: Wait for Elasticsearch to respond
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} http://localhost:9200/_cluster/health?pretty
       register: es_health
       retries: 30
@@ -202,7 +202,7 @@
 
     - name: Verify auth is enforced (unauthenticated should fail)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf http://localhost:9200/ 2>&1 || echo "AUTH_REQUIRED"
       register: es_noauth
       changed_when: false
@@ -217,7 +217,7 @@
 
     - name: Wait for Fluent-bit DaemonSet ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status daemonset/monitor-fluentbit -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status daemonset/schnappy-fluentbit -n {{ ns }} --timeout=120s
       register: fb_rollout
       changed_when: false
 
@@ -227,7 +227,7 @@
 
     - name: Query podlogs-* index for document count
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} \
             'http://localhost:9200/podlogs-*/_count' 2>/dev/null | \
           python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))"
@@ -248,13 +248,13 @@
 
     - name: Wait for Kibana deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-kibana -n {{ ns }} --timeout=300s
+        k3s kubectl rollout status deployment/schnappy-kibana -n {{ ns }} --timeout=300s
       register: kb_rollout
       changed_when: false
 
     - name: Check Kibana HTTP status
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-kibana -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-kibana -- \
           curl -sf -o /dev/null -w '%{http_code}' http://localhost:5601/api/status
       register: kb_health
       retries: 24
@@ -273,7 +273,7 @@
 
     - name: Check ILM policy exists
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} monitor-elasticsearch-0 -- \
+        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} \
             'http://localhost:9200/_ilm/policy/logs-30d-retention' 2>/dev/null
       register: ilm_check
@@ -293,7 +293,7 @@
 
     - name: Clean up values file
       ansible.builtin.file:
-        path: /tmp/monitor-elk-test-values.yml
+        path: /tmp/schnappy-elk-test-values.yml
         state: absent
 
     - name: Set result facts

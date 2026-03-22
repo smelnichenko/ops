@@ -19,7 +19,7 @@
   vars:
     linkerd_version: "stable-2.17.0"
     linkerd_viz: true
-    monitor_namespace: monitor
+    monitor_namespace: schnappy
     k3s_kubectl: "k3s kubectl"
 
   tasks:

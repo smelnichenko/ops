@@ -169,7 +169,7 @@
             - from:
                 - namespaceSelector:
                     matchLabels:
-                      kubernetes.io/metadata.name: monitor
+                      kubernetes.io/metadata.name: schnappy
               ports:
                 - protocol: TCP
                   port: 3000
@@ -214,7 +214,7 @@
           Grafana OAuth2 app created!
           Client ID: {{ oauth_app_result.json.client_id }}
           Client Secret: {{ oauth_app_result.json.client_secret }}
-          Store these in Vault at secret/monitor/grafana (oauth_client_id, oauth_client_secret)
+          Store these in Vault at secret/schnappy/grafana (oauth_client_id, oauth_client_secret)
       when: oauth_app_result is changed
 
     - name: Display Forgejo status

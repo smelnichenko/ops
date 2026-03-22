@@ -22,7 +22,7 @@
   gather_facts: false
 
   vars:
-    ns: monitor
+    ns: schnappy
     vault_ns: vault
     linkerd_ns: linkerd
     linkerd_viz_ns: linkerd-viz
@@ -94,7 +94,7 @@
     # Phase 2: Annotate namespace + deploy app
     # ================================================================
 
-    - name: Create monitor namespace
+    - name: Create schnappy namespace
       ansible.builtin.command: k3s kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
@@ -191,7 +191,7 @@
 
     - name: Write Helm values for Linkerd test
       ansible.builtin.copy:
-        dest: /tmp/monitor-linkerd-test-values.yml
+        dest: /tmp/schnappy-linkerd-test-values.yml
         mode: '0600'
         content: |
           vault:
@@ -325,10 +325,10 @@
 
     - name: Deploy chart with Linkerd injection
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
-          --values /tmp/monitor-linkerd-test-values.yml \
+          --values /tmp/schnappy-linkerd-test-values.yml \
           --wait --timeout 600s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -350,17 +350,17 @@
 
     - name: Wait for deployments
       ansible.builtin.shell: |
-        for deploy in monitor-gateway monitor-admin monitor-chat monitor-chess monitor-app; do
+        for deploy in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s 2>/dev/null || true
         done
       changed_when: false
 
     - name: Check sidecar injection per deployment
       ansible.builtin.shell: |
-        for deploy in monitor-gateway monitor-admin monitor-chat monitor-chess monitor-app; do
-          CONTAINERS=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/name=${deploy#monitor-} \
+        for deploy in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
+          CONTAINERS=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/name=${deploy#schnappy-} \
             -o jsonpath='{.items[0].spec.containers[*].name}' 2>/dev/null || \
-            k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=${deploy#monitor-} \
+            k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=${deploy#schnappy-} \
             -o jsonpath='{.items[0].spec.containers[*].name}' 2>/dev/null || echo "")
           if echo "$CONTAINERS" | grep -q "linkerd-proxy"; then
             echo "INJECTED: $deploy ($CONTAINERS)"
@@ -378,11 +378,11 @@
 
     - name: Set sidecar facts
       ansible.builtin.set_fact:
-        sidecar_gateway: "{{ 'INJECTED: monitor-gateway' in sidecar_check.stdout | default('') }}"
-        sidecar_admin: "{{ 'INJECTED: monitor-admin' in sidecar_check.stdout | default('') }}"
-        sidecar_chat: "{{ 'INJECTED: monitor-chat' in sidecar_check.stdout | default('') }}"
-        sidecar_chess: "{{ 'INJECTED: monitor-chess' in sidecar_check.stdout | default('') }}"
-        sidecar_core: "{{ 'INJECTED: monitor-app' in sidecar_check.stdout | default('') }}"
+        sidecar_gateway: "{{ 'INJECTED: schnappy-gateway' in sidecar_check.stdout | default('') }}"
+        sidecar_admin: "{{ 'INJECTED: schnappy-admin' in sidecar_check.stdout | default('') }}"
+        sidecar_chat: "{{ 'INJECTED: schnappy-chat' in sidecar_check.stdout | default('') }}"
+        sidecar_chess: "{{ 'INJECTED: schnappy-chess' in sidecar_check.stdout | default('') }}"
+        sidecar_core: "{{ 'INJECTED: schnappy-app' in sidecar_check.stdout | default('') }}"
 
     # ================================================================
     # Phase 4: Verify mTLS
@@ -411,8 +411,8 @@
     - name: Wait for traffic to flow (generate some requests)
       ansible.builtin.shell: |
         for i in $(seq 1 5); do
-          k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
-            curl -sf http://monitor-gateway:8080/api/health 2>/dev/null || true
+          k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+            curl -sf http://schnappy-gateway:8080/api/health 2>/dev/null || true
           sleep 2
         done
       changed_when: false
@@ -460,7 +460,7 @@
 
     - name: Check gateway health through mesh
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-gateway -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-gateway -- \
           curl -sf http://localhost:8080/actuator/health
       register: mesh_health_gateway
       retries: 12
@@ -471,7 +471,7 @@
 
     - name: Check core health through mesh
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-app -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-app -- \
           curl -sf http://localhost:8080/api/health
       register: mesh_health_core
       retries: 12
@@ -482,8 +482,8 @@
 
     - name: Register user through mesh (gateway -> admin)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
-          curl -sf -X POST http://monitor-gateway:8080/api/auth/register \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+          curl -sf -X POST http://schnappy-gateway:8080/api/auth/register \
           -H 'Content-Type: application/json' \
           -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
       register: mesh_register
@@ -495,8 +495,8 @@
 
     - name: Login through mesh (gateway -> admin)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-frontend -- \
-          curl -sf -X POST http://monitor-gateway:8080/api/auth/login \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+          curl -sf -X POST http://schnappy-gateway:8080/api/auth/login \
           -H 'Content-Type: application/json' \
           -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
       register: mesh_login
@@ -514,7 +514,7 @@
 
     - name: Check Linkerd Viz stat for gateway
       ansible.builtin.shell: |
-        /usr/local/bin/linkerd viz stat deployment/monitor-gateway -n {{ ns }} 2>&1 || echo "STAT_FAILED"
+        /usr/local/bin/linkerd viz stat deployment/schnappy-gateway -n {{ ns }} 2>&1 || echo "STAT_FAILED"
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       register: linkerd_stat
@@ -554,10 +554,10 @@
 
     - name: Test authorization enforcement (chess -> admin should be blocked)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-chess -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-chess -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           --connect-timeout 5 \
-          http://monitor-admin:8080/actuator/health 2>/dev/null || echo "BLOCKED"
+          http://schnappy-admin:8080/actuator/health 2>/dev/null || echo "BLOCKED"
       register: authz_test
       changed_when: false
       failed_when: false
@@ -602,7 +602,7 @@
 
     - name: Clean up values file
       ansible.builtin.file:
-        path: /tmp/monitor-linkerd-test-values.yml
+        path: /tmp/schnappy-linkerd-test-values.yml
         state: absent
 
     - name: Set final facts

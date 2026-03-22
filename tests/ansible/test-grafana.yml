@@ -20,7 +20,7 @@
   gather_facts: false
 
   vars:
-    ns: monitor
+    ns: schnappy
     vault_ns: vault
     test_grafana_user: "admin"
     test_grafana_password: "vagrant-test-grafana-password"
@@ -48,7 +48,7 @@
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/monitor/grafana \
+          vault kv put secret/schnappy/grafana \
             admin_user="{{ test_grafana_user }}" \
             admin_password="{{ test_grafana_password }}"
       no_log: true
@@ -61,7 +61,7 @@
     # Phase 2: Deploy chart with Grafana + Prometheus enabled
     # ================================================================
 
-    - name: Create monitor namespace
+    - name: Create schnappy namespace
       ansible.builtin.command: k3s kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
@@ -69,7 +69,7 @@
 
     - name: Write Helm values for Grafana test
       ansible.builtin.copy:
-        dest: /tmp/monitor-grafana-test-values.yml
+        dest: /tmp/schnappy-grafana-test-values.yml
         mode: '0600'
         content: |
           vault:
@@ -116,7 +116,7 @@
           grafana:
             enabled: true
             image: grafana/grafana:12.4.0
-            existingSecret: "monitor-grafana"
+            existingSecret: "schnappy-grafana"
             resources:
               requests:
                 memory: "128Mi"
@@ -141,10 +141,10 @@
 
     - name: Deploy chart with Grafana + Prometheus
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
-          --values /tmp/monitor-grafana-test-values.yml \
+          --values /tmp/schnappy-grafana-test-values.yml \
           --wait --timeout 300s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -166,13 +166,13 @@
 
     - name: Wait for Grafana deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-grafana -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-grafana -n {{ ns }} --timeout=120s
       register: grafana_rollout
       changed_when: false
 
     - name: Verify ExternalSecret synced for grafana
       ansible.builtin.shell: |
-        k3s kubectl get externalsecret monitor-grafana -n {{ ns }} \
+        k3s kubectl get externalsecret schnappy-grafana -n {{ ns }} \
           -o jsonpath='{.status.conditions[0].reason}'
       register: grafana_secret_sync
       retries: 12
@@ -182,7 +182,7 @@
 
     - name: Check Grafana HTTP health
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
           curl -sf -o /dev/null -w '%{http_code}' http://localhost:3000/api/health
       register: grafana_health
       retries: 12
@@ -200,7 +200,7 @@
 
     - name: Test Grafana login with seeded credentials
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -u {{ test_grafana_user }}:{{ test_grafana_password }} \
           http://localhost:3000/api/org
@@ -221,7 +221,7 @@
 
     - name: Check Grafana datasources
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
           curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }} \
           http://localhost:3000/api/datasources
       register: grafana_datasources
@@ -245,7 +245,7 @@
 
     - name: Search for dashboards
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/monitor-grafana -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
           curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }} \
           'http://localhost:3000/api/search?type=dash-db'
       register: grafana_dashboards
@@ -269,7 +269,7 @@
 
     - name: Clean up values file
       ansible.builtin.file:
-        path: /tmp/monitor-grafana-test-values.yml
+        path: /tmp/schnappy-grafana-test-values.yml
         state: absent
 
     - name: Set result facts

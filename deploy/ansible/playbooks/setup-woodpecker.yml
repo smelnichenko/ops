@@ -31,7 +31,7 @@
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
     forgejo_admin_user: "{{ forgejo_admin | default('forgejo_admin') }}"
     forgejo_admin_password: "{{ forgejo_password | default(lookup('env', 'FORGEJO_ADMIN_PASSWORD')) }}"
-    monitor_namespace: "{{ monitor_ns | default('monitor') }}"
+    monitor_namespace: "{{ monitor_ns | default('schnappy') }}"
 
   tasks:
     # ================================================================
@@ -185,9 +185,9 @@
         woodpecker_infra_repo_token: "{{ infra_token_result.json.sha1 }}"
       no_log: true
 
-    - name: Fetch SonarQube token from monitor namespace secret
+    - name: Fetch SonarQube token from schnappy namespace secret
       ansible.builtin.shell: |
-        k3s kubectl get secret monitor-sonarqube -n monitor \
+        k3s kubectl get secret schnappy-sonarqube -n schnappy \
           -o jsonpath='{.data.SONARQUBE_TOKEN}' 2>/dev/null | base64 -d
       args:
         executable: /bin/bash
@@ -399,7 +399,7 @@
             - from:
                 - namespaceSelector:
                     matchLabels:
-                      kubernetes.io/metadata.name: monitor
+                      kubernetes.io/metadata.name: schnappy
               ports:
                 - protocol: TCP
                   port: 8000
@@ -509,7 +509,7 @@
               ports:
                 - protocol: TCP
                   port: 443
-            # To SonarQube (monitor namespace)
+            # To SonarQube (schnappy namespace)
             - to:
                 - namespaceSelector:
                     matchLabels:
@@ -528,7 +528,7 @@
               ports:
                 - protocol: TCP
                   port: 3000
-            # To apt-cacher-ng (monitor namespace)
+            # To apt-cacher-ng (schnappy namespace)
             - to:
                 - namespaceSelector:
                     matchLabels:

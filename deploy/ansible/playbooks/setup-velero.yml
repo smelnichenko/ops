@@ -325,14 +325,14 @@
         deployNodeAgent: true
         snapshotsEnabled: false
         schedules:
-          monitor-daily:
+          schnappy-daily:
             disabled: false
             schedule: "0 2 * * *"
             useOwnerReferencesInBackup: false
             template:
               ttl: 168h
               includedNamespaces:
-                - monitor
+                - schnappy
               defaultVolumesToFsBackup: true
           full-weekly:
             disabled: false
@@ -532,7 +532,7 @@
           MinIO bucket: velero
 
           Scheduled backups:
-            - monitor-daily: 2 AM UTC, monitor namespace, 7-day retention
+            - schnappy-daily: 2 AM UTC, schnappy namespace, 7-day retention
             - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
 
           Offsite replication:
@@ -545,5 +545,5 @@
 
           Commands:
             velero backup get
-            velero backup create manual-test --include-namespaces monitor
+            velero backup create manual-test --include-namespaces schnappy
             velero restore create --from-backup manual-test

@@ -2,8 +2,8 @@
 # Monitor Helm chart deployment defaults
 
 # Helm release settings
-monitor_release_name: monitor
-monitor_namespace: monitor
+monitor_release_name: schnappy
+monitor_namespace: schnappy
 monitor_create_namespace: true
 
 # Chart location (relative to playbook or absolute path)

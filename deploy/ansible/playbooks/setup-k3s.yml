@@ -84,7 +84,7 @@
         k3s kubectl exec -n vault vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="$(k3s kubectl get secret vault-root-token -n vault -o jsonpath='{.data.token}' | base64 -d)" \
-          vault kv get -format=json secret/monitor/registry
+          vault kv get -format=json secret/schnappy/registry
       register: vault_registry
       changed_when: false
       failed_when: false

@@ -20,7 +20,7 @@
   gather_facts: false
 
   vars:
-    ns: monitor
+    ns: schnappy
     vault_ns: vault
     # Test secrets (not real — Vagrant only)
     test_jwt_secret: "vagrant-test-jwt-secret-at-least-32-chars-long"
@@ -56,7 +56,7 @@
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/monitor/auth \
+          vault kv put secret/schnappy/auth \
             jwt_secret="{{ test_jwt_secret }}"
       no_log: true
 
@@ -65,7 +65,7 @@
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/monitor/postgres \
+          vault kv put secret/schnappy/postgres \
             database="{{ test_db_name }}" \
             username="{{ test_db_user }}" \
             password="{{ test_db_password }}"
@@ -76,7 +76,7 @@
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/monitor/redis \
+          vault kv put secret/schnappy/redis \
             password="{{ test_redis_password }}"
       no_log: true
 
@@ -85,10 +85,10 @@
         msg: "Seeded auth, postgres, redis secrets into Vault KV"
 
     # ================================================================
-    # Phase 3: Deploy monitor app with ESO-managed secrets
+    # Phase 3: Deploy schnappy app with ESO-managed secrets
     # ================================================================
 
-    - name: Create monitor namespace
+    - name: Create schnappy namespace
       ansible.builtin.command: k3s kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
@@ -96,13 +96,13 @@
 
     - name: Write Helm values for ESO test
       ansible.builtin.copy:
-        dest: /tmp/monitor-eso-test-values.yml
+        dest: /tmp/schnappy-eso-test-values.yml
         mode: '0600'
         content: |
           vault:
             secretsEnabled: true
           auth:
-            existingSecret: "monitor-auth"
+            existingSecret: "schnappy-auth"
             tokenExpiration: 1h
             registrationEnabled: true
             secureCookies: false
@@ -127,7 +127,7 @@
           redis:
             enabled: true
             image: redis:7-alpine
-            existingSecret: "monitor-redis"
+            existingSecret: "schnappy-redis"
             resources:
               requests:
                 memory: "64Mi"
@@ -138,7 +138,7 @@
           postgres:
             enabled: true
             image: postgres:17-alpine
-            existingSecret: "monitor-postgres"
+            existingSecret: "schnappy-postgres"
             resources:
               requests:
                 memory: "128Mi"
@@ -168,12 +168,12 @@
       become: false
       changed_when: true
 
-    - name: Deploy monitor chart with ESO secrets
+    - name: Deploy schnappy chart with ESO secrets
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
-          --values /tmp/monitor-eso-test-values.yml \
+          --values /tmp/schnappy-eso-test-values.yml \
           --wait --timeout 60s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -228,7 +228,7 @@
 
     - name: Verify k8s Secrets were created by ESO
       ansible.builtin.shell: |
-        for secret in monitor-auth monitor-postgres monitor-redis; do
+        for secret in schnappy-auth schnappy-postgres schnappy-redis; do
           k3s kubectl get secret "$secret" -n {{ ns }} -o jsonpath='{.metadata.name}' && echo " OK"
         done
       register: secrets_check
@@ -240,7 +240,7 @@
 
     - name: Verify secret content matches Vault (JWT_SECRET key exists)
       ansible.builtin.shell: |
-        k3s kubectl get secret monitor-auth -n {{ ns }} \
+        k3s kubectl get secret schnappy-auth -n {{ ns }} \
           -o jsonpath='{.data.JWT_SECRET}' | base64 -d
       register: jwt_check
       changed_when: false
@@ -259,17 +259,17 @@
 
     - name: Wait for postgres to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-postgres -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-postgres -n {{ ns }} --timeout=120s
       changed_when: false
 
     - name: Wait for redis to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-redis -n {{ ns }} --timeout=60s
+        k3s kubectl rollout status deployment/schnappy-redis -n {{ ns }} --timeout=60s
       changed_when: false
 
     - name: Wait for app deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/monitor-app -n {{ ns }} --timeout=180s
+        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=180s
       register: app_rollout
       changed_when: false
       failed_when: false
@@ -314,7 +314,7 @@
 
     - name: Clean up values file
       ansible.builtin.file:
-        path: /tmp/monitor-eso-test-values.yml
+        path: /tmp/schnappy-eso-test-values.yml
         state: absent
 
     - name: "TEST RESULT"

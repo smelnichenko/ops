@@ -5,8 +5,8 @@
 # NOTE: Development uses simple passwords for convenience.
 # Never use these values in production!
 
-monitor_release_name: monitor
-monitor_namespace: monitor-dev
+monitor_release_name: schnappy
+monitor_namespace: schnappy-dev
 
 monitor_values:
   # Network policies disabled in dev for easier debugging

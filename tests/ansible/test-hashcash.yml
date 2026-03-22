@@ -20,14 +20,14 @@
   gather_facts: false
 
   vars:
-    ns: monitor
+    ns: schnappy
 
   tasks:
     # ================================================================
     # Phase 1: Deploy chart with captcha enabled
     # ================================================================
 
-    - name: Create monitor namespace
+    - name: Create schnappy namespace
       ansible.builtin.command: k3s kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
@@ -35,7 +35,7 @@
 
     - name: Write Helm values for hashcash test
       ansible.builtin.copy:
-        dest: /tmp/monitor-hashcash-test-values.yml
+        dest: /tmp/schnappy-hashcash-test-values.yml
         mode: '0600'
         content: |
           vault:
@@ -109,7 +109,7 @@
 
     - name: Uninstall existing release (clean state)
       ansible.builtin.shell: |
-        helm uninstall monitor --namespace {{ ns }} --wait 2>/dev/null || true
+        helm uninstall schnappy --namespace {{ ns }} --wait 2>/dev/null || true
         k3s kubectl delete pvc -n {{ ns }} --all --wait=true 2>/dev/null || true
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -117,10 +117,10 @@
 
     - name: Deploy chart with captcha enabled
       ansible.builtin.shell: |
-        helm upgrade --install monitor /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant/infra/helm \
           --namespace {{ ns }} \
           --create-namespace \
-          --values /tmp/monitor-hashcash-test-values.yml \
+          --values /tmp/schnappy-hashcash-test-values.yml \
           --set "scylla.args[0]=--developer-mode=1" \
           --set "scylla.args[1]=--smp=1" \
           --timeout 600s
@@ -163,7 +163,7 @@
 
     - name: Get captcha config
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
           curl -sf http://localhost:8080/api/captcha/config
       register: captcha_config
       retries: 10
@@ -185,7 +185,7 @@
 
     - name: Get challenge
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
           curl -sf http://localhost:8080/api/captcha/challenge
       register: challenge_result
       changed_when: false
@@ -237,7 +237,7 @@
 
     - name: Submit registration with valid PoW
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -X POST http://localhost:8080/api/auth/register \
           -H 'Content-Type: application/json' \
@@ -260,7 +260,7 @@
 
     - name: Replay same challenge+nonce
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -X POST http://localhost:8080/api/auth/register \
           -H 'Content-Type: application/json' \
@@ -283,14 +283,14 @@
 
     - name: Get fresh challenge for invalid nonce test
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
           curl -sf http://localhost:8080/api/captcha/challenge
       register: fresh_challenge
       changed_when: false
 
     - name: Submit with invalid nonce
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/monitor-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -X POST http://localhost:8080/api/auth/register \
           -H 'Content-Type: application/json' \
@@ -313,7 +313,7 @@
 
     - name: Clean up values file
       ansible.builtin.file:
-        path: /tmp/monitor-hashcash-test-values.yml
+        path: /tmp/schnappy-hashcash-test-values.yml
         state: absent
 
     - name: "TEST RESULT"

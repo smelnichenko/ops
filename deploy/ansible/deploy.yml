@@ -42,9 +42,9 @@
           Release: {{ monitor_release_name }}
 
           Access the application:
-            kubectl port-forward svc/{{ monitor_release_name }}-monitor-app 8080:8080 -n {{ monitor_namespace }}
+            kubectl port-forward svc/{{ monitor_release_name }}-schnappy-app 8080:8080 -n {{ monitor_namespace }}
             Then open: http://localhost:8080/api/actuator/health
 
           Access Grafana:
-            kubectl port-forward svc/{{ monitor_release_name }}-monitor-grafana 3000:3000 -n {{ monitor_namespace }}
+            kubectl port-forward svc/{{ monitor_release_name }}-schnappy-grafana 3000:3000 -n {{ monitor_namespace }}
             Then open: http://localhost:3000 (admin/admin)

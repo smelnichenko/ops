@@ -12,8 +12,8 @@
 
   vars:
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
-    monitor_release_name: monitor
-    monitor_namespace: monitor
+    monitor_release_name: schnappy
+    monitor_namespace: schnappy
     monitor_delete_namespace: false
     monitor_delete_pvcs: false
 
@@ -33,9 +33,9 @@
         name: "{{ item }}"
         state: absent
       loop:
-        - "{{ monitor_release_name }}-monitor-postgres"
-        - "{{ monitor_release_name }}-monitor-prometheus"
-        - "{{ monitor_release_name }}-monitor-grafana"
+        - "{{ monitor_release_name }}-schnappy-postgres"
+        - "{{ monitor_release_name }}-schnappy-prometheus"
+        - "{{ monitor_release_name }}-schnappy-grafana"
       when: monitor_delete_pvcs
 
     - name: Delete namespace
