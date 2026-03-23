@@ -35,6 +35,17 @@
 - Custom Docker image: `schnappy/keycloak-theme` (extends official image)
 - Dark gradient background, blue buttons, rounded cards, SCHNAPPY header
 - Built via Woodpecker CD pipeline, versioned in Forgejo registry
+- Extends `keycloak.v2` (PatternFly 5), login type only
+
+### Phase 6: Declarative Realm Config — COMPLETE (2026-03-23)
+- Schnappy realm imported via `--import-realm` on first deploy
+- Realm JSON in ConfigMap, init container templates secrets via sed
+- SMTP configured with Resend (password from Vault via init container)
+- Password reset enabled (`resetPasswordAllowed`)
+- Self-registration enabled (`registrationAllowed`)
+- OAuth clients (forgejo, grafana) declared in realm JSON with secrets from Vault/ESO
+- Master realm bootstrapped normally (Keycloak 26.x only supports temporary admin via env vars, finalized on first UI login)
+- Master realm theme set via `kcadm.sh` after first admin login (one-time)
 
 ## Issues resolved
 - `--optimized` fails on first start → removed
@@ -44,7 +55,14 @@
 - ConfigMap theme approach → custom Docker image (cleaner)
 - `.Files.Get` only works inside chart directory
 - Keycloak theme cache requires pod restart after CSS changes
-- `KC_SPI_THEME_DEFAULT` sets ALL theme types → only set login theme via realm API
+- `KC_SPI_THEME_DEFAULT` sets ALL theme types → only set login theme via realm config
+- `--import-realm --override true` wipes realms (deletes users/clients) → use `IGNORE_EXISTING`
+- `--import-realm` does NOT support `${env.VAR}` substitution → init container with sed
+- Partial master realm import breaks admin console (missing built-in clients) → only import schnappy realm
+- `KC_BOOTSTRAP_ADMIN_*` creates temporary admin in 26.x regardless → finalize via first UI login
+- `KEYCLOAK_ADMIN` deprecated in 26.x → use `KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD`
+- `KC_BOOTSTRAP_ADMIN_CLIENT_ID` requires `_CLIENT_SECRET` → removed
+- `#kc-info-wrapper { display: none }` hides register link → only hide `.kc-login-tooltip`
 
 ## Files created/modified
 
@@ -54,11 +72,12 @@
 ### Platform repo:
 - `keycloak-deployment.yaml`, `keycloak-service.yaml`, `keycloak-ingress.yaml`
 - `keycloak-networkpolicy.yaml`, `keycloak-secret.yaml`
-- `external-secrets.yaml` — Keycloak ESO entry
+- `keycloak-realm-configmap.yaml` — declarative realm JSON (SMTP, clients, theme)
+- `external-secrets.yaml` — Keycloak ESO entry (admin_password, db_password, forgejo_client_secret)
 - `gateway-deployment.yaml` — JWKS_URI env var
 - `admin-deployment.yaml` — Keycloak env vars
 - `network-policies.yaml` — admin→keycloak, grafana↔keycloak, keycloak→postgres
-- `values.yaml` — keycloak section
+- `values.yaml` — keycloak section (clients.forgejo, clients.grafana)
 
 ### Admin repo:
 - `OidcController.java`, `OidcService.java`, `OidcUserService.java`

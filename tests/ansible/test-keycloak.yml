@@ -1,0 +1,374 @@
+---
+# Test Keycloak deployment in Vagrant
+#
+# Verifies Keycloak deploys correctly, realm import works,
+# SMTP config is applied, OAuth clients are created, and
+# self-registration + password reset are enabled.
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   cd deploy/ansible
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-keycloak.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+
+- name: Test Keycloak integration
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    vault_ns: vault
+    test_admin_password: "vagrant-test-admin-password!!"
+    test_db_password: "vagrant-test-kc-db-password"
+    test_smtp_password: "vagrant-test-smtp-password"
+    test_forgejo_client_secret: "vagrant-test-forgejo-secret"
+    test_grafana_client_secret: "vagrant-test-grafana-secret"
+    test_mail_password: "vagrant-test-mail-password"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Seed secrets into Vault
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    - name: Seed keycloak secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/keycloak \
+            admin_password="{{ test_admin_password }}" \
+            db_password="{{ test_db_password }}" \
+            forgejo_client_secret="{{ test_forgejo_client_secret }}"
+      no_log: true
+
+    - name: Seed mail secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/mail \
+            password="{{ test_mail_password }}"
+      no_log: true
+
+    - name: Seed grafana secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/grafana \
+            admin_user=admin \
+            admin_password=vagrant-grafana-pw \
+            oauth-client-id=grafana \
+            oauth-client-secret="{{ test_grafana_client_secret }}"
+      no_log: true
+
+    - name: "SEED: Keycloak, mail, grafana credentials written to Vault KV"
+      ansible.builtin.debug:
+        msg: "Seeded keycloak, mail, grafana secrets into Vault KV"
+
+    # ================================================================
+    # Phase 2: Deploy chart with Keycloak enabled
+    # ================================================================
+
+    - name: Create schnappy namespace
+      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Write Helm values for Keycloak test
+      ansible.builtin.copy:
+        dest: /tmp/schnappy-keycloak-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: true
+          auth:
+            jwtSecret: "test-only-not-used-32-chars-long!!"
+          networkPolicies:
+            enabled: false
+          frontend:
+            enabled: false
+          app:
+            replicas: 0
+          redis:
+            enabled: false
+          postgres:
+            enabled: true
+            existingSecret: "schnappy-postgres"
+            storage:
+              size: 1Gi
+              storageClass: "local-path"
+            resources:
+              requests: { cpu: 100m, memory: 256Mi }
+              limits: { cpu: 500m, memory: 512Mi }
+          elk:
+            enabled: false
+          ai:
+            enabled: false
+          mail:
+            enabled: true
+            existingSecret: "schnappy-mail"
+            host: smtp.resend.com
+            port: "587"
+            username: resend
+          webhook:
+            enabled: false
+          minio:
+            enabled: false
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+            existingSecret: "schnappy-grafana"
+          kafka:
+            enabled: false
+          scylla:
+            enabled: false
+          keycloak:
+            enabled: true
+            existingSecret: "schnappy-keycloak"
+            image: quay.io/keycloak/keycloak:26.5.6
+            hostname: localhost
+            mail:
+              from: "test@example.com"
+              fromDisplayName: "schnappy-test"
+            clients:
+              forgejo:
+                enabled: true
+                redirectUri: "https://git.example.com/callback"
+              grafana:
+                enabled: true
+                redirectUri: "https://grafana.example.com/callback"
+            resources:
+              requests: { cpu: 200m, memory: 512Mi }
+              limits: { cpu: 1000m, memory: 1Gi }
+            ingress:
+              enabled: false
+
+    - name: Seed postgres secret (for keycloak DB)
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/postgres \
+            password="vagrant-test-pg-password" \
+            user="postgres"
+      no_log: true
+
+    - name: Rsync chart to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy chart with Keycloak enabled
+      ansible.builtin.shell: |
+        helm upgrade --install schnappy /vagrant/helm \
+          --namespace {{ ns }} \
+          --create-namespace \
+          --values /tmp/schnappy-keycloak-test-values.yml \
+          --wait --timeout 600s
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      register: helm_result
+
+    - name: Show pod status
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    # ================================================================
+    # Phase 3: Verify Keycloak deployment
+    # ================================================================
+
+    - name: Wait for Keycloak deployment rollout
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deploy/schnappy-keycloak -n {{ ns }} --timeout=300s
+      register: kc_rollout
+      changed_when: false
+
+    - name: Verify ExternalSecret synced for keycloak
+      ansible.builtin.shell: |
+        k3s kubectl get externalsecret schnappy-keycloak -n {{ ns }} \
+          -o jsonpath='{.status.conditions[0].reason}'
+      register: kc_secret_sync
+      retries: 12
+      delay: 5
+      until: kc_secret_sync.stdout == "SecretSynced"
+      changed_when: false
+
+    - name: Wait for Keycloak health endpoint
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+          sh -c 'wget -qO- http://localhost:9000/health/ready 2>/dev/null || true'
+      register: kc_health
+      retries: 30
+      delay: 10
+      until: "'UP' in kc_health.stdout"
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Verify realm import
+    # ================================================================
+
+    - name: Check schnappy realm exists
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+          /opt/keycloak/bin/kcadm.sh get realms/schnappy \
+            --fields realm,enabled,registrationAllowed,resetPasswordAllowed,loginTheme \
+            --server http://localhost:8080 --realm master \
+            --user admin --password "{{ test_admin_password }}"
+      register: realm_info
+      retries: 5
+      delay: 5
+      until: realm_info.rc == 0
+      changed_when: false
+      failed_when: false
+
+    - name: Parse realm config
+      ansible.builtin.set_fact:
+        realm_json: "{{ realm_info.stdout | from_json }}"
+      when: realm_info.rc == 0
+
+    - name: Verify realm settings
+      ansible.builtin.set_fact:
+        realm_enabled: "{{ realm_json.enabled | default(false) }}"
+        registration_enabled: "{{ realm_json.registrationAllowed | default(false) }}"
+        reset_password_enabled: "{{ realm_json.resetPasswordAllowed | default(false) }}"
+        login_theme_correct: "{{ realm_json.loginTheme | default('') == 'schnappy' }}"
+      when: realm_info.rc == 0
+
+    # ================================================================
+    # Phase 5: Verify OAuth clients
+    # ================================================================
+
+    - name: List clients in schnappy realm
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+          /opt/keycloak/bin/kcadm.sh get clients \
+            --fields clientId -r schnappy \
+            --server http://localhost:8080 --realm master \
+            --user admin --password "{{ test_admin_password }}"
+      register: clients_result
+      changed_when: false
+      failed_when: false
+
+    - name: Check forgejo client exists
+      ansible.builtin.set_fact:
+        forgejo_client_exists: "{{ 'forgejo' in clients_result.stdout }}"
+      when: clients_result.rc == 0
+
+    - name: Check grafana client exists
+      ansible.builtin.set_fact:
+        grafana_client_exists: "{{ 'grafana' in clients_result.stdout }}"
+      when: clients_result.rc == 0
+
+    # ================================================================
+    # Phase 6: Verify SMTP config
+    # ================================================================
+
+    - name: Check SMTP config in database
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/schnappy-postgres -n {{ ns }} -c postgres -- \
+          psql -U postgres -d keycloak -t -c \
+            "SELECT count(*) FROM realm_smtp_config WHERE realm_id = (SELECT id FROM realm WHERE name = 'schnappy')"
+      register: smtp_count
+      changed_when: false
+      failed_when: false
+
+    - name: Set SMTP configured fact
+      ansible.builtin.set_fact:
+        smtp_configured: "{{ (smtp_count.stdout | default('0') | trim | int) > 0 }}"
+
+    # ================================================================
+    # Phase 7: Verify OIDC discovery endpoint
+    # ================================================================
+
+    - name: Check OIDC well-known endpoint
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+          sh -c 'wget -qO- http://localhost:8080/realms/schnappy/.well-known/openid-configuration 2>/dev/null | head -1'
+      register: oidc_discovery
+      changed_when: false
+      failed_when: false
+
+    - name: Set OIDC discovery fact
+      ansible.builtin.set_fact:
+        oidc_working: "{{ 'issuer' in (oidc_discovery.stdout | default('')) }}"
+
+    # ================================================================
+    # Phase 8: Summary
+    # ================================================================
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/schnappy-keycloak-test-values.yml
+        state: absent
+
+    - name: Set result facts (defaults for failed realm check)
+      ansible.builtin.set_fact:
+        realm_enabled: "{{ realm_enabled | default(false) }}"
+        registration_enabled: "{{ registration_enabled | default(false) }}"
+        reset_password_enabled: "{{ reset_password_enabled | default(false) }}"
+        login_theme_correct: "{{ login_theme_correct | default(false) }}"
+        forgejo_client_exists: "{{ forgejo_client_exists | default(false) }}"
+        grafana_client_exists: "{{ grafana_client_exists | default(false) }}"
+        smtp_configured: "{{ smtp_configured | default(false) }}"
+        oidc_working: "{{ oidc_working | default(false) }}"
+
+    - name: "TEST RESULT"
+      vars:
+        kc_deploy_pass: "{{ kc_rollout.rc is defined and kc_rollout.rc == 0 }}"
+        kc_secret_pass: "{{ kc_secret_sync.stdout == 'SecretSynced' }}"
+        kc_health_pass: "{{ 'UP' in (kc_health.stdout | default('')) }}"
+        all_pass: "{{ kc_deploy_pass and kc_secret_pass and kc_health_pass and realm_enabled and registration_enabled and reset_password_enabled and login_theme_correct and forgejo_client_exists and grafana_client_exists and smtp_configured and oidc_working }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Keycloak Integration Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          [{{ 'PASS' if kc_deploy_pass else 'FAIL' }}] Keycloak Deployment running
+          [{{ 'PASS' if kc_secret_pass else 'FAIL' }}] ExternalSecret synced
+          [{{ 'PASS' if kc_health_pass else 'FAIL' }}] Health endpoint responding
+          [{{ 'PASS' if realm_enabled else 'FAIL' }}] Schnappy realm enabled
+          [{{ 'PASS' if registration_enabled else 'FAIL' }}] Self-registration enabled
+          [{{ 'PASS' if reset_password_enabled else 'FAIL' }}] Password reset enabled
+          [{{ 'PASS' if login_theme_correct else 'FAIL' }}] Login theme = schnappy
+          [{{ 'PASS' if forgejo_client_exists else 'FAIL' }}] Forgejo OAuth client exists
+          [{{ 'PASS' if grafana_client_exists else 'FAIL' }}] Grafana OAuth client exists
+          [{{ 'PASS' if smtp_configured else 'FAIL' }}] SMTP configured
+          [{{ 'PASS' if oidc_working else 'FAIL' }}] OIDC discovery endpoint working
+          ====================================================
+
+    - name: Fail if critical checks failed
+      vars:
+        kc_deploy_pass: "{{ kc_rollout.rc is defined and kc_rollout.rc == 0 }}"
+        kc_secret_pass: "{{ kc_secret_sync.stdout == 'SecretSynced' }}"
+        kc_health_pass: "{{ 'UP' in (kc_health.stdout | default('')) }}"
+      ansible.builtin.fail:
+        msg: "Critical Keycloak checks failed — see summary above"
+      when: not (kc_deploy_pass and kc_secret_pass and kc_health_pass and realm_enabled)
