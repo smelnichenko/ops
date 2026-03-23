@@ -58,10 +58,12 @@
 
   vars:
     ns: schnappy
+    vault_ns: vault
     app_url: http://localhost
-    test_pass: dr-test-pass-12345
+    test_password: dr-test-pass-12345
     test_email: dr-test@test.com
     test_monitor_name: dr-test-page
+    kc_admin_password: "vagrant-test-kc-admin!!"
     velero_ns: velero
     velero_chart_version: "11.4.0"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
@@ -84,17 +86,28 @@
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
 
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
     - name: Write Helm values for DR test
       ansible.builtin.copy:
         dest: /tmp/schnappy-dr-test-values.yml
         mode: '0600'
         content: |
           vault:
-            secretsEnabled: false
+            secretsEnabled: true
           auth:
-            jwtSecret: "test-only-not-used-32-chars-long!!"
-            registrationApproval:
-              mode: skip
+            existingSecret: "schnappy-auth"
           networkPolicies:
             enabled: false
           frontend:
@@ -115,13 +128,39 @@
               host: ""
           postgres:
             enabled: true
-            password: "vagrant-test-pw"
+            existingSecret: "schnappy-postgres"
             image: postgres:17-alpine
             storage:
               storageClass: "local-path"
           redis:
             enabled: true
             image: redis:7-alpine
+          keycloak:
+            enabled: true
+            existingSecret: "schnappy-keycloak"
+            image: quay.io/keycloak/keycloak:26.5.6
+            hostname: localhost
+            mail:
+              from: "test@example.com"
+            clients:
+              app:
+                enabled: true
+                redirectUri: "http://localhost/auth/callback"
+              forgejo:
+                enabled: false
+                redirectUri: ""
+              grafana:
+                enabled: false
+                redirectUri: ""
+            resources:
+              requests: { cpu: 200m, memory: 512Mi }
+              limits: { cpu: 1000m, memory: 1Gi }
+            ingress:
+              enabled: false
+          site:
+            enabled: false
+          aptCache:
+            enabled: false
           captcha:
             enabled: false
           elk:
@@ -129,7 +168,11 @@
           ai:
             enabled: false
           mail:
-            enabled: false
+            enabled: true
+            existingSecret: "schnappy-mail"
+            host: smtp.resend.com
+            port: "587"
+            username: resend
           webhook:
             enabled: false
           minio:
@@ -142,6 +185,46 @@
             enabled: false
           scylla:
             enabled: false
+
+    - name: Seed auth secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/auth \
+            jwt_secret="test-only-not-used-32-chars-long!!"
+      no_log: true
+
+    - name: Seed postgres secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/postgres \
+            database="monitor" \
+            username="postgres" \
+            password="vagrant-test-pw"
+      no_log: true
+
+    - name: Seed keycloak secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/keycloak \
+            admin_password="{{ kc_admin_password }}" \
+            db_password="vagrant-test-kc-db" \
+            forgejo_client_secret="not-used"
+      no_log: true
+
+    - name: Seed mail secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/mail \
+            password="vagrant-test-smtp"
+      no_log: true
 
     - name: Deploy chart for DR test
       ansible.builtin.shell: |
@@ -190,46 +273,10 @@
     # Suite 1: Seed Test Data
     # ================================================================
 
-    - name: "SEED: Register test user"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/register"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        status_code: [200, 201, 400, 409]
-      register: register_result
-
-    - name: "SEED: Auto-verify email and assign Admins group"
-      ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-postgres -n {{ ns }} -- \
-          psql -U postgres -d monitor -c "
-            UPDATE email_verification_tokens SET used = true
-              WHERE user_id = (SELECT id FROM users WHERE email = '{{ test_email }}') AND used = false;
-            INSERT INTO user_groups (user_id, group_id)
-              SELECT u.id, g.id FROM users u, groups g
-              WHERE u.email = '{{ test_email }}' AND g.name = 'Admins'
-                AND NOT EXISTS (
-                  SELECT 1 FROM user_groups ug WHERE ug.user_id = u.id AND ug.group_id = g.id
-                );
-          "
-      changed_when: false
-
-    - name: "SEED: Login to get JWT"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_result
-
-    - name: Set auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_result.cookies['AUTH_TOKEN'] }}"
+    - name: "SEED: Create test user and get token"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "SEED: Create page monitor"
       ansible.builtin.uri:
@@ -237,7 +284,7 @@
         method: POST
         body_format: json
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         body:
           name: "{{ test_monitor_name }}"
           url: "https://example.com"
@@ -252,7 +299,7 @@
         url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
         method: POST
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         status_code: [200, 201]
       register: check_result
       # May fail if external URL unreachable in Vagrant — that's ok for DR test
@@ -262,7 +309,7 @@
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_before
 
@@ -295,26 +342,16 @@
       delay: 5
       until: health_after_app.status == 200 and health_after_app.json.status == "UP"
 
-    - name: "POD-RECOVERY: Re-login after app restart"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_after_app
-
-    - name: Update auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_after_app.cookies['AUTH_TOKEN'] }}"
+    - name: "POD-RECOVERY: Re-authenticate after app restart"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "POD-RECOVERY: Verify data after app restart"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_after_app
 
@@ -346,26 +383,16 @@
       delay: 5
       until: health_after_pg.status == 200 and health_after_pg.json.status == "UP"
 
-    - name: "POD-RECOVERY: Re-login after postgres restart"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_after_pg
-
-    - name: Update auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_after_pg.cookies['AUTH_TOKEN'] }}"
+    - name: "POD-RECOVERY: Re-authenticate after postgres restart"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "POD-RECOVERY: Verify data after postgres restart"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_after_pg
 
@@ -439,7 +466,7 @@
 
     - name: "POD-RECOVERY: Wait for all deployments to roll out"
       ansible.builtin.shell: |
-        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site; do
+        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=180s
         done
       changed_when: false
@@ -453,26 +480,16 @@
       delay: 10
       until: health_after_all.status == 200 and health_after_all.json.status == "UP"
 
-    - name: "POD-RECOVERY: Re-login after full restart"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_after_all
-
-    - name: Update auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_after_all.cookies['AUTH_TOKEN'] }}"
+    - name: "POD-RECOVERY: Re-authenticate after full restart"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "POD-RECOVERY: Verify data after killing all pods"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_after_all
 
@@ -769,26 +786,16 @@
 
     # ── Step 2: Verify seed data still present ──
 
-    - name: "DR: Re-login before backup"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_pre_backup
-
-    - name: Update auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_pre_backup.cookies['AUTH_TOKEN'] }}"
+    - name: "DR: Re-authenticate before backup"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "DR: Verify monitors before backup"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_pre_backup
 
@@ -898,7 +905,7 @@
 
     - name: "DR: Wait for all deployments after restore"
       ansible.builtin.shell: |
-        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site; do
+        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
           echo "Waiting for $deploy..."
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
@@ -919,26 +926,16 @@
 
     # ── Step 7: Verify data integrity ──
 
-    - name: "DR: Login with original credentials after restore"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_after_restore
-
-    - name: Update auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_after_restore.cookies['AUTH_TOKEN'] }}"
+    - name: "DR: Re-authenticate after restore"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "DR: Verify monitors after restore"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_after_restore
 
@@ -953,7 +950,7 @@
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/config"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: config_after_restore
 
@@ -971,7 +968,7 @@
         url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
         method: POST
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         status_code: [200, 201]
       register: check_after_restore
       failed_when: false
@@ -1185,7 +1182,7 @@
 
     - name: "OFFSITE: Wait for all deployments"
       ansible.builtin.shell: |
-        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site; do
+        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
       changed_when: false
@@ -1199,26 +1196,16 @@
       delay: 10
       until: health_offsite.status == 200 and health_offsite.json.status == "UP"
 
-    - name: "OFFSITE: Login with original credentials"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/auth/login"
-        method: POST
-        body_format: json
-        body:
-          email: "{{ test_email }}"
-          password: "{{ test_pass }}"
-        return_content: true
-      register: login_offsite
-
-    - name: Update auth token
-      ansible.builtin.set_fact:
-        auth_cookie: "{{ login_offsite.cookies['AUTH_TOKEN'] }}"
+    - name: "OFFSITE: Re-authenticate after offsite restore"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "OFFSITE: Verify monitors after offsite restore"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/pages"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: pages_offsite
 
@@ -1233,7 +1220,7 @@
       ansible.builtin.uri:
         url: "{{ app_url }}/api/monitor/config"
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         return_content: true
       register: config_offsite
 
@@ -1249,7 +1236,7 @@
         url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
         method: POST
         headers:
-          Cookie: "AUTH_TOKEN={{ auth_cookie }}"
+          Authorization: "Bearer {{ auth_token }}"
         status_code: [200, 201]
       register: check_offsite
       failed_when: false

@@ -26,6 +26,9 @@
     vault_ns: vault
     test_jwt_secret: "test-only-not-used-32-chars-long!!"
     test_pg_password: "vagrant-test-gateway-pg-password"
+    test_email: "gateway-test@test.com"
+    test_password: "testpassword123"
+    kc_admin_password: "vagrant-test-kc-admin!!"
 
   tasks:
     # ================================================================
@@ -37,6 +40,19 @@
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
 
     - name: Build backend JAR
       ansible.builtin.shell: |
@@ -98,11 +114,9 @@
         mode: '0600'
         content: |
           vault:
-            secretsEnabled: false
+            secretsEnabled: true
           auth:
-            jwtSecret: "{{ test_jwt_secret }}"
-            registrationApproval:
-              mode: skip
+            existingSecret: "schnappy-auth"
           networkPolicies:
             enabled: true
           frontend:
@@ -128,7 +142,7 @@
             javaOpts: "-Xmx256m -XX:+UseZGC"
           postgres:
             enabled: true
-            password: "{{ test_pg_password }}"
+            existingSecret: "schnappy-postgres"
             image: postgres:17-alpine
             storage:
               storageClass: "local-path"
@@ -139,12 +153,42 @@
             enabled: false
           scylla:
             enabled: false
+          keycloak:
+            enabled: true
+            existingSecret: "schnappy-keycloak"
+            image: quay.io/keycloak/keycloak:26.5.6
+            hostname: localhost
+            mail:
+              from: "test@example.com"
+            clients:
+              app:
+                enabled: true
+                redirectUri: "http://localhost/auth/callback"
+              forgejo:
+                enabled: false
+                redirectUri: ""
+              grafana:
+                enabled: false
+                redirectUri: ""
+            resources:
+              requests: { cpu: 200m, memory: 512Mi }
+              limits: { cpu: 1000m, memory: 1Gi }
+            ingress:
+              enabled: false
+          site:
+            enabled: false
+          aptCache:
+            enabled: false
           elk:
             enabled: false
           ai:
             enabled: false
           mail:
-            enabled: false
+            enabled: true
+            existingSecret: "schnappy-mail"
+            host: smtp.resend.com
+            port: "587"
+            username: resend
           webhook:
             enabled: false
           minio:
@@ -153,6 +197,46 @@
             enabled: false
           grafana:
             enabled: false
+
+    - name: Seed auth secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/auth \
+            jwt_secret="{{ test_jwt_secret }}"
+      no_log: true
+
+    - name: Seed postgres secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/postgres \
+            database="monitor" \
+            username="postgres" \
+            password="{{ test_pg_password }}"
+      no_log: true
+
+    - name: Seed keycloak secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/keycloak \
+            admin_password="{{ kc_admin_password }}" \
+            db_password="vagrant-test-kc-db" \
+            forgejo_client_secret="not-used"
+      no_log: true
+
+    - name: Seed mail secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/mail \
+            password="vagrant-test-smtp"
+      no_log: true
 
     - name: Rsync chart to Vagrant VM
       ansible.builtin.command: vagrant rsync k3s
@@ -363,34 +447,18 @@
     # Phase 9: Verify auth flow through gateway
     # ================================================================
 
-    - name: Register a test user through gateway
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
-          curl -sf -X POST http://schnappy-gateway:8080/api/auth/register \
-          -H 'Content-Type: application/json' \
-          -d '{"email":"gateway-test@test.com","password":"testpassword123"}'
-      register: register_result
-      changed_when: false
-      failed_when: false
-
-    - name: Login through gateway
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
-          curl -sf -X POST http://schnappy-gateway:8080/api/auth/login \
-          -H 'Content-Type: application/json' \
-          -c - \
-          -d '{"email":"gateway-test@test.com","password":"testpassword123"}'
-      register: login_result
-      changed_when: false
-      failed_when: false
+    - name: "AUTH: Create test user and get token"
+      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+      vars:
+        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: Set auth flow fact
       ansible.builtin.set_fact:
-        auth_flow_ok: "{{ register_result.rc == 0 and login_result.rc == 0 }}"
+        auth_flow_ok: "{{ auth_token | default('') | length > 0 }}"
 
     - name: "Auth flow through gateway: {{ 'PASS' if auth_flow_ok else 'WARN' }}"
       ansible.builtin.debug:
-        msg: "{{ 'Register + login succeeded through gateway' if auth_flow_ok else 'Auth flow failed — may need core app fully ready' }}"
+        msg: "{{ 'Keycloak auth succeeded — JWT obtained' if auth_flow_ok else 'Auth flow failed — Keycloak may not be ready' }}"
 
     # ================================================================
     # Phase 10: Summary
