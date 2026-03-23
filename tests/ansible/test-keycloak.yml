@@ -235,14 +235,14 @@
       until: kc_secret_sync.stdout == "SecretSynced"
       changed_when: false
 
-    - name: Wait for Keycloak health endpoint
+    - name: Wait for Keycloak readiness probe
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
-          sh -c 'wget -qO- http://localhost:9000/health/ready 2>/dev/null || true'
+        k3s kubectl get pod -n {{ ns }} -l app.kubernetes.io/name=keycloak \
+          -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="keycloak")].ready}'
       register: kc_health
-      retries: 30
+      retries: 60
       delay: 10
-      until: "'UP' in kc_health.stdout"
+      until: kc_health.stdout == "true"
       changed_when: false
 
     # ================================================================
@@ -358,7 +358,7 @@
       vars:
         kc_deploy_pass: "{{ kc_rollout.rc is defined and kc_rollout.rc == 0 }}"
         kc_secret_pass: "{{ kc_secret_sync.stdout == 'SecretSynced' }}"
-        kc_health_pass: "{{ 'UP' in (kc_health.stdout | default('')) }}"
+        kc_health_pass: "{{ kc_health.stdout | default('') == 'true' }}"
         all_pass: "{{ kc_deploy_pass and kc_secret_pass and kc_health_pass and realm_enabled and registration_enabled and reset_password_enabled and login_theme_correct and forgejo_client_exists and grafana_client_exists and smtp_configured and oidc_working }}"
       ansible.builtin.debug:
         msg: |
@@ -382,7 +382,7 @@
       vars:
         kc_deploy_pass: "{{ kc_rollout.rc is defined and kc_rollout.rc == 0 }}"
         kc_secret_pass: "{{ kc_secret_sync.stdout == 'SecretSynced' }}"
-        kc_health_pass: "{{ 'UP' in (kc_health.stdout | default('')) }}"
+        kc_health_pass: "{{ kc_health.stdout | default('') == 'true' }}"
       ansible.builtin.fail:
         msg: "Critical Keycloak checks failed — see summary above"
       when: not (kc_deploy_pass and kc_secret_pass and kc_health_pass and realm_enabled)
