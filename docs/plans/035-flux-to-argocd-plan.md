@@ -162,14 +162,33 @@ Enable auto-sync on remaining applications:
 
 ### Phase 7: Remove Flux CD
 
-1. Remove Flux controllers: `task deploy:flux:uninstall` or `flux uninstall`
-2. Remove Flux-specific files from infra repo:
-   - `kustomization.yaml` files
-   - `helmrelease.yaml` files
-   - `sources/` directory (GitRepository, HelmRepository)
-3. Remove Flux CRDs
-4. Remove `setup-flux.yml` playbook
-5. Update CLAUDE.md documentation
+1. Suspend all Flux resources: `flux suspend ks --all && flux suspend hr --all`
+2. Verify Argo CD is managing all resources (all Applications synced + healthy)
+3. Remove Flux controllers: `flux uninstall --silent`
+4. Remove Flux CRDs: `kubectl delete crd -l app.kubernetes.io/part-of=flux`
+5. Remove `flux-system` namespace
+6. Remove Flux-specific files from infra repo:
+   - All `kustomization.yaml` files (Flux Kustomization, not to be confused with Kustomize)
+   - All `helmrelease.yaml` files
+   - `clusters/production/sources/` directory (GitRepository, HelmRepository, credentials)
+   - `clusters/production/flux-system/` directory
+7. Remove Flux network policies from infra repo
+8. Remove from ops repo:
+   - `deploy/ansible/playbooks/setup-flux.yml` playbook
+   - `tests/ansible/test-flux.yml` Vagrant test (replace with test-argocd.yml)
+   - `task deploy:flux` and `task test:flux` from Taskfile
+9. Remove Flux references from all `.woodpecker/cd.yaml` comments
+10. Update CLAUDE.md:
+    - Replace Flux CD sections with Argo CD
+    - Update deploy flow diagram
+    - Update `task deploy:*` commands
+    - Remove Flux key commands (`flux get`, `flux reconcile`, etc.)
+    - Add Argo CD key commands (`argocd app list`, `argocd app sync`, etc.)
+11. Update memory files:
+    - `project_flux_gitops.md` → mark as superseded by Argo CD
+12. Clean up Forgejo PAT if Flux-specific:
+    - Check if `forgejo-credentials` secret in `flux-system` namespace is shared
+    - Argo CD uses its own repo credentials
 
 ### Phase 8: Create Root Application (App of Apps)
 
