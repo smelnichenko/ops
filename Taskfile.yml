@@ -261,17 +261,6 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-sonarqube.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
-  test:hashcash:
-    desc: Test Hashcash PoW captcha in Vagrant
-    deps: [deploy:install]
-    cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up
-      - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-hashcash.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-
   test:cicd:
     desc: Test CI/CD pipeline with Forgejo registry in Vagrant
     deps: [deploy:install]
@@ -455,8 +444,6 @@ tasks:
       - task: test:grafana
       - echo "=== [5/11] test:kafka-scylla ==="
       - task: test:kafka-scylla
-      - echo "=== [6/11] test:hashcash ==="
-      - task: test:hashcash
       - echo "=== [7/11] test:sonarqube ==="
       - task: test:sonarqube
       - echo "=== [8/10] test:dr ==="

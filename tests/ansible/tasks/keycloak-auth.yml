@@ -1,0 +1,45 @@
+# Reusable tasks: Create a test user in Keycloak and get a JWT
+#
+# Required vars:
+#   kc_admin_password: Keycloak admin password
+#   test_email: Test user email
+#   test_password: Test user password
+#   ns: Kubernetes namespace (default: schnappy)
+#
+# Sets facts:
+#   auth_token: Bearer access token for API calls
+
+- name: "AUTH: Create test user in Keycloak"
+  ansible.builtin.shell: |
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+      /opt/keycloak/bin/kcadm.sh create users -r schnappy \
+        -s "username={{ test_email }}" \
+        -s "email={{ test_email }}" \
+        -s enabled=true \
+        -s emailVerified=true \
+        --server http://localhost:8080 --realm master \
+        --user admin --password "{{ kc_admin_password }}"
+  register: kc_create_user
+  changed_when: kc_create_user.rc == 0
+  failed_when: kc_create_user.rc != 0 and 'already exists' not in kc_create_user.stderr
+
+- name: "AUTH: Set test user password"
+  ansible.builtin.shell: |
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+      /opt/keycloak/bin/kcadm.sh set-password -r schnappy \
+        --username "{{ test_email }}" \
+        --new-password "{{ test_password }}" \
+        --server http://localhost:8080 --realm master \
+        --user admin --password "{{ kc_admin_password }}"
+
+- name: "AUTH: Get access token via password grant"
+  ansible.builtin.shell: |
+    k3s kubectl run -n {{ ns }} token-fetch --rm -i --restart=Never \
+      --image=busybox:1.37 -- sh -c \
+        'wget -qO- --post-data "grant_type=password&client_id=app&username={{ test_email }}&password={{ test_password }}&scope=openid" \
+          http://schnappy-keycloak.{{ ns }}.svc:8080/realms/schnappy/protocol/openid-connect/token'
+  register: token_result
+
+- name: "AUTH: Set auth token"
+  ansible.builtin.set_fact:
+    auth_token: "{{ (token_result.stdout | from_json).access_token }}"
