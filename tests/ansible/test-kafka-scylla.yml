@@ -123,7 +123,7 @@
 
     - name: Deploy chart with Kafka + ScyllaDB enabled
       ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant-platform/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-chat-test-values.yml \

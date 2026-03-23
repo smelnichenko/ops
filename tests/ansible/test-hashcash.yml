@@ -91,7 +91,7 @@
     - name: Build backend JAR
       ansible.builtin.shell: |
         source "$HOME/.sdkman/bin/sdkman-init.sh"
-        cd /vagrant/backend
+        cd /vagrant-monitor
         ./gradlew bootJar --no-daemon -x test
       become: false
       args:
@@ -101,8 +101,8 @@
       ansible.builtin.shell: |
         STAGE=$(mktemp -d)
         mkdir -p "$STAGE/backend"
-        cp /vagrant/backend/build/libs/*.jar "$STAGE/backend/app.jar"
-        cp /vagrant/backend/Dockerfile.runtime "$STAGE/backend/Dockerfile"
+        cp /vagrant-monitor/build/libs/*.jar "$STAGE/backend/app.jar"
+        cp /vagrant-monitor/Dockerfile.runtime "$STAGE/backend/Dockerfile"
         nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
           build -t monitor:local "$STAGE/backend/"
         rm -rf "$STAGE"
@@ -117,7 +117,7 @@
 
     - name: Deploy chart with captcha enabled
       ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant-platform/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-hashcash-test-values.yml \

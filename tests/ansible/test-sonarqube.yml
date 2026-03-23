@@ -174,7 +174,7 @@
 
     - name: Deploy chart with SonarQube enabled
       ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant-platform/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-sonarqube-test-values.yml \

@@ -44,7 +44,7 @@
     - name: Build backend (core) JAR
       ansible.builtin.shell: |
         source $HOME/.sdkman/bin/sdkman-init.sh
-        cd /vagrant/backend && ./gradlew bootJar --no-daemon -x test
+        cd /vagrant-monitor && ./gradlew bootJar --no-daemon -x test
       args:
         executable: /bin/bash
       register: backend_build
@@ -59,7 +59,7 @@
     - name: Build frontend
       ansible.builtin.shell: |
         source $HOME/.nvm/nvm.sh
-        cd /vagrant/frontend && npm ci && npm run build
+        cd /vagrant-site && npm ci && npm run build
       args:
         executable: /bin/bash
       changed_when: true
@@ -265,7 +265,7 @@
 
     - name: Deploy chart with all microservices
       ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant-platform/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-microservices-test-values.yml \

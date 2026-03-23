@@ -123,7 +123,16 @@ EOF
     k3s.vm.synced_folder ".", "/vagrant", type: "rsync",
       rsync__exclude: [".git/", "node_modules/", "build/", "dist/", ".gradle/"]
 
-    # Sync microservice repos for integration testing
+    # Sync sibling repos for integration testing
+    k3s.vm.synced_folder "../platform", "/vagrant-platform", type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"],
+      create: true
+    k3s.vm.synced_folder "../monitor", "/vagrant-monitor", type: "rsync",
+      rsync__exclude: [".git/", "node_modules/", "build/", "dist/", ".gradle/"],
+      create: true
+    k3s.vm.synced_folder "../site", "/vagrant-site", type: "rsync",
+      rsync__exclude: [".git/", "node_modules/", "build/", "dist/"],
+      create: true
     k3s.vm.synced_folder "../api-gateway", "/vagrant-gateway", type: "rsync",
       rsync__exclude: [".git/", "build/", ".gradle/"],
       create: true
@@ -280,20 +289,20 @@ EOF
       GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
       BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-      # Skip if backend dir doesn't exist (infra-only tests)
-      if [ ! -d /vagrant/backend ]; then
-        echo "=== No backend directory — skipping app build ==="
+      # Skip if monitor repo not synced (infra-only tests)
+      if [ ! -d /vagrant-monitor/src ]; then
+        echo "=== No monitor repo — skipping app build ==="
         exit 0
       fi
 
-      # Build backend JAR
+      # Build backend JAR (monitor repo has gradle at root)
       echo "=== Building backend JAR ==="
-      cd /vagrant/backend
+      cd /vagrant-monitor
       ./gradlew bootJar --no-daemon -x test
 
-      # Build frontend dist
+      # Build frontend dist (site repo)
       echo "=== Building frontend ==="
-      cd /vagrant/frontend
+      cd /vagrant-site
       npm ci --silent
       VITE_GIT_HASH=$GIT_HASH VITE_BUILD_TIME=$BUILD_TIME npm run build
 
@@ -303,18 +312,18 @@ EOF
 
       # Backend: copy JAR + Dockerfile.runtime
       mkdir -p "$STAGE/backend"
-      cp /vagrant/backend/build/libs/*.jar "$STAGE/backend/app.jar"
-      cp /vagrant/backend/Dockerfile.runtime "$STAGE/backend/Dockerfile"
+      cp /vagrant-monitor/build/libs/*.jar "$STAGE/backend/app.jar"
+      cp /vagrant-monitor/Dockerfile.runtime "$STAGE/backend/Dockerfile"
 
       # Frontend: copy dist + runtime files
       mkdir -p "$STAGE/frontend"
-      cp -r /vagrant/frontend/dist "$STAGE/frontend/"
-      cp /vagrant/frontend/Dockerfile.runtime "$STAGE/frontend/Dockerfile"
-      cp /vagrant/frontend/nginx.conf "$STAGE/frontend/"
-      cp /vagrant/frontend/nginx.conf.template "$STAGE/frontend/"
-      cp /vagrant/frontend/security-headers.conf "$STAGE/frontend/"
-      cp /vagrant/frontend/security-headers-base.conf "$STAGE/frontend/"
-      cp /vagrant/frontend/docker-entrypoint.sh "$STAGE/frontend/"
+      cp -r /vagrant-site/dist "$STAGE/frontend/"
+      cp /vagrant-site/Dockerfile.runtime "$STAGE/frontend/Dockerfile"
+      cp /vagrant-site/nginx.conf "$STAGE/frontend/"
+      cp /vagrant-site/nginx.conf.template "$STAGE/frontend/"
+      cp /vagrant-site/security-headers.conf "$STAGE/frontend/"
+      cp /vagrant-site/security-headers-base.conf "$STAGE/frontend/"
+      cp /vagrant-site/docker-entrypoint.sh "$STAGE/frontend/"
 
       # Build directly into k3s containerd (no Docker daemon, no import step)
       sudo nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \

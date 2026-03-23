@@ -145,7 +145,7 @@
 
     - name: Deploy chart for DR test
       ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant/infra/helm \
+        helm upgrade --install schnappy /vagrant-platform/helm \
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-dr-test-values.yml \
