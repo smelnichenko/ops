@@ -473,8 +473,10 @@ tasks:
       - task: test:microservices
       - echo "=== [14/15] test:linkerd ==="
       - task: test:linkerd
-      - echo "=== [15/15] test:flux ==="
+      - echo "=== [15/16] test:flux ==="
       - task: test:flux
+      - echo "=== [16/16] test:keycloak ==="
+      - task: test:keycloak
       - echo ""
       - echo "=== All Vagrant tests complete ==="
 
