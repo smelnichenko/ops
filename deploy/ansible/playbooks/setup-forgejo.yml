@@ -126,7 +126,7 @@
         k3s kubectl rollout status deployment/forgejo -n {{ forgejo_namespace }} --timeout=180s
       changed_when: false
 
-    - name: Apply network policies for Forgejo
+    - name: Apply network policies for Forgejo (legacy — Flux-managed via infra repo)
       ansible.builtin.shell: |
         set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
