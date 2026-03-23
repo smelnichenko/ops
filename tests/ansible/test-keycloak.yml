@@ -101,7 +101,6 @@
         content: |
           vault:
             secretsEnabled: true
-          auth:
           networkPolicies:
             enabled: false
           frontend:

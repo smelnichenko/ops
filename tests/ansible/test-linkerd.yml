@@ -215,7 +215,6 @@
         content: |
           vault:
             secretsEnabled: true
-          auth:
           networkPolicies:
             enabled: true
           linkerd:

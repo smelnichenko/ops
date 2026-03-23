@@ -42,7 +42,6 @@
         content: |
           vault:
             secretsEnabled: false
-          auth:
           networkPolicies:
             enabled: true
           frontend:
