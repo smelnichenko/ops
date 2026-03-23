@@ -127,6 +127,21 @@ Replace OIDC callback with gateway-triggered user sync.
 | E2E chat encryption | `chat.e2eEnabled: false` in prod; if enabled later, use separate encryption passphrase |
 | Keycloak downtime = no auth | Already true; KC is critical dependency |
 
+## Vagrant Tests
+
+Tests already migrated to Keycloak auth (use `tasks/keycloak-auth.yml`):
+- test-dr.yml, test-gateway.yml, test-linkerd.yml, test-microservices.yml
+
+After each phase, update and re-run affected Vagrant tests:
+- **Phase 1**: test-keycloak (verify roles in realm import)
+- **Phase 2+3**: test-gateway (verify Bearer-only auth, no cookie), test-microservices, test-linkerd
+- **Phase 4**: test-dr (verify ensure-user endpoint, Kafka user events)
+- **Phase 5**: all tests using X-User-ID headers
+- **Phase 7**: verify no tests reference JWT_SECRET, AUTH_TOKEN, or CSRF
+
+Removed tests:
+- test-hashcash.yml (captcha removed from admin service)
+
 ## Key Files
 
 | File | Changes |
