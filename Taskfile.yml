@@ -357,13 +357,6 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
 
-  deploy:registry-mirror:
-    desc: Deploy Docker Hub pull-through cache on Pi (legacy, replaced by deploy:nexus)
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-registry-mirror.yml
-
   deploy:k3s:
     desc: Setup k3s only
     dir: deploy/ansible
