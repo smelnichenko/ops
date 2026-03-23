@@ -160,8 +160,8 @@
                 enabled: true
                 redirectUri: "https://git.example.com/callback"
               grafana:
-                enabled: true
-                redirectUri: "https://grafana.example.com/callback"
+                enabled: false
+                redirectUri: ""
             resources:
               requests: { cpu: 200m, memory: 512Mi }
               limits: { cpu: 1000m, memory: 1Gi }
@@ -174,8 +174,18 @@
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/postgres \
-            password="vagrant-test-pg-password" \
-            user="postgres"
+            database="keycloak" \
+            username="postgres" \
+            password="vagrant-test-pg-password"
+      no_log: true
+
+    - name: Seed auth secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/auth \
+            jwt_secret="test-only-not-used-32-chars-long!!"
       no_log: true
 
     - name: Rsync chart to Vagrant VM
