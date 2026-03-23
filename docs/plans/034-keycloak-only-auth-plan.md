@@ -1,6 +1,6 @@
 # Keycloak-Only Auth Migration
 
-## Status: PLANNED
+## Status: COMPLETE (2026-03-23) — Phase 6 (Admin KC API) deferred
 
 ## Goal
 
