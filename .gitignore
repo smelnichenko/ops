@@ -1,0 +1,5 @@
+.vagrant/
+deploy/ansible/vars/vault-pi-runtime.yml
+deploy/ansible/vars/vault-k3s-init.json
+deploy/ansible/vars/sealed-secrets-key-backup.yaml
+deploy/ansible/venv/
