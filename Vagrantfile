@@ -280,6 +280,12 @@ EOF
       GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
       BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+      # Skip if backend dir doesn't exist (infra-only tests)
+      if [ ! -d /vagrant/backend ]; then
+        echo "=== No backend directory — skipping app build ==="
+        exit 0
+      fi
+
       # Build backend JAR
       echo "=== Building backend JAR ==="
       cd /vagrant/backend
