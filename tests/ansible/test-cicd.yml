@@ -354,9 +354,10 @@
           --set "app.image.repository={{ forgejo_host }}/{{ forgejo_admin_user }}/monitor" \
           --set "app.image.tag={{ test_image_tag }}" \
           --set "app.image.pullPolicy=Always" \
-          --set "frontend.image.repository={{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend" \
-          --set "frontend.image.tag={{ test_image_tag }}" \
-          --set "frontend.image.pullPolicy=Always" \
+          --set "site.image.repository={{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend" \
+          --set "site.image.tag={{ test_image_tag }}" \
+          --set "site.image.pullPolicy=Always" \
+          --set "aptCache.enabled=false" \
           --set "postgres.password=vagrant" \
           --set "auth.jwtSecret=vagrant-test-secret-at-least-32-chars" \
           --set "networkPolicies.enabled=false" \
@@ -375,7 +376,7 @@
         for i in $(seq 1 60); do
           APP_READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          FE_READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=frontend \
+          FE_READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=site \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
           if [ "$APP_READY" = "true" ] && [ "$FE_READY" = "true" ]; then
             echo "OK: Both pods ready"
