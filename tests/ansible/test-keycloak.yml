@@ -237,7 +237,7 @@
 
     - name: Wait for Keycloak readiness probe
       ansible.builtin.shell: |
-        k3s kubectl get pod -n {{ ns }} -l app.kubernetes.io/name=keycloak \
+        k3s kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak \
           -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="keycloak")].ready}'
       register: kc_health
       retries: 60
