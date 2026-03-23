@@ -350,14 +350,14 @@
 
     - name: Wait for deployments
       ansible.builtin.shell: |
-        for deploy in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
+        for deploy in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-monitor; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s 2>/dev/null || true
         done
       changed_when: false
 
     - name: Check sidecar injection per deployment
       ansible.builtin.shell: |
-        for deploy in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
+        for deploy in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-monitor; do
           CONTAINERS=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/name=${deploy#schnappy-} \
             -o jsonpath='{.items[0].spec.containers[*].name}' 2>/dev/null || \
             k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=${deploy#schnappy-} \
@@ -382,7 +382,7 @@
         sidecar_admin: "{{ 'INJECTED: schnappy-admin' in sidecar_check.stdout | default('') }}"
         sidecar_chat: "{{ 'INJECTED: schnappy-chat' in sidecar_check.stdout | default('') }}"
         sidecar_chess: "{{ 'INJECTED: schnappy-chess' in sidecar_check.stdout | default('') }}"
-        sidecar_core: "{{ 'INJECTED: schnappy-app' in sidecar_check.stdout | default('') }}"
+        sidecar_core: "{{ 'INJECTED: schnappy-monitor' in sidecar_check.stdout | default('') }}"
 
     # ================================================================
     # Phase 4: Verify mTLS
@@ -411,7 +411,7 @@
     - name: Wait for traffic to flow (generate some requests)
       ansible.builtin.shell: |
         for i in $(seq 1 5); do
-          k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+          k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
             curl -sf http://schnappy-gateway:8080/api/health 2>/dev/null || true
           sleep 2
         done
@@ -471,7 +471,7 @@
 
     - name: Check core health through mesh
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-app -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf http://localhost:8080/api/health
       register: mesh_health_core
       retries: 12
@@ -482,7 +482,7 @@
 
     - name: Register user through mesh (gateway -> admin)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -X POST http://schnappy-gateway:8080/api/auth/register \
           -H 'Content-Type: application/json' \
           -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
@@ -495,7 +495,7 @@
 
     - name: Login through mesh (gateway -> admin)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -X POST http://schnappy-gateway:8080/api/auth/login \
           -H 'Content-Type: application/json' \
           -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'

@@ -414,7 +414,7 @@
 
     - name: Verify app health endpoint responds
       ansible.builtin.shell: |
-        APP_IP=$(k3s kubectl get svc schnappy-app -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
+        APP_IP=$(k3s kubectl get svc schnappy-monitor -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
         for i in $(seq 1 30); do
           STATUS=$(curl -sf "http://$APP_IP:8080/api/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
           if [ "$STATUS" = "UP" ]; then
@@ -429,7 +429,7 @@
 
     - name: Verify build-info returns correct tag
       ansible.builtin.shell: |
-        APP_IP=$(k3s kubectl get svc schnappy-app -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
+        APP_IP=$(k3s kubectl get svc schnappy-monitor -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
         GIT_HASH=$(curl -sf "http://$APP_IP:8080/api/build-info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('gitHash',''))")
         if [ "$GIT_HASH" != "{{ test_image_tag }}" ]; then
           echo "FAIL: build-info gitHash=$GIT_HASH, expected {{ test_image_tag }}"

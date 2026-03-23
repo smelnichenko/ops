@@ -167,7 +167,7 @@
 
     - name: Get captcha config
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
           curl -sf http://localhost:8080/api/captcha/config
       register: captcha_config
       retries: 10
@@ -189,7 +189,7 @@
 
     - name: Get challenge
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
           curl -sf http://localhost:8080/api/captcha/challenge
       register: challenge_result
       changed_when: false
@@ -241,7 +241,7 @@
 
     - name: Submit registration with valid PoW
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -X POST http://localhost:8080/api/auth/register \
           -H 'Content-Type: application/json' \
@@ -264,7 +264,7 @@
 
     - name: Replay same challenge+nonce
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -X POST http://localhost:8080/api/auth/register \
           -H 'Content-Type: application/json' \
@@ -287,14 +287,14 @@
 
     - name: Get fresh challenge for invalid nonce test
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
           curl -sf http://localhost:8080/api/captcha/challenge
       register: fresh_challenge
       changed_when: false
 
     - name: Submit with invalid nonce
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-app -n {{ ns }} -- \
+        k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -X POST http://localhost:8080/api/auth/register \
           -H 'Content-Type: application/json' \

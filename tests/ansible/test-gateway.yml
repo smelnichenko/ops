@@ -228,7 +228,7 @@
 
     - name: Wait for core app to be ready
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-app -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf http://localhost:8080/api/health
       register: core_health
       retries: 30
@@ -239,7 +239,7 @@
 
     - name: Test /api/health route through gateway
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf http://schnappy-gateway:8080/api/health
       register: route_health
       retries: 6
@@ -254,7 +254,7 @@
 
     - name: Test /api/build-info route through gateway
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf http://schnappy-gateway:8080/api/build-info
       register: route_buildinfo
       retries: 6
@@ -273,7 +273,7 @@
 
     - name: Test CORS preflight request
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -I -X OPTIONS \
           -H "Origin: https://pmon.dev" \
           -H "Access-Control-Request-Method: GET" \
@@ -365,7 +365,7 @@
 
     - name: Register a test user through gateway
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -X POST http://schnappy-gateway:8080/api/auth/register \
           -H 'Content-Type: application/json' \
           -d '{"email":"gateway-test@test.com","password":"testpassword123"}'
@@ -375,7 +375,7 @@
 
     - name: Login through gateway
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -X POST http://schnappy-gateway:8080/api/auth/login \
           -H 'Content-Type: application/json' \
           -c - \

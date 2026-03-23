@@ -273,7 +273,7 @@
 
     - name: Wait for app deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=180s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=180s
       register: app_rollout
       changed_when: false
       failed_when: false

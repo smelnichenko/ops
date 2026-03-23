@@ -283,7 +283,7 @@
 
     - name: "POD-RECOVERY: Wait for app deployment rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
       changed_when: false
 
     - name: "POD-RECOVERY: Verify app health after restart"
@@ -412,7 +412,7 @@
 
     - name: "POD-RECOVERY: Wait for frontend deployment rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-frontend -n {{ ns }} --timeout=60s
+        k3s kubectl rollout status deployment/schnappy-site -n {{ ns }} --timeout=60s
       changed_when: false
 
     - name: "POD-RECOVERY: Verify frontend serves pages"
@@ -439,7 +439,7 @@
 
     - name: "POD-RECOVERY: Wait for all deployments to roll out"
       ansible.builtin.shell: |
-        for deploy in schnappy-app schnappy-postgres schnappy-redis schnappy-frontend; do
+        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=180s
         done
       changed_when: false
@@ -898,7 +898,7 @@
 
     - name: "DR: Wait for all deployments after restore"
       ansible.builtin.shell: |
-        for deploy in schnappy-app schnappy-postgres schnappy-redis schnappy-frontend; do
+        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site; do
           echo "Waiting for $deploy..."
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
@@ -1185,7 +1185,7 @@
 
     - name: "OFFSITE: Wait for all deployments"
       ansible.builtin.shell: |
-        for deploy in schnappy-app schnappy-postgres schnappy-redis schnappy-frontend; do
+        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
       changed_when: false

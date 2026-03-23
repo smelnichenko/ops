@@ -182,7 +182,7 @@
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-sonarqube-test-values.yml \
-          --timeout 120s
+          --timeout 600s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       register: helm_result

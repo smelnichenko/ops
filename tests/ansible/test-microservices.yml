@@ -318,14 +318,14 @@
 
     - name: Wait for core deployment
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=300s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=300s
       register: core_rollout
       changed_when: false
       failed_when: false
 
     - name: Wait for frontend deployment
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-frontend -n {{ ns }} --timeout=300s
+        k3s kubectl rollout status deployment/schnappy-site -n {{ ns }} --timeout=300s
       register: frontend_rollout
       changed_when: false
       failed_when: false
@@ -347,7 +347,7 @@
 
     - name: Register user through gateway -> admin
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -X POST http://schnappy-gateway:8080/api/auth/register \
           -H 'Content-Type: application/json' \
           -d '{"email":"{{ test_user_email }}","password":"{{ test_user_password }}"}'
@@ -360,7 +360,7 @@
 
     - name: Login through gateway -> admin and capture JWT
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -X POST http://schnappy-gateway:8080/api/auth/login \
           -H 'Content-Type: application/json' \
           -D /dev/stderr \
@@ -384,7 +384,7 @@
 
     - name: Test route to admin (/api/auth/approval-mode)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           http://schnappy-gateway:8080/api/auth/approval-mode
       register: route_admin
@@ -393,7 +393,7 @@
 
     - name: Test route to chat (/api/chat/channels)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer {{ jwt_token }}" \
           http://schnappy-gateway:8080/api/chat/channels
@@ -403,7 +403,7 @@
 
     - name: Test route to chess (/api/chess/games)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer {{ jwt_token }}" \
           http://schnappy-gateway:8080/api/chess/games
@@ -413,7 +413,7 @@
 
     - name: Test route to core (/api/monitor/pages)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-frontend -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer {{ jwt_token }}" \
           http://schnappy-gateway:8080/api/monitor/pages
@@ -548,7 +548,7 @@
     - name: Test DNS resolution from gateway pod
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ ns }} deploy/schnappy-gateway -- \
-          sh -c 'for svc in schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
+          sh -c 'for svc in schnappy-admin schnappy-chat schnappy-chess schnappy-monitor; do
             if getent hosts $svc.{{ ns }}.svc.cluster.local >/dev/null 2>&1; then
               echo "OK: $svc"
             else
@@ -568,7 +568,7 @@
         dns_admin_ok: "{{ 'OK: schnappy-admin' in dns_resolution.stdout | default('') }}"
         dns_chat_ok: "{{ 'OK: schnappy-chat' in dns_resolution.stdout | default('') }}"
         dns_chess_ok: "{{ 'OK: schnappy-chess' in dns_resolution.stdout | default('') }}"
-        dns_core_ok: "{{ 'OK: schnappy-app' in dns_resolution.stdout | default('') }}"
+        dns_core_ok: "{{ 'OK: schnappy-monitor' in dns_resolution.stdout | default('') }}"
 
     # ================================================================
     # Phase 10: Verify health endpoints per service
@@ -608,7 +608,7 @@
 
     - name: Check core health
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-app -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf http://localhost:8080/api/health
       register: health_core
       changed_when: false
@@ -620,7 +620,7 @@
 
     - name: Check network policies for all services
       ansible.builtin.shell: |
-        for np in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
+        for np in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-monitor; do
           if k3s kubectl get networkpolicy $np -n {{ ns }} -o name 2>/dev/null; then
             echo "OK: $np"
           else
@@ -637,7 +637,7 @@
         np_admin: "{{ 'OK: schnappy-admin' in np_check.stdout | default('') }}"
         np_chat: "{{ 'OK: schnappy-chat' in np_check.stdout | default('') }}"
         np_chess: "{{ 'OK: schnappy-chess' in np_check.stdout | default('') }}"
-        np_core: "{{ 'OK: schnappy-app' in np_check.stdout | default('') }}"
+        np_core: "{{ 'OK: schnappy-monitor' in np_check.stdout | default('') }}"
 
     # ================================================================
     # Phase 12: Verify services on correct ports
@@ -645,7 +645,7 @@
 
     - name: Check service ports
       ansible.builtin.shell: |
-        for svc in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-app; do
+        for svc in schnappy-gateway schnappy-admin schnappy-chat schnappy-chess schnappy-monitor; do
           PORT=$(k3s kubectl get service $svc -n {{ ns }} -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)
           echo "$svc: $PORT"
         done
@@ -663,7 +663,7 @@
         svc_admin_ok: "{{ 'schnappy-admin: 8080' in svc_ports.stdout | default('') }}"
         svc_chat_ok: "{{ 'schnappy-chat: 8080' in svc_ports.stdout | default('') }}"
         svc_chess_ok: "{{ 'schnappy-chess: 8080' in svc_ports.stdout | default('') }}"
-        svc_core_ok: "{{ 'schnappy-app: 8080' in svc_ports.stdout | default('') }}"
+        svc_core_ok: "{{ 'schnappy-monitor: 8080' in svc_ports.stdout | default('') }}"
 
     # ================================================================
     # Phase 13: Summary
@@ -736,7 +736,7 @@
           [{{ 'PASS' if dns_admin_ok else 'FAIL' }}] schnappy-admin.{{ ns }}.svc.cluster.local
           [{{ 'PASS' if dns_chat_ok else 'FAIL' }}] schnappy-chat.{{ ns }}.svc.cluster.local
           [{{ 'PASS' if dns_chess_ok else 'FAIL' }}] schnappy-chess.{{ ns }}.svc.cluster.local
-          [{{ 'PASS' if dns_core_ok else 'FAIL' }}] schnappy-app.{{ ns }}.svc.cluster.local
+          [{{ 'PASS' if dns_core_ok else 'FAIL' }}] schnappy-monitor.{{ ns }}.svc.cluster.local
 
           --- Health Endpoints ---
           [{{ 'PASS' if health_gateway_ok else 'FAIL' }}] Gateway health
@@ -757,7 +757,7 @@
           [{{ 'PASS' if svc_admin_ok else 'FAIL' }}] schnappy-admin
           [{{ 'PASS' if svc_chat_ok else 'FAIL' }}] schnappy-chat
           [{{ 'PASS' if svc_chess_ok else 'FAIL' }}] schnappy-chess
-          [{{ 'PASS' if svc_core_ok else 'FAIL' }}] schnappy-app
+          [{{ 'PASS' if svc_core_ok else 'FAIL' }}] schnappy-monitor
           ====================================================
 
     - name: Fail if critical checks failed
