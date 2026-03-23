@@ -48,6 +48,10 @@
             enabled: true
           frontend:
             enabled: false
+          site:
+            enabled: false
+          aptCache:
+            enabled: false
           app:
             replicas: 0
           redis:

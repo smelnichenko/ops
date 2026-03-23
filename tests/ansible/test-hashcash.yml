@@ -46,6 +46,10 @@
             enabled: true
           frontend:
             enabled: false
+          site:
+            enabled: false
+          aptCache:
+            enabled: false
           app:
             replicas: 1
             image:

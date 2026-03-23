@@ -110,6 +110,10 @@
             enabled: false
           frontend:
             enabled: false
+          site:
+            enabled: false
+          aptCache:
+            enabled: false
           app:
             image:
               repository: git.pmon.dev/schnappy/monitor
