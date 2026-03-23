@@ -447,7 +447,7 @@
             strictContentTypeValidation: true
           proxy:
             remoteUrl: https://registry-1.docker.io
-            contentMaxAge: 1440
+            contentMaxAge: 10080
             metadataMaxAge: 1440
           negativeCache:
             enabled: true
@@ -484,7 +484,7 @@
             strictContentTypeValidation: true
           proxy:
             remoteUrl: https://docker.elastic.co
-            contentMaxAge: 1440
+            contentMaxAge: 10080
             metadataMaxAge: 1440
           negativeCache:
             enabled: true
@@ -517,7 +517,7 @@
             strictContentTypeValidation: true
           proxy:
             remoteUrl: https://quay.io
-            contentMaxAge: 1440
+            contentMaxAge: 10080
             metadataMaxAge: 1440
           negativeCache:
             enabled: true
@@ -577,7 +577,7 @@
             strictContentTypeValidation: true
           proxy:
             remoteUrl: https://repo1.maven.org/maven2/
-            contentMaxAge: 1440
+            contentMaxAge: 10080
             metadataMaxAge: 1440
           negativeCache:
             enabled: true
@@ -632,7 +632,7 @@
             strictContentTypeValidation: true
           proxy:
             remoteUrl: https://registry.npmjs.org/
-            contentMaxAge: 1440
+            contentMaxAge: 10080
             metadataMaxAge: 1440
           negativeCache:
             enabled: true
@@ -681,7 +681,7 @@
             strictContentTypeValidation: true
           proxy:
             remoteUrl: https://pypi.org/
-            contentMaxAge: 1440
+            contentMaxAge: 10080
             metadataMaxAge: 1440
           negativeCache:
             enabled: true
