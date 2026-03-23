@@ -60,6 +60,7 @@
         cd /vagrant-monitor && ./gradlew bootJar --no-daemon -x test
       args:
         executable: /bin/bash
+      become: false
       register: backend_build
       changed_when: true
 
@@ -78,6 +79,7 @@
         cd /vagrant-site && npm ci && npm run build
       args:
         executable: /bin/bash
+      become: false
       register: frontend_build
       changed_when: true
 
@@ -96,6 +98,7 @@
         cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
       args:
         executable: /bin/bash
+      become: false
       register: gateway_build
       changed_when: true
 
