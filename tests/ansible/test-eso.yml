@@ -23,7 +23,7 @@
     ns: schnappy
     vault_ns: vault
     # Test secrets (not real — Vagrant only)
-    test_jwt_secret: "vagrant-test-jwt-secret-at-least-32-chars-long"
+    test_kc_admin_password: "vagrant-test-kc-admin-password"
     test_db_password: "vagrant-test-db-password"
     test_db_user: "monitor_user"
     test_db_name: "monitor"
@@ -56,8 +56,8 @@
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/auth \
-            jwt_secret="{{ test_jwt_secret }}"
+          vault kv put secret/schnappy/keycloak \
+            admin_password="{{ test_kc_admin_password }}" db_password="test-kc-db" forgejo_client_secret="test-forgejo"
       no_log: true
 
     - name: Seed postgres secret
@@ -71,6 +71,15 @@
             password="{{ test_db_password }}"
       no_log: true
 
+    - name: Seed mail secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/mail \
+            password="vagrant-test-smtp"
+      no_log: true
+
     - name: Seed redis secret
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
@@ -82,7 +91,7 @@
 
     - name: "SEED: Secrets written to Vault KV"
       ansible.builtin.debug:
-        msg: "Seeded auth, postgres, redis secrets into Vault KV"
+        msg: "Seeded keycloak, postgres, redis secrets into Vault KV"
 
     # ================================================================
     # Phase 3: Deploy schnappy app with ESO-managed secrets
@@ -101,11 +110,29 @@
         content: |
           vault:
             secretsEnabled: true
-          auth:
-            existingSecret: "schnappy-auth"
-            tokenExpiration: 1h
-            registrationEnabled: true
-            secureCookies: false
+          keycloak:
+            enabled: true
+            existingSecret: "schnappy-keycloak"
+            image: quay.io/keycloak/keycloak:26.5.6
+            hostname: localhost
+            clients:
+              app:
+                enabled: false
+                redirectUri: ""
+              forgejo:
+                enabled: false
+                redirectUri: ""
+              grafana:
+                enabled: false
+                redirectUri: ""
+            ingress:
+              enabled: false
+          mail:
+            enabled: true
+            existingSecret: "schnappy-mail"
+            host: smtp.resend.com
+            port: "587"
+            username: resend
           networkPolicies:
             enabled: false
           frontend:
@@ -232,7 +259,7 @@
 
     - name: Verify k8s Secrets were created by ESO
       ansible.builtin.shell: |
-        for secret in schnappy-auth schnappy-postgres schnappy-redis; do
+        for secret in schnappy-keycloak schnappy-postgres schnappy-redis; do
           k3s kubectl get secret "$secret" -n {{ ns }} -o jsonpath='{.metadata.name}' && echo " OK"
         done
       register: secrets_check
@@ -242,20 +269,20 @@
       ansible.builtin.debug:
         msg: "{{ secrets_check.stdout_lines }}"
 
-    - name: Verify secret content matches Vault (JWT_SECRET key exists)
+    - name: Verify secret content matches Vault (KEYCLOAK_ADMIN_PASSWORD key exists)
       ansible.builtin.shell: |
-        k3s kubectl get secret schnappy-auth -n {{ ns }} \
-          -o jsonpath='{.data.JWT_SECRET}' | base64 -d
+        k3s kubectl get secret schnappy-keycloak -n {{ ns }} \
+          -o jsonpath='{.data.KEYCLOAK_ADMIN_PASSWORD}' | base64 -d
       register: jwt_check
       changed_when: false
       no_log: true
 
-    - name: "ESO: JWT_SECRET matches Vault value"
+    - name: "ESO: KEYCLOAK_ADMIN_PASSWORD matches Vault value"
       ansible.builtin.assert:
         that:
-          - jwt_check.stdout == test_jwt_secret
-        fail_msg: "JWT_SECRET mismatch! ESO did not sync correctly."
-        success_msg: "JWT_SECRET in k8s Secret matches Vault KV value"
+          - jwt_check.stdout == test_kc_admin_password
+        fail_msg: "KEYCLOAK_ADMIN_PASSWORD mismatch! ESO did not sync correctly."
+        success_msg: "KEYCLOAK_ADMIN_PASSWORD in k8s Secret matches Vault KV value"
 
     # ================================================================
     # Phase 5: Verify app can start with ESO-managed secrets

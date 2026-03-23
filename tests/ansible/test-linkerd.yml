@@ -26,7 +26,6 @@
     vault_ns: vault
     linkerd_ns: linkerd
     linkerd_viz_ns: linkerd-viz
-    test_jwt_secret: "test-only-not-used-32-chars-long!!"
     test_pg_password: "vagrant-test-linkerd-pg-password"
     test_kafka_cluster_id: "vagrant-test-kafka-cluster-id00"
     test_email: "linkerd-test@test.com"
@@ -217,7 +216,6 @@
           vault:
             secretsEnabled: true
           auth:
-            existingSecret: "schnappy-auth"
           networkPolicies:
             enabled: true
           linkerd:
@@ -371,7 +369,6 @@
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/auth \
-            jwt_secret="{{ test_jwt_secret }}"
       no_log: true
 
     - name: Seed postgres secret

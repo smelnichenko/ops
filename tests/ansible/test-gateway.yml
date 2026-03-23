@@ -24,7 +24,6 @@
   vars:
     ns: schnappy
     vault_ns: vault
-    test_jwt_secret: "test-only-not-used-32-chars-long!!"
     test_pg_password: "vagrant-test-gateway-pg-password"
     test_email: "gateway-test@test.com"
     test_password: "testpassword123"
@@ -119,7 +118,6 @@
           vault:
             secretsEnabled: true
           auth:
-            existingSecret: "schnappy-auth"
           networkPolicies:
             enabled: true
           frontend:
@@ -207,7 +205,6 @@
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/auth \
-            jwt_secret="{{ test_jwt_secret }}"
       no_log: true
 
     - name: Seed postgres secret

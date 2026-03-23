@@ -359,7 +359,6 @@
           --set "site.image.pullPolicy=Always" \
           --set "aptCache.enabled=false" \
           --set "postgres.password=vagrant" \
-          --set "auth.jwtSecret=vagrant-test-secret-at-least-32-chars" \
           --set "networkPolicies.enabled=false" \
           --set "app.gitHash={{ test_image_tag }}" \
           --set "app.buildTime=2026-01-01T00:00:00Z" \

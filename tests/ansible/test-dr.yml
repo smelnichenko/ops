@@ -107,7 +107,6 @@
           vault:
             secretsEnabled: true
           auth:
-            existingSecret: "schnappy-auth"
           networkPolicies:
             enabled: false
           frontend:
@@ -192,7 +191,6 @@
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/auth \
-            jwt_secret="test-only-not-used-32-chars-long!!"
       no_log: true
 
     - name: Seed postgres secret

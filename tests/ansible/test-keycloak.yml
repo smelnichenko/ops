@@ -102,7 +102,6 @@
           vault:
             secretsEnabled: true
           auth:
-            jwtSecret: "test-only-not-used-32-chars-long!!"
           networkPolicies:
             enabled: false
           frontend:
