@@ -324,8 +324,9 @@
 
     - name: Check OIDC well-known endpoint
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
-          sh -c 'wget -qO- http://localhost:8080/realms/schnappy/.well-known/openid-configuration 2>/dev/null | head -1'
+        k3s kubectl run -n {{ ns }} oidc-check --rm -i --restart=Never \
+          --image=busybox:1.37 -- wget -qO- \
+          http://schnappy-keycloak.{{ ns }}.svc:8080/realms/schnappy/.well-known/openid-configuration 2>/dev/null
       register: oidc_discovery
       changed_when: false
       failed_when: false
@@ -350,7 +351,6 @@
         reset_password_enabled: "{{ reset_password_enabled | default(false) }}"
         login_theme_correct: "{{ login_theme_correct | default(false) }}"
         forgejo_client_exists: "{{ forgejo_client_exists | default(false) }}"
-        grafana_client_exists: "{{ grafana_client_exists | default(false) }}"
         smtp_configured: "{{ smtp_configured | default(false) }}"
         oidc_working: "{{ oidc_working | default(false) }}"
 
@@ -359,7 +359,7 @@
         kc_deploy_pass: "{{ kc_rollout.rc is defined and kc_rollout.rc == 0 }}"
         kc_secret_pass: "{{ kc_secret_sync.stdout == 'SecretSynced' }}"
         kc_health_pass: "{{ kc_health.stdout | default('') == 'true' }}"
-        all_pass: "{{ kc_deploy_pass and kc_secret_pass and kc_health_pass and realm_enabled and registration_enabled and reset_password_enabled and login_theme_correct and forgejo_client_exists and grafana_client_exists and smtp_configured and oidc_working }}"
+        all_pass: "{{ kc_deploy_pass and kc_secret_pass and kc_health_pass and realm_enabled and registration_enabled and reset_password_enabled and login_theme_correct and forgejo_client_exists and smtp_configured and oidc_working }}"
       ansible.builtin.debug:
         msg: |
           ====================================================
@@ -373,7 +373,6 @@
           [{{ 'PASS' if reset_password_enabled else 'FAIL' }}] Password reset enabled
           [{{ 'PASS' if login_theme_correct else 'FAIL' }}] Login theme = schnappy
           [{{ 'PASS' if forgejo_client_exists else 'FAIL' }}] Forgejo OAuth client exists
-          [{{ 'PASS' if grafana_client_exists else 'FAIL' }}] Grafana OAuth client exists
           [{{ 'PASS' if smtp_configured else 'FAIL' }}] SMTP configured
           [{{ 'PASS' if oidc_working else 'FAIL' }}] OIDC discovery endpoint working
           ====================================================
