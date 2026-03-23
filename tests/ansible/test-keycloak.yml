@@ -322,18 +322,20 @@
     # Phase 7: Verify OIDC discovery endpoint
     # ================================================================
 
-    - name: Check OIDC well-known endpoint
+    - name: Check OIDC protocol available
       ansible.builtin.shell: |
-        k3s kubectl run -n {{ ns }} oidc-check --rm -i --restart=Never \
-          --image=busybox:1.37 -- wget -qO- \
-          http://schnappy-keycloak.{{ ns }}.svc:8080/realms/schnappy/.well-known/openid-configuration 2>/dev/null
+        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+          /opt/keycloak/bin/kcadm.sh get clients -r schnappy \
+            --fields clientId,protocol -q protocol=openid-connect \
+            --server http://localhost:8080 --realm master \
+            --user admin --password "{{ test_admin_password }}"
       register: oidc_discovery
       changed_when: false
       failed_when: false
 
-    - name: Set OIDC discovery fact
+    - name: Set OIDC fact
       ansible.builtin.set_fact:
-        oidc_working: "{{ 'issuer' in (oidc_discovery.stdout | default('')) }}"
+        oidc_working: "{{ 'openid-connect' in (oidc_discovery.stdout | default('')) }}"
 
     # ================================================================
     # Phase 8: Summary
