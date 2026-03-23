@@ -337,11 +337,11 @@
     # Phase 7: Network Policies
     # ================================================================
 
-    - name: "PHASE 6: Apply network policies"
+    - name: "PHASE 6: Network policies (managed by Flux via infra repo)"
       ansible.builtin.debug:
-        msg: "Applying network policies for Woodpecker namespace"
+        msg: "Network policies are in clusters/production/woodpecker/networkpolicies.yaml — managed by Flux"
 
-    - name: Apply Woodpecker network policies
+    - name: Apply Woodpecker network policies (legacy — kept for Vagrant tests only)
       ansible.builtin.shell: |
         set -o pipefail
         cat <<'EOF' | k3s kubectl apply -f -
