@@ -110,8 +110,12 @@
 
     - name: Build gateway container image
       ansible.builtin.shell: |
-        cd /vagrant-gateway && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
-          -t monitor-gateway:local -f Dockerfile .
+        STAGE=$(mktemp -d)
+        cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
+        cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
+        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+          -t monitor-gateway:local "$STAGE"
+        rm -rf "$STAGE"
       changed_when: true
 
     - name: Write Helm values for DR test
