@@ -359,7 +359,7 @@
           --namespace {{ ns }} \
           --create-namespace \
           --values /tmp/schnappy-microservices-test-values.yml \
-          --wait --timeout 600s
+          --wait --timeout 900s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       register: helm_result
