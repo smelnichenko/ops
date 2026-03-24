@@ -302,14 +302,6 @@
           grafana:
             enabled: false
 
-    - name: Seed auth secret
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/auth \
-      no_log: true
-
     - name: Seed postgres secret
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
