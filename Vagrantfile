@@ -99,7 +99,7 @@ EOF
 
     # Sized for Core Ultra 125H (14C/18T) + 32GB: 10 CPUs + 20GB for k3s
     k3s.vm.provider "libvirt" do |lv|
-      lv.memory = 20480  # 20GB — k3s + Vault + full monitor stack
+      lv.memory = 22528  # 22GB — k3s + Vault + full monitor stack (host has 30GB, vault-pi uses 4GB)
       lv.cpus = 10       # 10 of 18 threads — leaves 7 for host + 1 for vault-pi
       lv.driver = "kvm"
       lv.machine_type = "q35"
@@ -107,7 +107,7 @@ EOF
     end
 
     k3s.vm.provider "virtualbox" do |vb|
-      vb.memory = 20480
+      vb.memory = 22528
       vb.cpus = 10
       vb.name = "monitor-test"
     end
