@@ -116,8 +116,6 @@
             secretsEnabled: true
           networkPolicies:
             enabled: false
-          frontend:
-            enabled: false
           site:
             enabled: false
           aptCache:
@@ -133,6 +131,8 @@
             image: sonarqube:26.3.0.120487-community
             javaOpts: "-Xms256m -Xmx256m"
             existingSecret: "schnappy-sonarqube"
+            setup:
+              enabled: false
             resources:
               requests:
                 memory: "1Gi"

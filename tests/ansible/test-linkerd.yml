@@ -129,8 +129,12 @@
 
     - name: Build backend container image
       ansible.builtin.shell: |
-        cd /vagrant && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
-          -t monitor:local -f backend/Dockerfile backend/
+        STAGE=$(mktemp -d)
+        cp /vagrant-monitor/build/libs/*.jar "$STAGE/app.jar"
+        cp /vagrant-monitor/Dockerfile.runtime "$STAGE/Dockerfile"
+        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+          -t monitor:local "$STAGE"
+        rm -rf "$STAGE"
       changed_when: true
 
     - name: Build frontend
@@ -144,8 +148,17 @@
 
     - name: Build frontend container image
       ansible.builtin.shell: |
-        cd /vagrant && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
-          -t monitor-frontend:local -f frontend/Dockerfile frontend/
+        STAGE=$(mktemp -d)
+        cp -r /vagrant-site/dist "$STAGE/"
+        cp /vagrant-site/Dockerfile.runtime "$STAGE/Dockerfile"
+        cp /vagrant-site/nginx.conf "$STAGE/"
+        cp /vagrant-site/nginx.conf.template "$STAGE/"
+        cp /vagrant-site/security-headers.conf "$STAGE/"
+        cp /vagrant-site/security-headers-base.conf "$STAGE/"
+        cp /vagrant-site/docker-entrypoint.sh "$STAGE/"
+        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+          -t monitor-frontend:local "$STAGE"
+        rm -rf "$STAGE"
       changed_when: true
 
     - name: Build gateway JAR
@@ -220,7 +233,7 @@
           linkerd:
             enabled: true
             authorizationPolicy: true
-          frontend:
+          site:
             enabled: true
             image:
               repository: monitor-frontend
@@ -339,8 +352,6 @@
               limits: { cpu: 1000m, memory: 1Gi }
             ingress:
               enabled: false
-          site:
-            enabled: false
           aptCache:
             enabled: false
           elk:
@@ -348,11 +359,7 @@
           ai:
             enabled: false
           mail:
-            enabled: true
-            existingSecret: "schnappy-mail"
-            host: smtp.resend.com
-            port: "587"
-            username: resend
+            enabled: false
           webhook:
             enabled: false
           minio:
@@ -382,15 +389,6 @@
             admin_password="{{ kc_admin_password }}" \
             db_password="vagrant-test-kc-db" \
             forgejo_client_secret="not-used"
-      no_log: true
-
-    - name: Seed mail secret
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/mail \
-            password="vagrant-test-smtp"
       no_log: true
 
     - name: Rsync chart to Vagrant VM
@@ -487,7 +485,7 @@
     - name: Wait for traffic to flow (generate some requests)
       ansible.builtin.shell: |
         for i in $(seq 1 5); do
-          k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
+          k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
             curl -sf http://schnappy-gateway:8080/api/health 2>/dev/null || true
           sleep 2
         done

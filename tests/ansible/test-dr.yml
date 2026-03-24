@@ -99,6 +99,21 @@
         vault_root_token: "{{ vault_token_result.stdout }}"
       no_log: true
 
+    - name: Build gateway JAR
+      ansible.builtin.shell: |
+        source $HOME/.sdkman/bin/sdkman-init.sh
+        cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
+      args:
+        executable: /bin/bash
+      become: false
+      changed_when: true
+
+    - name: Build gateway container image
+      ansible.builtin.shell: |
+        cd /vagrant-gateway && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+          -t monitor-gateway:local -f Dockerfile .
+      changed_when: true
+
     - name: Write Helm values for DR test
       ansible.builtin.copy:
         dest: /tmp/schnappy-dr-test-values.yml
@@ -108,7 +123,7 @@
             secretsEnabled: true
           networkPolicies:
             enabled: false
-          frontend:
+          site:
             enabled: true
             image:
               repository: monitor-frontend
@@ -124,6 +139,14 @@
               enabled: true
               className: traefik
               host: ""
+          gateway:
+            enabled: true
+            replicas: 1
+            image:
+              repository: monitor-gateway
+              tag: local
+              pullPolicy: Never
+            javaOpts: "-Xmx256m -XX:+UseZGC"
           postgres:
             enabled: true
             existingSecret: "schnappy-postgres"
@@ -155,8 +178,6 @@
               limits: { cpu: 1000m, memory: 1Gi }
             ingress:
               enabled: false
-          site:
-            enabled: false
           aptCache:
             enabled: false
           captcha:
@@ -167,8 +188,6 @@
             enabled: false
           mail:
             enabled: false
-            port: "587"
-            username: resend
           webhook:
             enabled: false
           minio:
@@ -410,7 +429,7 @@
 
     - name: "POD-RECOVERY: Delete frontend pod"
       ansible.builtin.shell: |
-        k3s kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=frontend -n {{ ns }} --wait=false
+        k3s kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=site -n {{ ns }} --wait=false
       changed_when: true
 
     - name: "POD-RECOVERY: Wait for frontend deployment rollout"
@@ -442,7 +461,7 @@
 
     - name: "POD-RECOVERY: Wait for all deployments to roll out"
       ansible.builtin.shell: |
-        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
+        for deploy in schnappy-gateway schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=180s
         done
       changed_when: false
@@ -879,7 +898,7 @@
 
     - name: "DR: Wait for all deployments after restore"
       ansible.builtin.shell: |
-        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
+        for deploy in schnappy-gateway schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
           echo "Waiting for $deploy..."
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
@@ -1155,7 +1174,7 @@
 
     - name: "OFFSITE: Wait for all deployments"
       ansible.builtin.shell: |
-        for deploy in schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
+        for deploy in schnappy-gateway schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
           k3s kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
         done
       changed_when: false

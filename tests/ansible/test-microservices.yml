@@ -66,8 +66,12 @@
 
     - name: Build backend container image
       ansible.builtin.shell: |
-        cd /vagrant && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
-          -t monitor:local -f backend/Dockerfile backend/
+        STAGE=$(mktemp -d)
+        cp /vagrant-monitor/build/libs/*.jar "$STAGE/app.jar"
+        cp /vagrant-monitor/Dockerfile.runtime "$STAGE/Dockerfile"
+        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+          -t monitor:local "$STAGE"
+        rm -rf "$STAGE"
       changed_when: true
 
     - name: Build frontend
@@ -81,8 +85,17 @@
 
     - name: Build frontend container image
       ansible.builtin.shell: |
-        cd /vagrant && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
-          -t monitor-frontend:local -f frontend/Dockerfile frontend/
+        STAGE=$(mktemp -d)
+        cp -r /vagrant-site/dist "$STAGE/"
+        cp /vagrant-site/Dockerfile.runtime "$STAGE/Dockerfile"
+        cp /vagrant-site/nginx.conf "$STAGE/"
+        cp /vagrant-site/nginx.conf.template "$STAGE/"
+        cp /vagrant-site/security-headers.conf "$STAGE/"
+        cp /vagrant-site/security-headers-base.conf "$STAGE/"
+        cp /vagrant-site/docker-entrypoint.sh "$STAGE/"
+        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+          -t monitor-frontend:local "$STAGE"
+        rm -rf "$STAGE"
       changed_when: true
 
     - name: Build gateway JAR
@@ -154,7 +167,7 @@
             secretsEnabled: true
           networkPolicies:
             enabled: true
-          frontend:
+          site:
             enabled: true
             image:
               repository: monitor-frontend
@@ -279,8 +292,6 @@
               limits: { cpu: 1000m, memory: 1Gi }
             ingress:
               enabled: false
-          site:
-            enabled: false
           aptCache:
             enabled: false
           elk:
@@ -288,11 +299,7 @@
           ai:
             enabled: false
           mail:
-            enabled: true
-            existingSecret: "schnappy-mail"
-            host: smtp.resend.com
-            port: "587"
-            username: resend
+            enabled: false
           webhook:
             enabled: false
           minio:
@@ -322,15 +329,6 @@
             admin_password="{{ kc_admin_password }}" \
             db_password="vagrant-test-kc-db" \
             forgejo_client_secret="not-used"
-      no_log: true
-
-    - name: Seed mail secret
-      ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/mail \
-            password="vagrant-test-smtp"
       no_log: true
 
     - name: Rsync chart to Vagrant VM
@@ -439,7 +437,7 @@
 
     - name: Test route to admin (/api/auth/approval-mode)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           http://schnappy-gateway:8080/api/auth/approval-mode
       register: route_admin
@@ -448,7 +446,7 @@
 
     - name: Test route to chat (/api/chat/channels)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer {{ jwt_token }}" \
           http://schnappy-gateway:8080/api/chat/channels
@@ -458,7 +456,7 @@
 
     - name: Test route to chess (/api/chess/games)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer {{ jwt_token }}" \
           http://schnappy-gateway:8080/api/chess/games
@@ -468,7 +466,7 @@
 
     - name: Test route to core (/api/monitor/pages)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-site -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
           curl -sf -o /dev/null -w '%{http_code}' \
           -H "Authorization: Bearer {{ jwt_token }}" \
           http://schnappy-gateway:8080/api/monitor/pages
@@ -510,7 +508,7 @@
 
     - name: List PostgreSQL databases
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-postgres-0 -- \
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-postgres -- \
           psql -U postgres -t -c "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname"
       register: pg_databases
       changed_when: false

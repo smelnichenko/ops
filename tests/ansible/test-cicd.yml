@@ -363,8 +363,12 @@
           --set "app.gitHash={{ test_image_tag }}" \
           --set "app.buildTime=2026-01-01T00:00:00Z" \
           --set "app.ingress.host=" \
+          --set "kafka.clusterId=cicd-test-kafka-cluster-id0" \
           --set "scylla.args[0]=--developer-mode=1" \
           --set "scylla.args[1]=--smp=1" \
+          --set "scylla.args[2]=--memory=512M" \
+          --set "scylla.args[3]=--overprovisioned=1" \
+          --set "mail.enabled=false" \
           --timeout 10m
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -394,7 +398,7 @@
 
     - name: Verify images were pulled from registry (not local)
       ansible.builtin.shell: |
-        for component in app frontend; do
+        for component in app site; do
           IMAGE=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
             -o jsonpath='{.items[0].status.containerStatuses[0].image}')
           IMAGE_ID=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
