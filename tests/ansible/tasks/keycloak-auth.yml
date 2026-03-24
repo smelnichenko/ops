@@ -11,7 +11,7 @@
 
 - name: "AUTH: Create test user in Keycloak"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh create users -r schnappy \
         -s "username={{ test_email }}" \
         -s "email={{ test_email }}" \
@@ -25,7 +25,7 @@
 
 - name: "AUTH: Set test user password"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh set-password -r schnappy \
         --username "{{ test_email }}" \
         --new-password "{{ test_password }}" \
