@@ -9,6 +9,16 @@
 # Sets facts:
 #   auth_token: Bearer access token for API calls
 
+- name: "AUTH: Wait for Keycloak to be ready for exec"
+  ansible.builtin.shell: |
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- /opt/keycloak/bin/kcadm.sh config credentials \
+      --server http://localhost:8080 --realm master \
+      --user admin --password "{{ kc_admin_password }}"
+  retries: 30
+  delay: 10
+  register: kc_ready
+  until: kc_ready.rc == 0
+
 - name: "AUTH: Create test user in Keycloak"
   ansible.builtin.shell: |
     k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
