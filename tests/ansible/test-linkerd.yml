@@ -559,7 +559,6 @@
     - name: "AUTH: Create test user and get token"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: Set traffic facts
       ansible.builtin.set_fact:

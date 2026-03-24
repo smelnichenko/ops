@@ -255,7 +255,6 @@
     - name: "SEED: Create test user and get token"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "SEED: Create page monitor"
       ansible.builtin.uri:
@@ -324,7 +323,6 @@
     - name: "POD-RECOVERY: Re-authenticate after app restart"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "POD-RECOVERY: Verify data after app restart"
       ansible.builtin.uri:
@@ -365,7 +363,6 @@
     - name: "POD-RECOVERY: Re-authenticate after postgres restart"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "POD-RECOVERY: Verify data after postgres restart"
       ansible.builtin.uri:
@@ -462,7 +459,6 @@
     - name: "POD-RECOVERY: Re-authenticate after full restart"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "POD-RECOVERY: Verify data after killing all pods"
       ansible.builtin.uri:
@@ -768,7 +764,6 @@
     - name: "DR: Re-authenticate before backup"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "DR: Verify monitors before backup"
       ansible.builtin.uri:
@@ -908,7 +903,6 @@
     - name: "DR: Re-authenticate after restore"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "DR: Verify monitors after restore"
       ansible.builtin.uri:
@@ -1178,7 +1172,6 @@
     - name: "OFFSITE: Re-authenticate after offsite restore"
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
       vars:
-        kc_admin_password: "{{ kc_admin_password }}"
 
     - name: "OFFSITE: Verify monitors after offsite restore"
       ansible.builtin.uri:
