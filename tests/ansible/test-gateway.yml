@@ -65,7 +65,7 @@
 
     - name: Build backend container image
       ansible.builtin.shell: |
-        cd /vagrant && nerdctl -n k8s.io build \
+        cd /vagrant && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
           -t monitor:local \
           -f backend/Dockerfile \
           backend/
@@ -84,7 +84,7 @@
 
     - name: Build frontend container image
       ansible.builtin.shell: |
-        cd /vagrant && nerdctl -n k8s.io build \
+        cd /vagrant && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
           -t monitor-frontend:local \
           -f frontend/Dockerfile \
           frontend/
@@ -103,7 +103,7 @@
 
     - name: Build gateway container image
       ansible.builtin.shell: |
-        cd /vagrant-gateway && nerdctl -n k8s.io build \
+        cd /vagrant-gateway && nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
           -t monitor-gateway:local \
           -f Dockerfile \
           .
