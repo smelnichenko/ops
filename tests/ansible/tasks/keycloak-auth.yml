@@ -42,11 +42,13 @@
 
 - name: "AUTH: Get access token via password grant"
   ansible.builtin.shell: |
-    k3s kubectl run -n {{ ns }} token-fetch --rm -i --restart=Never \
-      --image=busybox:1.37 -- sh -c \
-        'wget -qO- --post-data "grant_type=password&client_id=app&username={{ test_email }}&password={{ test_password }}&scope=openid" \
-          http://schnappy-keycloak.{{ ns }}.svc:8080/realms/schnappy/protocol/openid-connect/token'
+    k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
+      curl -sf -X POST http://schnappy-keycloak.{{ ns }}.svc:8080/realms/schnappy/protocol/openid-connect/token \
+        -d "grant_type=password&client_id=app&username={{ test_email }}&password={{ test_password }}&scope=openid"
   register: token_result
+  retries: 5
+  delay: 5
+  until: token_result.rc == 0
 
 - name: "AUTH: Set auth token"
   ansible.builtin.set_fact:
