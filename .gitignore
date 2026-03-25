@@ -1,3 +1,4 @@
+.env
 .vagrant/
 deploy/ansible/vars/vault-pi-runtime.yml
 deploy/ansible/vars/vault-k3s-init.json
