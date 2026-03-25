@@ -42,35 +42,29 @@
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
 
-- name: "AUTH: Temporarily allow monitor→keycloak for token fetch"
+- name: "AUTH: Assign realm roles to test user"
   ansible.builtin.shell: |
-    cat <<'NPEOF' | k3s kubectl apply -f -
-    apiVersion: networking.k8s.io/v1
-    kind: NetworkPolicy
-    metadata:
-      name: test-token-fetch
-      namespace: {{ ns }}
-    spec:
-      podSelector:
-        matchLabels:
-          app.kubernetes.io/component: app
-      egress:
-        - to:
-            - podSelector:
-                matchLabels:
-                  app.kubernetes.io/component: keycloak
-          ports:
-            - port: 8080
-              protocol: TCP
-    NPEOF
+    for role in PLAY CHAT EMAIL METRICS MANAGE_USERS; do
+      k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+        /opt/keycloak/bin/kcadm.sh add-roles -r schnappy \
+          --uusername "{{ test_email }}" --rolename "$role" \
+          --server http://localhost:8080 --realm master \
+          --user admin --password "{{ kc_admin_password }}" 2>/dev/null || true
+    done
   changed_when: true
 
-- name: "AUTH: Get access token via password grant"
+- name: "AUTH: Get access token via kcadm.sh (localhost, no NP needed)"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
-      curl -s -X POST http://schnappy-keycloak.{{ ns }}.svc:8080/realms/schnappy/protocol/openid-connect/token \
-        -d "grant_type=password&client_id=app&username={{ test_email }}&password={{ test_password }}&scope=openid"
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      sh -c '/opt/keycloak/bin/kcadm.sh config credentials \
+        --server http://localhost:8080 --realm schnappy \
+        --client app --user "{{ test_email }}" --password "{{ test_password }}" 2>/dev/null && \
+      grep -o "\"token\":\"[^\"]*\"" ~/.keycloak/kcadm.config 2>/dev/null | head -1 | cut -d\" -f4'
   register: token_result
   retries: 5
   delay: 5
-  until: "'access_token' in token_result.stdout"
+  until: token_result.stdout | length > 20
+
+- name: "AUTH: Set auth token"
+  ansible.builtin.set_fact:
+    auth_token: "{{ token_result.stdout | trim }}"
