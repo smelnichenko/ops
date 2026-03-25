@@ -22,6 +22,7 @@
         -s "email={{ test_email }}" \
         -s enabled=true \
         -s emailVerified=true \
+        -s 'requiredActions=[]' \
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
   register: kc_create_user
@@ -37,6 +38,7 @@
       /opt/keycloak/bin/kcadm.sh set-password -r schnappy \
         --username "{{ test_email }}" \
         --new-password "{{ test_password }}" \
+        --temporary=false \
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
 
