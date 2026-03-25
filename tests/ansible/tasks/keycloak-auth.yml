@@ -40,6 +40,29 @@
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
 
+- name: "AUTH: Temporarily allow monitor→keycloak for token fetch"
+  ansible.builtin.shell: |
+    cat <<'NPEOF' | k3s kubectl apply -f -
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: test-token-fetch
+      namespace: {{ ns }}
+    spec:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: app
+      egress:
+        - to:
+            - podSelector:
+                matchLabels:
+                  app.kubernetes.io/component: keycloak
+          ports:
+            - port: 8080
+              protocol: TCP
+    NPEOF
+  changed_when: true
+
 - name: "AUTH: Get access token via password grant"
   ansible.builtin.shell: |
     k3s kubectl exec deploy/schnappy-monitor -n {{ ns }} -- \
@@ -49,7 +72,3 @@
   retries: 5
   delay: 5
   until: token_result.rc == 0
-
-- name: "AUTH: Set auth token"
-  ansible.builtin.set_fact:
-    auth_token: "{{ (token_result.stdout | from_json).access_token }}"
