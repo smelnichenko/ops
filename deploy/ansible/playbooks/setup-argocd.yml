@@ -1,0 +1,514 @@
+---
+# Setup Argo CD for GitOps-based cluster management
+#
+# Prerequisites:
+#   - k3s running (setup-k3s.yml)
+#   - Forgejo running with schnappy/infra repo
+#   - cert-manager installed (for TLS to cd.pmon.dev)
+#   - Vault + ESO running (for secrets)
+#
+# Vault secrets required:
+#   secret/schnappy/argocd:
+#     admin_password  — Argo CD admin password (bcrypt hash)
+#     client_secret   — Keycloak OIDC client secret
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml \
+#     -e @vars/vault.yml
+#
+#   # Vagrant (no Keycloak SSO, no TLS):
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml \
+#     -e forgejo_domain=localhost -e argocd_validate_certs=false \
+#     -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+#
+- name: Setup Argo CD
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    argocd_namespace: "{{ argocd_ns | default('argocd') }}"
+    argocd_chart: "argo/argo-cd"
+    argocd_chart_version: "{{ argocd_version | default('7.8.13') }}"
+    argocd_chart_repo: "https://argoproj.github.io/argo-helm"
+    forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
+    _forgejo_user: "{{ forgejo_admin_user | default(lookup('env', 'FORGEJO_ADMIN_USER')) | default('forgejo_admin', true) }}"
+    _forgejo_password: "{{ forgejo_admin_password | default(lookup('env', 'FORGEJO_ADMIN_PASSWORD')) }}"
+    validate_certs: "{{ argocd_validate_certs | default(true) }}"
+    target_host: "{{ ansible_host | default('192.168.11.2') }}"
+    argocd_host: "{{ argocd_domain | default('cd.pmon.dev') }}"
+    keycloak_host: "{{ keycloak_domain | default('auth.pmon.dev') }}"
+    keycloak_enabled: "{{ argocd_keycloak_enabled | default(true) }}"
+    ingress_enabled: "{{ argocd_ingress_enabled | default(true) }}"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Namespace
+    # ================================================================
+
+    - name: "PHASE 1: Create argocd namespace"
+      ansible.builtin.debug:
+        msg: "Setting up Argo CD in namespace {{ argocd_namespace }}"
+
+    - name: Create argocd namespace with Pod Security Standards
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ argocd_namespace }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 2: Forgejo PAT for Git access
+    # ================================================================
+
+    - name: "PHASE 2: Create Forgejo PAT for Argo CD"
+      ansible.builtin.debug:
+        msg: "Creating personal access token for Argo CD Git access"
+
+    - name: Check existing Forgejo tokens
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
+        method: GET
+        user: "{{ _forgejo_user }}"
+        password: "{{ _forgejo_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        status_code: 200
+      register: existing_tokens
+      changed_when: false
+
+    - name: Find existing Argo CD token
+      ansible.builtin.set_fact:
+        existing_argocd_token: "{{ existing_tokens.json | selectattr('name', 'equalto', 'argocd') | list | first | default(None) }}"
+
+    - name: Delete existing Argo CD token (to get fresh secret)
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ existing_argocd_token.id }}"
+        method: DELETE
+        user: "{{ _forgejo_user }}"
+        password: "{{ _forgejo_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        status_code: 204
+      when: existing_argocd_token is not none
+
+    - name: Create Forgejo PAT for Argo CD
+      ansible.builtin.uri:
+        url: "https://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
+        method: POST
+        user: "{{ _forgejo_user }}"
+        password: "{{ _forgejo_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        body_format: json
+        body:
+          name: "argocd"
+          scopes:
+            - "read:repository"
+        status_code: 201
+      register: argocd_token_result
+
+    - name: Set Argo CD token fact
+      ansible.builtin.set_fact:
+        argocd_git_token: "{{ argocd_token_result.json.sha1 }}"
+      no_log: true
+
+    - name: Create Forgejo repo credentials secret for Argo CD
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: forgejo-repo-creds
+          namespace: {{ argocd_namespace }}
+          labels:
+            argocd.argoproj.io/secret-type: repo-creds
+        type: Opaque
+        stringData:
+          type: git
+          url: "https://{{ forgejo_host }}"
+          username: "{{ _forgejo_user }}"
+          password: "{{ argocd_git_token }}"
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+      no_log: true
+
+    # ================================================================
+    # Phase 3: Deploy Argo CD via Helm
+    # ================================================================
+
+    - name: "PHASE 3: Deploy Argo CD controllers"
+      ansible.builtin.debug:
+        msg: "Installing Argo CD via Helm"
+
+    - name: Add Argo Helm repository
+      ansible.builtin.shell: |
+        helm repo add argo {{ argocd_chart_repo }} 2>/dev/null || true
+        helm repo update argo
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Deploy Argo CD
+      ansible.builtin.shell: |
+        helm upgrade --install argocd \
+          {{ argocd_chart }} \
+          --version {{ argocd_chart_version }} \
+          --namespace {{ argocd_namespace }} \
+          --wait --timeout 5m \
+          --values - <<'HELMEOF'
+        global:
+          domain: {{ argocd_host }}
+
+        configs:
+          params:
+            server.insecure: true  # TLS terminated at Traefik
+
+        server:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+        repoServer:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+
+        controller:
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+
+        redis:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+        dex:
+          enabled: false
+
+        notifications:
+          enabled: false
+
+        applicationSet:
+          enabled: false
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for argocd-server to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for argocd-repo-server to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for argocd-application-controller to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Keycloak OIDC (production only)
+    # ================================================================
+
+    - name: "PHASE 4: Configure Keycloak OIDC"
+      ansible.builtin.debug:
+        msg: "{{ 'Configuring Keycloak SSO for Argo CD' if keycloak_enabled else 'Skipping Keycloak SSO (disabled)' }}"
+
+    - name: Patch argocd-cm with OIDC config
+      ansible.builtin.shell: |
+        set -o pipefail
+        k3s kubectl patch configmap argocd-cm -n {{ argocd_namespace }} --type merge -p "$(cat <<'EOF'
+        {
+          "data": {
+            "url": "https://{{ argocd_host }}",
+            "oidc.config": "name: Keycloak\nissuer: https://{{ keycloak_host }}/realms/schnappy\nclientID: argocd\nclientSecret: $argocd-oidc:oidc.keycloak.clientSecret\nrequestedScopes:\n  - openid\n  - profile\n  - email\n  - roles\n"
+          }
+        }
+        EOF
+        )"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: keycloak_enabled | bool
+
+    - name: Create OIDC client secret
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: argocd-oidc
+          namespace: {{ argocd_namespace }}
+          labels:
+            app.kubernetes.io/part-of: argocd
+        type: Opaque
+        stringData:
+          oidc.keycloak.clientSecret: "{{ argocd_keycloak_client_secret | default('changeme') }}"
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+      no_log: true
+      when: keycloak_enabled | bool
+
+    - name: Configure RBAC for Keycloak roles
+      ansible.builtin.shell: |
+        set -o pipefail
+        k3s kubectl patch configmap argocd-rbac-cm -n {{ argocd_namespace }} --type merge -p "$(cat <<'EOF'
+        {
+          "data": {
+            "policy.csv": "g, Admins, role:admin\ng, Users, role:readonly\n",
+            "policy.default": "role:readonly",
+            "scopes": "[groups, roles]"
+          }
+        }
+        EOF
+        )"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: keycloak_enabled | bool
+
+    # ================================================================
+    # Phase 5: Ingress (production only)
+    # ================================================================
+
+    - name: "PHASE 5: Create Ingress"
+      ansible.builtin.debug:
+        msg: "{{ 'Creating Ingress for ' + argocd_host if ingress_enabled else 'Skipping Ingress (disabled)' }}"
+
+    - name: Create Argo CD Ingress
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: argocd-server
+          namespace: {{ argocd_namespace }}
+          annotations:
+            cert-manager.io/cluster-issuer: letsencrypt-dns
+        spec:
+          ingressClassName: traefik
+          tls:
+            - hosts:
+                - {{ argocd_host }}
+              secretName: argocd-tls
+          rules:
+            - host: {{ argocd_host }}
+              http:
+                paths:
+                  - path: /
+                    pathType: Prefix
+                    backend:
+                      service:
+                        name: argocd-server
+                        port:
+                          number: 80
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+      when: ingress_enabled | bool
+
+    # ================================================================
+    # Phase 6: Network Policies
+    # ================================================================
+
+    - name: "PHASE 6: Apply network policies"
+      ansible.builtin.debug:
+        msg: "Applying network policies for argocd namespace"
+
+    - name: Apply Argo CD network policies
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        ---
+        # Default deny all ingress and egress
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: argocd-default-deny
+          namespace: {{ argocd_namespace }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+          egress:
+            # Allow DNS for all pods
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        ---
+        # Argo CD controllers: egress to Forgejo, k8s API, external HTTPS
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: argocd-controllers
+          namespace: {{ argocd_namespace }}
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+          ingress:
+            # Traefik → argocd-server (UI/API)
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 8080
+            # Internal: controller ↔ repo-server ↔ redis
+            - from:
+                - podSelector: {}
+              ports:
+                - protocol: TCP
+                  port: 8080
+                - protocol: TCP
+                  port: 8081
+                - protocol: TCP
+                  port: 8082
+                - protocol: TCP
+                  port: 6379
+          egress:
+            # To Forgejo (direct service access for Git clone)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: forgejo
+              ports:
+                - protocol: TCP
+                  port: 3000
+            # HTTPS egress via Traefik (git.pmon.dev)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 8443
+            # To Kubernetes API (for applying manifests)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: kube-system
+              ports:
+                - protocol: TCP
+                  port: 6443
+            # To Kubernetes API (node IP, belt-and-suspenders)
+            - to:
+                - ipBlock:
+                    cidr: {{ target_host }}/32
+              ports:
+                - protocol: TCP
+                  port: 6443
+            # To Kubernetes API (ClusterIP)
+            - to:
+                - ipBlock:
+                    cidr: 10.43.0.1/32
+              ports:
+                - protocol: TCP
+                  port: 443
+            # External HTTPS (Helm repos, OCI registries)
+            - to:
+                - ipBlock:
+                    cidr: 0.0.0.0/0
+                    except:
+                      - 10.0.0.0/8
+                      - 172.16.0.0/12
+                      - 192.168.0.0/16
+              ports:
+                - protocol: TCP
+                  port: 443
+            # Internal pod communication
+            - to:
+                - podSelector: {}
+              ports:
+                - protocol: TCP
+                  port: 8080
+                - protocol: TCP
+                  port: 8081
+                - protocol: TCP
+                  port: 8082
+                - protocol: TCP
+                  port: 6379
+            # DNS
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 7: Verify
+    # ================================================================
+
+    - name: "PHASE 7: Verify deployment"
+      ansible.builtin.debug:
+        msg: "Verifying Argo CD deployment"
+
+    - name: Check Argo CD pods
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ argocd_namespace }} -o wide
+      register: argocd_pods
+      changed_when: false
+
+    - name: Display Argo CD status
+      ansible.builtin.debug:
+        msg: |
+          Argo CD deployed successfully!
+
+          Pods:
+          {{ argocd_pods.stdout }}
+
+          Next steps:
+            1. Create Application manifests in infra repo
+            2. Access UI at https://{{ argocd_host }}
+            3. Login with admin / <vault-password> or Keycloak SSO

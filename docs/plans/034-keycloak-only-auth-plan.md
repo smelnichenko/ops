@@ -1,6 +1,6 @@
 # Keycloak-Only Auth Migration
 
-## Status: COMPLETE (2026-03-23) — Phase 6 (Admin KC API) deferred
+## Status: COMPLETE (2026-03-25) — All phases done
 
 ## Goal
 
@@ -93,12 +93,15 @@ Replace OIDC callback with gateway-triggered user sync.
 - Redis cache for UUID → Long ID (TTL 5min)
 - Alternative: gateway includes Long ID from ensure-user response in headers
 
-### Phase 6: Admin Keycloak API (admin repo) — DEFERRED
+### Phase 6: Admin Keycloak API (admin repo) — COMPLETE (2026-03-25)
 
-- Admin service calls Keycloak Admin REST API for group/role management
-- Service account client (`admin-service`) with `realm-admin` role
-- Admin DB becomes read-through cache of Keycloak state
-- Can defer — manage roles in Keycloak admin UI initially
+- Admin service calls Keycloak Admin REST API via `keycloak-admin-client:26.0.8`
+- Service account client (`admin-service`) with `manage-users`/`view-users`/`manage-realm`/`view-realm` roles
+- App DB is source of truth; KC is enforcement cache for JWT roles
+- `KeycloakSyncService` syncs individual realm roles (not composite) on group/enabled changes
+- Feature-flagged: `monitor.keycloak.enabled` / `keycloak.clients.adminService.enabled`
+- Graceful degradation: KC sync failures logged but don't block admin actions
+- `UserSyncService.syncGroupsFromRoles` now only runs for new users (existing users managed by admin)
 
 ### Phase 7: Cleanup
 
@@ -114,7 +117,7 @@ Replace OIDC callback with gateway-triggered user sync.
 1. **Phase 1** (realm roles + PKCE) — independent, no app changes
 2. **Phase 4** (ensure-user endpoint) — deploy but not yet used
 3. **Phase 2 + 3 + 5** (big switch) — coordinated deploy, invalidates all sessions
-4. **Phase 6** (admin KC API) — deferred
+4. **Phase 6** (admin KC API) — complete
 5. **Phase 7** (cleanup)
 
 ## Risks

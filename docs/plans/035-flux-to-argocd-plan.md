@@ -1,6 +1,12 @@
 # Migration from Flux CD to Argo CD
 
-## Status: PLANNED
+## Status: COMPLETE (2026-03-25)
+
+Argo CD deployed, Flux CD removed. All 8 CD pipelines updated to target `values.yaml`.
+App-of-apps pattern with root Application + 8 child Applications (including cluster-config for raw manifests).
+Keycloak SSO client configured. UI at `cd.pmon.dev`.
+
+**Remaining:** Add `cd.pmon.dev` to Unbound DNS on router (resolves to 192.168.11.2). Seed Vault secrets for `secret/schnappy/argocd` (admin_password, client_secret).
 
 ## Motivation
 

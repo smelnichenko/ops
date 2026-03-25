@@ -1,0 +1,504 @@
+---
+# Test Argo CD GitOps in Vagrant
+#
+# Verifies:
+#   1. Argo CD controllers running (server, repo-server, application-controller)
+#   2. Application created and synced from Git
+#   3. Git-push reconciliation (update → Argo CD detects → applies)
+#
+# Usage:
+#   ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-argocd.yml
+#
+- name: Test Argo CD GitOps
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    argocd_namespace: argocd
+    test_namespace: argocd-test
+    forgejo_host: "localhost"
+    forgejo_admin_user: testadmin
+    forgejo_admin_password: testpassword123
+    forgejo_port: 3000
+
+  tasks:
+    # ================================================================
+    # Phase 1: Deploy Forgejo (Git server)
+    # ================================================================
+
+    - name: "PHASE 1: Deploy Forgejo"
+      ansible.builtin.debug:
+        msg: "Setting up Forgejo as Git server for Argo CD test"
+
+    - name: Create forgejo namespace
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: forgejo
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Configure CoreDNS for Forgejo
+      ansible.builtin.shell: |
+        FORGEJO_IP=$(k3s kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+        if [ -z "$FORGEJO_IP" ]; then
+          echo "Forgejo not yet deployed, skipping CoreDNS config"
+          exit 0
+        fi
+        k3s kubectl get configmap coredns -n kube-system -o json | \
+          jq --arg ip "$FORGEJO_IP" '.data.Corefile |= . + "\nlocalhost:53 {\n  hosts {\n    " + $ip + " localhost\n    fallthrough\n  }\n}\n"' | \
+          k3s kubectl apply -f -
+        k3s kubectl rollout restart deployment/coredns -n kube-system
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy Forgejo via Helm
+      ansible.builtin.shell: |
+        helm upgrade --install forgejo oci://code.forgejo.org/forgejo-helm/forgejo \
+          --version 16.2.0 \
+          --namespace forgejo \
+          --wait --timeout 5m \
+          --values - <<'HELMEOF'
+        gitea:
+          admin:
+            username: {{ forgejo_admin_user }}
+            password: {{ forgejo_admin_password }}
+            email: admin@test.local
+          config:
+            database:
+              DB_TYPE: sqlite3
+            service:
+              DISABLE_REGISTRATION: true
+            repository:
+              DEFAULT_BRANCH: main
+        image:
+          rootless: true
+        redis-cluster:
+          enabled: false
+        postgresql:
+          enabled: false
+        postgresql-ha:
+          enabled: false
+        persistence:
+          enabled: true
+          size: 1Gi
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for Forgejo to be ready
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/forgejo -n forgejo --timeout=300s
+      changed_when: false
+
+    - name: Get Forgejo ClusterIP
+      ansible.builtin.shell: |
+        k3s kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}'
+      register: forgejo_ip_result
+      changed_when: false
+
+    - name: Set Forgejo IP fact
+      ansible.builtin.set_fact:
+        forgejo_cluster_ip: "{{ forgejo_ip_result.stdout }}"
+
+    - name: Wait for Forgejo API
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          if k3s kubectl exec deploy/forgejo -n forgejo -- \
+            wget -qO- --timeout=5 "http://localhost:3000/api/v1/version" 2>/dev/null | grep -q version; then
+            exit 0
+          fi
+          sleep 5
+        done
+        exit 1
+      changed_when: false
+
+    - name: Clear must-change-password on admin
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/forgejo -n forgejo -- \
+          gitea admin user change-password \
+          -u {{ forgejo_admin_user }} \
+          -p '{{ forgejo_admin_password }}' \
+          --must-change-password=false
+      changed_when: false
+
+    # ================================================================
+    # Phase 2: Create test repo with seed content
+    # ================================================================
+
+    - name: "PHASE 2: Create infra repo with seed content"
+      ansible.builtin.debug:
+        msg: "Creating test repository with Kubernetes manifests"
+
+    - name: Create infra repo in Forgejo
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/forgejo -n forgejo -- \
+          wget -qO- --timeout=10 \
+          --header="Content-Type: application/json" \
+          --header="Authorization: Basic $(echo -n '{{ forgejo_admin_user }}:{{ forgejo_admin_password }}' | base64)" \
+          --post-data='{"name":"infra","auto_init":true,"default_branch":"main"}' \
+          "http://localhost:3000/api/v1/user/repos" 2>/dev/null || true
+      changed_when: false
+
+    - name: Write seed manifests
+      ansible.builtin.copy:
+        dest: "/tmp/argocd-test-{{ item.name }}"
+        content: "{{ item.content }}"
+        mode: "0644"
+      loop:
+        - name: namespace.yaml
+          content: |
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: {{ test_namespace }}
+        - name: configmap.yaml
+          content: |
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: argocd-test
+              namespace: {{ test_namespace }}
+            data:
+              version: "v1"
+              message: "Initial deployment via Argo CD"
+
+    - name: Push seed content to infra repo
+      ansible.builtin.shell: |
+        set -e
+        REPO_DIR=$(mktemp -d)
+        cd "$REPO_DIR"
+        git init
+        git config user.email "test@test.local"
+        git config user.name "Test"
+        git remote add origin "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_cluster_ip }}:3000/{{ forgejo_admin_user }}/infra.git"
+        git fetch origin main 2>/dev/null || true
+        git checkout -b main
+        git pull origin main 2>/dev/null || true
+
+        mkdir -p clusters/production
+        cp /tmp/argocd-test-namespace.yaml clusters/production/namespace.yaml
+        cp /tmp/argocd-test-configmap.yaml clusters/production/configmap.yaml
+
+        git add -A
+        git commit -m "seed: initial test manifests" --allow-empty
+        git push -f origin main
+        rm -rf "$REPO_DIR"
+      changed_when: false
+
+    # ================================================================
+    # Phase 3: Install Argo CD
+    # ================================================================
+
+    - name: "PHASE 3: Install Argo CD"
+      ansible.builtin.debug:
+        msg: "Deploying Argo CD controllers"
+
+    - name: Create argocd namespace
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: {{ argocd_namespace }}
+          labels:
+            pod-security.kubernetes.io/enforce: baseline
+            pod-security.kubernetes.io/audit: restricted
+            pod-security.kubernetes.io/warn: restricted
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Add Argo Helm repo
+      ansible.builtin.shell: |
+        helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
+        helm repo update argo
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Deploy Argo CD
+      ansible.builtin.shell: |
+        helm upgrade --install argocd argo/argo-cd \
+          --namespace {{ argocd_namespace }} \
+          --wait --timeout 5m \
+          --values - <<'HELMEOF'
+        configs:
+          params:
+            server.insecure: true
+        dex:
+          enabled: false
+        notifications:
+          enabled: false
+        applicationSet:
+          enabled: false
+        server:
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+        repoServer:
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+        controller:
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+        redis:
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 128Mi }
+        HELMEOF
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for argocd-server
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for argocd-repo-server
+      ansible.builtin.shell: |
+        k3s kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
+      changed_when: false
+
+    - name: Wait for argocd-application-controller
+      ansible.builtin.shell: |
+        k3s kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
+      changed_when: false
+
+    # ================================================================
+    # Phase 4: Configure Argo CD source and Application
+    # ================================================================
+
+    - name: "PHASE 4: Create Argo CD Application"
+      ansible.builtin.debug:
+        msg: "Configuring Argo CD to watch test repo"
+
+    - name: Create repo credentials secret
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: forgejo-repo-creds
+          namespace: {{ argocd_namespace }}
+          labels:
+            argocd.argoproj.io/secret-type: repo-creds
+        type: Opaque
+        stringData:
+          type: git
+          url: "http://{{ forgejo_cluster_ip }}:3000"
+          username: "{{ forgejo_admin_user }}"
+          password: "{{ forgejo_admin_password }}"
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Create test Application
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat <<'EOF' | k3s kubectl apply -f -
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: test-app
+          namespace: {{ argocd_namespace }}
+        spec:
+          project: default
+          source:
+            repoURL: http://{{ forgejo_cluster_ip }}:3000/{{ forgejo_admin_user }}/infra.git
+            targetRevision: main
+            path: clusters/production
+          destination:
+            server: https://kubernetes.default.svc
+          syncPolicy:
+            automated:
+              selfHeal: true
+              prune: true
+            syncOptions:
+              - CreateNamespace=true
+        EOF
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # ================================================================
+    # Phase 5: Verify initial reconciliation
+    # ================================================================
+
+    - name: "PHASE 5: Verify initial reconciliation"
+      ansible.builtin.debug:
+        msg: "Waiting for Argo CD to sync test manifests"
+
+    - name: Wait for Application to sync
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          STATUS=$(k3s kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.sync.status}' 2>/dev/null)
+          HEALTH=$(k3s kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.health.status}' 2>/dev/null)
+          if [ "$STATUS" = "Synced" ] && [ "$HEALTH" = "Healthy" ]; then
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Timeout: status=$STATUS health=$HEALTH"
+        exit 1
+      changed_when: false
+      register: sync_result
+      failed_when: false
+
+    - name: Set initial sync fact
+      ansible.builtin.set_fact:
+        initial_sync_passed: "{{ sync_result.rc == 0 }}"
+
+    - name: Check test namespace exists
+      ansible.builtin.shell: |
+        k3s kubectl get namespace {{ test_namespace }} -o name 2>/dev/null
+      register: ns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Check ConfigMap v1 exists
+      ansible.builtin.shell: |
+        k3s kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null
+      register: cm_check
+      changed_when: false
+      failed_when: false
+
+    - name: Set v1 facts
+      ansible.builtin.set_fact:
+        namespace_created: "{{ ns_check.rc == 0 }}"
+        configmap_v1: "{{ cm_check.stdout == 'v1' }}"
+
+    # ================================================================
+    # Phase 6: Test git-push reconciliation
+    # ================================================================
+
+    - name: "PHASE 6: Test git-push reconciliation"
+      ansible.builtin.debug:
+        msg: "Pushing v2 ConfigMap and waiting for Argo CD to apply it"
+
+    - name: Push v2 ConfigMap
+      ansible.builtin.shell: |
+        set -e
+        REPO_DIR=$(mktemp -d)
+        cd "$REPO_DIR"
+        git init
+        git config user.email "test@test.local"
+        git config user.name "Test"
+        git remote add origin "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_cluster_ip }}:3000/{{ forgejo_admin_user }}/infra.git"
+        git fetch origin main
+        git checkout main
+
+        cat > clusters/production/configmap.yaml <<'CMEOF'
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: argocd-test
+          namespace: {{ test_namespace }}
+        data:
+          version: "v2"
+          message: "Updated via git push — Argo CD reconciliation test"
+        CMEOF
+
+        git add -A
+        git commit -m "update: configmap v2"
+        git push origin main
+        rm -rf "$REPO_DIR"
+      changed_when: false
+
+    - name: Wait for ConfigMap v2
+      ansible.builtin.shell: |
+        for i in $(seq 1 90); do
+          VERSION=$(k3s kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null)
+          if [ "$VERSION" = "v2" ]; then
+            exit 0
+          fi
+          sleep 5
+        done
+        echo "Timeout: version=$VERSION"
+        exit 1
+      register: v2_result
+      changed_when: false
+      failed_when: false
+
+    - name: Set v2 fact
+      ansible.builtin.set_fact:
+        configmap_v2: "{{ v2_result.rc == 0 }}"
+
+    # ================================================================
+    # Phase 7: Verify and report
+    # ================================================================
+
+    - name: "PHASE 7: Verify controllers and report"
+      ansible.builtin.debug:
+        msg: "Checking final state"
+
+    - name: Check controller pods
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ argocd_namespace }} -o wide
+      register: pods
+      changed_when: false
+
+    - name: Check Application status
+      ansible.builtin.shell: |
+        k3s kubectl get applications -n {{ argocd_namespace }} -o wide 2>/dev/null || echo "No applications"
+      register: apps
+      changed_when: false
+
+    - name: Check server pod running
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=server -o jsonpath='{.items[0].status.phase}'
+      register: server_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check repo-server pod running
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=repo-server -o jsonpath='{.items[0].status.phase}'
+      register: repo_server_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check controller pod running
+      ansible.builtin.shell: |
+        k3s kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=application-controller -o jsonpath='{.items[0].status.phase}'
+      register: controller_status
+      changed_when: false
+      failed_when: false
+
+    - name: TEST RESULT
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Argo CD Integration Test: {{ 'PASS' if (initial_sync_passed and namespace_created and configmap_v1 and configmap_v2 and server_status.stdout == 'Running' and repo_server_status.stdout == 'Running' and controller_status.stdout == 'Running') else 'FAIL' }}
+
+          [{{ 'PASS' if server_status.stdout == 'Running' else 'FAIL' }}] argocd-server running
+          [{{ 'PASS' if repo_server_status.stdout == 'Running' else 'FAIL' }}] argocd-repo-server running
+          [{{ 'PASS' if controller_status.stdout == 'Running' else 'FAIL' }}] argocd-application-controller running
+          [{{ 'PASS' if initial_sync_passed else 'FAIL' }}] Initial sync (Synced + Healthy)
+          [{{ 'PASS' if namespace_created else 'FAIL' }}] Test namespace created
+          [{{ 'PASS' if configmap_v1 else 'FAIL' }}] ConfigMap v1 applied
+          [{{ 'PASS' if configmap_v2 else 'FAIL' }}] ConfigMap v2 reconciled after git push
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "One or more Argo CD integration tests failed"
+      when: not (initial_sync_passed and namespace_created and configmap_v1 and configmap_v2)

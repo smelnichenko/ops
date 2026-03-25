@@ -280,14 +280,14 @@ tasks:
       - cmd: ssh-keygen -f "$HOME/.ssh/known_hosts" -R 192.168.56.10 2>/dev/null; true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-woodpecker.yml
 
-  test:flux:
-    desc: Test Flux CD GitOps in Vagrant
+  test:argocd:
+    desc: Test Argo CD GitOps in Vagrant
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up k3s
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-flux.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-argocd.yml
 
   test:nexus:
     desc: Test Nexus repository manager in Vagrant
@@ -378,12 +378,12 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/production.yml -e @vars/woodpecker.yml
 
-  deploy:flux:
-    desc: Install/update Flux CD
+  deploy:argocd:
+    desc: Install/update Argo CD
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-flux.yml -e @vars/vault.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
 
   deploy:linkerd:
     desc: Deploy Linkerd service mesh
@@ -455,8 +455,8 @@ tasks:
       - task: test:microservices
       - echo "=== [14/15] test:linkerd ==="
       - task: test:linkerd
-      - echo "=== [15/16] test:flux ==="
-      - task: test:flux
+      - echo "=== [15/16] test:argocd ==="
+      - task: test:argocd
       - echo "=== [16/16] test:keycloak ==="
       - task: test:keycloak
       - echo ""
