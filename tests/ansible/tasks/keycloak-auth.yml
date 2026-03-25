@@ -53,18 +53,37 @@
     done
   changed_when: true
 
-- name: "AUTH: Get access token via kcadm.sh (localhost, no NP needed)"
+- name: "AUTH: Create test-cli client for password grant"
   ansible.builtin.shell: |
     k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
-      sh -c '/opt/keycloak/bin/kcadm.sh config credentials \
+      /opt/keycloak/bin/kcadm.sh create clients -r schnappy \
+        -s clientId=test-cli -s enabled=true \
+        -s directAccessGrantsEnabled=true \
+        -s publicClient=false -s secret=test-cli-secret \
+        -s 'serviceAccountsEnabled=false' \
+        --server http://localhost:8080 --realm master \
+        --user admin --password "{{ kc_admin_password }}" 2>/dev/null || true
+  changed_when: true
+
+- name: "AUTH: Get access token via confidential client (localhost)"
+  ansible.builtin.shell: |
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      /opt/keycloak/bin/kcadm.sh config credentials \
         --server http://localhost:8080 --realm schnappy \
-        --client app --user "{{ test_email }}" --password "{{ test_password }}" 2>/dev/null && \
-      grep -o "\"token\":\"[^\"]*\"" ~/.keycloak/kcadm.config 2>/dev/null | head -1 | cut -d\" -f4'
+        --client test-cli --secret test-cli-secret \
+        --user "{{ test_email }}" --password "{{ test_password }}" 2>&1 && \
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      cat /root/.keycloak/kcadm.config 2>/dev/null
   register: token_result
   retries: 5
   delay: 5
-  until: token_result.stdout | length > 20
+  until: token_result.rc == 0
+
+- name: "AUTH: Extract token"
+  ansible.builtin.shell: |
+    echo '{{ token_result.stdout }}' | grep -o '"token":"[^"]*"' | tail -1 | cut -d'"' -f4
+  register: extracted_token
 
 - name: "AUTH: Set auth token"
   ansible.builtin.set_fact:
-    auth_token: "{{ token_result.stdout | trim }}"
+    auth_token: "{{ extracted_token.stdout | trim }}"
