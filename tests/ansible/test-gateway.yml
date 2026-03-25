@@ -131,6 +131,7 @@
           networkPolicies:
             enabled: true
           site:
+            dnsResolver: "10.43.0.10"
             enabled: true
             image:
               repository: monitor-frontend
