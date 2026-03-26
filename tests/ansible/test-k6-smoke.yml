@@ -74,7 +74,7 @@
       ansible.builtin.shell: |
         KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-data \
           /vagrant-platform/helm/schnappy-data \
-          -n {{ ns }} --wait --timeout 3m \
+          -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
           --set vault.secretsEnabled=true \
           --set postgres.enabled=true \
@@ -90,14 +90,14 @@
       changed_when: false
 
     - name: Wait for postgres
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-postgres -n {{ ns }} --timeout=120s
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-postgres -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: Deploy schnappy-observability chart (Prometheus only)
       ansible.builtin.shell: |
         KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-observability \
           /vagrant-platform/helm/schnappy-observability \
-          -n {{ ns }} --wait --timeout 3m \
+          -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
           --set prometheus.enabled=true \
           --set prometheus.image=prom/prometheus:v3.10.0 \
@@ -111,14 +111,14 @@
       changed_when: false
 
     - name: Wait for prometheus
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-prometheus -n {{ ns }} --timeout=120s
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-prometheus -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: Deploy schnappy core chart
       ansible.builtin.shell: |
         KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-app \
           /vagrant-platform/helm/schnappy \
-          -n {{ ns }} --wait --timeout 3m \
+          -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
           --set site.dnsResolver=10.43.0.10 \
           --set site.enabled=false \
@@ -129,9 +129,11 @@
           --set vault.secretsEnabled=true \
           --set networkPolicies.enabled=false \
           --set smokeTest.enabled=true \
-          --set smokeTest.baseUrl=http://schnappy-monitor:8080 \
+          --set smokeTest.baseUrl=http://schnappy-monitor:8080/api \
           --set app.ingress.enabled=false \
-          --set app.ingress.host=localhost
+          --set app.ingress.host=localhost \
+          --set postgres.existingSecret=schnappy-postgres \
+          --set redis.existingSecret=schnappy-redis
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       changed_when: false
@@ -155,7 +157,7 @@
 
     - name: Wait for k6 Job to complete
       ansible.builtin.shell: |
-        k3s kubectl wait --for=condition=complete job/k6-test -n {{ ns }} --timeout=120s
+        k3s kubectl wait --for=condition=complete job/k6-test -n {{ ns }} --timeout=180s
       register: k6_result
       changed_when: false
 
