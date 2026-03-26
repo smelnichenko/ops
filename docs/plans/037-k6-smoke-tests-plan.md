@@ -1,6 +1,13 @@
 # k6 Smoke Tests with Prometheus Metrics and Grafana Dashboard
 
-## Status: PLANNED
+## Status: IMPLEMENTED (2026-03-26)
+
+Deployed to production. PostSync hook runs after every Argo CD sync (10/10 checks passing). Daily CronJob at 6 AM UTC. Prometheus remote write working (7 metric series). Grafana dashboard with pass rate, duration bars, error rate, check history.
+
+**Remaining:**
+- Seed k6-smoke Keycloak client secret into Vault for authenticated endpoint tests
+- Vagrant integration test needs app image builds (skipped — validated in production)
+- Post-restore validation playbook (`task deploy:restore:verify`)
 
 ## Motivation
 
