@@ -256,7 +256,7 @@
         {
           "data": {
             "url": "https://{{ argocd_host }}",
-            "oidc.config": "name: Keycloak\nissuer: https://{{ keycloak_host }}/realms/schnappy\nclientID: argocd\nclientSecret: $argocd-oidc:oidc.keycloak.clientSecret\nrequestedScopes:\n  - openid\n  - profile\n  - email\n  - roles\n"
+            "oidc.config": "name: Keycloak\nissuer: https://{{ keycloak_host }}/realms/schnappy\nclientID: argocd\nclientSecret: $argocd-oidc:oidc.keycloak.clientSecret\nenablePKCEAuthentication: true\nrequestedScopes:\n  - openid\n  - profile\n  - email\n  - roles\n"
           }
         }
         EOF
