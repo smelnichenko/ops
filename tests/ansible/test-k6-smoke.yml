@@ -77,7 +77,9 @@
           -n {{ ns }} --wait --timeout 3m \
           --set vault.secretsEnabled=true \
           --set postgres.enabled=true \
+          --set postgres.existingSecret=schnappy-postgres \
           --set redis.enabled=true \
+          --set redis.existingSecret=schnappy-redis \
           --set kafka.enabled=false \
           --set minio.enabled=false \
           --set aptCache.enabled=false \
