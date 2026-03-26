@@ -29,7 +29,7 @@
   vars:
     argocd_namespace: "{{ argocd_ns | default('argocd') }}"
     argocd_chart: "argo/argo-cd"
-    argocd_chart_version: "{{ argocd_version | default('7.8.13') }}"
+    argocd_chart_version: "{{ argocd_version | default('9.4.16') }}"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
     _forgejo_user: "{{ forgejo_admin_user | default(lookup('env', 'FORGEJO_ADMIN_USER')) | default('forgejo_admin', true) }}"
