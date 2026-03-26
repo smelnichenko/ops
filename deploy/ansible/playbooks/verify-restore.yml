@@ -1,0 +1,77 @@
+---
+# Verify a Velero restore by running k6 smoke tests
+#
+# Run after a Velero restore to validate all endpoints respond correctly.
+# Uses the existing k6-smoke CronJob as the Job template.
+#
+# Usage:
+#   task deploy:restore:verify
+#
+# Prerequisites:
+#   - Velero restore completed
+#   - All pods running in schnappy namespace
+#   - k6-smoke CronJob exists (smokeTest.enabled: true)
+
+- name: Verify restore with k6 smoke tests
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    job_name: k6-restore-verify
+
+  tasks:
+    - name: Check all pods are running
+      ansible.builtin.shell: |
+        NOT_READY=$(k3s kubectl get pods -n {{ ns }} --no-headers | grep -v 'Running\|Completed' | wc -l)
+        echo "$NOT_READY pods not ready"
+        [ "$NOT_READY" -eq 0 ]
+      register: pods_check
+      retries: 30
+      delay: 10
+      until: pods_check.rc == 0
+      changed_when: false
+
+    - name: Check k6-smoke CronJob exists
+      ansible.builtin.shell: k3s kubectl get cronjob schnappy-k6-smoke -n {{ ns }} --no-headers
+      changed_when: false
+
+    - name: Delete previous verify job if exists
+      ansible.builtin.shell: k3s kubectl delete job {{ job_name }} -n {{ ns }} 2>/dev/null || true
+      changed_when: false
+
+    - name: Create k6 smoke test Job from CronJob
+      ansible.builtin.shell: |
+        k3s kubectl create job {{ job_name }} --from=cronjob/schnappy-k6-smoke -n {{ ns }}
+      changed_when: false
+
+    - name: Wait for k6 Job to complete
+      ansible.builtin.shell: |
+        k3s kubectl wait --for=condition=complete job/{{ job_name }} -n {{ ns }} --timeout=120s
+      register: k6_result
+      changed_when: false
+
+    - name: Get k6 Job logs
+      ansible.builtin.shell: k3s kubectl logs job/{{ job_name }} -n {{ ns }}
+      register: k6_logs
+      changed_when: false
+
+    - name: Display k6 results
+      ansible.builtin.debug:
+        msg: "{{ k6_logs.stdout }}"
+
+    - name: Verify all checks passed
+      ansible.builtin.assert:
+        that: k6_result.rc == 0
+        fail_msg: |
+          POST-RESTORE SMOKE TEST FAILED
+          One or more endpoints are not responding correctly after restore.
+          Review the k6 logs above for details.
+        success_msg: |
+          POST-RESTORE SMOKE TEST PASSED
+          All endpoints are healthy after restore.
+
+    - name: Clean up verify job
+      ansible.builtin.shell: k3s kubectl delete job {{ job_name }} -n {{ ns }}
+      changed_when: false

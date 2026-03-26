@@ -1278,6 +1278,45 @@
         path: /tmp/schnappy-dr-test-values.yml
         state: absent
 
+    # ================================================================
+    # Suite 4: Post-restore k6 smoke test
+    # ================================================================
+
+    - name: "SUITE 4: Post-restore k6 smoke test"
+      ansible.builtin.debug:
+        msg: "Running k6 smoke test to validate restored endpoints"
+
+    - name: "K6: Check if k6-smoke CronJob exists"
+      ansible.builtin.shell: k3s kubectl get cronjob schnappy-k6-smoke -n {{ ns }} --no-headers 2>/dev/null
+      register: k6_cronjob_check
+      changed_when: false
+      failed_when: false
+
+    - name: "K6: Run smoke test after restore"
+      ansible.builtin.shell: |
+        k3s kubectl delete job k6-dr-verify -n {{ ns }} 2>/dev/null || true
+        k3s kubectl create job k6-dr-verify --from=cronjob/schnappy-k6-smoke -n {{ ns }}
+        k3s kubectl wait --for=condition=complete job/k6-dr-verify -n {{ ns }} --timeout=120s
+      when: k6_cronjob_check.rc == 0
+      register: k6_dr_result
+      changed_when: false
+
+    - name: "K6: Get results"
+      ansible.builtin.shell: k3s kubectl logs job/k6-dr-verify -n {{ ns }} 2>/dev/null | grep -E '✓|✗|checks'
+      register: k6_dr_logs
+      when: k6_cronjob_check.rc == 0
+      changed_when: false
+
+    - name: "K6: Display results"
+      ansible.builtin.debug:
+        msg: "{{ k6_dr_logs.stdout }}"
+      when: k6_cronjob_check.rc == 0
+
+    - name: "K6: Smoke test skipped (no CronJob)"
+      ansible.builtin.debug:
+        msg: "k6 smoke test skipped — CronJob not deployed in this environment"
+      when: k6_cronjob_check.rc != 0
+
     - name: "=== ALL DR TESTS PASSED ==="
       ansible.builtin.debug:
         msg: |
@@ -1300,3 +1339,5 @@
               - Velero restore from recovered backup: PASS
               - Data integrity after offsite restore: PASS
               - App functional after offsite restore: PASS
+            Suite 4 - Post-restore smoke test:
+              - k6 endpoint validation: {{ 'PASS' if k6_cronjob_check.rc == 0 else 'SKIPPED' }}

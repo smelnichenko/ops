@@ -416,6 +416,12 @@ tasks:
     cmds:
       - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup create manual-$(date +%Y%m%d-%H%M) --include-namespaces schnappy --default-volumes-to-fs-backup --kubeconfig /etc/rancher/k3s/k3s.yaml"
 
+  deploy:restore:verify:
+    desc: Run k6 smoke tests to validate a Velero restore
+    deps: [deploy:install]
+    cmds:
+      - cd deploy/ansible && venv/bin/ansible-playbook -i inventory/production.yml playbooks/verify-restore.yml
+
   deploy:backup:status:
     desc: Check Velero backup status
     cmds:
