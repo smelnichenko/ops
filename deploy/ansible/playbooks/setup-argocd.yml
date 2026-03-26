@@ -266,6 +266,18 @@
       changed_when: false
       when: keycloak_enabled | bool
 
+    - name: Read OIDC client secret from Vault
+      ansible.builtin.shell: |
+        set -o pipefail
+        k3s kubectl exec -n vault vault-0 -- sh -c \
+          'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt VAULT_TOKEN={{ vault_root_token }} vault kv get -field=client_secret secret/schnappy/argocd'
+      args:
+        executable: /bin/bash
+      register: vault_argocd_secret
+      changed_when: false
+      no_log: true
+      when: keycloak_enabled | bool and vault_root_token is defined
+
     - name: Create OIDC client secret
       ansible.builtin.shell: |
         set -o pipefail
@@ -279,7 +291,7 @@
             app.kubernetes.io/part-of: argocd
         type: Opaque
         stringData:
-          oidc.keycloak.clientSecret: "{{ argocd_keycloak_client_secret | default('changeme') }}"
+          oidc.keycloak.clientSecret: "{{ vault_argocd_secret.stdout | default(argocd_keycloak_client_secret) | default('changeme') }}"
         EOF
       args:
         executable: /bin/bash
