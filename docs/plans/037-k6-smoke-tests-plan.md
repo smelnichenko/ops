@@ -358,13 +358,110 @@ smokeTest:
 | `schnappy/templates/k6-smoke-external-secret.yaml` | schnappy | New — ExternalSecret for k6-smoke client secret |
 | `infra/clusters/production/schnappy/values.yaml` | infra | Enable smokeTest |
 
+## Vagrant Integration Test
+
+`task test:k6-smoke` — deploys the app stack in Vagrant and validates the full k6 → Prometheus → Grafana pipeline.
+
+**Test playbook:** `tests/ansible/test-k6-smoke.yml`
+
+**Steps:**
+1. Deploy `schnappy-data`, `schnappy-auth`, `schnappy`, `schnappy-observability` charts (minimal config, no TLS)
+2. Wait for all pods ready
+3. Run k6 smoke test as a Job (targeting internal gateway service URL `http://schnappy-gateway:8080`)
+4. Verify k6 Job completed successfully (exit code 0, all checks passed)
+5. Query Prometheus API for k6 metrics (`/api/v1/query?query=k6_http_reqs_total`)
+6. Verify metrics exist (k6 → Prometheus remote write worked)
+7. Verify Grafana datasource is healthy (`/api/health`)
+
+**Vagrant-specific adjustments:**
+- `BASE_URL` uses internal service URL (no ingress/TLS in Vagrant)
+- `KEYCLOAK_URL` uses internal service URL
+- Prometheus remote write receiver enabled
+- k6 smoke test runs without the Argo CD PostSync annotation (just a plain Job)
+
+## Velero Post-Restore Validation
+
+After a Velero restore, run k6 smoke tests to verify the restored environment is functional. Two integration points:
+
+### 1. Manual post-restore check
+
+Add a Taskfile command that runs k6 after a Velero restore:
+
+```bash
+task deploy:restore:verify
+```
+
+This creates a one-shot k6 Job in the cluster (same smoke test ConfigMap) and waits for completion. Fails fast if any endpoint is broken after restore.
+
+**Implementation:** Ansible playbook `playbooks/verify-restore.yml`:
+```yaml
+- name: Run post-restore smoke test
+  shell: |
+    k3s kubectl create job k6-restore-verify \
+      --from=cronjob/schnappy-k6-smoke \
+      -n schnappy
+    k3s kubectl wait --for=condition=complete \
+      job/k6-restore-verify -n schnappy \
+      --timeout=120s
+  register: smoke_result
+
+- name: Verify smoke test passed
+  assert:
+    that: smoke_result.rc == 0
+    fail_msg: "Post-restore smoke test FAILED — endpoints are broken"
+    success_msg: "Post-restore smoke test PASSED — all endpoints healthy"
+```
+
+### 2. Automated in DR test
+
+Add k6 smoke validation to the existing `task test:dr` Vagrant test. After the Velero restore step, run the k6 smoke test to verify the restored app works end-to-end.
+
+**File:** `tests/ansible/test-dr.yml` — add step after Velero restore:
+```yaml
+- name: Run k6 smoke test after restore
+  shell: |
+    k3s kubectl create job k6-dr-verify \
+      --from=cronjob/schnappy-k6-smoke \
+      -n schnappy
+    k3s kubectl wait --for=condition=complete \
+      job/k6-dr-verify -n schnappy \
+      --timeout=120s
+```
+
+This ensures that DR restores are validated automatically — not just "pods came up" but "endpoints actually respond correctly."
+
+## File Changes
+
+| File | Chart/Repo | Change |
+|---|---|---|
+| `schnappy/templates/k6-smoke-configmap.yaml` | schnappy | New — smoke test script |
+| `schnappy/templates/k6-smoke-job.yaml` | schnappy | New — PostSync hook Job |
+| `schnappy/templates/k6-smoke-cronjob.yaml` | schnappy | New — daily CronJob |
+| `schnappy/templates/k6-smoke-external-secret.yaml` | schnappy | New — ExternalSecret for k6-smoke client secret |
+| `schnappy/templates/network-policies.yaml` | schnappy | Add k6 NP rules |
+| `schnappy/values.yaml` | schnappy | Add `smokeTest` config |
+| `schnappy-auth/templates/keycloak-realm-configmap.yaml` | auth | Add `k6-smoke` client to realm JSON |
+| `schnappy-observability/templates/prometheus-deployment.yaml` | observability | Add `--web.enable-remote-write-receiver` |
+| `schnappy-observability/templates/prometheus-rules-configmap.yaml` | observability | Add K6SmokeTestFailing alert |
+| `schnappy-observability/templates/network-policies.yaml` | observability | Allow k6 → Prometheus ingress |
+| `helm/dashboards/k6-smoke-dashboard.json` | observability | New — Grafana dashboard |
+| `schnappy-observability/templates/grafana-dashboards-configmap.yaml` | observability | Include new dashboard |
+| `tests/ansible/test-k6-smoke.yml` | ops | New — Vagrant integration test |
+| `playbooks/verify-restore.yml` | ops | New — post-restore validation |
+| `tests/ansible/test-dr.yml` | ops | Add k6 step after Velero restore |
+| `Taskfile.yml` | ops | Add `test:k6-smoke` and `deploy:restore:verify` tasks |
+| `infra/clusters/production/schnappy/values.yaml` | infra | Enable smokeTest |
+
 ## Implementation Order
 
 1. Enable Prometheus remote write receiver (~10min)
 2. Write smoke test script + ConfigMap (~15min)
 3. Create PostSync Job template (~10min)
 4. Create CronJob template (~10min)
-5. Add network policies (~10min)
-6. Create Grafana dashboard (~30min)
-7. Add alert rule (~5min)
-8. Update values + deploy (~10min)
+5. Add Keycloak k6-smoke client + ExternalSecret (~15min)
+6. Add network policies (~10min)
+7. Create Grafana dashboard (~30min)
+8. Add alert rule (~5min)
+9. Update values + deploy (~10min)
+10. Vagrant integration test (~30min)
+11. Post-restore validation playbook + DR test integration (~20min)
