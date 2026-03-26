@@ -154,6 +154,18 @@
       ansible.builtin.debug:
         msg: "Installing Argo CD via Helm"
 
+    - name: Read OIDC client secret from Vault
+      ansible.builtin.shell: |
+        set -o pipefail
+        k3s kubectl exec -n vault vault-0 -- sh -c \
+          'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt VAULT_TOKEN={{ vault_root_token }} vault kv get -field=client_secret secret/schnappy/argocd'
+      args:
+        executable: /bin/bash
+      register: vault_argocd_secret
+      changed_when: false
+      no_log: true
+      when: keycloak_enabled | bool and vault_root_token is defined
+
     - name: Add Argo Helm repository
       ansible.builtin.shell: |
         helm repo add argo {{ argocd_chart_repo }} 2>/dev/null || true
@@ -176,6 +188,28 @@
         configs:
           params:
             server.insecure: true  # TLS terminated at Traefik
+          cm:
+            url: "https://{{ argocd_host }}"
+            oidc.config: |
+              name: Keycloak
+              issuer: https://{{ keycloak_host }}/realms/schnappy
+              clientID: argocd
+              clientSecret: $argocd-secret:oidc.keycloak.clientSecret
+              enablePKCEAuthentication: true
+              requestedScopes:
+                - openid
+                - profile
+                - email
+                - roles
+          rbac:
+            policy.csv: |
+              g, Admins, role:admin
+              g, Users, role:readonly
+            policy.default: "role:readonly"
+            scopes: "[groups, roles]"
+          secret:
+            extra:
+              oidc.keycloak.clientSecret: "{{ vault_argocd_secret.stdout | default(argocd_keycloak_client_secret) | default('changeme') }}"
 
         server:
           resources:
@@ -242,80 +276,12 @@
       changed_when: false
 
     # ================================================================
-    # Phase 4: Keycloak OIDC (production only)
+    # Phase 4: Read Keycloak OIDC secret from Vault (used in Helm values above)
     # ================================================================
 
-    - name: "PHASE 4: Configure Keycloak OIDC"
+    - name: "PHASE 4: Keycloak OIDC"
       ansible.builtin.debug:
-        msg: "{{ 'Configuring Keycloak SSO for Argo CD' if keycloak_enabled else 'Skipping Keycloak SSO (disabled)' }}"
-
-    - name: Patch argocd-cm with OIDC config
-      ansible.builtin.shell: |
-        set -o pipefail
-        k3s kubectl patch configmap argocd-cm -n {{ argocd_namespace }} --type merge -p "$(cat <<'EOF'
-        {
-          "data": {
-            "url": "https://{{ argocd_host }}",
-            "oidc.config": "name: Keycloak\nissuer: https://{{ keycloak_host }}/realms/schnappy\nclientID: argocd\nclientSecret: $argocd-oidc:oidc.keycloak.clientSecret\nenablePKCEAuthentication: true\nrequestedScopes:\n  - openid\n  - profile\n  - email\n  - roles\n"
-          }
-        }
-        EOF
-        )"
-      args:
-        executable: /bin/bash
-      changed_when: false
-      when: keycloak_enabled | bool
-
-    - name: Read OIDC client secret from Vault
-      ansible.builtin.shell: |
-        set -o pipefail
-        k3s kubectl exec -n vault vault-0 -- sh -c \
-          'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt VAULT_TOKEN={{ vault_root_token }} vault kv get -field=client_secret secret/schnappy/argocd'
-      args:
-        executable: /bin/bash
-      register: vault_argocd_secret
-      changed_when: false
-      no_log: true
-      when: keycloak_enabled | bool and vault_root_token is defined
-
-    - name: Create OIDC client secret
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: argocd-oidc
-          namespace: {{ argocd_namespace }}
-          labels:
-            app.kubernetes.io/part-of: argocd
-        type: Opaque
-        stringData:
-          oidc.keycloak.clientSecret: "{{ vault_argocd_secret.stdout | default(argocd_keycloak_client_secret) | default('changeme') }}"
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
-      no_log: true
-      when: keycloak_enabled | bool
-
-    - name: Configure RBAC for Keycloak roles
-      ansible.builtin.shell: |
-        set -o pipefail
-        k3s kubectl patch configmap argocd-rbac-cm -n {{ argocd_namespace }} --type merge -p "$(cat <<'EOF'
-        {
-          "data": {
-            "policy.csv": "g, Admins, role:admin\ng, Users, role:readonly\n",
-            "policy.default": "role:readonly",
-            "scopes": "[groups, roles]"
-          }
-        }
-        EOF
-        )"
-      args:
-        executable: /bin/bash
-      changed_when: false
-      when: keycloak_enabled | bool
+        msg: "{{ 'OIDC config set via Helm values (Phase 3)' if keycloak_enabled else 'Keycloak SSO disabled' }}"
 
     # ================================================================
     # Phase 5: Ingress (production only)
