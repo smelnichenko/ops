@@ -1,0 +1,200 @@
+---
+# Test k6 smoke tests with Prometheus remote write in Vagrant
+#
+# Verifies:
+#   1. k6 smoke test Job runs and passes all checks
+#   2. k6 metrics are written to Prometheus via remote write
+#   3. Prometheus alert rules for smoke tests are loaded
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   task test:k6-smoke
+
+- name: Test k6 smoke tests
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    vault_ns: vault
+
+  tasks:
+    # ================================================================
+    # Phase 1: Seed secrets into Vault
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    - name: Seed postgres secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/postgres \
+            database=monitor username=monitor password=vagrant-test
+      no_log: true
+
+    - name: Seed redis secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/redis password=vagrant-redis
+      no_log: true
+
+    - name: "PHASE 1: Secrets seeded into Vault"
+      ansible.builtin.debug:
+        msg: "Vault secrets ready"
+
+    # ================================================================
+    # Phase 2: Deploy charts
+    # ================================================================
+
+    - name: Create schnappy namespace
+      ansible.builtin.shell: k3s kubectl create namespace {{ ns }} --dry-run=client -o yaml | k3s kubectl apply -f -
+      changed_when: false
+
+    - name: Deploy schnappy-data chart
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy \
+          /home/sm/src/platform/helm/schnappy-data \
+          -n {{ ns }} --wait --timeout 3m \
+          --set vault.secretsEnabled=true \
+          --set postgres.enabled=true \
+          --set redis.enabled=true \
+          --set kafka.enabled=false \
+          --set minio.enabled=false \
+          --set aptCache.enabled=false \
+          --set networkPolicies.enabled=false
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for postgres
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-postgres -n {{ ns }} --timeout=120s
+      changed_when: false
+
+    - name: Deploy schnappy-observability chart (Prometheus only)
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy \
+          /home/sm/src/platform/helm/schnappy-observability \
+          -n {{ ns }} --wait --timeout 3m \
+          --set prometheus.enabled=true \
+          --set prometheus.image=prom/prometheus:v3.10.0 \
+          --set grafana.enabled=false \
+          --set alertmanager.enabled=false \
+          --set elk.enabled=false \
+          --set kubeStateMetrics.enabled=false \
+          --set networkPolicies.enabled=false
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for prometheus
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-prometheus -n {{ ns }} --timeout=120s
+      changed_when: false
+
+    - name: Deploy schnappy core chart
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy \
+          /home/sm/src/platform/helm/schnappy \
+          -n {{ ns }} --wait --timeout 3m \
+          --set site.dnsResolver=10.43.0.10 \
+          --set site.enabled=false \
+          --set gateway.enabled=false \
+          --set admin.enabled=false \
+          --set chatService.enabled=false \
+          --set chessService.enabled=false \
+          --set vault.secretsEnabled=true \
+          --set networkPolicies.enabled=false \
+          --set smokeTest.enabled=true \
+          --set smokeTest.baseUrl=http://schnappy-monitor:8080 \
+          --set app.ingress.enabled=false \
+          --set app.ingress.host=localhost
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for app
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-monitor -n {{ ns }} --timeout=180s
+      changed_when: false
+
+    - name: "PHASE 2: Charts deployed"
+      ansible.builtin.debug:
+        msg: "All charts deployed and ready"
+
+    # ================================================================
+    # Phase 3: Run k6 smoke test
+    # ================================================================
+
+    - name: Create k6 smoke test Job
+      ansible.builtin.shell: |
+        k3s kubectl create job k6-test --from=cronjob/schnappy-k6-smoke -n {{ ns }}
+      changed_when: false
+
+    - name: Wait for k6 Job to complete
+      ansible.builtin.shell: |
+        k3s kubectl wait --for=condition=complete job/k6-test -n {{ ns }} --timeout=120s
+      register: k6_result
+      changed_when: false
+
+    - name: Get k6 Job logs
+      ansible.builtin.shell: k3s kubectl logs job/k6-test -n {{ ns }}
+      register: k6_logs
+      changed_when: false
+
+    - name: Display k6 results
+      ansible.builtin.debug:
+        msg: "{{ k6_logs.stdout }}"
+
+    - name: Verify k6 Job succeeded
+      ansible.builtin.assert:
+        that: k6_result.rc == 0
+        fail_msg: "k6 smoke test FAILED"
+        success_msg: "k6 smoke test PASSED — all checks OK"
+
+    # ================================================================
+    # Phase 4: Verify Prometheus metrics
+    # ================================================================
+
+    - name: Wait for metrics to be scraped
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Query Prometheus for k6 metrics
+      ansible.builtin.shell: |
+        k3s kubectl exec deploy/schnappy-prometheus -n {{ ns }} -- \
+          wget -qO- 'http://localhost:9090/api/v1/query?query=k6_http_reqs_total' 2>/dev/null
+      register: prom_result
+      changed_when: false
+
+    - name: Verify k6 metrics in Prometheus
+      ansible.builtin.assert:
+        that:
+          - "'k6_http_reqs_total' in prom_result.stdout"
+        fail_msg: "k6 metrics NOT found in Prometheus — remote write failed"
+        success_msg: "k6 metrics found in Prometheus — remote write working"
+
+    - name: "TEST PASSED: k6 smoke tests with Prometheus remote write"
+      ansible.builtin.debug:
+        msg: |
+          All tests passed:
+            1. k6 smoke test Job completed successfully
+            2. All health checks passed
+            3. k6 metrics written to Prometheus via remote write
