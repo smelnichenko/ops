@@ -72,8 +72,8 @@
 
     - name: Deploy schnappy-data chart
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy \
-          /home/sm/src/platform/helm/schnappy-data \
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-data \
+          /vagrant-platform/helm/schnappy-data \
           -n {{ ns }} --wait --timeout 3m \
           --set vault.secretsEnabled=true \
           --set postgres.enabled=true \
@@ -92,8 +92,8 @@
 
     - name: Deploy schnappy-observability chart (Prometheus only)
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy \
-          /home/sm/src/platform/helm/schnappy-observability \
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-observability \
+          /vagrant-platform/helm/schnappy-observability \
           -n {{ ns }} --wait --timeout 3m \
           --set prometheus.enabled=true \
           --set prometheus.image=prom/prometheus:v3.10.0 \
@@ -112,8 +112,8 @@
 
     - name: Deploy schnappy core chart
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy \
-          /home/sm/src/platform/helm/schnappy \
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-app \
+          /vagrant-platform/helm/schnappy \
           -n {{ ns }} --wait --timeout 3m \
           --set site.dnsResolver=10.43.0.10 \
           --set site.enabled=false \
