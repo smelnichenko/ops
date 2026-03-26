@@ -104,7 +104,85 @@ export default function () {
 }
 ```
 
-Endpoints tested: health, build-info, approval-mode, permissions, keycloak OIDC discovery, frontend, actuator. All public — no auth token needed. Authenticated endpoint tests can be added later with a Keycloak service account token.
+### Authentication: Keycloak service account
+
+Create a dedicated `k6-smoke` Keycloak client (confidential, service account enabled) with all permissions (METRICS, PLAY, CHAT, EMAIL, MANAGE_USERS). The k6 script uses `client_credentials` grant to get an access token, then passes it as `Authorization: Bearer` header.
+
+**Keycloak client config** (added to realm JSON in schnappy-auth chart):
+```json
+{
+  "clientId": "k6-smoke",
+  "enabled": true,
+  "clientAuthenticatorType": "client-secret",
+  "secret": "K6_SMOKE_CLIENT_SECRET_PLACEHOLDER",
+  "serviceAccountsEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "standardFlowEnabled": false,
+  "protocol": "openid-connect"
+}
+```
+
+After realm import, assign realm roles (METRICS, PLAY, CHAT, EMAIL, MANAGE_USERS) to the `k6-smoke` service account user via a Keycloak setup step.
+
+**Vault secret:** `secret/schnappy/k6-smoke` with `client_secret` key, synced to k8s Secret `schnappy-k6-smoke` via ExternalSecret.
+
+**k6 auth helper** (in smoke-test.js):
+```javascript
+function getToken() {
+  const tokenUrl = `${__ENV.KEYCLOAK_URL}/realms/schnappy/protocol/openid-connect/token`;
+  const res = http.post(tokenUrl, {
+    client_id: 'k6-smoke',
+    client_secret: __ENV.K6_CLIENT_SECRET,
+    grant_type: 'client_credentials',
+  });
+  return res.json('access_token');
+}
+
+const token = getToken();
+const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
+```
+
+**Authenticated endpoint tests:**
+```javascript
+  // Authenticated endpoints (with service account token)
+  group('monitors', () => {
+    const r = http.get(`${BASE_URL}/api/monitor/pages`, authHeaders);
+    check(r, { 'pages 200': (r) => r.status === 200 });
+  });
+
+  group('rss', () => {
+    const r = http.get(`${BASE_URL}/api/rss/feeds`, authHeaders);
+    check(r, { 'feeds 200': (r) => r.status === 200 });
+  });
+
+  group('inbox', () => {
+    const r = http.get(`${BASE_URL}/api/inbox/emails`, authHeaders);
+    check(r, { 'inbox 200': (r) => r.status === 200 });
+  });
+
+  group('chat', () => {
+    const r = http.get(`${BASE_URL}/api/chat/channels`, authHeaders);
+    check(r, { 'channels 200': (r) => r.status === 200 });
+  });
+
+  group('admin', () => {
+    const r = http.get(`${BASE_URL}/api/admin/users`, authHeaders);
+    check(r, { 'admin-users 200': (r) => r.status === 200 });
+  });
+```
+
+**k6 Job env vars** (added to Job/CronJob templates):
+```yaml
+- name: KEYCLOAK_URL
+  value: "http://{{ include "schnappy.keycloak.serviceName" . }}:8080"
+- name: K6_CLIENT_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: schnappy-k6-smoke
+      key: CLIENT_SECRET
+```
+
+Uses internal Keycloak URL (cluster-internal, no TLS) for token exchange.
 
 ## Implementation
 
@@ -256,8 +334,10 @@ smokeTest:
 ## Security
 
 - k6 pods run as non-root, drop all capabilities, read-only root filesystem
-- k6 only accesses public endpoints — no secrets or auth tokens needed
-- Network policy restricts k6 egress to Prometheus (remote write) + external HTTPS (app endpoints)
+- Service account `k6-smoke` is machine-only (no interactive login, `standardFlowEnabled: false`)
+- Client secret stored in Vault (`secret/schnappy/k6-smoke`), synced via ExternalSecret
+- k6 uses internal Keycloak URL for token exchange (no external network hop)
+- Network policy restricts k6 egress to Prometheus (remote write) + Keycloak (token) + external HTTPS (app endpoints)
 - Job pods are ephemeral (cleaned up by Argo CD hook-delete-policy and CronJob history limits)
 
 ## File Changes
@@ -274,6 +354,8 @@ smokeTest:
 | `schnappy-observability/templates/network-policies.yaml` | observability | Allow k6 → Prometheus ingress |
 | `helm/dashboards/k6-smoke-dashboard.json` | observability | New — Grafana dashboard |
 | `schnappy-observability/templates/grafana-dashboards-configmap.yaml` | observability | Include new dashboard |
+| `schnappy-auth/templates/keycloak-realm-configmap.yaml` | auth | Add `k6-smoke` client to realm JSON |
+| `schnappy/templates/k6-smoke-external-secret.yaml` | schnappy | New — ExternalSecret for k6-smoke client secret |
 | `infra/clusters/production/schnappy/values.yaml` | infra | Enable smokeTest |
 
 ## Implementation Order
