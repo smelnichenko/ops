@@ -75,6 +75,7 @@
         KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-data \
           /vagrant-platform/helm/schnappy-data \
           -n {{ ns }} --wait --timeout 3m \
+          --set fullnameOverride=schnappy \
           --set vault.secretsEnabled=true \
           --set postgres.enabled=true \
           --set postgres.existingSecret=schnappy-postgres \
@@ -97,6 +98,7 @@
         KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-observability \
           /vagrant-platform/helm/schnappy-observability \
           -n {{ ns }} --wait --timeout 3m \
+          --set fullnameOverride=schnappy \
           --set prometheus.enabled=true \
           --set prometheus.image=prom/prometheus:v3.10.0 \
           --set grafana.enabled=false \
@@ -117,6 +119,7 @@
         KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-app \
           /vagrant-platform/helm/schnappy \
           -n {{ ns }} --wait --timeout 3m \
+          --set fullnameOverride=schnappy \
           --set site.dnsResolver=10.43.0.10 \
           --set site.enabled=false \
           --set gateway.enabled=false \
