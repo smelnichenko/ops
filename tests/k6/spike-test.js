@@ -1,33 +1,28 @@
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-import { Rate } from 'k6/metrics';
+import { sleep } from 'k6';
+import { authHeaders } from './helpers/auth.js';
+import { userSession } from './helpers/flows.js';
 
-const errorRate = new Rate('errors');
-
-// Spike test - sudden traffic surge
 export const options = {
   stages: [
-    { duration: '10s', target: 10 },   // Warm up
-    { duration: '1m', target: 10 },    // Normal load
-    { duration: '10s', target: 200 },  // Spike!
-    { duration: '3m', target: 200 },   // Stay at spike
-    { duration: '10s', target: 10 },   // Scale down
-    { duration: '1m', target: 10 },    // Recovery
-    { duration: '10s', target: 0 },    // Ramp down
+    { duration: '30s', target: 10 },
+    { duration: '1m', target: 10 },
+    { duration: '10s', target: 150 },
+    { duration: '2m', target: 150 },
+    { duration: '10s', target: 10 },
+    { duration: '1m', target: 10 },
+    { duration: '30s', target: 0 },
   ],
   thresholds: {
-    http_req_duration: ['p(95)<2000'], // 95% under 2s during spike
-    errors: ['rate<0.3'],              // Allow higher error rate during spike
+    http_req_duration: ['p(95)<2000'],
+    http_req_failed: ['rate<0.05'],
+    checks: ['rate>0.95'],
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
-
 export default function () {
-  const res = http.get(`${BASE_URL}/api/monitor/results`);
-  check(res, {
-    'status 200': (r) => r.status === 200,
-  });
-  errorRate.add(res.status !== 200);
-  sleep(0.3);
+  const auth = authHeaders();
+  if (!auth) return;
+
+  userSession(auth);
+  sleep(Math.random() + 0.5);
 }

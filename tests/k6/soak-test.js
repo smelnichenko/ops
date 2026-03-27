@@ -4,9 +4,8 @@ import { userSession } from './helpers/flows.js';
 
 export const options = {
   stages: [
-    { duration: '1m', target: 25 },
-    { duration: '3m', target: 50 },
-    { duration: '1m', target: 50 },
+    { duration: '1m', target: 30 },
+    { duration: '28m', target: 30 },
     { duration: '1m', target: 0 },
   ],
   thresholds: {
@@ -21,5 +20,5 @@ export default function () {
   if (!auth) return;
 
   userSession(auth);
-  sleep(Math.random() * 2 + 1);
+  sleep(Math.random() * 3 + 2);
 }

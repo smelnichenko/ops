@@ -129,10 +129,10 @@ tasks:
     cmds:
       - k6 run tests/k6/spike-test.js
 
-  test:load:smoke:
-    desc: Quick k6 smoke test
+  test:load:soak:
+    desc: Run k6 soak test (30 VUs, 30min — detects memory leaks)
     cmds:
-      - k6 run --vus 1 --duration 10s k6/load-test.js
+      - k6 run tests/k6/soak-test.js
 
   # ============== JOOQ ==============
   jooq:generate:
