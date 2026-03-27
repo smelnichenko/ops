@@ -1219,19 +1219,34 @@
         - vault_seed_secrets | default(false) | bool
         - lookup('env', 'SONARQUBE_DB_PASSWORD') | length > 0
 
-    - name: Seed schnappyregistry secret
+    - name: Seed Forgejo admin secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+          env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_seed_token }}" \
+          vault kv put secret/schnappy/forgejo \
+            admin_username="{{ lookup('env', 'FORGEJO_ADMIN_USER') }}" \
+            admin_password="{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}" \
+            admin_email="{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') }}"
+      no_log: true
+      changed_when: false
+      when:
+        - vault_seed_secrets | default(false) | bool
+        - lookup('env', 'FORGEJO_ADMIN_PASSWORD') | length > 0
+
+    - name: Seed registry pull secret (from Forgejo admin)
       ansible.builtin.shell: |
         k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/registry \
-            pull_user="{{ lookup('env', 'FORGEJO_REGISTRY_PULL_USER') | default('schnappy', true) }}" \
-            pull_token="{{ lookup('env', 'FORGEJO_REGISTRY_PULL_TOKEN') }}"
+            pull_user="{{ lookup('env', 'FORGEJO_ADMIN_USER') }}" \
+            pull_token="{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
       no_log: true
       changed_when: false
       when:
         - vault_seed_secrets | default(false) | bool
-        - lookup('env', 'FORGEJO_REGISTRY_PULL_TOKEN') | length > 0
+        - lookup('env', 'FORGEJO_ADMIN_PASSWORD') | length > 0
 
     - name: Display setup summary
       ansible.builtin.debug:
