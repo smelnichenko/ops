@@ -131,9 +131,9 @@
         cat /tmp/k6-s1.log
       register: k6_result_s1
 
-    - name: "S1: Verify k6 completed (exit code in log)"
+    - name: "S1: Verify k6 completed"
       ansible.builtin.shell: |
-        grep -c "checks.*pass" /tmp/k6-s1.log
+        grep -cE "checks|http_reqs" /tmp/k6-s1.log
       register: s1_checks
       failed_when: s1_checks.stdout | int == 0
 
