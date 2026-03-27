@@ -42,16 +42,25 @@
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
 
-- name: "AUTH: Clear required actions"
+- name: "AUTH: Disable VERIFY_PROFILE default required action"
   ansible.builtin.shell: |
     k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
-      /opt/keycloak/bin/kcadm.sh update users/$(
-        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
-          /opt/keycloak/bin/kcadm.sh get users -r schnappy -q "username={{ test_email }}" \
-            --fields id --format csv --noquotes \
-            --server http://localhost:8080 --realm master \
-            --user admin --password "{{ kc_admin_password }}"
-      ) -r schnappy -s 'requiredActions=[]' \
+      /opt/keycloak/bin/kcadm.sh update authentication/required-actions/VERIFY_PROFILE -r schnappy \
+        -s defaultAction=false -s enabled=false \
+        --server http://localhost:8080 --realm master \
+        --user admin --password "{{ kc_admin_password }}" 2>/dev/null || true
+  changed_when: true
+
+- name: "AUTH: Clear user required actions"
+  ansible.builtin.shell: |
+    USER_ID=$(k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      /opt/keycloak/bin/kcadm.sh get users -r schnappy -q "username={{ test_email }}" \
+        --fields id --format csv --noquotes \
+        --server http://localhost:8080 --realm master \
+        --user admin --password "{{ kc_admin_password }}")
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      /opt/keycloak/bin/kcadm.sh update "users/$USER_ID" -r schnappy \
+        -s 'requiredActions=[]' \
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
   failed_when: false
