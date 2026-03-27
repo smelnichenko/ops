@@ -42,6 +42,20 @@
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}"
 
+- name: "AUTH: Clear required actions"
+  ansible.builtin.shell: |
+    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      /opt/keycloak/bin/kcadm.sh update users/$(
+        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+          /opt/keycloak/bin/kcadm.sh get users -r schnappy -q "username={{ test_email }}" \
+            --fields id --format csv --noquotes \
+            --server http://localhost:8080 --realm master \
+            --user admin --password "{{ kc_admin_password }}"
+      ) -r schnappy -s 'requiredActions=[]' \
+        --server http://localhost:8080 --realm master \
+        --user admin --password "{{ kc_admin_password }}"
+  failed_when: false
+
 - name: "AUTH: Assign realm roles to test user"
   ansible.builtin.shell: |
     for role in PLAY CHAT EMAIL METRICS MANAGE_USERS; do
