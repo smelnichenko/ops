@@ -117,22 +117,32 @@ tasks:
   test:load:
     desc: Run k6 load test (requires running app)
     cmds:
-      - k6 run tests/k6/load-test.js
+      - mkdir -p /tmp/k6-results
+      - K6_TEST_NAME=load-test k6 run tests/k6/load-test.js
 
   test:load:stress:
-    desc: Run k6 stress test
+    desc: Run k6 stress test — find breaking point
     cmds:
-      - k6 run tests/k6/stress-test.js
+      - mkdir -p /tmp/k6-results
+      - K6_TEST_NAME=stress-test k6 run tests/k6/stress-test.js
 
   test:load:spike:
-    desc: Run k6 spike test
+    desc: Run k6 spike test — sudden traffic surge
     cmds:
-      - k6 run tests/k6/spike-test.js
+      - mkdir -p /tmp/k6-results
+      - K6_TEST_NAME=spike-test k6 run tests/k6/spike-test.js
 
   test:load:soak:
     desc: Run k6 soak test (30 VUs, 30min — detects memory leaks)
     cmds:
-      - k6 run tests/k6/soak-test.js
+      - mkdir -p /tmp/k6-results
+      - K6_TEST_NAME=soak-test k6 run tests/k6/soak-test.js
+
+  test:load:baseline:
+    desc: Save current load test results as baseline
+    cmds:
+      - mkdir -p /tmp/k6-results
+      - K6_TEST_NAME=load-test K6_SAVE_BASELINE=true k6 run tests/k6/load-test.js
 
   # ============== JOOQ ==============
   jooq:generate:

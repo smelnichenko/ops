@@ -1,6 +1,7 @@
 import { sleep } from 'k6';
 import { authHeaders } from './helpers/auth.js';
 import { userSession } from './helpers/flows.js';
+export { handleSummary } from './helpers/summary.js';
 
 export const options = {
   stages: [
