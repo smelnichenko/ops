@@ -331,6 +331,18 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
+  test:failure-modes:
+    desc: Test failure modes under load in Vagrant (pod kill, pool exhaustion, Kafka outage, memory pressure, rate limiting)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/deploy-app.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-failure-modes.yml
+
   test:gateway:
     desc: Test API Gateway deployment in Vagrant
     deps: [deploy:install]
