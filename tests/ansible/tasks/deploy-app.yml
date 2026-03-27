@@ -1,0 +1,226 @@
+# Reusable tasks: Deploy app in Vagrant via Helm
+#
+# Required vars:
+#   ns: Kubernetes namespace (default: schnappy)
+#   kc_admin_password: Keycloak admin password
+#   helm_values_extra: Additional Helm values YAML (optional)
+#
+# Assumes:
+#   - k3s running, Vault initialized
+#   - Container images built (monitor:local, monitor-frontend:local)
+#   - Gateway repo at /vagrant-gateway
+
+- name: Get Vault root token
+  ansible.builtin.shell: |
+    k3s kubectl get secret vault-root-token -n vault \
+      -o jsonpath='{.data.token}' | base64 -d
+  register: vault_token_result
+  changed_when: false
+  no_log: true
+
+- name: Set Vault token fact
+  ansible.builtin.set_fact:
+    vault_root_token: "{{ vault_token_result.stdout }}"
+  no_log: true
+
+- name: Create namespace
+  ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+  register: ns_result
+  changed_when: ns_result.rc == 0
+  failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+
+- name: Write Helm values
+  ansible.builtin.copy:
+    dest: /tmp/schnappy-test-values.yml
+    mode: '0600'
+    content: |
+      vault:
+        secretsEnabled: true
+      networkPolicies:
+        enabled: false
+      site:
+        dnsResolver: "10.43.0.10"
+        enabled: true
+        image:
+          repository: monitor-frontend
+          tag: local
+          pullPolicy: Never
+      app:
+        replicas: 1
+        image:
+          repository: monitor
+          tag: local
+          pullPolicy: Never
+        ingress:
+          enabled: true
+          className: traefik
+          host: ""
+      gateway:
+        enabled: true
+        replicas: 1
+        image:
+          repository: monitor-gateway
+          tag: local
+          pullPolicy: Never
+        javaOpts: "-Xmx256m -XX:+UseZGC"
+      postgres:
+        enabled: true
+        existingSecret: "schnappy-postgres"
+        image: postgres:17-alpine
+        storage:
+          storageClass: "local-path"
+      redis:
+        enabled: true
+        image: redis:7-alpine
+      keycloak:
+        enabled: true
+        existingSecret: "schnappy-keycloak"
+        image: quay.io/keycloak/keycloak:26.5.6
+        hostname: localhost
+        mail:
+          from: "test@example.com"
+        clients:
+          app:
+            enabled: true
+            redirectUri: "http://localhost/auth/callback"
+          forgejo:
+            enabled: false
+            redirectUri: ""
+          grafana:
+            enabled: false
+            redirectUri: ""
+        resources:
+          requests: { cpu: 200m, memory: 512Mi }
+          limits: { cpu: 1000m, memory: 1Gi }
+        ingress:
+          enabled: false
+      aptCache:
+        enabled: false
+      captcha:
+        enabled: false
+      elk:
+        enabled: false
+      ai:
+        enabled: false
+      mail:
+        enabled: false
+      webhook:
+        enabled: false
+      minio:
+        enabled: false
+      prometheus:
+        enabled: false
+      grafana:
+        enabled: false
+      smokeTest:
+        enabled: false
+      loadTest:
+        enabled: false
+      {{ helm_values_extra | default('') | indent(6) }}
+
+- name: Seed postgres secret in Vault
+  ansible.builtin.shell: |
+    k3s kubectl exec -n vault vault-0 -- env \
+      VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+      VAULT_TOKEN="{{ vault_root_token }}" \
+      vault kv put secret/schnappy/postgres \
+        database="monitor" \
+        username="postgres" \
+        password="vagrant-test-pw"
+  no_log: true
+
+- name: Seed keycloak secret in Vault
+  ansible.builtin.shell: |
+    k3s kubectl exec -n vault vault-0 -- env \
+      VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+      VAULT_TOKEN="{{ vault_root_token }}" \
+      vault kv put secret/schnappy/keycloak \
+        admin_password="{{ kc_admin_password }}" \
+        db_password="vagrant-test-kc-db" \
+        forgejo_client_secret="not-used"
+  no_log: true
+
+- name: Seed kafka secret in Vault (if needed)
+  ansible.builtin.shell: |
+    k3s kubectl exec -n vault vault-0 -- env \
+      VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+      VAULT_TOKEN="{{ vault_root_token }}" \
+      vault kv put secret/schnappy/kafka \
+        password="vagrant-test-kafka"
+  no_log: true
+  when: deploy_kafka | default(false) | bool
+
+- name: Build gateway JAR
+  ansible.builtin.shell: |
+    source $HOME/.sdkman/bin/sdkman-init.sh
+    cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
+  args:
+    executable: /bin/bash
+  become: false
+  changed_when: true
+
+- name: Build gateway container image
+  ansible.builtin.shell: |
+    STAGE=$(mktemp -d)
+    cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
+    cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
+    nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+      -t monitor-gateway:local "$STAGE"
+    rm -rf "$STAGE"
+  changed_when: true
+
+- name: Deploy schnappy-data chart
+  ansible.builtin.shell: |
+    helm upgrade --install schnappy /vagrant-platform/helm/schnappy-data \
+      --namespace {{ ns }} \
+      --create-namespace \
+      --values /tmp/schnappy-test-values.yml \
+      --timeout 300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Deploy schnappy-auth chart
+  ansible.builtin.shell: |
+    helm upgrade --install schnappy /vagrant-platform/helm/schnappy-auth \
+      --namespace {{ ns }} \
+      --values /tmp/schnappy-test-values.yml \
+      --timeout 300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Deploy schnappy chart (app)
+  ansible.builtin.shell: |
+    helm upgrade --install schnappy /vagrant-platform/helm/schnappy \
+      --namespace {{ ns }} \
+      --values /tmp/schnappy-test-values.yml \
+      --timeout 300s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Wait for app to be ready
+  ansible.builtin.shell: |
+    for i in $(seq 1 60); do
+      READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+        -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+      if [ "$READY" = "true" ]; then
+        echo "OK: App pod ready"
+        exit 0
+      fi
+      echo "Waiting... ready=$READY (attempt $i/60)"
+      sleep 10
+    done
+    echo "FAIL: app not ready after 10 minutes"
+    k3s kubectl get pods -n {{ ns }} -o wide
+    k3s kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+    exit 1
+  register: app_readiness
+  changed_when: false
+  timeout: 660
+
+- name: Verify app is healthy
+  ansible.builtin.uri:
+    url: "{{ app_url }}/api/health"
+  register: deploy_health
+  retries: 30
+  delay: 5
+  until: deploy_health.status == 200
