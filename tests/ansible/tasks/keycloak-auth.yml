@@ -88,20 +88,28 @@
         --user admin --password "{{ kc_admin_password }}" 2>/dev/null || true
   changed_when: true
 
-- name: "AUTH: Get access token via token endpoint"
+- name: "AUTH: Get Keycloak service ClusterIP"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
-      curl -sf http://localhost:8080/realms/schnappy/protocol/openid-connect/token \
-        -d "client_id=test-cli" \
-        -d "client_secret=test-cli-secret" \
-        -d "grant_type=password" \
-        -d "username={{ test_email }}" \
-        -d "password={{ test_password }}"
+    k3s kubectl get svc schnappy-keycloak -n {{ ns }} -o jsonpath='{.spec.clusterIP}'
+  register: kc_ip
+  changed_when: false
+
+- name: "AUTH: Get access token via token endpoint"
+  ansible.builtin.uri:
+    url: "http://{{ kc_ip.stdout }}:8080/realms/schnappy/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: test-cli
+      client_secret: test-cli-secret
+      grant_type: password
+      username: "{{ test_email }}"
+      password: "{{ test_password }}"
   register: token_result
   retries: 5
   delay: 5
-  until: token_result.rc == 0
+  until: token_result.status == 200
 
 - name: "AUTH: Set auth token"
   ansible.builtin.set_fact:
-    auth_token: "{{ (token_result.stdout | from_json).access_token }}"
+    auth_token: "{{ token_result.json.access_token }}"
