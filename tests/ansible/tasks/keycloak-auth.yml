@@ -88,25 +88,20 @@
         --user admin --password "{{ kc_admin_password }}" 2>/dev/null || true
   changed_when: true
 
-- name: "AUTH: Get access token via confidential client (localhost)"
+- name: "AUTH: Get access token via token endpoint"
   ansible.builtin.shell: |
     k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
-      /opt/keycloak/bin/kcadm.sh config credentials \
-        --server http://localhost:8080 --realm schnappy \
-        --client test-cli --secret test-cli-secret \
-        --user "{{ test_email }}" --password "{{ test_password }}" 2>&1 && \
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
-      cat /root/.keycloak/kcadm.config 2>/dev/null
+      curl -sf http://localhost:8080/realms/schnappy/protocol/openid-connect/token \
+        -d "client_id=test-cli" \
+        -d "client_secret=test-cli-secret" \
+        -d "grant_type=password" \
+        -d "username={{ test_email }}" \
+        -d "password={{ test_password }}"
   register: token_result
   retries: 5
   delay: 5
   until: token_result.rc == 0
 
-- name: "AUTH: Extract token"
-  ansible.builtin.shell: |
-    echo '{{ token_result.stdout }}' | grep -o '"token":"[^"]*"' | tail -1 | cut -d'"' -f4
-  register: extracted_token
-
 - name: "AUTH: Set auth token"
   ansible.builtin.set_fact:
-    auth_token: "{{ extracted_token.stdout | trim }}"
+    auth_token: "{{ (token_result.stdout | from_json).access_token }}"
