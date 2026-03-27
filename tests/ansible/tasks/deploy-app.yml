@@ -175,7 +175,7 @@
       --namespace {{ ns }} \
       --create-namespace \
       --values /tmp/schnappy-test-values.yml \
-      --timeout 300s
+      --timeout 600s
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 

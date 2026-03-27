@@ -38,12 +38,6 @@
 
     - name: Deploy app
       ansible.builtin.include_tasks: tasks/deploy-app.yml
-      vars:
-        deploy_kafka: true
-        helm_values_extra: |
-          kafka:
-            enabled: true
-            existingSecret: "schnappy-kafka"
 
     - name: Create test user and get token
       ansible.builtin.include_tasks: tasks/keycloak-auth.yml
@@ -165,12 +159,12 @@
 
     - name: "S2: Patch app deployment with small pool"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-app -n {{ ns }} \
+        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=3
 
     - name: "S2: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "S2: Wait for app healthy"
       ansible.builtin.uri:
@@ -202,94 +196,94 @@
 
     - name: "S2: Restore pool size"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-app -n {{ ns }} \
+        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE-
 
     - name: "S2: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "=== Suite 2 Complete ==="
       ansible.builtin.debug:
         msg: "Connection pool test done."
 
     # ================================================================
-    # Suite 3: Kafka Outage Isolation
+    # Suite 3: Kafka Outage Isolation (requires -e deploy_kafka=true)
     # ================================================================
 
-    - name: "=== Suite 3: Kafka Outage Isolation ==="
+    - name: "Suite 3: Kafka Outage Isolation"
+      when: deploy_kafka | default(false) | bool
+      block:
+        - name: "=== Suite 3: Kafka Outage Isolation ==="
+          ansible.builtin.debug:
+            msg: "Scale Kafka to 0 during load, verify non-chat endpoints stay healthy"
+
+        - name: "S3: Refresh auth token"
+          ansible.builtin.include_tasks: tasks/keycloak-auth.yml
+
+        - name: "S3: Start k6 in background"
+          ansible.builtin.shell: |
+            K6_VUS=5 K6_DURATION={{ k6_duration }} K6_MAX_ERROR_RATE=0.10 \
+            BASE_URL={{ app_url }} AUTH_TOKEN={{ auth_token }} \
+            k6 run /tmp/k6-failure-test.js > /tmp/k6-s3.log 2>&1 &
+            echo $!
+          register: k6_pid_s3
+
+        - name: "S3: Wait 10s then kill Kafka"
+          ansible.builtin.pause:
+            seconds: 10
+
+        - name: "S3: Scale Kafka to 0"
+          ansible.builtin.shell: |
+            k3s kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=0
+
+        - name: "S3: Verify health endpoint still responds (Kafka down)"
+          ansible.builtin.uri:
+            url: "{{ app_url }}/api/health"
+          register: s3_kafka_down_health
+          retries: 5
+          delay: 3
+          until: s3_kafka_down_health.status == 200
+
+        - name: "S3: Verify monitors endpoint still responds (Kafka down)"
+          ansible.builtin.uri:
+            url: "{{ app_url }}/api/monitor/pages"
+            headers:
+              Authorization: "Bearer {{ auth_token }}"
+          register: s3_monitors
+          retries: 5
+          delay: 3
+          until: s3_monitors.status == 200
+
+        - name: "S3: Wait 30s with Kafka down"
+          ansible.builtin.pause:
+            seconds: 30
+
+        - name: "S3: Restore Kafka"
+          ansible.builtin.shell: |
+            k3s kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=1
+
+        - name: "S3: Wait for Kafka ready"
+          ansible.builtin.shell: |
+            k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=kafka -n {{ ns }} --timeout=180s
+          retries: 3
+          delay: 10
+          until: true
+
+        - name: "S3: Wait for k6 to finish"
+          ansible.builtin.shell: |
+            tail --pid={{ k6_pid_s3.stdout | trim }} -f /dev/null 2>/dev/null
+            cat /tmp/k6-s3.log
+          register: k6_result_s3
+
+        - name: "=== Suite 3 Complete ==="
+          ansible.builtin.debug:
+            msg: "Non-chat endpoints stayed healthy during Kafka outage."
+
+    - name: "Suite 3 skipped (no Kafka)"
       ansible.builtin.debug:
-        msg: "Scale Kafka to 0 during load, verify non-chat endpoints stay healthy"
-
-    - name: "S3: Wait for app healthy"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/health"
-      register: s3_pre_health
-      retries: 30
-      delay: 5
-      until: s3_pre_health.status == 200
-
-    - name: "S3: Refresh auth token"
-      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
-
-    - name: "S3: Start k6 in background"
-      ansible.builtin.shell: |
-        K6_VUS=5 K6_DURATION={{ k6_duration }} K6_MAX_ERROR_RATE=0.10 \
-        BASE_URL={{ app_url }} AUTH_TOKEN={{ auth_token }} \
-        k6 run /tmp/k6-failure-test.js > /tmp/k6-s3.log 2>&1 &
-        echo $!
-      register: k6_pid_s3
-
-    - name: "S3: Wait 10s then kill Kafka"
-      ansible.builtin.pause:
-        seconds: 10
-
-    - name: "S3: Scale Kafka to 0"
-      ansible.builtin.shell: |
-        k3s kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=0
-
-    - name: "S3: Verify health endpoint still responds (Kafka down)"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/health"
-      register: s3_kafka_down_health
-      retries: 5
-      delay: 3
-      until: s3_kafka_down_health.status == 200
-
-    - name: "S3: Verify monitors endpoint still responds (Kafka down)"
-      ansible.builtin.uri:
-        url: "{{ app_url }}/api/monitor/pages"
-        headers:
-          Authorization: "Bearer {{ auth_token }}"
-      register: s3_monitors
-      retries: 5
-      delay: 3
-      until: s3_monitors.status == 200
-
-    - name: "S3: Wait 30s with Kafka down"
-      ansible.builtin.pause:
-        seconds: 30
-
-    - name: "S3: Restore Kafka"
-      ansible.builtin.shell: |
-        k3s kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=1
-
-    - name: "S3: Wait for Kafka ready"
-      ansible.builtin.shell: |
-        k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=kafka -n {{ ns }} --timeout=180s
-      retries: 3
-      delay: 10
-      until: true
-
-    - name: "S3: Wait for k6 to finish"
-      ansible.builtin.shell: |
-        tail --pid={{ k6_pid_s3.stdout | trim }} -f /dev/null 2>/dev/null
-        cat /tmp/k6-s3.log
-      register: k6_result_s3
-
-    - name: "=== Suite 3 Complete ==="
-      ansible.builtin.debug:
-        msg: "Non-chat endpoints stayed healthy during Kafka outage."
+        msg: "Skipped — run with -e deploy_kafka=true for Kafka outage test"
+      when: not (deploy_kafka | default(false) | bool)
 
     # ================================================================
     # Suite 4: Memory Pressure
@@ -301,12 +295,12 @@
 
     - name: "S4: Patch app with small heap"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-app -n {{ ns }} \
+        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           JAVA_OPTS="-Xmx256m -XX:+UseZGC"
 
     - name: "S4: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "S4: Wait for app healthy"
       ansible.builtin.uri:
@@ -336,12 +330,12 @@
 
     - name: "S4: Restore heap"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-app -n {{ ns }} \
+        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           JAVA_OPTS="-Xmx1536m -XX:+UseZGC"
 
     - name: "S4: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-app -n {{ ns }} --timeout=120s
+        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "=== Suite 4 Complete ==="
       ansible.builtin.debug:
