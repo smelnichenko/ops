@@ -76,22 +76,34 @@ Rewrite all three k6 scripts against concrete targets.
 - **Weekly stress test**: CronJob Sunday 4 AM, runs `stress-test.js`. Informational — doesn't fail on threshold breach, but results are visible in Grafana.
 - All CI tests use the k6 image already used for smoke tests. ConfigMap for scripts, ExternalSecret for Keycloak client credentials.
 
-### Phase 5: Failure Mode Testing
+### Phase 5: Failure Mode Testing (Vagrant)
 
-Manual tests (not automated in CI), documented as runbooks in `ops/docs/runbooks/`.
+Automated via `task test:failure-modes` — Ansible playbook in Vagrant, same pattern as `test:dr`, `test:elk`, `test:kafka-scylla`. Safe to run destructive tests because the Vagrant cluster is disposable.
 
-- **Slow database:** `kubectl exec postgres -- pg_sleep(2)` on a test table, run load test, observe response time degradation and connection pool behavior
-- **Pod failure:** `kubectl delete pod schnappy-monitor` during load test, verify requests fail briefly then recover as new pod starts
-- **Connection pool exhaustion:** Temporarily set `hikari.maximum-pool-size=5`, run 50 VUs, observe pending connections and timeouts
-- **Kafka outage:** `kubectl scale statefulset schnappy-kafka --replicas=0` during load test, verify non-chat endpoints are unaffected
-- **Memory pressure:** Set `JAVA_OPTS=-Xmx512m`, run 30 VUs, observe GC pause frequency and duration
-- **Rate limiting:** Run 50 VUs from single IP, verify Bucket4j kicks in at 300 req/min and returns 429
+**Vagrant test structure (`tests/ansible/test-failure-modes.yml`):**
+
+The playbook deploys the full stack in Vagrant, seeds test data, then runs each failure scenario as a suite. k6 runs on the host against the Vagrant cluster's NodePort. Each suite:
+1. Starts a k6 load test in background (30 VUs, 2min)
+2. Injects the failure mid-test
+3. Waits for recovery
+4. Asserts k6 exit code and checks Prometheus metrics
+
+**Suites:**
+
+- **Suite 1 — Pod failure recovery:** Kill `schnappy-monitor` pod during load. Assert: requests fail < 30s, new pod starts, k6 error rate < 5% overall, all requests succeed after recovery.
+- **Suite 2 — Database connection exhaustion:** Patch HikariCP to `maximum-pool-size=3`, run 30 VUs. Assert: pending connections spike, no connection timeout errors (requests queue rather than fail), p99 increases but errors stay < 1%.
+- **Suite 3 — Kafka outage isolation:** Scale Kafka to 0 replicas during load. Assert: chat endpoints return 503, all other endpoints (monitors, RSS, admin, inbox) continue at < 500ms p95, error rate for non-chat < 0.1%.
+- **Suite 4 — Memory pressure:** Set `JAVA_OPTS=-Xmx256m`, run 20 VUs for 3min. Assert: GC pause frequency increases, p95 degrades but no OOMKilled, app stays responsive.
+- **Suite 5 — Rate limiting:** Run 50 VUs from single source IP. Assert: first 300 requests/min succeed (200), subsequent requests get 429, no 500 errors, rate limit resets after 1 minute.
+- **Suite 6 — Slow database:** Inject 2s latency on PostgreSQL via `pg_sleep` in a test trigger or tc netem on the postgres pod network. Assert: response times increase proportionally, connection pool doesn't exhaust, no cascading failures to other services.
+
+**Pass criteria:** All 6 suites pass. Any suite failure fails the Vagrant test.
 
 ## Implementation Order
 
 Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5
 
-Phase 1 is the most impactful — realistic scenarios with real thresholds replace the current toy tests. Phase 2 gives visibility into why things break. Phase 3 catches regressions. Phase 4 automates it. Phase 5 is manual but high-value for incident preparedness.
+Phase 1 is the most impactful — realistic scenarios with real thresholds replace the current toy tests. Phase 2 gives visibility into why things break. Phase 3 catches regressions. Phase 4 automates it. Phase 5 validates resilience in a disposable environment.
 
 ## Files to Change
 
@@ -103,7 +115,7 @@ Phase 1 is the most impactful — realistic scenarios with real thresholds repla
 | `ops/tests/k6/soak-test.js` | New — long-duration leak detection |
 | `ops/tests/k6/helpers/auth.js` | New — shared Keycloak token helper |
 | `ops/tests/k6/helpers/scenarios.js` | New — shared user flow functions |
-| `ops/Taskfile.yml` | Add `test:load:soak`, update existing tasks |
+| `ops/Taskfile.yml` | Add `test:load:soak`, `test:failure-modes`, update existing tasks |
 | `platform/helm/schnappy-observability/dashboards/load-test-dashboard.json` | New Grafana dashboard |
 | `platform/helm/schnappy/templates/k6-load-*` | CI CronJob + ConfigMap for nightly/weekly |
-| `ops/docs/runbooks/failure-mode-tests.md` | New — failure test procedures |
+| `ops/tests/ansible/test-failure-modes.yml` | New — Vagrant failure mode test playbook |
