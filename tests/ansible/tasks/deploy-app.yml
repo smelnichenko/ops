@@ -171,9 +171,10 @@
 
 - name: Deploy schnappy-data chart
   ansible.builtin.shell: |
-    helm upgrade --install schnappy /vagrant-platform/helm/schnappy-data \
+    helm upgrade --install schnappy-data /vagrant-platform/helm/schnappy-data \
       --namespace {{ ns }} \
       --create-namespace \
+      --set fullnameOverride=schnappy \
       --values /tmp/schnappy-test-values.yml \
       --timeout 600s
   environment:
@@ -181,8 +182,9 @@
 
 - name: Deploy schnappy-auth chart
   ansible.builtin.shell: |
-    helm upgrade --install schnappy /vagrant-platform/helm/schnappy-auth \
+    helm upgrade --install schnappy-auth /vagrant-platform/helm/schnappy-auth \
       --namespace {{ ns }} \
+      --set fullnameOverride=schnappy \
       --values /tmp/schnappy-test-values.yml \
       --timeout 300s
   environment:
