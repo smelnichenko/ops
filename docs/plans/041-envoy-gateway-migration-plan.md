@@ -1,6 +1,6 @@
 # Plan 041: Envoy Gateway Migration
 
-**Status:** IN PROGRESS
+**Status:** IN PROGRESS (routing + JWT validated, traffic switch pending)
 **Created:** 2026-03-28
 
 ## Context
