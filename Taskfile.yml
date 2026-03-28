@@ -127,49 +127,9 @@ tasks:
       - K6_TEST_NAME=stress-test k6 run tests/k6/stress-test.js
 
   test:load:stress:prod:
-    desc: Run distributed k6 stress test in production (k6-operator, 4 workers)
+    desc: Run distributed k6 stress test in production (4 parallel pods)
     cmds:
-      - |
-        ssh ten 'cat <<EOF | sudo k3s kubectl apply -f -
-        apiVersion: k6.io/v1alpha1
-        kind: TestRun
-        metadata:
-          name: stress-$(date +%s)
-          namespace: schnappy
-        spec:
-          parallelism: 4
-          separate: false
-          arguments: --out experimental-prometheus-rw
-          runner:
-            image: grafana/k6:0.57.0
-            metadata:
-              labels:
-                app.kubernetes.io/component: k6-load
-                app.kubernetes.io/instance: schnappy
-                app.kubernetes.io/name: schnappy
-                app.kubernetes.io/part-of: schnappy
-            resources:
-              requests: { cpu: 500m, memory: 128Mi }
-              limits: { cpu: 2000m, memory: 512Mi }
-            env:
-              - name: BASE_URL
-                value: "http://schnappy-gateway:8080"
-              - name: KEYCLOAK_URL
-                value: "http://schnappy-keycloak:8080"
-              - name: K6_PROMETHEUS_RW_SERVER_URL
-                value: "http://schnappy-prometheus:9090/api/v1/write"
-              - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
-                value: "true"
-              - name: K6_CLIENT_SECRET
-                valueFrom:
-                  secretKeyRef:
-                    name: schnappy-k6-smoke
-                    key: CLIENT_SECRET
-          script:
-            configMap:
-              name: schnappy-k6-stress
-              file: stress-test.js
-        EOF'
+      - ssh ten 'sudo k3s kubectl delete job schnappy-k6-stress-manual -n schnappy 2>/dev/null; sudo k3s kubectl create job schnappy-k6-stress-manual --from=cronjob/schnappy-k6-stress -n schnappy'
 
   test:load:spike:
     desc: Run k6 spike test — sudden traffic surge
