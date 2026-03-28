@@ -27,10 +27,10 @@
         --user admin --password "{{ kc_admin_password }}"
   register: kc_create_user
   changed_when: kc_create_user.rc == 0
-  failed_when: kc_create_user.rc != 0 and 'already exists' not in kc_create_user.stderr
+  failed_when: kc_create_user.rc != 0 and 'already exists' not in kc_create_user.stderr and 'exists with same' not in kc_create_user.stderr
   retries: 5
   delay: 10
-  until: kc_create_user.rc == 0 or 'already exists' in (kc_create_user.stderr | default(''))
+  until: kc_create_user.rc == 0 or 'already exists' in (kc_create_user.stderr | default('')) or 'exists with same' in (kc_create_user.stderr | default(''))
 
 - name: "AUTH: Set test user password"
   ansible.builtin.shell: |
