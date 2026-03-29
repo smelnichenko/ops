@@ -82,7 +82,7 @@
 
     - name: Pre-pull SonarQube image
       ansible.builtin.shell: |
-        k3s ctr images pull docker.io/library/sonarqube:26.3.0.120487-community
+        ctr -n k8s.io images pull docker.io/library/sonarqube:26.3.0.120487-community
       register: sq_pull
       retries: 3
       delay: 15
@@ -91,7 +91,7 @@
 
     - name: Pre-pull PostgreSQL image
       ansible.builtin.shell: |
-        k3s ctr images pull docker.io/library/postgres:17-alpine
+        ctr -n k8s.io images pull docker.io/library/postgres:17-alpine
       register: pg_pull
       retries: 3
       delay: 15
@@ -100,7 +100,7 @@
 
     - name: Pre-pull busybox image
       ansible.builtin.shell: |
-        k3s ctr images pull docker.io/library/busybox:1.37
+        ctr -n k8s.io images pull docker.io/library/busybox:1.37
       register: bb_pull
       retries: 3
       delay: 15

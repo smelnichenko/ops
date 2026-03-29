@@ -69,12 +69,30 @@
 
     - name: Add DNS to CoreDNS for in-cluster resolution
       ansible.builtin.shell: |
-        EXISTING=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
-        if ! echo "$EXISTING" | grep -q "{{ forgejo_host }}"; then
-          UPDATED="${EXISTING}
-        $(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}') {{ forgejo_host }}"
-          kubectl patch configmap coredns -n kube-system --type merge \
-            -p "{\"data\":{\"NodeHosts\":\"${UPDATED}\"}}"
+        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+        COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
+        if ! echo "$COREFILE" | grep -q "{{ forgejo_host }}"; then
+          python3 -c "
+        import subprocess, json
+        r = subprocess.run(['kubectl', 'get', 'configmap', 'coredns',
+                            '-n', 'kube-system', '-o', 'json'],
+                           capture_output=True, text=True)
+        cm = json.loads(r.stdout)
+        corefile = cm['data']['Corefile']
+        entry = '${NODE_IP} {{ forgejo_host }}'
+        if 'hosts {' not in corefile:
+            hosts_block = '''
+    hosts {
+        %s
+        fallthrough
+    }''' % entry
+            corefile = corefile.replace('kubernetes cluster.local', hosts_block + '\n    kubernetes cluster.local')
+        else:
+            corefile = corefile.replace('hosts {', 'hosts {\n        ' + entry)
+        patch = json.dumps({'data': {'Corefile': corefile}})
+        subprocess.run(['kubectl', 'patch', 'configmap', 'coredns',
+                         '-n', 'kube-system', '--type=merge', '-p', patch])
+        "
           kubectl rollout restart deployment coredns -n kube-system
           echo "CoreDNS updated with {{ forgejo_host }}"
         else
@@ -172,27 +190,9 @@
         registry_token: "{{ registry_token_result.stdout }}"
       no_log: true
 
-    - name: Configure k3s registry access
-      ansible.builtin.copy:
-        dest: /etc/rancher/k3s/registries.yaml
-        mode: '0600'
-        content: |
-          mirrors:
-            {{ forgejo_host }}:
-              endpoint:
-                - "http://{{ forgejo_host }}"
-          configs:
-            "{{ forgejo_host }}":
-              auth:
-                username: {{ forgejo_admin_user }}
-                password: {{ registry_token }}
-              tls:
-                insecure_skip_verify: true
-      no_log: true
-
-    - name: Configure containerd hosts for plain HTTP (nerdctl push)
+    - name: Configure containerd hosts for plain HTTP (registry access)
       ansible.builtin.shell: |
-        CERTS_DIR=/var/lib/rancher/k3s/agent/etc/containerd/certs.d
+        CERTS_DIR=/etc/containerd/certs.d
         mkdir -p "$CERTS_DIR/{{ forgejo_host }}"
         cat > "$CERTS_DIR/{{ forgejo_host }}/hosts.toml" <<'TOML'
         server = "http://{{ forgejo_host }}"
@@ -201,28 +201,29 @@
           skip_verify = true
         TOML
       changed_when: true
+      no_log: true
 
-    - name: Restart k3s to pick up registry config
+    - name: Restart containerd to pick up registry config
       ansible.builtin.systemd:
-        name: k3s
+        name: containerd
         state: restarted
 
-    - name: Wait for k3s to be ready after restart
+    - name: Wait for cluster to be ready after restart
       ansible.builtin.shell: |
         for i in $(seq 1 30); do
           if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
-            echo "k3s ready"
+            echo "cluster ready"
             exit 0
           fi
           sleep 5
         done
-        echo "k3s not ready"
+        echo "cluster not ready"
         exit 1
       changed_when: false
 
     - name: "RESULT: Registry configured"
       ansible.builtin.debug:
-        msg: "k3s configured to pull from {{ forgejo_host }} registry"
+        msg: "containerd configured to pull from {{ forgejo_host }} registry"
 
     # ================================================================
     # Phase 3: Build and push images to registry
@@ -234,7 +235,7 @@
 
     - name: Log in to Forgejo registry via nerdctl
       ansible.builtin.shell: |
-        echo "{{ registry_token }}" | nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+        echo "{{ registry_token }}" | nerdctl -n k8s.io \
           login {{ forgejo_host }} -u {{ forgejo_admin_user }} --password-stdin --insecure-registry 2>&1
       no_log: true
       register: nerdctl_login
@@ -256,12 +257,12 @@
         cp build/libs/*.jar "$STAGE/app.jar"
         cp Dockerfile.runtime "$STAGE/Dockerfile"
 
-        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+        nerdctl -n k8s.io \
           build -t {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} "$STAGE"
         rm -rf "$STAGE"
 
         # Push to registry
-        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+        nerdctl -n k8s.io \
           push {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} --insecure-registry
       environment:
         PATH: "/home/vagrant/.sdkman/candidates/java/current/bin:{{ node_bin_path }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -290,12 +291,12 @@
         cp security-headers-base.conf "$STAGE/"
         cp docker-entrypoint.sh "$STAGE/"
 
-        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+        nerdctl -n k8s.io \
           build -t {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} "$STAGE"
         rm -rf "$STAGE"
 
         # Push to registry
-        nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io \
+        nerdctl -n k8s.io \
           push {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} --insecure-registry
       environment:
         PATH: "{{ node_bin_path }}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -328,8 +329,8 @@
 
     - name: Remove local images from containerd to force registry pull
       ansible.builtin.shell: |
-        k3s ctr images rm {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} 2>/dev/null || true
-        k3s ctr images rm {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} 2>/dev/null || true
+        ctr -n k8s.io images rm {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }} 2>/dev/null || true
+        ctr -n k8s.io images rm {{ forgejo_host }}/{{ forgejo_admin_user }}/monitor-frontend:{{ test_image_tag }} 2>/dev/null || true
         echo "Local images removed"
       changed_when: false
 

@@ -12,7 +12,7 @@
 
 - name: Get Vault root token
   ansible.builtin.shell: |
-    k3s kubectl get secret vault-root-token -n vault \
+    kubectl get secret vault-root-token -n vault \
       -o jsonpath='{.data.token}' | base64 -d
   register: vault_token_result
   changed_when: false
@@ -24,7 +24,7 @@
   no_log: true
 
 - name: Create namespace
-  ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+  ansible.builtin.command: kubectl create namespace {{ ns }}
   register: ns_result
   changed_when: ns_result.rc == 0
   failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
@@ -120,7 +120,7 @@
 
 - name: Seed postgres secret in Vault
   ansible.builtin.shell: |
-    k3s kubectl exec -n vault vault-0 -- env \
+    kubectl exec -n vault vault-0 -- env \
       VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
       VAULT_TOKEN="{{ vault_root_token }}" \
       vault kv put secret/schnappy/postgres \
@@ -131,7 +131,7 @@
 
 - name: Seed keycloak secret in Vault
   ansible.builtin.shell: |
-    k3s kubectl exec -n vault vault-0 -- env \
+    kubectl exec -n vault vault-0 -- env \
       VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
       VAULT_TOKEN="{{ vault_root_token }}" \
       vault kv put secret/schnappy/keycloak \
@@ -142,7 +142,7 @@
 
 - name: Seed kafka secret in Vault (if needed)
   ansible.builtin.shell: |
-    k3s kubectl exec -n vault vault-0 -- env \
+    kubectl exec -n vault vault-0 -- env \
       VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
       VAULT_TOKEN="{{ vault_root_token }}" \
       vault kv put secret/schnappy/kafka \
@@ -164,7 +164,7 @@
     STAGE=$(mktemp -d)
     cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
     cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
-    nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+    nerdctl -n k8s.io build \
       -t monitor-gateway:local "$STAGE"
     rm -rf "$STAGE"
   changed_when: true
@@ -178,7 +178,7 @@
       --values /tmp/schnappy-test-values.yml \
       --timeout 600s
   environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    KUBECONFIG: /etc/kubernetes/admin.conf
 
 - name: Deploy schnappy-auth chart
   ansible.builtin.shell: |
@@ -188,7 +188,7 @@
       --values /tmp/schnappy-test-values.yml \
       --timeout 300s
   environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    KUBECONFIG: /etc/kubernetes/admin.conf
 
 - name: Deploy schnappy chart (app)
   ansible.builtin.shell: |
@@ -197,12 +197,12 @@
       --values /tmp/schnappy-test-values.yml \
       --timeout 300s
   environment:
-    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    KUBECONFIG: /etc/kubernetes/admin.conf
 
 - name: Wait for app to be ready
   ansible.builtin.shell: |
     for i in $(seq 1 60); do
-      READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+      READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
         -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
       if [ "$READY" = "true" ]; then
         echo "OK: App pod ready"
@@ -212,8 +212,8 @@
       sleep 10
     done
     echo "FAIL: app not ready after 10 minutes"
-    k3s kubectl get pods -n {{ ns }} -o wide
-    k3s kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+    kubectl get pods -n {{ ns }} -o wide
+    kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
     exit 1
   register: app_readiness
   changed_when: false

@@ -236,21 +236,35 @@
       ansible.builtin.shell: |
         set -o pipefail
         TRAEFIK_IP="{{ traefik_clusterip_result.stdout }}"
-        # Get current NodeHosts
-        CURRENT=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
-        # Remove any previous entries we added (idempotent)
-        CLEANED=$(echo "$CURRENT" | grep -v '# woodpecker-managed' || true)
-        # Append our entries
-        UPDATED="${CLEANED}
-        ${TRAEFIK_IP} {{ forgejo_host }} {{ woodpecker_host }} # woodpecker-managed"
-        # Patch the ConfigMap
-        kubectl get configmap coredns -n kube-system -o json | \
-          python3 -c "
-        import json, sys
-        cm = json.load(sys.stdin)
-        cm['data']['NodeHosts'] = '''${UPDATED}'''
-        json.dump(cm, sys.stdout)
-        " | kubectl apply -f -
+        # Patch CoreDNS Corefile with hosts plugin for internal DNS
+        python3 -c "
+        import subprocess, json, sys
+        r = subprocess.run(['kubectl', 'get', 'configmap', 'coredns',
+                            '-n', 'kube-system', '-o', 'json'],
+                           capture_output=True, text=True)
+        cm = json.loads(r.stdout)
+        corefile = cm['data']['Corefile']
+        traefik_ip = '${TRAEFIK_IP}'
+        managed_comment = '# woodpecker-managed'
+        # Remove any previous woodpecker-managed entries
+        lines = [l for l in corefile.splitlines() if managed_comment not in l]
+        corefile = '\n'.join(lines)
+        entry = f'{traefik_ip} {{ forgejo_host }} {{ woodpecker_host }} {managed_comment}'
+        if 'hosts {' not in corefile:
+            hosts_block = f'''
+    hosts {{
+        {entry}
+        fallthrough
+    }}'''
+            corefile = corefile.replace('kubernetes cluster.local', hosts_block + '\n    kubernetes cluster.local')
+        else:
+            corefile = corefile.replace('hosts {', 'hosts {\n        ' + entry)
+        patch = json.dumps({'data': {'Corefile': corefile}})
+        r2 = subprocess.run(['kubectl', 'patch', 'configmap', 'coredns',
+                              '-n', 'kube-system', '--type=merge', '-p', patch],
+                            capture_output=True, text=True)
+        print(r2.stdout.strip() or r2.stderr.strip())
+        "
       args:
         executable: /bin/bash
       changed_when: false

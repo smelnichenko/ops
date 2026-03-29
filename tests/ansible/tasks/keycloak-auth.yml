@@ -11,12 +11,12 @@
 
 - name: "AUTH: Wait for Keycloak readiness"
   ansible.builtin.shell: |
-    k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=keycloak -n {{ ns }} --timeout=300s
+    kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=keycloak -n {{ ns }} --timeout=300s
   changed_when: false
 
 - name: "AUTH: Create test user in Keycloak"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+    kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh create users -r schnappy \
         -s "username={{ test_email }}" \
         -s "email={{ test_email }}" \
@@ -34,7 +34,7 @@
 
 - name: "AUTH: Set test user password"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+    kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh set-password -r schnappy \
         --username "{{ test_email }}" \
         --new-password "{{ test_password }}" \
@@ -44,7 +44,7 @@
 
 - name: "AUTH: Disable VERIFY_PROFILE default required action"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+    kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh update authentication/required-actions/VERIFY_PROFILE -r schnappy \
         -s defaultAction=false -s enabled=false \
         --server http://localhost:8080 --realm master \
@@ -53,12 +53,12 @@
 
 - name: "AUTH: Clear user required actions"
   ansible.builtin.shell: |
-    USER_ID=$(k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+    USER_ID=$(kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh get users -r schnappy -q "username={{ test_email }}" \
         --fields id --format csv --noquotes \
         --server http://localhost:8080 --realm master \
         --user admin --password "{{ kc_admin_password }}")
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+    kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh update "users/$USER_ID" -r schnappy \
         -s 'requiredActions=[]' \
         --server http://localhost:8080 --realm master \
@@ -68,7 +68,7 @@
 - name: "AUTH: Assign realm roles to test user"
   ansible.builtin.shell: |
     for role in PLAY CHAT EMAIL METRICS MANAGE_USERS; do
-      k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+      kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
         /opt/keycloak/bin/kcadm.sh add-roles -r schnappy \
           --uusername "{{ test_email }}" --rolename "$role" \
           --server http://localhost:8080 --realm master \
@@ -78,7 +78,7 @@
 
 - name: "AUTH: Create test-cli client for password grant"
   ansible.builtin.shell: |
-    k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
+    kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
       /opt/keycloak/bin/kcadm.sh create clients -r schnappy \
         -s clientId=test-cli -s enabled=true \
         -s directAccessGrantsEnabled=true \
@@ -90,7 +90,7 @@
 
 - name: "AUTH: Get Keycloak service ClusterIP"
   ansible.builtin.shell: |
-    k3s kubectl get svc schnappy-keycloak -n {{ ns }} -o jsonpath='{.spec.clusterIP}'
+    kubectl get svc schnappy-keycloak -n {{ ns }} -o jsonpath='{.spec.clusterIP}'
   register: kc_ip
   changed_when: false
 

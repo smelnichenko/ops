@@ -69,7 +69,7 @@
         STAGE=$(mktemp -d)
         cp /vagrant-monitor/build/libs/*.jar "$STAGE/app.jar"
         cp /vagrant-monitor/Dockerfile.runtime "$STAGE/Dockerfile"
-        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+        nerdctl -n k8s.io build \
           -t monitor:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true
@@ -93,7 +93,7 @@
         cp /vagrant-site/security-headers.conf "$STAGE/"
         cp /vagrant-site/security-headers-base.conf "$STAGE/"
         cp /vagrant-site/docker-entrypoint.sh "$STAGE/"
-        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+        nerdctl -n k8s.io build \
           -t monitor-frontend:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true
@@ -112,7 +112,7 @@
         STAGE=$(mktemp -d)
         cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
         cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
-        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+        nerdctl -n k8s.io build \
           -t monitor-gateway:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true
@@ -131,7 +131,7 @@
         STAGE=$(mktemp -d)
         cp /vagrant-admin/build/libs/*.jar "$STAGE/app.jar"
         cp /vagrant-admin/Dockerfile "$STAGE/Dockerfile"
-        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+        nerdctl -n k8s.io build \
           -t monitor-admin:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true
@@ -150,7 +150,7 @@
         STAGE=$(mktemp -d)
         cp /vagrant-chat/build/libs/*.jar "$STAGE/app.jar"
         cp /vagrant-chat/Dockerfile "$STAGE/Dockerfile"
-        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+        nerdctl -n k8s.io build \
           -t monitor-chat:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true
@@ -169,7 +169,7 @@
         STAGE=$(mktemp -d)
         cp /vagrant-chess/build/libs/*.jar "$STAGE/app.jar"
         cp /vagrant-chess/Dockerfile "$STAGE/Dockerfile"
-        nerdctl --address /run/k3s/containerd/containerd.sock -n k8s.io build \
+        nerdctl -n k8s.io build \
           -t monitor-chess:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true

@@ -81,11 +81,11 @@
 
     # ================================================================
     # Phase 0.5: CoreDNS — ensure vault-pi DNS resolves inside cluster
-    # k3s CoreDNS reads NodeHosts from the coredns ConfigMap (not node /etc/hosts)
+    # kubeadm CoreDNS uses standard hosts plugin in the Corefile
     # In production vault_pi_dns is public DNS; in Vagrant it needs injection here.
     # ================================================================
 
-    - name: Add vault-pi DNS entry to CoreDNS NodeHosts (idempotent)
+    - name: Add vault-pi DNS entry to CoreDNS Corefile (idempotent)
       ansible.builtin.shell: |
         python3 -c "
         import subprocess, json, sys
@@ -93,13 +93,24 @@
                             '-n', 'kube-system', '-o', 'json'],
                            capture_output=True, text=True)
         cm = json.loads(r.stdout)
-        current = cm['data']['NodeHosts']
+        corefile = cm['data']['Corefile']
         entry = '{{ vault_pi_ip }} {{ vault_pi_dns }}'
-        if entry in current:
+        if entry in corefile:
             print('already_present')
             sys.exit(0)
-        cm['data']['NodeHosts'] = current + '\n' + entry
-        patch = json.dumps({'data': {'NodeHosts': cm['data']['NodeHosts']}})
+        # Insert a hosts block before the final closing brace of the main server block
+        hosts_block = '''
+    hosts {
+        %s
+        fallthrough
+    }''' % entry
+        # Find the kubernetes plugin line and insert hosts block before it
+        if 'hosts {' not in corefile:
+            corefile = corefile.replace('kubernetes cluster.local', hosts_block + '\n    kubernetes cluster.local')
+        else:
+            # Already has a hosts block, just add the entry
+            corefile = corefile.replace('hosts {', 'hosts {\n        ' + entry)
+        patch = json.dumps({'data': {'Corefile': corefile}})
         r2 = subprocess.run(['kubectl', 'patch', 'configmap', 'coredns',
                               '-n', 'kube-system', '--type=merge', '-p', patch],
                             capture_output=True, text=True)
