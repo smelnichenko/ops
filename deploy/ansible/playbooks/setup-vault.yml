@@ -89,7 +89,7 @@
       ansible.builtin.shell: |
         python3 -c "
         import subprocess, json, sys
-        r = subprocess.run(['k3s', 'kubectl', 'get', 'configmap', 'coredns',
+        r = subprocess.run(['kubectl', 'get', 'configmap', 'coredns',
                             '-n', 'kube-system', '-o', 'json'],
                            capture_output=True, text=True)
         cm = json.loads(r.stdout)
@@ -100,7 +100,7 @@
             sys.exit(0)
         cm['data']['NodeHosts'] = current + '\n' + entry
         patch = json.dumps({'data': {'NodeHosts': cm['data']['NodeHosts']}})
-        r2 = subprocess.run(['k3s', 'kubectl', 'patch', 'configmap', 'coredns',
+        r2 = subprocess.run(['kubectl', 'patch', 'configmap', 'coredns',
                               '-n', 'kube-system', '--type=merge', '-p', patch],
                             capture_output=True, text=True)
         print(r2.stdout.strip() or r2.stderr.strip())
