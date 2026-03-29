@@ -238,18 +238,64 @@
     # Phase 8: Install local-path-provisioner
     # ================================================================
 
-    - name: Install local-path-provisioner
+    - name: Install local-path-provisioner via Helm
       ansible.builtin.shell: |
-        kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-provisioner.yaml
-      changed_when: true
-
-    - name: Set local-path as default StorageClass
-      ansible.builtin.shell: |
-        kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+        helm repo add local-path-provisioner https://charts.containeroo.ch
+        helm upgrade --install local-path-provisioner local-path-provisioner/local-path-provisioner \
+          --namespace local-path-storage --create-namespace \
+          --set storageClass.defaultClass=true \
+          --wait --timeout 120s
       changed_when: true
 
     # ================================================================
-    # Phase 9: Configure HAProxy
+    # Phase 9: Install metrics-server
+    # ================================================================
+
+    - name: Install metrics-server
+      ansible.builtin.shell: |
+        helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+        helm upgrade --install metrics-server metrics-server/metrics-server \
+          --namespace kube-system \
+          --set args="{--kubelet-insecure-tls}" \
+          --wait --timeout 60s
+      changed_when: true
+
+    # ================================================================
+    # Phase 10: Install cert-manager
+    # ================================================================
+
+    - name: Install cert-manager
+      ansible.builtin.shell: |
+        helm repo add jetstack https://charts.jetstack.io
+        helm upgrade --install cert-manager jetstack/cert-manager \
+          --namespace cert-manager --create-namespace \
+          --set crds.enabled=true \
+          --wait --timeout 120s
+      changed_when: true
+
+    # ================================================================
+    # Phase 11: Install Gateway API CRDs
+    # ================================================================
+
+    - name: Install Gateway API CRDs
+      ansible.builtin.shell: |
+        kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+      changed_when: true
+
+    # ================================================================
+    # Phase 12: Install ESO
+    # ================================================================
+
+    - name: Install External Secrets Operator
+      ansible.builtin.shell: |
+        helm repo add external-secrets https://charts.external-secrets.io
+        helm upgrade --install external-secrets external-secrets/external-secrets \
+          --namespace external-secrets --create-namespace \
+          --wait --timeout 120s
+      changed_when: true
+
+    # ================================================================
+    # Phase 13: Configure HAProxy
     # ================================================================
 
     - name: Install HAProxy
