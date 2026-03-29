@@ -40,7 +40,7 @@
 
     - name: Create forgejo namespace
       ansible.builtin.shell: |
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -63,9 +63,9 @@
 
     - name: Add custom DNS for Forgejo and Woodpecker via CoreDNS
       ansible.builtin.shell: |
-        NODE_IP=$(k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 
-        k3s kubectl create configmap coredns-custom -n kube-system \
+        kubectl create configmap coredns-custom -n kube-system \
           --from-literal="vagrant.test.server=vagrant.test:53 {
           hosts {
             ${NODE_IP} {{ forgejo_host }}
@@ -73,10 +73,10 @@
             fallthrough
           }
           whoami
-        }" --dry-run=client -o yaml | k3s kubectl apply -f -
+        }" --dry-run=client -o yaml | kubectl apply -f -
 
-        k3s kubectl rollout restart deployment coredns -n kube-system
-        k3s kubectl rollout status deployment coredns -n kube-system --timeout=60s
+        kubectl rollout restart deployment coredns -n kube-system
+        kubectl rollout status deployment coredns -n kube-system --timeout=60s
       changed_when: false
 
     - name: Deploy Forgejo via Helm
@@ -108,7 +108,7 @@
           --set resources.limits.cpu=2000m \
           --wait --timeout 5m
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Wait for Forgejo to be ready
       ansible.builtin.shell: |
@@ -125,7 +125,7 @@
 
     - name: Get Forgejo ClusterIP for internal access
       ansible.builtin.shell: |
-        k3s kubectl get svc forgejo-http -n {{ forgejo_ns }} \
+        kubectl get svc forgejo-http -n {{ forgejo_ns }} \
           -o jsonpath='{.spec.clusterIP}'
       register: forgejo_clusterip_result
       changed_when: false
@@ -136,7 +136,7 @@
 
     - name: Clear must_change_password flag on admin user
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/forgejo -n {{ forgejo_ns }} -- \
+        kubectl exec deploy/forgejo -n {{ forgejo_ns }} -- \
           gitea admin user change-password \
           -u {{ forgejo_admin_user }} \
           -p '{{ forgejo_admin_password }}' \
@@ -159,7 +159,7 @@
 
     - name: Create woodpecker namespace
       ansible.builtin.shell: |
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -209,7 +209,7 @@
     - name: Create Woodpecker Forgejo OAuth secret
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Secret
         metadata:
@@ -283,28 +283,28 @@
               memory: 256Mi
         HELMEOF
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       register: helm_result
 
     - name: Restart Woodpecker server to pick up fresh OAuth secret
       ansible.builtin.shell: |
-        k3s kubectl rollout restart statefulset/woodpecker-server -n {{ woodpecker_ns }}
+        kubectl rollout restart statefulset/woodpecker-server -n {{ woodpecker_ns }}
       changed_when: false
 
     - name: Wait for Woodpecker server to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/woodpecker-server -n {{ woodpecker_ns }} --timeout=300s
+        kubectl rollout status statefulset/woodpecker-server -n {{ woodpecker_ns }} --timeout=300s
       changed_when: false
 
     - name: Wait for Woodpecker agent to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/woodpecker-agent -n {{ woodpecker_ns }} --timeout=300s
+        kubectl rollout status statefulset/woodpecker-agent -n {{ woodpecker_ns }} --timeout=300s
       changed_when: false
 
     - name: Create deployer RBAC
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         ---
         apiVersion: v1
         kind: ServiceAccount
@@ -361,10 +361,10 @@
 
     - name: Create deploy state ConfigMap
       ansible.builtin.shell: |
-        k3s kubectl create configmap woodpecker-deploy-state \
+        kubectl create configmap woodpecker-deploy-state \
           --namespace {{ woodpecker_ns }} \
           --from-literal=last-deployed-commit="" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -
       changed_when: false
 
     # ================================================================
@@ -377,14 +377,14 @@
 
     - name: Check Woodpecker server pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ woodpecker_ns }} -l app.kubernetes.io/name=server \
+        kubectl get pods -n {{ woodpecker_ns }} -l app.kubernetes.io/name=server \
           -o jsonpath='{.items[0].status.phase}'
       register: server_pod_status
       changed_when: false
 
     - name: Check Woodpecker agent pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ woodpecker_ns }} -l app.kubernetes.io/name=agent \
+        kubectl get pods -n {{ woodpecker_ns }} -l app.kubernetes.io/name=agent \
           -o jsonpath='{.items[0].status.phase}'
       register: agent_pod_status
       changed_when: false
@@ -424,7 +424,7 @@
           -X DELETE "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/woodpecker-test-token" \
           2>/dev/null || true
         # Create fresh token via CLI (more reliable than API)
-        k3s kubectl exec deploy/forgejo -n {{ forgejo_ns }} -- \
+        kubectl exec deploy/forgejo -n {{ forgejo_ns }} -- \
           gitea admin user generate-access-token \
           -u {{ forgejo_admin_user }} \
           --token-name woodpecker-test-token \
@@ -702,7 +702,7 @@
 
     - name: Check deployer can list deployments in default namespace
       ansible.builtin.shell: |
-        k3s kubectl auth can-i list deployments \
+        kubectl auth can-i list deployments \
           --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
       register: rbac_list_deploy
       changed_when: false
@@ -710,7 +710,7 @@
 
     - name: Check deployer can create configmaps
       ansible.builtin.shell: |
-        k3s kubectl auth can-i create configmaps \
+        kubectl auth can-i create configmaps \
           --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
       register: rbac_create_cm
       changed_when: false
@@ -718,7 +718,7 @@
 
     - name: Check deployer can patch configmaps in woodpecker namespace
       ansible.builtin.shell: |
-        k3s kubectl auth can-i patch configmaps -n {{ woodpecker_ns }} \
+        kubectl auth can-i patch configmaps -n {{ woodpecker_ns }} \
           --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
       register: rbac_patch_cm
       changed_when: false
@@ -726,7 +726,7 @@
 
     - name: Check deployer can create deployments
       ansible.builtin.shell: |
-        k3s kubectl auth can-i create deployments \
+        kubectl auth can-i create deployments \
           --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
       register: rbac_create_deploy
       changed_when: false
@@ -734,7 +734,7 @@
 
     - name: Check deployer can manage poddisruptionbudgets
       ansible.builtin.shell: |
-        k3s kubectl auth can-i create poddisruptionbudgets.policy \
+        kubectl auth can-i create poddisruptionbudgets.policy \
           --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
       register: rbac_pdb
       changed_when: false
@@ -742,7 +742,7 @@
 
     - name: Check deployer can manage externalsecrets
       ansible.builtin.shell: |
-        k3s kubectl auth can-i create externalsecrets.external-secrets.io \
+        kubectl auth can-i create externalsecrets.external-secrets.io \
           --as=system:serviceaccount:{{ woodpecker_ns }}:woodpecker-deployer
       register: rbac_eso
       changed_when: false
@@ -768,7 +768,7 @@
     - name: Apply Woodpecker network policies
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         ---
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
@@ -952,7 +952,7 @@
 
     - name: Check network policies exist
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy -n {{ woodpecker_ns }} -o name
+        kubectl get networkpolicy -n {{ woodpecker_ns }} -o name
       register: np_list
       changed_when: false
 
@@ -973,20 +973,20 @@
 
     - name: Read deploy state ConfigMap
       ansible.builtin.shell: |
-        k3s kubectl get configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
+        kubectl get configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
           -o jsonpath='{.data.last-deployed-commit}'
       register: deploy_state
       changed_when: false
 
     - name: Update deploy state ConfigMap
       ansible.builtin.shell: |
-        k3s kubectl patch configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
+        kubectl patch configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
           --type merge -p '{"data":{"last-deployed-commit":"abc1234"}}'
       changed_when: false
 
     - name: Read updated deploy state
       ansible.builtin.shell: |
-        k3s kubectl get configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
+        kubectl get configmap woodpecker-deploy-state -n {{ woodpecker_ns }} \
           -o jsonpath='{.data.last-deployed-commit}'
       register: deploy_state_updated
       changed_when: false
@@ -1002,7 +1002,7 @@
 
     - name: Show all pods in woodpecker namespace
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ woodpecker_ns }} -o wide
+        kubectl get pods -n {{ woodpecker_ns }} -o wide
       register: final_pods
       changed_when: false
 

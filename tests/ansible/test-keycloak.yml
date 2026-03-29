@@ -37,7 +37,7 @@
 
     - name: Get Vault root token from k8s secret
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+        kubectl get secret vault-root-token -n {{ vault_ns }} \
           -o jsonpath='{.data.token}' | base64 -d
       register: vault_token_result
       changed_when: false
@@ -50,7 +50,7 @@
 
     - name: Seed keycloak secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/keycloak \
@@ -61,7 +61,7 @@
 
     - name: Seed mail secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/mail \
@@ -70,7 +70,7 @@
 
     - name: Seed grafana secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/grafana \
@@ -89,7 +89,7 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      ansible.builtin.command: kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
@@ -168,7 +168,7 @@
 
     - name: Seed postgres secret (for keycloak DB)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/postgres \
@@ -179,7 +179,7 @@
 
     - name: Seed auth secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/auth \
@@ -200,12 +200,12 @@
           --values /tmp/schnappy-keycloak-test-values.yml \
           --wait --timeout 600s
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       register: helm_result
 
     - name: Show pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ ns }} -o wide
+        kubectl get pods -n {{ ns }} -o wide
       register: pod_status
       changed_when: false
 
@@ -219,13 +219,13 @@
 
     - name: Wait for Keycloak deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deploy/schnappy-keycloak -n {{ ns }} --timeout=300s
+        kubectl rollout status deploy/schnappy-keycloak -n {{ ns }} --timeout=300s
       register: kc_rollout
       changed_when: false
 
     - name: Verify ExternalSecret synced for keycloak
       ansible.builtin.shell: |
-        k3s kubectl get externalsecret schnappy-keycloak -n {{ ns }} \
+        kubectl get externalsecret schnappy-keycloak -n {{ ns }} \
           -o jsonpath='{.status.conditions[0].reason}'
       register: kc_secret_sync
       retries: 12
@@ -235,7 +235,7 @@
 
     - name: Wait for Keycloak readiness probe
       ansible.builtin.shell: |
-        k3s kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak \
+        kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak \
           -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="keycloak")].ready}'
       register: kc_health
       retries: 60
@@ -249,7 +249,7 @@
 
     - name: Check schnappy realm exists
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+        kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
           /opt/keycloak/bin/kcadm.sh get realms/schnappy \
             --fields realm,enabled,registrationAllowed,resetPasswordAllowed,loginTheme \
             --server http://localhost:8080 --realm master \
@@ -280,7 +280,7 @@
 
     - name: List clients in schnappy realm
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+        kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
           /opt/keycloak/bin/kcadm.sh get clients \
             --fields clientId -r schnappy \
             --server http://localhost:8080 --realm master \
@@ -305,7 +305,7 @@
 
     - name: Check SMTP config in database
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-postgres -n {{ ns }} -c postgres -- \
+        kubectl exec deploy/schnappy-postgres -n {{ ns }} -c postgres -- \
           psql -U postgres -d keycloak -t -c \
             "SELECT count(*) FROM realm_smtp_config WHERE realm_id = (SELECT id FROM realm WHERE name = 'schnappy')"
       register: smtp_count
@@ -322,7 +322,7 @@
 
     - name: Check OIDC protocol available
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
+        kubectl exec deploy/schnappy-keycloak -n {{ ns }} -c keycloak -- \
           /opt/keycloak/bin/kcadm.sh get clients -r schnappy \
             --fields clientId,protocol -q protocol=openid-connect \
             --server http://localhost:8080 --realm master \

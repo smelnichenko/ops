@@ -40,7 +40,7 @@
     - name: Create velero namespace
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -69,7 +69,7 @@
     - name: Deploy backup MinIO
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         ---
         apiVersion: v1
         kind: PersistentVolume
@@ -207,7 +207,7 @@
 
     - name: Wait for backup MinIO to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/minio-backup -n {{ velero_namespace }} --timeout=120s
+        kubectl rollout status deployment/minio-backup -n {{ velero_namespace }} --timeout=120s
       changed_when: false
 
     - name: Create velero bucket in MinIO
@@ -236,7 +236,7 @@
                     drop: ["ALL"]
       ansible.builtin.shell: |
         # Run mc client as ephemeral pod to create the bucket
-        k3s kubectl run minio-setup --rm -i \
+        kubectl run minio-setup --rm -i \
           --restart=Never \
           -n {{ velero_namespace }} \
           --image={{ mc_image }} \
@@ -253,13 +253,13 @@
         helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>/dev/null || true
         helm repo update vmware-tanzu
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Create Velero credentials secret
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: v1
         kind: Secret
         metadata:
@@ -278,7 +278,7 @@
 
     - name: Install Velero CRDs
       ansible.builtin.shell: |
-        k3s kubectl apply --server-side -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backups.yaml \
+        kubectl apply --server-side -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backups.yaml \
           -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/backupstoragelocations.yaml \
           -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/deletebackuprequests.yaml \
           -f https://raw.githubusercontent.com/vmware-tanzu/helm-charts/main/charts/velero/crds/downloadrequests.yaml \
@@ -354,12 +354,12 @@
       args:
         executable: /bin/bash
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for Velero deployment to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/velero -n {{ velero_namespace }} --timeout=120s
+        kubectl rollout status deployment/velero -n {{ velero_namespace }} --timeout=120s
       changed_when: false
 
     # ================================================================
@@ -369,7 +369,7 @@
     - name: Apply network policies for velero namespace (legacy — Flux-managed via infra repo)
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:

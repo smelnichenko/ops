@@ -45,7 +45,7 @@
     - name: Create woodpecker namespace with Pod Security Standards
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -120,7 +120,7 @@
     - name: Create Woodpecker Forgejo OAuth secret
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Secret
         metadata:
@@ -187,7 +187,7 @@
 
     - name: Fetch SonarQube token from schnappy namespace secret
       ansible.builtin.shell: |
-        k3s kubectl get secret schnappy-sonarqube -n schnappy \
+        kubectl get secret schnappy-sonarqube -n schnappy \
           -o jsonpath='{.data.SONARQUBE_TOKEN}' 2>/dev/null | base64 -d
       args:
         executable: /bin/bash
@@ -198,7 +198,7 @@
     - name: Create CI pipeline secrets (SonarQube, registry credentials)
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Secret
         metadata:
@@ -228,7 +228,7 @@
 
     - name: Get Traefik LoadBalancer ClusterIP for internal DNS
       ansible.builtin.shell: |
-        k3s kubectl get svc traefik -n kube-system -o jsonpath='{.spec.clusterIP}'
+        kubectl get svc traefik -n kube-system -o jsonpath='{.spec.clusterIP}'
       register: traefik_clusterip_result
       changed_when: false
 
@@ -237,20 +237,20 @@
         set -o pipefail
         TRAEFIK_IP="{{ traefik_clusterip_result.stdout }}"
         # Get current NodeHosts
-        CURRENT=$(k3s kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
+        CURRENT=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
         # Remove any previous entries we added (idempotent)
         CLEANED=$(echo "$CURRENT" | grep -v '# woodpecker-managed' || true)
         # Append our entries
         UPDATED="${CLEANED}
         ${TRAEFIK_IP} {{ forgejo_host }} {{ woodpecker_host }} # woodpecker-managed"
         # Patch the ConfigMap
-        k3s kubectl get configmap coredns -n kube-system -o json | \
+        kubectl get configmap coredns -n kube-system -o json | \
           python3 -c "
         import json, sys
         cm = json.load(sys.stdin)
         cm['data']['NodeHosts'] = '''${UPDATED}'''
         json.dump(cm, sys.stdout)
-        " | k3s kubectl apply -f -
+        " | kubectl apply -f -
       args:
         executable: /bin/bash
       changed_when: false
@@ -320,17 +320,17 @@
               memory: 256Mi
         HELMEOF
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for Woodpecker server to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/woodpecker-server -n {{ woodpecker_namespace }} --timeout=300s
+        kubectl rollout status statefulset/woodpecker-server -n {{ woodpecker_namespace }} --timeout=300s
       changed_when: false
 
     - name: Wait for Woodpecker agent to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/woodpecker-agent -n {{ woodpecker_namespace }} --timeout=300s
+        kubectl rollout status statefulset/woodpecker-agent -n {{ woodpecker_namespace }} --timeout=300s
       changed_when: false
 
     # ================================================================
@@ -344,7 +344,7 @@
     - name: Apply Woodpecker network policies (legacy — kept for Vagrant tests only)
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         ---
         # Default deny all ingress and egress
         apiVersion: networking.k8s.io/v1
@@ -585,13 +585,13 @@
 
     - name: Check Woodpecker server pod
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=server -o jsonpath='{.items[0].status.phase}'
+        kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=server -o jsonpath='{.items[0].status.phase}'
       register: server_status
       changed_when: false
 
     - name: Check Woodpecker agent pod
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=agent -o jsonpath='{.items[0].status.phase}'
+        kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=agent -o jsonpath='{.items[0].status.phase}'
       register: agent_status
       changed_when: false
 

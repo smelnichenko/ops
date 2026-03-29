@@ -129,7 +129,7 @@ tasks:
   test:load:stress:prod:
     desc: Run distributed k6 stress test in production (4 parallel pods)
     cmds:
-      - ssh ten 'sudo k3s kubectl delete job schnappy-k6-stress-manual -n schnappy 2>/dev/null; sudo k3s kubectl create job schnappy-k6-stress-manual --from=cronjob/schnappy-k6-stress -n schnappy'
+      - ssh ten 'kubectl delete job schnappy-k6-stress-manual -n schnappy 2>/dev/null; kubectl create job schnappy-k6-stress-manual --from=cronjob/schnappy-k6-stress -n schnappy'
 
   test:load:spike:
     desc: Run k6 spike test — sudden traffic surge
@@ -153,18 +153,18 @@ tasks:
   test:hyperfoil:load:
     desc: Run Hyperfoil load test in production (5min, reports to MinIO)
     cmds:
-      - ssh ten 'sudo k3s kubectl delete job hf-load -n schnappy 2>/dev/null; sudo k3s kubectl create job hf-load --from=cronjob/schnappy-hyperfoil-load -n schnappy'
+      - ssh ten 'kubectl delete job hf-load -n schnappy 2>/dev/null; kubectl create job hf-load --from=cronjob/schnappy-hyperfoil-load -n schnappy'
       - echo "Waiting for completion (~5min)..."
-      - ssh ten 'sudo k3s kubectl wait --for=condition=complete job/hf-load -n schnappy --timeout=600s'
-      - ssh ten 'sudo k3s kubectl logs job/hf-load -n schnappy 2>/dev/null | tail -10'
+      - ssh ten 'kubectl wait --for=condition=complete job/hf-load -n schnappy --timeout=600s'
+      - ssh ten 'kubectl logs job/hf-load -n schnappy 2>/dev/null | tail -10'
 
   test:hyperfoil:stress:
     desc: Run Hyperfoil stress test in production (6min, reports to MinIO)
     cmds:
-      - ssh ten 'sudo k3s kubectl delete job hf-stress -n schnappy 2>/dev/null; sudo k3s kubectl create job hf-stress --from=cronjob/schnappy-hyperfoil-stress -n schnappy'
+      - ssh ten 'kubectl delete job hf-stress -n schnappy 2>/dev/null; kubectl create job hf-stress --from=cronjob/schnappy-hyperfoil-stress -n schnappy'
       - echo "Waiting for completion (~6min)..."
-      - ssh ten 'sudo k3s kubectl wait --for=condition=complete job/hf-stress -n schnappy --timeout=600s'
-      - ssh ten 'sudo k3s kubectl logs job/hf-stress -n schnappy 2>/dev/null | tail -10'
+      - ssh ten 'kubectl wait --for=condition=complete job/hf-stress -n schnappy --timeout=600s'
+      - ssh ten 'kubectl logs job/hf-stress -n schnappy 2>/dev/null | tail -10'
 
   # ============== JOOQ ==============
   jooq:generate:
@@ -402,8 +402,8 @@ tasks:
     desc: Build apt-cacher-ng image and import to k3s
     cmds:
       - docker build -t git.pmon.dev/schnappy/apt-cacher-ng:1.0 {{.SRC_DIR}}/platform/apt-cache/
-      - docker save git.pmon.dev/schnappy/apt-cacher-ng:1.0 | ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s ctr images import -'
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo k3s kubectl rollout restart deployment/schnappy-apt-cache -n schnappy'
+      - docker save git.pmon.dev/schnappy/apt-cacher-ng:1.0 | ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo ctr -n k8s.io images import -'
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'kubectl rollout restart deployment/schnappy-apt-cache -n schnappy'
 
   deploy:nexus:
     desc: Deploy Nexus repository manager on Pi
@@ -433,6 +433,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/production.yml -e @vars/woodpecker.yml
 
+  deploy:kubeadm:
+    desc: Install kubeadm cluster (replaces k3s)
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
+
   deploy:argocd:
     desc: Install/update Argo CD
     dir: deploy/ansible
@@ -452,7 +459,7 @@ tasks:
   deploy:backup:
     desc: Trigger a manual Velero backup of schnappy namespace
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup create manual-$(date +%Y%m%d-%H%M) --include-namespaces schnappy --default-volumes-to-fs-backup --kubeconfig /etc/rancher/k3s/k3s.yaml"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "kubectl exec deploy/velero -n velero -- velero backup create manual-$(date +%Y%m%d-%H%M) --include-namespaces schnappy --default-volumes-to-fs-backup --kubeconfig /etc/kubernetes/admin.conf"
 
   deploy:restore:verify:
     desc: Run k6 smoke tests to validate a Velero restore
@@ -463,17 +470,17 @@ tasks:
   deploy:backup:status:
     desc: Check Velero backup status
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl exec deploy/velero -n velero -- velero backup get --kubeconfig /etc/rancher/k3s/k3s.yaml"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "kubectl exec deploy/velero -n velero -- velero backup get --kubeconfig /etc/kubernetes/admin.conf"
 
   deploy:undeploy:
     desc: Uninstall schnappy from target (keeps PVCs)
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall schnappy -n schnappy --kubeconfig /etc/rancher/k3s/k3s.yaml"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo helm uninstall schnappy -n schnappy --kubeconfig /etc/kubernetes/admin.conf"
 
   deploy:status:
     desc: Check deployment status on target
     cmds:
-      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "sudo k3s kubectl get pods,svc,ingress -n schnappy"
+      - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} "kubectl get pods,svc,ingress -n schnappy"
 
   deploy:ping:
     desc: Test connectivity to target host

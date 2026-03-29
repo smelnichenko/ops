@@ -34,7 +34,7 @@
     - name: Create forgejo namespace
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -50,15 +50,15 @@
 
     - name: Configure CoreDNS for Forgejo
       ansible.builtin.shell: |
-        FORGEJO_IP=$(k3s kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+        FORGEJO_IP=$(kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
         if [ -z "$FORGEJO_IP" ]; then
           echo "Forgejo not yet deployed, skipping CoreDNS config"
           exit 0
         fi
-        k3s kubectl get configmap coredns -n kube-system -o json | \
+        kubectl get configmap coredns -n kube-system -o json | \
           jq --arg ip "$FORGEJO_IP" '.data.Corefile |= . + "\nlocalhost:53 {\n  hosts {\n    " + $ip + " localhost\n    fallthrough\n  }\n}\n"' | \
-          k3s kubectl apply -f -
-        k3s kubectl rollout restart deployment/coredns -n kube-system
+          kubectl apply -f -
+        kubectl rollout restart deployment/coredns -n kube-system
       changed_when: false
       failed_when: false
 
@@ -94,17 +94,17 @@
           size: 1Gi
         HELMEOF
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for Forgejo to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/forgejo -n forgejo --timeout=300s
+        kubectl rollout status deployment/forgejo -n forgejo --timeout=300s
       changed_when: false
 
     - name: Get Forgejo ClusterIP
       ansible.builtin.shell: |
-        k3s kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}'
+        kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}'
       register: forgejo_ip_result
       changed_when: false
 
@@ -115,7 +115,7 @@
     - name: Wait for Forgejo API
       ansible.builtin.shell: |
         for i in $(seq 1 30); do
-          if k3s kubectl exec deploy/forgejo -n forgejo -- \
+          if kubectl exec deploy/forgejo -n forgejo -- \
             wget -qO- --timeout=5 "http://localhost:3000/api/v1/version" 2>/dev/null | grep -q version; then
             exit 0
           fi
@@ -126,7 +126,7 @@
 
     - name: Clear must-change-password on admin
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/forgejo -n forgejo -- \
+        kubectl exec deploy/forgejo -n forgejo -- \
           gitea admin user change-password \
           -u {{ forgejo_admin_user }} \
           -p '{{ forgejo_admin_password }}' \
@@ -143,7 +143,7 @@
 
     - name: Create infra repo in Forgejo
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/forgejo -n forgejo -- \
+        kubectl exec deploy/forgejo -n forgejo -- \
           wget -qO- --timeout=10 \
           --header="Content-Type: application/json" \
           --header="Authorization: Basic $(echo -n '{{ forgejo_admin_user }}:{{ forgejo_admin_password }}' | base64)" \
@@ -208,7 +208,7 @@
     - name: Create argocd namespace
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -227,7 +227,7 @@
         helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
         helm repo update argo
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Deploy Argo CD
@@ -263,22 +263,22 @@
             limits: { cpu: 100m, memory: 128Mi }
         HELMEOF
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for argocd-server
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
+        kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
       changed_when: false
 
     - name: Wait for argocd-repo-server
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
+        kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
       changed_when: false
 
     - name: Wait for argocd-application-controller
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
+        kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
       changed_when: false
 
     # ================================================================
@@ -292,7 +292,7 @@
     - name: Create repo credentials secret
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Secret
         metadata:
@@ -314,7 +314,7 @@
     - name: Create test Application
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: argoproj.io/v1alpha1
         kind: Application
         metadata:
@@ -350,8 +350,8 @@
     - name: Wait for Application to sync
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          STATUS=$(k3s kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.sync.status}' 2>/dev/null)
-          HEALTH=$(k3s kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.health.status}' 2>/dev/null)
+          STATUS=$(kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.sync.status}' 2>/dev/null)
+          HEALTH=$(kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.health.status}' 2>/dev/null)
           if [ "$STATUS" = "Synced" ] && [ "$HEALTH" = "Healthy" ]; then
             exit 0
           fi
@@ -369,14 +369,14 @@
 
     - name: Check test namespace exists
       ansible.builtin.shell: |
-        k3s kubectl get namespace {{ test_namespace }} -o name 2>/dev/null
+        kubectl get namespace {{ test_namespace }} -o name 2>/dev/null
       register: ns_check
       changed_when: false
       failed_when: false
 
     - name: Check ConfigMap v1 exists
       ansible.builtin.shell: |
-        k3s kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null
+        kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null
       register: cm_check
       changed_when: false
       failed_when: false
@@ -426,7 +426,7 @@
     - name: Wait for ConfigMap v2
       ansible.builtin.shell: |
         for i in $(seq 1 90); do
-          VERSION=$(k3s kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null)
+          VERSION=$(kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null)
           if [ "$VERSION" = "v2" ]; then
             exit 0
           fi
@@ -452,33 +452,33 @@
 
     - name: Check controller pods
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ argocd_namespace }} -o wide
+        kubectl get pods -n {{ argocd_namespace }} -o wide
       register: pods
       changed_when: false
 
     - name: Check Application status
       ansible.builtin.shell: |
-        k3s kubectl get applications -n {{ argocd_namespace }} -o wide 2>/dev/null || echo "No applications"
+        kubectl get applications -n {{ argocd_namespace }} -o wide 2>/dev/null || echo "No applications"
       register: apps
       changed_when: false
 
     - name: Check server pod running
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=server -o jsonpath='{.items[0].status.phase}'
+        kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=server -o jsonpath='{.items[0].status.phase}'
       register: server_status
       changed_when: false
       failed_when: false
 
     - name: Check repo-server pod running
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=repo-server -o jsonpath='{.items[0].status.phase}'
+        kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=repo-server -o jsonpath='{.items[0].status.phase}'
       register: repo_server_status
       changed_when: false
       failed_when: false
 
     - name: Check controller pod running
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=application-controller -o jsonpath='{.items[0].status.phase}'
+        kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=application-controller -o jsonpath='{.items[0].status.phase}'
       register: controller_status
       changed_when: false
       failed_when: false

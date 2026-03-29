@@ -34,7 +34,7 @@
 
     - name: Get Vault root token from k8s secret
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+        kubectl get secret vault-root-token -n {{ vault_ns }} \
           -o jsonpath='{.data.token}' | base64 -d
       register: vault_token_result
       changed_when: false
@@ -47,7 +47,7 @@
 
     - name: Seed minio secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/minio \
@@ -64,12 +64,12 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.shell: k3s kubectl create namespace {{ ns }} --dry-run=client -o yaml | k3s kubectl apply -f -
+      ansible.builtin.shell: kubectl create namespace {{ ns }} --dry-run=client -o yaml | kubectl apply -f -
       changed_when: false
 
     - name: Apply default-deny network policy
       ansible.builtin.shell: |
-        k3s kubectl apply -n {{ ns }} -f - <<'EOF'
+        kubectl apply -n {{ ns }} -f - <<'EOF'
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:
@@ -96,7 +96,7 @@
 
     - name: Deploy schnappy-data chart (MinIO only)
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-data \
+        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-data \
           /vagrant-platform/helm/schnappy-data \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
@@ -112,16 +112,16 @@
           --set minio.storage.storageClass=local-path \
           --set networkPolicies.enabled=true
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for MinIO
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-minio -n {{ ns }} --timeout=180s
+      ansible.builtin.shell: kubectl rollout status deploy/schnappy-minio -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: Deploy schnappy-observability chart (reports only)
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-observability \
+        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-observability \
           /vagrant-platform/helm/schnappy-observability \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
@@ -133,16 +133,16 @@
           --set reports.enabled=true \
           --set networkPolicies.enabled=true
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for reports server
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-reports -n {{ ns }} --timeout=120s
+      ansible.builtin.shell: kubectl rollout status deploy/schnappy-reports -n {{ ns }} --timeout=120s
       changed_when: false
 
     - name: Deploy schnappy chart (Hyperfoil NPs only)
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-app \
+        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-app \
           /vagrant-platform/helm/schnappy \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
@@ -163,11 +163,11 @@
           --set networkPolicies.enabled=true \
           --set vault.secretsEnabled=true
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Show pod status
-      ansible.builtin.shell: k3s kubectl get pods -n {{ ns }} -o wide
+      ansible.builtin.shell: kubectl get pods -n {{ ns }} -o wide
       register: pod_status
       changed_when: false
 
@@ -185,7 +185,7 @@
 
     - name: Create test report upload job
       ansible.builtin.shell: |
-        k3s kubectl apply -n {{ ns }} -f - <<'EOF'
+        kubectl apply -n {{ ns }} -f - <<'EOF'
         apiVersion: batch/v1
         kind: Job
         metadata:
@@ -267,7 +267,7 @@
     - name: Wait for upload job to complete
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          TYPES=$(k3s kubectl get job report-upload-test -n {{ ns }} -o jsonpath='{.status.conditions[*].type}' 2>/dev/null)
+          TYPES=$(kubectl get job report-upload-test -n {{ ns }} -o jsonpath='{.status.conditions[*].type}' 2>/dev/null)
           echo "$TYPES" | grep -q "Complete" && exit 0
           echo "$TYPES" | grep -q "Failed" && exit 1
           sleep 5
@@ -278,7 +278,7 @@
       failed_when: false
 
     - name: Get upload job logs
-      ansible.builtin.shell: k3s kubectl logs job/report-upload-test -n {{ ns }} 2>/dev/null || echo "No logs available"
+      ansible.builtin.shell: kubectl logs job/report-upload-test -n {{ ns }} 2>/dev/null || echo "No logs available"
       register: upload_logs
       changed_when: false
 
@@ -298,7 +298,7 @@
 
     - name: Check reports index page via Nginx
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
           curl -sf -o /dev/null -w '%{http_code}' http://localhost:8080/index.html
       register: index_http
       retries: 6
@@ -309,7 +309,7 @@
 
     - name: Check index page contains report links
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
           curl -sf http://localhost:8080/index.html
       register: index_content
       changed_when: false
@@ -317,7 +317,7 @@
 
     - name: Check report page via Nginx
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
           curl -sf -o /dev/null -w '%{http_code}' http://localhost:8080/load/2026-01-01_030000/index.html
       register: report_http
       retries: 6
@@ -328,7 +328,7 @@
 
     - name: Check report content
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
           curl -sf http://localhost:8080/load/2026-01-01_030000/index.html
       register: report_content
       changed_when: false
@@ -340,28 +340,28 @@
 
     - name: Check MinIO network policy exists
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy schnappy-minio -n {{ ns }} -o name
+        kubectl get networkpolicy schnappy-minio -n {{ ns }} -o name
       register: minio_np
       changed_when: false
       failed_when: false
 
     - name: Check reports network policy exists
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy schnappy-reports -n {{ ns }} -o name
+        kubectl get networkpolicy schnappy-reports -n {{ ns }} -o name
       register: reports_np
       changed_when: false
       failed_when: false
 
     - name: Check Hyperfoil network policy exists
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy schnappy-hyperfoil -n {{ ns }} -o name
+        kubectl get networkpolicy schnappy-hyperfoil -n {{ ns }} -o name
       register: hyperfoil_np
       changed_when: false
       failed_when: false
 
     - name: Check default-deny network policy exists
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy schnappy-default-deny -n {{ ns }} -o name
+        kubectl get networkpolicy schnappy-default-deny -n {{ ns }} -o name
       register: deny_np
       changed_when: false
       failed_when: false

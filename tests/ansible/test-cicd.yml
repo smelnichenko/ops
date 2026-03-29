@@ -49,7 +49,7 @@
 
     - name: Create forgejo namespace
       ansible.builtin.shell: |
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -69,13 +69,13 @@
 
     - name: Add DNS to CoreDNS for in-cluster resolution
       ansible.builtin.shell: |
-        EXISTING=$(k3s kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
+        EXISTING=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.NodeHosts}')
         if ! echo "$EXISTING" | grep -q "{{ forgejo_host }}"; then
           UPDATED="${EXISTING}
-        $(k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}') {{ forgejo_host }}"
-          k3s kubectl patch configmap coredns -n kube-system --type merge \
+        $(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}') {{ forgejo_host }}"
+          kubectl patch configmap coredns -n kube-system --type merge \
             -p "{\"data\":{\"NodeHosts\":\"${UPDATED}\"}}"
-          k3s kubectl rollout restart deployment coredns -n kube-system
+          kubectl rollout restart deployment coredns -n kube-system
           echo "CoreDNS updated with {{ forgejo_host }}"
         else
           echo "CoreDNS already has {{ forgejo_host }}"
@@ -112,7 +112,7 @@
           --set resources.limits.cpu=2000m \
           --wait --timeout 5m
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Wait for Forgejo to be ready
       ansible.builtin.shell: |
@@ -210,7 +210,7 @@
     - name: Wait for k3s to be ready after restart
       ansible.builtin.shell: |
         for i in $(seq 1 30); do
-          if k3s kubectl get nodes 2>/dev/null | grep -q " Ready"; then
+          if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
             echo "k3s ready"
             exit 0
           fi
@@ -335,7 +335,7 @@
 
     - name: Create schnappy namespace
       ansible.builtin.shell: |
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -371,27 +371,27 @@
           --set "mail.enabled=false" \
           --timeout 10m
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       timeout: 660
 
     - name: Wait for app and frontend pods to be ready
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          APP_READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+          APP_READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          FE_READY=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=site \
+          FE_READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=site \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
           if [ "$APP_READY" = "true" ] && [ "$FE_READY" = "true" ]; then
             echo "OK: Both pods ready"
-            k3s kubectl get pods -n {{ ns }} -o wide
+            kubectl get pods -n {{ ns }} -o wide
             exit 0
           fi
           echo "Waiting... app=$APP_READY frontend=$FE_READY (attempt $i/60)"
           sleep 10
         done
         echo "FAIL: pods not ready after 10 minutes"
-        k3s kubectl get pods -n {{ ns }} -o wide
-        k3s kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+        kubectl get pods -n {{ ns }} -o wide
+        kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
         exit 1
       changed_when: false
       timeout: 660
@@ -399,9 +399,9 @@
     - name: Verify images were pulled from registry (not local)
       ansible.builtin.shell: |
         for component in app site; do
-          IMAGE=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
+          IMAGE=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
             -o jsonpath='{.items[0].status.containerStatuses[0].image}')
-          IMAGE_ID=$(k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
+          IMAGE_ID=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=$component \
             -o jsonpath='{.items[0].status.containerStatuses[0].imageID}')
           echo "$component: image=$IMAGE imageID=$IMAGE_ID"
           if ! echo "$IMAGE" | grep -q "{{ forgejo_host }}"; then
@@ -418,7 +418,7 @@
 
     - name: Verify app health endpoint responds
       ansible.builtin.shell: |
-        APP_IP=$(k3s kubectl get svc schnappy-monitor -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
+        APP_IP=$(kubectl get svc schnappy-monitor -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
         for i in $(seq 1 30); do
           STATUS=$(curl -sf "http://$APP_IP:8080/api/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null)
           if [ "$STATUS" = "UP" ]; then
@@ -433,7 +433,7 @@
 
     - name: Verify build-info returns correct tag
       ansible.builtin.shell: |
-        APP_IP=$(k3s kubectl get svc schnappy-monitor -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
+        APP_IP=$(kubectl get svc schnappy-monitor -n {{ ns }} -o jsonpath='{.spec.clusterIP}')
         GIT_HASH=$(curl -sf "http://$APP_IP:8080/api/build-info" | python3 -c "import sys,json; print(json.load(sys.stdin).get('gitHash',''))")
         if [ "$GIT_HASH" != "{{ test_image_tag }}" ]; then
           echo "FAIL: build-info gitHash=$GIT_HASH, expected {{ test_image_tag }}"

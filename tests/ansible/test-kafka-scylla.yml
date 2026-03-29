@@ -30,7 +30,7 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      ansible.builtin.command: kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
@@ -131,12 +131,12 @@
           --values /tmp/schnappy-chat-test-values.yml \
           --wait --timeout 600s
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       register: helm_result
 
     - name: Show pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ ns }} -o wide
+        kubectl get pods -n {{ ns }} -o wide
       register: pod_status
       changed_when: false
 
@@ -150,13 +150,13 @@
 
     - name: Wait for Kafka StatefulSet rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/schnappy-kafka -n {{ ns }} --timeout=300s
+        kubectl rollout status statefulset/schnappy-kafka -n {{ ns }} --timeout=300s
       register: kafka_rollout
       changed_when: false
 
     - name: Wait for Kafka broker to respond
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-kafka-0 -- \
+        kubectl exec -n {{ ns }} schnappy-kafka-0 -- \
           /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092
       register: kafka_broker
       retries: 30
@@ -174,14 +174,14 @@
 
     - name: Wait for topics Job to complete
       ansible.builtin.shell: |
-        k3s kubectl wait --for=condition=complete job/schnappy-kafka-topics -n {{ ns }} --timeout=300s
+        kubectl wait --for=condition=complete job/schnappy-kafka-topics -n {{ ns }} --timeout=300s
       register: topics_job
       changed_when: false
       failed_when: false
 
     - name: List Kafka topics
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-kafka-0 -- \
+        kubectl exec -n {{ ns }} schnappy-kafka-0 -- \
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
       register: kafka_topics
       retries: 6
@@ -205,13 +205,13 @@
 
     - name: Wait for ScyllaDB StatefulSet rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/schnappy-scylla -n {{ ns }} --timeout=300s
+        kubectl rollout status statefulset/schnappy-scylla -n {{ ns }} --timeout=300s
       register: scylla_rollout
       changed_when: false
 
     - name: Wait for ScyllaDB CQL to respond
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-scylla-0 -- \
+        kubectl exec -n {{ ns }} schnappy-scylla-0 -- \
           sh -c 'cqlsh "$(hostname -i)" 9042 -e "SELECT now() FROM system.local"'
       register: scylla_cql
       retries: 30
@@ -229,14 +229,14 @@
 
     - name: Wait for schema Job to complete
       ansible.builtin.shell: |
-        k3s kubectl wait --for=condition=complete job/schnappy-scylla-schema -n {{ ns }} --timeout=300s
+        kubectl wait --for=condition=complete job/schnappy-scylla-schema -n {{ ns }} --timeout=300s
       register: schema_job
       changed_when: false
       failed_when: false
 
     - name: Check chat keyspace exists
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-scylla-0 -- \
+        kubectl exec -n {{ ns }} schnappy-scylla-0 -- \
           sh -c 'cqlsh "$(hostname -i)" 9042 -e "DESCRIBE KEYSPACE chat"'
       register: scylla_keyspace
       retries: 6
@@ -247,7 +247,7 @@
 
     - name: Check chat tables exist
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-scylla-0 -- \
+        kubectl exec -n {{ ns }} schnappy-scylla-0 -- \
           sh -c "cqlsh \$(hostname -i) 9042 -e \"SELECT table_name FROM system_schema.tables WHERE keyspace_name='chat'\""
       register: scylla_tables
       changed_when: false
@@ -271,14 +271,14 @@
 
     - name: Check Kafka network policy exists
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy schnappy-kafka -n {{ ns }} -o name
+        kubectl get networkpolicy schnappy-kafka -n {{ ns }} -o name
       register: kafka_np
       changed_when: false
       failed_when: false
 
     - name: Check ScyllaDB network policy exists
       ansible.builtin.shell: |
-        k3s kubectl get networkpolicy schnappy-scylla -n {{ ns }} -o name
+        kubectl get networkpolicy schnappy-scylla -n {{ ns }} -o name
       register: scylla_np
       changed_when: false
       failed_when: false
@@ -294,14 +294,14 @@
 
     - name: Check Kafka service exists
       ansible.builtin.shell: |
-        k3s kubectl get service schnappy-kafka -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
+        kubectl get service schnappy-kafka -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
       register: kafka_svc
       changed_when: false
       failed_when: false
 
     - name: Check ScyllaDB service exists
       ansible.builtin.shell: |
-        k3s kubectl get service schnappy-scylla -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
+        kubectl get service schnappy-scylla -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
       register: scylla_svc
       changed_when: false
       failed_when: false

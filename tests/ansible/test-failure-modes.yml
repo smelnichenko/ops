@@ -33,7 +33,7 @@
     # ================================================================
 
     - name: Verify k3s is running
-      ansible.builtin.command: k3s kubectl get nodes
+      ansible.builtin.command: kubectl get nodes
       changed_when: false
 
     - name: Deploy app
@@ -115,11 +115,11 @@
 
     - name: "S1: Kill app pod"
       ansible.builtin.shell: |
-        k3s kubectl delete pod -l app.kubernetes.io/component=app -n {{ ns }} --grace-period=0 --force
+        kubectl delete pod -l app.kubernetes.io/component=app -n {{ ns }} --grace-period=0 --force
 
     - name: "S1: Wait for new pod to be ready"
       ansible.builtin.shell: |
-        k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=app -n {{ ns }} --timeout=120s
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=app -n {{ ns }} --timeout=120s
       register: pod_recovery
       retries: 3
       delay: 5
@@ -159,12 +159,12 @@
 
     - name: "S2: Patch app deployment with small pool"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
+        kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=3
 
     - name: "S2: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "S2: Wait for app healthy"
       ansible.builtin.uri:
@@ -196,12 +196,12 @@
 
     - name: "S2: Restore pool size"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
+        kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE-
 
     - name: "S2: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "=== Suite 2 Complete ==="
       ansible.builtin.debug:
@@ -235,7 +235,7 @@
 
         - name: "S3: Scale Kafka to 0"
           ansible.builtin.shell: |
-            k3s kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=0
+            kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=0
 
         - name: "S3: Verify health endpoint still responds (Kafka down)"
           ansible.builtin.uri:
@@ -261,11 +261,11 @@
 
         - name: "S3: Restore Kafka"
           ansible.builtin.shell: |
-            k3s kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=1
+            kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=1
 
         - name: "S3: Wait for Kafka ready"
           ansible.builtin.shell: |
-            k3s kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=kafka -n {{ ns }} --timeout=180s
+            kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=kafka -n {{ ns }} --timeout=180s
           retries: 3
           delay: 10
           until: true
@@ -295,12 +295,12 @@
 
     - name: "S4: Patch app with small heap"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
+        kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           JAVA_OPTS="-Xmx256m -XX:+UseZGC"
 
     - name: "S4: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "S4: Wait for app healthy"
       ansible.builtin.uri:
@@ -323,19 +323,19 @@
 
     - name: "S4: Check pod not OOMKilled"
       ansible.builtin.shell: |
-        k3s kubectl get pod -l app.kubernetes.io/component=app -n {{ ns }} \
+        kubectl get pod -l app.kubernetes.io/component=app -n {{ ns }} \
           -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.reason}'
       register: s4_oom
       failed_when: "'OOMKilled' in s4_oom.stdout"
 
     - name: "S4: Restore heap"
       ansible.builtin.shell: |
-        k3s kubectl set env deployment/schnappy-monitor -n {{ ns }} \
+        kubectl set env deployment/schnappy-monitor -n {{ ns }} \
           JAVA_OPTS="-Xmx1536m -XX:+UseZGC"
 
     - name: "S4: Wait for rollout"
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
 
     - name: "=== Suite 4 Complete ==="
       ansible.builtin.debug:

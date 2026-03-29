@@ -32,7 +32,7 @@
 
     - name: Get Vault root token from k8s secret
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+        kubectl get secret vault-root-token -n {{ vault_ns }} \
           -o jsonpath='{.data.token}' | base64 -d
       register: vault_token_result
       changed_when: false
@@ -45,7 +45,7 @@
 
     - name: Check if sonarqube secret exists in Vault
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv get secret/schnappy/sonarqube
@@ -56,7 +56,7 @@
 
     - name: Seed sonarqube secret into Vault
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/sonarqube \
@@ -75,7 +75,7 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      ansible.builtin.command: kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
@@ -182,12 +182,12 @@
           --values /tmp/schnappy-sonarqube-test-values.yml \
           --timeout 600s
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       register: helm_result
 
     - name: Show pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ ns }} -o wide
+        kubectl get pods -n {{ ns }} -o wide
       register: pod_status
       changed_when: false
 
@@ -201,13 +201,13 @@
 
     - name: Wait for SonarQube PostgreSQL StatefulSet rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/schnappy-sonarqube-postgres -n {{ ns }} --timeout=180s
+        kubectl rollout status statefulset/schnappy-sonarqube-postgres -n {{ ns }} --timeout=180s
       register: sq_pg_rollout
       changed_when: false
 
     - name: Verify ExternalSecret synced for sonarqube
       ansible.builtin.shell: |
-        k3s kubectl get externalsecret schnappy-sonarqube -n {{ ns }} \
+        kubectl get externalsecret schnappy-sonarqube -n {{ ns }} \
           -o jsonpath='{.status.conditions[0].reason}'
       register: sq_secret_sync
       retries: 12
@@ -217,7 +217,7 @@
 
     - name: Verify PostgreSQL is accepting connections
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-sonarqube-postgres-0 -- \
+        kubectl exec -n {{ ns }} schnappy-sonarqube-postgres-0 -- \
           pg_isready -U sonarqube
       register: sq_pg_ready
       retries: 12
@@ -231,14 +231,14 @@
 
     - name: Wait for SonarQube deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-sonarqube -n {{ ns }} --timeout=600s
+        kubectl rollout status deployment/schnappy-sonarqube -n {{ ns }} --timeout=600s
       register: sq_rollout
       changed_when: false
       failed_when: false
 
     - name: Show SonarQube pod logs if rollout failed
       ansible.builtin.shell: |
-        k3s kubectl logs -n {{ ns }} -l app.kubernetes.io/component=sonarqube --tail=50
+        kubectl logs -n {{ ns }} -l app.kubernetes.io/component=sonarqube --tail=50
       register: sq_logs
       changed_when: false
       when: sq_rollout.rc is defined and sq_rollout.rc != 0
@@ -250,7 +250,7 @@
 
     - name: Wait for SonarQube to be UP
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf http://localhost:9000/api/system/status 2>/dev/null | \
           python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'UNKNOWN'))"
       register: sq_status
@@ -266,7 +266,7 @@
 
     - name: Verify SonarQube web UI responds
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -o /dev/null -w '%{http_code}' http://localhost:9000/
       register: sq_http
       retries: 6
@@ -281,7 +281,7 @@
 
     - name: Check if admin password is still default
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "admin:{{ sonarqube_default_password }}" \
           http://localhost:9000/api/authentication/validate
       register: sq_default_auth
@@ -290,7 +290,7 @@
 
     - name: Fetch admin password from Vault (if default no longer works)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv get -field=admin_password secret/schnappy/sonarqube
@@ -302,7 +302,7 @@
 
     - name: Validate Vault admin password
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "admin:{{ sq_vault_admin_pw.stdout }}" \
           http://localhost:9000/api/authentication/validate
       register: sq_vault_auth
@@ -327,7 +327,7 @@
 
     - name: Change admin password from default
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "admin:{{ sonarqube_default_password }}" \
           -X POST "http://localhost:9000/api/users/change_password" \
           --data-urlencode "login=admin" \
@@ -349,7 +349,7 @@
 
     - name: Generate API token for CI
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "admin:{{ sq_api_password }}" \
           -X POST "http://localhost:9000/api/user_tokens/generate" \
           -d "name=ci-token" \
@@ -366,7 +366,7 @@
 
     - name: Seed sonarqube credentials into Vault
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/sonarqube \
@@ -392,7 +392,7 @@
 
     - name: Check if custom quality gate exists
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualitygates/show?name=Monitor"
       register: sq_qg_check
@@ -402,7 +402,7 @@
 
     - name: Create custom quality gate
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualitygates/create" \
           -d "name=Monitor"
@@ -411,7 +411,7 @@
 
     - name: Get existing quality gate conditions
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualitygates/show?name=Monitor"
       register: sq_qg_conditions
@@ -456,7 +456,7 @@
 
     - name: Add quality gate conditions
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualitygates/create_condition" \
           -d "gateName=Monitor" \
@@ -470,7 +470,7 @@
 
     - name: Set Monitor quality gate as default
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualitygates/set_as_default" \
           -d "name=Monitor"
@@ -482,7 +482,7 @@
 
     - name: Check if Monitor Java quality profile exists
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
       register: sq_java_profile
@@ -496,7 +496,7 @@
 
     - name: Get Sonar way Java profile key
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=java"
       register: sq_java_profile_sonarway
@@ -506,7 +506,7 @@
 
     - name: Copy Sonar way Java profile as Monitor
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualityprofiles/copy" \
           -d "fromKey={{ (sq_java_profile_sonarway.stdout | from_json).profiles[0].key }}" \
@@ -516,7 +516,7 @@
 
     - name: Get Monitor Java profile key
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
       register: sq_java_monitor_profile
@@ -525,7 +525,7 @@
 
     - name: Set cognitive complexity threshold to 15
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualityprofiles/activate_rule" \
           -d "key={{ (sq_java_monitor_profile.stdout | from_json).profiles[0].key }}" \
@@ -535,7 +535,7 @@
 
     - name: Set Monitor as default Java profile
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualityprofiles/set_default" \
           -d "qualityProfile=Monitor" \
@@ -545,7 +545,7 @@
     # TypeScript profile
     - name: Check if Monitor TypeScript quality profile exists
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
       register: sq_ts_profile
@@ -559,7 +559,7 @@
 
     - name: Get Sonar way TypeScript profile key
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=ts"
       register: sq_ts_profile_sonarway
@@ -569,7 +569,7 @@
 
     - name: Copy Sonar way TypeScript profile as Monitor
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualityprofiles/copy" \
           -d "fromKey={{ (sq_ts_profile_sonarway.stdout | from_json).profiles[0].key }}" \
@@ -579,7 +579,7 @@
 
     - name: Get Monitor TypeScript profile key
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
       register: sq_ts_monitor_profile
@@ -588,7 +588,7 @@
 
     - name: Set TS cognitive complexity threshold to 15
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualityprofiles/activate_rule" \
           -d "key={{ (sq_ts_monitor_profile.stdout | from_json).profiles[0].key }}" \
@@ -598,7 +598,7 @@
 
     - name: Set Monitor as default TypeScript profile
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualityprofiles/set_default" \
           -d "qualityProfile=Monitor" \
@@ -638,7 +638,7 @@
 
     - name: Create SonarQube projects
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/projects/create" \
           -d "name={{ item.name }}" \
@@ -653,7 +653,7 @@
 
     - name: Set quality gate for each project
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           -X POST "http://localhost:9000/api/qualitygates/select" \
           -d "projectKey={{ item.key }}" \
@@ -665,7 +665,7 @@
 
     - name: List all SonarQube projects
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
           curl -sf -u "{{ sq_auth }}" \
           "http://localhost:9000/api/projects/search" | \
           python3 -c "import sys,json; comps=json.load(sys.stdin).get('components',[]); [print(c['key']) for c in comps]"

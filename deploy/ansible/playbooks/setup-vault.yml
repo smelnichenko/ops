@@ -44,39 +44,39 @@
 
     - name: Check if cert-manager is installed
       ansible.builtin.shell: |
-        k3s kubectl get namespace cert-manager -o name
+        kubectl get namespace cert-manager -o name
       register: certmanager_check
       changed_when: false
       failed_when: false
 
     - name: Install cert-manager (if not present)
       ansible.builtin.shell: |
-        k3s kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
       when: certmanager_check.rc != 0
       changed_when: true
 
     - name: Wait for cert-manager webhook to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=120s
+        kubectl rollout status deployment/cert-manager-webhook -n cert-manager --timeout=120s
       when: certmanager_check.rc != 0
       changed_when: false
 
     - name: Add HashiCorp Helm repo
       ansible.builtin.shell: |
-        helm repo add hashicorp https://helm.releases.hashicorp.com --kubeconfig /etc/rancher/k3s/k3s.yaml
-        helm repo update hashicorp --kubeconfig /etc/rancher/k3s/k3s.yaml
+        helm repo add hashicorp https://helm.releases.hashicorp.com --kubeconfig /etc/kubernetes/admin.conf
+        helm repo update hashicorp --kubeconfig /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Add External Secrets Helm repo
       ansible.builtin.shell: |
-        helm repo add external-secrets https://charts.external-secrets.io --kubeconfig /etc/rancher/k3s/k3s.yaml
-        helm repo update external-secrets --kubeconfig /etc/rancher/k3s/k3s.yaml
+        helm repo add external-secrets https://charts.external-secrets.io --kubeconfig /etc/kubernetes/admin.conf
+        helm repo update external-secrets --kubeconfig /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Add Sealed Secrets Helm repo
       ansible.builtin.shell: |
-        helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets --kubeconfig /etc/rancher/k3s/k3s.yaml
-        helm repo update sealed-secrets --kubeconfig /etc/rancher/k3s/k3s.yaml
+        helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets --kubeconfig /etc/kubernetes/admin.conf
+        helm repo update sealed-secrets --kubeconfig /etc/kubernetes/admin.conf
       changed_when: false
 
     # ================================================================
@@ -116,7 +116,7 @@
     - name: Create vault namespace
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -133,10 +133,10 @@
     - name: Create vault-unseal-ca secret (Pi TLS cert)
       ansible.builtin.shell: |
         set -o pipefail
-        k3s kubectl create secret generic vault-unseal-ca \
+        kubectl create secret generic vault-unseal-ca \
           -n {{ vault_k3s_namespace }} \
           --from-literal=ca.pem="{{ vault_pi_ca_cert }}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -
       args:
         executable: /bin/bash
       changed_when: false
@@ -145,10 +145,10 @@
     - name: Create vault-unseal-token secret (autounseal token)
       ansible.builtin.shell: |
         set -o pipefail
-        k3s kubectl create secret generic vault-unseal-token \
+        kubectl create secret generic vault-unseal-token \
           -n {{ vault_k3s_namespace }} \
           --from-literal=token="{{ vault_pi_autounseal_token }}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -
       args:
         executable: /bin/bash
       changed_when: false
@@ -161,7 +161,7 @@
     - name: Apply cert-manager TLS resources
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         ---
         apiVersion: cert-manager.io/v1
         kind: ClusterIssuer
@@ -221,7 +221,7 @@
 
     - name: Wait for vault-tls certificate to be Ready
       ansible.builtin.shell: |
-        k3s kubectl get certificate vault-tls -n {{ vault_k3s_namespace }} \
+        kubectl get certificate vault-tls -n {{ vault_k3s_namespace }} \
           -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
       register: vault_tls_ready
       retries: 24
@@ -349,17 +349,17 @@
         helm upgrade --install vault hashicorp/vault \
           --namespace {{ vault_k3s_namespace }} \
           --version {{ vault_k3s_helm_version }} \
-          --kubeconfig /etc/rancher/k3s/k3s.yaml \
+          --kubeconfig /etc/kubernetes/admin.conf \
           -f /tmp/vault-ha-values.yaml \
           --wait-for-jobs \
           --timeout 5m
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for vault-0 pod to be Running (not Ready — normal pre-init)
       ansible.builtin.shell: |
-        k3s kubectl get pod vault-0 -n {{ vault_k3s_namespace }} \
+        kubectl get pod vault-0 -n {{ vault_k3s_namespace }} \
           -o jsonpath='{.status.phase}'
       register: vault_pod_phase
       retries: 30
@@ -373,7 +373,7 @@
 
     - name: Check k3s Vault init status
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           vault operator init -status 2>&1
       register: k3s_init_status
@@ -390,7 +390,7 @@
 
     - name: Initialize k3s Vault (first time only)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           vault operator init \
           -recovery-shares={{ vault_recovery_shares }} \
@@ -438,10 +438,10 @@
         - name: Store root token as k8s secret (Vagrant/test only)
           ansible.builtin.shell: |
             set -o pipefail
-            k3s kubectl create secret generic vault-root-token \
+            kubectl create secret generic vault-root-token \
               -n {{ vault_k3s_namespace }} \
               --from-literal=token="{{ k3s_vault_root_token }}" \
-              --dry-run=client -o yaml | k3s kubectl apply -f -
+              --dry-run=client -o yaml | kubectl apply -f -
           args:
             executable: /bin/bash
           when: vault_store_root_token | default(false) | bool
@@ -450,7 +450,7 @@
 
         - name: Wait for vault-0 to be Ready after init (auto-unseal via transit)
           ansible.builtin.shell: |
-            k3s kubectl wait -n {{ vault_k3s_namespace }} pod/vault-0 \
+            kubectl wait -n {{ vault_k3s_namespace }} pod/vault-0 \
               --for=condition=ready --timeout=120s
           changed_when: false
 
@@ -460,7 +460,7 @@
 
         - name: Enable KV v2 secrets engine
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault secrets enable -path=secret kv-v2
@@ -468,7 +468,7 @@
 
         - name: Enable Kubernetes auth
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault auth enable kubernetes
@@ -476,7 +476,7 @@
 
         - name: Configure Kubernetes auth (only kubernetes_host — no explicit token reviewer)
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault write auth/kubernetes/config \
@@ -486,7 +486,7 @@
         - name: Write schnappy policy
           ansible.builtin.shell: |
             set -o pipefail
-            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+            cat <<'POLICY' | kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault policy write schnappy -
@@ -504,7 +504,7 @@
         - name: Write eso policy
           ansible.builtin.shell: |
             set -o pipefail
-            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+            cat <<'POLICY' | kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault policy write eso-policy -
@@ -522,7 +522,7 @@
         - name: Write vault-backup policy
           ansible.builtin.shell: |
             set -o pipefail
-            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+            cat <<'POLICY' | kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault policy write vault-backup -
@@ -537,7 +537,7 @@
         - name: Write prometheus policy
           ansible.builtin.shell: |
             set -o pipefail
-            cat <<'POLICY' | k3s kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
+            cat <<'POLICY' | kubectl exec -i -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault policy write prometheus -
@@ -551,7 +551,7 @@
 
         - name: Tune token max_lease_ttl for long-lived service tokens
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault write sys/auth/token/tune max_lease_ttl={{ vault_token_ttl }}
@@ -559,7 +559,7 @@
 
         - name: Create Kubernetes auth role for schnappy app
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault write auth/kubernetes/role/schnappy \
@@ -571,7 +571,7 @@
 
         - name: Create Kubernetes auth role for ESO
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault write auth/kubernetes/role/eso-role \
@@ -583,7 +583,7 @@
 
         - name: Create vault-backup service token
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault token create \
@@ -601,10 +601,10 @@
         - name: Store vault-backup-token as k8s secret in vault namespace
           ansible.builtin.shell: |
             set -o pipefail
-            k3s kubectl create secret generic vault-backup-token \
+            kubectl create secret generic vault-backup-token \
               -n {{ vault_k3s_namespace }} \
               --from-literal=token="{{ (vault_backup_token_output.stdout | from_json).auth.client_token }}" \
-              --dry-run=client -o yaml | k3s kubectl apply -f -
+              --dry-run=client -o yaml | kubectl apply -f -
           args:
             executable: /bin/bash
           no_log: true
@@ -612,7 +612,7 @@
 
         - name: Create prometheus service token
           ansible.builtin.shell: |
-            k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+            kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
               env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
               VAULT_TOKEN="{{ k3s_vault_root_token }}" \
               vault token create \
@@ -630,10 +630,10 @@
         - name: Store prometheus token as k8s secret in vault namespace
           ansible.builtin.shell: |
             set -o pipefail
-            k3s kubectl create secret generic vault-prometheus-token \
+            kubectl create secret generic vault-prometheus-token \
               -n {{ vault_k3s_namespace }} \
               --from-literal=token="{{ (vault_prometheus_token_output.stdout | from_json).auth.client_token }}" \
-              --dry-run=client -o yaml | k3s kubectl apply -f -
+              --dry-run=client -o yaml | kubectl apply -f -
           args:
             executable: /bin/bash
           no_log: true
@@ -649,7 +649,7 @@
           --namespace external-secrets \
           --create-namespace \
           --version {{ vault_eso_chart_version }} \
-          --kubeconfig /etc/rancher/k3s/k3s.yaml \
+          --kubeconfig /etc/kubernetes/admin.conf \
           --wait \
           --timeout 5m
       changed_when: false
@@ -661,7 +661,7 @@
 
     - name: Wait for ESO CRDs to be available
       ansible.builtin.shell: |
-        k3s kubectl get crd clustersecretstores.external-secrets.io
+        kubectl get crd clustersecretstores.external-secrets.io
       register: eso_crd_check
       retries: 12
       delay: 5
@@ -671,7 +671,7 @@
     - name: Apply ClusterSecretStore (Vault backend)
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: external-secrets.io/v1
         kind: ClusterSecretStore
         metadata:
@@ -709,7 +709,7 @@
           --namespace kube-system \
           --version {{ vault_sealed_secrets_chart_version }} \
           --set fullnameOverride=sealed-secrets-controller \
-          --kubeconfig /etc/rancher/k3s/k3s.yaml \
+          --kubeconfig /etc/kubernetes/admin.conf \
           --wait \
           --timeout 3m
       changed_when: false
@@ -749,13 +749,13 @@
 
     - name: Wait for Sealed Secrets controller to be ready
       ansible.builtin.shell: |
-        k3s kubectl wait deploy/sealed-secrets-controller -n kube-system \
+        kubectl wait deploy/sealed-secrets-controller -n kube-system \
           --for=condition=available --timeout=60s
       changed_when: false
 
     - name: Backup Sealed Secrets controller private key
       ansible.builtin.shell: |
-        k3s kubectl get secret -n kube-system \
+        kubectl get secret -n kube-system \
           -l sealedsecrets.bitnami.com/sealed-secrets-key \
           -o yaml
       register: sealed_secrets_key
@@ -791,11 +791,11 @@
     - name: Create vault-minio-secret for snapshot uploads
       ansible.builtin.shell: |
         set -o pipefail
-        k3s kubectl create secret generic vault-minio-secret \
+        kubectl create secret generic vault-minio-secret \
           -n {{ vault_k3s_namespace }} \
           --from-literal=access_key="{{ vault_minio_access_key }}" \
           --from-literal=secret_key="{{ vault_minio_secret_key }}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -
       args:
         executable: /bin/bash
       changed_when: false
@@ -804,7 +804,7 @@
     - name: Apply Vault Raft snapshot CronJob
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: batch/v1
         kind: CronJob
         metadata:
@@ -888,7 +888,7 @@
 
     - name: Label vault namespace to exclude from Velero (use Raft snapshots instead)
       ansible.builtin.shell: |
-        k3s kubectl label namespace {{ vault_k3s_namespace }} \
+        kubectl label namespace {{ vault_k3s_namespace }} \
           velero.io/exclude-from-backup=true --overwrite
       changed_when: false
 
@@ -899,7 +899,7 @@
     - name: Apply vault network policy
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<EOF | k3s kubectl apply -f -
+        cat <<EOF | kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:
@@ -965,7 +965,7 @@
 
     - name: Check if velero namespace exists (for Raft snapshot network policy)
       ansible.builtin.shell: |
-        k3s kubectl get namespace velero -o name
+        kubectl get namespace velero -o name
       register: velero_ns_check
       failed_when: false
       changed_when: false
@@ -973,7 +973,7 @@
     - name: Apply vault-to-minio network policy (for Raft snapshot CronJob)
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:
@@ -1005,14 +1005,14 @@
 
     - name: Check if schnappy namespace exists (for Prometheus secrets)
       ansible.builtin.shell: |
-        k3s kubectl get namespace schnappy -o name
+        kubectl get namespace schnappy -o name
       register: monitor_ns_check
       failed_when: false
       changed_when: false
 
     - name: Check if vault CA cert source secret exists
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} -o name
+        kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} -o name
       register: vault_ca_check
       failed_when: false
       changed_when: false
@@ -1020,12 +1020,12 @@
 
     - name: Copy vault CA cert to schnappy namespace (for Prometheus TLS)
       ansible.builtin.shell: |
-        CA_CERT=$(k3s kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} \
+        CA_CERT=$(kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} \
           -o jsonpath="{.data.ca\.crt}" | base64 -d)
-        k3s kubectl create secret generic vault-ca-schnappy \
+        kubectl create secret generic vault-ca-schnappy \
           -n schnappy \
           --from-literal="ca.crt=${CA_CERT}" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -
       args:
         executable: /bin/bash
       when: monitor_ns_check.rc == 0 and vault_ca_check.rc == 0
@@ -1033,7 +1033,7 @@
 
     - name: Check if prometheus token secret exists in vault namespace
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-prometheus-token -n {{ vault_k3s_namespace }} -o name
+        kubectl get secret vault-prometheus-token -n {{ vault_k3s_namespace }} -o name
       register: prometheus_token_check
       failed_when: false
       changed_when: false
@@ -1042,12 +1042,12 @@
     - name: Create vault-metrics-secret in schnappy namespace
       ansible.builtin.shell: |
         set -o pipefail
-        TOKEN=$(k3s kubectl get secret vault-prometheus-token \
+        TOKEN=$(kubectl get secret vault-prometheus-token \
           -n {{ vault_k3s_namespace }} -o jsonpath='{.data.token}' | base64 -d)
-        k3s kubectl create secret generic vault-metrics-secret \
+        kubectl create secret generic vault-metrics-secret \
           -n schnappy \
           --from-literal=token="$TOKEN" \
-          --dry-run=client -o yaml | k3s kubectl apply -f -
+          --dry-run=client -o yaml | kubectl apply -f -
       args:
         executable: /bin/bash
       when: monitor_ns_check.rc == 0 and prometheus_token_check.rc == 0
@@ -1061,7 +1061,7 @@
     - name: Verify Vault is unsealed
       ansible.builtin.shell: |
         set -o pipefail
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           vault status | grep "Sealed"
       args:
@@ -1072,7 +1072,7 @@
 
     - name: Wait for ESO ClusterSecretStore to be Ready
       ansible.builtin.shell: |
-        k3s kubectl get clustersecretstore vault-backend \
+        kubectl get clustersecretstore vault-backend \
           -o jsonpath='{.status.conditions[0].status}'
       register: css_ready
       retries: 12
@@ -1088,7 +1088,7 @@
 
     - name: Seed schnappyauth secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/auth \
@@ -1099,7 +1099,7 @@
 
     - name: Seed schnappypostgres secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/postgres \
@@ -1112,7 +1112,7 @@
 
     - name: Seed schnappyredis secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/redis \
@@ -1125,7 +1125,7 @@
 
     - name: Seed schnappymail secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/mail \
@@ -1138,7 +1138,7 @@
 
     - name: Seed schnappyAI secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/ai \
@@ -1151,7 +1151,7 @@
 
     - name: Seed schnappywebhook secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/webhook \
@@ -1165,7 +1165,7 @@
 
     - name: Seed schnappyminio secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/minio \
@@ -1179,7 +1179,7 @@
 
     - name: Seed schnappykafka secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/kafka \
@@ -1192,7 +1192,7 @@
 
     - name: Seed schnappygrafana secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/grafana \
@@ -1206,7 +1206,7 @@
 
     - name: Seed schnappysonarqube secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/sonarqube \
@@ -1221,7 +1221,7 @@
 
     - name: Seed Forgejo admin secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/forgejo \
@@ -1236,7 +1236,7 @@
 
     - name: Seed registry pull secret (from Forgejo admin)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
+        kubectl exec -n {{ vault_k3s_namespace }} vault-0 -- \
           env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_seed_token }}" \
           vault kv put secret/schnappy/registry \
@@ -1271,7 +1271,7 @@
             deploy/ansible/vars/sealed-secrets-key-backup.yaml
 
           Useful commands:
-            k3s kubectl get pods -n vault
-            k3s kubectl get clustersecretstore vault-backend
-            k3s kubectl exec -n vault vault-0 -- env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt vault status
+            kubectl get pods -n vault
+            kubectl get clustersecretstore vault-backend
+            kubectl exec -n vault vault-0 -- env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt vault status
           ====================================================

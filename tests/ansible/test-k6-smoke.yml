@@ -30,7 +30,7 @@
 
     - name: Get Vault root token from k8s secret
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+        kubectl get secret vault-root-token -n {{ vault_ns }} \
           -o jsonpath='{.data.token}' | base64 -d
       register: vault_token_result
       changed_when: false
@@ -43,7 +43,7 @@
 
     - name: Seed postgres secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/postgres \
@@ -52,7 +52,7 @@
 
     - name: Seed redis secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/redis password=vagrant-redis
@@ -67,12 +67,12 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.shell: k3s kubectl create namespace {{ ns }} --dry-run=client -o yaml | k3s kubectl apply -f -
+      ansible.builtin.shell: kubectl create namespace {{ ns }} --dry-run=client -o yaml | kubectl apply -f -
       changed_when: false
 
     - name: Deploy schnappy-data chart
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-data \
+        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-data \
           /vagrant-platform/helm/schnappy-data \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
@@ -86,16 +86,16 @@
           --set aptCache.enabled=false \
           --set networkPolicies.enabled=false
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for postgres
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-postgres -n {{ ns }} --timeout=180s
+      ansible.builtin.shell: kubectl rollout status deploy/schnappy-postgres -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: Deploy schnappy-observability chart (Prometheus only)
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-observability \
+        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-observability \
           /vagrant-platform/helm/schnappy-observability \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
@@ -107,16 +107,16 @@
           --set kubeStateMetrics.enabled=false \
           --set networkPolicies.enabled=false
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for prometheus
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-prometheus -n {{ ns }} --timeout=180s
+      ansible.builtin.shell: kubectl rollout status deploy/schnappy-prometheus -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: Deploy schnappy core chart
       ansible.builtin.shell: |
-        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-app \
+        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-app \
           /vagrant-platform/helm/schnappy \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
@@ -135,11 +135,11 @@
           --set postgres.existingSecret=schnappy-postgres \
           --set redis.existingSecret=schnappy-redis
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for app
-      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-monitor -n {{ ns }} --timeout=180s
+      ansible.builtin.shell: kubectl rollout status deploy/schnappy-monitor -n {{ ns }} --timeout=180s
       changed_when: false
 
     - name: "PHASE 2: Charts deployed"
@@ -152,17 +152,17 @@
 
     - name: Create k6 smoke test Job
       ansible.builtin.shell: |
-        k3s kubectl create job k6-test --from=cronjob/schnappy-k6-smoke -n {{ ns }}
+        kubectl create job k6-test --from=cronjob/schnappy-k6-smoke -n {{ ns }}
       changed_when: false
 
     - name: Wait for k6 Job to complete
       ansible.builtin.shell: |
-        k3s kubectl wait --for=condition=complete job/k6-test -n {{ ns }} --timeout=180s
+        kubectl wait --for=condition=complete job/k6-test -n {{ ns }} --timeout=180s
       register: k6_result
       changed_when: false
 
     - name: Get k6 Job logs
-      ansible.builtin.shell: k3s kubectl logs job/k6-test -n {{ ns }}
+      ansible.builtin.shell: kubectl logs job/k6-test -n {{ ns }}
       register: k6_logs
       changed_when: false
 
@@ -186,7 +186,7 @@
 
     - name: Query Prometheus for k6 metrics
       ansible.builtin.shell: |
-        k3s kubectl exec deploy/schnappy-prometheus -n {{ ns }} -- \
+        kubectl exec deploy/schnappy-prometheus -n {{ ns }} -- \
           wget -qO- 'http://localhost:9090/api/v1/query?query=k6_http_reqs_total' 2>/dev/null
       register: prom_result
       changed_when: false

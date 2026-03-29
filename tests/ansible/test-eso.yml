@@ -36,7 +36,7 @@
 
     - name: Get Vault root token from k8s secret
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+        kubectl get secret vault-root-token -n {{ vault_ns }} \
           -o jsonpath='{.data.token}' | base64 -d
       register: vault_token_result
       changed_when: false
@@ -53,7 +53,7 @@
 
     - name: Seed auth secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/keycloak \
@@ -62,7 +62,7 @@
 
     - name: Seed postgres secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/postgres \
@@ -73,7 +73,7 @@
 
     - name: Seed mail secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/mail \
@@ -82,7 +82,7 @@
 
     - name: Seed redis secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/redis \
@@ -98,7 +98,7 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      ansible.builtin.command: kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
@@ -207,7 +207,7 @@
           --values /tmp/schnappy-eso-test-values.yml \
           --wait --timeout 60s
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       # --wait may timeout if pods need ESO secrets first; that's expected
       register: helm_result
       failed_when: false
@@ -222,7 +222,7 @@
 
     - name: Wait for ExternalSecrets to be created
       ansible.builtin.shell: |
-        k3s kubectl get externalsecrets -n {{ ns }} -o json | \
+        kubectl get externalsecrets -n {{ ns }} -o json | \
           python3 -c "import sys,json; items=json.load(sys.stdin)['items']; print(len(items))"
       register: es_count
       retries: 12
@@ -236,7 +236,7 @@
 
     - name: Wait for ExternalSecrets to sync
       ansible.builtin.shell: |
-        k3s kubectl get externalsecrets -n {{ ns }} -o json | \
+        kubectl get externalsecrets -n {{ ns }} -o json | \
           python3 -c "
         import sys, json
         items = json.load(sys.stdin)['items']
@@ -260,7 +260,7 @@
     - name: Verify k8s Secrets were created by ESO
       ansible.builtin.shell: |
         for secret in schnappy-keycloak schnappy-postgres schnappy-redis; do
-          k3s kubectl get secret "$secret" -n {{ ns }} -o jsonpath='{.metadata.name}' && echo " OK"
+          kubectl get secret "$secret" -n {{ ns }} -o jsonpath='{.metadata.name}' && echo " OK"
         done
       register: secrets_check
       changed_when: false
@@ -271,7 +271,7 @@
 
     - name: Verify secret content matches Vault (KEYCLOAK_ADMIN_PASSWORD key exists)
       ansible.builtin.shell: |
-        k3s kubectl get secret schnappy-keycloak -n {{ ns }} \
+        kubectl get secret schnappy-keycloak -n {{ ns }} \
           -o jsonpath='{.data.KEYCLOAK_ADMIN_PASSWORD}' | base64 -d
       register: jwt_check
       changed_when: false
@@ -290,24 +290,24 @@
 
     - name: Wait for postgres to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-postgres -n {{ ns }} --timeout=120s
+        kubectl rollout status deployment/schnappy-postgres -n {{ ns }} --timeout=120s
       changed_when: false
 
     - name: Wait for redis to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-redis -n {{ ns }} --timeout=60s
+        kubectl rollout status deployment/schnappy-redis -n {{ ns }} --timeout=60s
       changed_when: false
 
     - name: Wait for app deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=180s
+        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=180s
       register: app_rollout
       changed_when: false
       failed_when: false
 
     - name: Check app pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+        kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
           -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} ({range .status.containerStatuses[*]}{.state}{end}){"\n"}{end}'
       register: pod_status
       changed_when: false
@@ -318,7 +318,7 @@
 
     - name: Get app logs if not ready
       ansible.builtin.shell: |
-        k3s kubectl logs -n {{ ns }} -l app.kubernetes.io/component=app --tail=30
+        kubectl logs -n {{ ns }} -l app.kubernetes.io/component=app --tail=30
       register: app_logs
       changed_when: false
       failed_when: false

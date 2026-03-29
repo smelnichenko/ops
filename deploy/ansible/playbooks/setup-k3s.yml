@@ -221,7 +221,7 @@
 
     - name: Copy kubeconfig for user
       ansible.builtin.copy:
-        src: /etc/rancher/k3s/k3s.yaml
+        src: /etc/kubernetes/admin.conf
         dest: "/home/{{ ansible_user }}/.kube/config"
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
@@ -288,14 +288,14 @@
             helm repo add cert-manager-webhook-porkbun https://talinx.github.io/cert-manager-webhook-porkbun && \
             helm repo update cert-manager-webhook-porkbun
           environment:
-            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+            KUBECONFIG: /etc/kubernetes/admin.conf
           changed_when: false
 
         - name: Check if Porkbun webhook is installed
           ansible.builtin.shell: |
             helm status cert-manager-webhook-porkbun -n cert-manager 2>/dev/null
           environment:
-            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+            KUBECONFIG: /etc/kubernetes/admin.conf
           register: porkbun_webhook_status
           ignore_errors: true
           changed_when: false
@@ -306,7 +306,7 @@
               cert-manager-webhook-porkbun/cert-manager-webhook-porkbun \
               -n cert-manager --wait --timeout 120s
           environment:
-            KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+            KUBECONFIG: /etc/kubernetes/admin.conf
           when: porkbun_webhook_status.rc != 0
           changed_when: true
 

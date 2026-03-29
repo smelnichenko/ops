@@ -53,7 +53,7 @@
     - name: Create argocd namespace with Pod Security Standards
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -126,7 +126,7 @@
     - name: Create Forgejo repo credentials secret for Argo CD
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Secret
         metadata:
@@ -157,7 +157,7 @@
     - name: Read OIDC client secret from Vault
       ansible.builtin.shell: |
         set -o pipefail
-        k3s kubectl exec -n vault vault-0 -- sh -c \
+        kubectl exec -n vault vault-0 -- sh -c \
           'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt VAULT_TOKEN={{ vault_root_token }} vault kv get -field=client_secret secret/schnappy/argocd'
       args:
         executable: /bin/bash
@@ -171,7 +171,7 @@
         helm repo add argo {{ argocd_chart_repo }} 2>/dev/null || true
         helm repo update argo
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Deploy Argo CD
@@ -257,22 +257,22 @@
           enabled: false
         HELMEOF
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for argocd-server to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
+        kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
       changed_when: false
 
     - name: Wait for argocd-repo-server to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
+        kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
       changed_when: false
 
     - name: Wait for argocd-application-controller to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
+        kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
       changed_when: false
 
     # ================================================================
@@ -294,7 +294,7 @@
     - name: Create Argo CD Ingress
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: Ingress
         metadata:
@@ -336,7 +336,7 @@
     - name: Apply Argo CD network policies
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         ---
         # Default deny all ingress and egress
         apiVersion: networking.k8s.io/v1
@@ -474,7 +474,7 @@
 
     - name: Check Argo CD pods
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ argocd_namespace }} -o wide
+        kubectl get pods -n {{ argocd_namespace }} -o wide
       register: argocd_pods
       changed_when: false
 

@@ -32,7 +32,7 @@
 
     - name: Get Vault root token from k8s secret
       ansible.builtin.shell: |
-        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+        kubectl get secret vault-root-token -n {{ vault_ns }} \
           -o jsonpath='{.data.token}' | base64 -d
       register: vault_token_result
       changed_when: false
@@ -45,7 +45,7 @@
 
     - name: Seed elasticsearch secret
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
           VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
           VAULT_TOKEN="{{ vault_root_token }}" \
           vault kv put secret/schnappy/elasticsearch \
@@ -62,7 +62,7 @@
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.command: k3s kubectl create namespace {{ ns }}
+      ansible.builtin.command: kubectl create namespace {{ ns }}
       register: ns_result
       changed_when: ns_result.rc == 0
       failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
@@ -155,12 +155,12 @@
           --values /tmp/schnappy-elk-test-values.yml \
           --wait --timeout 600s
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
       register: helm_result
 
     - name: Show pod status
       ansible.builtin.shell: |
-        k3s kubectl get pods -n {{ ns }} -o wide
+        kubectl get pods -n {{ ns }} -o wide
       register: pod_status
       changed_when: false
 
@@ -174,13 +174,13 @@
 
     - name: Wait for Elasticsearch StatefulSet rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status statefulset/schnappy-elasticsearch -n {{ ns }} --timeout=300s
+        kubectl rollout status statefulset/schnappy-elasticsearch -n {{ ns }} --timeout=300s
       register: es_rollout
       changed_when: false
 
     - name: Verify ExternalSecret synced for elasticsearch
       ansible.builtin.shell: |
-        k3s kubectl get externalsecret schnappy-elasticsearch -n {{ ns }} \
+        kubectl get externalsecret schnappy-elasticsearch -n {{ ns }} \
           -o jsonpath='{.status.conditions[0].reason}'
       register: es_secret_sync
       retries: 12
@@ -190,7 +190,7 @@
 
     - name: Wait for Elasticsearch to respond
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
+        kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} http://localhost:9200/_cluster/health?pretty
       register: es_health
       retries: 30
@@ -204,7 +204,7 @@
 
     - name: Verify auth is enforced (unauthenticated should fail)
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
+        kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf http://localhost:9200/ 2>&1 || echo "AUTH_REQUIRED"
       register: es_noauth
       changed_when: false
@@ -219,7 +219,7 @@
 
     - name: Wait for Fluent-bit DaemonSet ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status daemonset/schnappy-fluentbit -n {{ ns }} --timeout=120s
+        kubectl rollout status daemonset/schnappy-fluentbit -n {{ ns }} --timeout=120s
       register: fb_rollout
       changed_when: false
 
@@ -229,7 +229,7 @@
 
     - name: Query podlogs-* index for document count
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
+        kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} \
             'http://localhost:9200/podlogs-*/_count' 2>/dev/null | \
           python3 -c "import sys,json; print(json.load(sys.stdin).get('count', 0))"
@@ -250,13 +250,13 @@
 
     - name: Wait for Kibana deployment rollout
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/schnappy-kibana -n {{ ns }} --timeout=300s
+        kubectl rollout status deployment/schnappy-kibana -n {{ ns }} --timeout=300s
       register: kb_rollout
       changed_when: false
 
     - name: Check Kibana HTTP status
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} deploy/schnappy-kibana -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-kibana -- \
           curl -sf -o /dev/null -w '%{http_code}' http://localhost:5601/api/status
       register: kb_health
       retries: 24
@@ -275,7 +275,7 @@
 
     - name: Check ILM policy exists
       ansible.builtin.shell: |
-        k3s kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
+        kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
           curl -sf -u elastic:{{ test_es_password }} \
             'http://localhost:9200/_ilm/policy/logs-30d-retention' 2>/dev/null
       register: ilm_check

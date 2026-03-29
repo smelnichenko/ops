@@ -38,7 +38,7 @@
     - name: Create forgejo namespace with Pod Security Standards
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: v1
         kind: Namespace
         metadata:
@@ -119,17 +119,17 @@
         HELMEOF
       changed_when: false
       environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        KUBECONFIG: /etc/kubernetes/admin.conf
 
     - name: Wait for Forgejo deployment to be ready
       ansible.builtin.shell: |
-        k3s kubectl rollout status deployment/forgejo -n {{ forgejo_namespace }} --timeout=180s
+        kubectl rollout status deployment/forgejo -n {{ forgejo_namespace }} --timeout=180s
       changed_when: false
 
     - name: Apply network policies for Forgejo (legacy — Flux-managed via infra repo)
       ansible.builtin.shell: |
         set -o pipefail
-        cat <<'EOF' | k3s kubectl apply -f -
+        cat <<'EOF' | kubectl apply -f -
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:
