@@ -397,16 +397,6 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-microservices.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
-  test:linkerd:
-    desc: Test Linkerd service mesh in Vagrant
-    deps: [deploy:install]
-    cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up
-      - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-linkerd.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   deploy:apt-cache:
     desc: Build apt-cacher-ng image and import to k3s
@@ -451,12 +441,6 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml -e vault_root_token=$VAULT_ROOT_TOKEN
     dotenv: ['.env']
 
-  deploy:linkerd:
-    desc: Deploy Linkerd service mesh
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-linkerd.yml
 
   deploy:velero:
     desc: Deploy Velero + Backup MinIO
@@ -501,35 +485,33 @@ tasks:
     desc: Run all Vagrant integration tests sequentially
     deps: [deploy:install]
     cmds:
-      - echo "=== [1/11] test:vault ==="
+      - echo "=== [1/14] test:vault ==="
       - task: test:vault
-      - echo "=== [2/11] test:eso ==="
+      - echo "=== [2/14] test:eso ==="
       - task: test:eso
-      - echo "=== [3/11] test:elk ==="
+      - echo "=== [3/14] test:elk ==="
       - task: test:elk
-      - echo "=== [4/11] test:grafana ==="
+      - echo "=== [4/14] test:grafana ==="
       - task: test:grafana
-      - echo "=== [5/11] test:kafka-scylla ==="
+      - echo "=== [5/14] test:kafka-scylla ==="
       - task: test:kafka-scylla
-      - echo "=== [7/11] test:sonarqube ==="
+      - echo "=== [6/14] test:sonarqube ==="
       - task: test:sonarqube
-      - echo "=== [8/10] test:dr ==="
+      - echo "=== [7/14] test:dr ==="
       - task: test:dr
-      - echo "=== [9/11] test:cicd ==="
+      - echo "=== [8/14] test:cicd ==="
       - task: test:cicd
-      - echo "=== [10/11] test:nexus ==="
+      - echo "=== [9/14] test:nexus ==="
       - task: test:nexus
-      - echo "=== [11/11] test:woodpecker ==="
+      - echo "=== [10/14] test:woodpecker ==="
       - task: test:woodpecker
-      - echo "=== [12/14] test:gateway ==="
+      - echo "=== [11/14] test:gateway ==="
       - task: test:gateway
-      - echo "=== [13/14] test:microservices ==="
+      - echo "=== [12/14] test:microservices ==="
       - task: test:microservices
-      - echo "=== [14/15] test:linkerd ==="
-      - task: test:linkerd
-      - echo "=== [15/16] test:argocd ==="
+      - echo "=== [13/14] test:argocd ==="
       - task: test:argocd
-      - echo "=== [16/16] test:keycloak ==="
+      - echo "=== [14/14] test:keycloak ==="
       - task: test:keycloak
       - echo ""
       - echo "=== All Vagrant tests complete ==="
