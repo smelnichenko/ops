@@ -87,36 +87,19 @@
 
     - name: Add vault-pi DNS entry to CoreDNS Corefile (idempotent)
       ansible.builtin.shell: |
-        python3 -c "
-        import subprocess, json, sys
-        r = subprocess.run(['kubectl', 'get', 'configmap', 'coredns',
-                            '-n', 'kube-system', '-o', 'json'],
-                           capture_output=True, text=True)
-        cm = json.loads(r.stdout)
-        corefile = cm['data']['Corefile']
-        entry = '{{ vault_pi_ip }} {{ vault_pi_dns }}'
-        if entry in corefile:
-            print('already_present')
-            sys.exit(0)
-        # Insert a hosts block before the final closing brace of the main server block
-        hosts_block = '''
-    hosts {
-        %s
-        fallthrough
-    }''' % entry
-        # Find the kubernetes plugin line and insert hosts block before it
-        if 'hosts {' not in corefile:
-            corefile = corefile.replace('kubernetes cluster.local', hosts_block + '\n    kubernetes cluster.local')
-        else:
-            # Already has a hosts block, just add the entry
-            corefile = corefile.replace('hosts {', 'hosts {\n        ' + entry)
-        patch = json.dumps({'data': {'Corefile': corefile}})
-        r2 = subprocess.run(['kubectl', 'patch', 'configmap', 'coredns',
-                              '-n', 'kube-system', '--type=merge', '-p', patch],
-                            capture_output=True, text=True)
-        print(r2.stdout.strip() or r2.stderr.strip())
-        print('added')
-        "
+        ENTRY="{{ vault_pi_ip }} {{ vault_pi_dns }}"
+        COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
+        if echo "$COREFILE" | grep -q "$ENTRY"; then
+          echo "already_present"
+          exit 0
+        fi
+        if echo "$COREFILE" | grep -q "hosts {"; then
+          NEW=$(echo "$COREFILE" | sed "s|hosts {|hosts {\n        $ENTRY|")
+        else
+          NEW=$(echo "$COREFILE" | sed "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
+        fi
+        kubectl patch configmap coredns -n kube-system --type=merge -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
+        echo "added"
       register: coredns_patch
       changed_when: "'added' in coredns_patch.stdout"
 
