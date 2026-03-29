@@ -1,0 +1,412 @@
+---
+# Test Hyperfoil report persistence and web serving in Vagrant
+#
+# Verifies:
+#   1. MinIO bucket creation and anonymous read policy
+#   2. Report upload to MinIO via mc client
+#   3. Index page generation
+#   4. Nginx report server proxies to MinIO
+#   5. Network policies for reports, MinIO, and Hyperfoil
+#
+# Prerequisites:
+#   - vagrant up (k3s + vault-pi VMs)
+#   - setup-vault-pi.yml completed
+#   - setup-vault.yml completed (Vault + ESO deployed)
+#
+# Usage:
+#   task test:hyperfoil-reports
+
+- name: Test Hyperfoil report persistence
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    vault_ns: vault
+    test_minio_user: minioadmin
+    test_minio_password: vagrant-minio-secret
+
+  tasks:
+    # ================================================================
+    # Phase 1: Seed secrets into Vault
+    # ================================================================
+
+    - name: Get Vault root token from k8s secret
+      ansible.builtin.shell: |
+        k3s kubectl get secret vault-root-token -n {{ vault_ns }} \
+          -o jsonpath='{.data.token}' | base64 -d
+      register: vault_token_result
+      changed_when: false
+      no_log: true
+
+    - name: Set Vault token fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_token_result.stdout }}"
+      no_log: true
+
+    - name: Seed minio secret
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_root_token }}" \
+          vault kv put secret/schnappy/minio \
+            access_key="{{ test_minio_user }}" \
+            secret_key="{{ test_minio_password }}"
+      no_log: true
+
+    - name: "PHASE 1: Secrets seeded into Vault"
+      ansible.builtin.debug:
+        msg: "Vault secrets ready"
+
+    # ================================================================
+    # Phase 2: Deploy charts with network policies enabled
+    # ================================================================
+
+    - name: Create schnappy namespace
+      ansible.builtin.shell: k3s kubectl create namespace {{ ns }} --dry-run=client -o yaml | k3s kubectl apply -f -
+      changed_when: false
+
+    - name: Apply default-deny network policy
+      ansible.builtin.shell: |
+        k3s kubectl apply -n {{ ns }} -f - <<'EOF'
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: schnappy-default-deny
+        spec:
+          podSelector: {}
+          policyTypes:
+            - Ingress
+            - Egress
+          egress:
+            - ports:
+                - protocol: UDP
+                  port: 53
+                - protocol: TCP
+                  port: 53
+        EOF
+      changed_when: false
+
+    - name: Rsync charts to Vagrant VM
+      ansible.builtin.command: vagrant rsync k3s
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Deploy schnappy-data chart (MinIO only)
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-data \
+          /vagrant-platform/helm/schnappy-data \
+          -n {{ ns }} --wait --timeout 5m \
+          --set fullnameOverride=schnappy \
+          --set vault.secretsEnabled=true \
+          --set postgres.enabled=false \
+          --set redis.enabled=false \
+          --set kafka.enabled=false \
+          --set scylla.enabled=false \
+          --set aptCache.enabled=false \
+          --set minio.enabled=true \
+          --set minio.existingSecret=schnappy-minio \
+          --set minio.storage.size=1Gi \
+          --set minio.storage.storageClass=local-path \
+          --set networkPolicies.enabled=true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for MinIO
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-minio -n {{ ns }} --timeout=180s
+      changed_when: false
+
+    - name: Deploy schnappy-observability chart (reports only)
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-observability \
+          /vagrant-platform/helm/schnappy-observability \
+          -n {{ ns }} --wait --timeout 5m \
+          --set fullnameOverride=schnappy \
+          --set victoriametrics.enabled=false \
+          --set grafana.enabled=false \
+          --set alertmanager.enabled=false \
+          --set elk.enabled=false \
+          --set kubeStateMetrics.enabled=false \
+          --set reports.enabled=true \
+          --set networkPolicies.enabled=true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Wait for reports server
+      ansible.builtin.shell: k3s kubectl rollout status deploy/schnappy-reports -n {{ ns }} --timeout=120s
+      changed_when: false
+
+    - name: Deploy schnappy chart (Hyperfoil NPs only)
+      ansible.builtin.shell: |
+        KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm upgrade --install schnappy-app \
+          /vagrant-platform/helm/schnappy \
+          -n {{ ns }} --wait --timeout 5m \
+          --set fullnameOverride=schnappy \
+          --set monitor.enabled=false \
+          --set site.enabled=false \
+          --set site.dnsResolver=10.43.0.10 \
+          --set gateway.enabled=false \
+          --set admin.enabled=false \
+          --set chatService.enabled=false \
+          --set chessService.enabled=false \
+          --set kafka.enabled=false \
+          --set scylla.enabled=false \
+          --set hyperfoil.enabled=true \
+          --set smokeTest.enabled=false \
+          --set envoyGateway.enabled=false \
+          --set app.ingress.enabled=false \
+          --set minio.existingSecret=schnappy-minio \
+          --set networkPolicies.enabled=true \
+          --set vault.secretsEnabled=true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      changed_when: false
+
+    - name: Show pod status
+      ansible.builtin.shell: k3s kubectl get pods -n {{ ns }} -o wide
+      register: pod_status
+      changed_when: false
+
+    - name: Pod status
+      ansible.builtin.debug:
+        msg: "{{ pod_status.stdout_lines }}"
+
+    - name: "PHASE 2: Charts deployed with network policies"
+      ansible.builtin.debug:
+        msg: "MinIO + reports server + Hyperfoil NPs deployed"
+
+    # ================================================================
+    # Phase 3: Upload a test report to MinIO
+    # ================================================================
+
+    - name: Create test report upload job
+      ansible.builtin.shell: |
+        k3s kubectl apply -n {{ ns }} -f - <<'EOF'
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: report-upload-test
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 3600
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: schnappy
+                app.kubernetes.io/instance: schnappy-app
+                app.kubernetes.io/part-of: schnappy
+                app.kubernetes.io/component: hyperfoil-load
+            spec:
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+                - name: uploader
+                  image: minio/mc:latest
+                  command: ['/bin/sh', '-c']
+                  args:
+                    - |
+                      set -e
+                      export MC_CONFIG_DIR=/tmp/.mc
+                      echo "Configuring MinIO alias..."
+                      mc alias set minio http://schnappy-minio:9000 "$MINIO_USER" "$MINIO_PASSWORD" --api S3v4
+
+                      echo "Creating bucket..."
+                      mc mb --ignore-existing minio/hyperfoil-reports
+                      mc anonymous set download minio/hyperfoil-reports
+
+                      mkdir -p /tmp/report
+                      echo '<!DOCTYPE html><html><head><title>Test Report</title></head><body><h1>Hyperfoil Load Test Report</h1><p>Test report for Vagrant validation</p></body></html>' > /tmp/report/index.html
+
+                      REPORT_DIR="load/2026-01-01_030000"
+                      echo "Uploading report to ${REPORT_DIR}..."
+                      mc cp --recursive /tmp/report/ "minio/hyperfoil-reports/${REPORT_DIR}/"
+
+                      echo '<!DOCTYPE html><html><head><title>Hyperfoil Reports</title></head><body><h1>Hyperfoil Reports</h1><table><tr><th>Type</th><th>Date</th><th>Link</th></tr><tr><td>load</td><td>2026-01-01_030000</td><td><a href="load/2026-01-01_030000/index.html">View Report</a></td></tr></table></body></html>' > /tmp/index.html
+                      mc cp /tmp/index.html minio/hyperfoil-reports/index.html
+
+                      echo "Verifying upload..."
+                      mc ls minio/hyperfoil-reports/load/2026-01-01_030000/
+                      mc ls minio/hyperfoil-reports/index.html
+                      echo "Upload complete"
+                  env:
+                    - name: MINIO_USER
+                      valueFrom:
+                        secretKeyRef:
+                          name: schnappy-minio
+                          key: MINIO_ROOT_USER
+                    - name: MINIO_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: schnappy-minio
+                          key: MINIO_ROOT_PASSWORD
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    capabilities:
+                      drop: ["ALL"]
+                  volumeMounts:
+                    - name: tmp
+                      mountPath: /tmp
+                  resources:
+                    requests: { cpu: 50m, memory: 64Mi }
+                    limits: { cpu: 500m, memory: 256Mi }
+              volumes:
+                - name: tmp
+                  emptyDir: {}
+              restartPolicy: Never
+        EOF
+      changed_when: false
+
+    - name: Wait for upload job to complete
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          TYPES=$(k3s kubectl get job report-upload-test -n {{ ns }} -o jsonpath='{.status.conditions[*].type}' 2>/dev/null)
+          echo "$TYPES" | grep -q "Complete" && exit 0
+          echo "$TYPES" | grep -q "Failed" && exit 1
+          sleep 5
+        done
+        exit 1
+      register: upload_result
+      changed_when: false
+      failed_when: false
+
+    - name: Get upload job logs
+      ansible.builtin.shell: k3s kubectl logs job/report-upload-test -n {{ ns }} 2>/dev/null || echo "No logs available"
+      register: upload_logs
+      changed_when: false
+
+    - name: Display upload logs
+      ansible.builtin.debug:
+        msg: "{{ upload_logs.stdout }}"
+
+    - name: Verify upload job succeeded
+      ansible.builtin.assert:
+        that: upload_result.rc == 0
+        fail_msg: "Report upload FAILED"
+        success_msg: "Report uploaded to MinIO successfully"
+
+    # ================================================================
+    # Phase 4: Verify Nginx report server
+    # ================================================================
+
+    - name: Check reports index page via Nginx
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+          curl -sf -o /dev/null -w '%{http_code}' http://localhost:8080/index.html
+      register: index_http
+      retries: 6
+      delay: 5
+      until: index_http.stdout | default('') == '200'
+      changed_when: false
+      failed_when: false
+
+    - name: Check index page contains report links
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+          curl -sf http://localhost:8080/index.html
+      register: index_content
+      changed_when: false
+      failed_when: false
+
+    - name: Check report page via Nginx
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+          curl -sf -o /dev/null -w '%{http_code}' http://localhost:8080/load/2026-01-01_030000/index.html
+      register: report_http
+      retries: 6
+      delay: 5
+      until: report_http.stdout | default('') == '200'
+      changed_when: false
+      failed_when: false
+
+    - name: Check report content
+      ansible.builtin.shell: |
+        k3s kubectl exec -n {{ ns }} deploy/schnappy-reports -- \
+          curl -sf http://localhost:8080/load/2026-01-01_030000/index.html
+      register: report_content
+      changed_when: false
+      failed_when: false
+
+    # ================================================================
+    # Phase 5: Verify network policies
+    # ================================================================
+
+    - name: Check MinIO network policy exists
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy schnappy-minio -n {{ ns }} -o name
+      register: minio_np
+      changed_when: false
+      failed_when: false
+
+    - name: Check reports network policy exists
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy schnappy-reports -n {{ ns }} -o name
+      register: reports_np
+      changed_when: false
+      failed_when: false
+
+    - name: Check Hyperfoil network policy exists
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy schnappy-hyperfoil -n {{ ns }} -o name
+      register: hyperfoil_np
+      changed_when: false
+      failed_when: false
+
+    - name: Check default-deny network policy exists
+      ansible.builtin.shell: |
+        k3s kubectl get networkpolicy schnappy-default-deny -n {{ ns }} -o name
+      register: deny_np
+      changed_when: false
+      failed_when: false
+
+    # ================================================================
+    # Phase 6: Summary
+    # ================================================================
+
+    - name: Set result facts
+      ansible.builtin.set_fact:
+        upload_ok: "{{ upload_result.rc == 0 }}"
+        index_served: "{{ index_http.stdout | default('') == '200' }}"
+        index_has_links: "{{ 'View Report' in (index_content.stdout | default('')) }}"
+        report_served: "{{ report_http.stdout | default('') == '200' }}"
+        report_has_content: "{{ 'Hyperfoil Load Test Report' in (report_content.stdout | default('')) }}"
+        minio_np_exists: "{{ minio_np.rc == 0 }}"
+        reports_np_exists: "{{ reports_np.rc == 0 }}"
+        hyperfoil_np_exists: "{{ hyperfoil_np.rc == 0 }}"
+        deny_np_exists: "{{ deny_np.rc == 0 }}"
+
+    - name: "TEST RESULT"
+      vars:
+        all_pass: "{{ upload_ok and index_served and index_has_links and report_served and report_has_content and minio_np_exists and reports_np_exists and hyperfoil_np_exists and deny_np_exists }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Hyperfoil Report Persistence Test: {{ 'PASS' if all_pass else 'FAIL' }}
+
+          --- Upload ---
+          [{{ 'PASS' if upload_ok else 'FAIL' }}] Report uploaded to MinIO
+          [{{ 'PASS' if index_served else 'FAIL' }}] Index page served (HTTP 200)
+          [{{ 'PASS' if index_has_links else 'FAIL' }}] Index page contains report links
+
+          --- Report Serving ---
+          [{{ 'PASS' if report_served else 'FAIL' }}] Report served via Nginx (HTTP 200)
+          [{{ 'PASS' if report_has_content else 'FAIL' }}] Report content correct
+
+          --- Network Policies ---
+          [{{ 'PASS' if deny_np_exists else 'FAIL' }}] Default-deny network policy
+          [{{ 'PASS' if minio_np_exists else 'FAIL' }}] MinIO network policy
+          [{{ 'PASS' if reports_np_exists else 'FAIL' }}] Reports network policy
+          [{{ 'PASS' if hyperfoil_np_exists else 'FAIL' }}] Hyperfoil network policy
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical report persistence checks failed — see summary above"
+      when: not (upload_ok and index_served and report_served and report_has_content and minio_np_exists and reports_np_exists and hyperfoil_np_exists)
