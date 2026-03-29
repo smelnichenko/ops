@@ -149,6 +149,23 @@ tasks:
       - mkdir -p /tmp/k6-results
       - K6_TEST_NAME=load-test K6_SAVE_BASELINE=true k6 run tests/k6/load-test.js
 
+  # ============== HYPERFOIL (production) ==============
+  test:hyperfoil:load:
+    desc: Run Hyperfoil load test in production (5min, reports to MinIO)
+    cmds:
+      - ssh ten 'sudo k3s kubectl delete job hf-load -n schnappy 2>/dev/null; sudo k3s kubectl create job hf-load --from=cronjob/schnappy-hyperfoil-load -n schnappy'
+      - echo "Waiting for completion (~5min)..."
+      - ssh ten 'sudo k3s kubectl wait --for=condition=complete job/hf-load -n schnappy --timeout=600s'
+      - ssh ten 'sudo k3s kubectl logs job/hf-load -n schnappy 2>/dev/null | tail -10'
+
+  test:hyperfoil:stress:
+    desc: Run Hyperfoil stress test in production (6min, reports to MinIO)
+    cmds:
+      - ssh ten 'sudo k3s kubectl delete job hf-stress -n schnappy 2>/dev/null; sudo k3s kubectl create job hf-stress --from=cronjob/schnappy-hyperfoil-stress -n schnappy'
+      - echo "Waiting for completion (~6min)..."
+      - ssh ten 'sudo k3s kubectl wait --for=condition=complete job/hf-stress -n schnappy --timeout=600s'
+      - ssh ten 'sudo k3s kubectl logs job/hf-stress -n schnappy 2>/dev/null | tail -10'
+
   # ============== JOOQ ==============
   jooq:generate:
     desc: Generate jOOQ classes from database (requires running postgres)
