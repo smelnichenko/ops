@@ -6,8 +6,8 @@ Web page monitoring application that extracts numeric values using regex pattern
 
 Woodpecker CI (`.woodpecker/`), running on the Kubernetes backend in the `woodpecker` namespace. Each pipeline step runs as a real k8s pod — logs captured automatically by Fluent-bit's pod log tail.
 
-**CI** (`ci.yaml`): Push to non-master branches or PRs → parallel test jobs (path-filtered by changed files)
-**CD** (`cd.yaml`): Push to master → parallel test jobs → Kaniko image builds → commit image tag to infra repo → Argo CD deploys
+**CI** (`ci.yaml`): Push to non-main branches or PRs → parallel test jobs (path-filtered by changed files)
+**CD** (`cd.yaml`): Push to main → parallel test jobs → Kaniko image builds → commit image tag to infra repo → Argo CD deploys
 
 Change detection: CI uses Woodpecker's `when.path` webhook filtering. CD uses git-diff against `CI_PREV_COMMIT_SHA` (previous pipeline commit).
 
@@ -390,8 +390,8 @@ monitor:
 ```
 monitor/
 ├── .woodpecker/                # CI/CD (Woodpecker CI)
-│   ├── ci.yaml                # Test on push to non-master
-│   └── cd.yaml                # Test + build + deploy on push to master
+│   ├── ci.yaml                # Test on push to non-main
+│   └── cd.yaml                # Test + build + deploy on push to main
 ├── backend/                    # Spring Boot API
 │   └── src/main/java/         # Java source
 └── CLAUDE.md
@@ -547,7 +547,7 @@ task deploy:undeploy  # Remove (keeps data)
 **Access:** `https://pmon.dev/` | Grafana: `https://grafana.pmon.dev/` | Logs: `https://logs.pmon.dev/` | CI: `https://ci.pmon.dev/`
 
 **Build & deploy flow (CD pipeline + Argo CD GitOps):**
-- Push to master triggers Woodpecker CD pipeline
+- Push to main triggers Woodpecker CD pipeline
 - Incremental: only rebuilds changed components (backend/frontend)
 - Docker images built with Kaniko and pushed to Forgejo container registry (`git.pmon.dev`)
 - `update-infra` step commits new image tags to `values.yaml` in `schnappy/infra` repo on Forgejo
