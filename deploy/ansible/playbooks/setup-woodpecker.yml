@@ -226,9 +226,9 @@
       ansible.builtin.debug:
         msg: "Deploying Woodpecker via unified Helm chart"
 
-    - name: Get Traefik LoadBalancer ClusterIP for internal DNS
+    - name: Get Istio gateway ClusterIP for internal DNS
       ansible.builtin.shell: |
-        kubectl get svc traefik -n kube-system -o jsonpath='{.spec.clusterIP}'
+        kubectl get svc schnappy-gateway-istio -n schnappy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || kubectl get svc traefik -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "127.0.0.1"
       register: traefik_clusterip_result
       changed_when: false
 
