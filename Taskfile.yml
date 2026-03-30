@@ -440,6 +440,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
 
+  deploy:istio:
+    desc: Install Istio ambient mesh + HAProxy
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-istio.yml
+
   deploy:argocd:
     desc: Install/update Argo CD
     dir: deploy/ansible

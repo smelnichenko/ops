@@ -1,0 +1,181 @@
+---
+# Setup Istio ambient mesh + HAProxy on kubeadm cluster
+#
+# Installs:
+#   - Istio ambient (base, istiod, cni, ztunnel)
+#   - Enrolls schnappy namespace in ambient mesh
+#   - Configures HAProxy to forward 80/443 to Istio gateway NodePorts
+#
+# Prerequisites:
+#   - kubeadm cluster running (setup-kubeadm.yml)
+#   - Gateway API CRDs installed (setup-kubeadm.yml)
+#   - schnappy-mesh Argo CD app deployed (gateway + routes)
+#
+# Usage:
+#   task deploy:istio
+
+- name: Setup Istio ambient mesh
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    istio_version: "1.25.2"
+    ns: schnappy
+
+  tasks:
+    # ================================================================
+    # Phase 1: Install Istio Helm charts
+    # ================================================================
+
+    - name: Add Istio Helm repo
+      ansible.builtin.shell: |
+        helm repo add istio https://istio-release.storage.googleapis.com/charts
+        helm repo update istio
+      changed_when: true
+
+    - name: Install Istio base (CRDs)
+      ansible.builtin.shell: |
+        helm upgrade --install istio-base istio/base \
+          --namespace istio-system --create-namespace \
+          --version {{ istio_version }} \
+          --wait --timeout 60s
+      changed_when: true
+
+    - name: Install istiod (ambient profile)
+      ansible.builtin.shell: |
+        helm upgrade --install istiod istio/istiod \
+          --namespace istio-system \
+          --version {{ istio_version }} \
+          --set profile=ambient \
+          --set "pilot.env.CA_TRUSTED_NODE_ACCOUNTS=istio-system/istio-ztunnel" \
+          --set meshConfig.accessLogFile=/dev/stdout \
+          --wait --timeout 120s
+      changed_when: true
+
+    - name: Install Istio CNI
+      ansible.builtin.shell: |
+        helm upgrade --install istio-cni istio/cni \
+          --namespace istio-system \
+          --version {{ istio_version }} \
+          --set "cni.ambient.enabled=true" \
+          --wait --timeout 120s
+      changed_when: true
+
+    - name: Install ztunnel
+      ansible.builtin.shell: |
+        helm upgrade --install istio-ztunnel istio/ztunnel \
+          --namespace istio-system \
+          --version {{ istio_version }} \
+          --wait --timeout 120s
+      changed_when: true
+
+    - name: Verify Istio pods
+      ansible.builtin.shell: |
+        kubectl get pods -n istio-system --no-headers | grep -v Running | grep -v Completed
+      register: istio_check
+      failed_when: istio_check.stdout | length > 0
+      changed_when: false
+
+    - name: "PHASE 1: Istio installed"
+      ansible.builtin.debug:
+        msg: "istiod, ztunnel, CNI all running"
+
+    # ================================================================
+    # Phase 2: Enroll schnappy namespace
+    # ================================================================
+
+    - name: Label schnappy namespace for ambient mesh
+      ansible.builtin.shell: |
+        kubectl label namespace {{ ns }} istio.io/dataplane-mode=ambient --overwrite
+      changed_when: true
+
+    - name: "PHASE 2: schnappy namespace enrolled in ambient mesh"
+      ansible.builtin.debug:
+        msg: "mTLS active between all {{ ns }} pods via ztunnel"
+
+    # ================================================================
+    # Phase 3: Configure HAProxy
+    # ================================================================
+
+    - name: Install HAProxy
+      ansible.builtin.apt:
+        name: haproxy
+        state: present
+
+    - name: Wait for Istio gateway service
+      ansible.builtin.shell: |
+        kubectl get svc schnappy-gateway-istio -n {{ ns }} -o jsonpath='{.spec.ports[?(@.port==443)].nodePort}'
+      register: gateway_https_np
+      retries: 30
+      delay: 10
+      until: gateway_https_np.stdout | length > 0
+      changed_when: false
+
+    - name: Get gateway HTTP NodePort
+      ansible.builtin.shell: |
+        kubectl get svc schnappy-gateway-istio -n {{ ns }} -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}'
+      register: gateway_http_np
+      changed_when: false
+
+    - name: Configure HAProxy
+      ansible.builtin.copy:
+        dest: /etc/haproxy/haproxy.cfg
+        mode: '0644'
+        content: |
+          global
+              log /dev/log local0
+              maxconn 4096
+
+          defaults
+              mode tcp
+              timeout connect 5s
+              timeout client 30s
+              timeout server 30s
+
+          frontend https_in
+              bind *:443
+              default_backend istio_https
+
+          frontend http_in
+              bind *:80
+              default_backend istio_http
+
+          backend istio_https
+              server gateway 127.0.0.1:{{ gateway_https_np.stdout }}
+
+          backend istio_http
+              server gateway 127.0.0.1:{{ gateway_http_np.stdout }}
+      notify: restart haproxy
+
+    - name: "PHASE 3: HAProxy configured"
+      ansible.builtin.debug:
+        msg: |
+          HAProxy forwards:
+            443 → NodePort {{ gateway_https_np.stdout }}
+            80  → NodePort {{ gateway_http_np.stdout }}
+
+    # ================================================================
+    # Phase 4: Verify
+    # ================================================================
+
+    - name: Test Istio gateway via HAProxy
+      ansible.builtin.shell: |
+        curl -sk -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:127.0.0.1 https://pmon.dev/api/health
+      register: gateway_test
+      changed_when: false
+      failed_when: false
+
+    - name: "RESULT"
+      ansible.builtin.debug:
+        msg: |
+          Istio ambient mesh: RUNNING
+          HAProxy → Istio gateway: {{ 'OK' if gateway_test.stdout == '200' else 'NOT YET (app pods may still be starting)' }}
+          PeerAuth: PERMISSIVE (STRICT after kubeadm migration, once no Traefik)
+
+  handlers:
+    - name: restart haproxy
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
+        enabled: true
