@@ -181,7 +181,7 @@
     # ============== GRAFANA OAUTH2 APP ==============
     - name: Check if Grafana OAuth2 app exists
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/user/applications/oauth2"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: GET
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -192,7 +192,7 @@
 
     - name: Create Grafana OAuth2 app
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/user/applications/oauth2"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: POST
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"

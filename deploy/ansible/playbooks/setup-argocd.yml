@@ -303,7 +303,7 @@
           annotations:
             cert-manager.io/cluster-issuer: letsencrypt-dns
         spec:
-          ingressClassName: traefik
+          ingressClassName: "{{ ingress_class | default('traefik') }}"
           tls:
             - hosts:
                 - {{ argocd_host }}
