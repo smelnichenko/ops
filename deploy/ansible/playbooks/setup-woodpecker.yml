@@ -234,39 +234,20 @@
 
     - name: Add internal DNS for ingress hosts (avoids hairpin routing via node IP)
       ansible.builtin.shell: |
-        set -o pipefail
-        TRAEFIK_IP="{{ traefik_clusterip_result.stdout }}"
-        # Patch CoreDNS Corefile with hosts plugin for internal DNS
-        python3 -c "
-        import subprocess, json, sys
-        r = subprocess.run(['kubectl', 'get', 'configmap', 'coredns',
-                            '-n', 'kube-system', '-o', 'json'],
-                           capture_output=True, text=True)
-        cm = json.loads(r.stdout)
-        corefile = cm['data']['Corefile']
-        traefik_ip = '${TRAEFIK_IP}'
-        managed_comment = '# woodpecker-managed'
-        # Remove any previous woodpecker-managed entries
-        lines = [l for l in corefile.splitlines() if managed_comment not in l]
-        corefile = '\n'.join(lines)
-        entry = f'{traefik_ip} {{ forgejo_host }} {{ woodpecker_host }} {managed_comment}'
-        if 'hosts {' not in corefile:
-            hosts_block = f'''
-    hosts {{
-        {entry}
-        fallthrough
-    }}'''
-            corefile = corefile.replace('kubernetes cluster.local', hosts_block + '\n    kubernetes cluster.local')
-        else:
-            corefile = corefile.replace('hosts {', 'hosts {\n        ' + entry)
-        patch = json.dumps({'data': {'Corefile': corefile}})
-        r2 = subprocess.run(['kubectl', 'patch', 'configmap', 'coredns',
-                              '-n', 'kube-system', '--type=merge', '-p', patch],
-                            capture_output=True, text=True)
-        print(r2.stdout.strip() or r2.stderr.strip())
-        "
-      args:
-        executable: /bin/bash
+        GW_IP="{{ traefik_clusterip_result.stdout }}"
+        ENTRY="$GW_IP {{ forgejo_host }} {{ woodpecker_host }}"
+        COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
+        if echo "$COREFILE" | grep -q "{{ forgejo_host }}"; then
+          echo "already_present"
+          exit 0
+        fi
+        if echo "$COREFILE" | grep -q "hosts {"; then
+          NEW=$(echo "$COREFILE" | sed "s|hosts {|hosts {\n        $ENTRY|")
+        else
+          NEW=$(echo "$COREFILE" | sed "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
+        fi
+        kubectl patch configmap coredns -n kube-system --type=merge -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
+        echo "added"
       changed_when: false
 
     - name: Deploy Woodpecker
