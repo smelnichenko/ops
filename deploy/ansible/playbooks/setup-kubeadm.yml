@@ -201,6 +201,15 @@
         kubeadm init phase addon kube-proxy --apiserver-advertise-address={{ node_ip }}
       changed_when: true
 
+    - name: Set kube-proxy to nftables mode
+      ansible.builtin.shell: |
+        kubectl get configmap kube-proxy -n kube-system -o json | \
+          python3 -c "import json,sys; cm=json.loads(sys.stdin.read()); cm['data']['config.conf']=cm['data']['config.conf'].replace('mode: \"\"','mode: \"nftables\"'); print(json.dumps(cm))" | \
+          kubectl apply -f -
+        kubectl rollout restart daemonset kube-proxy -n kube-system
+        kubectl rollout status daemonset kube-proxy -n kube-system --timeout=60s
+      changed_when: true
+
     # ================================================================
     # Phase 7: Install Calico CNI
     # ================================================================

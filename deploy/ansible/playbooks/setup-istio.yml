@@ -22,6 +22,7 @@
   vars:
     istio_version: "1.25.2"
     ns: schnappy
+    node_ip: "{{ ansible_host | default('192.168.11.2') }}"
 
   tasks:
     # ================================================================
@@ -153,10 +154,10 @@
               default_backend istio_http
 
           backend istio_https
-              server gateway 127.0.0.1:{{ gateway_https_np.stdout }}
+              server gateway {{ node_ip }}:{{ gateway_https_np.stdout }}
 
           backend istio_http
-              server gateway 127.0.0.1:{{ gateway_http_np.stdout }}
+              server gateway {{ node_ip }}:{{ gateway_http_np.stdout }}
       notify: restart haproxy
 
     - name: "PHASE 3: HAProxy configured"
