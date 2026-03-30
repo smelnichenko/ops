@@ -398,6 +398,16 @@
               ports:
                 - protocol: TCP
                   port: 3000
+            # To Istio gateway (OIDC discovery via auth.pmon.dev)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: schnappy
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 8443
             # To Kubernetes API (for applying manifests)
             - to:
                 - namespaceSelector:
