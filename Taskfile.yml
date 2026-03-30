@@ -440,6 +440,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
 
+  deploy:seed-secrets:
+    desc: Seed Vault secrets from .env
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
+
   deploy:istio:
     desc: Install Istio ambient mesh + HAProxy
     dir: deploy/ansible
