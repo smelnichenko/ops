@@ -16,7 +16,7 @@ steps:
     image: python:3.13-slim
     commands:
       - pip install --quiet ansible-lint
-      - ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/ || true
+      - ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/
     backend_options:
       kubernetes:
         resources:
