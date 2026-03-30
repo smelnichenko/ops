@@ -444,8 +444,27 @@ tasks:
     desc: Seed Vault secrets from .env
     dir: deploy/ansible
     deps: [deploy:install]
+    dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
+      - >-
+        venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
+        -e "MONITOR_DB_PASSWORD=$MONITOR_DB_PASSWORD"
+        -e "REDIS_PASSWORD=$REDIS_PASSWORD"
+        -e "JWT_SECRET=$JWT_SECRET"
+        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
+        -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+        -e "RESEND_WEBHOOK_SECRET=$RESEND_WEBHOOK_SECRET"
+        -e "RESEND_API_KEY=$RESEND_API_KEY"
+        -e "MINIO_ROOT_USER=$MINIO_ROOT_USER"
+        -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD"
+        -e "ELASTICSEARCH_PASSWORD=$ELASTICSEARCH_PASSWORD"
+        -e "KIBANA_PASSWORD=$KIBANA_PASSWORD"
+        -e "GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD"
+        -e "KAFKA_CLUSTER_ID=$KAFKA_CLUSTER_ID"
+        -e "FORGEJO_ADMIN_USER=$FORGEJO_ADMIN_USER"
+        -e "FORGEJO_ADMIN_PASSWORD=$FORGEJO_ADMIN_PASSWORD"
+        -e "FORGEJO_ADMIN_EMAIL=$FORGEJO_ADMIN_EMAIL"
+        -e "KEYCLOAK_FORGEJO_CLIENT_SECRET=$KEYCLOAK_FORGEJO_CLIENT_SECRET"
 
   deploy:istio:
     desc: Install Istio ambient mesh + HAProxy
