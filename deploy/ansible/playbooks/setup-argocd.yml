@@ -39,7 +39,7 @@
     argocd_host: "{{ argocd_domain | default('cd.pmon.dev') }}"
     keycloak_host: "{{ keycloak_domain | default('auth.pmon.dev') }}"
     keycloak_enabled: "{{ argocd_keycloak_enabled | default(true) }}"
-    ingress_enabled: "{{ argocd_ingress_enabled | default(true) }}"
+    ingress_enabled: "{{ argocd_ingress_enabled | default(false) }}"
 
   tasks:
     # ================================================================
@@ -369,11 +369,11 @@
             - Ingress
             - Egress
           ingress:
-            # Traefik → argocd-server (UI/API)
+            # Istio gateway → argocd-server (UI/API)
             - from:
                 - namespaceSelector:
                     matchLabels:
-                      kubernetes.io/metadata.name: kube-system
+                      kubernetes.io/metadata.name: schnappy
               ports:
                 - protocol: TCP
                   port: 8080
@@ -398,16 +398,6 @@
               ports:
                 - protocol: TCP
                   port: 3000
-            # HTTPS egress via Traefik (git.pmon.dev)
-            - to:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: kube-system
-              ports:
-                - protocol: TCP
-                  port: 443
-                - protocol: TCP
-                  port: 8443
             # To Kubernetes API (for applying manifests)
             - to:
                 - namespaceSelector:
