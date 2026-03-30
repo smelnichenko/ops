@@ -24,9 +24,12 @@
   tasks:
     - name: Check all pods are running
       ansible.builtin.shell: |
+        set -o pipefail
         NOT_READY=$(kubectl get pods -n {{ ns }} --no-headers | grep -v 'Running\|Completed' | wc -l)
         echo "$NOT_READY pods not ready"
         [ "$NOT_READY" -eq 0 ]
+      args:
+        executable: /bin/bash
       register: pods_check
       retries: 30
       delay: 10
@@ -34,7 +37,7 @@
       changed_when: false
 
     - name: Check k6-smoke CronJob exists
-      ansible.builtin.shell: kubectl get cronjob schnappy-k6-smoke -n {{ ns }} --no-headers
+      ansible.builtin.command: kubectl get cronjob schnappy-k6-smoke -n {{ ns }} --no-headers
       changed_when: false
 
     - name: Delete previous verify job if exists
@@ -53,7 +56,7 @@
       changed_when: false
 
     - name: Get k6 Job logs
-      ansible.builtin.shell: kubectl logs job/{{ job_name }} -n {{ ns }}
+      ansible.builtin.command: kubectl logs job/{{ job_name }} -n {{ ns }}
       register: k6_logs
       changed_when: false
 
@@ -73,5 +76,5 @@
           All endpoints are healthy after restore.
 
     - name: Clean up verify job
-      ansible.builtin.shell: kubectl delete job {{ job_name }} -n {{ ns }}
+      ansible.builtin.command: kubectl delete job {{ job_name }} -n {{ ns }}
       changed_when: false

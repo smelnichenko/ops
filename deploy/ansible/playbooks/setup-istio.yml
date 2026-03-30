@@ -84,7 +84,10 @@
 
     - name: Verify Istio pods
       ansible.builtin.shell: |
+        set -o pipefail
         kubectl get pods -n istio-system --no-headers | grep -v Running | grep -v Completed
+      args:
+        executable: /bin/bash
       register: istio_check
       failed_when: istio_check.stdout | length > 0
       changed_when: false
@@ -158,7 +161,7 @@
 
           backend istio_http
               server gateway {{ node_ip }}:{{ gateway_http_np.stdout }}
-      notify: restart haproxy
+      notify: Restart haproxy
 
     - name: "PHASE 3: HAProxy configured"
       ansible.builtin.debug:
@@ -171,7 +174,7 @@
     # Phase 4: Verify
     # ================================================================
 
-    - name: Test Istio gateway via HAProxy
+    - name: Test Istio gateway via HAProxy  # noqa: command-instead-of-module
       ansible.builtin.shell: |
         curl -sk -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:127.0.0.1 https://pmon.dev/api/health
       register: gateway_test
@@ -186,7 +189,7 @@
           PeerAuth: PERMISSIVE (STRICT after kubeadm migration, once no Traefik)
 
   handlers:
-    - name: restart haproxy
+    - name: Restart haproxy
       ansible.builtin.systemd:
         name: haproxy
         state: restarted

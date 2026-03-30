@@ -208,7 +208,7 @@
       register: oauth_app_result
       when: oauth_apps.json | selectattr('name', 'equalto', 'Grafana') | list | length == 0
 
-    - name: Display Grafana OAuth2 credentials
+    - name: Display Grafana OAuth2 credentials  # noqa: no-handler
       ansible.builtin.debug:
         msg: |
           Grafana OAuth2 app created!

@@ -33,14 +33,14 @@
     # Phase 1: Stop k3s
     # ================================================================
 
-    - name: Stop and disable k3s
+    - name: Stop and disable k3s  # noqa: ignore-errors
       ansible.builtin.systemd:
         name: k3s
         state: stopped
         enabled: false
       ignore_errors: true
 
-    - name: Uninstall k3s
+    - name: Uninstall k3s  # noqa: ignore-errors command-instead-of-shell risky-shell-pipe no-changed-when
       ansible.builtin.shell: /usr/local/bin/k3s-uninstall.sh
       ignore_errors: true
 
@@ -99,9 +99,12 @@
     # Phase 3: Install kubeadm, kubelet, kubectl
     # ================================================================
 
-    - name: Add Kubernetes apt key
+    - name: Add Kubernetes apt key  # noqa: command-instead-of-module risky-shell-pipe
       ansible.builtin.shell: |
+        set -o pipefail
         curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg --yes
+      args:
+        executable: /bin/bash
       changed_when: true
 
     - name: Add Kubernetes apt repository
@@ -142,16 +145,18 @@
         - overlay
 
     - name: Set sysctl for kubernetes
-      ansible.posix.sysctl:
-        name: "{{ item.key }}"
-        value: "{{ item.value }}"
-        sysctl_file: /etc/sysctl.d/99-kubernetes.conf
-        reload: true
-      loop:
-        - { key: net.bridge.bridge-nf-call-iptables, value: '1' }
-        - { key: net.bridge.bridge-nf-call-ip6tables, value: '1' }
-        - { key: net.ipv4.ip_forward, value: '1' }
-        - { key: fs.aio-max-nr, value: '1048576' }
+      ansible.builtin.shell: |
+        for param in "net.bridge.bridge-nf-call-iptables=1" "net.bridge.bridge-nf-call-ip6tables=1" "net.ipv4.ip_forward=1" "fs.aio-max-nr=1048576"; do
+          sysctl -w "$param"
+        done
+        cat > /etc/sysctl.d/99-kubernetes.conf <<'EOF'
+        net.bridge.bridge-nf-call-iptables = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+        net.ipv4.ip_forward = 1
+        fs.aio-max-nr = 1048576
+        EOF
+        sysctl --system
+      changed_when: true
 
     # ================================================================
     # Phase 5: Initialize cluster
@@ -201,13 +206,19 @@
         kubeadm init phase addon kube-proxy --apiserver-advertise-address={{ node_ip }}
       changed_when: true
 
-    - name: Set kube-proxy to nftables mode
+    - name: Set kube-proxy to nftables mode  # noqa: risky-shell-pipe
       ansible.builtin.shell: |
+        set -o pipefail
         kubectl get configmap kube-proxy -n kube-system -o json | \
-          python3 -c "import json,sys; cm=json.loads(sys.stdin.read()); cm['data']['config.conf']=cm['data']['config.conf'].replace('mode: \"\"','mode: \"nftables\"'); print(json.dumps(cm))" | \
+          python3 -c "import json,sys; cm=json.loads(sys.stdin.read()); \
+            cc=cm['data']['config.conf']; \
+            cm['data']['config.conf']=cc.replace('mode: \"\"','mode: \"nftables\"'); \
+            print(json.dumps(cm))" | \
           kubectl apply -f -
         kubectl rollout restart daemonset kube-proxy -n kube-system
         kubectl rollout status daemonset kube-proxy -n kube-system --timeout=60s
+      args:
+        executable: /bin/bash
       changed_when: true
 
     # ================================================================
@@ -221,6 +232,7 @@
 
     - name: Install Calico custom resources
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<EOF | kubectl apply -f -
         apiVersion: operator.tigera.io/v1
         kind: Installation
@@ -237,9 +249,10 @@
       changed_when: true
 
     - name: Wait for Calico pods
-      ansible.builtin.shell: |
-        kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n calico-system --timeout=120s
+      ansible.builtin.command:
+        cmd: kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n calico-system --timeout=120s
       register: calico_wait
+      changed_when: false
       retries: 6
       delay: 10
       until: calico_wait.rc == 0

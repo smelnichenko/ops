@@ -111,6 +111,7 @@
         not nexus_binary.stat.exists or
         nexus_version_file is failed or
         (nexus_version_file.content | default('') | b64decode | trim) != nexus_version
+      notify: Restart nexus
       block:
         - name: Download Nexus tarball
           ansible.builtin.get_url:
@@ -152,6 +153,7 @@
               cp -rn /tmp/sonatype-work/nexus3/* {{ nexus_data_dir }}/ 2>/dev/null || true
               rm -rf /tmp/sonatype-work
             fi
+          changed_when: false
 
         - name: Record installed version
           ansible.builtin.copy:
@@ -173,8 +175,6 @@
           ansible.builtin.file:
             path: /tmp/nexus.tar.gz
             state: absent
-
-      notify: Restart nexus
 
     # ================================================================
     # Phase 2: Configure Nexus
@@ -858,4 +858,3 @@
       ansible.builtin.systemd:
         name: nexus
         state: restarted
-

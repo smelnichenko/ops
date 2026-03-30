@@ -88,6 +88,7 @@
     - name: Add vault-pi DNS entry to CoreDNS Corefile (idempotent)
       tags: [coredns]
       ansible.builtin.shell: |
+        set -o pipefail
         ENTRY="{{ vault_pi_ip }} {{ vault_pi_dns }}"
         COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
         if echo "$COREFILE" | grep -q "$ENTRY"; then
@@ -97,10 +98,14 @@
         if echo "$COREFILE" | grep -q "hosts {"; then
           NEW=$(echo "$COREFILE" | sed "s|hosts {|hosts {\n        $ENTRY|")
         else
-          NEW=$(echo "$COREFILE" | sed "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
+          NEW=$(echo "$COREFILE" | sed \
+            "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
         fi
-        kubectl patch configmap coredns -n kube-system --type=merge -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
+        kubectl patch configmap coredns -n kube-system --type=merge \
+          -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
         echo "added"
+      args:
+        executable: /bin/bash
       register: coredns_patch
       changed_when: "'added' in coredns_patch.stdout"
 
@@ -1015,6 +1020,7 @@
 
     - name: Copy vault CA cert to schnappy namespace (for Prometheus TLS)
       ansible.builtin.shell: |
+        set -o pipefail
         CA_CERT=$(kubectl get secret vault-ca-secret -n {{ vault_k3s_namespace }} \
           -o jsonpath="{.data.ca\.crt}" | base64 -d)
         kubectl create secret generic vault-ca-schnappy \

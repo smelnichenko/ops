@@ -187,6 +187,7 @@
 
     - name: Fetch SonarQube token from schnappy namespace secret
       ansible.builtin.shell: |
+        set -o pipefail
         kubectl get secret schnappy-sonarqube -n schnappy \
           -o jsonpath='{.data.SONARQUBE_TOKEN}' 2>/dev/null | base64 -d
       args:
@@ -228,7 +229,10 @@
 
     - name: Check if Woodpecker is already deployed (ArgoCD-managed)
       ansible.builtin.shell: |
+        set -o pipefail
         kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=server --no-headers 2>/dev/null | grep -c Running || echo "0"
+      args:
+        executable: /bin/bash
       register: woodpecker_existing_pods
       changed_when: false
 
@@ -245,6 +249,7 @@
 
     - name: Add internal DNS for ingress hosts (avoids hairpin routing via node IP)
       ansible.builtin.shell: |
+        set -o pipefail
         GW_IP="{{ gateway_clusterip_result.stdout }}"
         ENTRY="$GW_IP {{ forgejo_host }} {{ woodpecker_host }}"
         COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
@@ -255,10 +260,14 @@
         if echo "$COREFILE" | grep -q "hosts {"; then
           NEW=$(echo "$COREFILE" | sed "s|hosts {|hosts {\n        $ENTRY|")
         else
-          NEW=$(echo "$COREFILE" | sed "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
+          NEW=$(echo "$COREFILE" | sed \
+            "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
         fi
-        kubectl patch configmap coredns -n kube-system --type=merge -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
+        kubectl patch configmap coredns -n kube-system --type=merge \
+          -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
         echo "added"
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Deploy Woodpecker

@@ -158,7 +158,10 @@
       ansible.builtin.shell: |
         set -o pipefail
         kubectl exec -n vault vault-0 -- sh -c \
-          'VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt VAULT_TOKEN={{ vault_root_token }} vault kv get -field=client_secret secret/schnappy/argocd'
+          'VAULT_ADDR=https://127.0.0.1:8200 \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN={{ vault_root_token }} \
+          vault kv get -field=client_secret secret/schnappy/argocd'
       args:
         executable: /bin/bash
       register: vault_argocd_secret
@@ -176,6 +179,7 @@
 
     - name: Deploy Argo CD
       ansible.builtin.shell: |
+        set -o pipefail
         helm upgrade --install argocd \
           {{ argocd_chart }} \
           --version {{ argocd_chart_version }} \
@@ -259,6 +263,8 @@
         applicationSet:
           enabled: false
         HELMEOF
+      args:
+        executable: /bin/bash
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
