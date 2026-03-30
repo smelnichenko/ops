@@ -86,6 +86,7 @@
     # ================================================================
 
     - name: Add vault-pi DNS entry to CoreDNS Corefile (idempotent)
+      tags: [coredns]
       ansible.builtin.shell: |
         ENTRY="{{ vault_pi_ip }} {{ vault_pi_dns }}"
         COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')

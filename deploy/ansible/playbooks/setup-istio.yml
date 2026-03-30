@@ -34,12 +34,20 @@
         helm repo update istio
       changed_when: true
 
+    - name: Check if Istio is already installed
+      ansible.builtin.shell: |
+        kubectl get deployment istiod -n istio-system -o name 2>/dev/null
+      register: istio_exists
+      changed_when: false
+      failed_when: false
+
     - name: Install Istio base (CRDs)
       ansible.builtin.shell: |
         helm upgrade --install istio-base istio/base \
           --namespace istio-system --create-namespace \
           --version {{ istio_version }} \
           --wait --timeout 60s
+      when: istio_exists.rc != 0
       changed_when: true
 
     - name: Install istiod (ambient profile)
@@ -51,6 +59,7 @@
           --set "pilot.env.CA_TRUSTED_NODE_ACCOUNTS=istio-system/istio-ztunnel" \
           --set meshConfig.accessLogFile=/dev/stdout \
           --wait --timeout 120s
+      when: istio_exists.rc != 0
       changed_when: true
 
     - name: Install Istio CNI
@@ -60,6 +69,7 @@
           --version {{ istio_version }} \
           --set "cni.ambient.enabled=true" \
           --wait --timeout 120s
+      when: istio_exists.rc != 0
       changed_when: true
 
     - name: Install ztunnel
@@ -68,6 +78,7 @@
           --namespace istio-system \
           --version {{ istio_version }} \
           --wait --timeout 120s
+      when: istio_exists.rc != 0
       changed_when: true
 
     - name: Verify Istio pods

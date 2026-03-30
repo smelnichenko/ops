@@ -77,7 +77,7 @@
 
     - name: Check existing Forgejo tokens
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: GET
         user: "{{ _forgejo_user }}"
         password: "{{ _forgejo_password }}"
@@ -93,7 +93,7 @@
 
     - name: Delete existing Argo CD token (to get fresh secret)
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ existing_argocd_token.id }}"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ existing_argocd_token.id }}"
         method: DELETE
         user: "{{ _forgejo_user }}"
         password: "{{ _forgejo_password }}"
@@ -104,7 +104,7 @@
 
     - name: Create Forgejo PAT for Argo CD
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: POST
         user: "{{ _forgejo_user }}"
         password: "{{ _forgejo_password }}"
@@ -137,7 +137,7 @@
         type: Opaque
         stringData:
           type: git
-          url: "https://{{ forgejo_host }}"
+          url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
           username: "{{ _forgejo_user }}"
           password: "{{ argocd_git_token }}"
         EOF
