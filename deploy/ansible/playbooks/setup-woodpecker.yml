@@ -226,15 +226,26 @@
       ansible.builtin.debug:
         msg: "Deploying Woodpecker via unified Helm chart"
 
+    - name: Check if Woodpecker is already deployed (ArgoCD-managed)
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ woodpecker_namespace }} -l app.kubernetes.io/name=server --no-headers 2>/dev/null | grep -c Running || echo "0"
+      register: woodpecker_existing_pods
+      changed_when: false
+
+    - name: Skip Helm install — Woodpecker already deployed (ArgoCD manages it)
+      ansible.builtin.debug:
+        msg: "Woodpecker pods already running ({{ woodpecker_existing_pods.stdout | trim }} server pods). Skipping Helm install — ArgoCD manages deployment."
+      when: (woodpecker_existing_pods.stdout | trim | int) > 0 and not (woodpecker_helm_install | default(false))
+
     - name: Get Istio gateway ClusterIP for internal DNS
       ansible.builtin.shell: |
-        kubectl get svc schnappy-gateway-istio -n schnappy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || kubectl get svc traefik -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "127.0.0.1"
-      register: traefik_clusterip_result
+        kubectl get svc schnappy-gateway-istio -n schnappy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "127.0.0.1"
+      register: gateway_clusterip_result
       changed_when: false
 
     - name: Add internal DNS for ingress hosts (avoids hairpin routing via node IP)
       ansible.builtin.shell: |
-        GW_IP="{{ traefik_clusterip_result.stdout }}"
+        GW_IP="{{ gateway_clusterip_result.stdout }}"
         ENTRY="$GW_IP {{ forgejo_host }} {{ woodpecker_host }}"
         COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
         if echo "$COREFILE" | grep -q "{{ forgejo_host }}"; then
@@ -270,7 +281,6 @@
             - woodpecker-forgejo-secret
           ingress:
             enabled: true
-            ingressClassName: traefik
             hosts:
               - host: "{{ woodpecker_host }}"
                 paths:
@@ -317,6 +327,7 @@
       environment:
         KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
+      when: woodpecker_helm_install | default(false)
 
     - name: Wait for Woodpecker server to be ready
       ansible.builtin.shell: |
@@ -332,9 +343,9 @@
     # Phase 7: Network Policies
     # ================================================================
 
-    - name: "PHASE 6: Network policies (managed by Flux via infra repo)"
+    - name: "PHASE 6: Network policies (managed by ArgoCD via infra repo)"
       ansible.builtin.debug:
-        msg: "Network policies are in clusters/production/woodpecker/networkpolicies.yaml — managed by Flux"
+        msg: "Network policies are in clusters/production/woodpecker/networkpolicies.yaml — managed by ArgoCD"
 
     - name: Apply Woodpecker network policies (legacy — kept for Vagrant tests only)
       ansible.builtin.shell: |
@@ -360,7 +371,7 @@
                 - protocol: TCP
                   port: 53
         ---
-        # Woodpecker server: ingress from Traefik + agent
+        # Woodpecker server: ingress from Istio gateway + agent
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:
@@ -374,11 +385,14 @@
             - Ingress
             - Egress
           ingress:
-            # From Traefik ingress controller
+            # From Istio gateway
             - from:
                 - namespaceSelector:
                     matchLabels:
-                      kubernetes.io/metadata.name: kube-system
+                      kubernetes.io/metadata.name: {{ monitor_namespace }}
+                  podSelector:
+                    matchLabels:
+                      istio.io/gateway-name: schnappy-gateway
               ports:
                 - protocol: TCP
                   port: 8000
@@ -407,13 +421,10 @@
               ports:
                 - protocol: TCP
                   port: 3000
-            # HTTPS egress (OAuth via Traefik — git.pmon.dev resolves to Traefik ClusterIP via CoreDNS)
-            # Port 443 for ClusterIP pre-DNAT, port 8443 for post-DNAT (Traefik websecure targetPort)
+            # HTTPS egress (OAuth via Istio gateway — git.pmon.dev resolves to gateway ClusterIP via CoreDNS)
             - ports:
                 - protocol: TCP
                   port: 443
-                - protocol: TCP
-                  port: 8443
             # DNS
             - ports:
                 - protocol: UDP
@@ -475,18 +486,25 @@
             - from:
                 - podSelector: {}
           egress:
-            # To Traefik / k8s API (kube-system namespace)
-            # NB: NP matches target ports, not service ports.
-            # Traefik: svc 443->pod 8443, svc 80->pod 8000.
+            # To Istio gateway (schnappy namespace)
+            - to:
+                - namespaceSelector:
+                    matchLabels:
+                      kubernetes.io/metadata.name: {{ monitor_namespace }}
+                  podSelector:
+                    matchLabels:
+                      istio.io/gateway-name: schnappy-gateway
+              ports:
+                - protocol: TCP
+                  port: 443
+                - protocol: TCP
+                  port: 80
+            # To k8s API (kube-system namespace)
             - to:
                 - namespaceSelector:
                     matchLabels:
                       kubernetes.io/metadata.name: kube-system
               ports:
-                - protocol: TCP
-                  port: 8443
-                - protocol: TCP
-                  port: 8000
                 - protocol: TCP
                   port: 443
                 - protocol: TCP
