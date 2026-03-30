@@ -61,7 +61,7 @@
 
     - name: Check if Woodpecker OAuth app already exists
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/user/applications/oauth2"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: GET
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -77,7 +77,7 @@
 
     - name: Create Woodpecker OAuth2 application in Forgejo
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/user/applications/oauth2"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: POST
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -138,7 +138,7 @@
 
     - name: Check existing Forgejo tokens for infra repo PAT
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
         method: GET
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -154,7 +154,7 @@
 
     - name: Delete existing woodpecker-infra token (to get fresh secret)
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/{{ existing_infra_token.id }}"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/{{ existing_infra_token.id }}"
         method: DELETE
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -165,7 +165,7 @@
 
     - name: Create Forgejo PAT for Woodpecker infra repo push
       ansible.builtin.uri:
-        url: "https://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
         method: POST
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -261,7 +261,7 @@
           env:
             WOODPECKER_HOST: "https://{{ woodpecker_host }}"
             WOODPECKER_FORGEJO: "true"
-            WOODPECKER_FORGEJO_URL: "https://{{ forgejo_host }}"
+            WOODPECKER_FORGEJO_URL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
             WOODPECKER_ADMIN: "{{ woodpecker_admin }}"
             WOODPECKER_OPEN: "true"
             WOODPECKER_LOG_LEVEL: "warn"
