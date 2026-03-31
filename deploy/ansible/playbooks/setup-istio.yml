@@ -147,6 +147,7 @@
               timeout connect 5s
               timeout client 30s
               timeout server 30s
+              retries 3
 
           frontend https_in
               bind *:443
