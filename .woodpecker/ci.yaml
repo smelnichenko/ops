@@ -24,7 +24,7 @@ steps:
           limits: { cpu: 1000m, memory: 512Mi }
 
   - name: sonar
-    image: node:22-bookworm-slim
+    image: git.pmon.dev/schnappy/sonar-scanner:latest
     commands:
       - '[ -n "$SONAR_TOKEN" ] && [ -n "$SONAR_HOST_URL" ] || { echo "Skipping SonarQube (no token or URL)"; exit 0; }'
       - |
@@ -32,8 +32,7 @@ steps:
           wget -q --spider --timeout=2 "$SONAR_HOST_URL/api/system/status" 2>/dev/null && break
           sleep 1
         done
-      - apt-get update -qq && apt-get install -yqq default-jre-headless > /dev/null 2>&1
-      - npx sonarqube-scanner -Dsonar.qualitygate.wait=false -Dsonar.scanner.skipJreProvisioning=true
+      - sonar-scanner -Dsonar.qualitygate.wait=false
     depends_on: [ansible-lint]
     backend_options:
       kubernetes:
