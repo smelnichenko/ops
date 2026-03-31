@@ -1,9 +1,9 @@
 ---
-# Setup Istio ambient mesh + HAProxy on kubeadm cluster
+# Setup Istio sidecar mesh + HAProxy on kubeadm cluster
 #
 # Installs:
-#   - Istio ambient (base, istiod, cni, ztunnel)
-#   - Enrolls schnappy namespace in ambient mesh
+#   - Istio sidecar (base, istiod, cni)
+#   - Enables sidecar injection for schnappy namespace
 #   - Configures HAProxy to forward 80/443 to Istio gateway NodePorts
 #
 # Prerequisites:
@@ -14,7 +14,7 @@
 # Usage:
 #   task deploy:istio
 
-- name: Setup Istio ambient mesh
+- name: Setup Istio sidecar mesh
   hosts: target
   become: true
   gather_facts: false
@@ -51,14 +51,13 @@
       when: istio_exists.rc != 0
       changed_when: true
 
-    - name: Install istiod (ambient profile)
+    - name: Install istiod
       ansible.builtin.shell: |
         helm upgrade --install istiod istio/istiod \
           --namespace istio-system \
           --version {{ istio_version }} \
-          --set profile=ambient \
-          --set "pilot.env.CA_TRUSTED_NODE_ACCOUNTS=istio-system/istio-ztunnel" \
           --set meshConfig.accessLogFile=/dev/stdout \
+          --set meshConfig.defaultConfig.holdApplicationUntilProxyStarts=true \
           --wait --timeout 120s
       when: istio_exists.rc != 0
       changed_when: true
@@ -68,16 +67,8 @@
         helm upgrade --install istio-cni istio/cni \
           --namespace istio-system \
           --version {{ istio_version }} \
-          --set "cni.ambient.enabled=true" \
-          --wait --timeout 120s
-      when: istio_exists.rc != 0
-      changed_when: true
-
-    - name: Install ztunnel
-      ansible.builtin.shell: |
-        helm upgrade --install istio-ztunnel istio/ztunnel \
-          --namespace istio-system \
-          --version {{ istio_version }} \
+          --set cni.cniConfDir=/etc/cni/net.d \
+          --set cni.cniBinDir=/opt/cni/bin \
           --wait --timeout 120s
       when: istio_exists.rc != 0
       changed_when: true
@@ -94,20 +85,20 @@
 
     - name: "PHASE 1: Istio installed"
       ansible.builtin.debug:
-        msg: "istiod, ztunnel, CNI all running"
+        msg: "istiod and CNI running"
 
     # ================================================================
-    # Phase 2: Enroll schnappy namespace
+    # Phase 2: Enable sidecar injection for schnappy namespace
     # ================================================================
 
-    - name: Label schnappy namespace for ambient mesh
+    - name: Label schnappy namespace for sidecar injection
       ansible.builtin.shell: |
-        kubectl label namespace {{ ns }} istio.io/dataplane-mode=ambient --overwrite
+        kubectl label namespace {{ ns }} istio-injection=enabled --overwrite
       changed_when: true
 
-    - name: "PHASE 2: schnappy namespace enrolled in ambient mesh"
+    - name: "PHASE 2: schnappy namespace sidecar injection enabled"
       ansible.builtin.debug:
-        msg: "mTLS active between all {{ ns }} pods via ztunnel"
+        msg: "New/restarted pods in {{ ns }} will get Envoy sidecar"
 
     # ================================================================
     # Phase 3: Configure HAProxy
@@ -185,9 +176,9 @@
     - name: "RESULT"
       ansible.builtin.debug:
         msg: |
-          Istio ambient mesh: RUNNING
+          Istio sidecar mesh: RUNNING
           HAProxy → Istio gateway: {{ 'OK' if gateway_test.stdout == '200' else 'NOT YET (app pods may still be starting)' }}
-          PeerAuth: PERMISSIVE (STRICT after kubeadm migration, once no Traefik)
+          PeerAuth: STRICT mTLS
 
   handlers:
     - name: Restart haproxy
