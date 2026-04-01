@@ -34,6 +34,7 @@
           VAULT_TOKEN="{{ vault_token_value }}" \
           vault kv get -field=admin_password secret/schnappy/keycloak
       register: kc_password
+      changed_when: false
       no_log: true
 
     - name: Get Keycloak admin token

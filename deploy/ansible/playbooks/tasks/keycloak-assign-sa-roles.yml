@@ -37,7 +37,7 @@
         | list
       }}
 
-- name: "Assign roles {{ client_config.roles }} to {{ client_config.client_id }} service account"
+- name: "Assign roles to service account"  # {{ client_config.client_id }}
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
     method: POST
