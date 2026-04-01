@@ -1,7 +1,7 @@
 ---
 # Test Grafana deployment in Vagrant
 #
-# Verifies Grafana deploys correctly with Prometheus datasource,
+# Verifies Grafana deploys correctly with Mimir datasource,
 # ExternalSecret syncs from Vault, and dashboard is accessible.
 #
 # Prerequisites:
@@ -100,21 +100,17 @@
             enabled: false
           prometheus:
             enabled: true
-            image: prom/prometheus:v3.10.0
-            retention: 1d
             scrapeInterval: 30s
-            vault:
-              enabled: false
+          mimir:
+            enabled: true
+            image: grafana/mimir:2.16.0
+            retention: 1d
+            minioSecret: schnappy-minio
+            storage: 1Gi
+            storageClassName: local-path
             resources:
-              requests:
-                memory: "128Mi"
-                cpu: "100m"
-              limits:
-                memory: "512Mi"
-                cpu: "500m"
-            storage:
-              size: 1Gi
-              storageClass: "local-path"
+              requests: { memory: "256Mi", cpu: "100m" }
+              limits: { memory: "1Gi", cpu: "500m" }
           grafana:
             enabled: true
             image: grafana/grafana:12.4.0
@@ -233,11 +229,11 @@
       changed_when: false
       failed_when: false
 
-    - name: Check Prometheus datasource exists
+    - name: Check Mimir datasource exists
       ansible.builtin.set_fact:
-        datasource_ok: "{{ 'prometheus' in (grafana_datasources.stdout | default('') | lower) }}"
+        datasource_ok: "{{ 'mimir' in (grafana_datasources.stdout | default('') | lower) }}"
 
-    - name: "Datasource: {{ 'PASS — Prometheus configured' if datasource_ok else 'FAIL — no Prometheus datasource' }}"
+    - name: "Datasource: {{ 'PASS — Mimir configured' if datasource_ok else 'FAIL — no Mimir datasource' }}"
       ansible.builtin.debug:
         msg: "Datasources: {{ grafana_datasources.stdout | default('N/A') }}"
 
