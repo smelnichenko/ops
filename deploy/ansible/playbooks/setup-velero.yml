@@ -104,15 +104,7 @@
             matchLabels:
               app: minio-backup
         ---
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: minio-backup-secret
-          namespace: {{ velero_namespace }}
-        type: Opaque
-        stringData:
-          MINIO_ROOT_USER: "{{ velero_minio_access_key }}"
-          MINIO_ROOT_PASSWORD: "{{ velero_minio_secret_key }}"
+        # minio-backup-secret managed by ExternalSecret (Vault)
         ---
         apiVersion: apps/v1
         kind: Deployment
@@ -256,24 +248,14 @@
         KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
-    - name: Create Velero credentials secret
+    # velero-credentials managed by ExternalSecret (Vault)
+    - name: Wait for Velero credentials secret
       ansible.builtin.shell: |
-        set -o pipefail
-        cat <<EOF | kubectl apply -f -
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: velero-credentials
-          namespace: {{ velero_namespace }}
-        type: Opaque
-        stringData:
-          cloud: |
-            [default]
-            aws_access_key_id={{ velero_minio_access_key }}
-            aws_secret_access_key={{ velero_minio_secret_key }}
-        EOF
-      args:
-        executable: /bin/bash
+        kubectl get secret velero-credentials -n {{ velero_namespace }} -o name
+      register: velero_secret
+      retries: 12
+      delay: 10
+      until: velero_secret.rc == 0
       changed_when: false
 
     - name: Install Velero CRDs
