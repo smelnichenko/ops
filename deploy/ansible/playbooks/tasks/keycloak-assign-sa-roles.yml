@@ -1,0 +1,54 @@
+---
+# Assigns realm roles to a Keycloak client's service account
+# Expects: client_config.client_id, client_config.roles, kc_token, keycloak_url, realm
+
+- name: "Get client UUID for {{ client_config.client_id }}"
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ realm }}/clients?clientId={{ client_config.client_id }}"
+    headers:
+      Authorization: "Bearer {{ kc_token.json.access_token }}"
+  register: kc_client
+
+- name: "Get service account user for {{ client_config.client_id }}"
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ realm }}/clients/{{ kc_client.json[0].id }}/service-account-user"
+    headers:
+      Authorization: "Bearer {{ kc_token.json.access_token }}"
+  register: kc_sa_user
+
+- name: "Get realm roles"
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
+    headers:
+      Authorization: "Bearer {{ kc_token.json.access_token }}"
+  register: kc_roles
+
+- name: "Build role mappings for {{ client_config.client_id }}"
+  ansible.builtin.set_fact:
+    role_mappings: >-
+      {{
+        kc_roles.json
+        | selectattr('name', 'in', client_config.roles)
+        | map(attribute='id')
+        | zip(client_config.roles)
+        | map('reverse')
+        | map('list')
+        | map('community.general.dict_kv', ['name', 'id'])
+        | list
+      }}
+
+- name: "Assign roles {{ client_config.roles }} to {{ client_config.client_id }} service account"
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ kc_token.json.access_token }}"
+      Content-Type: application/json
+    body_format: json
+    body: "{{ kc_roles.json | selectattr('name', 'in', client_config.roles) | list }}"
+    status_code: [204]
+  changed_when: true
+
+- name: "Roles assigned to {{ client_config.client_id }}"
+  ansible.builtin.debug:
+    msg: "{{ client_config.roles }} → {{ client_config.client_id }} service account"

@@ -211,11 +211,19 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
 
   deploy:vault:
-    desc: Deploy Vault HA on k3s (+ ESO + Sealed Secrets + backups + Prometheus)
+    desc: Deploy Vault HA on kubeadm (+ ESO + backups)
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
+
+  deploy:keycloak-clients:
+    desc: Configure Keycloak service account roles (k6-smoke PLAY role)
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keycloak-clients.yml
 
   test:vault:
     desc: Test Vault end-to-end in Vagrant

@@ -1,0 +1,57 @@
+---
+# Configure Keycloak service account roles
+#
+# Assigns required realm roles to service accounts of Keycloak clients.
+# Runs after Keycloak is deployed and clients are created.
+#
+# Usage:
+#   task deploy:keycloak-clients
+
+- name: Configure Keycloak client service account roles
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    vault_ns: vault
+    keycloak_url: https://auth.pmon.dev
+    realm: schnappy
+    clients_roles:
+      - client_id: k6-smoke
+        roles: [PLAY, VIEW, CHAT]
+
+  tasks:
+    - name: Read Vault root token from init file
+      ansible.builtin.set_fact:
+        vault_token_value: "{{ (lookup('file', playbook_dir + '/../vars/vault-k3s-init.json') | from_json).root_token }}"
+      delegate_to: localhost
+      no_log: true
+
+    - name: Get Keycloak admin password from Vault
+      ansible.builtin.shell: |
+        kubectl exec -n {{ vault_ns }} vault-0 -- env \
+          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
+          VAULT_TOKEN="{{ vault_token_value }}" \
+          vault kv get -field=admin_password secret/schnappy/keycloak
+      register: kc_password
+      no_log: true
+
+    - name: Get Keycloak admin token
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: admin-cli
+          username: admin
+          password: "{{ kc_password.stdout }}"
+          grant_type: password
+        validate_certs: true
+      register: kc_token
+      no_log: true
+
+    - name: Assign roles to client service accounts
+      ansible.builtin.include_tasks: tasks/keycloak-assign-sa-roles.yml
+      loop: "{{ clients_roles }}"
+      loop_control:
+        loop_var: client_config
