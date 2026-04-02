@@ -18,12 +18,12 @@ vault_pi_dns: "vault.schnappy.io"  # DNS name (must match TLS cert SAN)
 vault_unseal_shares: 3
 vault_unseal_threshold: 2
 
-# ── Vault k3s cluster ─────────────────────────────────────────────────────────
-vault_k3s_namespace: "vault"
-vault_k3s_helm_version: "0.29.1"  # hashicorp/vault Helm chart version
+# ── Vault cluster ─────────────────────────────────────────────────────────
+vault_namespace: "vault"
+vault_helm_version: "0.29.1"  # hashicorp/vault Helm chart version
 vault_image_tag: "1.21.3"         # pin — Vault has breaking changes between versions
 
-# ── Vault k3s init ────────────────────────────────────────────────────────────
+# ── Vault cluster init ────────────────────────────────────────────────────────────
 vault_recovery_shares: 5
 vault_recovery_threshold: 3
 

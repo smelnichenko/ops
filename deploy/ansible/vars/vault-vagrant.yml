@@ -11,8 +11,8 @@
 vault_arch: "amd64"                   # x86_64 Vagrant VM (arm64 in production)
 vault_pi_ip: "192.168.56.20"          # Vagrant private network (192.168.11.4 in production)
 vault_pi_dns: "vault.schnappy.io"     # same as production (resolved via CoreDNS patch)
-vault_k3s_ip: "192.168.56.10"         # Vagrant k3s node IP (192.168.11.2 in production)
-vault_k3s_ipv6: ""                    # no IPv6 in Vagrant private network
+vault_cluster_ip: "192.168.56.10"         # Vagrant kubeadm node IP (192.168.11.2 in production)
+vault_cluster_ipv6: ""                    # no IPv6 in Vagrant private network
 
 # UFW rules for vault-pi VM (allow from Vagrant private + NAT networks)
 vault_pi_ssh_allow_ipv4: "192.168.56.0/24"
