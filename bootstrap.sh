@@ -14,7 +14,7 @@
 #   ./bootstrap.sh           # Full bootstrap
 #   ./bootstrap.sh cert-manager  # Single component
 
-set -euo pipefail
+set -uo pipefail
 
 INFRA_DIR="${INFRA_DIR:-/home/sm/src/infra}"
 VALUES_DIR="$INFRA_DIR/clusters/production"
@@ -71,7 +71,7 @@ install_external_secrets() {
     -n external-secrets --create-namespace \
     --version 2.2.0 \
     -f "$VALUES_DIR/external-secrets/values.yaml" \
-    --wait --timeout 120s
+    --wait --timeout 180s
   log "external-secrets installed"
 }
 
@@ -150,12 +150,17 @@ main() {
     velero)             install_velero ;;
     cluster-config)     install_cluster_config ;;
     all)
-      install_cert_manager
-      install_porkbun_webhook
-      install_external_secrets
-      install_istio
-      install_velero
-      install_cluster_config
+      local failed=0
+      install_cert_manager       || { err "cert-manager failed"; ((failed++)); }
+      install_porkbun_webhook    || { err "porkbun-webhook failed"; ((failed++)); }
+      install_external_secrets   || { err "external-secrets failed"; ((failed++)); }
+      install_istio              || { err "istio failed"; ((failed++)); }
+      install_velero             || { err "velero failed"; ((failed++)); }
+      install_cluster_config     || { err "cluster-config failed"; ((failed++)); }
+      if [[ $failed -gt 0 ]]; then
+        err "$failed component(s) failed — check output above"
+        exit 1
+      fi
       log "Tier 0 bootstrap complete!"
       log ""
       log "Next steps:"
