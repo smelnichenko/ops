@@ -291,6 +291,14 @@ NFTEOF
       # Install Calico CNI (nftables mode, matches production)
       echo "=== Installing Calico CNI ==="
       kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.0/manifests/tigera-operator.yaml
+
+      # Wait for Installation CRD to be registered by the operator
+      echo "Waiting for Calico CRDs..."
+      for i in $(seq 1 30); do
+        kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 && break
+        sleep 2
+      done
+
       cat <<'EOF' | kubectl apply -f -
 apiVersion: operator.tigera.io/v1
 kind: Installation
