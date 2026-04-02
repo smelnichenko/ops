@@ -250,6 +250,7 @@ EOF
         --pod-network-cidr=10.42.0.0/16 \
         --service-cidr=10.43.0.0/16 \
         --apiserver-advertise-address=192.168.56.10 \
+        --skip-phases=addon/kube-proxy \
         --node-name=schnappy-test
 
       # Setup kubeconfig for root
