@@ -245,6 +245,30 @@ EOF
     node.vm.provision "shell", name: "setup-kubeadm", inline: <<-SHELL
       set -e
 
+      # Base firewall rules (survives CNI removal/crash)
+      echo "=== Configuring base nftables ==="
+      cat > /etc/nftables.conf << 'NFTEOF'
+#!/usr/sbin/nft -f
+table ip base-filter {
+  chain input {
+    type filter hook input priority -10; policy accept;
+    ct state established,related accept
+    iif lo accept
+    tcp dport 22 accept
+    tcp dport 6443 accept
+    icmp type echo-request accept
+  }
+  chain forward {
+    type filter hook forward priority -10; policy accept;
+  }
+  chain output {
+    type filter hook output priority -10; policy accept;
+  }
+}
+NFTEOF
+      systemctl enable nftables
+      nft -f /etc/nftables.conf
+
       echo "=== Initializing kubeadm cluster ==="
       kubeadm init \
         --pod-network-cidr=10.42.0.0/16 \

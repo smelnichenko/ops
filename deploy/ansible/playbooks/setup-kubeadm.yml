@@ -159,6 +159,42 @@
       changed_when: true
 
     # ================================================================
+    # Phase 4b: Base firewall rules (survives CNI removal/crash)
+    # ================================================================
+
+    - name: Write base nftables config
+      ansible.builtin.copy:
+        dest: /etc/nftables.conf
+        mode: '0644'
+        content: |
+          #!/usr/sbin/nft -f
+          # Base firewall rules — survives CNI removal/crash
+          # CNI (Calico/Cilium) adds its own tables on top
+
+          table ip base-filter {
+            chain input {
+              type filter hook input priority -10; policy accept;
+              ct state established,related accept
+              iif lo accept
+              tcp dport 22 accept
+              tcp dport 6443 accept
+              icmp type echo-request accept
+            }
+            chain forward {
+              type filter hook forward priority -10; policy accept;
+            }
+            chain output {
+              type filter hook output priority -10; policy accept;
+            }
+          }
+
+    - name: Enable and start nftables
+      ansible.builtin.systemd:
+        name: nftables
+        enabled: true
+        state: started
+
+    # ================================================================
     # Phase 5: Initialize cluster
     # ================================================================
 
