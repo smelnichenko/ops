@@ -264,30 +264,28 @@ EOF
       # Allow scheduling on control plane (single node)
       kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
 
-      # Install Calico CNI (nftables mode, matches production)
-      echo "=== Installing Calico CNI ==="
-      kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.2/manifests/tigera-operator.yaml
-      cat <<'EOF' | kubectl apply -f -
-apiVersion: operator.tigera.io/v1
-kind: Installation
-metadata:
-  name: default
-spec:
-  calicoNetwork:
-    ipPools:
-    - cidr: 10.42.0.0/16
-      encapsulation: VXLANCrossSubnet
-      natOutgoing: Enabled
-    linuxDataplane: Nftables
----
-apiVersion: operator.tigera.io/v1
-kind: APIServer
-metadata:
-  name: default
-spec: {}
-EOF
+      # Install Cilium CNI (eBPF dataplane, replaces Calico + kube-proxy)
+      echo "=== Installing Cilium CNI ==="
+      helm repo add cilium https://helm.cilium.io/
+      helm repo update cilium
+      helm install cilium cilium/cilium \
+        --namespace kube-system \
+        --version 1.19.2 \
+        --set ipam.operator.clusterPoolIPv4PodCIDRList="10.42.0.0/16" \
+        --set kubeProxyReplacement=true \
+        --set k8sServiceHost=192.168.56.10 \
+        --set k8sServicePort=6443 \
+        --set cni.exclusive=false \
+        --set routingMode=native \
+        --set ipv4NativeRoutingCIDR="10.42.0.0/16" \
+        --set bpf.masquerade=true \
+        --set operator.replicas=1 \
+        --set hubble.enabled=true \
+        --set hubble.relay.enabled=true \
+        --set hubble.ui.enabled=false \
+        --wait --timeout 300s
 
-      echo "=== Waiting for Calico ==="
+      echo "=== Waiting for Cilium ==="
       for i in $(seq 1 60); do
         if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
           echo "Node is ready!"

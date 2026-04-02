@@ -5,7 +5,7 @@
 # Uses external Helm chart repos (not Forgejo) and local values files.
 #
 # Prerequisites:
-#   - kubeadm cluster running with Calico CNI
+#   - kubeadm cluster running with Cilium CNI
 #   - kubectl configured and working
 #   - helm installed
 #   - INFRA_DIR points to the infra repo (default: /home/sm/src/infra)
