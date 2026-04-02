@@ -177,9 +177,14 @@ net.ipv4.ip_forward                 = 1
 EOF
       sysctl --system
 
-      # Install containerd
+      # Install containerd from Docker repo (Debian's version is too old for kubeadm 1.34)
       echo "=== Installing containerd ==="
-      apt-get install -y containerd
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        tee /etc/apt/sources.list.d/docker.list
+      apt-get update
+      apt-get install -y containerd.io
       mkdir -p /etc/containerd
       containerd config default > /etc/containerd/config.toml
       sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
