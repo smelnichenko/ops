@@ -71,6 +71,7 @@ install_external_secrets() {
     -n external-secrets --create-namespace \
     --version 2.2.0 \
     -f "$VALUES_DIR/external-secrets/values.yaml" \
+    --set installCRDs=true \
     --wait --timeout 180s
   log "external-secrets installed"
 }
