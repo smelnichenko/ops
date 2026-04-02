@@ -1,37 +1,46 @@
-# Plan 049: Migrate from Calico to Cilium CNI
+# Plan 049: Cilium Migration (Retry with Full Vagrant Test)
 
 ## Context
 
-The cluster uses Calico 3.30.0 (nftables dataplane) with a separate kube-proxy DaemonSet. Cilium provides an eBPF-based CNI with built-in kube-proxy replacement and Hubble network observability. All 60 NetworkPolicies are standard Kubernetes -- no Calico CRDs -- fully portable.
+First attempt at in-place Calico->Cilium migration on production failed:
+- `nft flush ruleset` killed SSH (should have only deleted Calico table)
+- Cilium operator couldn't schedule due to `network-unavailable` taint
+- Required physical console access to recover
 
-Cilium and Istio CNI coexist. Istio CNI chains onto whatever primary CNI is installed. Cilium needs `cni.exclusive: false` to not delete Istio's chained config.
+The safe approach: `kubeadm reset` + fresh init with Cilium + Velero restore.
+Must be fully tested in Vagrant before touching production.
 
-## What Changes
+## Approach
 
-| Before | After |
-|--------|-------|
-| Calico 3.30.0 (nftables) | Cilium (eBPF) |
-| kube-proxy DaemonSet (nftables) | Cilium kube-proxy replacement (eBPF) |
-| VXLANCrossSubnet encapsulation | Native routing (single node) |
-| nftables NAT masquerade | eBPF masquerade |
-| No network observability | Hubble (L3/L4 visibility) |
-
-Unchanged: Istio sidecar mesh, all NetworkPolicies, Pod/Service CIDRs, Istio CNI.
-
-## Migration Steps
-
+NOT in-place swap. Full cluster rebuild:
 1. Velero backup
-2. Remove kube-proxy DaemonSet
-3. Remove Calico (operator, CRDs, host state)
-4. Install Cilium via Helm (kube-proxy replacement, native routing, Hubble)
-5. Restart all pods
-6. Verify (networking, mTLS, NPs, services, Hubble)
+2. `kubeadm reset` (wipes etcd, PVC data survives on disk)
+3. `kubeadm init --skip-phases=addon/kube-proxy`
+4. Install Cilium via Helm
+5. Run `bootstrap.sh` (Tier 0)
+6. Velero restore (all workloads + data come back)
+7. Reconnect Vault + Forgejo + ArgoCD
 
-## Rollback
+## Vagrant Test Flow
 
-- `helm uninstall cilium` -> re-install Calico + kube-proxy
-- Or: restore from Velero backup
+Full end-to-end test in Vagrant:
+1. Build full stack with Calico (vagrant up + Ansible)
+2. Create test data + Velero backup
+3. kubeadm reset (destroy cluster, keep PVC data)
+4. Rebuild with Cilium
+5. Restore from Velero
+6. Verify everything (data, apps, tracing, smoke test)
 
-## Estimated Downtime
+## Safeguards Added
 
-~35-40 minutes. Test in Vagrant first.
+- Base nftables rules in `/etc/nftables.conf` (survives CNI removal)
+- Never `nft flush ruleset` — only delete specific CNI tables
+- All commands on production require explicit approval
+- Full Vagrant test before production
+
+## Status
+
+- [x] Base nftables rules applied to production
+- [x] setup-kubeadm.yml + Vagrantfile include base nftables
+- [ ] Vagrant end-to-end test
+- [ ] Production migration
