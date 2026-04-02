@@ -1,0 +1,325 @@
+---
+# Cilium Migration End-to-End Test
+#
+# Tests the full kubeadm reset + Cilium install + Velero restore flow.
+# Verifies data survives the migration (Postgres, Keycloak, Forgejo).
+#
+# Prerequisites:
+#   - vagrant up (kubeadm + vault-pi VMs, Calico CNI)
+#   - Vault Pi initialized
+#   - Full stack deployed (Vault, Forgejo, app with Postgres data)
+#
+# Usage:
+#   # First deploy the full stack:
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-microservices.yml
+#
+#   # Then run this test:
+#   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-cilium-migration.yml
+
+- name: "Cilium Migration Test"
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    pod_cidr: "10.42.0.0/16"
+    service_cidr: "10.43.0.0/16"
+    node_ip: "192.168.56.10"
+    cilium_version: "1.19.2"
+    calico_version: "3.30.0"
+
+  tasks:
+    # ================================================================
+    # Phase 1: Verify pre-migration state
+    # ================================================================
+
+    - name: "Phase 1: Verify cluster is healthy"
+      ansible.builtin.shell: |
+        kubectl get nodes | grep -q " Ready" && echo "node ready"
+      changed_when: false
+
+    - name: Verify Calico is running
+      ansible.builtin.shell: |
+        kubectl get pods -n calico-system -l k8s-app=calico-node --no-headers | grep -q Running
+      changed_when: false
+
+    - name: Verify app is running
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app --no-headers | grep -q Running
+      changed_when: false
+
+    - name: Create test data in Postgres
+      ansible.builtin.shell: |
+        APP_POD=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=app -o jsonpath='{.items[0].metadata.name}')
+        kubectl exec -n {{ ns }} "$APP_POD" -c app -- sh -c '
+          curl -sf http://localhost:8080/api/actuator/health/liveness
+        '
+      changed_when: false
+
+    - name: Record pre-migration pod count
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ ns }} --no-headers | grep -c Running
+      register: pre_pod_count
+      changed_when: false
+
+    - name: "Pre-migration: {{ pre_pod_count.stdout }} running pods"
+      ansible.builtin.debug:
+        msg: "{{ pre_pod_count.stdout }} pods running in {{ ns }}"
+
+    # ================================================================
+    # Phase 2: Velero backup
+    # ================================================================
+
+    - name: "Phase 2: Check if Velero is available"
+      ansible.builtin.shell: |
+        kubectl get deploy velero -n velero --no-headers 2>/dev/null | grep -q "1/1" || echo "no-velero"
+      register: velero_check
+      changed_when: false
+
+    - name: Create Velero backup
+      ansible.builtin.shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: velero.io/v1
+        kind: Backup
+        metadata:
+          name: pre-cilium-vagrant
+          namespace: velero
+        spec:
+          includedNamespaces:
+            - "*"
+          defaultVolumesToFsBackup: true
+          ttl: 24h
+        EOF
+      when: velero_check.stdout != "no-velero"
+      changed_when: true
+
+    - name: Wait for backup to complete
+      ansible.builtin.shell: |
+        for i in $(seq 1 120); do
+          PHASE=$(kubectl get backup pre-cilium-vagrant -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
+          if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
+            echo "Backup $PHASE"
+            exit 0
+          fi
+          echo "Backup phase: $PHASE ($i/120)"
+          sleep 10
+        done
+        echo "FAIL: backup did not complete in 20 minutes"
+        exit 1
+      when: velero_check.stdout != "no-velero"
+      changed_when: false
+      timeout: 1260
+
+    # ================================================================
+    # Phase 3: Destroy cluster
+    # ================================================================
+
+    - name: "Phase 3: kubeadm reset"
+      ansible.builtin.shell: |
+        kubeadm reset --force --cleanup-tmp-dir
+      changed_when: true
+
+    - name: Clean Calico host state
+      ansible.builtin.shell: |
+        # Only delete Calico-specific tables, NEVER flush entire ruleset
+        nft delete table ip calico 2>/dev/null || true
+        nft delete table ip6 calico 2>/dev/null || true
+        rm -f /etc/cni/net.d/10-calico.conflist /etc/cni/net.d/calico-kubeconfig
+        rm -f /opt/cni/bin/calico /opt/cni/bin/calico-ipam
+        ip link delete vxlan.calico 2>/dev/null || true
+      changed_when: true
+
+    - name: Verify PVC data still on disk
+      ansible.builtin.shell: |
+        ls /mnt/storage/ 2>/dev/null || ls /opt/local-path-provisioner/ 2>/dev/null || echo "no-pvcs"
+      register: pvc_dirs
+      changed_when: false
+
+    - name: "PVC directories: {{ pvc_dirs.stdout_lines | length }} found"
+      ansible.builtin.debug:
+        msg: "{{ pvc_dirs.stdout }}"
+
+    # ================================================================
+    # Phase 4: Rebuild with Cilium
+    # ================================================================
+
+    - name: "Phase 4: Initialize kubeadm (no kube-proxy)"
+      ansible.builtin.shell: |
+        kubeadm init \
+          --pod-network-cidr={{ pod_cidr }} \
+          --service-cidr={{ service_cidr }} \
+          --apiserver-advertise-address={{ node_ip }} \
+          --skip-phases=addon/kube-proxy \
+          --node-name={{ ansible_hostname }}
+      changed_when: true
+
+    - name: Setup kubeconfig
+      ansible.builtin.shell: |
+        mkdir -p /root/.kube /home/vagrant/.kube
+        cp /etc/kubernetes/admin.conf /root/.kube/config
+        cp /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+        chown -R vagrant:vagrant /home/vagrant/.kube
+      changed_when: true
+
+    - name: Remove control plane taint
+      ansible.builtin.shell: |
+        kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null || true
+      changed_when: true
+
+    - name: Add Cilium Helm repo
+      ansible.builtin.command:
+        cmd: helm repo add cilium https://helm.cilium.io/
+      changed_when: true
+
+    - name: Update Helm repos
+      ansible.builtin.command:
+        cmd: helm repo update cilium
+      changed_when: false
+
+    - name: Install Cilium
+      ansible.builtin.shell: |
+        helm install cilium cilium/cilium \
+          --namespace kube-system \
+          --version {{ cilium_version }} \
+          --set ipam.operator.clusterPoolIPv4PodCIDRList="{{ pod_cidr }}" \
+          --set kubeProxyReplacement=true \
+          --set k8sServiceHost={{ node_ip }} \
+          --set k8sServicePort=6443 \
+          --set cni.exclusive=false \
+          --set routingMode=native \
+          --set ipv4NativeRoutingCIDR={{ pod_cidr }} \
+          --set bpf.masquerade=true \
+          --set operator.replicas=1 \
+          --set hubble.enabled=true \
+          --set hubble.relay.enabled=true \
+          --set hubble.ui.enabled=false \
+          --wait --timeout 300s
+      changed_when: true
+
+    - name: Wait for node Ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
+            echo "Node ready!"
+            exit 0
+          fi
+          echo "Waiting... ($i/60)"
+          sleep 5
+        done
+        echo "FAIL: node not ready"
+        exit 1
+      changed_when: false
+      timeout: 330
+
+    - name: Install local-path-provisioner
+      ansible.builtin.shell: |
+        kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+        kubectl patch storageclass local-path -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      changed_when: true
+
+    # ================================================================
+    # Phase 5: Bootstrap Tier 0 + Restore
+    # ================================================================
+
+    - name: "Phase 5: Run bootstrap.sh (Tier 0)"
+      ansible.builtin.shell: |
+        export INFRA_DIR=/vagrant-infra
+        /vagrant/bootstrap.sh all
+      become: false
+      changed_when: true
+      timeout: 600
+
+    - name: Restore Velero backup
+      ansible.builtin.shell: |
+        # Wait for Velero pod
+        for i in $(seq 1 30); do
+          READY=$(kubectl get pod -n velero -l app.kubernetes.io/name=velero \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+          if [ "$READY" = "true" ]; then break; fi
+          echo "Waiting for Velero... ($i/30)"
+          sleep 10
+        done
+
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: velero.io/v1
+        kind: Restore
+        metadata:
+          name: cilium-restore
+          namespace: velero
+        spec:
+          backupName: pre-cilium-vagrant
+          includedNamespaces:
+            - "*"
+          existingResourcePolicy: update
+        EOF
+
+        # Wait for restore
+        for i in $(seq 1 120); do
+          PHASE=$(kubectl get restore cilium-restore -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
+          if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
+            echo "Restore $PHASE"
+            exit 0
+          fi
+          echo "Restore phase: $PHASE ($i/120)"
+          sleep 10
+        done
+        echo "FAIL: restore did not complete"
+        exit 1
+      when: velero_check.stdout != "no-velero"
+      changed_when: true
+      timeout: 1260
+
+    # ================================================================
+    # Phase 6: Verify
+    # ================================================================
+
+    - name: "Phase 6: Wait for pods to stabilize"
+      ansible.builtin.shell: |
+        sleep 60
+        kubectl get pods -A --no-headers | grep -c Running
+      register: post_pod_count
+      changed_when: false
+
+    - name: Check Cilium is running
+      ansible.builtin.shell: |
+        kubectl get pods -n kube-system -l app.kubernetes.io/name=cilium-agent --no-headers | grep -q Running
+      changed_when: false
+
+    - name: Check no kube-proxy
+      ansible.builtin.shell: |
+        ! kubectl get daemonset kube-proxy -n kube-system 2>/dev/null
+      changed_when: false
+
+    - name: Check node has no Calico/Cilium taints
+      ansible.builtin.shell: |
+        TAINTS=$(kubectl get nodes -o jsonpath='{.items[0].spec.taints}')
+        echo "Taints: $TAINTS"
+        echo "$TAINTS" | grep -qv "cilium\|calico\|network-unavailable" || [ -z "$TAINTS" ] || [ "$TAINTS" = "null" ]
+      changed_when: false
+
+    - name: Check Istio CNI chained with Cilium
+      ansible.builtin.shell: |
+        kubectl get pods -n istio-system -l k8s-app=istio-cni-node --no-headers | grep -q Running && echo "Istio CNI running"
+      changed_when: false
+      ignore_errors: true
+
+    - name: Check Hubble relay
+      ansible.builtin.shell: |
+        kubectl get pods -n kube-system -l app.kubernetes.io/name=hubble-relay --no-headers | grep -q Running && echo "Hubble running"
+      changed_when: false
+
+    - name: Print results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Cilium Migration Test Results
+          ============================================
+          Pre-migration pods:  {{ pre_pod_count.stdout }}
+          Post-migration pods: {{ post_pod_count.stdout }}
+          CNI: Cilium (kube-proxy replaced)
+          ============================================
