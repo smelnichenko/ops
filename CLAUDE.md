@@ -145,9 +145,16 @@ task deploy:velero    # Deploy Velero + Backup MinIO
 task deploy:full      # Fresh kubeadm + forgejo + woodpecker + velero + argocd + app
 task deploy:status    # Check pods
 
-# Backups
-task deploy:backup         # Manual Velero backup
-task deploy:backup:status  # Check backup status
+# Backups (velero CLI installed on ten)
+velero backup get                              # List backups
+velero backup create my-backup                 # Manual full backup
+velero backup create --from-schedule velero-schnappy-daily my-snap  # From schedule template
+velero restore create --from-backup <name>     # Restore
+velero schedule get                            # List schedules
+
+# Tier 0 Bootstrap (pre-GitOps, no Forgejo/ArgoCD needed)
+./bootstrap.sh all           # Install cert-manager, ESO, Istio, Velero, cluster-config
+./bootstrap.sh cert-manager  # Single component
 ```
 
 ## Architecture
