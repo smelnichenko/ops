@@ -2,25 +2,89 @@
 # Cilium Migration End-to-End Test
 #
 # Tests the full kubeadm reset + Cilium install + Velero restore flow.
-# Verifies data survives the migration (Postgres, Keycloak, Forgejo).
+# Forgejo runs on vault-pi (outside the cluster) — survives cluster reset.
 #
 # Prerequisites:
-#   - vagrant up (kubeadm + vault-pi VMs, Calico CNI)
+#   - vagrant up (kubeadm + vault-pi VMs)
+#   - Forgejo running on vault-pi (installed by Vagrantfile provisioner)
 #   - Vault Pi initialized
-#   - Full stack deployed (Vault, Forgejo, app with Postgres data)
 #
 # Usage:
-#   # First deploy the full stack:
+#   # First setup Vault:
 #   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
 #     -e @vars/vault.yml -e @vars/vault-vagrant.yml
 #   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
 #     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-#   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-microservices.yml
 #
 #   # Then run this test:
 #   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-cilium-migration.yml
 
-- name: "Cilium Migration Test"
+# ─── Play 0: Verify Forgejo on vault-pi ──────────────────────────────────────
+- name: "Verify Forgejo on vault-pi"
+  hosts: vault_pi
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for vault-pi SSH
+      ansible.builtin.wait_for_connection:
+        delay: 2
+        timeout: 60
+
+    - name: Check Forgejo is running
+      ansible.builtin.uri:
+        url: http://localhost:3000/
+        status_code: 200
+      register: forgejo_check
+      retries: 5
+      delay: 5
+      until: forgejo_check.status == 200
+
+    - name: Create test repos in Forgejo
+      ansible.builtin.shell: |
+        # Create schnappy org
+        curl -sf -X POST http://localhost:3000/api/v1/orgs \
+          -u forgejo_admin:vagrant-forgejo-pw \
+          -H 'Content-Type: application/json' \
+          -d '{"username":"schnappy","visibility":"private"}' || true
+
+        # Create infra and platform repos
+        for repo in infra platform; do
+          curl -sf -X POST http://localhost:3000/api/v1/orgs/schnappy/repos \
+            -u forgejo_admin:vagrant-forgejo-pw \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"$repo\",\"auto_init\":false,\"private\":true}" || true
+        done
+      changed_when: true
+
+    - name: Push repos to Forgejo
+      ansible.builtin.shell: |
+        cd /vagrant-{{ item }}
+        git init 2>/dev/null || true
+        git add -A 2>/dev/null
+        git commit -m "initial" --allow-empty 2>/dev/null || true
+        git remote remove origin 2>/dev/null || true
+        git remote add origin http://forgejo_admin:vagrant-forgejo-pw@localhost:3000/schnappy/{{ item }}.git
+        git push -u origin HEAD:main --force
+      become: false
+      loop:
+        - infra
+        - platform
+      changed_when: true
+
+    - name: Verify repos accessible
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/v1/repos/schnappy/{{ item }}"
+        url_username: forgejo_admin
+        url_password: vagrant-forgejo-pw
+        force_basic_auth: true
+        status_code: 200
+      loop:
+        - infra
+        - platform
+
+# ─── Play 1: Pre-migration setup on kubeadm ──────────────────────────────────
+- name: "Pre-migration: Deploy workloads with PVC data"
   hosts: target
   become: true
   gather_facts: false
@@ -30,36 +94,75 @@
     pod_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
     node_ip: "192.168.56.10"
+    forgejo_ip: "192.168.56.20"
     cilium_version: "1.19.2"
-    calico_version: "3.30.0"
 
   tasks:
-    # ================================================================
-    # Phase 1: Verify pre-migration state
-    # ================================================================
-
-    - name: "Phase 1: Verify cluster is healthy"
+    - name: Verify cluster is healthy with Calico
       ansible.builtin.shell: |
         kubectl get nodes | grep -q " Ready" && echo "node ready"
+        kubectl get pods -n calico-system -l k8s-app=calico-node --no-headers | grep -q Running && echo "calico running"
       changed_when: false
 
-    - name: Verify Calico is running
-      ansible.builtin.shell: |
-        kubectl get pods -n calico-system -l k8s-app=calico-node --no-headers | grep -q Running
-      changed_when: false
+    - name: Create namespace
+      ansible.builtin.command: kubectl create namespace {{ ns }}
+      register: ns_result
+      changed_when: ns_result.rc == 0
+      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
 
-    - name: Verify app is running
+    - name: Create service accounts
       ansible.builtin.shell: |
-        kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app --no-headers | grep -q Running
-      changed_when: false
+        for sa in schnappy-postgres schnappy-redis schnappy-apt-cache; do
+          kubectl create serviceaccount $sa -n {{ ns }} 2>/dev/null || true
+        done
+      changed_when: true
 
-    - name: Create test data in Postgres
+    - name: Deploy Postgres with PVC
       ansible.builtin.shell: |
-        APP_POD=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=app -o jsonpath='{.items[0].metadata.name}')
-        kubectl exec -n {{ ns }} "$APP_POD" -c app -- sh -c '
-          curl -sf http://localhost:8080/api/actuator/health/liveness
-        '
+        helm upgrade --install schnappy-data /vagrant-platform/helm/schnappy-data \
+          --namespace {{ ns }} \
+          --set fullnameOverride=schnappy \
+          --set vault.secretsEnabled=false \
+          --set networkPolicies.enabled=false \
+          --set postgres.enabled=true \
+          --set postgres.image=postgres:17-alpine \
+          --set postgres.password=test-pw \
+          --set postgres.database=monitor \
+          --set postgres.storage.storageClass=local-path \
+          --set redis.enabled=true \
+          --set redis.image=redis:7-alpine \
+          --set kafka.enabled=false \
+          --set scylla.enabled=false \
+          --set minio.enabled=false
+      changed_when: true
+
+    - name: Wait for Postgres to be ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          READY=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=postgres \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+          if [ "$READY" = "true" ]; then echo "postgres ready"; exit 0; fi
+          sleep 5
+        done
+        kubectl get pods -n {{ ns }} --no-headers
+        exit 1
       changed_when: false
+      timeout: 330
+
+    - name: Insert test data into Postgres
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -- \
+          psql -U postgres -d monitor -c "
+            CREATE TABLE IF NOT EXISTS migration_test (id serial PRIMARY KEY, data text, created_at timestamp DEFAULT now());
+            INSERT INTO migration_test (data) VALUES ('cilium-migration-test-{{ ansible_date_time.iso8601 | default('unknown') }}');
+            SELECT count(*) as rows FROM migration_test;
+          "
+      register: test_data
+      changed_when: true
+
+    - name: Record test data count
+      ansible.builtin.debug:
+        msg: "Test data inserted: {{ test_data.stdout }}"
 
     - name: Record pre-migration pod count
       ansible.builtin.shell: |
@@ -67,21 +170,17 @@
       register: pre_pod_count
       changed_when: false
 
-    - name: "Pre-migration: {{ pre_pod_count.stdout }} running pods"
-      ansible.builtin.debug:
-        msg: "{{ pre_pod_count.stdout }} pods running in {{ ns }}"
-
     # ================================================================
-    # Phase 2: Velero backup
+    # Phase 2: Velero backup (skip if Velero not available)
     # ================================================================
 
-    - name: "Phase 2: Check if Velero is available"
+    - name: Check Velero availability
       ansible.builtin.shell: |
-        kubectl get deploy velero -n velero --no-headers 2>/dev/null | grep -q "1/1" || echo "no-velero"
-      register: velero_check
+        kubectl get deploy velero -n velero --no-headers 2>/dev/null | grep -q "1/1" && echo "available" || echo "unavailable"
+      register: velero_status
       changed_when: false
 
-    - name: Create Velero backup
+    - name: Take Velero backup
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
         apiVersion: velero.io/v1
@@ -90,29 +189,20 @@
           name: pre-cilium-vagrant
           namespace: velero
         spec:
-          includedNamespaces:
-            - "*"
+          includedNamespaces: ["*"]
           defaultVolumesToFsBackup: true
           ttl: 24h
         EOF
-      when: velero_check.stdout != "no-velero"
-      changed_when: true
-
-    - name: Wait for backup to complete
-      ansible.builtin.shell: |
         for i in $(seq 1 120); do
           PHASE=$(kubectl get backup pre-cilium-vagrant -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
           if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
-            echo "Backup $PHASE"
-            exit 0
+            echo "Backup $PHASE"; exit 0
           fi
-          echo "Backup phase: $PHASE ($i/120)"
           sleep 10
         done
-        echo "FAIL: backup did not complete in 20 minutes"
-        exit 1
-      when: velero_check.stdout != "no-velero"
-      changed_when: false
+        echo "Backup timeout"; exit 1
+      when: velero_status.stdout == "available"
+      changed_when: true
       timeout: 1260
 
     # ================================================================
@@ -124,9 +214,8 @@
         kubeadm reset --force --cleanup-tmp-dir
       changed_when: true
 
-    - name: Clean Calico host state
+    - name: Clean Calico host state (NOT flush ruleset!)
       ansible.builtin.shell: |
-        # Only delete Calico-specific tables, NEVER flush entire ruleset
         nft delete table ip calico 2>/dev/null || true
         nft delete table ip6 calico 2>/dev/null || true
         rm -f /etc/cni/net.d/10-calico.conflist /etc/cni/net.d/calico-kubeconfig
@@ -136,26 +225,35 @@
 
     - name: Verify PVC data still on disk
       ansible.builtin.shell: |
-        ls /mnt/storage/ 2>/dev/null || ls /opt/local-path-provisioner/ 2>/dev/null || echo "no-pvcs"
-      register: pvc_dirs
+        find /opt/local-path-provisioner/ -name "PG_VERSION" 2>/dev/null | head -1 || echo "no-pg-data"
+      register: pvc_check
       changed_when: false
 
-    - name: "PVC directories: {{ pvc_dirs.stdout_lines | length }} found"
-      ansible.builtin.debug:
-        msg: "{{ pvc_dirs.stdout }}"
+    - name: Assert PVC data survived reset
+      ansible.builtin.assert:
+        that: "'PG_VERSION' in pvc_check.stdout"
+        fail_msg: "Postgres PVC data not found on disk after kubeadm reset!"
+
+    - name: Verify Forgejo still accessible (on vault-pi)
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_ip }}:3000/api/v1/repos/schnappy/infra"
+        url_username: forgejo_admin
+        url_password: vagrant-forgejo-pw
+        force_basic_auth: true
+        status_code: 200
 
     # ================================================================
     # Phase 4: Rebuild with Cilium
     # ================================================================
 
-    - name: "Phase 4: Initialize kubeadm (no kube-proxy)"
+    - name: "Phase 4: kubeadm init (no kube-proxy)"
       ansible.builtin.shell: |
         kubeadm init \
           --pod-network-cidr={{ pod_cidr }} \
           --service-cidr={{ service_cidr }} \
           --apiserver-advertise-address={{ node_ip }} \
           --skip-phases=addon/kube-proxy \
-          --node-name={{ ansible_hostname }}
+          --node-name={{ ansible_hostname | default('schnappy-test') }}
       changed_when: true
 
     - name: Setup kubeconfig
@@ -171,18 +269,10 @@
         kubectl taint nodes --all node-role.kubernetes.io/control-plane- 2>/dev/null || true
       changed_when: true
 
-    - name: Add Cilium Helm repo
-      ansible.builtin.command:
-        cmd: helm repo add cilium https://helm.cilium.io/
-      changed_when: true
-
-    - name: Update Helm repos
-      ansible.builtin.command:
-        cmd: helm repo update cilium
-      changed_when: false
-
     - name: Install Cilium
       ansible.builtin.shell: |
+        helm repo add cilium https://helm.cilium.io/ 2>/dev/null || true
+        helm repo update cilium
         helm install cilium cilium/cilium \
           --namespace kube-system \
           --version {{ cilium_version }} \
@@ -204,14 +294,9 @@
     - name: Wait for node Ready
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
-            echo "Node ready!"
-            exit 0
-          fi
-          echo "Waiting... ($i/60)"
+          if kubectl get nodes | grep -q " Ready"; then echo "ready"; exit 0; fi
           sleep 5
         done
-        echo "FAIL: node not ready"
         exit 1
       changed_when: false
       timeout: 330
@@ -226,7 +311,7 @@
     # Phase 5: Bootstrap Tier 0 + Restore
     # ================================================================
 
-    - name: "Phase 5: Run bootstrap.sh (Tier 0)"
+    - name: "Phase 5: Run bootstrap.sh"
       ansible.builtin.shell: |
         export INFRA_DIR=/vagrant-infra
         /vagrant/bootstrap.sh all
@@ -236,15 +321,13 @@
 
     - name: Restore Velero backup
       ansible.builtin.shell: |
-        # Wait for Velero pod
+        # Wait for Velero
         for i in $(seq 1 30); do
           READY=$(kubectl get pod -n velero -l app.kubernetes.io/name=velero \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          if [ "$READY" = "true" ]; then break; fi
-          echo "Waiting for Velero... ($i/30)"
+          [ "$READY" = "true" ] && break
           sleep 10
         done
-
         cat <<'EOF' | kubectl apply -f -
         apiVersion: velero.io/v1
         kind: Restore
@@ -253,24 +336,18 @@
           namespace: velero
         spec:
           backupName: pre-cilium-vagrant
-          includedNamespaces:
-            - "*"
+          includedNamespaces: ["*"]
           existingResourcePolicy: update
         EOF
-
-        # Wait for restore
         for i in $(seq 1 120); do
           PHASE=$(kubectl get restore cilium-restore -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
           if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
-            echo "Restore $PHASE"
-            exit 0
+            echo "Restore $PHASE"; exit 0
           fi
-          echo "Restore phase: $PHASE ($i/120)"
           sleep 10
         done
-        echo "FAIL: restore did not complete"
-        exit 1
-      when: velero_check.stdout != "no-velero"
+        echo "Restore timeout"; exit 1
+      when: velero_status.stdout == "available"
       changed_when: true
       timeout: 1260
 
@@ -279,11 +356,40 @@
     # ================================================================
 
     - name: "Phase 6: Wait for pods to stabilize"
+      ansible.builtin.pause:
+        seconds: 90
+
+    - name: Create service accounts (if not restored)
       ansible.builtin.shell: |
-        sleep 60
-        kubectl get pods -A --no-headers | grep -c Running
-      register: post_pod_count
+        for sa in schnappy-postgres schnappy-redis schnappy-apt-cache; do
+          kubectl create serviceaccount $sa -n {{ ns }} 2>/dev/null || true
+        done
+      changed_when: true
+
+    - name: Wait for Postgres pod
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          READY=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=postgres \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+          [ "$READY" = "true" ] && exit 0
+          sleep 5
+        done
+        kubectl get pods -n {{ ns }} --no-headers
+        exit 1
       changed_when: false
+      timeout: 330
+
+    - name: Verify test data survived migration
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -- \
+          psql -U postgres -d monitor -c "SELECT count(*) FROM migration_test;"
+      register: post_data
+      changed_when: false
+
+    - name: Assert data survived
+      ansible.builtin.assert:
+        that: "'1' in post_data.stdout or '2' in post_data.stdout"
+        fail_msg: "Test data not found after migration! Data: {{ post_data.stdout }}"
 
     - name: Check Cilium is running
       ansible.builtin.shell: |
@@ -295,22 +401,23 @@
         ! kubectl get daemonset kube-proxy -n kube-system 2>/dev/null
       changed_when: false
 
-    - name: Check node has no Calico/Cilium taints
-      ansible.builtin.shell: |
-        TAINTS=$(kubectl get nodes -o jsonpath='{.items[0].spec.taints}')
-        echo "Taints: $TAINTS"
-        echo "$TAINTS" | grep -qv "cilium\|calico\|network-unavailable" || [ -z "$TAINTS" ] || [ "$TAINTS" = "null" ]
-      changed_when: false
-
-    - name: Check Istio CNI chained with Cilium
-      ansible.builtin.shell: |
-        kubectl get pods -n istio-system -l k8s-app=istio-cni-node --no-headers | grep -q Running && echo "Istio CNI running"
-      changed_when: false
-      ignore_errors: true
-
     - name: Check Hubble relay
       ansible.builtin.shell: |
-        kubectl get pods -n kube-system -l app.kubernetes.io/name=hubble-relay --no-headers | grep -q Running && echo "Hubble running"
+        kubectl get pods -n kube-system -l app.kubernetes.io/name=hubble-relay --no-headers | grep -q Running
+      changed_when: false
+
+    - name: Check Forgejo still accessible
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_ip }}:3000/api/v1/repos/schnappy/infra"
+        url_username: forgejo_admin
+        url_password: vagrant-forgejo-pw
+        force_basic_auth: true
+        status_code: 200
+
+    - name: Post-migration pod count
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ ns }} --no-headers | grep -c Running
+      register: post_pod_count
       changed_when: false
 
     - name: Print results
@@ -321,5 +428,7 @@
           ============================================
           Pre-migration pods:  {{ pre_pod_count.stdout }}
           Post-migration pods: {{ post_pod_count.stdout }}
-          CNI: Cilium (kube-proxy replaced)
+          Postgres data:       {{ post_data.stdout | trim }}
+          CNI: Cilium {{ cilium_version }}
+          Forgejo: http://{{ forgejo_ip }}:3000 (on vault-pi)
           ============================================

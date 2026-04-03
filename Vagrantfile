@@ -38,8 +38,13 @@ Vagrant.configure("2") do |config|
     vpi.vm.box = "debian/trixie64"
     vpi.vm.hostname = "vault-pi"
 
-    # vault-pi needs no project files — disable default /vagrant synced_folder
-    vpi.vm.synced_folder ".", "/vagrant", disabled: true
+    # Sync infra repo for Forgejo repo initialization
+    vpi.vm.synced_folder "../infra", "/vagrant-infra", type: "rsync",
+      rsync__exclude: [".git/"],
+      create: true
+    vpi.vm.synced_folder "../platform", "/vagrant-platform", type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"],
+      create: true
 
     # Private network for vault-pi ↔ kubeadm communication
     vpi.vm.network "private_network", ip: "192.168.56.20"
@@ -78,6 +83,74 @@ EOF
         ifup eth1 || true
       fi
 
+      # Install Forgejo (lightweight git forge, runs outside the cluster)
+      echo "=== Installing Forgejo ==="
+      FORGEJO_VERSION=12.0.0
+      ARCH=$(dpkg --print-architecture)
+      curl -sSL "https://code.forgejo.org/forgejo/forgejo/releases/download/v${FORGEJO_VERSION}/forgejo-${FORGEJO_VERSION}-linux-${ARCH}" -o /usr/local/bin/forgejo
+      chmod +x /usr/local/bin/forgejo
+
+      # Create forgejo user and directories
+      useradd --system --shell /bin/bash --home-dir /var/lib/forgejo forgejo 2>/dev/null || true
+      mkdir -p /var/lib/forgejo/{data,repos,log,custom/conf}
+      chown -R forgejo:forgejo /var/lib/forgejo
+
+      # Forgejo config
+      cat > /var/lib/forgejo/custom/conf/app.ini << 'FEOF'
+[server]
+HTTP_PORT = 3000
+HTTP_ADDR = 0.0.0.0
+ROOT_URL = http://192.168.56.20:3000/
+LFS_START_SERVER = false
+
+[database]
+DB_TYPE = sqlite3
+PATH = /var/lib/forgejo/data/forgejo.db
+
+[repository]
+ROOT = /var/lib/forgejo/repos
+
+[log]
+ROOT_PATH = /var/lib/forgejo/log
+LEVEL = Warn
+FEOF
+      chown forgejo:forgejo /var/lib/forgejo/custom/conf/app.ini
+
+      # Systemd service
+      cat > /etc/systemd/system/forgejo.service << 'SEOF'
+[Unit]
+Description=Forgejo Git Forge
+After=network.target
+
+[Service]
+Type=simple
+User=forgejo
+Group=forgejo
+WorkingDirectory=/var/lib/forgejo
+ExecStart=/usr/local/bin/forgejo web --config /var/lib/forgejo/custom/conf/app.ini
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SEOF
+      systemctl daemon-reload
+      systemctl enable --now forgejo
+
+      # Wait for Forgejo to start
+      for i in $(seq 1 30); do
+        curl -sf http://localhost:3000/ >/dev/null 2>&1 && break
+        sleep 2
+      done
+
+      # Create admin user
+      su - forgejo -c "forgejo admin user create \
+        --admin --username forgejo_admin \
+        --password vagrant-forgejo-pw \
+        --email admin@test.local \
+        --config /var/lib/forgejo/custom/conf/app.ini" 2>/dev/null || true
+
+      echo "Forgejo running at http://192.168.56.20:3000/"
       echo "vault-pi bootstrap complete"
     SHELL
   end
