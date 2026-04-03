@@ -181,8 +181,24 @@
       changed_when: false
 
     # ================================================================
-    # Phase 2: Setup Velero with Pi MinIO + backup
+    # Phase 2: pg_dump to Pi MinIO + Velero backup
     # ================================================================
+
+    - name: pg_dump all databases to Pi MinIO
+      ansible.builtin.shell: |
+        # Dump to local file first, then upload via mc
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+          pg_dumpall -U postgres > /tmp/pg-dump-pre-migration.sql
+        # Install mc if not present
+        which mc >/dev/null 2>&1 || {
+          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+        }
+        HOME=/tmp mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret 2>/dev/null
+        HOME=/tmp mc mb pi/velero/pg-dump --ignore-existing 2>/dev/null
+        HOME=/tmp mc cp /tmp/pg-dump-pre-migration.sql pi/velero/pg-dump/
+        echo "pg_dump uploaded: $(wc -c < /tmp/pg-dump-pre-migration.sql) bytes"
+      changed_when: true
 
     - name: Create Velero credentials secret
       ansible.builtin.shell: |
@@ -496,6 +512,19 @@
         exit 1
       changed_when: false
       timeout: 330
+
+    - name: Import pg_dump from Pi MinIO
+      ansible.builtin.shell: |
+        which mc >/dev/null 2>&1 || {
+          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+        }
+        HOME=/tmp mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret 2>/dev/null
+        HOME=/tmp mc cp pi/velero/pg-dump/pg-dump-pre-migration.sql /tmp/pg-restore.sql
+        kubectl exec -i -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+          psql -U postgres < /tmp/pg-restore.sql
+        echo "pg_dump imported"
+      changed_when: true
 
     - name: Verify test data survived migration
       ansible.builtin.shell: |
