@@ -55,8 +55,12 @@
   tasks:
     - name: Configure MinIO site replication
       ansible.builtin.shell: |
+        rm -rf /tmp/.mc
         HOME=/tmp mc alias set pi1 http://192.168.56.20:9000 velero-admin velero-vagrant-secret
         HOME=/tmp mc alias set pi2 http://192.168.56.21:9000 velero-admin velero-vagrant-secret
+        # Clear pi2 buckets so site replication can be configured (only one site may have data)
+        HOME=/tmp mc rb --force pi2/velero 2>/dev/null || true
+        HOME=/tmp mc rb --force pi2/pg-dump 2>/dev/null || true
         HOME=/tmp mc admin replicate add pi1 pi2 2>/dev/null || echo "replication already configured"
       changed_when: true
 
