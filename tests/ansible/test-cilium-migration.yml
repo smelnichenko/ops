@@ -83,6 +83,15 @@
     cilium_version: "1.19.2"
 
   tasks:
+    - name: Generate unique backup ID
+      ansible.builtin.shell: date +%s
+      register: backup_ts
+      changed_when: false
+
+    - name: Set backup ID fact
+      ansible.builtin.set_fact:
+        backup_id: "{{ backup_ts.stdout }}"
+
     - name: Push repos to Forgejo on vault-pi
       ansible.builtin.shell: |
         for repo in infra platform; do
@@ -242,7 +251,7 @@
         apiVersion: velero.io/v1
         kind: Backup
         metadata:
-          name: pre-cilium-vagrant
+          name: pre-cilium-{{ backup_id }}
           namespace: velero
         spec:
           includedNamespaces: ["*"]
