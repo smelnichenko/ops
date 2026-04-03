@@ -66,7 +66,7 @@ Vagrant.configure("2") do |config|
       set -e
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq
-      apt-get install -y curl unzip jq ufw openssl python3
+      apt-get install -y curl unzip jq ufw openssl python3 git
 
       # Persist private network config (vagrant-libvirt may not configure eth1 on Debian trixie)
       if ! grep -q eth1 /etc/network/interfaces; then
