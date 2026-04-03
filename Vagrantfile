@@ -82,7 +82,7 @@ EOF
 
       # Install Forgejo (lightweight git forge, runs outside the cluster)
       echo "=== Installing Forgejo ==="
-      FORGEJO_VERSION=12.0.0
+      FORGEJO_VERSION=14.0.3
       ARCH=$(dpkg --print-architecture)
       curl -sSL "https://code.forgejo.org/forgejo/forgejo/releases/download/v${FORGEJO_VERSION}/forgejo-${FORGEJO_VERSION}-linux-${ARCH}" -o /usr/local/bin/forgejo
       chmod +x /usr/local/bin/forgejo
