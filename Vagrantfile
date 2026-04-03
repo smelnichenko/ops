@@ -205,6 +205,75 @@ MEOF
       HOME=/tmp mc mb local/velero --ignore-existing
 
       echo "MinIO running at http://192.168.56.20:9000/"
+      HOME=/tmp mc mb local/pg-dump --ignore-existing
+
+      # Install Postgres (Keycloak database)
+      echo "=== Installing Postgres ==="
+      apt-get install -y postgresql postgresql-client
+      sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'kc-db-vagrant-pw';"
+      sudo -u postgres createdb keycloak 2>/dev/null || true
+      # Allow network connections
+      echo "host all all 0.0.0.0/0 scram-sha-256" >> /etc/postgresql/*/main/pg_hba.conf
+      sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/" /etc/postgresql/*/main/postgresql.conf
+      systemctl restart postgresql
+
+      # Install Keycloak (SSO, runs outside the cluster)
+      echo "=== Installing Keycloak ==="
+      KC_VERSION=26.5.7
+      curl -sSL "https://github.com/keycloak/keycloak/releases/download/${KC_VERSION}/keycloak-${KC_VERSION}.tar.gz" | tar -xz -C /opt
+      ln -sf /opt/keycloak-${KC_VERSION} /opt/keycloak
+      useradd --system --shell /bin/false --home-dir /opt/keycloak keycloak 2>/dev/null || true
+      chown -R keycloak:keycloak /opt/keycloak-${KC_VERSION}
+
+      # Systemd service
+      cat > /etc/systemd/system/keycloak.service << 'KCEOF'
+[Unit]
+Description=Keycloak SSO
+After=network.target postgresql.service
+
+[Service]
+Type=exec
+User=keycloak
+Group=keycloak
+Environment=KC_DB=postgres
+Environment=KC_DB_URL=jdbc:postgresql://localhost:5432/keycloak
+Environment=KC_DB_USERNAME=postgres
+Environment=KC_DB_PASSWORD=kc-db-vagrant-pw
+Environment=KC_HOSTNAME_STRICT=false
+Environment=KC_HTTP_ENABLED=true
+Environment=KC_HTTP_PORT=8080
+Environment=KC_BOOTSTRAP_ADMIN_USERNAME=admin
+Environment=KC_BOOTSTRAP_ADMIN_PASSWORD=admin-test-pw
+ExecStart=/opt/keycloak/bin/kc.sh start-dev
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+KCEOF
+      systemctl daemon-reload
+      systemctl enable --now keycloak
+
+      # Wait for Keycloak to start
+      echo "Waiting for Keycloak..."
+      for i in $(seq 1 60); do
+        curl -sf http://localhost:8080/realms/master >/dev/null 2>&1 && break
+        sleep 5
+      done
+
+      # Create schnappy realm
+      KC_TOKEN=$(curl -sf -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
+        -d "client_id=admin-cli&grant_type=password&username=admin&password=admin-test-pw" | \
+        python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+      curl -sf -X POST http://localhost:8080/admin/realms \
+        -H "Authorization: Bearer $KC_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{"realm":"schnappy","enabled":true}' || true
+
+      echo "Keycloak running at http://192.168.56.20:8080/"
+
+      # Allow Keycloak through UFW
+      ufw allow 8080/tcp comment "Keycloak"
 
       echo "vault-pi bootstrap complete"
     SHELL
