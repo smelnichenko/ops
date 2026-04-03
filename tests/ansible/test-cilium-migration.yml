@@ -123,6 +123,7 @@
           --set kafka.enabled=false \
           --set scylla.enabled=false \
           --set minio.enabled=false \
+          --set aptCache.enabled=false \
           --wait --timeout 300s
       changed_when: true
       timeout: 360
@@ -293,6 +294,7 @@
           --set kafka.enabled=false \
           --set scylla.enabled=false \
           --set minio.enabled=false \
+          --set aptCache.enabled=false \
           --wait --timeout 300s
       changed_when: true
       timeout: 360
