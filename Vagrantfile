@@ -49,8 +49,10 @@ Vagrant.configure("2") do |config|
     # Private network for vault-pi ↔ kubeadm communication
     vpi.vm.network "private_network", ip: "192.168.56.20"
 
-    # Optional: forward Vault port for debugging from host
-    vpi.vm.network "forwarded_port", guest: 8200, host: 8300
+    # Forward ports for debugging from host
+    vpi.vm.network "forwarded_port", guest: 8200, host: 8300   # Vault
+    vpi.vm.network "forwarded_port", guest: 3000, host: 3030   # Forgejo
+    vpi.vm.network "forwarded_port", guest: 9000, host: 9090   # MinIO
 
     vpi.vm.provider "libvirt" do |lv|
       lv.memory = 4096
@@ -151,6 +153,47 @@ SEOF
         --config /var/lib/forgejo/custom/conf/app.ini" 2>/dev/null || true
 
       echo "Forgejo running at http://192.168.56.20:3000/"
+
+      # Install MinIO (Velero backup target, runs outside the cluster)
+      echo "=== Installing MinIO ==="
+      ARCH=$(dpkg --print-architecture)
+      curl -sSL "https://dl.min.io/server/minio/release/linux-${ARCH}/minio" -o /usr/local/bin/minio
+      chmod +x /usr/local/bin/minio
+
+      # Create minio user and data directory
+      useradd --system --shell /bin/false --home-dir /var/lib/minio minio 2>/dev/null || true
+      mkdir -p /var/lib/minio/data
+      chown -R minio:minio /var/lib/minio
+
+      # Systemd service
+      cat > /etc/systemd/system/minio.service << 'MEOF'
+[Unit]
+Description=MinIO Object Storage
+After=network.target
+
+[Service]
+Type=simple
+User=minio
+Group=minio
+Environment="MINIO_ROOT_USER=velero-admin"
+Environment="MINIO_ROOT_PASSWORD=velero-vagrant-secret"
+ExecStart=/usr/local/bin/minio server /var/lib/minio/data --address :9000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+MEOF
+      systemctl daemon-reload
+      systemctl enable --now minio
+
+      # Wait for MinIO to start
+      for i in $(seq 1 30); do
+        curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break
+        sleep 2
+      done
+      echo "MinIO running at http://192.168.56.20:9000/"
+
       echo "vault-pi bootstrap complete"
     SHELL
   end

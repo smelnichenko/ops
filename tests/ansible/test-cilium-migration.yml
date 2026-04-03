@@ -171,16 +171,70 @@
       changed_when: false
 
     # ================================================================
-    # Phase 2: Velero backup (skip if Velero not available)
+    # Phase 2: Setup Velero with Pi MinIO + backup
     # ================================================================
 
-    - name: Check Velero availability
+    - name: Create Velero credentials secret
       ansible.builtin.shell: |
-        kubectl get deploy velero -n velero --no-headers 2>/dev/null | grep -q "1/1" && echo "available" || echo "unavailable"
-      register: velero_status
-      changed_when: false
+        kubectl create namespace velero 2>/dev/null || true
+        kubectl create secret generic velero-credentials -n velero \
+          --from-literal=cloud="[default]
+        aws_access_key_id=velero-admin
+        aws_secret_access_key=velero-vagrant-secret" \
+          --dry-run=client -o yaml | kubectl apply -f -
+      changed_when: true
 
-    - name: Take Velero backup
+    - name: Install Velero via Helm pointing to Pi MinIO
+      ansible.builtin.shell: |
+        helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>/dev/null || true
+        helm repo update vmware-tanzu
+        helm upgrade --install velero vmware-tanzu/velero \
+          -n velero \
+          --version 12.0.0 \
+          --set initContainers[0].name=velero-plugin-for-aws \
+          --set initContainers[0].image=velero/velero-plugin-for-aws:v1.11.1 \
+          --set initContainers[0].volumeMounts[0].name=plugins \
+          --set initContainers[0].volumeMounts[0].mountPath=/target \
+          --set credentials.useSecret=true \
+          --set credentials.existingSecret=velero-credentials \
+          --set configuration.backupStorageLocation[0].name=default \
+          --set configuration.backupStorageLocation[0].provider=aws \
+          --set configuration.backupStorageLocation[0].bucket=velero \
+          --set configuration.backupStorageLocation[0].config.region=us-east-1 \
+          --set configuration.backupStorageLocation[0].config.s3ForcePathStyle=true \
+          --set configuration.backupStorageLocation[0].config.s3Url=http://{{ forgejo_ip }}:9000 \
+          --set configuration.defaultVolumesToFsBackup=true \
+          --set snapshotsEnabled=false \
+          --set deployNodeAgent=true \
+          --set upgradeCRDs=false \
+          --wait --timeout 300s
+      changed_when: true
+      timeout: 360
+
+    - name: Create Velero bucket on Pi MinIO
+      ansible.builtin.shell: |
+        kubectl run mc-create-bucket --rm -it --restart=Never -n velero \
+          --image=quay.io/minio/mc:latest \
+          --override-type=strategic \
+          --overrides='{"spec":{"securityContext":{"runAsUser":1000,"runAsNonRoot":true},"containers":[{"name":"mc-create-bucket","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"seccompProfile":{"type":"RuntimeDefault"}}}]}}' \
+          --env="HOME=/tmp" \
+          -- sh -c "mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret && mc mb pi/velero --ignore-existing"
+      changed_when: true
+      timeout: 60
+
+    - name: Wait for Velero to be ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          READY=$(kubectl get pod -n velero -l app.kubernetes.io/name=velero \
+            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
+          [ "$READY" = "true" ] && echo "velero ready" && exit 0
+          sleep 10
+        done
+        exit 1
+      changed_when: false
+      timeout: 330
+
+    - name: Take Velero backup to Pi MinIO
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
         apiVersion: velero.io/v1
@@ -201,7 +255,6 @@
           sleep 10
         done
         echo "Backup timeout"; exit 1
-      when: velero_status.stdout == "available"
       changed_when: true
       timeout: 1260
 
@@ -240,6 +293,11 @@
         url_username: forgejo_admin
         url_password: vagrant-forgejo-pw
         force_basic_auth: true
+        status_code: 200
+
+    - name: Verify MinIO backup still on Pi
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_ip }}:9000/minio/health/live"
         status_code: 200
 
     # ================================================================
@@ -311,23 +369,51 @@
     # Phase 5: Bootstrap Tier 0 + Restore
     # ================================================================
 
-    - name: "Phase 5: Run bootstrap.sh"
+    - name: "Phase 5: Run bootstrap.sh (skip Velero — we install it separately)"
       ansible.builtin.shell: |
         export INFRA_DIR=/vagrant-infra
-        /vagrant/bootstrap.sh all
+        /vagrant/bootstrap.sh cert-manager
+        /vagrant/bootstrap.sh porkbun-webhook
+        /vagrant/bootstrap.sh external-secrets
+        /vagrant/bootstrap.sh istio
       become: false
       changed_when: true
       timeout: 600
 
-    - name: Restore Velero backup
+    - name: Install Velero pointing to Pi MinIO
       ansible.builtin.shell: |
-        # Wait for Velero
-        for i in $(seq 1 30); do
-          READY=$(kubectl get pod -n velero -l app.kubernetes.io/name=velero \
-            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          [ "$READY" = "true" ] && break
-          sleep 10
-        done
+        kubectl create namespace velero 2>/dev/null || true
+        kubectl create secret generic velero-credentials -n velero \
+          --from-literal=cloud="[default]
+        aws_access_key_id=velero-admin
+        aws_secret_access_key=velero-vagrant-secret" \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+        helm upgrade --install velero vmware-tanzu/velero \
+          -n velero \
+          --version 12.0.0 \
+          --set initContainers[0].name=velero-plugin-for-aws \
+          --set initContainers[0].image=velero/velero-plugin-for-aws:v1.11.1 \
+          --set initContainers[0].volumeMounts[0].name=plugins \
+          --set initContainers[0].volumeMounts[0].mountPath=/target \
+          --set credentials.useSecret=true \
+          --set credentials.existingSecret=velero-credentials \
+          --set configuration.backupStorageLocation[0].name=default \
+          --set configuration.backupStorageLocation[0].provider=aws \
+          --set configuration.backupStorageLocation[0].bucket=velero \
+          --set configuration.backupStorageLocation[0].config.region=us-east-1 \
+          --set configuration.backupStorageLocation[0].config.s3ForcePathStyle=true \
+          --set configuration.backupStorageLocation[0].config.s3Url=http://{{ forgejo_ip }}:9000 \
+          --set configuration.defaultVolumesToFsBackup=true \
+          --set snapshotsEnabled=false \
+          --set deployNodeAgent=true \
+          --set upgradeCRDs=false \
+          --wait --timeout 300s
+      changed_when: true
+      timeout: 360
+
+    - name: Restore from Pi MinIO backup
+      ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
         apiVersion: velero.io/v1
         kind: Restore
@@ -347,7 +433,6 @@
           sleep 10
         done
         echo "Restore timeout"; exit 1
-      when: velero_status.stdout == "available"
       changed_when: true
       timeout: 1260
 
