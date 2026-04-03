@@ -138,6 +138,82 @@
       changed_when: false
       timeout: 300
 
+    # ── Deploy Keycloak ──
+    - name: Create Keycloak service account
+      ansible.builtin.shell: |
+        kubectl create serviceaccount schnappy-keycloak -n {{ ns }} 2>/dev/null || true
+      changed_when: true
+
+    - name: Deploy schnappy-auth (Keycloak)
+      ansible.builtin.shell: |
+        helm upgrade --install schnappy-auth /vagrant-platform/helm/schnappy-auth \
+          --namespace {{ ns }} \
+          --set fullnameOverride=schnappy \
+          --set vault.secretsEnabled=false \
+          --set networkPolicies.enabled=false \
+          --set keycloak.enabled=true \
+          --set keycloak.adminPassword=admin-test-pw \
+          --set keycloak.dbPassword=kc-db-test-pw \
+          --set keycloak.hostname=localhost \
+          --set keycloak.clients.app.enabled=true \
+          --set keycloak.clients.app.redirectUri="http://localhost/*" \
+          --set keycloak.ingress.enabled=false \
+          --wait --timeout 300s
+      changed_when: true
+      timeout: 360
+
+    - name: Wait for Keycloak ready
+      ansible.builtin.shell: |
+        until kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak \
+          -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null | grep -q true; do
+          sleep 5
+        done
+        echo "keycloak ready"
+      changed_when: false
+      timeout: 300
+
+    - name: Create test user in Keycloak
+      ansible.builtin.shell: |
+        KC_POD=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak -o jsonpath='{.items[0].metadata.name}')
+        # Get admin token
+        TOKEN=$(kubectl exec -n {{ ns }} $KC_POD -- \
+          curl -sf -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
+          -d "client_id=admin-cli&grant_type=password&username=admin&password=admin-test-pw" | \
+          python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+        # Create schnappy realm if not exists
+        kubectl exec -n {{ ns }} $KC_POD -- \
+          curl -sf -X POST http://localhost:8080/admin/realms \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"realm":"schnappy","enabled":true}' || true
+        # Get realm token
+        TOKEN=$(kubectl exec -n {{ ns }} $KC_POD -- \
+          curl -sf -X POST http://localhost:8080/realms/master/protocol/openid-connect/token \
+          -d "client_id=admin-cli&grant_type=password&username=admin&password=admin-test-pw" | \
+          python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+        # Create test user
+        kubectl exec -n {{ ns }} $KC_POD -- \
+          curl -sf -X POST http://localhost:8080/admin/realms/schnappy/users \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"username":"testuser","enabled":true,"credentials":[{"type":"password","value":"test123","temporary":false}]}'
+        echo "test user created"
+      changed_when: true
+
+    - name: Verify test user can authenticate
+      ansible.builtin.shell: |
+        KC_POD=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak -o jsonpath='{.items[0].metadata.name}')
+        RESULT=$(kubectl exec -n {{ ns }} $KC_POD -- \
+          curl -sf -X POST http://localhost:8080/realms/schnappy/protocol/openid-connect/token \
+          -d "client_id=admin-cli&grant_type=password&username=testuser&password=test123")
+        echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("token_type:", d["token_type"]); print("has_access_token:", "access_token" in d)'
+      register: pre_auth
+      changed_when: false
+
+    - name: Show pre-migration auth result
+      ansible.builtin.debug:
+        msg: "{{ pre_auth.stdout }}"
+
     # ── Insert test data ──
     - name: Insert test data
       ansible.builtin.shell: |
@@ -272,7 +348,7 @@
     - name: "Phase 4: Create namespace and SAs"
       ansible.builtin.shell: |
         kubectl create namespace {{ ns }} 2>/dev/null || true
-        for sa in schnappy-postgres schnappy-redis schnappy-apt-cache; do
+        for sa in schnappy-postgres schnappy-redis schnappy-apt-cache schnappy-keycloak; do
           kubectl create serviceaccount $sa -n {{ ns }} 2>/dev/null || true
         done
       changed_when: true
@@ -321,6 +397,125 @@
           psql -U postgres < /tmp/pg-restore.sql
         echo "pg_dump imported"
       changed_when: true
+
+    # ── Redeploy Keycloak ──
+    - name: Redeploy schnappy-auth (Keycloak)
+      ansible.builtin.shell: |
+        helm upgrade --install schnappy-auth /vagrant-platform/helm/schnappy-auth \
+          --namespace {{ ns }} \
+          --set fullnameOverride=schnappy \
+          --set vault.secretsEnabled=false \
+          --set networkPolicies.enabled=false \
+          --set keycloak.enabled=true \
+          --set keycloak.adminPassword=admin-test-pw \
+          --set keycloak.dbPassword=kc-db-test-pw \
+          --set keycloak.hostname=localhost \
+          --set keycloak.clients.app.enabled=true \
+          --set keycloak.clients.app.redirectUri="http://localhost/*" \
+          --set keycloak.ingress.enabled=false \
+          --wait --timeout 300s
+      changed_when: true
+      timeout: 360
+
+    - name: Wait for Keycloak ready
+      ansible.builtin.shell: |
+        until kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak \
+          -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null | grep -q true; do
+          sleep 5
+        done
+        echo "keycloak ready"
+      changed_when: false
+      timeout: 300
+
+    - name: Verify test user can still authenticate after migration
+      ansible.builtin.shell: |
+        KC_POD=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak -o jsonpath='{.items[0].metadata.name}')
+        RESULT=$(kubectl exec -n {{ ns }} $KC_POD -- \
+          curl -sf -X POST http://localhost:8080/realms/schnappy/protocol/openid-connect/token \
+          -d "client_id=admin-cli&grant_type=password&username=testuser&password=test123")
+        echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("authenticated:", d["token_type"] == "Bearer")'
+      register: post_auth
+      changed_when: false
+
+    - name: Assert Keycloak auth works after migration
+      ansible.builtin.assert:
+        that: "'authenticated: True' in post_auth.stdout"
+        fail_msg: "FAIL: Keycloak auth failed after migration: {{ post_auth.stdout }}"
+
+    # ── Setup ArgoCD ──
+    - name: Install ArgoCD
+      ansible.builtin.shell: |
+        helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
+        helm repo update argo
+        kubectl create namespace argocd 2>/dev/null || true
+        helm upgrade --install argocd argo/argo-cd \
+          --namespace argocd \
+          --version 9.4.16 \
+          --set server.service.type=ClusterIP \
+          --set configs.params."server\.insecure"=true \
+          --set crds.install=true \
+          --wait --timeout 300s
+      changed_when: true
+      timeout: 360
+
+    - name: Configure ArgoCD repo pointing to Pi Forgejo
+      ansible.builtin.shell: |
+        kubectl apply -n argocd -f - <<'EOF'
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: forgejo-repo
+          labels:
+            argocd.argoproj.io/secret-type: repository
+        type: Opaque
+        stringData:
+          type: git
+          url: http://{{ forgejo_ip }}:3000/schnappy/infra.git
+          username: forgejo_admin
+          password: vagrant-forgejo-pw
+        EOF
+      changed_when: true
+
+    - name: Create ArgoCD test Application
+      ansible.builtin.shell: |
+        kubectl apply -n argocd -f - <<'EOF'
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: test-app
+        spec:
+          project: default
+          source:
+            repoURL: http://{{ forgejo_ip }}:3000/schnappy/infra.git
+            targetRevision: main
+            path: clusters/production/cilium
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: default
+          syncPolicy:
+            automated:
+              selfHeal: true
+        EOF
+      changed_when: true
+
+    - name: Wait for ArgoCD app to sync
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          STATUS=$(kubectl get app test-app -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null)
+          [ "$STATUS" = "Synced" ] && echo "ArgoCD synced" && exit 0
+          echo "ArgoCD status: $STATUS ($i/30)"
+          sleep 10
+        done
+        kubectl get app test-app -n argocd -o yaml | tail -20
+        exit 1
+      register: argocd_sync
+      changed_when: false
+      timeout: 330
+
+    - name: Assert ArgoCD synced from Pi Forgejo
+      ansible.builtin.assert:
+        that: "'ArgoCD synced' in argocd_sync.stdout"
+        fail_msg: "FAIL: ArgoCD did not sync from Pi Forgejo"
 
     # ================================================================
     # Phase 5: Verify everything
@@ -381,6 +576,8 @@
           Pre-migration pods:  {{ pre_pod_count.stdout }}
           Post-migration pods: {{ post_pod_count.stdout }}
           Postgres rows:       {{ post_data.stdout | trim }}
+          Keycloak auth:       {{ post_auth.stdout | trim }}
+          ArgoCD sync:         {{ argocd_sync.stdout | trim }}
           CNI: Cilium {{ cilium_version }}
           Forgejo: http://{{ forgejo_ip }}:3000
           MinIO:   http://{{ forgejo_ip }}:9000
