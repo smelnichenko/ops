@@ -224,6 +224,18 @@
       changed_when: false
       timeout: 330
 
+    - name: Wait for BSL to be Available
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          PHASE=$(kubectl get backupstoragelocation default -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$PHASE" = "Available" ] && echo "BSL available" && exit 0
+          echo "BSL: $PHASE ($i/30)"
+          sleep 10
+        done
+        exit 1
+      changed_when: false
+      timeout: 330
+
     - name: Take Velero backup to Pi MinIO
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
