@@ -414,6 +414,27 @@
       changed_when: true
       timeout: 360
 
+    - name: Wait for BSL Available before restore
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          PHASE=$(kubectl get backupstoragelocation default -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
+          [ "$PHASE" = "Available" ] && echo "BSL available" && exit 0
+          echo "BSL: $PHASE ($i/30)"
+          sleep 10
+        done
+        exit 1
+      changed_when: false
+      timeout: 330
+
+    - name: Verify backup visible from new cluster
+      ansible.builtin.shell: |
+        kubectl get backup pre-cilium-vagrant -n velero -o jsonpath='{.status.phase}'
+      register: backup_check
+      changed_when: false
+      retries: 6
+      delay: 10
+      until: "'Completed' in backup_check.stdout or 'PartiallyFailed' in backup_check.stdout"
+
     - name: Restore from Pi MinIO backup
       ansible.builtin.shell: |
         cat <<'EOF' | kubectl apply -f -
