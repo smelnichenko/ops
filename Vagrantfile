@@ -80,6 +80,10 @@ EOF
         ifup eth1 || true
       fi
 
+      # Allow Forgejo and MinIO through UFW
+      ufw allow 3000/tcp comment "Forgejo"
+      ufw allow 9000/tcp comment "MinIO"
+
       # Install Forgejo (lightweight git forge, runs outside the cluster)
       echo "=== Installing Forgejo ==="
       FORGEJO_VERSION=14.0.3
