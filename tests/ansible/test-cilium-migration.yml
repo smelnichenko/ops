@@ -212,17 +212,6 @@
       changed_when: true
       timeout: 360
 
-    - name: Create Velero bucket on Pi MinIO
-      ansible.builtin.shell: |
-        kubectl run mc-create-bucket --rm -it --restart=Never -n velero \
-          --image=quay.io/minio/mc:latest \
-          --override-type=strategic \
-          --overrides='{"spec":{"securityContext":{"runAsUser":1000,"runAsNonRoot":true},"containers":[{"name":"mc-create-bucket","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"seccompProfile":{"type":"RuntimeDefault"}}}]}}' \
-          --env="HOME=/tmp" \
-          -- sh -c "mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret && mc mb pi/velero --ignore-existing"
-      changed_when: true
-      timeout: 60
-
     - name: Wait for Velero to be ready
       ansible.builtin.shell: |
         for i in $(seq 1 30); do

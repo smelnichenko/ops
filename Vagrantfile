@@ -198,6 +198,12 @@ MEOF
         curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break
         sleep 2
       done
+      # Install mc client and create velero bucket
+      curl -sSL "https://dl.min.io/client/mc/release/linux-${ARCH}/mc" -o /usr/local/bin/mc
+      chmod +x /usr/local/bin/mc
+      HOME=/tmp mc alias set local http://localhost:9000 velero-admin velero-vagrant-secret
+      HOME=/tmp mc mb local/velero --ignore-existing
+
       echo "MinIO running at http://192.168.56.20:9000/"
 
       echo "vault-pi bootstrap complete"
