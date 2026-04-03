@@ -422,10 +422,11 @@ NFTEOF
 
       # Wait for Installation CRD to be registered by the operator
       echo "Waiting for Calico CRDs..."
-      for i in $(seq 1 30); do
-        kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 && break
-        sleep 2
+      until kubectl get crd installations.operator.tigera.io >/dev/null 2>&1; do
+        echo "  waiting..."
+        sleep 5
       done
+      echo "CRD registered"
 
       cat <<'EOF' | kubectl apply -f -
 apiVersion: operator.tigera.io/v1
@@ -448,14 +449,11 @@ spec: {}
 EOF
 
       echo "=== Waiting for Calico ==="
-      for i in $(seq 1 60); do
-        if kubectl get nodes 2>/dev/null | grep -q " Ready"; then
-          echo "Node is ready!"
-          break
-        fi
-        echo "Waiting... ($i/60)"
+      until kubectl get nodes 2>/dev/null | grep -q " Ready"; do
+        echo "  waiting for node Ready..."
         sleep 5
       done
+      echo "Node is ready!"
 
       # Install local-path-provisioner
       echo "=== Installing local-path-provisioner ==="
