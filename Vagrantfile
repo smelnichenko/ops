@@ -347,7 +347,7 @@ EOF
 
     # Install sdkman + Java and nvm + Node.js for vagrant user
     node.vm.provision "shell", name: "install-sdks", privileged: false, inline: <<-SHELL
-      set -e
+      # No set -e: sdkman install has harmless find errors
 
       # Install SDKMAN and Java
       echo "=== Installing SDKMAN ==="
