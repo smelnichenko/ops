@@ -94,10 +94,14 @@ EOF
 
       # Forgejo config
       cat > /var/lib/forgejo/custom/conf/app.ini << 'FEOF'
+APP_NAME = Forgejo
+RUN_USER = forgejo
+
 [server]
 HTTP_PORT = 3000
 HTTP_ADDR = 0.0.0.0
 ROOT_URL = http://192.168.56.20:3000/
+APP_DATA_PATH = /var/lib/forgejo/data
 LFS_START_SERVER = false
 
 [database]
