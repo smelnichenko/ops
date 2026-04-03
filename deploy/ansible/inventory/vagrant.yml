@@ -1,21 +1,10 @@
 ---
-# Vagrant inventory — two-VM test environment
+# Vagrant inventory — three-VM test environment
 #
 # VMs:
-#   kubeadm   192.168.56.10  — kubeadm node (Calico, Istio, full stack)
-#   vault-pi  192.168.56.20  — simulates Raspberry Pi unseal Vault
-#
-# SSH keys are written by Vagrant to .vagrant/machines/{name}/libvirt/private_key
-#
-# Usage:
-#   vagrant up
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-#
-# vault-vagrant.yml overrides vault.yml production IPs/arch with Vagrant values.
-# Extra vars always win over inventory vars, so overrides must be passed last via -e.
+#   kubeadm   192.168.56.10  — kubeadm node (Calico/Cilium, full stack)
+#   pi1       192.168.56.20  — Pi services primary (Vault, Forgejo, MinIO, Keycloak, Postgres)
+#   pi2       192.168.56.21  — Pi services mirror (same stack, Postgres replica)
 
 all:
   vars:
@@ -28,18 +17,33 @@ all:
       ansible_ssh_private_key_file: "{{ inventory_dir }}/../../../.vagrant/machines/kubeadm/libvirt/private_key"
       ansible_python_interpreter: /usr/bin/python3
 
-    vault_pi:
+    pi1:
       ansible_host: 192.168.56.20
-      ansible_ssh_private_key_file: "{{ inventory_dir }}/../../../.vagrant/machines/vault-pi/libvirt/private_key"
+      ansible_ssh_private_key_file: "{{ inventory_dir }}/../../../.vagrant/machines/pi1/libvirt/private_key"
       ansible_python_interpreter: /usr/bin/python3
-      # Overrides for Vagrant (x86_64, different IPs)
       vault_arch: amd64
       vault_pi_ip: "192.168.56.20"
-      vault_pi_dns: "vault.schnappy.io"  # resolved via /etc/hosts injection in kubeadm VM
-      # UFW: allow SSH from private network (host→192.168.56.1, kubeadm→192.168.56.10)
-      # and from NAT network (192.168.121.0/24) so 'vagrant ssh' works
+      vault_pi_dns: "vault.schnappy.io"
       vault_pi_ssh_allow_ipv4: "192.168.56.0/24"
-      vault_pi_ssh_allow_ipv6: ""          # no IPv6 in Vagrant private network
-      vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"  # Vagrant NAT (for vagrant ssh)
+      vault_pi_ssh_allow_ipv6: ""
+      vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"
       vault_cluster_ip: "192.168.56.10"
-      vault_cluster_ipv6: ""                   # no IPv6 in Vagrant
+      vault_cluster_ipv6: ""
+
+    pi2:
+      ansible_host: 192.168.56.21
+      ansible_ssh_private_key_file: "{{ inventory_dir }}/../../../.vagrant/machines/pi2/libvirt/private_key"
+      ansible_python_interpreter: /usr/bin/python3
+      vault_arch: amd64
+      vault_pi_ip: "192.168.56.21"
+
+  children:
+    pis:
+      hosts:
+        pi1:
+        pi2:
+
+    # Legacy alias for existing playbooks
+    vault_pi:
+      hosts:
+        pi1:
