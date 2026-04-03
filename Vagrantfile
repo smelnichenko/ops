@@ -27,7 +27,7 @@ PI_SERVICES_SCRIPT = <<-'PISCRIPT'
   PI_NAME=$3
 
   apt-get update -qq
-  apt-get install -y curl unzip jq ufw openssl python3 git postgresql postgresql-client
+  apt-get install -y curl unzip jq ufw openssl python3 git postgresql postgresql-client default-jre-headless
 
   # Persist private network config
   if ! grep -q eth1 /etc/network/interfaces; then
