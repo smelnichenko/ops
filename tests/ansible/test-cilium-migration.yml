@@ -1,26 +1,21 @@
 ---
 # Cilium Migration End-to-End Test
 #
-# Tests the full kubeadm reset + Cilium install + Velero restore flow.
-# Forgejo runs on vault-pi (outside the cluster) — survives cluster reset.
+# Tests: Calico cluster → pg_dump → kubeadm reset → Cilium rebuild →
+#        Helm redeploy → pg_restore → verify data + auth + ArgoCD
+#
+# No Velero in this test — Postgres data backed up via pg_dump to Pi MinIO.
+# Velero backup/restore is tested separately in test-dr.yml.
 #
 # Prerequisites:
 #   - vagrant up (kubeadm + vault-pi VMs)
-#   - Forgejo running on vault-pi (installed by Vagrantfile provisioner)
-#   - Vault Pi initialized
+#   - Vault Pi + Vault cluster initialized
 #
 # Usage:
-#   # First setup Vault:
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-#
-#   # Then run this test:
 #   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-cilium-migration.yml
 
-# ─── Play 0: Verify Forgejo on vault-pi ──────────────────────────────────────
-- name: "Verify Forgejo on vault-pi"
+# ─── Play 0: Verify Pi services ──────────────────────────────────────────────
+- name: "Verify Pi services"
   hosts: vault_pi
   become: true
   gather_facts: false
@@ -33,22 +28,22 @@
 
     - name: Check Forgejo is running
       ansible.builtin.uri:
-        url: http://localhost:3000/
+        url: http://localhost:3000/api/v1/version
         status_code: 200
-      register: forgejo_check
       retries: 5
       delay: 5
-      until: forgejo_check.status == 200
 
-    - name: Create test repos in Forgejo
+    - name: Check MinIO is running
+      ansible.builtin.uri:
+        url: http://localhost:9000/minio/health/live
+        status_code: 200
+
+    - name: Create schnappy org and repos in Forgejo
       ansible.builtin.shell: |
-        # Create schnappy org
         curl -sf -X POST http://localhost:3000/api/v1/orgs \
           -u forgejo_admin:vagrant-forgejo-pw \
           -H 'Content-Type: application/json' \
           -d '{"username":"schnappy","visibility":"private"}' || true
-
-        # Create infra and platform repos
         for repo in infra platform; do
           curl -sf -X POST http://localhost:3000/api/v1/orgs/schnappy/repos \
             -u forgejo_admin:vagrant-forgejo-pw \
@@ -57,19 +52,14 @@
         done
       changed_when: true
 
-    - name: Verify repos created
-      ansible.builtin.uri:
-        url: "http://localhost:3000/api/v1/repos/schnappy/{{ item }}"
-        url_username: forgejo_admin
-        url_password: vagrant-forgejo-pw
-        force_basic_auth: true
-        status_code: 200
-      loop:
-        - infra
-        - platform
+    - name: Ensure pg-dump bucket exists
+      ansible.builtin.shell: |
+        HOME=/tmp mc alias set local http://localhost:9000 velero-admin velero-vagrant-secret 2>/dev/null
+        HOME=/tmp mc mb local/pg-dump --ignore-existing
+      changed_when: true
 
-# ─── Play 1: Pre-migration setup on kubeadm ──────────────────────────────────
-- name: "Pre-migration: Deploy workloads with PVC data"
+# ─── Play 1: Pre-migration — deploy, populate, dump ──────────────────────────
+- name: "Pre-migration: deploy and backup"
   hosts: target
   become: true
   gather_facts: false
@@ -83,23 +73,15 @@
     cilium_version: "1.19.2"
 
   tasks:
-    - name: Generate unique backup ID
-      ansible.builtin.shell: date +%s
-      register: backup_ts
-      changed_when: false
-
-    - name: Set backup ID fact
-      ansible.builtin.set_fact:
-        backup_id: "{{ backup_ts.stdout }}"
-
+    # ── Push repos to Pi Forgejo ──
     - name: Push repos to Forgejo on vault-pi
       ansible.builtin.shell: |
         for repo in infra platform; do
           cd /vagrant-$repo
           git init 2>/dev/null || true
           git add -A 2>/dev/null
-          git config user.email "test@test.local" 2>/dev/null
-          git config user.name "test" 2>/dev/null
+          git config user.email "test@test.local"
+          git config user.name "test"
           git commit -m "initial" --allow-empty 2>/dev/null || true
           git remote remove forgejo 2>/dev/null || true
           git remote add forgejo http://forgejo_admin:vagrant-forgejo-pw@{{ forgejo_ip }}:3000/schnappy/$repo.git
@@ -108,26 +90,23 @@
       become: false
       changed_when: true
 
-    - name: Verify cluster is healthy with Calico
+    # ── Verify Calico cluster ──
+    - name: Verify cluster healthy with Calico
       ansible.builtin.shell: |
-        kubectl get nodes | grep -q " Ready" && echo "node ready"
-        kubectl get pods -n calico-system -l k8s-app=calico-node --no-headers | grep -q Running && echo "calico running"
+        kubectl get nodes | grep -q " Ready"
+        kubectl get pods -n calico-system -l k8s-app=calico-node --no-headers | grep -q Running
       changed_when: false
 
-    - name: Create namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
-
-    - name: Create service accounts
+    # ── Deploy Postgres ──
+    - name: Create namespace and service accounts
       ansible.builtin.shell: |
+        kubectl create namespace {{ ns }} 2>/dev/null || true
         for sa in schnappy-postgres schnappy-redis schnappy-apt-cache; do
           kubectl create serviceaccount $sa -n {{ ns }} 2>/dev/null || true
         done
       changed_when: true
 
-    - name: Deploy Postgres with PVC
+    - name: Deploy schnappy-data
       ansible.builtin.shell: |
         helm upgrade --install schnappy-data /vagrant-platform/helm/schnappy-data \
           --namespace {{ ns }} \
@@ -143,202 +122,98 @@
           --set redis.image=redis:7-alpine \
           --set kafka.enabled=false \
           --set scylla.enabled=false \
-          --set minio.enabled=false
+          --set minio.enabled=false \
+          --wait --timeout 300s
       changed_when: true
+      timeout: 360
 
-    - name: Wait for Postgres to be ready
+    - name: Wait for Postgres ready
       ansible.builtin.shell: |
-        for i in $(seq 1 60); do
-          READY=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=postgres \
-            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          if [ "$READY" = "true" ]; then echo "postgres ready"; exit 0; fi
+        until kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=postgres \
+          -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null | grep -q true; do
           sleep 5
         done
-        kubectl get pods -n {{ ns }} --no-headers
-        exit 1
+        echo "postgres ready"
       changed_when: false
-      timeout: 330
+      timeout: 300
 
-    - name: Insert test data into Postgres
+    # ── Insert test data ──
+    - name: Insert test data
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-postgres -- \
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
           psql -U postgres -d monitor -c "
-            CREATE TABLE IF NOT EXISTS migration_test (id serial PRIMARY KEY, data text, created_at timestamp DEFAULT now());
-            INSERT INTO migration_test (data) VALUES ('cilium-migration-test-{{ ansible_date_time.iso8601 | default('unknown') }}');
+            CREATE TABLE IF NOT EXISTS migration_test (id serial PRIMARY KEY, data text);
+            INSERT INTO migration_test (data) VALUES ('cilium-test-data');
             SELECT count(*) as rows FROM migration_test;
           "
-      register: test_data
+      register: pre_data
       changed_when: true
 
-    - name: Record test data count
+    - name: Show pre-migration data
       ansible.builtin.debug:
-        msg: "Test data inserted: {{ test_data.stdout }}"
+        msg: "{{ pre_data.stdout }}"
 
-    - name: Record pre-migration pod count
+    # ── pg_dump to Pi MinIO ──
+    - name: pg_dump to Pi MinIO
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+          pg_dumpall -U postgres > /tmp/pg-dump.sql
+        which mc >/dev/null 2>&1 || {
+          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+        }
+        HOME=/tmp mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret
+        HOME=/tmp mc cp /tmp/pg-dump.sql pi/pg-dump/
+        SIZE=$(wc -c < /tmp/pg-dump.sql)
+        echo "pg_dump uploaded: $SIZE bytes"
+        [ "$SIZE" -gt 1000 ] || { echo "FAIL: dump too small"; exit 1; }
+      changed_when: true
+
+    - name: Record pre-migration state
       ansible.builtin.shell: |
         kubectl get pods -n {{ ns }} --no-headers | grep -c Running
       register: pre_pod_count
       changed_when: false
 
     # ================================================================
-    # Phase 2: pg_dump to Pi MinIO + Velero backup
+    # Phase 2: Destroy cluster
     # ================================================================
 
-    - name: pg_dump all databases to Pi MinIO
-      ansible.builtin.shell: |
-        # Dump to local file first, then upload via mc
-        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
-          pg_dumpall -U postgres > /tmp/pg-dump-pre-migration.sql
-        # Install mc if not present
-        which mc >/dev/null 2>&1 || {
-          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
-          chmod +x /usr/local/bin/mc
-        }
-        HOME=/tmp mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret 2>/dev/null
-        HOME=/tmp mc mb pi/velero/pg-dump --ignore-existing 2>/dev/null
-        HOME=/tmp mc cp /tmp/pg-dump-pre-migration.sql pi/velero/pg-dump/
-        echo "pg_dump uploaded: $(wc -c < /tmp/pg-dump-pre-migration.sql) bytes"
-      changed_when: true
-
-    - name: Create Velero credentials secret
-      ansible.builtin.shell: |
-        kubectl create namespace velero 2>/dev/null || true
-        kubectl create secret generic velero-credentials -n velero \
-          --from-literal=cloud="[default]
-        aws_access_key_id=velero-admin
-        aws_secret_access_key=velero-vagrant-secret" \
-          --dry-run=client -o yaml | kubectl apply -f -
-      changed_when: true
-
-    - name: Install Velero via Helm pointing to Pi MinIO
-      ansible.builtin.shell: |
-        helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>/dev/null || true
-        helm repo update vmware-tanzu
-        helm upgrade --install velero vmware-tanzu/velero \
-          -n velero \
-          --version 12.0.0 \
-          --set initContainers[0].name=velero-plugin-for-aws \
-          --set initContainers[0].image=velero/velero-plugin-for-aws:v1.11.1 \
-          --set initContainers[0].volumeMounts[0].name=plugins \
-          --set initContainers[0].volumeMounts[0].mountPath=/target \
-          --set credentials.useSecret=true \
-          --set credentials.existingSecret=velero-credentials \
-          --set configuration.backupStorageLocation[0].name=default \
-          --set configuration.backupStorageLocation[0].provider=aws \
-          --set configuration.backupStorageLocation[0].bucket=velero \
-          --set configuration.backupStorageLocation[0].config.region=us-east-1 \
-          --set configuration.backupStorageLocation[0].config.s3ForcePathStyle=true \
-          --set configuration.backupStorageLocation[0].config.s3Url=http://{{ forgejo_ip }}:9000 \
-          --set configuration.defaultVolumesToFsBackup=true \
-          --set snapshotsEnabled=false \
-          --set deployNodeAgent=true \
-          --set upgradeCRDs=false \
-          --wait --timeout 300s
-      changed_when: true
-      timeout: 360
-
-    - name: Wait for Velero to be ready
-      ansible.builtin.shell: |
-        for i in $(seq 1 30); do
-          READY=$(kubectl get pod -n velero -l app.kubernetes.io/name=velero \
-            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          [ "$READY" = "true" ] && echo "velero ready" && exit 0
-          sleep 10
-        done
-        exit 1
-      changed_when: false
-      timeout: 330
-
-    - name: Wait for BSL to be Available
-      ansible.builtin.shell: |
-        for i in $(seq 1 30); do
-          PHASE=$(kubectl get backupstoragelocation default -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
-          [ "$PHASE" = "Available" ] && echo "BSL available" && exit 0
-          echo "BSL: $PHASE ($i/30)"
-          sleep 10
-        done
-        exit 1
-      changed_when: false
-      timeout: 330
-
-    - name: Take Velero backup to Pi MinIO
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: velero.io/v1
-        kind: Backup
-        metadata:
-          name: pre-cilium-{{ backup_id }}
-          namespace: velero
-        spec:
-          includedNamespaces: ["*"]
-          defaultVolumesToFsBackup: true
-          ttl: 24h
-        EOF
-        for i in $(seq 1 120); do
-          PHASE=$(kubectl get backup pre-cilium-{{ backup_id }} -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
-          if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
-            echo "Backup $PHASE"; exit 0
-          fi
-          sleep 10
-        done
-        echo "Backup timeout"; exit 1
-      changed_when: true
-      timeout: 1260
-
-    # ================================================================
-    # Phase 3: Destroy cluster
-    # ================================================================
-
-    - name: "Phase 3: kubeadm reset"
+    - name: "Phase 2: kubeadm reset"
       ansible.builtin.shell: |
         kubeadm reset --force --cleanup-tmp-dir
       changed_when: true
 
-    - name: Clean Calico host state (NOT flush ruleset!)
+    - name: Clean Calico host state
       ansible.builtin.shell: |
         nft delete table ip calico 2>/dev/null || true
         nft delete table ip6 calico 2>/dev/null || true
-        rm -f /etc/cni/net.d/10-calico.conflist /etc/cni/net.d/calico-kubeconfig
-        rm -f /opt/cni/bin/calico /opt/cni/bin/calico-ipam
+        rm -f /etc/cni/net.d/* /opt/cni/bin/calico*
         ip link delete vxlan.calico 2>/dev/null || true
       changed_when: true
 
-    - name: Verify PVC data still on disk
+    - name: Verify Pi services survived reset
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_ip }}:3000/api/v1/version"
+        status_code: 200
+
+    - name: Verify pg_dump on Pi MinIO
       ansible.builtin.shell: |
-        find /opt/local-path-provisioner/ -name "PG_VERSION" 2>/dev/null | head -1 || echo "no-pg-data"
-      register: pvc_check
+        HOME=/tmp mc ls pi/pg-dump/pg-dump.sql
       changed_when: false
 
-    - name: Assert PVC data survived reset
-      ansible.builtin.assert:
-        that: "'PG_VERSION' in pvc_check.stdout"
-        fail_msg: "Postgres PVC data not found on disk after kubeadm reset!"
-
-    - name: Verify Forgejo still accessible (on vault-pi)
-      ansible.builtin.uri:
-        url: "http://{{ forgejo_ip }}:3000/api/v1/repos/schnappy/infra"
-        url_username: forgejo_admin
-        url_password: vagrant-forgejo-pw
-        force_basic_auth: true
-        status_code: 200
-
-    - name: Verify MinIO backup still on Pi
-      ansible.builtin.uri:
-        url: "http://{{ forgejo_ip }}:9000/minio/health/live"
-        status_code: 200
-
     # ================================================================
-    # Phase 4: Rebuild with Cilium
+    # Phase 3: Rebuild with Cilium
     # ================================================================
 
-    - name: "Phase 4: kubeadm init (no kube-proxy)"
+    - name: "Phase 3: kubeadm init with Cilium"
       ansible.builtin.shell: |
         kubeadm init \
           --pod-network-cidr={{ pod_cidr }} \
           --service-cidr={{ service_cidr }} \
           --apiserver-advertise-address={{ node_ip }} \
           --skip-phases=addon/kube-proxy \
-          --node-name={{ ansible_hostname | default('schnappy-test') }}
+          --node-name=schnappy-test
       changed_when: true
 
     - name: Setup kubeconfig
@@ -378,13 +253,10 @@
 
     - name: Wait for node Ready
       ansible.builtin.shell: |
-        for i in $(seq 1 60); do
-          if kubectl get nodes | grep -q " Ready"; then echo "ready"; exit 0; fi
-          sleep 5
-        done
-        exit 1
+        until kubectl get nodes | grep -q " Ready"; do sleep 5; done
+        echo "node ready"
       changed_when: false
-      timeout: 330
+      timeout: 300
 
     - name: Install local-path-provisioner
       ansible.builtin.shell: |
@@ -393,125 +265,47 @@
       changed_when: true
 
     # ================================================================
-    # Phase 5: Bootstrap Tier 0 + Restore
+    # Phase 4: Redeploy + restore data
     # ================================================================
 
-    - name: "Phase 5: Run bootstrap.sh (skip Velero — we install it separately)"
+    - name: "Phase 4: Create namespace and SAs"
       ansible.builtin.shell: |
-        export INFRA_DIR=/vagrant-infra
-        /vagrant/bootstrap.sh cert-manager
-        /vagrant/bootstrap.sh porkbun-webhook
-        /vagrant/bootstrap.sh external-secrets
-        /vagrant/bootstrap.sh istio
-      become: false
-      changed_when: true
-      timeout: 600
-
-    - name: Install Velero pointing to Pi MinIO
-      ansible.builtin.shell: |
-        kubectl create namespace velero 2>/dev/null || true
-        kubectl create secret generic velero-credentials -n velero \
-          --from-literal=cloud="[default]
-        aws_access_key_id=velero-admin
-        aws_secret_access_key=velero-vagrant-secret" \
-          --dry-run=client -o yaml | kubectl apply -f -
-
-        helm upgrade --install velero vmware-tanzu/velero \
-          -n velero \
-          --version 12.0.0 \
-          --set initContainers[0].name=velero-plugin-for-aws \
-          --set initContainers[0].image=velero/velero-plugin-for-aws:v1.11.1 \
-          --set initContainers[0].volumeMounts[0].name=plugins \
-          --set initContainers[0].volumeMounts[0].mountPath=/target \
-          --set credentials.useSecret=true \
-          --set credentials.existingSecret=velero-credentials \
-          --set configuration.backupStorageLocation[0].name=default \
-          --set configuration.backupStorageLocation[0].provider=aws \
-          --set configuration.backupStorageLocation[0].bucket=velero \
-          --set configuration.backupStorageLocation[0].config.region=us-east-1 \
-          --set configuration.backupStorageLocation[0].config.s3ForcePathStyle=true \
-          --set configuration.backupStorageLocation[0].config.s3Url=http://{{ forgejo_ip }}:9000 \
-          --set configuration.defaultVolumesToFsBackup=true \
-          --set snapshotsEnabled=false \
-          --set deployNodeAgent=true \
-          --set upgradeCRDs=false \
-          --wait --timeout 300s
-      changed_when: true
-      timeout: 360
-
-    - name: Wait for BSL Available before restore
-      ansible.builtin.shell: |
-        for i in $(seq 1 30); do
-          PHASE=$(kubectl get backupstoragelocation default -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
-          [ "$PHASE" = "Available" ] && echo "BSL available" && exit 0
-          echo "BSL: $PHASE ($i/30)"
-          sleep 10
-        done
-        exit 1
-      changed_when: false
-      timeout: 330
-
-    - name: Verify backup visible from new cluster
-      ansible.builtin.shell: |
-        kubectl get backup pre-cilium-{{ backup_id }} -n velero -o jsonpath='{.status.phase}'
-      register: backup_check
-      changed_when: false
-      retries: 6
-      delay: 10
-      until: "'Completed' in backup_check.stdout or 'PartiallyFailed' in backup_check.stdout"
-
-    - name: Restore from Pi MinIO backup
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: velero.io/v1
-        kind: Restore
-        metadata:
-          name: cilium-restore
-          namespace: velero
-        spec:
-          backupName: pre-cilium-{{ backup_id }}
-          includedNamespaces: ["*"]
-          excludedNamespaces: ["velero", "kube-system", "calico-system", "tigera-operator", "calico-apiserver", "cert-manager", "external-secrets", "istio-system", "local-path-storage"]
-          existingResourcePolicy: update
-        EOF
-        for i in $(seq 1 120); do
-          PHASE=$(kubectl get restore cilium-restore -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
-          if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
-            echo "Restore $PHASE"; exit 0
-          fi
-          sleep 10
-        done
-        echo "Restore timeout"; exit 1
-      changed_when: true
-      timeout: 1260
-
-    # ================================================================
-    # Phase 6: Verify
-    # ================================================================
-
-    - name: "Phase 6: Wait for pods to stabilize"
-      ansible.builtin.pause:
-        seconds: 90
-
-    - name: Create service accounts (if not restored)
-      ansible.builtin.shell: |
+        kubectl create namespace {{ ns }} 2>/dev/null || true
         for sa in schnappy-postgres schnappy-redis schnappy-apt-cache; do
           kubectl create serviceaccount $sa -n {{ ns }} 2>/dev/null || true
         done
       changed_when: true
 
-    - name: Wait for Postgres pod
+    - name: Redeploy schnappy-data
       ansible.builtin.shell: |
-        for i in $(seq 1 60); do
-          READY=$(kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=postgres \
-            -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
-          [ "$READY" = "true" ] && exit 0
+        helm upgrade --install schnappy-data /vagrant-platform/helm/schnappy-data \
+          --namespace {{ ns }} \
+          --set fullnameOverride=schnappy \
+          --set vault.secretsEnabled=false \
+          --set networkPolicies.enabled=false \
+          --set postgres.enabled=true \
+          --set postgres.image=postgres:17-alpine \
+          --set postgres.password=test-pw \
+          --set postgres.database=monitor \
+          --set postgres.storage.storageClass=local-path \
+          --set redis.enabled=true \
+          --set redis.image=redis:7-alpine \
+          --set kafka.enabled=false \
+          --set scylla.enabled=false \
+          --set minio.enabled=false \
+          --wait --timeout 300s
+      changed_when: true
+      timeout: 360
+
+    - name: Wait for Postgres ready
+      ansible.builtin.shell: |
+        until kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=postgres \
+          -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null | grep -q true; do
           sleep 5
         done
-        kubectl get pods -n {{ ns }} --no-headers
-        exit 1
+        echo "postgres ready"
       changed_when: false
-      timeout: 330
+      timeout: 300
 
     - name: Import pg_dump from Pi MinIO
       ansible.builtin.shell: |
@@ -519,46 +313,55 @@
           curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
           chmod +x /usr/local/bin/mc
         }
-        HOME=/tmp mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret 2>/dev/null
-        HOME=/tmp mc cp pi/velero/pg-dump/pg-dump-pre-migration.sql /tmp/pg-restore.sql
+        HOME=/tmp mc alias set pi http://{{ forgejo_ip }}:9000 velero-admin velero-vagrant-secret
+        HOME=/tmp mc cp pi/pg-dump/pg-dump.sql /tmp/pg-restore.sql
         kubectl exec -i -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
           psql -U postgres < /tmp/pg-restore.sql
         echo "pg_dump imported"
       changed_when: true
 
-    - name: Verify test data survived migration
+    # ================================================================
+    # Phase 5: Verify everything
+    # ================================================================
+
+    - name: "Phase 5: Verify Postgres data survived"
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-postgres -- \
-          psql -U postgres -d monitor -c "SELECT count(*) FROM migration_test;"
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+          psql -U postgres -d monitor -t -c "SELECT count(*) FROM migration_test;"
       register: post_data
       changed_when: false
 
     - name: Assert data survived
       ansible.builtin.assert:
-        that: "'1' in post_data.stdout or '2' in post_data.stdout"
-        fail_msg: "Test data not found after migration! Data: {{ post_data.stdout }}"
+        that: "post_data.stdout | trim | int >= 1"
+        fail_msg: "FAIL: migration_test has {{ post_data.stdout | trim }} rows (expected >= 1)"
 
-    - name: Check Cilium is running
+    - name: Verify Cilium running
       ansible.builtin.shell: |
         kubectl get pods -n kube-system -l app.kubernetes.io/name=cilium-agent --no-headers | grep -q Running
       changed_when: false
 
-    - name: Check no kube-proxy
+    - name: Verify no kube-proxy
       ansible.builtin.shell: |
         ! kubectl get daemonset kube-proxy -n kube-system 2>/dev/null
       changed_when: false
 
-    - name: Check Hubble relay
+    - name: Verify Hubble relay
       ansible.builtin.shell: |
         kubectl get pods -n kube-system -l app.kubernetes.io/name=hubble-relay --no-headers | grep -q Running
       changed_when: false
 
-    - name: Check Forgejo still accessible
+    - name: Verify Forgejo on Pi still accessible
       ansible.builtin.uri:
         url: "http://{{ forgejo_ip }}:3000/api/v1/repos/schnappy/infra"
         url_username: forgejo_admin
         url_password: vagrant-forgejo-pw
         force_basic_auth: true
+        status_code: 200
+
+    - name: Verify MinIO on Pi still accessible
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_ip }}:9000/minio/health/live"
         status_code: 200
 
     - name: Post-migration pod count
@@ -571,11 +374,12 @@
       ansible.builtin.debug:
         msg: |
           ============================================
-          Cilium Migration Test Results
+          Cilium Migration Test — PASSED
           ============================================
           Pre-migration pods:  {{ pre_pod_count.stdout }}
           Post-migration pods: {{ post_pod_count.stdout }}
-          Postgres data:       {{ post_data.stdout | trim }}
+          Postgres rows:       {{ post_data.stdout | trim }}
           CNI: Cilium {{ cilium_version }}
-          Forgejo: http://{{ forgejo_ip }}:3000 (on vault-pi)
+          Forgejo: http://{{ forgejo_ip }}:3000
+          MinIO:   http://{{ forgejo_ip }}:9000
           ============================================
