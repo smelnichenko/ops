@@ -38,13 +38,8 @@ Vagrant.configure("2") do |config|
     vpi.vm.box = "debian/trixie64"
     vpi.vm.hostname = "vault-pi"
 
-    # Sync infra repo for Forgejo repo initialization
-    vpi.vm.synced_folder "../infra", "/vagrant-infra", type: "rsync",
-      rsync__exclude: [".git/"],
-      create: true
-    vpi.vm.synced_folder "../platform", "/vagrant-platform", type: "rsync",
-      rsync__exclude: [".git/", "build/", ".gradle/"],
-      create: true
+    # No synced folders — repos are pushed to Forgejo via the test playbook
+    vpi.vm.synced_folder ".", "/vagrant", disabled: true
 
     # Private network for vault-pi ↔ kubeadm communication
     vpi.vm.network "private_network", ip: "192.168.56.20"
