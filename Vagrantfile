@@ -110,6 +110,9 @@ ROOT = /var/lib/forgejo/repos
 [log]
 ROOT_PATH = /var/lib/forgejo/log
 LEVEL = Warn
+
+[security]
+INSTALL_LOCK = true
 FEOF
       chown forgejo:forgejo /var/lib/forgejo/custom/conf/app.ini
 
