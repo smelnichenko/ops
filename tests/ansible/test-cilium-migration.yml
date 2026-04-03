@@ -259,7 +259,7 @@
           ttl: 24h
         EOF
         for i in $(seq 1 120); do
-          PHASE=$(kubectl get backup pre-cilium-vagrant -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
+          PHASE=$(kubectl get backup pre-cilium-{{ backup_id }} -n velero -o jsonpath='{.status.phase}' 2>/dev/null)
           if [ "$PHASE" = "Completed" ] || [ "$PHASE" = "PartiallyFailed" ]; then
             echo "Backup $PHASE"; exit 0
           fi
@@ -437,7 +437,7 @@
 
     - name: Verify backup visible from new cluster
       ansible.builtin.shell: |
-        kubectl get backup pre-cilium-vagrant -n velero -o jsonpath='{.status.phase}'
+        kubectl get backup pre-cilium-{{ backup_id }} -n velero -o jsonpath='{.status.phase}'
       register: backup_check
       changed_when: false
       retries: 6
@@ -453,7 +453,7 @@
           name: cilium-restore
           namespace: velero
         spec:
-          backupName: pre-cilium-vagrant
+          backupName: pre-cilium-{{ backup_id }}
           includedNamespaces: ["*"]
           excludedNamespaces: ["velero", "kube-system", "calico-system", "tigera-operator", "calico-apiserver", "cert-manager", "external-secrets", "istio-system", "local-path-storage"]
           existingResourcePolicy: update
