@@ -57,22 +57,7 @@
         done
       changed_when: true
 
-    - name: Push repos to Forgejo
-      ansible.builtin.shell: |
-        cd /vagrant-{{ item }}
-        git init 2>/dev/null || true
-        git add -A 2>/dev/null
-        git commit -m "initial" --allow-empty 2>/dev/null || true
-        git remote remove origin 2>/dev/null || true
-        git remote add origin http://forgejo_admin:vagrant-forgejo-pw@localhost:3000/schnappy/{{ item }}.git
-        git push -u origin HEAD:main --force
-      become: false
-      loop:
-        - infra
-        - platform
-      changed_when: true
-
-    - name: Verify repos accessible
+    - name: Verify repos created
       ansible.builtin.uri:
         url: "http://localhost:3000/api/v1/repos/schnappy/{{ item }}"
         url_username: forgejo_admin
@@ -98,6 +83,22 @@
     cilium_version: "1.19.2"
 
   tasks:
+    - name: Push repos to Forgejo on vault-pi
+      ansible.builtin.shell: |
+        for repo in infra platform; do
+          cd /vagrant-$repo
+          git init 2>/dev/null || true
+          git add -A 2>/dev/null
+          git config user.email "test@test.local" 2>/dev/null
+          git config user.name "test" 2>/dev/null
+          git commit -m "initial" --allow-empty 2>/dev/null || true
+          git remote remove forgejo 2>/dev/null || true
+          git remote add forgejo http://forgejo_admin:vagrant-forgejo-pw@{{ forgejo_ip }}:3000/schnappy/$repo.git
+          git push -u forgejo HEAD:main --force
+        done
+      become: false
+      changed_when: true
+
     - name: Verify cluster is healthy with Calico
       ansible.builtin.shell: |
         kubectl get nodes | grep -q " Ready" && echo "node ready"
