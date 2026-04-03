@@ -446,6 +446,7 @@
         spec:
           backupName: pre-cilium-vagrant
           includedNamespaces: ["*"]
+          excludedNamespaces: ["velero", "kube-system", "calico-system", "tigera-operator", "calico-apiserver", "cert-manager", "external-secrets", "istio-system", "local-path-storage"]
           existingResourcePolicy: update
         EOF
         for i in $(seq 1 120); do
