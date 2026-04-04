@@ -155,15 +155,15 @@
         curl -sf -X POST $KC_URL/admin/realms/schnappy/users \
           -H "Authorization: Bearer $TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{"username":"testuser","enabled":true,"credentials":[{"type":"password","value":"test123","temporary":false}]}'
+          -d '{"username":"testuser","enabled":true,"emailVerified":true,"credentials":[{"type":"password","value":"test123","temporary":false}]}'
         echo "test user created"
       changed_when: true
 
     - name: Verify test user can authenticate (pre-migration)
       ansible.builtin.shell: |
-        RESULT=$(curl -sf -X POST http://{{ forgejo_ip }}:8080/realms/schnappy/protocol/openid-connect/token \
+        RESULT=$(curl -s -X POST http://{{ forgejo_ip }}:8080/realms/schnappy/protocol/openid-connect/token \
           -d "client_id=admin-cli&grant_type=password&username=testuser&password=test123")
-        echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("authenticated:", d["token_type"] == "Bearer")'
+        echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("authenticated:", d.get("token_type") == "Bearer")'
       register: pre_auth
       changed_when: false
 
@@ -359,9 +359,9 @@
     # ── Verify Keycloak on Pi survived migration ──
     - name: Verify test user can still authenticate (post-migration)
       ansible.builtin.shell: |
-        RESULT=$(curl -sf -X POST http://{{ forgejo_ip }}:8080/realms/schnappy/protocol/openid-connect/token \
+        RESULT=$(curl -s -X POST http://{{ forgejo_ip }}:8080/realms/schnappy/protocol/openid-connect/token \
           -d "client_id=admin-cli&grant_type=password&username=testuser&password=test123")
-        echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("authenticated:", d["token_type"] == "Bearer")'
+        echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("authenticated:", d.get("token_type") == "Bearer")'
       register: post_auth
       changed_when: false
 
