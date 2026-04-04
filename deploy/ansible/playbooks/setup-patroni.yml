@@ -48,10 +48,9 @@
       register: pg_data_dir
       changed_when: false
 
-    - name: Stop system Postgres (Patroni will manage it)
+    - name: Disable system Postgres (Patroni will manage it)
       ansible.builtin.systemd:
         name: postgresql
-        state: stopped
         enabled: false
 
     - name: Create Patroni config directory
@@ -116,8 +115,10 @@
             listen: 0.0.0.0:5432
             connect_address: {{ node_ip }}:5432
             data_dir: {{ pg_data_dir.stdout }}
+            config_dir: {{ pg_data_dir.stdout }}
             bin_dir: /usr/lib/postgresql/{{ pg_version.stdout }}/bin
             pgpass: /tmp/pgpass
+            use_unix_socket: true
             authentication:
               superuser:
                 username: postgres
@@ -129,10 +130,27 @@
               unix_socket_directories: '/var/run/postgresql'
       notify: Restart Patroni
 
-    - name: Clear existing Postgres data on replica
+    - name: Dump Keycloak DB before Patroni takes over (primary only)
+      ansible.builtin.shell: |
+        if sudo -u postgres psql -c "SELECT 1" 2>/dev/null; then
+          sudo -u postgres pg_dump keycloak > /tmp/keycloak-pre-patroni.sql
+          echo "dumped $(wc -l < /tmp/keycloak-pre-patroni.sql) lines"
+        else
+          echo "postgres not running, skip dump"
+        fi
+      when: inventory_hostname == 'pi1'
+      register: pg_dump_result
+      changed_when: true
+
+    - name: Stop system Postgres if still running
+      ansible.builtin.systemd:
+        name: postgresql
+        state: stopped
+      ignore_errors: true
+
+    - name: Clear Postgres data for Patroni init
       ansible.builtin.shell: |
         rm -rf {{ pg_data_dir.stdout }}/*
-      when: inventory_hostname == 'pi2'
       changed_when: true
 
     - name: Install Patroni systemd service
@@ -185,6 +203,41 @@
         name: patroni
         state: restarted
         daemon_reload: true
+
+# ─── Restore Keycloak DB ─────────────────────────────────────────────────────
+- name: Restore Keycloak database
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    pg_password: "{{ kc_db_pw | default('changeme') }}"
+
+  tasks:
+    - name: Wait for Patroni primary
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          ROLE=$(curl -sf http://localhost:8008 | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
+          [ "$ROLE" = "master" ] && echo "primary" && exit 0
+          sleep 5
+        done
+        exit 1
+      changed_when: false
+
+    - name: Create keycloak database
+      ansible.builtin.shell: |
+        PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -c "CREATE DATABASE keycloak" 2>/dev/null || true
+      changed_when: true
+
+    - name: Restore Keycloak dump if exists
+      ansible.builtin.shell: |
+        if [ -f /tmp/keycloak-pre-patroni.sql ]; then
+          PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -d keycloak < /tmp/keycloak-pre-patroni.sql
+          echo "restored $(wc -l < /tmp/keycloak-pre-patroni.sql) lines"
+        else
+          echo "no dump to restore"
+        fi
+      changed_when: true
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Patroni cluster
