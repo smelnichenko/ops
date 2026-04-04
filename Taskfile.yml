@@ -580,6 +580,25 @@ tasks:
     cmds:
       - ssh -o ConnectTimeout=5 {{.TARGET_USER}}@{{.TARGET_HOST}} "hostname && uname -a"
 
+  # ============== DUAL-PI HA TEST ==============
+  test:dual-pi:
+    desc: Test dual-Pi HA (Consul, Patroni, GlusterFS, Keepalived, Vault, failover)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy pi1 pi2 -f 2>/dev/null; true
+      - cmd: vagrant up pi1 pi2
+      - defer: vagrant halt pi1 pi2
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
+
+  test:dual-pi-clean:
+    desc: Full clean dual-Pi test (destroy + up + test)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up pi1 pi2
+      - defer: vagrant halt pi1 pi2
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
+
   # ============== VAGRANT TESTS (ALL) ==============
   test:vagrant-all:
     desc: Run all Vagrant integration tests sequentially

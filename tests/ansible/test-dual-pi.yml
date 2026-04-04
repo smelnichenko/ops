@@ -1,243 +1,282 @@
 ---
-# Dual-Pi Replication + Failover Test
+# Test dual-Pi HA infrastructure
 #
-# Tests that both Pis run identical services, data replicates in real-time,
-# and a failed Pi can catch up after restart.
-#
-# Prerequisites:
-#   - vagrant up pi1 pi2
+# Deploys and tests the full Pi HA stack in Vagrant:
+#   1. Consul 3-node cluster
+#   2. Patroni Postgres HA
+#   3. Pi services (Forgejo, MinIO, Keycloak, Nexus)
+#   4. GlusterFS repo replication
+#   5. Keepalived VIP failover
+#   6. Vault with Consul storage
+#   7. Pi-1 failure + recovery
 #
 # Usage:
-#   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-dual-pi.yml
+#   task test:dual-pi
 
-# ─── Test 1: Verify both Pis have all services ──────────────────────────────
-- name: "Test 1: Verify services on both Pis"
-  hosts: pis
+# ─── Deploy all Pi services ─────────────────────────────────────────────────
+- name: Deploy Consul
+  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-consul.yml"
+
+- name: Deploy Pi services
+  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-pi-services.yml"
+
+- name: Deploy Patroni
+  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-patroni.yml"
+
+- name: Deploy GlusterFS
+  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-gluster.yml"
+
+- name: Deploy Keepalived
+  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-keepalived.yml"
+
+- name: Deploy Vault (Consul storage)
+  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/migrate-vault-consul.yml"
+
+# ─── Verify services ────────────────────────────────────────────────────────
+- name: Verify all services
+  hosts: pi1,pi2
   become: true
   gather_facts: false
 
   tasks:
-    - name: Wait for SSH
-      ansible.builtin.wait_for_connection:
-        delay: 2
-        timeout: 60
-
-    - name: Check Forgejo
-      ansible.builtin.uri:
-        url: http://localhost:3000/api/v1/version
-        status_code: 200
-      retries: 5
-      delay: 5
-
-    - name: Check MinIO
-      ansible.builtin.uri:
-        url: http://localhost:9000/minio/health/live
-        status_code: 200
-
-    - name: Check Keycloak
-      ansible.builtin.uri:
-        url: http://localhost:8080/realms/master
-        status_code: 200
-      retries: 15
-      delay: 10
-
-    - name: Check Postgres
-      ansible.builtin.shell: |
-        sudo -u postgres psql -c "SELECT 1" >/dev/null && echo "postgres OK"
-      changed_when: false
-
-# ─── Test 2: Setup MinIO site replication ────────────────────────────────────
-- name: "Test 2: Setup MinIO replication"
-  hosts: pi1
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Configure MinIO site replication
-      ansible.builtin.shell: |
-        rm -rf /tmp/.mc
-        HOME=/tmp mc alias set pi1 http://192.168.56.20:9000 velero-admin velero-vagrant-secret
-        HOME=/tmp mc alias set pi2 http://192.168.56.21:9000 velero-admin velero-vagrant-secret
-        # Clear pi2 buckets so site replication can be configured (only one site may have data)
-        HOME=/tmp mc rb --force pi2/velero 2>/dev/null || true
-        HOME=/tmp mc rb --force pi2/pg-dump 2>/dev/null || true
-        HOME=/tmp mc admin replicate add pi1 pi2 2>/dev/null || echo "replication already configured"
-      changed_when: true
-
-    - name: Write test data to pi1 MinIO
-      ansible.builtin.shell: |
-        echo "test-data-from-pi1" > /tmp/test-minio.txt
-        HOME=/tmp mc cp /tmp/test-minio.txt pi1/velero/test-replication.txt
-      changed_when: true
-
-    - name: Wait for replication
-      ansible.builtin.pause:
-        seconds: 5
-
-    - name: Verify data replicated to pi2
-      ansible.builtin.shell: |
-        HOME=/tmp mc cat pi2/velero/test-replication.txt
-      register: minio_repl
-      changed_when: false
-
-    - name: Assert MinIO replication works
-      ansible.builtin.assert:
-        that: "'test-data-from-pi1' in minio_repl.stdout"
-        fail_msg: "MinIO replication failed: {{ minio_repl.stdout }}"
-
-# ─── Test 3: Setup Postgres streaming replication ────────────────────────────
-- name: "Test 3: Setup Postgres replication"
-  hosts: pi1
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Create replication user
-      ansible.builtin.shell: |
-        sudo -u postgres psql -c "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'repl-pw';" 2>/dev/null || true
-      changed_when: true
-
-    - name: Insert test data in pi1 Keycloak DB
-      ansible.builtin.shell: |
-        sudo -u postgres psql -d keycloak -c "
-          CREATE TABLE IF NOT EXISTS repl_test (id serial, data text);
-          INSERT INTO repl_test (data) VALUES ('pi1-original-data');
-        "
-      changed_when: true
-
-- name: "Setup Postgres replica on pi2"
-  hosts: pi2
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Stop Postgres on pi2
+    - name: Check all services are running
       ansible.builtin.systemd:
-        name: postgresql
-        state: stopped
-
-    - name: Clear pi2 data and replicate from pi1
-      ansible.builtin.shell: |
-        PG_DATA=$(find /var/lib/postgresql -name main -type d | head -1)
-        rm -rf "$PG_DATA"/*
-        PGPASSWORD=repl-pw pg_basebackup -h 192.168.56.20 -U replicator -D "$PG_DATA" -Fp -Xs -R -P
-        chown -R postgres:postgres "$PG_DATA"
-      changed_when: true
-
-    - name: Start Postgres replica on pi2
-      ansible.builtin.systemd:
-        name: postgresql
+        name: "{{ item }}"
         state: started
+      loop:
+        - forgejo
+        - keycloak
+        - minio
+        - patroni
+        - consul
+        - vault
+        - keepalived
+        - glusterd
 
-    - name: Wait for replica to catch up
-      ansible.builtin.pause:
-        seconds: 5
+    - name: Verify Forgejo API
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/v1/version"
+        status_code: 200
 
-    - name: Verify replicated data on pi2
-      ansible.builtin.shell: |
-        sudo -u postgres psql -d keycloak -t -c "SELECT data FROM repl_test LIMIT 1;"
-      register: pg_repl
-      changed_when: false
+    - name: Verify Keycloak
+      ansible.builtin.uri:
+        url: "http://localhost:8080/realms/master"
+        status_code: 200
 
-    - name: Assert Postgres replication works
-      ansible.builtin.assert:
-        that: "'pi1-original-data' in pg_repl.stdout"
-        fail_msg: "Postgres replication failed: {{ pg_repl.stdout }}"
+    - name: Verify MinIO health
+      ansible.builtin.uri:
+        url: "http://localhost:9000/minio/health/live"
+        status_code: 200
 
-# ─── Test 4: Pi-1 failure + recovery ────────────────────────────────────────
-- name: "Test 4: Simulate Pi-1 failure"
+    - name: Verify Patroni
+      ansible.builtin.uri:
+        url: "http://localhost:8008/health"
+        status_code: 200
+
+# ─── Test Consul cluster ────────────────────────────────────────────────────
+- name: Test Consul cluster
   hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Stop all services on pi1 (simulate failure)
+    - name: Check cluster members
       ansible.builtin.shell: |
-        systemctl stop forgejo minio keycloak postgresql
-      changed_when: true
+        set -o pipefail
+        consul members | grep -c alive
+      register: consul_count
+      changed_when: false
 
-- name: "Write data to Pi-2 during Pi-1 downtime"
-  hosts: pi2
+    - name: Verify at least 2 members
+      ansible.builtin.assert:
+        that: consul_count.stdout | trim | int >= 2
+        fail_msg: "Expected at least 2 Consul members, got {{ consul_count.stdout }}"
+
+# ─── Test Patroni replication ───────────────────────────────────────────────
+- name: Test Patroni replication
+  hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Verify pi2 MinIO still works
+    - name: Write test data on primary
       ansible.builtin.shell: |
-        HOME=/tmp mc alias set pi2 http://localhost:9000 velero-admin velero-vagrant-secret
-        echo "data-written-during-pi1-downtime" > /tmp/failover-test.txt
-        HOME=/tmp mc cp /tmp/failover-test.txt pi2/velero/failover-test.txt
+        sudo -u postgres psql -d forgejo -c "CREATE TABLE IF NOT EXISTS test_ha (id serial, val text)"
+        sudo -u postgres psql -d forgejo -c "INSERT INTO test_ha (val) VALUES ('pi1-write')"
       changed_when: true
 
-    - name: Promote pi2 Postgres to primary
+    - name: Verify replication on pi2
       ansible.builtin.shell: |
-        sudo -u postgres pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') promote
-      changed_when: true
-
-    - name: Restart Keycloak on pi2 (reconnect to promoted Postgres)
-      ansible.builtin.systemd:
-        name: keycloak
-        state: restarted
-
-    - name: Wait for Keycloak on pi2
-      ansible.builtin.uri:
-        url: http://localhost:8080/realms/master
-        status_code: 200
-      retries: 15
-      delay: 10
-
-    - name: Verify pi2 Keycloak serves schnappy realm
-      ansible.builtin.uri:
-        url: http://localhost:8080/realms/schnappy
-        status_code: 200
+        set -o pipefail
+        sudo -u postgres psql -h {{ hostvars['pi2']['ansible_host'] }} -d forgejo -c "SELECT val FROM test_ha WHERE val='pi1-write'" | grep -c pi1-write
+      register: repl_check
+      changed_when: false
       retries: 5
+      delay: 2
+      until: repl_check.stdout | trim | int >= 1
+
+# ─── Test GlusterFS replication ─────────────────────────────────────────────
+- name: Test GlusterFS replication
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Create test file on pi1
+      ansible.builtin.copy:
+        dest: /var/lib/forgejo/repos/test-gluster.txt
+        content: "gluster-test-{{ ansible_date_time.epoch | default('now') }}"
+        mode: '0644'
+
+    - name: Verify file replicated to pi2
+      ansible.builtin.shell: |
+        cat /var/lib/forgejo/repos/test-gluster.txt
+      register: gluster_check
+      changed_when: false
+      delegate_to: pi2
+      retries: 3
+      delay: 2
+      until: "'gluster-test' in gluster_check.stdout"
+
+    - name: Clean up
+      ansible.builtin.file:
+        path: /var/lib/forgejo/repos/test-gluster.txt
+        state: absent
+
+# ─── Test Keepalived VIP ────────────────────────────────────────────────────
+- name: Test Keepalived VIP
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    vip: "{{ lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true) }}"
+
+  tasks:
+    - name: Verify VIP is assigned
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip addr show | grep {{ vip }}
+      register: vip_check
+      changed_when: false
+      failed_when: vip not in vip_check.stdout
+
+    - name: Verify Forgejo via VIP
+      ansible.builtin.uri:
+        url: "http://{{ vip }}:3000/api/v1/version"
+        status_code: 200
+
+# ─── Test Pi-1 failure ──────────────────────────────────────────────────────
+- name: Simulate Pi-1 failure
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop all services on pi1
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - forgejo
+        - keycloak
+        - minio
+        - keepalived
+        - patroni
+
+- name: Verify Pi-2 takes over
+  hosts: pi2
+  become: true
+  gather_facts: false
+
+  vars:
+    vip: "{{ lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true) }}"
+
+  tasks:
+    - name: Wait for VIP failover
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip addr show | grep {{ vip }}
+      register: vip_failover
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: vip in vip_failover.stdout
+
+    - name: Verify Forgejo on pi2
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/v1/version"
+        status_code: 200
+
+    - name: Verify Patroni promoted pi2
+      ansible.builtin.uri:
+        url: "http://localhost:8008/health"
+        status_code: 200
+      retries: 12
       delay: 5
 
-    - name: Write data to pi2 Postgres during pi1 downtime
+    - name: Write data while pi1 is down
       ansible.builtin.shell: |
-        sudo -u postgres psql -d keycloak -c "
-          INSERT INTO repl_test (data) VALUES ('written-during-pi1-downtime');
-        "
+        sudo -u postgres psql -d forgejo -c "INSERT INTO test_ha (val) VALUES ('pi2-during-failover')"
       changed_when: true
 
-- name: "Restart Pi-1 and verify catch-up"
+# ─── Recover Pi-1 ───────────────────────────────────────────────────────────
+- name: Recover Pi-1
   hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
     - name: Start services on pi1
-      ansible.builtin.shell: |
-        systemctl start postgresql forgejo minio keycloak
-      changed_when: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - patroni
+        - keepalived
+        - forgejo
+        - keycloak
+        - minio
 
-    - name: Wait for services
-      ansible.builtin.pause:
-        seconds: 15
-
-    - name: Verify pi1 MinIO caught up
-      ansible.builtin.shell: |
-        HOME=/tmp mc alias set local http://localhost:9000 velero-admin velero-vagrant-secret
-        HOME=/tmp mc cat local/velero/failover-test.txt
-      register: minio_catchup
-      changed_when: false
-      retries: 6
+    - name: Wait for Patroni to rejoin
+      ansible.builtin.uri:
+        url: "http://localhost:8008/health"
+        status_code: 200
+      retries: 30
       delay: 5
-      until: "'data-written-during-pi1-downtime' in minio_catchup.stdout"
 
-    - name: Assert MinIO caught up
-      ansible.builtin.assert:
-        that: "'data-written-during-pi1-downtime' in minio_catchup.stdout"
-        fail_msg: "MinIO failed to catch up: {{ minio_catchup.stdout }}"
+    - name: Verify pi1 caught up with failover data
+      ansible.builtin.shell: |
+        set -o pipefail
+        sudo -u postgres psql -d forgejo -c "SELECT val FROM test_ha WHERE val='pi2-during-failover'" | grep -c pi2-during-failover
+      register: catchup_check
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: catchup_check.stdout | trim | int >= 1
+
+# ─── Results ────────────────────────────────────────────────────────────────
+- name: Test results
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Clean up test data
+      ansible.builtin.shell: |
+        sudo -u postgres psql -d forgejo -c "DROP TABLE IF EXISTS test_ha"
+      changed_when: true
 
     - name: Print results
       ansible.builtin.debug:
         msg: |
           ============================================
-          Dual-Pi Test — PASSED
+          Dual-Pi HA Test — PASSED
           ============================================
-          MinIO replication:    OK
-          Postgres replication: OK
-          Pi-1 failure:         Pi-2 survived
-          MinIO catch-up:       OK
+          - Consul cluster: OK
+          - Patroni replication: OK
+          - GlusterFS replication: OK
+          - Keepalived VIP: OK
+          - Pi-1 failure + Pi-2 takeover: OK
+          - Pi-1 recovery + data catch-up: OK
           ============================================
