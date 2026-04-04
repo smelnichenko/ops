@@ -61,6 +61,19 @@
       ansible.builtin.set_fact:
         consul_encrypt_key: "{{ hostvars['pi1']['consul_key_gen']['stdout'] | default('') }}"
 
+    - name: Allow Consul ports through UFW
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.name }}"
+      loop:
+        - { port: "8300", proto: "tcp", name: "Consul RPC" }
+        - { port: "8301", proto: "tcp", name: "Consul Serf LAN" }
+        - { port: "8301", proto: "udp", name: "Consul Serf LAN UDP" }
+        - { port: "8500", proto: "tcp", name: "Consul HTTP" }
+      ignore_errors: true  # ten may not have UFW
+
     - name: Write Consul config
       ansible.builtin.copy:
         dest: /etc/consul.d/consul.hcl
