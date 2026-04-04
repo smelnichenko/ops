@@ -155,7 +155,7 @@
         curl -sf -X POST $KC_URL/admin/realms/schnappy/users \
           -H "Authorization: Bearer $TOKEN" \
           -H "Content-Type: application/json" \
-          -d '{"username":"testuser","enabled":true,"emailVerified":true,"credentials":[{"type":"password","value":"test123","temporary":false}]}'
+          -d '{"username":"testuser","enabled":true,"emailVerified":true,"email":"test@test.local","firstName":"Test","lastName":"User","credentials":[{"type":"password","value":"test123","temporary":false}]}'
         echo "test user created"
       changed_when: true
 
