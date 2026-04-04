@@ -1,0 +1,211 @@
+---
+# Install Patroni for automatic Postgres failover
+#
+# Uses Consul as DCS. Manages Postgres on pi1 and pi2.
+# Replaces the manual streaming replication setup.
+#
+# Prerequisites:
+#   - Consul cluster running (setup-consul.yml)
+#   - Postgres installed on both Pis (setup-pi-services.yml)
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml
+
+- name: Install Patroni
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    patroni_scope: "schnappy-postgres"
+    node_ip: "{{ ansible_default_ipv4.address }}"
+    pg_password: "{{ kc_db_pw | default('changeme') }}"
+    pg_repl_password: "{{ pg_repl_pw | default('changeme') }}"
+
+  tasks:
+    - name: Install Patroni via pip
+      ansible.builtin.apt:
+        name:
+          - python3-pip
+          - python3-psycopg2
+          - python3-consul
+        state: present
+
+    - name: Install Patroni + Consul support
+      ansible.builtin.pip:
+        name:
+          - patroni[consul]
+        state: present
+        break_system_packages: true
+
+    - name: Find Postgres version
+      ansible.builtin.shell: ls -d /usr/lib/postgresql/*/bin | head -1 | grep -oP '\d+'
+      register: pg_version
+      changed_when: false
+
+    - name: Find Postgres data directory
+      ansible.builtin.shell: ls -d /var/lib/postgresql/*/main | head -1
+      register: pg_data_dir
+      changed_when: false
+
+    - name: Stop system Postgres (Patroni will manage it)
+      ansible.builtin.systemd:
+        name: postgresql
+        state: stopped
+        enabled: false
+
+    - name: Create Patroni config directory
+      ansible.builtin.file:
+        path: /etc/patroni
+        state: directory
+        owner: postgres
+        group: postgres
+
+    - name: Write Patroni config
+      ansible.builtin.copy:
+        dest: /etc/patroni/patroni.yml
+        owner: postgres
+        group: postgres
+        mode: '0640'
+        content: |
+          scope: {{ patroni_scope }}
+          name: {{ inventory_hostname }}
+
+          consul:
+            host: 127.0.0.1:8500
+            register_service: true
+
+          restapi:
+            listen: 0.0.0.0:8008
+            connect_address: {{ node_ip }}:8008
+
+          bootstrap:
+            dcs:
+              ttl: 30
+              loop_wait: 10
+              retry_timeout: 10
+              maximum_lag_on_failover: 1048576
+              postgresql:
+                use_pg_rewind: true
+                parameters:
+                  wal_level: replica
+                  max_wal_senders: 5
+                  max_replication_slots: 5
+                  hot_standby: "on"
+                  listen_addresses: '*'
+
+            initdb:
+              - encoding: UTF8
+              - data-checksums
+
+            pg_hba:
+              - host replication replicator 0.0.0.0/0 scram-sha-256
+              - host all all 0.0.0.0/0 scram-sha-256
+
+            users:
+              postgres:
+                password: {{ pg_password }}
+                options:
+                  - superuser
+              replicator:
+                password: {{ pg_repl_password }}
+                options:
+                  - replication
+
+          postgresql:
+            listen: 0.0.0.0:5432
+            connect_address: {{ node_ip }}:5432
+            data_dir: {{ pg_data_dir.stdout }}
+            bin_dir: /usr/lib/postgresql/{{ pg_version.stdout }}/bin
+            pgpass: /tmp/pgpass
+            authentication:
+              superuser:
+                username: postgres
+                password: {{ pg_password }}
+              replication:
+                username: replicator
+                password: {{ pg_repl_password }}
+            parameters:
+              unix_socket_directories: '/var/run/postgresql'
+      notify: Restart Patroni
+
+    - name: Clear existing Postgres data on replica
+      ansible.builtin.shell: |
+        rm -rf {{ pg_data_dir.stdout }}/*
+      when: inventory_hostname == 'pi2'
+      changed_when: true
+
+    - name: Install Patroni systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/patroni.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Patroni Postgres HA
+          After=network.target consul.service
+          Wants=consul.service
+          [Service]
+          Type=simple
+          User=postgres
+          Group=postgres
+          ExecStart=/usr/local/bin/patroni /etc/patroni/patroni.yml
+          ExecReload=/bin/kill -s HUP $MAINPID
+          KillMode=process
+          TimeoutSec=30
+          Restart=on-failure
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Patroni
+
+    - name: Allow Patroni REST API through UFW
+      community.general.ufw:
+        rule: allow
+        port: "8008"
+        proto: tcp
+        comment: "Patroni REST API"
+
+    - name: Enable and start Patroni
+      ansible.builtin.systemd:
+        name: patroni
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for Patroni to be ready
+      ansible.builtin.uri:
+        url: http://localhost:8008/health
+        status_code: [200, 503]
+      retries: 15
+      delay: 10
+
+  handlers:
+    - name: Restart Patroni
+      ansible.builtin.systemd:
+        name: patroni
+        state: restarted
+        daemon_reload: true
+
+# ─── Verify cluster ──────────────────────────────────────────────────────────
+- name: Verify Patroni cluster
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check Patroni cluster status
+      ansible.builtin.shell: |
+        patronictl -c /etc/patroni/patroni.yml list
+      register: patroni_status
+      changed_when: false
+      retries: 6
+      delay: 10
+
+    - name: Print results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Patroni Cluster — Ready
+          ============================================
+          {{ patroni_status.stdout }}
+          ============================================

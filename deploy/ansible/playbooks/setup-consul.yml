@@ -1,0 +1,180 @@
+---
+# Install Consul cluster (3 nodes: pi1, pi2, ten)
+#
+# Provides distributed consensus for Patroni Postgres failover.
+# All 3 nodes are servers — any 2 form quorum.
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml
+
+- name: Install Consul
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: true
+
+  vars:
+    consul_version: "1.20.6"
+    consul_datacenter: "schnappy"
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    ten_ip: "{{ hostvars['target']['ansible_host'] | default('192.168.11.2') }}"
+    node_ip: "{{ ansible_default_ipv4.address }}"
+
+  tasks:
+    - name: Determine architecture
+      ansible.builtin.set_fact:
+        consul_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    - name: Download Consul
+      ansible.builtin.unarchive:
+        src: "https://releases.hashicorp.com/consul/{{ consul_version }}/consul_{{ consul_version }}_linux_{{ consul_arch }}.zip"
+        dest: /usr/local/bin
+        remote_src: true
+        creates: /usr/local/bin/consul
+
+    - name: Create Consul user
+      ansible.builtin.user:
+        name: consul
+        system: true
+        shell: /bin/false
+        home: /var/lib/consul
+        create_home: true
+
+    - name: Create Consul directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: consul
+        group: consul
+      loop:
+        - /etc/consul.d
+        - /var/lib/consul/data
+
+    - name: Generate Consul encryption key (pi1 only)
+      ansible.builtin.shell: |
+        consul keygen
+      register: consul_key_gen
+      when: inventory_hostname == 'pi1'
+      changed_when: true
+
+    - name: Set encryption key fact
+      ansible.builtin.set_fact:
+        consul_encrypt_key: "{{ hostvars['pi1']['consul_key_gen']['stdout'] | default('') }}"
+
+    - name: Write Consul config
+      ansible.builtin.copy:
+        dest: /etc/consul.d/consul.hcl
+        owner: consul
+        group: consul
+        mode: '0640'
+        content: |
+          datacenter = "{{ consul_datacenter }}"
+          data_dir = "/var/lib/consul/data"
+          node_name = "{{ inventory_hostname }}"
+
+          server = true
+          bootstrap_expect = 3
+
+          bind_addr = "{{ node_ip }}"
+          client_addr = "0.0.0.0"
+
+          retry_join = ["{{ pi1_ip }}", "{{ pi2_ip }}", "{{ ten_ip }}"]
+
+          encrypt = "{{ consul_encrypt_key }}"
+
+          ui_config {
+            enabled = false
+          }
+
+          performance {
+            raft_multiplier = 1
+          }
+
+          connect {
+            enabled = false
+          }
+      notify: Restart Consul
+
+    - name: Install Consul systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/consul.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Consul Agent
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=notify
+          User=consul
+          Group=consul
+          ExecStart=/usr/local/bin/consul agent -config-dir=/etc/consul.d/
+          ExecReload=/bin/kill --signal HUP $MAINPID
+          KillMode=process
+          KillSignal=SIGTERM
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Consul
+
+    - name: Enable and start Consul
+      ansible.builtin.systemd:
+        name: consul
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for Consul to be ready
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          consul members 2>/dev/null | grep -q alive && exit 0
+          sleep 2
+        done
+        exit 1
+      changed_when: false
+      retries: 3
+      delay: 5
+
+  handlers:
+    - name: Restart Consul
+      ansible.builtin.systemd:
+        name: consul
+        state: restarted
+        daemon_reload: true
+
+# ─── Verify cluster ──────────────────────────────────────────────────────────
+- name: Verify Consul cluster
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for all members
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          COUNT=$(consul members 2>/dev/null | grep -c alive)
+          [ "$COUNT" -ge 3 ] && echo "3 members alive" && exit 0
+          echo "waiting... ($COUNT/3)"
+          sleep 5
+        done
+        consul members
+        exit 1
+      register: consul_members
+      changed_when: false
+
+    - name: Show cluster status
+      ansible.builtin.shell: |
+        consul members
+      register: consul_status
+      changed_when: false
+
+    - name: Print results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Consul Cluster — Ready
+          ============================================
+          {{ consul_status.stdout }}
+          ============================================
