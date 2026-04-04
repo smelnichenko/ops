@@ -169,15 +169,29 @@
         HOME=/tmp mc cp /tmp/failover-test.txt pi2/velero/failover-test.txt
       changed_when: true
 
-    - name: Verify pi2 Keycloak still works
+    - name: Promote pi2 Postgres to primary
+      ansible.builtin.shell: |
+        sudo -u postgres pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') promote
+      changed_when: true
+
+    - name: Restart Keycloak on pi2 (reconnect to promoted Postgres)
+      ansible.builtin.systemd:
+        name: keycloak
+        state: restarted
+
+    - name: Wait for Keycloak on pi2
+      ansible.builtin.uri:
+        url: http://localhost:8080/realms/master
+        status_code: 200
+      retries: 15
+      delay: 10
+
+    - name: Verify pi2 Keycloak serves schnappy realm
       ansible.builtin.uri:
         url: http://localhost:8080/realms/schnappy
         status_code: 200
-
-    - name: Promote pi2 Postgres to primary
-      ansible.builtin.shell: |
-        sudo -u postgres pg_ctlcluster $(pg_lsclusters -h | awk '{print $1, $2}') promote 2>/dev/null || true
-      changed_when: true
+      retries: 5
+      delay: 5
 
     - name: Write data to pi2 Postgres during pi1 downtime
       ansible.builtin.shell: |
