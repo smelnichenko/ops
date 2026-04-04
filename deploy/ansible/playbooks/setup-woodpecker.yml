@@ -211,8 +211,8 @@
           sonar_host_url: "{{ woodpecker_sonar_host_url | default('https://sonar.pmon.dev') }}"
           registry_user: "{{ woodpecker_registry_user | default(forgejo_admin_user) }}"
           registry_token: "{{ woodpecker_registry_token | default(forgejo_admin_password) }}"
-          nexus_url: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}"
-          nexus_npm_registry: "http://{{ nexus_host | default('192.168.11.4') }}:{{ nexus_port | default('8081') }}/repository/npm-public/"
+          nexus_url: "http://{{ nexus_host | default('192.168.11.5') }}:{{ nexus_port | default('8081') }}"
+          nexus_npm_registry: "http://{{ nexus_host | default('192.168.11.5') }}:{{ nexus_port | default('8081') }}/repository/npm-public/"
           infra_repo_token: "{{ woodpecker_infra_repo_token | default('') }}"
         EOF
       args:
@@ -564,7 +564,7 @@
             # To Nexus on Pi (caching proxy for Maven, npm, PyPI, Docker)
             - to:
                 - ipBlock:
-                    cidr: {{ nexus_host | default('192.168.11.4') }}/32
+                    cidr: {{ nexus_host | default('192.168.11.5') }}/32
               ports:
                 - protocol: TCP
                   port: {{ nexus_port | default('8081') }}

@@ -23,7 +23,7 @@
 #   ansible-playbook -i inventory/vagrant.yml playbooks/setup-nexus.yml
 
 - name: Setup Nexus Repository Manager
-  hosts: vault_pi
+  hosts: pi1,pi2
   become: true
   gather_facts: true
 

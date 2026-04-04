@@ -1,0 +1,292 @@
+---
+# Migrate Vault from raft storage to Consul storage
+#
+# Raft with 2 nodes deadlocks on leader restart (no quorum).
+# Consul storage uses the existing 3-node Consul cluster for HA.
+#
+# After this playbook:
+#   - Run seed-vault-secrets.yml to re-populate secrets
+#   - Run setup-argocd.yml to re-create repo-creds
+#   - ESO will auto-sync ExternalSecrets once Vault is populated
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/migrate-vault-consul.yml
+
+- name: Stop Vault on both Pis
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Stop Vault
+      ansible.builtin.systemd:
+        name: vault
+        state: stopped
+
+- name: Reconfigure Vault for Consul storage
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    tls_dir: /etc/vault.d/tls
+    node_ip: "{{ ansible_default_ipv4.address }}"
+
+  tasks:
+    - name: Backup old raft data
+      ansible.builtin.shell: |
+        if [ -d /var/lib/vault/raft ]; then
+          mv /var/lib/vault/raft /var/lib/vault/raft.bak.$(date +%s)
+        fi
+      changed_when: true
+
+    - name: Ensure vault.d ownership
+      ansible.builtin.file:
+        path: /etc/vault.d
+        state: directory
+        owner: vault
+        group: vault
+        mode: '0750'
+
+    - name: Write Vault config with Consul storage
+      ansible.builtin.copy:
+        dest: /etc/vault.d/vault.hcl
+        owner: vault
+        group: vault
+        mode: '0640'
+        content: |
+          ui = false
+          disable_mlock = true
+
+          storage "consul" {
+            address = "127.0.0.1:8500"
+            path    = "vault/"
+          }
+
+          listener "tcp" {
+            address            = "[::]:8200"
+            tls_cert_file      = "{{ tls_dir }}/vault-cert.pem"
+            tls_key_file       = "{{ tls_dir }}/vault-key.pem"
+            tls_client_ca_file = "{{ tls_dir }}/ca-cert.pem"
+          }
+
+          api_addr     = "https://{{ node_ip }}:8200"
+          cluster_addr = "https://{{ node_ip }}:8201"
+
+    - name: Start Vault
+      ansible.builtin.systemd:
+        name: vault
+        state: started
+
+    - name: Wait for Vault to be listening
+      ansible.builtin.wait_for:
+        port: 8200
+        timeout: 30
+
+- name: Initialize Vault on pi1
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check if already initialized
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        vault status -format=json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["initialized"])'
+      register: vault_init_status
+      changed_when: false
+
+    - name: Initialize Vault
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        vault operator init -key-shares=3 -key-threshold=2 -format=json
+      register: vault_init
+      when: vault_init_status.stdout | trim == 'False'
+
+    - name: Save unseal keys
+      ansible.builtin.copy:
+        dest: /etc/vault-unseal/unseal-keys
+        content: |
+          {{ (vault_init.stdout | from_json).unseal_keys_b64[0] }}
+          {{ (vault_init.stdout | from_json).unseal_keys_b64[1] }}
+          {{ (vault_init.stdout | from_json).unseal_keys_b64[2] }}
+        owner: root
+        group: root
+        mode: '0400'
+      when: vault_init is changed
+
+    - name: Save root token
+      ansible.builtin.copy:
+        dest: /etc/vault-unseal/root-token
+        content: "{{ (vault_init.stdout | from_json).root_token }}"
+        owner: root
+        group: root
+        mode: '0400'
+      when: vault_init is changed
+
+    - name: Display new root token
+      ansible.builtin.debug:
+        msg: "NEW ROOT TOKEN: {{ (vault_init.stdout | from_json).root_token }}"
+      when: vault_init is changed
+
+    - name: Unseal Vault on pi1
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        KEY1=$(sed -n '1p' /etc/vault-unseal/unseal-keys)
+        KEY2=$(sed -n '2p' /etc/vault-unseal/unseal-keys)
+        vault operator unseal $KEY1 > /dev/null
+        vault operator unseal $KEY2 > /dev/null
+        vault status 2>&1 | grep -E 'Sealed|HA Mode'
+      register: unseal_result
+
+    - name: Show pi1 status
+      ansible.builtin.debug:
+        msg: "{{ unseal_result.stdout }}"
+
+    - name: Fetch unseal keys to controller
+      ansible.builtin.fetch:
+        src: /etc/vault-unseal/unseal-keys
+        dest: /tmp/vault-unseal-keys
+        flat: true
+
+    - name: Enable KV v2 secrets engine
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+        vault secrets enable -path=secret kv-v2 2>&1 || echo "already enabled"
+      when: vault_init is changed
+
+    - name: Create ESO policy
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+        vault policy write eso-reader - <<POLICY
+        path "secret/data/*" {
+          capabilities = ["read"]
+        }
+        path "secret/metadata/*" {
+          capabilities = ["read", "list"]
+        }
+        POLICY
+      when: vault_init is changed
+
+    - name: Enable Kubernetes auth
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+        vault auth enable kubernetes 2>&1 || echo "already enabled"
+      when: vault_init is changed
+
+- name: Distribute unseal keys to pi2
+  hosts: pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Copy unseal keys
+      ansible.builtin.copy:
+        src: /tmp/vault-unseal-keys
+        dest: /etc/vault-unseal/unseal-keys
+        owner: root
+        group: root
+        mode: '0400'
+
+    - name: Unseal Vault on pi2
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        KEY1=$(sed -n '1p' /etc/vault-unseal/unseal-keys)
+        KEY2=$(sed -n '2p' /etc/vault-unseal/unseal-keys)
+        vault operator unseal $KEY1 > /dev/null
+        vault operator unseal $KEY2 > /dev/null
+        vault status 2>&1 | grep -E 'Sealed|HA Mode|Active'
+      register: unseal_result
+
+    - name: Show pi2 status
+      ansible.builtin.debug:
+        msg: "{{ unseal_result.stdout }}"
+
+- name: Create auto-unseal service
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Create auto-unseal script
+      ansible.builtin.copy:
+        dest: /etc/vault-unseal/unseal.sh
+        owner: root
+        group: root
+        mode: '0700'
+        content: |
+          #!/bin/bash
+          export VAULT_ADDR=https://127.0.0.1:8200
+          export VAULT_SKIP_VERIFY=1
+          KEYS=/etc/vault-unseal/unseal-keys
+          until vault status 2>/dev/null; do sleep 1; done
+          if vault status -format=json 2>/dev/null | grep -q '"sealed":true'; then
+            KEY1=$(sed -n '1p' $KEYS)
+            KEY2=$(sed -n '2p' $KEYS)
+            vault operator unseal $KEY1 > /dev/null 2>&1
+            vault operator unseal $KEY2 > /dev/null 2>&1
+          fi
+
+    - name: Create auto-unseal systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vault-unseal.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Auto-unseal Vault
+          After=vault.service
+          Requires=vault.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/etc/vault-unseal/unseal.sh
+          RemainAfterExit=true
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable auto-unseal service
+      ansible.builtin.systemd:
+        name: vault-unseal
+        enabled: true
+        daemon_reload: true
+
+# ─── Verify ─────────────────────────────────────────────────────────────────
+- name: Verify Vault
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check Vault status on both nodes
+      ansible.builtin.shell: |
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        vault status 2>&1
+      register: vault_status
+      changed_when: false
+
+    - name: Check Consul Vault keys
+      ansible.builtin.shell: |
+        consul kv get -keys vault/ 2>/dev/null | head -10
+      register: consul_keys
+      changed_when: false
+
+    - name: Print results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Vault Migration — Complete
+          ============================================
+          {{ vault_status.stdout }}
+          ============================================
+          Consul KV keys:
+          {{ consul_keys.stdout }}
+          ============================================
+          NEXT STEPS:
+          1. Update VAULT_ROOT_TOKEN in ops/.env
+          2. Run: task deploy:vault-secrets
+          3. Run: task deploy:argocd
+          ============================================

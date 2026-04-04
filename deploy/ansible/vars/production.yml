@@ -10,7 +10,7 @@ monitor_release_name: schnappy
 monitor_namespace: schnappy
 
 # Registry pull-through cache on Pi (setup-registry-mirror.yml)
-registry_mirror_ip: "192.168.11.4"
+registry_mirror_ip: "192.168.11.5"
 
 monitor_values:
   # Vault integration — ESO syncs secrets from Vault KV into k8s Secrets

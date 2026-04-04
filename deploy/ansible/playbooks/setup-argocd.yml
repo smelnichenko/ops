@@ -399,11 +399,10 @@
                 - protocol: TCP
                   port: 6379
           egress:
-            # To Forgejo (direct service access for Git clone)
+            # To Pi Forgejo via VIP (Git clone)
             - to:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: forgejo
+                - ipBlock:
+                    cidr: 192.168.11.5/32
               ports:
                 - protocol: TCP
                   port: 3000

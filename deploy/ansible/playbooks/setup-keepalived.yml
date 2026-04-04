@@ -1,0 +1,180 @@
+---
+# Setup Keepalived for floating VIP between pi1 and pi2
+#
+# Provides a single stable IP (192.168.11.5) that floats between Pis.
+# All services (Forgejo, Keycloak, MinIO, Postgres) are reached via VIP.
+# If the active Pi dies, the other grabs the VIP in ~3 seconds.
+#
+# Prerequisites:
+#   - Both Pis running with services installed
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-keepalived.yml
+
+- name: Setup Keepalived
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    vip: 192.168.11.5
+    vip_cidr: 24
+    vrrp_interface: "{{ ansible_default_ipv4.interface }}"
+    vrrp_router_id: 51
+    vrrp_password: "{{ lookup('env', 'KEEPALIVED_PASSWORD') }}"
+    # pi1 is master (higher priority), pi2 is backup
+    vrrp_priority: "{{ 150 if inventory_hostname == 'pi1' else 100 }}"
+    # Both start as BACKUP — higher priority wins MASTER. nopreempt requires this.
+    vrrp_state: BACKUP
+
+  tasks:
+    - name: Install Keepalived
+      ansible.builtin.apt:
+        name: keepalived
+        state: present
+
+    - name: Allow VRRP through UFW
+      community.general.ufw:
+        rule: allow
+        proto: vrrp
+        from_ip: 192.168.11.0/24
+        comment: "VRRP protocol"
+
+    - name: Create health check script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/check_services.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Check critical services — if any fails, reduce priority to trigger failover
+
+          # Forgejo
+          curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
+
+          # Keycloak
+          curl -sf -o /dev/null -m 3 http://localhost:8080/realms/master || exit 1
+
+          # Patroni
+          curl -sf -o /dev/null -m 3 http://localhost:8008/health || exit 1
+
+          exit 0
+
+    - name: Write Keepalived config
+      ansible.builtin.copy:
+        dest: /etc/keepalived/keepalived.conf
+        mode: '0644'
+        content: |
+          global_defs {
+            router_id {{ inventory_hostname }}
+            script_user root
+            enable_script_security
+          }
+
+          vrrp_script check_services {
+            script "/etc/keepalived/check_services.sh"
+            interval 5
+            weight -50
+            fall 3
+            rise 2
+          }
+
+          vrrp_instance PI_VIP {
+            state {{ vrrp_state }}
+            interface {{ vrrp_interface }}
+            virtual_router_id {{ vrrp_router_id }}
+            priority {{ vrrp_priority }}
+            advert_int 1
+            nopreempt
+
+            authentication {
+              auth_type PASS
+              auth_pass {{ vrrp_password }}
+            }
+
+            virtual_ipaddress {
+              {{ vip }}/{{ vip_cidr }}
+            }
+
+            track_script {
+              check_services
+            }
+          }
+      notify: Restart Keepalived
+
+    - name: Enable and start Keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart Keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        state: restarted
+
+# ─── Verify ─────────────────────────────────────────────────────────────────
+- name: Verify Keepalived
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  vars:
+    vip: 192.168.11.5
+
+  tasks:
+    - name: Check Keepalived status
+      ansible.builtin.shell: |
+        systemctl is-active keepalived && ip addr show | grep {{ vip }} || echo "VIP not on this node"
+      register: keepalived_status
+      changed_when: false
+
+    - name: Print status
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}: {{ keepalived_status.stdout }}
+
+- name: Verify VIP reachable
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    vip: 192.168.11.5
+
+  tasks:
+    - name: Wait for VRRP election
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Ping VIP
+      ansible.builtin.shell: |
+        ping -c 2 -W 2 {{ vip }}
+      changed_when: false
+
+    - name: Check Forgejo via VIP
+      ansible.builtin.uri:
+        url: "http://{{ vip }}:3000/api/v1/version"
+        status_code: 200
+      register: forgejo_vip
+      retries: 6
+      delay: 5
+      until: forgejo_vip.status == 200
+
+    - name: Check Keycloak via VIP
+      ansible.builtin.uri:
+        url: "http://{{ vip }}:8080/realms/master"
+        status_code: 200
+      register: keycloak_vip
+
+    - name: Print results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          Keepalived Setup — Complete
+          ============================================
+          VIP {{ vip }} is active
+          Forgejo:  {{ forgejo_vip.status }}
+          Keycloak: {{ keycloak_vip.status }}
+          ============================================

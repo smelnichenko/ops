@@ -151,13 +151,19 @@
           [server]
           HTTP_PORT = 3000
           HTTP_ADDR = 0.0.0.0
-          ROOT_URL = http://{{ pi_ip }}:3000/
+          DOMAIN = git.pmon.dev
+          ROOT_URL = https://git.pmon.dev/
           APP_DATA_PATH = /var/lib/forgejo/data
           LFS_START_SERVER = false
 
           [database]
-          DB_TYPE = sqlite3
-          PATH = /var/lib/forgejo/data/forgejo.db
+          DB_TYPE = postgres
+          HOST = {{ pi1_ip }}:5432,{{ pi2_ip }}:5432
+          NAME = forgejo
+          USER = postgres
+          PASSWD = {{ forgejo_db_password }}
+          SSL_MODE = disable
+          TARGET_SESSION_ATTRS = read-write
 
           [repository]
           ROOT = /var/lib/forgejo/repos
@@ -334,10 +340,11 @@
           User=keycloak
           Group=keycloak
           Environment=KC_DB=postgres
-          Environment=KC_DB_URL=jdbc:postgresql://localhost:5432/keycloak
+          Environment=KC_DB_URL=jdbc:postgresql://{{ pi1_ip }}:5432,{{ pi2_ip }}:5432/keycloak?targetServerType=primary
           Environment=KC_DB_USERNAME=postgres
           Environment=KC_DB_PASSWORD={{ keycloak_db_password }}
-          Environment=KC_HOSTNAME_STRICT=false
+          Environment=KC_HOSTNAME=auth.pmon.dev
+          Environment=KC_PROXY_HEADERS=xforwarded
           Environment=KC_HTTP_ENABLED=true
           Environment=KC_HTTP_PORT=8080
           Environment=KC_BOOTSTRAP_ADMIN_USERNAME=admin

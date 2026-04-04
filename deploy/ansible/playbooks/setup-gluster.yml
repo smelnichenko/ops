@@ -1,0 +1,233 @@
+---
+# Setup GlusterFS for Forgejo repo replication between pi1 and pi2
+#
+# Creates a replicated GlusterFS volume for /var/lib/forgejo/repos
+# Both nodes serve the same data — FUSE-based, no kernel module dependency
+#
+# Prerequisites:
+#   - Both Pis running with Forgejo installed
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-gluster.yml
+
+# ─── Install and configure GlusterFS on both Pis ────────────────────────────
+- name: Setup GlusterFS
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    gluster_brick: /var/lib/gluster/forgejo-brick
+    forgejo_uid: 900
+    forgejo_gid: 900
+
+  tasks:
+    - name: Install GlusterFS
+      ansible.builtin.apt:
+        name: glusterfs-server
+        state: present
+
+    - name: Allow GlusterFS ports through UFW
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.name }}"
+      loop:
+        - { port: "24007", proto: "tcp", name: "GlusterFS daemon" }
+        - { port: "24008", proto: "tcp", name: "GlusterFS management" }
+        - { port: "49152:49155", proto: "tcp", name: "GlusterFS bricks" }
+
+    - name: Enable and start GlusterFS
+      ansible.builtin.systemd:
+        name: glusterd
+        enabled: true
+        state: started
+
+    - name: Align Forgejo UID/GID across nodes
+      ansible.builtin.shell: |
+        CURRENT_UID=$(id -u forgejo)
+        if [ "$CURRENT_UID" != "{{ forgejo_uid }}" ]; then
+          systemctl stop forgejo 2>/dev/null || true
+          groupmod -g {{ forgejo_gid }} forgejo
+          usermod -u {{ forgejo_uid }} -g {{ forgejo_gid }} forgejo
+          find /var/lib/forgejo -not -path '/var/lib/forgejo/repos/*' -exec chown -h {{ forgejo_uid }}:{{ forgejo_gid }} {} +
+          echo "changed"
+        else
+          echo "ok"
+        fi
+      register: uid_result
+      changed_when: "'changed' in uid_result.stdout"
+
+    - name: Create brick directory
+      ansible.builtin.file:
+        path: "{{ gluster_brick }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+# ─── Probe peers and create volume from pi1 ─────────────────────────────────
+- name: Create GlusterFS volume
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    gluster_brick: /var/lib/gluster/forgejo-brick
+    gluster_mount: /var/lib/forgejo/repos
+    forgejo_uid: 900
+    forgejo_gid: 900
+
+  tasks:
+    - name: Probe pi2
+      ansible.builtin.shell: |
+        gluster peer probe {{ hostvars['pi2']['ansible_host'] }} 2>&1
+      register: peer_probe
+      changed_when: "'already in peer list' not in peer_probe.stdout"
+
+    - name: Wait for peer to connect
+      ansible.builtin.shell: |
+        gluster peer status | grep -c 'State: Peer in Cluster (Connected)'
+      register: peer_status
+      until: peer_status.stdout | trim | int >= 1
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Check if volume exists
+      ansible.builtin.shell: |
+        gluster volume info forgejo-repos 2>/dev/null && echo "exists" || echo "not-found"
+      register: vol_info
+      changed_when: false
+
+    - name: Stop Forgejo on pi1
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+      when: "'not-found' in vol_info.stdout"
+
+    - name: Stop Forgejo on pi2
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+      delegate_to: pi2
+      when: "'not-found' in vol_info.stdout"
+
+    - name: Copy existing repos to brick on pi1
+      ansible.builtin.shell: |
+        if [ -d {{ gluster_mount }}/schnappy ]; then
+          cp -a {{ gluster_mount }}/schnappy {{ gluster_brick }}/
+          chown -R {{ forgejo_uid }}:{{ forgejo_gid }} {{ gluster_brick }}/
+        fi
+      when: "'not-found' in vol_info.stdout"
+      changed_when: true
+
+    - name: Create replicated volume
+      ansible.builtin.shell: |
+        gluster volume create forgejo-repos replica 2 \
+          {{ hostvars['pi1']['ansible_host'] }}:{{ gluster_brick }} \
+          {{ hostvars['pi2']['ansible_host'] }}:{{ gluster_brick }} \
+          force 2>&1
+      when: "'not-found' in vol_info.stdout"
+      changed_when: true
+
+    - name: Set volume options
+      ansible.builtin.shell: |
+        gluster volume set forgejo-repos auth.allow {{ hostvars['pi1']['ansible_host'] }},{{ hostvars['pi2']['ansible_host'] }},127.0.0.1
+        gluster volume set forgejo-repos performance.cache-size 256MB
+        gluster volume set forgejo-repos server.allow-insecure on
+      when: "'not-found' in vol_info.stdout"
+      changed_when: true
+
+    - name: Start volume
+      ansible.builtin.shell: |
+        gluster volume start forgejo-repos 2>&1
+      when: "'not-found' in vol_info.stdout"
+      changed_when: true
+
+# ─── Mount GlusterFS on both Pis ────────────────────────────────────────────
+- name: Mount GlusterFS volume
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    gluster_mount: /var/lib/forgejo/repos
+    node_ip: "{{ ansible_default_ipv4.address }}"
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+
+  tasks:
+    - name: Stop Forgejo
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+
+    - name: Unmount if already mounted
+      ansible.posix.mount:
+        path: "{{ gluster_mount }}"
+        state: unmounted
+
+    - name: Mount GlusterFS volume
+      ansible.posix.mount:
+        path: "{{ gluster_mount }}"
+        src: "{{ node_ip }}:/forgejo-repos"
+        fstype: glusterfs
+        opts: "defaults,_netdev,backup-volfile-servers={{ pi2_ip if inventory_hostname == 'pi1' else pi1_ip }}"
+        state: mounted
+
+    - name: Fix ownership
+      ansible.builtin.file:
+        path: "{{ gluster_mount }}"
+        owner: forgejo
+        group: forgejo
+        mode: '0700'
+
+    - name: Start Forgejo
+      ansible.builtin.systemd:
+        name: forgejo
+        state: started
+
+# ─── Verify ─────────────────────────────────────────────────────────────────
+- name: Verify GlusterFS
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check volume status
+      ansible.builtin.shell: |
+        gluster volume status forgejo-repos
+      register: vol_status
+      changed_when: false
+
+    - name: Check replication
+      ansible.builtin.shell: |
+        gluster volume heal forgejo-repos info
+      register: heal_info
+      changed_when: false
+
+    - name: Check mount on both nodes
+      ansible.builtin.shell: |
+        mount | grep forgejo-repos
+      register: mount_check
+      changed_when: false
+      delegate_to: "{{ item }}"
+      loop:
+        - pi1
+        - pi2
+
+    - name: Print results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          GlusterFS Setup — Complete
+          ============================================
+          {{ vol_status.stdout }}
+          ============================================
+          Heal status:
+          {{ heal_info.stdout }}
+          ============================================
