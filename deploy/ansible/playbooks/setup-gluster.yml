@@ -90,6 +90,7 @@
 
     - name: Wait for peer to connect
       ansible.builtin.shell: |
+        set -o pipefail
         gluster peer status | grep -c 'State: Peer in Cluster (Connected)'
       register: peer_status
       until: peer_status.stdout | trim | int >= 1
@@ -167,12 +168,12 @@
         state: stopped
 
     - name: Unmount if already mounted
-      ansible.posix.mount:
+      ansible.builtin.mount:
         path: "{{ gluster_mount }}"
         state: unmounted
 
     - name: Mount GlusterFS volume
-      ansible.posix.mount:
+      ansible.builtin.mount:
         path: "{{ gluster_mount }}"
         src: "{{ node_ip }}:/forgejo-repos"
         fstype: glusterfs
@@ -212,6 +213,7 @@
 
     - name: Check mount on both nodes
       ansible.builtin.shell: |
+        set -o pipefail
         mount | grep forgejo-repos
       register: mount_check
       changed_when: false

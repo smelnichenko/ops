@@ -91,6 +91,7 @@
   tasks:
     - name: Check if already initialized
       ansible.builtin.shell: |
+        set -o pipefail
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         vault status -format=json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["initialized"])'
       register: vault_init_status
@@ -101,9 +102,10 @@
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         vault operator init -key-shares=3 -key-threshold=2 -format=json
       register: vault_init
+      changed_when: true
       when: vault_init_status.stdout | trim == 'False'
 
-    - name: Save unseal keys
+    - name: Save unseal keys  # noqa: no-handler
       ansible.builtin.copy:
         dest: /etc/vault-unseal/unseal-keys
         content: |
@@ -115,7 +117,7 @@
         mode: '0400'
       when: vault_init is changed
 
-    - name: Save root token
+    - name: Save root token  # noqa: no-handler
       ansible.builtin.copy:
         dest: /etc/vault-unseal/root-token
         content: "{{ (vault_init.stdout | from_json).root_token }}"
@@ -124,13 +126,14 @@
         mode: '0400'
       when: vault_init is changed
 
-    - name: Display new root token
+    - name: Display new root token  # noqa: no-handler
       ansible.builtin.debug:
         msg: "NEW ROOT TOKEN: {{ (vault_init.stdout | from_json).root_token }}"
       when: vault_init is changed
 
     - name: Unseal Vault on pi1
       ansible.builtin.shell: |
+        set -o pipefail
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         KEY1=$(sed -n '1p' /etc/vault-unseal/unseal-keys)
         KEY2=$(sed -n '2p' /etc/vault-unseal/unseal-keys)
@@ -138,6 +141,7 @@
         vault operator unseal $KEY2 > /dev/null
         vault status 2>&1 | grep -E 'Sealed|HA Mode'
       register: unseal_result
+      changed_when: true
 
     - name: Show pi1 status
       ansible.builtin.debug:
@@ -149,14 +153,15 @@
         dest: /tmp/vault-unseal-keys
         flat: true
 
-    - name: Enable KV v2 secrets engine
+    - name: Enable KV v2 secrets engine  # noqa: no-handler
       ansible.builtin.shell: |
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
         vault secrets enable -path=secret kv-v2 2>&1 || echo "already enabled"
+      changed_when: true
       when: vault_init is changed
 
-    - name: Create ESO policy
+    - name: Create ESO policy  # noqa: no-handler
       ansible.builtin.shell: |
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
@@ -168,13 +173,15 @@
           capabilities = ["read", "list"]
         }
         POLICY
+      changed_when: true
       when: vault_init is changed
 
-    - name: Enable Kubernetes auth
+    - name: Enable Kubernetes auth  # noqa: no-handler
       ansible.builtin.shell: |
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
         vault auth enable kubernetes 2>&1 || echo "already enabled"
+      changed_when: true
       when: vault_init is changed
 
 - name: Distribute unseal keys to pi2
@@ -193,6 +200,7 @@
 
     - name: Unseal Vault on pi2
       ansible.builtin.shell: |
+        set -o pipefail
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         KEY1=$(sed -n '1p' /etc/vault-unseal/unseal-keys)
         KEY2=$(sed -n '2p' /etc/vault-unseal/unseal-keys)
@@ -200,6 +208,7 @@
         vault operator unseal $KEY2 > /dev/null
         vault status 2>&1 | grep -E 'Sealed|HA Mode|Active'
       register: unseal_result
+      changed_when: true
 
     - name: Show pi2 status
       ansible.builtin.debug:
@@ -270,6 +279,7 @@
 
     - name: Check Consul Vault keys
       ansible.builtin.shell: |
+        set -o pipefail
         consul kv get -keys vault/ 2>/dev/null | head -10
       register: consul_keys
       changed_when: false

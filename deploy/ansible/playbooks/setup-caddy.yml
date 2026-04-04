@@ -38,6 +38,7 @@
 
     - name: Check if caddy with porkbun plugin exists
       ansible.builtin.shell: |
+        set -o pipefail
         caddy list-modules 2>/dev/null | grep -q porkbun && echo "exists" || echo "missing"
       register: caddy_check
       changed_when: false
@@ -171,11 +172,13 @@
       ansible.builtin.pause:
         seconds: 15
 
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
     - name: Check Caddy status
-      ansible.builtin.shell: |
-        systemctl is-active caddy
-      register: caddy_status
-      changed_when: false
+      ansible.builtin.set_fact:
+        caddy_status:
+          stdout: "{{ ansible_facts.services['caddy.service'].state | default('unknown') }}"
 
     - name: Test HTTPS Forgejo
       ansible.builtin.uri:

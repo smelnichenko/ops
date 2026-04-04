@@ -124,8 +124,9 @@
     vip: 192.168.11.5
 
   tasks:
-    - name: Check Keepalived status
+    - name: Check Keepalived status  # noqa: command-instead-of-module
       ansible.builtin.shell: |
+        set -o pipefail
         systemctl is-active keepalived && ip addr show | grep {{ vip }} || echo "VIP not on this node"
       register: keepalived_status
       changed_when: false
