@@ -1,0 +1,10 @@
+---
+# Pi services configuration
+# Secrets should come from .env or Vault in production
+
+forgejo_admin_pw: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('changeme', true) }}"
+forgejo_admin_mail: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
+kc_admin_pw: "{{ lookup('env', 'KEYCLOAK_ADMIN_PASSWORD') | default('changeme', true) }}"
+kc_db_pw: "{{ lookup('env', 'KEYCLOAK_DB_PASSWORD') | default('changeme', true) }}"
+minio_user: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"
+minio_password: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') | default('changeme', true) }}"

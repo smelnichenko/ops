@@ -1,0 +1,401 @@
+---
+# Setup Pi Services (Forgejo, MinIO, Keycloak, Postgres)
+#
+# Installs the shared service stack on a Pi. Run on pi1 or pi2.
+# Vault and Nexus are set up separately (existing playbooks).
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml \
+#     --limit pi2 -e @vars/pi-services.yml
+#
+# For both Pis:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml \
+#     -e @vars/pi-services.yml
+
+- name: Setup Pi Services
+  hosts: pis
+  become: true
+  gather_facts: true
+
+  vars:
+    forgejo_version: "14.0.3"
+    keycloak_version: "26.5.7"
+    pi_ip: "{{ ansible_default_ipv4.address }}"
+    forgejo_admin_user: forgejo_admin
+    forgejo_admin_password: "{{ forgejo_admin_pw | default('changeme') }}"
+    forgejo_admin_email: "{{ forgejo_admin_mail | default('admin@pmon.dev') }}"
+    keycloak_admin_password: "{{ kc_admin_pw | default('changeme') }}"
+    keycloak_db_password: "{{ kc_db_pw | default('changeme') }}"
+    minio_root_user: "{{ minio_user | default('velero-admin') }}"
+    minio_root_password: "{{ minio_password | default('changeme') }}"
+
+  tasks:
+    # ================================================================
+    # Phase 1: System dependencies
+    # ================================================================
+
+    - name: Install system packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - unzip
+          - jq
+          - git
+          - ufw
+          - openssl
+          - python3
+          - postgresql
+          - postgresql-client
+          - default-jre-headless
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Configure UFW rules
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: tcp
+        comment: "{{ item.name }}"
+      loop:
+        - { port: "22", name: "SSH" }
+        - { port: "3000", name: "Forgejo" }
+        - { port: "8080", name: "Keycloak" }
+        - { port: "9000", name: "MinIO" }
+        - { port: "5432", name: "Postgres" }
+        - { port: "8200", name: "Vault" }
+
+    # ================================================================
+    # Phase 2: Postgres
+    # ================================================================
+
+    - name: Set Postgres password
+      ansible.builtin.shell: |
+        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ keycloak_db_password }}';"
+      changed_when: true
+      no_log: true
+
+    - name: Create Keycloak database
+      ansible.builtin.shell: |
+        sudo -u postgres createdb keycloak 2>/dev/null || true
+      changed_when: true
+
+    - name: Configure Postgres for network access + replication
+      ansible.builtin.blockinfile:
+        path: "{{ item }}"
+        block: |
+          host all all 0.0.0.0/0 scram-sha-256
+          host replication all 0.0.0.0/0 scram-sha-256
+        marker: "# {mark} ANSIBLE MANAGED - network access"
+      loop: "{{ lookup('fileglob', '/etc/postgresql/*/main/pg_hba.conf', wantlist=True) }}"
+      notify: Restart Postgres
+
+    - name: Configure Postgres listen addresses and WAL
+      ansible.builtin.lineinfile:
+        path: "{{ item.file }}"
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - file: "{{ lookup('fileglob', '/etc/postgresql/*/main/postgresql.conf') }}"
+          regexp: "^#?listen_addresses"
+          line: "listen_addresses = '*'"
+        - file: "{{ lookup('fileglob', '/etc/postgresql/*/main/postgresql.conf') }}"
+          regexp: "^#?wal_level"
+          line: "wal_level = replica"
+        - file: "{{ lookup('fileglob', '/etc/postgresql/*/main/postgresql.conf') }}"
+          regexp: "^#?max_wal_senders"
+          line: "max_wal_senders = 3"
+      notify: Restart Postgres
+
+    # ================================================================
+    # Phase 3: Forgejo
+    # ================================================================
+
+    - name: Download Forgejo
+      ansible.builtin.get_url:
+        url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-arm64"
+        dest: /usr/local/bin/forgejo
+        mode: '0755'
+
+    - name: Create Forgejo user
+      ansible.builtin.user:
+        name: forgejo
+        system: true
+        shell: /bin/bash
+        home: /var/lib/forgejo
+        create_home: true
+
+    - name: Create Forgejo directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: forgejo
+        group: forgejo
+      loop:
+        - /var/lib/forgejo/data
+        - /var/lib/forgejo/repos
+        - /var/lib/forgejo/log
+        - /var/lib/forgejo/custom/conf
+
+    - name: Write Forgejo config
+      ansible.builtin.template:
+        dest: /var/lib/forgejo/custom/conf/app.ini
+        owner: forgejo
+        group: forgejo
+        mode: '0644'
+        src: /dev/stdin
+        content: |
+          APP_NAME = Forgejo
+          RUN_USER = forgejo
+
+          [server]
+          HTTP_PORT = 3000
+          HTTP_ADDR = 0.0.0.0
+          ROOT_URL = http://{{ pi_ip }}:3000/
+          APP_DATA_PATH = /var/lib/forgejo/data
+          LFS_START_SERVER = false
+
+          [database]
+          DB_TYPE = sqlite3
+          PATH = /var/lib/forgejo/data/forgejo.db
+
+          [repository]
+          ROOT = /var/lib/forgejo/repos
+
+          [log]
+          ROOT_PATH = /var/lib/forgejo/log
+          LEVEL = Warn
+
+          [security]
+          INSTALL_LOCK = true
+      notify: Restart Forgejo
+
+    - name: Install Forgejo systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/forgejo.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Forgejo Git Forge
+          After=network.target
+          [Service]
+          Type=simple
+          User=forgejo
+          Group=forgejo
+          WorkingDirectory=/var/lib/forgejo
+          ExecStart=/usr/local/bin/forgejo web --config /var/lib/forgejo/custom/conf/app.ini
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Forgejo
+
+    - name: Enable and start Forgejo
+      ansible.builtin.systemd:
+        name: forgejo
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for Forgejo
+      ansible.builtin.uri:
+        url: http://localhost:3000/
+        status_code: 200
+      retries: 15
+      delay: 5
+
+    - name: Create Forgejo admin user
+      ansible.builtin.shell: |
+        su - forgejo -c "forgejo admin user create \
+          --admin --username {{ forgejo_admin_user }} \
+          --password '{{ forgejo_admin_password }}' \
+          --email '{{ forgejo_admin_email }}' \
+          --config /var/lib/forgejo/custom/conf/app.ini" 2>/dev/null || true
+      changed_when: true
+      no_log: true
+
+    # ================================================================
+    # Phase 4: MinIO
+    # ================================================================
+
+    - name: Download MinIO
+      ansible.builtin.get_url:
+        url: "https://dl.min.io/server/minio/release/linux-arm64/minio"
+        dest: /usr/local/bin/minio
+        mode: '0755'
+
+    - name: Download MinIO client
+      ansible.builtin.get_url:
+        url: "https://dl.min.io/client/mc/release/linux-arm64/mc"
+        dest: /usr/local/bin/mc
+        mode: '0755'
+
+    - name: Create MinIO user and data dir
+      ansible.builtin.user:
+        name: minio
+        system: true
+        shell: /bin/false
+        home: /var/lib/minio
+        create_home: true
+
+    - name: Create MinIO data directory
+      ansible.builtin.file:
+        path: /var/lib/minio/data
+        state: directory
+        owner: minio
+        group: minio
+
+    - name: Install MinIO systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/minio.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=MinIO Object Storage
+          After=network.target
+          [Service]
+          Type=simple
+          User=minio
+          Group=minio
+          Environment="MINIO_ROOT_USER={{ minio_root_user }}"
+          Environment="MINIO_ROOT_PASSWORD={{ minio_root_password }}"
+          Environment="MINIO_SITE_NAME={{ inventory_hostname }}"
+          ExecStart=/usr/local/bin/minio server /var/lib/minio/data --address :9000
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart MinIO
+      no_log: true
+
+    - name: Enable and start MinIO
+      ansible.builtin.systemd:
+        name: minio
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for MinIO
+      ansible.builtin.uri:
+        url: http://localhost:9000/minio/health/live
+        status_code: 200
+      retries: 10
+      delay: 5
+
+    - name: Create MinIO buckets
+      ansible.builtin.shell: |
+        HOME=/tmp mc alias set local http://localhost:9000 {{ minio_root_user }} {{ minio_root_password }}
+        HOME=/tmp mc mb local/velero --ignore-existing
+        HOME=/tmp mc mb local/pg-dump --ignore-existing
+      changed_when: true
+      no_log: true
+
+    # ================================================================
+    # Phase 5: Keycloak
+    # ================================================================
+
+    - name: Download and extract Keycloak
+      ansible.builtin.unarchive:
+        src: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"
+        dest: /opt
+        remote_src: true
+        creates: "/opt/keycloak-{{ keycloak_version }}"
+
+    - name: Symlink Keycloak
+      ansible.builtin.file:
+        src: "/opt/keycloak-{{ keycloak_version }}"
+        dest: /opt/keycloak
+        state: link
+
+    - name: Create Keycloak user
+      ansible.builtin.user:
+        name: keycloak
+        system: true
+        shell: /bin/false
+        home: /opt/keycloak
+
+    - name: Set Keycloak ownership
+      ansible.builtin.file:
+        path: "/opt/keycloak-{{ keycloak_version }}"
+        owner: keycloak
+        group: keycloak
+        recurse: true
+
+    - name: Install Keycloak systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/keycloak.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Keycloak SSO
+          After=network.target postgresql.service
+          [Service]
+          Type=exec
+          User=keycloak
+          Group=keycloak
+          Environment=KC_DB=postgres
+          Environment=KC_DB_URL=jdbc:postgresql://localhost:5432/keycloak
+          Environment=KC_DB_USERNAME=postgres
+          Environment=KC_DB_PASSWORD={{ keycloak_db_password }}
+          Environment=KC_HOSTNAME_STRICT=false
+          Environment=KC_HTTP_ENABLED=true
+          Environment=KC_HTTP_PORT=8080
+          Environment=KC_BOOTSTRAP_ADMIN_USERNAME=admin
+          Environment=KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
+          ExecStart=/opt/keycloak/bin/kc.sh start-dev
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Keycloak
+      no_log: true
+
+    - name: Enable and start Keycloak
+      ansible.builtin.systemd:
+        name: keycloak
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for Keycloak
+      ansible.builtin.uri:
+        url: http://localhost:8080/realms/master
+        status_code: 200
+      retries: 30
+      delay: 10
+
+    # ================================================================
+    # Verification
+    # ================================================================
+
+    - name: Verify all services
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }} setup complete:
+            Forgejo:  http://{{ pi_ip }}:3000/
+            MinIO:    http://{{ pi_ip }}:9000/
+            Keycloak: http://{{ pi_ip }}:8080/
+            Postgres: {{ pi_ip }}:5432
+
+  handlers:
+    - name: Restart Postgres
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted
+
+    - name: Restart Forgejo
+      ansible.builtin.systemd:
+        name: forgejo
+        state: restarted
+
+    - name: Restart MinIO
+      ansible.builtin.systemd:
+        name: minio
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart Keycloak
+      ansible.builtin.systemd:
+        name: keycloak
+        state: restarted
+        daemon_reload: true
