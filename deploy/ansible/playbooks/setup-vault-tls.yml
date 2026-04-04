@@ -1,0 +1,225 @@
+---
+# Generate Vault CA + per-node TLS certificates
+#
+# Creates a shared CA on pi1, signs certs for both Pis.
+# Both Vault nodes trust the CA for raft cluster mTLS.
+#
+# Usage:
+#   ansible-playbook -i inventory/production.yml playbooks/setup-vault-tls.yml
+
+# ─── Generate CA on pi1 ──────────────────────────────────────────────────────
+- name: "Generate Vault CA"
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    ca_dir: /etc/vault.d/tls
+    ca_days: 3650
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+
+  tasks:
+    - name: Backup existing certs
+      ansible.builtin.shell: |
+        [ -f {{ ca_dir }}/vault-cert.pem ] && cp {{ ca_dir }}/vault-cert.pem {{ ca_dir }}/vault-cert.pem.bak || true
+        [ -f {{ ca_dir }}/vault-key.pem ] && cp {{ ca_dir }}/vault-key.pem {{ ca_dir }}/vault-key.pem.bak || true
+      changed_when: true
+
+    - name: Generate CA private key
+      ansible.builtin.shell: |
+        openssl ecparam -name P-384 -genkey -noout -out {{ ca_dir }}/ca-key.pem
+      args:
+        creates: "{{ ca_dir }}/ca-key.pem"
+
+    - name: Generate CA certificate
+      ansible.builtin.shell: |
+        openssl req -x509 -new \
+          -key {{ ca_dir }}/ca-key.pem \
+          -out {{ ca_dir }}/ca-cert.pem \
+          -days {{ ca_days }} \
+          -subj "/CN=Vault CA" \
+          -addext "basicConstraints=critical,CA:TRUE" \
+          -addext "keyUsage=critical,keyCertSign,cRLSign"
+      args:
+        creates: "{{ ca_dir }}/ca-cert.pem"
+
+    - name: Generate pi1 private key
+      ansible.builtin.shell: |
+        openssl ecparam -name P-384 -genkey -noout -out {{ ca_dir }}/vault-key.pem
+      changed_when: true
+
+    - name: Generate pi1 CSR
+      ansible.builtin.shell: |
+        openssl req -new \
+          -key {{ ca_dir }}/vault-key.pem \
+          -out {{ ca_dir }}/vault.csr \
+          -subj "/CN=vault.schnappy.io" \
+          -addext "subjectAltName=DNS:vault.schnappy.io,DNS:pi1.schnappy.io,IP:{{ pi1_ip }},IP:127.0.0.1"
+      changed_when: true
+
+    - name: Sign pi1 cert with CA
+      ansible.builtin.shell: |
+        openssl x509 -req \
+          -in {{ ca_dir }}/vault.csr \
+          -CA {{ ca_dir }}/ca-cert.pem \
+          -CAkey {{ ca_dir }}/ca-key.pem \
+          -CAcreateserial \
+          -out {{ ca_dir }}/vault-cert.pem \
+          -days {{ ca_days }} \
+          -copy_extensions copyall
+      changed_when: true
+
+    - name: Generate pi2 private key
+      ansible.builtin.shell: |
+        openssl ecparam -name P-384 -genkey -noout -out {{ ca_dir }}/pi2-key.pem
+      changed_when: true
+
+    - name: Generate pi2 CSR
+      ansible.builtin.shell: |
+        openssl req -new \
+          -key {{ ca_dir }}/pi2-key.pem \
+          -out {{ ca_dir }}/pi2.csr \
+          -subj "/CN=pi2.schnappy.io" \
+          -addext "subjectAltName=DNS:pi2.schnappy.io,DNS:vault.schnappy.io,IP:{{ pi2_ip }},IP:127.0.0.1"
+      changed_when: true
+
+    - name: Sign pi2 cert with CA
+      ansible.builtin.shell: |
+        openssl x509 -req \
+          -in {{ ca_dir }}/pi2.csr \
+          -CA {{ ca_dir }}/ca-cert.pem \
+          -CAkey {{ ca_dir }}/ca-key.pem \
+          -CAcreateserial \
+          -out {{ ca_dir }}/pi2-cert.pem \
+          -days {{ ca_days }} \
+          -copy_extensions copyall
+      changed_when: true
+
+    - name: Set permissions
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        owner: vault
+        group: vault
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ ca_dir }}/ca-key.pem", mode: "0400" }
+        - { path: "{{ ca_dir }}/ca-cert.pem", mode: "0644" }
+        - { path: "{{ ca_dir }}/vault-key.pem", mode: "0400" }
+        - { path: "{{ ca_dir }}/vault-cert.pem", mode: "0644" }
+        - { path: "{{ ca_dir }}/pi2-key.pem", mode: "0400" }
+        - { path: "{{ ca_dir }}/pi2-cert.pem", mode: "0644" }
+
+    - name: Fetch pi2 cert + key + CA to controller
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: /tmp/vault-tls/
+        flat: true
+      loop:
+        - "{{ ca_dir }}/ca-cert.pem"
+        - "{{ ca_dir }}/pi2-cert.pem"
+        - "{{ ca_dir }}/pi2-key.pem"
+
+    - name: Clean up CSRs
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ca_dir }}/vault.csr"
+        - "{{ ca_dir }}/pi2.csr"
+
+# ─── Deploy certs to pi2 ─────────────────────────────────────────────────────
+- name: "Deploy TLS to pi2"
+  hosts: pi2
+  become: true
+  gather_facts: false
+
+  vars:
+    tls_dir: /etc/vault.d/tls
+
+  tasks:
+    - name: Create TLS directory
+      ansible.builtin.file:
+        path: "{{ tls_dir }}"
+        state: directory
+        owner: vault
+        group: vault
+        mode: '0755'
+
+    - name: Copy CA cert
+      ansible.builtin.copy:
+        src: /tmp/vault-tls/ca-cert.pem
+        dest: "{{ tls_dir }}/ca-cert.pem"
+        owner: vault
+        group: vault
+        mode: '0644'
+
+    - name: Copy pi2 cert
+      ansible.builtin.copy:
+        src: /tmp/vault-tls/pi2-cert.pem
+        dest: "{{ tls_dir }}/vault-cert.pem"
+        owner: vault
+        group: vault
+        mode: '0644'
+
+    - name: Copy pi2 key
+      ansible.builtin.copy:
+        src: /tmp/vault-tls/pi2-key.pem
+        dest: "{{ tls_dir }}/vault-key.pem"
+        owner: vault
+        group: vault
+        mode: '0400'
+
+# ─── Update Vault configs to use CA ──────────────────────────────────────────
+- name: "Update Vault configs"
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    node_ip: "{{ ansible_default_ipv4.address }}"
+    tls_dir: /etc/vault.d/tls
+
+  tasks:
+    - name: Write Vault config with CA-verified TLS
+      ansible.builtin.copy:
+        dest: /etc/vault.d/vault.hcl
+        owner: vault
+        group: vault
+        mode: '0640'
+        content: |
+          ui = false
+          disable_mlock = true
+
+          storage "raft" {
+            path = "/var/lib/vault/raft"
+            node_id = "{{ inventory_hostname }}"
+          }
+
+          listener "tcp" {
+            address            = "[::]:8200"
+            tls_cert_file      = "{{ tls_dir }}/vault-cert.pem"
+            tls_key_file       = "{{ tls_dir }}/vault-key.pem"
+            tls_client_ca_file = "{{ tls_dir }}/ca-cert.pem"
+          }
+
+          api_addr     = "https://{{ node_ip }}:8200"
+          cluster_addr = "https://{{ node_ip }}:8201"
+      notify: Restart Vault
+
+    - name: Verify cert
+      ansible.builtin.shell: |
+        openssl x509 -in {{ tls_dir }}/vault-cert.pem -noout -subject -issuer -dates | head -4
+      register: cert_info
+      changed_when: false
+
+    - name: Show cert info
+      ansible.builtin.debug:
+        msg: "{{ cert_info.stdout }}"
+
+  handlers:
+    - name: Restart Vault
+      ansible.builtin.systemd:
+        name: vault
+        state: restarted
+        daemon_reload: true
