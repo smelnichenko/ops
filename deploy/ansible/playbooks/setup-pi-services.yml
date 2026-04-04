@@ -80,30 +80,31 @@
         sudo -u postgres createdb keycloak 2>/dev/null || true
       changed_when: true
 
+    - name: Find Postgres config directory
+      ansible.builtin.shell: ls -d /etc/postgresql/*/main | head -1
+      register: pg_conf_dir
+      changed_when: false
+
     - name: Configure Postgres for network access + replication
       ansible.builtin.blockinfile:
-        path: "{{ item }}"
+        path: "{{ pg_conf_dir.stdout }}/pg_hba.conf"
         block: |
           host all all 0.0.0.0/0 scram-sha-256
           host replication all 0.0.0.0/0 scram-sha-256
         marker: "# {mark} ANSIBLE MANAGED - network access"
-      loop: "{{ lookup('fileglob', '/etc/postgresql/*/main/pg_hba.conf', wantlist=True) }}"
       notify: Restart Postgres
 
     - name: Configure Postgres listen addresses and WAL
       ansible.builtin.lineinfile:
-        path: "{{ item.file }}"
+        path: "{{ pg_conf_dir.stdout }}/postgresql.conf"
         regexp: "{{ item.regexp }}"
         line: "{{ item.line }}"
       loop:
-        - file: "{{ lookup('fileglob', '/etc/postgresql/*/main/postgresql.conf') }}"
-          regexp: "^#?listen_addresses"
+        - regexp: "^#?listen_addresses"
           line: "listen_addresses = '*'"
-        - file: "{{ lookup('fileglob', '/etc/postgresql/*/main/postgresql.conf') }}"
-          regexp: "^#?wal_level"
+        - regexp: "^#?wal_level"
           line: "wal_level = replica"
-        - file: "{{ lookup('fileglob', '/etc/postgresql/*/main/postgresql.conf') }}"
-          regexp: "^#?max_wal_senders"
+        - regexp: "^#?max_wal_senders"
           line: "max_wal_senders = 3"
       notify: Restart Postgres
 
@@ -138,12 +139,11 @@
         - /var/lib/forgejo/custom/conf
 
     - name: Write Forgejo config
-      ansible.builtin.template:
+      ansible.builtin.copy:
         dest: /var/lib/forgejo/custom/conf/app.ini
         owner: forgejo
         group: forgejo
         mode: '0644'
-        src: /dev/stdin
         content: |
           APP_NAME = Forgejo
           RUN_USER = forgejo
