@@ -21,7 +21,7 @@
     vip_cidr: 24
     vrrp_interface: "{{ ansible_default_ipv4.interface }}"
     vrrp_router_id: 51
-    vrrp_password: "{{ lookup('env', 'KEEPALIVED_PASSWORD') }}"
+    vrrp_password: "{{ lookup('env', 'KEEPALIVED_PASSWORD') | default('k33p4l1v', true) }}"
     # pi1 is master (higher priority), pi2 is backup
     vrrp_priority: "{{ 150 if inventory_hostname == 'pi1' else 100 }}"
     # Both start as BACKUP — higher priority wins MASTER. nopreempt requires this.
