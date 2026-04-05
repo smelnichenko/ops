@@ -121,12 +121,133 @@ install_velero() {
   log "Velero installed"
 }
 
+# --- vault-eso (connect ESO to Pi Vault) ---
+setup_vault_eso() {
+  log "Configuring ESO → Pi Vault connection..."
+
+  local VAULT_VIP="${VAULT_VIP:-192.168.11.5}"
+  local VAULT_PI="${VAULT_PI:-192.168.11.4}"
+  local VAULT_PASSWORD="${VAULT_ROOT_TOKEN:-}"
+
+  # Fetch Vault CA cert from Pi
+  if [[ -f /tmp/vault-ca.pem ]]; then
+    log "Using cached Vault CA from /tmp/vault-ca.pem"
+  else
+    ssh "sm@${VAULT_PI}" "sudo cat /etc/vault.d/tls/ca-cert.pem" > /tmp/vault-ca.pem 2>/dev/null || {
+      err "Cannot fetch Vault CA from Pi. Copy /etc/vault.d/tls/ca-cert.pem to /tmp/vault-ca.pem manually."
+      return 1
+    }
+  fi
+
+  local VAULT_CA_B64
+  VAULT_CA_B64=$(base64 -w0 < /tmp/vault-ca.pem)
+
+  # Create Vault CA secret in external-secrets namespace
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-pi-ca
+  namespace: external-secrets
+data:
+  ca.crt: ${VAULT_CA_B64}
+EOF
+
+  # Create token reviewer ClusterRoleBinding
+  kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-token-reviewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: external-secrets
+    namespace: external-secrets
+EOF
+
+  # Create long-lived SA token for Vault token reviewer
+  kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-token-reviewer
+  namespace: external-secrets
+  annotations:
+    kubernetes.io/service-account.name: external-secrets
+type: kubernetes.io/service-account-token
+EOF
+
+  sleep 3
+
+  # Configure Vault kubernetes auth on Pi
+  local K8S_CA
+  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d)
+  local SA_TOKEN
+  SA_TOKEN=$(kubectl get secret vault-token-reviewer -n external-secrets -o jsonpath='{.data.token}' | base64 -d)
+  local K8S_HOST
+  K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+
+  # Write K8s CA to temp file for Vault
+  echo "$K8S_CA" > /tmp/k8s-ca.pem
+
+  ssh "sm@${VAULT_PI}" "sudo bash -c '
+    export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+    export VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
+    vault write auth/kubernetes/config \
+      kubernetes_host=\"${K8S_HOST}\" \
+      kubernetes_ca_cert=@/dev/stdin \
+      token_reviewer_jwt=\"${SA_TOKEN}\" \
+      disable_local_ca_jwt=true << CERT
+${K8S_CA}
+CERT
+    vault write auth/kubernetes/role/eso-role \
+      bound_service_account_names=external-secrets \
+      bound_service_account_namespaces=external-secrets \
+      policies=eso-reader \
+      ttl=1h
+  '" 2>/dev/null || {
+    warn "Could not configure Vault kubernetes auth via SSH. Configure manually."
+    return 0
+  }
+
+  log "ESO → Pi Vault configured"
+}
+
 # --- cluster-config (static resources) ---
 install_cluster_config() {
   log "Applying cluster-config resources..."
-  for f in "$VALUES_DIR/cluster-config/"*.yaml; do
-    kubectl apply -f "$f" --server-side 2>/dev/null || warn "Skipped: $(basename "$f")"
+
+  # Wait for ESO CRDs to be available
+  log "Waiting for ExternalSecret CRD..."
+  for i in $(seq 1 30); do
+    kubectl get crd externalsecrets.external-secrets.io >/dev/null 2>&1 && break
+    sleep 5
   done
+
+  # Wait for ClusterSecretStore CRD
+  for i in $(seq 1 30); do
+    kubectl get crd clustersecretstores.external-secrets.io >/dev/null 2>&1 && break
+    sleep 5
+  done
+
+  # Apply all resources, retry failures
+  local skipped=()
+  for f in "$VALUES_DIR/cluster-config/"*.yaml; do
+    kubectl apply -f "$f" --server-side 2>/dev/null || skipped+=("$f")
+  done
+
+  # Retry skipped resources (CRDs might have become ready)
+  if [[ ${#skipped[@]} -gt 0 ]]; then
+    sleep 10
+    for f in "${skipped[@]}"; do
+      kubectl apply -f "$f" --server-side 2>/dev/null || warn "Skipped: $(basename "$f")"
+    done
+  fi
+
   log "cluster-config applied"
 }
 
@@ -147,6 +268,7 @@ main() {
     cert-manager)       install_cert_manager ;;
     porkbun-webhook)    install_porkbun_webhook ;;
     external-secrets)   install_external_secrets ;;
+    vault-eso)          setup_vault_eso ;;
     istio)              install_istio ;;
     velero)             install_velero ;;
     cluster-config)     install_cluster_config ;;
@@ -155,6 +277,7 @@ main() {
       install_cert_manager       || { err "cert-manager failed"; ((failed++)); }
       install_porkbun_webhook    || { err "porkbun-webhook failed"; ((failed++)); }
       install_external_secrets   || { err "external-secrets failed"; ((failed++)); }
+      setup_vault_eso            || { err "vault-eso failed"; ((failed++)); }
       install_istio              || { err "istio failed"; ((failed++)); }
       install_velero             || { err "velero failed"; ((failed++)); }
       install_cluster_config     || { err "cluster-config failed"; ((failed++)); }
