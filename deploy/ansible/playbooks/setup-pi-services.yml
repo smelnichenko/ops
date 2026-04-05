@@ -74,7 +74,7 @@
 
     - name: Set Postgres password
       ansible.builtin.shell: |
-        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ keycloak_db_password }}';"
+        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ keycloak_db_password }}';" 2>/dev/null || true
       changed_when: true
       no_log: true
 
