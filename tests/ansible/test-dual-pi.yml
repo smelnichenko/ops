@@ -101,6 +101,15 @@
         - keepalived
         - glusterd
 
+    - name: Wait for Patroni to be healthy on all nodes
+      ansible.builtin.uri:
+        url: "http://localhost:8008/health"
+        status_code: 200
+      retries: 30
+      delay: 10
+      register: patroni_health
+      until: patroni_health.status == 200
+
     - name: Verify Forgejo API
       ansible.builtin.uri:
         url: "http://localhost:3000/api/v1/version"
