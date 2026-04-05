@@ -62,6 +62,13 @@ install_porkbun_webhook() {
   log "porkbun-webhook installed"
 }
 
+# --- local-path-provisioner ---
+install_local_path() {
+  log "Installing local-path-provisioner..."
+  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+  log "local-path-provisioner installed"
+}
+
 # --- external-secrets ---
 install_external_secrets() {
   log "Installing external-secrets..."
@@ -272,6 +279,7 @@ main() {
   fi
 
   case "$component" in
+    local-path)         install_local_path ;;
     cert-manager)       install_cert_manager ;;
     porkbun-webhook)    install_porkbun_webhook ;;
     external-secrets)   install_external_secrets ;;
@@ -281,6 +289,7 @@ main() {
     cluster-config)     install_cluster_config ;;
     all)
       local failed=0
+      install_local_path         || { err "local-path failed"; ((failed++)); }
       install_cert_manager       || { err "cert-manager failed"; ((failed++)); }
       install_porkbun_webhook    || { err "porkbun-webhook failed"; ((failed++)); }
       install_external_secrets   || { err "external-secrets failed"; ((failed++)); }
