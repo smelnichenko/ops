@@ -78,8 +78,8 @@
 - name: Deploy Keepalived
   ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-keepalived.yml"
 
-- name: Deploy Vault (Consul storage)
-  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/migrate-vault-consul.yml"
+# Vault skipped in Vagrant (requires TLS certs + binary install)
+# Production uses: setup-vault-tls.yml + migrate-vault-consul.yml
 
 # ─── Verify services ────────────────────────────────────────────────────────
 - name: Verify all services
@@ -98,7 +98,6 @@
         - minio
         - patroni
         - consul
-        - vault
         - keepalived
         - glusterd
 
