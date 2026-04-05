@@ -154,20 +154,11 @@
       ansible.builtin.debug:
         msg: "Installing Argo CD via Helm"
 
-    - name: Read OIDC client secret from Vault
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl exec -n vault vault-0 -- sh -c \
-          'VAULT_ADDR=https://127.0.0.1:8200 \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN={{ vault_root_token }} \
-          vault kv get -field=client_secret secret/schnappy/argocd'
-      args:
-        executable: /bin/bash
-      register: vault_argocd_secret
-      changed_when: false
+    - name: Set OIDC client secret
+      ansible.builtin.set_fact:
+        vault_argocd_secret:
+          stdout: "{{ argocd_keycloak_client_secret | default(lookup('env', 'KEYCLOAK_ARGOCD_CLIENT_SECRET')) | default('changeme') }}"
       no_log: true
-      when: keycloak_enabled | bool and vault_root_token is defined
 
     - name: Add Argo Helm repository
       ansible.builtin.shell: |
@@ -347,26 +338,8 @@
         set -o pipefail
         cat <<'EOF' | kubectl apply -f -
         ---
-        # Default deny all ingress and egress
-        apiVersion: networking.k8s.io/v1
-        kind: NetworkPolicy
-        metadata:
-          name: argocd-default-deny
-          namespace: {{ argocd_namespace }}
-        spec:
-          podSelector: {}
-          policyTypes:
-            - Ingress
-            - Egress
-          egress:
-            # Allow DNS for all pods
-            - ports:
-                - protocol: UDP
-                  port: 53
-                - protocol: TCP
-                  port: 53
-        ---
         # Argo CD controllers: egress to Forgejo, k8s API, external HTTPS
+        # Default deny is managed by cluster-config (applied after ArgoCD syncs)
         apiVersion: networking.k8s.io/v1
         kind: NetworkPolicy
         metadata:
