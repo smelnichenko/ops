@@ -23,12 +23,33 @@
 - name: Deploy Patroni
   ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-patroni.yml"
 
-- name: Restart services after Patroni
+- name: Reconfigure services for Patroni multi-host PG
   hosts: pi1,pi2
   become: true
   gather_facts: false
+  vars:
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] }}"
+    multi_host: "{{ pi1_ip }}:5432,{{ pi2_ip }}:5432"
   tasks:
-    - name: Restart Forgejo and Keycloak to use Patroni PG
+    - name: Update Forgejo DB host to multi-host
+      ansible.builtin.lineinfile:
+        path: /var/lib/forgejo/custom/conf/app.ini
+        regexp: '^HOST = '
+        line: "HOST = {{ multi_host }}"
+
+    - name: Update Keycloak DB URL to multi-host
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/keycloak.service
+        regexp: 'KC_DB_URL='
+        line: "Environment=KC_DB_URL=jdbc:postgresql://{{ multi_host }}/keycloak?targetServerType=primary"
+      notify: Reload systemd
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart Forgejo and Keycloak
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: restarted
@@ -42,8 +63,8 @@
         status_code: 200
       retries: 15
       delay: 5
-      until: forgejo_check.status == 200
       register: forgejo_check
+      until: forgejo_check.status == 200
 
 - name: Deploy GlusterFS
   ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-gluster.yml"

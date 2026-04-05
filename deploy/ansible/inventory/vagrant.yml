@@ -12,9 +12,9 @@ all:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     # Override default IP (Vagrant NAT) with private network IP for service binding
     node_ip_override: "{{ ansible_host }}"
-    # Multi-host PG for Patroni failover (same as production)
-    forgejo_db_host: "192.168.56.20:5432,192.168.56.21:5432"
-    keycloak_db_host: "192.168.56.20:5432,192.168.56.21:5432"
+    # localhost for initial setup (before Patroni). Test restarts services after Patroni.
+    forgejo_db_host: "localhost:5432"
+    keycloak_db_host: "localhost:5432"
     keepalived_vip: "192.168.56.50"
 
   hosts:
