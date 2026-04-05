@@ -99,6 +99,13 @@ install_istio() {
     -f "$VALUES_DIR/istio/cni-values.yaml" \
     --wait --timeout 60s
 
+  # Cilium CNI coexistence: disable exclusive mode so Istio CNI can chain
+  if cilium status >/dev/null 2>&1; then
+    log "Setting Cilium cni.exclusive=false for Istio CNI coexistence..."
+    cilium config set cni-exclusive false 2>/dev/null || \
+      kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"cni-exclusive":"false"}}' 2>/dev/null || true
+  fi
+
   log "Istio installed"
 }
 
