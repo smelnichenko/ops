@@ -222,7 +222,7 @@
     - name: Wait for Patroni primary
       ansible.builtin.shell: |
         set -o pipefail
-        for i in $(seq 1 30); do
+        for i in $(seq 1 60); do
           ROLE=$(curl -sf http://localhost:8008 | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
           [ "$ROLE" = "master" ] || [ "$ROLE" = "primary" ] && echo "primary" && exit 0
           sleep 5
