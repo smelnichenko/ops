@@ -111,11 +111,16 @@ install_istio() {
     -f "$VALUES_DIR/istio/cni-values.yaml" \
     --wait --timeout 60s
 
-  # Cilium CNI coexistence: disable exclusive mode so Istio CNI can chain
+  # Cilium + Istio coexistence:
+  # - cni-exclusive=false: let Istio CNI chain after Cilium
+  # - socketLB hostNamespaceOnly: prevent Cilium from DNATing service IPs
+  #   in pod namespaces (Envoy needs to see the ClusterIP, not the pod IP)
   if cilium status >/dev/null 2>&1; then
-    log "Setting Cilium cni.exclusive=false for Istio CNI coexistence..."
-    cilium config set cni-exclusive false 2>/dev/null || \
-      kubectl patch configmap cilium-config -n kube-system --type merge -p '{"data":{"cni-exclusive":"false"}}' 2>/dev/null || true
+    log "Configuring Cilium for Istio coexistence..."
+    kubectl patch configmap cilium-config -n kube-system --type merge \
+      -p '{"data":{"cni-exclusive":"false","bpf-lb-sock":"true","bpf-lb-sock-hostns-only":"true"}}' 2>/dev/null || true
+    kubectl rollout restart daemonset/cilium -n kube-system
+    kubectl rollout status daemonset/cilium -n kube-system --timeout=120s
   fi
 
   log "Istio installed"
