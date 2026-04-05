@@ -86,6 +86,11 @@ install_external_secrets() {
 # --- istio ---
 install_istio() {
   log "Installing Istio..."
+
+  # Gateway API CRDs (required for Istio Gateway resources)
+  log "Installing Gateway API CRDs..."
+  kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml 2>/dev/null || true
+
   helm repo add istio https://istio-release.storage.googleapis.com/charts 2>/dev/null || true
   helm repo update istio
 
