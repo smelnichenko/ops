@@ -43,7 +43,6 @@
         path: /etc/systemd/system/keycloak.service
         regexp: 'KC_DB_URL='
         line: "Environment=KC_DB_URL=jdbc:postgresql://{{ multi_host }}/keycloak?targetServerType=primary"
-      notify: Reload systemd
 
     - name: Reload systemd
       ansible.builtin.systemd:
