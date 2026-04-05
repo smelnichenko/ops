@@ -167,7 +167,7 @@
         name: forgejo
         state: stopped
 
-    - name: Unmount if already mounted
+    - name: Unmount if already mounted  # noqa: syntax-check[unknown-module]
       ansible.builtin.mount:
         path: "{{ gluster_mount }}"
         state: unmounted

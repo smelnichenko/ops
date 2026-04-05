@@ -81,7 +81,9 @@
       changed_when: true
 
     - name: Find Postgres config directory
-      ansible.builtin.shell: ls -d /etc/postgresql/*/main | head -1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ls -d /etc/postgresql/*/main | head -1
       register: pg_conf_dir
       changed_when: false
 
@@ -132,6 +134,7 @@
         state: directory
         owner: forgejo
         group: forgejo
+        mode: '0755'
       loop:
         - /var/lib/forgejo/data
         - /var/lib/forgejo/repos
@@ -250,6 +253,7 @@
         state: directory
         owner: minio
         group: minio
+        mode: '0755'
 
     - name: Install MinIO systemd service
       ansible.builtin.copy:

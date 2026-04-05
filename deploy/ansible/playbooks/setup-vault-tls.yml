@@ -209,6 +209,7 @@
 
     - name: Verify cert
       ansible.builtin.shell: |
+        set -o pipefail
         openssl x509 -in {{ tls_dir }}/vault-cert.pem -noout -subject -issuer -dates | head -4
       register: cert_info
       changed_when: false

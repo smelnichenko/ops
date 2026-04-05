@@ -46,6 +46,7 @@
         state: directory
         owner: consul
         group: consul
+        mode: '0755'
       loop:
         - /etc/consul.d
         - /var/lib/consul/data
@@ -72,7 +73,7 @@
         - { port: "8301", proto: "tcp", name: "Consul Serf LAN" }
         - { port: "8301", proto: "udp", name: "Consul Serf LAN UDP" }
         - { port: "8500", proto: "tcp", name: "Consul HTTP" }
-      ignore_errors: true  # ten may not have UFW
+      failed_when: false  # ten may not have UFW
 
     - name: Write Consul config
       ansible.builtin.copy:
@@ -141,6 +142,7 @@
 
     - name: Wait for Consul to be ready
       ansible.builtin.shell: |
+        set -o pipefail
         for i in $(seq 1 30); do
           consul members 2>/dev/null | grep -q alive && exit 0
           sleep 2
@@ -166,6 +168,7 @@
   tasks:
     - name: Wait for all members
       ansible.builtin.shell: |
+        set -o pipefail
         for i in $(seq 1 30); do
           COUNT=$(consul members 2>/dev/null | grep -c alive)
           [ "$COUNT" -ge 3 ] && echo "3 members alive" && exit 0

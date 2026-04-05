@@ -37,6 +37,7 @@
 
     - name: Verify primary is accepting connections
       ansible.builtin.shell: |
+        set -o pipefail
         sudo -u postgres psql -c "SELECT pg_is_in_recovery();" -t | grep -q f && echo "primary OK"
       changed_when: false
 
@@ -52,6 +53,7 @@
   tasks:
     - name: Check if already a replica
       ansible.builtin.shell: |
+        set -o pipefail
         sudo -u postgres psql -c "SELECT pg_is_in_recovery();" -t 2>/dev/null | grep -q t && echo "already-replica" || echo "standalone"
       register: pg_mode
       changed_when: false
@@ -63,7 +65,9 @@
       when: pg_mode.stdout | trim == "standalone"
 
     - name: Find Postgres data directory
-      ansible.builtin.shell: ls -d /var/lib/postgresql/*/main | head -1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ls -d /var/lib/postgresql/*/main | head -1
       register: pg_data
       changed_when: false
 
@@ -91,6 +95,7 @@
 
     - name: Verify replica is in recovery mode
       ansible.builtin.shell: |
+        set -o pipefail
         sudo -u postgres psql -c "SELECT pg_is_in_recovery();" -t | grep -q t && echo "replica OK"
       register: replica_check
       changed_when: false
@@ -190,7 +195,9 @@
 
     - name: Verify data on replica
       ansible.builtin.shell: |
-        PGPASSWORD={{ pg_repl_password | default('changeme') }} psql -h {{ pi2_ip }} -U replicator -d keycloak -t -c "SELECT data FROM repl_verify ORDER BY id DESC LIMIT 1;"
+        PGPASSWORD={{ pg_repl_password | default('changeme') }} \
+          psql -h {{ pi2_ip }} -U replicator -d keycloak \
+          -t -c "SELECT data FROM repl_verify ORDER BY id DESC LIMIT 1;"
       register: repl_data
       changed_when: false
 

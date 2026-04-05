@@ -39,12 +39,16 @@
         break_system_packages: true
 
     - name: Find Postgres version
-      ansible.builtin.shell: ls -d /usr/lib/postgresql/*/bin | head -1 | grep -oP '\d+'
+      ansible.builtin.shell: |
+        set -o pipefail
+        ls -d /usr/lib/postgresql/*/bin | head -1 | grep -oP '\d+'
       register: pg_version
       changed_when: false
 
     - name: Find Postgres data directory
-      ansible.builtin.shell: ls -d /var/lib/postgresql/*/main | head -1
+      ansible.builtin.shell: |
+        set -o pipefail
+        ls -d /var/lib/postgresql/*/main | head -1
       register: pg_data_dir
       changed_when: false
 
@@ -59,6 +63,7 @@
         state: directory
         owner: postgres
         group: postgres
+        mode: '0755'
 
     - name: Write Patroni config
       ansible.builtin.copy:
@@ -146,7 +151,7 @@
       ansible.builtin.systemd:
         name: postgresql
         state: stopped
-      ignore_errors: true
+      failed_when: false
 
     - name: Clear Postgres data for Patroni init
       ansible.builtin.shell: |
@@ -216,6 +221,7 @@
   tasks:
     - name: Wait for Patroni primary
       ansible.builtin.shell: |
+        set -o pipefail
         for i in $(seq 1 30); do
           ROLE=$(curl -sf http://localhost:8008 | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
           [ "$ROLE" = "master" ] && echo "primary" && exit 0
