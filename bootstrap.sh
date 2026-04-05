@@ -66,7 +66,8 @@ install_porkbun_webhook() {
 install_local_path() {
   log "Installing local-path-provisioner..."
   kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
-  log "local-path-provisioner installed"
+  kubectl patch storageclass local-path -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+  log "local-path-provisioner installed (set as default StorageClass)"
 }
 
 # --- external-secrets ---
