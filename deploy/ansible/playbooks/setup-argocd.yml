@@ -468,6 +468,48 @@
           {{ argocd_pods.stdout }}
 
           Next steps:
-            1. Create Application manifests in infra repo
-            2. Access UI at https://{{ argocd_host }}
-            3. Login with admin / <vault-password> or Keycloak SSO
+            1. Access UI at https://{{ argocd_host }}
+            2. Login with admin / <vault-password> or Keycloak SSO
+
+    # ================================================================
+    # Phase 8: Create root application
+    # ================================================================
+
+    - name: Wait for ESO CRDs to be available
+      ansible.builtin.shell: |
+        kubectl get crd externalsecrets.external-secrets.io >/dev/null 2>&1
+      retries: 30
+      delay: 10
+      changed_when: false
+      register: eso_crd
+      until: eso_crd.rc == 0
+
+    - name: Create root application
+      ansible.builtin.shell: |
+        cat <<'EOF' | kubectl apply -f -
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: root
+          namespace: {{ argocd_namespace }}
+          finalizers:
+            - resources-finalizer.argocd.argoproj.io
+        spec:
+          project: default
+          source:
+            repoURL: "{{ _forgejo_scheme }}://{{ forgejo_host }}/schnappy/infra.git"
+            targetRevision: main
+            path: clusters/production/argocd/apps
+            directory:
+              recurse: false
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: {{ argocd_namespace }}
+          syncPolicy:
+            automated:
+              selfHeal: true
+              prune: true
+            syncOptions:
+              - ServerSideApply=false
+        EOF
+      changed_when: true
