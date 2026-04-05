@@ -93,6 +93,7 @@ KUBESCRIPT
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.box = "debian/bookworm64"
+  config.vm.synced_folder ".", "/vagrant", disabled: true
 
   # ── Pi 1 ─────────────────────────────────────────────────────────────
   config.vm.define "pi1" do |pi1|

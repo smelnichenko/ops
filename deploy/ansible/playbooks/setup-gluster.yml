@@ -157,7 +157,7 @@
 
   vars:
     gluster_mount: /var/lib/forgejo/repos
-    node_ip: "{{ ansible_default_ipv4.address }}"
+    node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
 

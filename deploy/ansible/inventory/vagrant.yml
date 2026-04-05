@@ -10,6 +10,11 @@ all:
   vars:
     ansible_user: vagrant
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    # Override default IP (Vagrant NAT) with private network IP for service binding
+    node_ip_override: "{{ ansible_host }}"
+    # Use localhost for DB before Patroni is set up
+    forgejo_db_host: "localhost:5432"
+    keycloak_db_host: "localhost:5432"
 
   hosts:
     target:

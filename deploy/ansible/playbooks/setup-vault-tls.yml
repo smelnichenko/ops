@@ -177,7 +177,7 @@
   gather_facts: true
 
   vars:
-    node_ip: "{{ ansible_default_ipv4.address }}"
+    node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     tls_dir: /etc/vault.d/tls
 
   tasks:

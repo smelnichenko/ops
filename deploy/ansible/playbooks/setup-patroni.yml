@@ -18,7 +18,7 @@
 
   vars:
     patroni_scope: "schnappy-postgres"
-    node_ip: "{{ ansible_default_ipv4.address }}"
+    node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pg_password: "{{ kc_db_pw | default('changeme') }}"
     pg_repl_password: "{{ pg_repl_pw | default('changeme') }}"
 

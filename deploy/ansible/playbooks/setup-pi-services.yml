@@ -20,7 +20,10 @@
   vars:
     forgejo_version: "14.0.3"
     keycloak_version: "26.5.7"
-    pi_ip: "{{ ansible_default_ipv4.address }}"
+    pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    forgejo_db_password: "{{ forgejo_db_pw | default('changeme') }}"
     forgejo_admin_user: forgejo_admin
     forgejo_admin_password: "{{ forgejo_admin_pw | default('changeme') }}"
     forgejo_admin_email: "{{ forgejo_admin_mail | default('admin@pmon.dev') }}"
@@ -75,8 +78,9 @@
       changed_when: true
       no_log: true
 
-    - name: Create Keycloak database
+    - name: Create Forgejo and Keycloak databases
       ansible.builtin.shell: |
+        sudo -u postgres createdb forgejo 2>/dev/null || true
         sudo -u postgres createdb keycloak 2>/dev/null || true
       changed_when: true
 
@@ -114,9 +118,13 @@
     # Phase 3: Forgejo
     # ================================================================
 
+    - name: Determine architecture
+      ansible.builtin.set_fact:
+        forgejo_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
     - name: Download Forgejo
       ansible.builtin.get_url:
-        url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-arm64"
+        url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-{{ forgejo_arch }}"
         dest: /usr/local/bin/forgejo
         mode: '0755'
 
@@ -161,7 +169,7 @@
 
           [database]
           DB_TYPE = postgres
-          HOST = {{ pi1_ip }}:5432,{{ pi2_ip }}:5432
+          HOST = {{ forgejo_db_host | default(pi1_ip + ':5432,' + pi2_ip + ':5432') }}
           NAME = forgejo
           USER = postgres
           PASSWD = {{ forgejo_db_password }}
@@ -229,13 +237,13 @@
 
     - name: Download MinIO
       ansible.builtin.get_url:
-        url: "https://dl.min.io/server/minio/release/linux-arm64/minio"
+        url: "https://dl.min.io/server/minio/release/linux-{{ forgejo_arch }}/minio"
         dest: /usr/local/bin/minio
         mode: '0755'
 
     - name: Download MinIO client
       ansible.builtin.get_url:
-        url: "https://dl.min.io/client/mc/release/linux-arm64/mc"
+        url: "https://dl.min.io/client/mc/release/linux-{{ forgejo_arch }}/mc"
         dest: /usr/local/bin/mc
         mode: '0755'
 
@@ -344,7 +352,7 @@
           User=keycloak
           Group=keycloak
           Environment=KC_DB=postgres
-          Environment=KC_DB_URL=jdbc:postgresql://{{ pi1_ip }}:5432,{{ pi2_ip }}:5432/keycloak?targetServerType=primary
+          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host | default(pi1_ip + ':5432,' + pi2_ip + ':5432') }}/keycloak?targetServerType=primary
           Environment=KC_DB_USERNAME=postgres
           Environment=KC_DB_PASSWORD={{ keycloak_db_password }}
           Environment=KC_HOSTNAME=auth.pmon.dev

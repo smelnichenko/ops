@@ -18,7 +18,7 @@
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
     ten_ip: "{{ hostvars['target']['ansible_host'] | default('192.168.11.2') }}"
-    node_ip: "{{ ansible_default_ipv4.address }}"
+    node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
 
   tasks:
     - name: Determine architecture
@@ -119,7 +119,7 @@
           After=network-online.target
           Wants=network-online.target
           [Service]
-          Type=notify
+          Type=exec
           User=consul
           Group=consul
           ExecStart=/usr/local/bin/consul agent -config-dir=/etc/consul.d/
@@ -129,6 +129,7 @@
           Restart=on-failure
           RestartSec=5
           LimitNOFILE=65536
+          TimeoutStartSec=120
           [Install]
           WantedBy=multi-user.target
       notify: Restart Consul
