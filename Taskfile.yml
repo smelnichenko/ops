@@ -586,7 +586,6 @@ tasks:
     deps: [deploy:install]
     cmds:
       - cmd: vagrant up
-      - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
 
   test:dual-pi-clean:
@@ -596,7 +595,6 @@ tasks:
       - cmd: vagrant destroy -f
         ignore_error: true
       - cmd: vagrant up
-      - defer: vagrant halt
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
 
   # ============== VAGRANT TESTS (ALL) ==============
