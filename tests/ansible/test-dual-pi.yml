@@ -23,6 +23,28 @@
 - name: Deploy Patroni
   ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-patroni.yml"
 
+- name: Restart services after Patroni
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Restart Forgejo and Keycloak to use Patroni PG
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - forgejo
+        - keycloak
+
+    - name: Wait for Forgejo
+      ansible.builtin.uri:
+        url: "http://localhost:3000/api/v1/version"
+        status_code: 200
+      retries: 15
+      delay: 5
+      until: forgejo_check.status == 200
+      register: forgejo_check
+
 - name: Deploy GlusterFS
   ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-gluster.yml"
 

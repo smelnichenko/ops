@@ -220,8 +220,11 @@
         status_code: 200
       retries: 15
       delay: 5
+      failed_when: false
+      register: forgejo_wait
 
     - name: Create Forgejo admin user
+      when: forgejo_wait.status | default(0) == 200
       ansible.builtin.shell: |
         su - forgejo -c "forgejo admin user create \
           --admin --username {{ forgejo_admin_user }} \
