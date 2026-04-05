@@ -15,6 +15,7 @@ all:
     # Use localhost for DB before Patroni is set up
     forgejo_db_host: "localhost:5432"
     keycloak_db_host: "localhost:5432"
+    keepalived_vip: "192.168.56.50"
 
   hosts:
     target:

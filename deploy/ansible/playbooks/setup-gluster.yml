@@ -38,7 +38,7 @@
       loop:
         - { port: "24007", proto: "tcp", name: "GlusterFS daemon" }
         - { port: "24008", proto: "tcp", name: "GlusterFS management" }
-        - { port: "49152:49155", proto: "tcp", name: "GlusterFS bricks" }
+        - { port: "49152:61000", proto: "tcp", name: "GlusterFS bricks" }
 
     - name: Enable and start GlusterFS
       ansible.builtin.systemd:

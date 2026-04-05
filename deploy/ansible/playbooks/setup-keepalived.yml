@@ -17,7 +17,7 @@
   gather_facts: true
 
   vars:
-    vip: 192.168.11.5
+    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
     vip_cidr: 24
     vrrp_interface: "{{ ansible_default_ipv4.interface }}"
     vrrp_router_id: 51
@@ -121,7 +121,7 @@
   gather_facts: false
 
   vars:
-    vip: 192.168.11.5
+    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
 
   tasks:
     - name: Check Keepalived status  # noqa: command-instead-of-module
@@ -142,7 +142,7 @@
   gather_facts: false
 
   vars:
-    vip: 192.168.11.5
+    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
 
   tasks:
     - name: Wait for VRRP election

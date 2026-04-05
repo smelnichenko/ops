@@ -72,6 +72,8 @@
         - { port: "8300", proto: "tcp", name: "Consul RPC" }
         - { port: "8301", proto: "tcp", name: "Consul Serf LAN" }
         - { port: "8301", proto: "udp", name: "Consul Serf LAN UDP" }
+        - { port: "8302", proto: "tcp", name: "Consul Serf WAN" }
+        - { port: "8302", proto: "udp", name: "Consul Serf WAN UDP" }
         - { port: "8500", proto: "tcp", name: "Consul HTTP" }
       failed_when: false  # ten may not have UFW
 
