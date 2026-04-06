@@ -1,10 +1,10 @@
 ---
 # Cilium Migration End-to-End Test
 #
-# Tests: Calico cluster → pg_dump → kubeadm reset → Cilium rebuild →
-#        Helm redeploy → pg_restore → verify data + auth + ArgoCD
+# Tests: Calico cluster → pg_dumpall → kubeadm reset → Cilium rebuild →
+#        Helm redeploy → psql restore → verify all 4 DBs + auth + ArgoCD
 #
-# No Velero in this test — Postgres data backed up via pg_dump to Pi MinIO.
+# No Velero in this test — Postgres data backed up via pg_dumpall to Pi MinIO.
 # Velero backup/restore is tested separately in test-dr.yml.
 #
 # Prerequisites:
@@ -172,15 +172,30 @@
         that: "'authenticated: True' in pre_auth.stdout"
         fail_msg: "FAIL: Keycloak auth failed pre-migration"
 
-    # ── Insert test data ──
-    - name: Insert test data
+    # ── Create additional databases ──
+    - name: Create all app databases
       ansible.builtin.shell: |
         kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
-          psql -U postgres -d monitor -c "
-            CREATE TABLE IF NOT EXISTS migration_test (id serial PRIMARY KEY, data text);
-            INSERT INTO migration_test (data) VALUES ('cilium-test-data');
-            SELECT count(*) as rows FROM migration_test;
-          "
+          psql -U postgres -c "CREATE DATABASE monitor_admin" 2>/dev/null || true
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+          psql -U postgres -c "CREATE DATABASE monitor_chat" 2>/dev/null || true
+        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+          psql -U postgres -c "CREATE DATABASE monitor_chess" 2>/dev/null || true
+      changed_when: true
+
+    # ── Insert test data into all databases ──
+    - name: Insert test data into all databases
+      ansible.builtin.shell: |
+        for db in monitor monitor_admin monitor_chat monitor_chess; do
+          kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+            psql -U postgres -d $db -c "
+              CREATE TABLE IF NOT EXISTS migration_test (id serial PRIMARY KEY, data text, db_name text);
+              INSERT INTO migration_test (data, db_name) VALUES ('cilium-test-$db', '$db');
+            "
+          ROWS=$(kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+            psql -U postgres -d $db -t -c "SELECT count(*) FROM migration_test;")
+          echo "$db: $(echo $ROWS | tr -d ' ') rows"
+        done
       register: pre_data
       changed_when: true
 
@@ -449,17 +464,27 @@
     # Phase 5: Verify everything
     # ================================================================
 
-    - name: "Phase 5: Verify Postgres data survived"
+    - name: "Phase 5: Verify Postgres data survived in all databases"
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
-          psql -U postgres -d monitor -t -c "SELECT count(*) FROM migration_test;"
+        ERRORS=0
+        for db in monitor monitor_admin monitor_chat monitor_chess; do
+          ROWS=$(kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+            psql -U postgres -d $db -t -c "SELECT count(*) FROM migration_test;" | tr -d ' ')
+          DATA=$(kubectl exec -n {{ ns }} deploy/schnappy-postgres -c postgres -- \
+            psql -U postgres -d $db -t -c "SELECT data FROM migration_test WHERE db_name='$db';" | tr -d ' ')
+          echo "$db: $ROWS rows, data=$DATA"
+          [ "$ROWS" -ge 1 ] || { echo "FAIL: $db has $ROWS rows"; ERRORS=$((ERRORS+1)); }
+          [ "$DATA" = "cilium-test-$db" ] || { echo "FAIL: $db data mismatch (got '$DATA')"; ERRORS=$((ERRORS+1)); }
+        done
+        [ "$ERRORS" -eq 0 ] || { echo "FAIL: $ERRORS verification errors"; exit 1; }
+        echo "all databases verified"
       register: post_data
       changed_when: false
 
     - name: Assert data survived
       ansible.builtin.assert:
-        that: "post_data.stdout | trim | int >= 1"
-        fail_msg: "FAIL: migration_test has {{ post_data.stdout | trim }} rows (expected >= 1)"
+        that: "'all databases verified' in post_data.stdout"
+        fail_msg: "FAIL: database verification failed: {{ post_data.stdout }}"
 
     - name: Verify Cilium running
       ansible.builtin.shell: |
@@ -503,7 +528,7 @@
           ============================================
           Pre-migration pods:  {{ pre_pod_count.stdout }}
           Post-migration pods: {{ post_pod_count.stdout }}
-          Postgres rows:       {{ post_data.stdout | trim }}
+          Postgres:            all 4 databases verified
           Keycloak auth:       {{ post_auth.stdout | trim }}
           ArgoCD sync:         {{ argocd_sync.stdout | trim }}
           CNI: Cilium {{ cilium_version }}

@@ -44,31 +44,36 @@
         HOME=/tmp mc mb pi/{{ backup_bucket }} --ignore-existing
       changed_when: true
 
-    - name: Dump monitor database
+    - name: Dump all monitor databases (pg_dumpall)
       ansible.builtin.shell: |
         PG_POD=$(kubectl get pod -n schnappy -l app.kubernetes.io/component=postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-        if [ -n "$PG_POD" ]; then
-          kubectl exec -n schnappy $PG_POD -c postgres -- pg_dump -U monitor -d monitor -Fc > /tmp/monitor.dump
-          kubectl exec -n schnappy $PG_POD -c postgres -- pg_dump -U monitor -d monitor_admin -Fc > /tmp/monitor_admin.dump 2>/dev/null || true
-          HOME=/tmp mc cp /tmp/monitor.dump pi/{{ backup_bucket }}/monitor.dump
-          HOME=/tmp mc cp /tmp/monitor_admin.dump pi/{{ backup_bucket }}/monitor_admin.dump 2>/dev/null || true
-          echo "monitor databases backed up"
-        else
-          echo "no postgres pod, skipping"
-        fi
+        if [ -z "$PG_POD" ]; then echo "FAIL: no postgres pod"; exit 1; fi
+        kubectl exec -n schnappy $PG_POD -c postgres -- pg_dumpall -U monitor > /tmp/monitor-all.sql
+        SIZE=$(wc -c < /tmp/monitor-all.sql)
+        echo "pg_dumpall: $SIZE bytes"
+        [ "$SIZE" -gt 1000 ] || { echo "FAIL: dump too small ($SIZE bytes)"; exit 1; }
+        HOME=/tmp mc cp /tmp/monitor-all.sql pi/{{ backup_bucket }}/monitor-all.sql
       changed_when: true
 
     - name: Dump sonarqube database
       ansible.builtin.shell: |
         SQ_POD=$(kubectl get pod -n schnappy -l app.kubernetes.io/component=sonarqube-postgres -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-        if [ -n "$SQ_POD" ]; then
-          kubectl exec -n schnappy $SQ_POD -c postgres -- pg_dump -U sonarqube -d sonarqube -Fc > /tmp/sonarqube.dump
-          HOME=/tmp mc cp /tmp/sonarqube.dump pi/{{ backup_bucket }}/sonarqube.dump
-          echo "sonarqube backed up"
-        else
-          echo "no sonarqube pod, skipping"
-        fi
+        if [ -z "$SQ_POD" ]; then echo "FAIL: no sonarqube-postgres pod"; exit 1; fi
+        kubectl exec -n schnappy $SQ_POD -c postgres -- pg_dumpall -U sonarqube > /tmp/sonarqube-all.sql
+        SIZE=$(wc -c < /tmp/sonarqube-all.sql)
+        echo "sonarqube pg_dumpall: $SIZE bytes"
+        [ "$SIZE" -gt 1000 ] || { echo "FAIL: sonarqube dump too small"; exit 1; }
+        HOME=/tmp mc cp /tmp/sonarqube-all.sql pi/{{ backup_bucket }}/sonarqube-all.sql
       changed_when: true
+
+    - name: Verify backups on Pi MinIO
+      ansible.builtin.shell: |
+        for f in monitor-all.sql sonarqube-all.sql; do
+          HOME=/tmp mc stat pi/{{ backup_bucket }}/$f > /dev/null || { echo "FAIL: $f missing from MinIO"; exit 1; }
+        done
+        HOME=/tmp mc ls pi/{{ backup_bucket }}/
+        echo "all backups verified"
+      changed_when: false
 
 - name: Reset and rebuild cluster with Cilium
   hosts: target
@@ -204,18 +209,16 @@
       retries: 3
       delay: 30
 
-    - name: Download and restore monitor database
+    - name: Download and restore all monitor databases
       ansible.builtin.shell: |
         HOME=/tmp mc alias set pi http://{{ minio_vip }}:9000 "{{ minio_user }}" "{{ minio_password }}" 2>/dev/null
-        HOME=/tmp mc cp pi/{{ backup_bucket }}/monitor.dump /tmp/monitor.dump
-        HOME=/tmp mc cp pi/{{ backup_bucket }}/monitor_admin.dump /tmp/monitor_admin.dump 2>/dev/null || true
+        HOME=/tmp mc cp pi/{{ backup_bucket }}/monitor-all.sql /tmp/monitor-all.sql
+        SIZE=$(wc -c < /tmp/monitor-all.sql)
+        echo "downloaded monitor-all.sql: $SIZE bytes"
+        [ "$SIZE" -gt 1000 ] || { echo "FAIL: dump too small ($SIZE bytes)"; exit 1; }
         PG_POD=$(kubectl get pod -n schnappy -l app.kubernetes.io/component=postgres -o jsonpath='{.items[0].metadata.name}')
-        kubectl cp /tmp/monitor.dump schnappy/$PG_POD:/tmp/monitor.dump -c postgres
-        kubectl exec -n schnappy $PG_POD -c postgres -- pg_restore -U monitor -d monitor --clean --if-exists /tmp/monitor.dump 2>&1 | tail -3
-        kubectl exec -n schnappy $PG_POD -c postgres -- psql -U monitor -c 'CREATE DATABASE monitor_admin' 2>/dev/null || true
-        kubectl cp /tmp/monitor_admin.dump schnappy/$PG_POD:/tmp/monitor_admin.dump -c postgres
-        kubectl exec -n schnappy $PG_POD -c postgres -- pg_restore -U monitor -d monitor_admin --clean --if-exists /tmp/monitor_admin.dump 2>&1 | tail -3
-        echo "monitor databases restored"
+        kubectl exec -i -n schnappy $PG_POD -c postgres -- psql -U monitor < /tmp/monitor-all.sql
+        echo "all monitor databases restored"
       changed_when: true
 
     - name: Wait for SonarQube Postgres
@@ -227,18 +230,35 @@
 
     - name: Download and restore sonarqube database
       ansible.builtin.shell: |
-        HOME=/tmp mc cp pi/{{ backup_bucket }}/sonarqube.dump /tmp/sonarqube.dump
+        HOME=/tmp mc alias set pi http://{{ minio_vip }}:9000 "{{ minio_user }}" "{{ minio_password }}" 2>/dev/null
+        HOME=/tmp mc cp pi/{{ backup_bucket }}/sonarqube-all.sql /tmp/sonarqube-all.sql
+        SIZE=$(wc -c < /tmp/sonarqube-all.sql)
+        echo "downloaded sonarqube-all.sql: $SIZE bytes"
+        [ "$SIZE" -gt 1000 ] || { echo "FAIL: dump too small ($SIZE bytes)"; exit 1; }
         SQ_POD=$(kubectl get pod -n schnappy -l app.kubernetes.io/component=sonarqube-postgres -o jsonpath='{.items[0].metadata.name}')
-        kubectl cp /tmp/sonarqube.dump schnappy/$SQ_POD:/tmp/sonarqube.dump -c postgres
-        kubectl exec -n schnappy $SQ_POD -c postgres -- pg_restore -U sonarqube -d sonarqube --clean --if-exists /tmp/sonarqube.dump 2>&1 | tail -3
+        kubectl exec -i -n schnappy $SQ_POD -c postgres -- psql -U sonarqube < /tmp/sonarqube-all.sql
         echo "sonarqube restored"
       changed_when: true
 
     - name: Restart app services to pick up restored data
       ansible.builtin.shell: |
-        kubectl rollout restart deploy/schnappy-monitor deploy/schnappy-admin deploy/schnappy-chat -n schnappy 2>/dev/null || true
+        kubectl rollout restart deploy/schnappy-monitor deploy/schnappy-admin deploy/schnappy-chat deploy/schnappy-chess -n schnappy 2>/dev/null || true
         kubectl rollout restart deploy/schnappy-sonarqube -n schnappy 2>/dev/null || true
       changed_when: true
+
+    - name: Verify restored data
+      ansible.builtin.shell: |
+        PG_POD=$(kubectl get pod -n schnappy -l app.kubernetes.io/component=postgres -o jsonpath='{.items[0].metadata.name}')
+        ERRORS=0
+        for db in monitor monitor_admin monitor_chat monitor_chess; do
+          TABLES=$(kubectl exec -n schnappy $PG_POD -c postgres -- psql -U monitor -d $db -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';")
+          TABLES=$(echo "$TABLES" | tr -d ' ')
+          echo "$db: $TABLES tables"
+          [ "$TABLES" -gt 0 ] || { echo "FAIL: $db has no tables"; ERRORS=$((ERRORS+1)); }
+        done
+        [ "$ERRORS" -eq 0 ] || { echo "FAIL: $ERRORS databases have no tables"; exit 1; }
+        echo "all databases verified"
+      changed_when: false
 
     - name: Print results
       ansible.builtin.debug:
