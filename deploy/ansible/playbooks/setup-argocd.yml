@@ -486,6 +486,7 @@
 
     - name: Create root application
       ansible.builtin.shell: |
+        set -o pipefail
         cat <<'EOF' | kubectl apply -f -
         apiVersion: argoproj.io/v1alpha1
         kind: Application

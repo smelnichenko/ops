@@ -204,7 +204,10 @@
 
     - name: Create replicator role on primary
       ansible.builtin.shell: |
-        sudo -u postgres psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='replicator') THEN CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD 'changeme'; END IF; END \$\$;"
+        sudo -u postgres psql -c "DO \$\$ BEGIN \
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='replicator') \
+          THEN CREATE ROLE replicator WITH REPLICATION LOGIN \
+          PASSWORD 'changeme'; END IF; END \$\$;"
       changed_when: true
       when: inventory_hostname == 'pi1'
 

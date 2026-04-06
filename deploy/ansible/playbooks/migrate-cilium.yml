@@ -89,6 +89,7 @@
   tasks:
     - name: Reset kubeadm
       ansible.builtin.shell: |
+        set -o pipefail
         kubeadm reset -f 2>&1 | tail -3
         rm -rf /etc/cni/net.d /var/lib/etcd
         nft delete table ip calico 2>/dev/null || true
@@ -99,6 +100,7 @@
 
     - name: Initialize kubeadm without kube-proxy
       ansible.builtin.shell: |
+        set -o pipefail
         kubeadm init \
           --pod-network-cidr={{ pod_cidr }} \
           --service-cidr={{ service_cidr }} \
@@ -121,6 +123,7 @@
 
     - name: Install Cilium
       ansible.builtin.shell: |
+        set -o pipefail
         cilium install \
           --set kubeProxyReplacement=true \
           --set k8sServiceHost={{ node_ip }} \
@@ -160,6 +163,7 @@
   tasks:
     - name: Run bootstrap
       ansible.builtin.shell: |
+        set -o pipefail
         cd {{ playbook_dir }}/../../../
         export KUBECONFIG=~/.kube/config
         ./bootstrap.sh all 2>&1 | tail -10
@@ -169,6 +173,7 @@
 
     - name: Deploy ArgoCD
       ansible.builtin.shell: |
+        set -o pipefail
         cd {{ playbook_dir }}/../../
         source {{ playbook_dir }}/../../../.env
         venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml \
@@ -177,6 +182,7 @@
 
     - name: Wait for apps to sync
       ansible.builtin.shell: |
+        set -o pipefail
         export KUBECONFIG=~/.kube/config
         for i in $(seq 1 60); do
           SYNCED=$(kubectl get applications -n argocd --no-headers 2>/dev/null | grep -c 'Synced' || echo 0)
@@ -248,10 +254,16 @@
 
     - name: Verify restored data
       ansible.builtin.shell: |
-        PG_POD=$(kubectl get pod -n schnappy -l app.kubernetes.io/component=postgres -o jsonpath='{.items[0].metadata.name}')
+        set -o pipefail
+        PG_POD=$(kubectl get pod -n schnappy \
+          -l app.kubernetes.io/component=postgres \
+          -o jsonpath='{.items[0].metadata.name}')
         ERRORS=0
         for db in monitor monitor_admin monitor_chat monitor_chess; do
-          TABLES=$(kubectl exec -n schnappy $PG_POD -c postgres -- psql -U monitor -d $db -t -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';")
+          TABLES=$(kubectl exec -n schnappy $PG_POD -c postgres -- \
+            psql -U monitor -d $db -t -c \
+            "SELECT count(*) FROM information_schema.tables \
+            WHERE table_schema='public' AND table_type='BASE TABLE';")
           TABLES=$(echo "$TABLES" | tr -d ' ')
           echo "$db: $TABLES tables"
           [ "$TABLES" -gt 0 ] || { echo "FAIL: $db has no tables"; ERRORS=$((ERRORS+1)); }
