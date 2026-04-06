@@ -209,7 +209,7 @@ Velero (namespace: velero)       ← k8s backup orchestrator → MinIO
   └─ full-weekly (Sun 3 AM)      ← all namespaces, 30-day retention
 ```
 
-**Stack:** Java 25, Spring Boot 4.0, Istio ambient mesh 1.25, React 18, TypeScript, Vite 5, PostgreSQL 17, Kafka 4.2 (KRaft), ScyllaDB 6.2, Recharts, Bucket4j, Rome (RSS), Anthropic SDK, Elasticsearch 8, Fluent-bit, Kibana, kubeadm 1.34, Calico CNI, Helm, Ansible, Forgejo, Woodpecker CI, Velero, SpringDoc OpenAPI
+**Stack:** Java 25, Spring Boot 4.0, Istio sidecar mesh 1.25, React 18, TypeScript, Vite 5, PostgreSQL 17, Kafka 4.2 (KRaft), ScyllaDB 6.2, Recharts, Bucket4j, Rome (RSS), Anthropic SDK, Elasticsearch 8, Fluent-bit, Kibana, kubeadm 1.34, Cilium CNI (kube-proxy replacement), Helm, Ansible, Forgejo, Woodpecker CI, Velero, SpringDoc OpenAPI
 
 ## Authentication & Authorization
 
@@ -235,18 +235,20 @@ Velero (namespace: velero)       ← k8s backup orchestrator → MinIO
 - **Declarative config:** Realm JSON in ConfigMap, init container templates secrets, `--import-realm` on first deploy
 - **Admin console:** `auth.pmon.dev/admin/` (permanent admin user)
 
-### Istio Ambient Mesh
+### Istio Sidecar Mesh
 
-Istio ambient mode v1.25 provides L4 mTLS (ztunnel) and L7 routing (gateway proxy). Only `schnappy` namespace is enrolled in the mesh.
+Istio classic sidecar mode v1.25 provides per-pod mTLS and L7 routing. Only `schnappy` namespace is enrolled in the mesh (`istio.io/rev=default` label).
 
-- **Components:** istiod (control plane), ztunnel (DaemonSet, L4 mTLS), istio-cni (traffic redirection), gateway proxy (L7 routing + TLS termination)
-- **Gateway:** Istio Gateway in schnappy namespace with NodePort service; HAProxy on host forwards 80/443 to gateway NodePorts
-- **Routing:** HTTPRoutes (Gateway API) for all 9 hosts (pmon.dev, auth, git, ci, cd, grafana, logs, reports, sonar)
-- **TLS:** All certs via cert-manager DNS-01 (Porkbun), terminated at Istio gateway
-- **mTLS:** Automatic pod-to-pod encryption via ztunnel for enrolled namespace (PERMISSIVE mode for cross-namespace traffic)
-- **Cross-namespace routing:** ServiceEntries + DestinationRules (tls: DISABLE) + ReferenceGrants for forgejo, argocd, woodpecker
-- **Helm chart:** `schnappy-mesh` — Gateway, HTTPRoutes, ServiceAccounts, PeerAuthentication, DestinationRules, ServiceEntries, Certificates, ReferenceGrants
-- **Legacy:** Envoy Gateway removed, `api-gateway` repo archived
+- **Components:** istiod (control plane), istio-cni (iptables redirection), per-pod sidecar proxies (classic mode, `ENABLE_NATIVE_SIDECARS=false`)
+- **CNI:** Cilium with `socketLB.hostNamespaceOnly=true` for Istio compatibility (prevents eBPF DNAT in pod namespaces)
+- **Gateway:** Istio Gateway API in schnappy namespace with `externalIPs: [192.168.11.2]`
+- **Routing:** HTTPRoutes (Gateway API) for pmon.dev, ci, cd, grafana, logs, reports, sonar (auth + git on Pi Caddy)
+- **TLS:** Wildcard cert `*.pmon.dev` via cert-manager DNS-01 (Porkbun webhook), terminated at Istio gateway
+- **mTLS:** STRICT PeerAuthentication namespace-wide; per-service AuthorizationPolicies with SPIFFE identity; port-level PERMISSIVE for MinIO (9000) and Mimir (9009)
+- **Cross-namespace routing:** ReferenceGrants for argocd and woodpecker namespaces
+- **Helm chart:** `schnappy-mesh` — Gateway, HTTPRoutes, ServiceAccounts, PeerAuthentication, AuthorizationPolicies, Certificates, ReferenceGrants
+- **Jobs:** All Job templates include `curl -X POST localhost:15020/quitquitquit` to terminate sidecar after completion
+- **Init containers:** Removed `wait-for-postgres` init containers (incompatible with STRICT mTLS; Spring Boot retries on its own)
 
 **Public paths** (no JWT required): `/api/auth/approval-mode`, `/api/webhooks/**`, `/api/health`, `/api/permissions/required`, `/api/actuator/**`, `/api/swagger-ui/**`
 
@@ -569,11 +571,11 @@ task deploy:undeploy  # Remove (keeps data)
 
 **Networking:**
 - Single interface: `enp1s0f0` (192.168.11.0/24) on unmanaged switch
-- kubeadm cluster with Calico CNI (nftables native), `--pod-network-cidr=10.42.0.0/16`, `--service-cidr=10.43.0.0/16`
-- HAProxy on host: TCP passthrough forwarding 80/443 (IPv4+IPv6) to Istio gateway NodePorts
+- kubeadm cluster with Cilium CNI (kube-proxy replacement, eBPF), `--pod-network-cidr=10.42.0.0/16`, `--service-cidr=10.43.0.0/16`
+- Istio gateway service with `externalIPs: [192.168.11.2]` — directly reachable on node IP ports 80/443
 - Router port-forwards 80/443 from public IP to 192.168.11.2
-- **DNS:** All `*.pmon.dev` resolved via CoreDNS `hosts` plugin to Istio gateway ClusterIP (internal). `pmon.dev` also has public A record. `nexus.pmon.dev` resolves to 192.168.11.4 (Pi) via Unbound (internal only, no TLS)
-- **TLS:** All 9 certs via cert-manager DNS-01 (Porkbun webhook), single `letsencrypt-dns` ClusterIssuer
+- **DNS:** `*.pmon.dev` resolved via upstream DNS (public A records → 192.168.11.2). CoreDNS `hosts` plugin only for internal-only entries (vault-pi). No `*.pmon.dev` entries in CoreDNS (breaks SOA resolution for cert-manager DNS-01)
+- **TLS:** Wildcard cert `*.pmon.dev` via cert-manager DNS-01 (Porkbun webhook), single `letsencrypt-dns` ClusterIssuer
 - **No AAAA records** — server does not serve IPv6 for the app
 
 ## Performance Tuning (10-core / 64GB target)

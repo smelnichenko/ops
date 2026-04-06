@@ -241,35 +241,6 @@
         msg: "Woodpecker pods already running ({{ woodpecker_existing_pods.stdout | trim }} server pods). Skipping Helm install — ArgoCD manages deployment."
       when: (woodpecker_existing_pods.stdout | trim | int) > 0 and not (woodpecker_helm_install | default(false))
 
-    - name: Get Istio gateway ClusterIP for internal DNS
-      ansible.builtin.shell: |
-        kubectl get svc schnappy-gateway-istio -n schnappy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "127.0.0.1"
-      register: gateway_clusterip_result
-      changed_when: false
-
-    - name: Add internal DNS for ingress hosts (avoids hairpin routing via node IP)
-      ansible.builtin.shell: |
-        set -o pipefail
-        GW_IP="{{ gateway_clusterip_result.stdout }}"
-        ENTRY="$GW_IP {{ forgejo_host }} {{ woodpecker_host }}"
-        COREFILE=$(kubectl get configmap coredns -n kube-system -o jsonpath='{.data.Corefile}')
-        if echo "$COREFILE" | grep -q "{{ forgejo_host }}"; then
-          echo "already_present"
-          exit 0
-        fi
-        if echo "$COREFILE" | grep -q "hosts {"; then
-          NEW=$(echo "$COREFILE" | sed "s|hosts {|hosts {\n        $ENTRY|")
-        else
-          NEW=$(echo "$COREFILE" | sed \
-            "s|kubernetes cluster.local|hosts {\n        $ENTRY\n        fallthrough\n    }\n    kubernetes cluster.local|")
-        fi
-        kubectl patch configmap coredns -n kube-system --type=merge \
-          -p "{\"data\":{\"Corefile\":$(echo "$NEW" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')}}"
-        echo "added"
-      args:
-        executable: /bin/bash
-      changed_when: false
-
     - name: Deploy Woodpecker
       ansible.builtin.shell: |
         helm upgrade --install woodpecker \
