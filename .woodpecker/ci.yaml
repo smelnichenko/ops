@@ -8,10 +8,6 @@ clone:
   - name: git
     image: woodpeckerci/plugin-git
     settings:
-      netrc_machine: git.pmon.dev
-      netrc_username: forgejo_admin
-      netrc_password:
-        from_secret: clone_token
       partial: false
       depth: 100
 
