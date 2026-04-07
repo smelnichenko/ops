@@ -386,13 +386,15 @@
                 - protocol: TCP
                   port: 6379
           egress:
-            # To Pi Forgejo via VIP (Git clone)
+            # To Pi (Forgejo on 3000, Keycloak/OIDC on 443)
             - to:
                 - ipBlock:
                     cidr: 192.168.11.5/32
               ports:
                 - protocol: TCP
                   port: 3000
+                - protocol: TCP
+                  port: 443
             # To Istio gateway (OIDC discovery via auth.pmon.dev)
             - to:
                 - namespaceSelector:
