@@ -1,5 +1,7 @@
 # Plan 051: Performance Optimization — Push Beyond 2,400 req/s
 
+**Status: COMPLETED (2026-04-07)**
+
 ## Context
 
 Plan 050 established that the system sustains 2,400 req/s at 5ms latency, with CPU saturation (all 20 cores at 87-92%) as the ceiling. The bottleneck is not the app services themselves (~4.5 cores) but the overhead from sidecars (~4.5 cores under load) and observability infrastructure (~5 cores: ES 3.3, Fluent Bit, Tempo, Mimir). By freeing wasted CPU we can push throughput higher without hardware changes.
@@ -27,9 +29,9 @@ These pods have sidecars but don't need them — they're not app services, they 
 
 At 2,400 req/s with 10% sampling: 240 traces/sec flowing through Tempo. Reducing to 1% = 24 traces/sec. Plenty for debugging, 10x less CPU/IO.
 
-### 3. Cap ES CPU limit (~1.5 cores freed under load)
+### 3. Cap ES CPU limit (~0.5 cores freed under load)
 
-ES uses 3.3 cores under load (indexing access logs). It has a 4-core limit. Cap it to prevent it stealing CPU from app services during stress.
+ES uses 3.3 cores under load (indexing access logs). Had a 4-core limit. Initially capped to 2 cores but Fluent Bit couldn't flush fast enough — raised to 3 cores as a compromise.
 
 ### 4. Use virtual threads for HTTP clients in monitor (minor, reduces thread contention)
 
@@ -46,22 +48,24 @@ The app config in `application.yml` has `maximum-pool-size: 25` but Helm configm
 - **Don't change CPU requests**: Current low requests allow flexible scheduling on single-node
 - **Don't remove Tomcat thread config**: Virtual threads handle this already
 
-## Estimated Impact
+## Additional fixes during implementation
 
-| Optimization | CPU Freed | Confidence |
-|-------------|-----------|------------|
-| Remove 8 unnecessary sidecars | ~1.5 cores | High |
-| Reduce tracing 10% → 1% | ~0.5 cores | Medium |
-| Cap ES CPU 4000m → 2000m | ~1.5 cores | High |
-| Virtual thread HTTP clients | ~0.2 cores | Low |
-| **Total** | **~3.7 cores** | |
+- **MinIO AuthorizationPolicy**: Tempo and Mimir lost mTLS identity after sidecar removal. Added `notPrincipals` rule for plaintext access on port 9000.
+- **Fluent Bit buffer**: Increased `Buffer_Size` from 512KB to 1024KB to handle log volume during stress.
+- **ES CPU limit**: Raised from 2000m back to 3000m — 2 cores caused Fluent Bit flush failures.
 
-With 3.7 cores freed, estimated new ceiling: **~3,200-3,500 req/s** (from 2,400).
+## Results
 
-## Verification
+| Phase | Before (Plan 050) | After (Plan 051) | Change |
+|-------|-------------------|-------------------|--------|
+| rate100 | 599 req/s, 34ms | 604 req/s, 57ms | same |
+| rate200 | 1,201 req/s, 3ms | 1,192 req/s, 2ms | same |
+| rate400 | 2,406 req/s, 5ms | 2,395 req/s, 6ms | same |
+| rate600 | **2,249 req/s, 234ms** | **3,084 req/s, 148ms** | **+37%** |
 
-1. Apply all changes, wait for ArgoCD sync
-2. Verify removed sidecars
-3. Run Hyperfoil stress test (same constantRate config: 100/200/400/600)
-4. Compare per-phase req/s and latency against Plan 050 baseline
-5. Check `kubectl top pods --containers` during rate600 — total sidecar CPU should drop from ~4.5 to ~3 cores
+Lower phases unchanged (not CPU-bound). At rate600 where the node was saturated:
+- **Throughput: +835 req/s (+37%)**
+- **Latency: -86ms (-37%)**
+- CPU warnings dropped from 87-92% to 80-87%
+
+System now sustains **~3,100 req/s** before degradation. CPU saturation on 20 cores remains the ceiling.
