@@ -185,6 +185,20 @@
             server.insecure: true  # TLS terminated at Traefik
           cm:
             url: "https://{{ argocd_host }}"
+            resource.customizations.ignoreDifferences.apps_StatefulSet: |
+              jqPathExpressions:
+                - .spec.persistentVolumeClaimRetentionPolicy
+                - .spec.volumeClaimTemplates[]?.apiVersion
+                - .spec.volumeClaimTemplates[]?.kind
+                - .spec.volumeClaimTemplates[]?.spec.volumeMode
+                - .spec.volumeClaimTemplates[]?.status
+            resource.customizations.ignoreDifferences.external-secrets.io_ExternalSecret: |
+              jqPathExpressions:
+                - .spec.data[]?.remoteRef.conversionStrategy
+                - .spec.data[]?.remoteRef.decodingStrategy
+                - .spec.data[]?.remoteRef.metadataPolicy
+                - .spec.target.creationPolicy
+                - .spec.target.deletionPolicy
             oidc.config: |
               name: Keycloak
               issuer: https://{{ keycloak_host }}/realms/schnappy
