@@ -403,28 +403,6 @@
                   port: 443
                 - protocol: TCP
                   port: 8443
-            # To Kubernetes API (for applying manifests)
-            - to:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: kube-system
-              ports:
-                - protocol: TCP
-                  port: 6443
-            # To Kubernetes API (node IP, belt-and-suspenders)
-            - to:
-                - ipBlock:
-                    cidr: {{ target_host }}/32
-              ports:
-                - protocol: TCP
-                  port: 6443
-            # To Kubernetes API (ClusterIP)
-            - to:
-                - ipBlock:
-                    cidr: 10.43.0.1/32
-              ports:
-                - protocol: TCP
-                  port: 443
             # External HTTPS (Helm repos, OCI registries)
             - to:
                 - ipBlock:
@@ -454,6 +432,20 @@
                   port: 53
                 - protocol: TCP
                   port: 53
+        ---
+        # Cilium-specific: allow egress to kube-apiserver (host-network endpoint)
+        # Standard K8s NetworkPolicy ipBlock/namespaceSelector cannot match
+        # host-network processes with Cilium CNI
+        apiVersion: cilium.io/v2
+        kind: CiliumNetworkPolicy
+        metadata:
+          name: argocd-kube-api
+          namespace: {{ argocd_namespace }}
+        spec:
+          endpointSelector: {}
+          egress:
+            - toEntities:
+                - kube-apiserver
         EOF
       args:
         executable: /bin/bash
