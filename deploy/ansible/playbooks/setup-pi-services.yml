@@ -309,6 +309,7 @@
         HOME=/tmp mc mb local/velero --ignore-existing
         HOME=/tmp mc mb local/pg-dump --ignore-existing
         HOME=/tmp mc mb local/postgres-backups --ignore-existing
+        HOME=/tmp mc mb local/scylla-backups --ignore-existing
       changed_when: true
       no_log: true
 
