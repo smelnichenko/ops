@@ -308,6 +308,7 @@
         HOME=/tmp mc alias set local http://localhost:9000 {{ minio_root_user }} {{ minio_root_password }}
         HOME=/tmp mc mb local/velero --ignore-existing
         HOME=/tmp mc mb local/pg-dump --ignore-existing
+        HOME=/tmp mc mb local/postgres-backups --ignore-existing
       changed_when: true
       no_log: true
 
