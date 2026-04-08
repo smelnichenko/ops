@@ -186,11 +186,13 @@
             jwt_secret="test-only-not-used-32-chars-long!!"
       no_log: true
 
-    - name: Rsync chart to Vagrant VM
-      ansible.builtin.command: vagrant rsync k3s
+    - name: Sync platform charts to VM
+      ansible.builtin.synchronize:
+        src: "{{ lookup('env', 'HOME') }}/src/platform/"
+        dest: /vagrant-platform/
+        delete: true
       delegate_to: localhost
       become: false
-      changed_when: true
 
     - name: Deploy chart with Keycloak enabled
       ansible.builtin.shell: |

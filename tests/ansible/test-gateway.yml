@@ -226,11 +226,13 @@
             forgejo_client_secret="not-used"
       no_log: true
 
-    - name: Rsync chart to Vagrant VM
-      ansible.builtin.command: vagrant rsync k3s
+    - name: Sync platform charts to VM
+      ansible.builtin.synchronize:
+        src: "{{ lookup('env', 'HOME') }}/src/platform/"
+        dest: /vagrant-platform/
+        delete: true
       delegate_to: localhost
       become: false
-      changed_when: true
 
     - name: Deploy chart with gateway enabled
       ansible.builtin.shell: |
