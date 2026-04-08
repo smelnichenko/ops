@@ -124,7 +124,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     k.vm.hostname = "ten"
     k.vm.network "private_network", ip: "192.168.56.10"
     k.vm.provider "libvirt" do |v|
-      v.memory = 18432
+      v.memory = 20480
       v.cpus = 8
     end
     k.vm.provision "shell", inline: BASE_SCRIPT

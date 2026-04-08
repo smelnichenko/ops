@@ -24,12 +24,21 @@ Before any changes, create a timestamped backup:
 cp /home/sm/src/ops/.env /home/sm/src/ops/.env.backup-$(date +%Y%m%d)
 ```
 
+### Vagrant stack matches production
+
+`setup-kubeadm.yml` deploys the full production stack:
+- Cilium 1.19.1 (kubeProxyReplacement, VXLAN tunnel)
+- Istio 1.25.2 (base + istiod + CNI, sidecar injection)
+- cert-manager, ESO, Gateway API CRDs
+- CNPG 0.28.0, Strimzi 0.51.0, ScyllaDB Operator 1.20.2 + Manager
+- local-path-provisioner, metrics-server, HAProxy
+
 ### Vagrant-first development
 
-All Phase 1 parameterization changes are developed and validated in Vagrant **before** touching production:
+All changes are developed and validated in Vagrant **before** touching production:
 1. Make chart changes locally (parameterize names, vault prefix)
 2. Run `helm template` diff to verify identical output for prod values
-3. Run `test:multi-env` in Vagrant to validate both envs work
+3. Run `test:multi-env` in Vagrant to validate both envs work on the full stack
 4. Only after Vagrant passes: push to platform.git, let ArgoCD sync prod
 
 ### Production backups (before Phase 2 deployment)
