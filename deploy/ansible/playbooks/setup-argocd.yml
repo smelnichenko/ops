@@ -389,7 +389,7 @@
             # To Pi (Forgejo on 3000, Keycloak/OIDC on 443)
             - to:
                 - ipBlock:
-                    cidr: 192.168.11.5/32
+                    cidr: {{ hostvars['pi1']['ansible_host'] | default('192.168.11.5') }}/32
               ports:
                 - protocol: TCP
                   port: 3000
@@ -506,7 +506,7 @@
         spec:
           project: default
           source:
-            repoURL: "{{ _forgejo_scheme }}://{{ forgejo_host }}/schnappy/infra.git"
+            repoURL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/schnappy/infra.git"
             targetRevision: main
             path: clusters/production/argocd/apps
             directory:
