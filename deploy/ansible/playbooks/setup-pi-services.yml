@@ -23,12 +23,13 @@
     pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
-    forgejo_db_password: "{{ forgejo_db_pw | default('changeme') }}"
+    pi_postgres_password: "{{ pi_pg_pw | default(kc_db_pw) | default('changeme') }}"
+    forgejo_db_password: "{{ pi_postgres_password }}"
     forgejo_admin_user: forgejo_admin
     forgejo_admin_password: "{{ forgejo_admin_pw | default('changeme') }}"
     forgejo_admin_email: "{{ forgejo_admin_mail | default('admin@pmon.dev') }}"
     keycloak_admin_password: "{{ kc_admin_pw | default('changeme') }}"
-    keycloak_db_password: "{{ kc_db_pw | default('changeme') }}"
+    keycloak_db_password: "{{ pi_postgres_password }}"
     minio_root_user: "{{ minio_user | default('velero-admin') }}"
     minio_root_password: "{{ minio_password | default('changeme') }}"
 
@@ -72,9 +73,9 @@
     # Phase 2: Postgres
     # ================================================================
 
-    - name: Set Postgres password
+    - name: Set Postgres password (shared by Forgejo + Keycloak)
       ansible.builtin.shell: |
-        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ keycloak_db_password }}';" 2>/dev/null || true
+        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ pi_postgres_password }}';" 2>/dev/null || true
       changed_when: true
       no_log: true
 
@@ -218,13 +219,12 @@
       ansible.builtin.uri:
         url: http://localhost:3000/
         status_code: 200
-      retries: 15
+      retries: 30
       delay: 5
-      failed_when: false
+      until: forgejo_wait.status | default(0) == 200
       register: forgejo_wait
 
     - name: Create Forgejo admin user
-      when: forgejo_wait.status | default(0) == 200
       ansible.builtin.shell: |
         su - forgejo -c "forgejo admin user create \
           --admin --username {{ forgejo_admin_user }} \
