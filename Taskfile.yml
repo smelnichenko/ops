@@ -261,6 +261,41 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keepalived.yml
 
+  promote:prod:
+    desc: Promote all test image tags to production
+    cmds:
+      - |
+        cd {{.SRC_DIR}}/infra
+        TEST=clusters/production/schnappy-test-apps/values.yaml
+        PROD=clusters/production/schnappy/values.yaml
+        CHANGED=0
+        for svc in monitor admin chat chess site game-scp; do
+          TAG=$(grep "# schnappy-${svc}\b" "$TEST" | grep -oP 'tag: "\K[^"]+' || true)
+          if [ -n "$TAG" ]; then
+            CURRENT=$(grep "# schnappy-${svc}\b" "$PROD" | grep -oP 'tag: "\K[^"]+' || true)
+            if [ "$TAG" != "$CURRENT" ]; then
+              sed -i "s|tag: \".*\"  # schnappy-${svc}|tag: \"${TAG}\"  # schnappy-${svc}|" "$PROD"
+              echo "  ${svc}: ${CURRENT} -> ${TAG}"
+              CHANGED=1
+            fi
+          fi
+        done
+        if [ "$CHANGED" -eq 0 ]; then
+          echo "No changes to promote"
+          exit 0
+        fi
+        git add "$PROD"
+        git commit -m "promote: test -> prod"
+        git push
+
+  deploy:seed-test-secrets:
+    desc: Seed test environment secrets into Vault
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env', '../../.env.test']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e vault_prefix=schnappy-test
+
   test:vault:
     desc: Test Vault end-to-end in Vagrant
     deps: [deploy:install]
