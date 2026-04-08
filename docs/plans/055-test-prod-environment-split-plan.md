@@ -337,14 +337,29 @@ Flow: verify test at `test.pmon.dev` → `task promote:prod` → ArgoCD syncs pr
 
 Add `test:multi-env` to `ops/Taskfile.yml` and create `tests/ansible/test-multi-env.yml`.
 
-The test playbook should verify:
-1. Both namespaces exist (`schnappy`, `schnappy-test`)
-2. Pods running in both namespaces
-3. Services resolve correctly (no cross-env leakage)
-4. ExternalSecrets synced in both namespaces from different Vault paths
-5. NetworkPolicies block cross-namespace data access
-6. HTTPRoutes serve correct env per hostname
-7. ResourceQuota enforced on test namespace
+### What the test does
+
+**Setup (automated by Taskfile):**
+1. `vagrant destroy && vagrant up` — fresh 3-VM environment (kubeadm + pi1 + pi2)
+2. `setup-kubeadm.yml` — installs kubeadm, initializes cluster, Calico CNI
+3. `setup-vault-pi.yml` — installs Vault on pi1
+4. `setup-vault.yml` — deploys Vault + ESO into k8s
+
+**Test playbook verifies multi-env isolation:**
+1. Seeds Vault with two separate paths (`secret/schnappy/*` and `secret/schnappy-test/*`) using different credentials
+2. Updates Vault policy to allow ESO reads from both paths
+3. Creates both namespaces, applies ResourceQuota on test
+4. Syncs platform charts to VM, deploys schnappy-data chart twice:
+   - `helm upgrade --install schnappy` in `schnappy` namespace (prod)
+   - `helm upgrade --install schnappy-test` in `schnappy-test` namespace (test)
+5. Asserts:
+   - Pods running in both namespaces (≥2 each)
+   - ExternalSecrets synced in both namespaces
+   - **Secret isolation**: prod postgres password differs from test (from different Vault paths)
+   - **Service name isolation**: `schnappy-postgres` in prod, `schnappy-test-postgres` in test
+   - **ResourceQuota enforced**: test namespace has 4Gi memory limit
+
+**What it proves:** Same Helm chart, different release name, different Vault path, different namespace — no cross-contamination.
 
 ```yaml
 # Taskfile entry:
