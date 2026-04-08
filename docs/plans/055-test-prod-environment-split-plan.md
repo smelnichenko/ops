@@ -15,6 +15,30 @@ Single kubeadm node `ten` (192.168.11.2). Everything in `schnappy` namespace. Go
 - **All data stores enabled in test** with minimal resources
 - **ScyllaDB**: operator-managed in both envs, test uses minimal resources (`--smp=1 --memory=512M`)
 
+## Phase 0: Safety + Vagrant Validation
+
+### Backup ops .env
+
+Before any changes, create a timestamped backup:
+```
+cp /home/sm/src/ops/.env /home/sm/src/ops/.env.backup-$(date +%Y%m%d)
+```
+
+### Vagrant-first development
+
+All Phase 1 parameterization changes are developed and validated in Vagrant **before** touching production:
+1. Make chart changes locally (parameterize names, vault prefix)
+2. Run `helm template` diff to verify identical output for prod values
+3. Run `test:multi-env` in Vagrant to validate both envs work
+4. Only after Vagrant passes: push to platform.git, let ArgoCD sync prod
+
+### Production backups (before Phase 2 deployment)
+
+1. CNPG on-demand backup → verify on Pi MinIO
+2. Velero full namespace backup
+3. Stress test baseline
+4. Record node resource allocation (`kubectl describe node ten`)
+
 ## Phase 1: Parameterize Hardcoded Names in Platform Charts
 
 **Why**: Several resource names are hardcoded instead of using `{{ include "schnappy.fullname" . }}`. With `releaseName: schnappy-test`, these would collide or break.
@@ -362,30 +386,17 @@ Based on prod idle consumption (`kubectl top pods`):
 
 ## Verification
 
-### Before starting (safety net)
+### After Phase 0 (safety)
 
-1. **CNPG backup**: trigger on-demand backup, verify WAL + base backup on Pi MinIO
-   ```
-   kubectl apply -f - <<EOF
-   apiVersion: postgresql.cnpg.io/v1
-   kind: Backup
-   metadata: { name: pre-env-split, namespace: schnappy }
-   spec: { cluster: { name: schnappy-postgres }, method: barmanObjectStore }
-   EOF
-   kubectl wait --for=condition=completed backup/pre-env-split -n schnappy --timeout=300s
-   ```
-2. **Velero backup**: full namespace backup
-   ```
-   velero backup create pre-env-split --include-namespaces schnappy --wait
-   velero backup describe pre-env-split
-   ```
-3. **Verify backup data**: check objects on Pi MinIO, confirm PG backup has all databases, verify ScyllaDB backup status
-4. **Run stress test baseline**: `task test:hyperfoil:stress` — save report URL for comparison
+1. `.env` backup exists
+2. Vagrant `test:multi-env` passes with parameterized charts
+3. `helm template` output identical before/after for prod values
 
-### After Phase 1 (parameterization)
+### Before Phase 2 (production deployment)
 
-5. `helm template` output for prod values must be identical before/after changes
-6. ArgoCD syncs prod without diff — confirm no drift
+4. CNPG + Velero backups verified on Pi MinIO
+5. Stress test baseline saved
+6. Node resource allocation recorded
 
 ### After Phase 2 (test env deployed)
 
