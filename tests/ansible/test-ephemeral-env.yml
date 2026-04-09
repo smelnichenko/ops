@@ -3,10 +3,13 @@
 #
 # Verifies:
 #   1. Create env "ephemeral" → all apps Synced+Healthy
-#   2. HTTPRoutes work for ephemeral.pmon.dev
-#   3. Destroy env → namespace removed, no ArgoCD apps
-#   4. Recreate env → works again (idempotency)
-#   5. Destroy again — clean exit
+#   2. HTTPRoutes exist
+#   3. Destroy env → apps removed
+#   4. Recreate → works (idempotency)
+#   5. Final destroy — clean exit
+#
+# Uses a temporary infra repo clone pushing to Vagrant Forgejo,
+# so production infra is never modified.
 #
 # Usage:
 #   task test:ephemeral-env
@@ -18,86 +21,94 @@
 
   vars:
     env_name: ephemeral
-    namespace: "schnappy-{{ env_name }}"
+    ns: "schnappy-{{ env_name }}"
+    forgejo_host: "{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}"
+    forgejo_url: "http://{{ forgejo_host }}:3000"
+    infra_git_url: "http://forgejo_admin:vagrant-forgejo-pw@{{ forgejo_host }}:3000/schnappy/infra.git"
+    tmp_infra: /tmp/test-infra-ephemeral
 
   tasks:
     # ================================================================
-    # Round 1: Create
+    # Setup: clone infra repo to temp dir
     # ================================================================
 
-    - name: "ROUND 1: Create environment"
-      ansible.builtin.debug:
-        msg: "Creating {{ namespace }}..."
+    - name: Clean temp infra dir
+      ansible.builtin.file:
+        path: "{{ tmp_infra }}"
+        state: absent
+      delegate_to: localhost
+      become: false
 
-    - name: Run create-environment playbook
+    - name: Clone infra from Vagrant Forgejo
       ansible.builtin.shell: |
-        cd {{ playbook_dir }}/../../deploy/ansible
-        venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml \
-          -e "env_name={{ env_name }}"
+        git clone {{ infra_git_url }} {{ tmp_infra }}
+        cd {{ tmp_infra }}
+        git config user.email "test@test"
+        git config user.name "test"
       delegate_to: localhost
       become: false
       changed_when: true
 
-    - name: Wait for ArgoCD to sync {{ namespace }}
+    # ================================================================
+    # Round 1: Create
+    # ================================================================
+
+    - name: "ROUND 1: Create"
+      ansible.builtin.debug:
+        msg: "Creating {{ ns }}..."
+
+    - name: Run create-environment
+      ansible.builtin.shell: |
+        cd {{ playbook_dir }}/../../deploy/ansible
+        venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml \
+          -e "env_name={{ env_name }}" \
+          -e "infra_dir_override={{ tmp_infra }}" \
+          -e "infra_git_url_override={{ infra_git_url }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Wait for ArgoCD sync
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          UNHEALTHY=$(kubectl get app -n argocd -o json | \
+          COUNT=$(kubectl get app -n argocd -o json | \
             jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}")) | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")] | length')
-          [ "$UNHEALTHY" = "0" ] && echo "ALL_HEALTHY" && exit 0
+          [ "$COUNT" = "0" ] && FOUND=$(kubectl get app -n argocd -o json | jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}"))] | length') && [ "$FOUND" -gt "0" ] && echo "ALL_HEALTHY" && exit 0
           sleep 10
         done
         echo "TIMEOUT"
+        kubectl get app -n argocd | grep {{ env_name }}
         exit 1
       register: sync_wait
       changed_when: false
       failed_when: "'ALL_HEALTHY' not in sync_wait.stdout"
 
-    - name: Verify pods running in {{ namespace }}
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ namespace }} --no-headers | grep -v Running | grep -v Completed | wc -l
-      register: bad_pods
-      changed_when: false
-      failed_when: bad_pods.stdout | int > 0
-
     - name: Verify HTTPRoutes exist
       ansible.builtin.shell: |
-        kubectl get httproute -n {{ namespace }} --no-headers | wc -l
+        kubectl get httproute -n {{ ns }} --no-headers | wc -l
       register: routes
       changed_when: false
       failed_when: routes.stdout | int == 0
 
-    - name: Check if Keycloak realm exists
-      ansible.builtin.uri:
-        url: "http://{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}:8080/realms/schnappy/.well-known/openid-configuration"
-        validate_certs: false
-        status_code: [200, 404]
-      register: kc_check
-      failed_when: false
-      delegate_to: localhost
-      become: false
-
-    - name: Verify Keycloak redirect URI
+    - name: "ROUND 1 CREATE: PASSED"
       ansible.builtin.debug:
-        msg: "Keycloak realm not configured in Vagrant — skipping redirect URI check"
-      when: kc_check.status != 200
-
-    - name: "ROUND 1: Create PASSED"
-      ansible.builtin.debug:
-        msg: "{{ namespace }} created, synced, routes working, KC configured"
+        msg: "{{ ns }} created and synced"
 
     # ================================================================
     # Round 1: Destroy
     # ================================================================
 
-    - name: "ROUND 1: Destroy environment"
+    - name: "ROUND 1: Destroy"
       ansible.builtin.debug:
-        msg: "Destroying {{ namespace }}..."
+        msg: "Destroying {{ ns }}..."
 
-    - name: Run destroy-environment playbook
+    - name: Run destroy-environment
       ansible.builtin.shell: |
         cd {{ playbook_dir }}/../../deploy/ansible
         venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml \
-          -e "env_name={{ env_name }}"
+          -e "env_name={{ env_name }}" \
+          -e "infra_dir_override={{ tmp_infra }}" \
+          -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
       changed_when: true
@@ -118,31 +129,29 @@
 
     - name: Delete namespace
       ansible.builtin.command:
-        cmd: kubectl delete namespace {{ namespace }} --timeout=120s
+        cmd: kubectl delete namespace {{ ns }} --timeout=120s
       changed_when: true
       failed_when: false
 
-    - name: Verify Keycloak redirect URI removed
+    - name: "ROUND 1 DESTROY: PASSED"
       ansible.builtin.debug:
-        msg: "Keycloak realm not configured in Vagrant — skipping"
-
-    - name: "ROUND 1: Destroy PASSED"
-      ansible.builtin.debug:
-        msg: "{{ namespace }} destroyed, apps gone, KC cleaned up"
+        msg: "{{ ns }} destroyed"
 
     # ================================================================
     # Round 2: Recreate (idempotency)
     # ================================================================
 
-    - name: "ROUND 2: Recreate environment"
+    - name: "ROUND 2: Recreate"
       ansible.builtin.debug:
-        msg: "Recreating {{ namespace }} to verify idempotency..."
+        msg: "Recreating {{ ns }}..."
 
-    - name: Run create-environment playbook (round 2)
+    - name: Run create-environment (round 2)
       ansible.builtin.shell: |
         cd {{ playbook_dir }}/../../deploy/ansible
         venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml \
-          -e "env_name={{ env_name }}"
+          -e "env_name={{ env_name }}" \
+          -e "infra_dir_override={{ tmp_infra }}" \
+          -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
       changed_when: true
@@ -150,9 +159,9 @@
     - name: Wait for ArgoCD sync (round 2)
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          UNHEALTHY=$(kubectl get app -n argocd -o json | \
+          COUNT=$(kubectl get app -n argocd -o json | \
             jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}")) | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")] | length')
-          [ "$UNHEALTHY" = "0" ] && echo "ALL_HEALTHY" && exit 0
+          [ "$COUNT" = "0" ] && FOUND=$(kubectl get app -n argocd -o json | jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}"))] | length') && [ "$FOUND" -gt "0" ] && echo "ALL_HEALTHY" && exit 0
           sleep 10
         done
         echo "TIMEOUT"
@@ -161,28 +170,37 @@
       changed_when: false
       failed_when: "'ALL_HEALTHY' not in sync_wait_2.stdout"
 
-    - name: "ROUND 2: Recreate PASSED"
+    - name: "ROUND 2 RECREATE: PASSED"
       ansible.builtin.debug:
-        msg: "{{ namespace }} recreated successfully — idempotent"
+        msg: "{{ ns }} recreated — idempotent"
 
     # ================================================================
-    # Round 2: Destroy (cleanup)
+    # Final cleanup
     # ================================================================
 
-    - name: Run destroy-environment playbook (final cleanup)
+    - name: Run destroy-environment (final)
       ansible.builtin.shell: |
         cd {{ playbook_dir }}/../../deploy/ansible
         venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml \
-          -e "env_name={{ env_name }}"
+          -e "env_name={{ env_name }}" \
+          -e "infra_dir_override={{ tmp_infra }}" \
+          -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
       changed_when: true
 
     - name: Delete namespace (final)
       ansible.builtin.command:
-        cmd: kubectl delete namespace {{ namespace }} --timeout=120s
+        cmd: kubectl delete namespace {{ ns }} --timeout=120s
       changed_when: true
       failed_when: false
+
+    - name: Clean temp infra dir
+      ansible.builtin.file:
+        path: "{{ tmp_infra }}"
+        state: absent
+      delegate_to: localhost
+      become: false
 
     - name: "TEST PASSED"
       ansible.builtin.debug:

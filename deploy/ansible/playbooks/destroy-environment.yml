@@ -17,10 +17,11 @@
   vars:
     env_name: "{{ env_name }}"
     namespace: "schnappy-{{ env_name }}"
-    infra_dir: "{{ playbook_dir }}/../../../../infra"
+    infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
     cluster_dir: "{{ infra_dir }}/clusters/production"
     vault_addr: "https://127.0.0.1:8200"
     keycloak_url: "http://localhost:8080"
+    infra_git_url: "{{ infra_git_url_override | default('') }}"
 
   pre_tasks:
     - name: Validate env_name
@@ -217,7 +218,11 @@
         git add -A
         git diff --cached --quiet && echo "no changes" && exit 0
         git commit -m "env: destroy {{ namespace }}"
+        {% if infra_git_url %}
+        git push {{ infra_git_url }} main
+        {% else %}
         git push origin main
+        {% endif %}
       delegate_to: localhost
       become: false
       changed_when: true
