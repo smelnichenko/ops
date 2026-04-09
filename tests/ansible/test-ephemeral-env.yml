@@ -49,6 +49,24 @@
       become: false
       changed_when: true
 
+    - name: Ensure test template values exist in Vagrant infra
+      ansible.builtin.shell: |
+        cd {{ tmp_infra }}
+        REAL_INFRA={{ playbook_dir }}/../../../../infra
+        for chart in data apps mesh; do
+          DIR=clusters/production/schnappy-test-${chart}
+          if [ ! -f "$DIR/values.yaml" ]; then
+            mkdir -p "$DIR"
+            cp "$REAL_INFRA/$DIR/values.yaml" "$DIR/values.yaml"
+          fi
+        done
+        git add -A
+        git diff --cached --quiet || git commit -m "add test template values"
+        git push origin main
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
     # ================================================================
     # Round 1: Create
     # ================================================================
