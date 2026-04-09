@@ -696,10 +696,10 @@ tasks:
       vars: [ENV_NAME]
     cmds:
       - >-
-        venv/bin/ansible-playbook playbooks/create-environment.yml
+        venv/bin/ansible-playbook -i inventory/production.yml playbooks/create-environment.yml
         -e "env_name={{.ENV_NAME}}"
-        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
         -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
         -e "RESEND_WEBHOOK_SECRET=$RESEND_WEBHOOK_SECRET"
         -e "RESEND_API_KEY=$RESEND_API_KEY"
 
@@ -711,8 +711,14 @@ tasks:
       vars: [ENV_NAME]
     cmds:
       - >-
-        venv/bin/ansible-playbook playbooks/destroy-environment.yml
+        venv/bin/ansible-playbook -i inventory/production.yml playbooks/destroy-environment.yml
         -e "env_name={{.ENV_NAME}}"
+
+  test:ephemeral-env:
+    desc: Test ephemeral environment create/destroy lifecycle in Vagrant
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml
 
   # ============== DUAL-PI HA TEST ==============
   test:dual-pi:

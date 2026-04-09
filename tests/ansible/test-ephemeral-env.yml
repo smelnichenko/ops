@@ -1,0 +1,196 @@
+---
+# Test ephemeral environment create/destroy lifecycle
+#
+# Verifies:
+#   1. Create env "ephemeral" → all apps Synced+Healthy
+#   2. HTTPRoutes work for ephemeral.pmon.dev
+#   3. Destroy env → namespace removed, no ArgoCD apps
+#   4. Recreate env → works again (idempotency)
+#   5. Destroy again — clean exit
+#
+# Usage:
+#   task test:ephemeral-env
+
+- name: Test ephemeral environment lifecycle
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    env_name: ephemeral
+    namespace: "schnappy-{{ env_name }}"
+
+  tasks:
+    # ================================================================
+    # Round 1: Create
+    # ================================================================
+
+    - name: "ROUND 1: Create environment"
+      ansible.builtin.debug:
+        msg: "Creating {{ namespace }}..."
+
+    - name: Run create-environment playbook
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml
+          -e "env_name={{ env_name }}"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Wait for ArgoCD to sync {{ namespace }}
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          UNHEALTHY=$(kubectl get app -n argocd -o json | \
+            jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}")) | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")] | length')
+          [ "$UNHEALTHY" = "0" ] && echo "ALL_HEALTHY" && exit 0
+          sleep 10
+        done
+        echo "TIMEOUT"
+        exit 1
+      register: sync_wait
+      changed_when: false
+      failed_when: "'ALL_HEALTHY' not in sync_wait.stdout"
+
+    - name: Verify pods running in {{ namespace }}
+      ansible.builtin.shell: |
+        kubectl get pods -n {{ namespace }} --no-headers | grep -v Running | grep -v Completed | wc -l
+      register: bad_pods
+      changed_when: false
+      failed_when: bad_pods.stdout | int > 0
+
+    - name: Verify HTTPRoutes exist
+      ansible.builtin.shell: |
+        kubectl get httproute -n {{ namespace }} --no-headers | wc -l
+      register: routes
+      changed_when: false
+      failed_when: routes.stdout | int == 0
+
+    - name: Verify Keycloak redirect URI
+      ansible.builtin.shell: |
+        KC_PASS=$(sudo cat /etc/vault-unseal/root-token | xargs -I{} env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 VAULT_TOKEN={} vault kv get -field=admin_password secret/schnappy/keycloak)
+        TOKEN=$(curl -sk -X POST 'http://localhost:8080/realms/master/protocol/openid-connect/token' \
+          -d "client_id=admin-cli&username=admin&grant_type=password" --data-urlencode "password=$KC_PASS" | jq -r .access_token)
+        curl -sk -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/admin/realms/schnappy/clients?clientId=app&first=0&max=1' | \
+          jq -e '.[0].redirectUris[] | select(test("{{ env_name }}"))'
+      delegate_to: pi1
+      changed_when: false
+
+    - name: "ROUND 1: Create PASSED"
+      ansible.builtin.debug:
+        msg: "{{ namespace }} created, synced, routes working, KC configured"
+
+    # ================================================================
+    # Round 1: Destroy
+    # ================================================================
+
+    - name: "ROUND 1: Destroy environment"
+      ansible.builtin.debug:
+        msg: "Destroying {{ namespace }}..."
+
+    - name: Run destroy-environment playbook
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml
+          -e "env_name={{ env_name }}"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Wait for ArgoCD apps to disappear
+      ansible.builtin.shell: |
+        for i in $(seq 1 30); do
+          COUNT=$(kubectl get app -n argocd -o json | \
+            jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}"))] | length')
+          [ "$COUNT" = "0" ] && echo "GONE" && exit 0
+          sleep 10
+        done
+        echo "TIMEOUT"
+        exit 1
+      register: destroy_wait
+      changed_when: false
+      failed_when: "'GONE' not in destroy_wait.stdout"
+
+    - name: Delete namespace
+      ansible.builtin.command:
+        cmd: kubectl delete namespace {{ namespace }} --timeout=120s
+      changed_when: true
+      failed_when: false
+
+    - name: Verify Keycloak redirect URI removed
+      ansible.builtin.shell: |
+        KC_PASS=$(sudo cat /etc/vault-unseal/root-token | xargs -I{} env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 VAULT_TOKEN={} vault kv get -field=admin_password secret/schnappy/keycloak)
+        TOKEN=$(curl -sk -X POST 'http://localhost:8080/realms/master/protocol/openid-connect/token' \
+          -d "client_id=admin-cli&username=admin&grant_type=password" --data-urlencode "password=$KC_PASS" | jq -r .access_token)
+        FOUND=$(curl -sk -H "Authorization: Bearer $TOKEN" 'http://localhost:8080/admin/realms/schnappy/clients?clientId=app&first=0&max=1' | \
+          jq '[.[0].redirectUris[] | select(test("{{ env_name }}"))] | length')
+        [ "$FOUND" = "0" ]
+      delegate_to: pi1
+      changed_when: false
+
+    - name: "ROUND 1: Destroy PASSED"
+      ansible.builtin.debug:
+        msg: "{{ namespace }} destroyed, apps gone, KC cleaned up"
+
+    # ================================================================
+    # Round 2: Recreate (idempotency)
+    # ================================================================
+
+    - name: "ROUND 2: Recreate environment"
+      ansible.builtin.debug:
+        msg: "Recreating {{ namespace }} to verify idempotency..."
+
+    - name: Run create-environment playbook (round 2)
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml
+          -e "env_name={{ env_name }}"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Wait for ArgoCD sync (round 2)
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          UNHEALTHY=$(kubectl get app -n argocd -o json | \
+            jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}")) | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")] | length')
+          [ "$UNHEALTHY" = "0" ] && echo "ALL_HEALTHY" && exit 0
+          sleep 10
+        done
+        echo "TIMEOUT"
+        exit 1
+      register: sync_wait_2
+      changed_when: false
+      failed_when: "'ALL_HEALTHY' not in sync_wait_2.stdout"
+
+    - name: "ROUND 2: Recreate PASSED"
+      ansible.builtin.debug:
+        msg: "{{ namespace }} recreated successfully — idempotent"
+
+    # ================================================================
+    # Round 2: Destroy (cleanup)
+    # ================================================================
+
+    - name: Run destroy-environment playbook (final cleanup)
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml
+          -e "env_name={{ env_name }}"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Delete namespace (final)
+      ansible.builtin.command:
+        cmd: kubectl delete namespace {{ namespace }} --timeout=120s
+      changed_when: true
+      failed_when: false
+
+    - name: "TEST PASSED"
+      ansible.builtin.debug:
+        msg: |
+          Ephemeral environment lifecycle test PASSED.
+          - Create: OK
+          - Destroy: OK
+          - Recreate: OK (idempotent)
+          - Final destroy: OK

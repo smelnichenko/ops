@@ -1,25 +1,21 @@
 ---
-# Create a new schnappy environment (namespace, values, secrets, ArgoCD apps)
+# Create a new schnappy environment
 #
 # Usage:
 #   task env:create ENV_NAME=staging
-#   task env:create ENV_NAME=pr-123
+#
+# Creates: namespace, values files, cluster-config, ApplicationSet entries,
+# Vault secrets, Keycloak redirect URI, gateway ReferenceGrant entry.
+# Commits and pushes infra repo. ArgoCD auto-syncs.
 #
 # Prerequisites:
-#   - Vault secrets seeded for the environment
-#   - Wildcard DNS *.pmon.dev → 192.168.11.2 (already configured)
-#
-# What it does:
-#   1. Creates infra values files (data, apps, mesh) from test template
-#   2. Creates cluster-config (namespace, default-deny, quota, forgejo-registry)
-#   3. Adds environment to ArgoCD ApplicationSets
-#   4. Seeds Vault secrets
-#   5. Commits and pushes infra repo
-#   6. ArgoCD auto-syncs the new environment
+#   - Wildcard DNS *.pmon.dev → 192.168.11.2
+#   - Vault running on Pi
+#   - ArgoCD running with ApplicationSets
 
 - name: "Create environment: schnappy-{{ env_name }}"
-  hosts: localhost
-  connection: local
+  hosts: pi1
+  become: true
   gather_facts: false
 
   vars:
@@ -28,6 +24,9 @@
     release_name: "schnappy-{{ env_name }}"
     infra_dir: "{{ playbook_dir }}/../../../../infra"
     cluster_dir: "{{ infra_dir }}/clusters/production"
+    vault_addr: "https://127.0.0.1:8200"
+    forgejo_url: "http://localhost:3000"
+    keycloak_url: "http://localhost:8080"
 
   pre_tasks:
     - name: Validate env_name
@@ -37,21 +36,119 @@
           - env_name | length > 0
           - env_name != "production"
           - env_name is match("^[a-z0-9-]+$")
-        fail_msg: "env_name must be a lowercase alphanumeric string (got: '{{ env_name | default('undefined') }}')"
+        fail_msg: "env_name must be lowercase alphanumeric (got: '{{ env_name | default('undefined') }}')"
 
     - name: Check environment doesn't already exist
       ansible.builtin.stat:
         path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
       register: env_exists
+      delegate_to: localhost
 
     - name: Fail if environment exists
       ansible.builtin.fail:
-        msg: "Environment {{ namespace }} already exists at {{ cluster_dir }}/{{ namespace }}-data/"
+        msg: "Environment {{ namespace }} already exists"
       when: env_exists.stat.exists
+
+    - name: Read Vault root token
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/root-token
+      register: vault_token_raw
+
+    - name: Set vault env
+      ansible.builtin.set_fact:
+        vault_env: "VAULT_ADDR={{ vault_addr }} VAULT_SKIP_VERIFY=1 VAULT_TOKEN={{ vault_token_raw.content | b64decode | trim }}"
+
+    - name: Generate passwords
+      ansible.builtin.set_fact:
+        gen_db_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+        gen_redis_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+        gen_minio_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+        gen_jwt_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
+        gen_kafka_cluster_id: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=22') }}"
+      delegate_to: localhost
 
   tasks:
     # ================================================================
-    # Phase 1: Create values files from test template
+    # Phase 1: Seed Vault secrets
+    # ================================================================
+
+    - name: Seed Vault secrets for {{ namespace }}
+      ansible.builtin.shell: |
+        {{ vault_env }} vault kv put secret/{{ namespace }}/postgres \
+          database=monitor username=monitor password="{{ gen_db_password }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/redis \
+          password="{{ gen_redis_password }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/auth \
+          jwt_secret="{{ gen_jwt_secret }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/minio \
+          access_key=admin secret_key="{{ gen_minio_password }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/kafka \
+          cluster_id="{{ gen_kafka_cluster_id }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/ai \
+          api_key="{{ ANTHROPIC_API_KEY | default('placeholder') }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/mail \
+          password="{{ MAIL_PASSWORD | default('placeholder') }}"
+        {{ vault_env }} vault kv put secret/{{ namespace }}/webhook \
+          signing_secret="{{ RESEND_WEBHOOK_SECRET | default('') }}" \
+          api_key="{{ RESEND_API_KEY | default('') }}"
+      changed_when: true
+
+    - name: "PHASE 1: Vault secrets seeded"
+      ansible.builtin.debug:
+        msg: "Seeded secrets at secret/{{ namespace }}/*"
+
+    # ================================================================
+    # Phase 2: Add Keycloak redirect URI
+    # ================================================================
+
+    - name: Get Keycloak admin password
+      ansible.builtin.shell: |
+        {{ vault_env }} vault kv get -field=admin_password secret/schnappy/keycloak
+      register: kc_password
+      changed_when: false
+
+    - name: Get Keycloak admin token
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: admin-cli
+          username: admin
+          password: "{{ kc_password.stdout }}"
+          grant_type: password
+        validate_certs: false
+      register: kc_token
+
+    - name: Get app client config
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/schnappy/clients?clientId=app&first=0&max=1"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+        validate_certs: false
+      register: kc_app_client
+
+    - name: Add redirect URI
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/schnappy/clients/{{ kc_app_client.json[0].id }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          clientId: app
+          redirectUris: "{{ kc_app_client.json[0].redirectUris + ['https://' + env_name + '.pmon.dev/*'] | unique }}"
+          webOrigins: "{{ kc_app_client.json[0].webOrigins }}"
+        validate_certs: false
+        status_code: 204
+
+    - name: "PHASE 2: Keycloak redirect URI added"
+      ansible.builtin.debug:
+        msg: "Added https://{{ env_name }}.pmon.dev/* to Keycloak app client"
+
+    # ================================================================
+    # Phase 3: Create infra files (runs on localhost)
     # ================================================================
 
     - name: Create values directories
@@ -59,60 +156,51 @@
         path: "{{ cluster_dir }}/{{ namespace }}-{{ item }}"
         state: directory
         mode: '0755'
-      loop:
-        - data
-        - apps
-        - mesh
+      loop: [data, apps, mesh]
+      delegate_to: localhost
 
-    - name: Copy test data values as template
+    - name: Copy and customize data values
+      ansible.builtin.shell: |
+        cp {{ cluster_dir }}/schnappy-test-data/values.yaml {{ cluster_dir }}/{{ namespace }}-data/values.yaml
+        sed -i 's|secret/data/schnappy-test|secret/data/{{ namespace }}|g' {{ cluster_dir }}/{{ namespace }}-data/values.yaml
+        sed -i 's|schnappy-test-|{{ namespace }}-|g' {{ cluster_dir }}/{{ namespace }}-data/values.yaml
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Copy and customize apps values
+      ansible.builtin.shell: |
+        cp {{ cluster_dir }}/schnappy-test-apps/values.yaml {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
+        sed -i 's|secret/data/schnappy-test|secret/data/{{ namespace }}|g' {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
+        sed -i 's|schnappy-test-|{{ namespace }}-|g' {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
+      delegate_to: localhost
+      changed_when: true
+
+    - name: Create mesh values with external gateway
       ansible.builtin.copy:
-        src: "{{ cluster_dir }}/schnappy-test-data/values.yaml"
-        dest: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
-        mode: '0644'
-
-    - name: Update data values vault prefix
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
-        regexp: 'secret/data/schnappy-test'
-        replace: "secret/data/{{ namespace }}"
-
-    - name: Update data values existing secrets
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
-        regexp: 'schnappy-test-'
-        replace: "{{ namespace }}-"
-
-    - name: Copy test apps values as template
-      ansible.builtin.copy:
-        src: "{{ cluster_dir }}/schnappy-test-apps/values.yaml"
-        dest: "{{ cluster_dir }}/{{ namespace }}-apps/values.yaml"
-        mode: '0644'
-
-    - name: Update apps values vault prefix
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/{{ namespace }}-apps/values.yaml"
-        regexp: 'secret/data/schnappy-test'
-        replace: "secret/data/{{ namespace }}"
-
-    - name: Update apps values existing secrets
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/{{ namespace }}-apps/values.yaml"
-        regexp: 'schnappy-test-'
-        replace: "{{ namespace }}-"
-
-    - name: Copy test mesh values as template
-      ansible.builtin.copy:
-        src: "{{ cluster_dir }}/schnappy-test-mesh/values.yaml"
         dest: "{{ cluster_dir }}/{{ namespace }}-mesh/values.yaml"
         mode: '0644'
+        content: |
+          scyllaOperator:
+            enabled: true
 
-    - name: "Phase 1 complete: values files created"
-      ansible.builtin.debug:
-        msg: "Created {{ namespace }}-{data,apps,mesh}/values.yaml"
+          peerAuthentication:
+            enabled: true
+            mode: STRICT
 
-    # ================================================================
-    # Phase 2: Create cluster-config resources
-    # ================================================================
+          authorizationPolicies:
+            enabled: true
+
+          gateway:
+            enabled: false
+            external:
+              enabled: true
+              gatewayName: schnappy-gateway
+              gatewayNamespace: schnappy
+              hostname: {{ env_name }}.pmon.dev
+
+          jwt:
+            enabled: false
+      delegate_to: localhost
 
     - name: Create namespace manifest
       ansible.builtin.copy:
@@ -126,6 +214,7 @@
             labels:
               istio.io/rev: default
               environment: {{ env_name }}
+      delegate_to: localhost
 
     - name: Create default-deny + quota
       ansible.builtin.copy:
@@ -152,7 +241,6 @@
                 ports:
                   - protocol: TCP
                     port: 8080
-              # Gateway ingress (cross-namespace routing from prod gateway)
               - from:
                   - namespaceSelector:
                       matchLabels:
@@ -160,55 +248,38 @@
                     podSelector:
                       matchLabels:
                         gateway.networking.k8s.io/gateway-name: schnappy-gateway
-              # Kubelet probes
               - ports:
                   - protocol: TCP
                     port: 15021
             egress:
-              # DNS
               - ports:
-                  - protocol: UDP
-                    port: 53
-                  - protocol: TCP
-                    port: 53
-              # Intra-namespace
+                  - { protocol: UDP, port: 53 }
+                  - { protocol: TCP, port: 53 }
               - to:
                   - podSelector: {}
-              # Istio control plane
               - to:
                   - namespaceSelector:
                       matchLabels:
                         kubernetes.io/metadata.name: istio-system
                 ports:
-                  - protocol: TCP
-                    port: 15012
-                  - protocol: TCP
-                    port: 15010
-                  - protocol: TCP
-                    port: 15014
-                  - protocol: TCP
-                    port: 443
-              # Kubernetes API
+                  - { protocol: TCP, port: 15012 }
+                  - { protocol: TCP, port: 15010 }
+                  - { protocol: TCP, port: 15014 }
+                  - { protocol: TCP, port: 443 }
               - ports:
-                  - protocol: TCP
-                    port: 443
-                  - protocol: TCP
-                    port: 6443
-              # Pi services (Vault for ESO)
+                  - { protocol: TCP, port: 443 }
+                  - { protocol: TCP, port: 6443 }
               - to:
                   - ipBlock:
                       cidr: 192.168.11.5/32
                 ports:
-                  - protocol: TCP
-                    port: 8200
-              # Observability (traces to prod Tempo)
+                  - { protocol: TCP, port: 8200 }
               - to:
                   - namespaceSelector:
                       matchLabels:
                         kubernetes.io/metadata.name: schnappy
                 ports:
-                  - protocol: TCP
-                    port: 4318
+                  - { protocol: TCP, port: 4318 }
           ---
           apiVersion: v1
           kind: ResourceQuota
@@ -221,8 +292,9 @@
               requests.memory: 8Gi
               limits.cpu: "32"
               limits.memory: 24Gi
+      delegate_to: localhost
 
-    - name: Add forgejo-registry secret for new namespace
+    - name: Add forgejo-registry secret
       ansible.builtin.blockinfile:
         path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
         marker: "# {mark} {{ namespace }}"
@@ -255,152 +327,77 @@
                 remoteRef:
                   key: secret/data/schnappy/forgejo
                   property: admin_password
+      delegate_to: localhost
 
-    - name: "Phase 2 complete: cluster-config created"
+    - name: "PHASE 3: Infra files created"
       ansible.builtin.debug:
-        msg: "Created namespace, default-deny, quota, forgejo-registry for {{ namespace }}"
+        msg: "Created values, namespace, NP, quota, forgejo-registry"
 
     # ================================================================
-    # Phase 3: Add to ApplicationSets
+    # Phase 4: Update ApplicationSets + gateway ReferenceGrant
     # ================================================================
 
-    - name: Add env to data ApplicationSet
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/argocd/apps/schnappy-data-envs.yaml"
-        regexp: '(  template:)'
-        replace: |4
-                    - env: {{ env_name }}
-                      namespace: {{ namespace }}
-                      releaseName: {{ release_name }}
-                      valuesPath: clusters/production/{{ namespace }}-data/values.yaml
-                      syncWave: "0"
-            \1
-
-    - name: Add env to apps ApplicationSet
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/argocd/apps/schnappy-apps-envs.yaml"
-        regexp: '(  template:)'
-        replace: |4
-                    - env: {{ env_name }}
-                      namespace: {{ namespace }}
-                      releaseName: {{ release_name }}
-                      valuesPath: clusters/production/{{ namespace }}-apps/values.yaml
-                      syncWave: "0"
-            \1
-
-    - name: Add env to mesh ApplicationSet
-      ansible.builtin.replace:
-        path: "{{ cluster_dir }}/argocd/apps/schnappy-mesh-envs.yaml"
-        regexp: '(  template:)'
-        replace: |4
-                    - env: {{ env_name }}
-                      namespace: {{ namespace }}
-                      releaseName: {{ release_name }}
-                      valuesPath: clusters/production/{{ namespace }}-mesh/values.yaml
-                      syncWave: "0"
-            \1
-
-    - name: "Phase 3 complete: ApplicationSets updated"
-      ansible.builtin.debug:
-        msg: "Added {{ env_name }} to all 3 ApplicationSets"
-
-    # ================================================================
-    # Phase 3.5: Add redirect URI to Keycloak app client
-    # ================================================================
-
-    - name: Get Keycloak admin password from Vault
+    - name: Add env to ApplicationSets
       ansible.builtin.shell: |
-        sudo cat /etc/vault-unseal/root-token | xargs -I{} env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 VAULT_TOKEN={} vault kv get -field=admin_password secret/schnappy/keycloak
-      register: kc_password
-      changed_when: false
-      delegate_to: pi1
+        python3 << 'PYEOF'
+        import yaml
 
-    - name: Get Keycloak admin token
-      ansible.builtin.uri:
-        url: "https://auth.pmon.dev/realms/master/protocol/openid-connect/token"
-        method: POST
-        body_format: form-urlencoded
-        body:
-          client_id: admin-cli
-          username: admin
-          password: "{{ kc_password.stdout }}"
-          grant_type: password
-        validate_certs: true
-      register: kc_token
+        appsets = {
+            'data': '{{ cluster_dir }}/argocd/apps/schnappy-data-envs.yaml',
+            'apps': '{{ cluster_dir }}/argocd/apps/schnappy-apps-envs.yaml',
+            'mesh': '{{ cluster_dir }}/argocd/apps/schnappy-mesh-envs.yaml',
+        }
+        for chart, path in appsets.items():
+            with open(path) as f:
+                doc = yaml.safe_load(f)
+            elements = doc['spec']['generators'][0]['list']['elements']
+            if not any(e['env'] == '{{ env_name }}' for e in elements):
+                elements.append({
+                    'env': '{{ env_name }}',
+                    'namespace': '{{ namespace }}',
+                    'releaseName': '{{ release_name }}',
+                    'valuesPath': f'clusters/production/{{ namespace }}-{chart}/values.yaml',
+                    'syncWave': '0',
+                })
+            with open(path, 'w') as f:
+                yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+        PYEOF
+      delegate_to: localhost
+      changed_when: true
 
-    - name: Get current app client config
-      ansible.builtin.uri:
-        url: "https://auth.pmon.dev/admin/realms/schnappy/clients?clientId=app&first=0&max=1"
-        headers:
-          Authorization: "Bearer {{ kc_token.json.access_token }}"
-        validate_certs: true
-      register: kc_app_client
+    - name: Add namespace to gateway allowedNamespaces
+      ansible.builtin.lineinfile:
+        path: "{{ cluster_dir }}/schnappy-mesh/values.yaml"
+        insertafter: 'allowedNamespaces:'
+        line: "    - {{ namespace }}"
+      delegate_to: localhost
 
-    - name: Add redirect URI for new environment
-      ansible.builtin.uri:
-        url: "https://auth.pmon.dev/admin/realms/schnappy/clients/{{ kc_app_client.json[0].id }}"
-        method: PUT
-        headers:
-          Authorization: "Bearer {{ kc_token.json.access_token }}"
-          Content-Type: application/json
-        body_format: json
-        body:
-          clientId: app
-          redirectUris: "{{ kc_app_client.json[0].redirectUris + ['https://' + env_name + '.pmon.dev/*'] | unique }}"
-          webOrigins: "{{ kc_app_client.json[0].webOrigins }}"
-        validate_certs: true
-        status_code: 204
-
-    - name: "Phase 3.5 complete: Keycloak redirect URI added"
+    - name: "PHASE 4: ApplicationSets and gateway updated"
       ansible.builtin.debug:
-        msg: "Added https://{{ env_name }}.pmon.dev/* to Keycloak app client redirect URIs"
-
-    # ================================================================
-    # Phase 4: Seed Vault secrets
-    # ================================================================
-
-    - name: Generate passwords for new environment
-      ansible.builtin.set_fact:
-        env_db_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        env_redis_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        env_minio_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        env_kafka_cluster_id: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=22') }}"
-
-    - name: Seed Vault secrets for {{ namespace }}
-      ansible.builtin.include_tasks: seed-vault-secrets.yml
-      vars:
-        vault_prefix: "{{ namespace }}"
-        MONITOR_DB_PASSWORD: "{{ env_db_password }}"
-        REDIS_PASSWORD: "{{ env_redis_password }}"
-        MINIO_ROOT_USER: "admin"
-        MINIO_ROOT_PASSWORD: "{{ env_minio_password }}"
-        KAFKA_CLUSTER_ID: "{{ env_kafka_cluster_id }}"
-        JWT_SECRET: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
-        MAIL_PASSWORD: "{{ MAIL_PASSWORD | default('') }}"
-        ANTHROPIC_API_KEY: "{{ ANTHROPIC_API_KEY | default('') }}"
-        RESEND_WEBHOOK_SECRET: "{{ RESEND_WEBHOOK_SECRET | default('') }}"
-        RESEND_API_KEY: "{{ RESEND_API_KEY | default('') }}"
-        ELASTICSEARCH_PASSWORD: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        KIBANA_PASSWORD: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        GRAFANA_ADMIN_PASSWORD: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-      when: seed_vault | default(true) | bool
+        msg: "Added {{ env_name }} to ApplicationSets and gateway ReferenceGrant"
 
     # ================================================================
     # Phase 5: Commit and push
     # ================================================================
 
-    - name: Commit and push infra changes
+    - name: Commit and push infra
       ansible.builtin.shell: |
         cd {{ infra_dir }}
         git add -A
-        git commit -m "env: create {{ namespace }} environment"
-        git push
-      register: git_push
-      changed_when: git_push.rc == 0
+        git diff --cached --quiet && echo "no changes" && exit 0
+        git commit -m "env: create {{ namespace }}"
+        git push origin main
+      delegate_to: localhost
+      changed_when: true
+      environment:
+        GIT_AUTHOR_NAME: "env-automation"
+        GIT_AUTHOR_EMAIL: "automation@pmon.dev"
+        GIT_COMMITTER_NAME: "env-automation"
+        GIT_COMMITTER_EMAIL: "automation@pmon.dev"
 
-    - name: "DONE: Environment {{ namespace }} created"
+    - name: "DONE"
       ansible.builtin.debug:
         msg: |
-          Environment {{ namespace }} created successfully.
-          ArgoCD will auto-sync within 3 minutes.
-          Access at: https://{{ env_name }}.pmon.dev (once apps are running)
+          Environment {{ namespace }} created.
+          ArgoCD will sync within 3 minutes.
+          URL: https://{{ env_name }}.pmon.dev
