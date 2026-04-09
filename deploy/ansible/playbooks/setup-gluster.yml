@@ -226,10 +226,134 @@
       ansible.builtin.debug:
         msg: |
           ============================================
-          GlusterFS Setup — Complete
+          GlusterFS Setup — forgejo-repos Complete
           ============================================
           {{ vol_status.stdout }}
           ============================================
           Heal status:
           {{ heal_info.stdout }}
+          ============================================
+
+# ─── Backups GlusterFS volume ──────────────────────────────────────────────
+- name: Create backups GlusterFS volume
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    backup_brick: /var/lib/gluster/backups-brick
+    backup_mount: /mnt/backups
+
+  tasks:
+    - name: Create backup brick directories
+      ansible.builtin.file:
+        path: "{{ backup_brick }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      delegate_to: "{{ item }}"
+      loop: [pi1, pi2]
+
+    - name: Check if backups volume exists
+      ansible.builtin.shell: |
+        gluster volume info backups 2>/dev/null && echo "exists" || echo "not-found"
+      register: backup_vol_info
+      changed_when: false
+
+    - name: Copy existing backups to brick on pi1
+      ansible.builtin.shell: |
+        if [ -d {{ backup_mount }} ] && [ ! -d {{ backup_brick }}/offsite ]; then
+          cp -a {{ backup_mount }}/* {{ backup_brick }}/ 2>/dev/null || true
+        fi
+      when: "'not-found' in backup_vol_info.stdout"
+      changed_when: true
+
+    - name: Create replicated backups volume
+      ansible.builtin.shell: |
+        gluster volume create backups replica 2 \
+          {{ hostvars['pi1']['ansible_host'] }}:{{ backup_brick }} \
+          {{ hostvars['pi2']['ansible_host'] }}:{{ backup_brick }} \
+          force 2>&1
+      when: "'not-found' in backup_vol_info.stdout"
+      changed_when: true
+
+    - name: Set backups volume options
+      ansible.builtin.shell: |
+        gluster volume set backups auth.allow {{ hostvars['pi1']['ansible_host'] }},{{ hostvars['pi2']['ansible_host'] }},127.0.0.1
+        gluster volume set backups performance.cache-size 256MB
+        gluster volume set backups server.allow-insecure on
+      when: "'not-found' in backup_vol_info.stdout"
+      changed_when: true
+
+    - name: Start backups volume
+      ansible.builtin.shell: |
+        gluster volume start backups 2>&1
+      when: "'not-found' in backup_vol_info.stdout"
+      changed_when: true
+
+- name: Mount backups GlusterFS volume
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+
+  vars:
+    backup_mount: /mnt/backups
+    node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+
+  tasks:
+    - name: Unmount if already mounted
+      ansible.builtin.mount:
+        path: "{{ backup_mount }}"
+        state: unmounted
+
+    - name: Mount backups GlusterFS volume
+      ansible.builtin.mount:
+        path: "{{ backup_mount }}"
+        src: "{{ node_ip }}:/backups"
+        fstype: glusterfs
+        opts: "defaults,_netdev,backup-volfile-servers={{ pi2_ip if inventory_hostname == 'pi1' else pi1_ip }}"
+        state: mounted
+
+    - name: Ensure backup subdirectories exist
+      ansible.builtin.file:
+        path: "{{ backup_mount }}/{{ item }}"
+        state: directory
+        owner: sm
+        group: sm
+        mode: '0755'
+      loop:
+        - offsite
+        - git-mirror
+
+- name: Verify backups volume
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check backups volume status
+      ansible.builtin.shell: |
+        gluster volume status backups
+      register: backup_vol_status
+      changed_when: false
+
+    - name: Check mount on both nodes
+      ansible.builtin.shell: |
+        set -o pipefail
+        mount | grep backups
+      register: backup_mount_check
+      changed_when: false
+      delegate_to: "{{ item }}"
+      loop: [pi1, pi2]
+
+    - name: Print backups results
+      ansible.builtin.debug:
+        msg: |
+          ============================================
+          GlusterFS Backups Volume — Complete
+          ============================================
+          {{ backup_vol_status.stdout }}
           ============================================
