@@ -290,6 +290,8 @@
           --set hubble.enabled=true \
           --set hubble.relay.enabled=true \
           --set hubble.ui.enabled=false \
+          --set l2announcements.enabled=true \
+          --set externalIPs.enabled=true \
           --wait --timeout 180s
       changed_when: true
 
@@ -301,6 +303,30 @@
       retries: 6
       delay: 10
       until: cilium_wait.rc == 0
+
+    - name: Create Cilium L2 LoadBalancer IP pool
+      ansible.builtin.shell: |
+        kubectl apply -f - <<'EOF'
+        apiVersion: cilium.io/v2alpha1
+        kind: CiliumLoadBalancerIPPool
+        metadata:
+          name: default-pool
+        spec:
+          blocks:
+            - start: "{{ node_ip }}"
+              stop: "{{ node_ip }}"
+        ---
+        apiVersion: cilium.io/v2alpha1
+        kind: CiliumL2AnnouncementPolicy
+        metadata:
+          name: default-l2-policy
+        spec:
+          loadBalancerIPs: true
+          interfaces:
+            - ^enp.*
+            - ^eth.*
+        EOF
+      changed_when: true
 
     # ================================================================
     # Phase 7b: Install Istio service mesh
