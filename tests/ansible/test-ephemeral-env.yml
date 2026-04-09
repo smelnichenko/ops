@@ -30,12 +30,12 @@
         msg: "Creating {{ namespace }}..."
 
     - name: Run create-environment playbook
-      ansible.builtin.command:
-        cmd: >-
-          ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml
+      ansible.builtin.shell: |
+        cd {{ playbook_dir }}/../../deploy/ansible
+        venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml \
           -e "env_name={{ env_name }}"
-        chdir: "{{ playbook_dir }}/../../deploy/ansible"
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Wait for ArgoCD to sync {{ namespace }}
@@ -89,12 +89,12 @@
         msg: "Destroying {{ namespace }}..."
 
     - name: Run destroy-environment playbook
-      ansible.builtin.command:
-        cmd: >-
-          ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml
+      ansible.builtin.shell: |
+        cd {{ playbook_dir }}/../../deploy/ansible
+        venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml \
           -e "env_name={{ env_name }}"
-        chdir: "{{ playbook_dir }}/../../deploy/ansible"
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Wait for ArgoCD apps to disappear
@@ -141,12 +141,12 @@
         msg: "Recreating {{ namespace }} to verify idempotency..."
 
     - name: Run create-environment playbook (round 2)
-      ansible.builtin.command:
-        cmd: >-
-          ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml
+      ansible.builtin.shell: |
+        cd {{ playbook_dir }}/../../deploy/ansible
+        venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/create-environment.yml \
           -e "env_name={{ env_name }}"
-        chdir: "{{ playbook_dir }}/../../deploy/ansible"
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Wait for ArgoCD sync (round 2)
@@ -172,12 +172,12 @@
     # ================================================================
 
     - name: Run destroy-environment playbook (final cleanup)
-      ansible.builtin.command:
-        cmd: >-
-          ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml
+      ansible.builtin.shell: |
+        cd {{ playbook_dir }}/../../deploy/ansible
+        venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/destroy-environment.yml \
           -e "env_name={{ env_name }}"
-        chdir: "{{ playbook_dir }}/../../deploy/ansible"
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Delete namespace (final)
