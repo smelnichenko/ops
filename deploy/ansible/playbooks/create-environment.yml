@@ -152,6 +152,17 @@
                 ports:
                   - protocol: TCP
                     port: 8080
+              # Gateway ingress (cross-namespace routing from prod gateway)
+              - from:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: schnappy
+                    podSelector:
+                      matchLabels:
+                        istio.io/gateway-name: schnappy-gateway
+                ports:
+                  - protocol: TCP
+                    port: 8080
               # Kubelet probes
               - ports:
                   - protocol: TCP
