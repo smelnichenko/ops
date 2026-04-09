@@ -89,6 +89,53 @@
         state: absent
 
     # ================================================================
+    # Phase 2.5: Remove redirect URI from Keycloak app client
+    # ================================================================
+
+    - name: Get Keycloak admin password from Vault
+      ansible.builtin.shell: |
+        sudo cat /etc/vault-unseal/root-token | xargs -I{} env VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 VAULT_TOKEN={} vault kv get -field=admin_password secret/schnappy/keycloak
+      register: kc_password
+      changed_when: false
+      delegate_to: pi1
+
+    - name: Get Keycloak admin token
+      ansible.builtin.uri:
+        url: "https://auth.pmon.dev/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: admin-cli
+          username: admin
+          password: "{{ kc_password.stdout }}"
+          grant_type: password
+        validate_certs: true
+      register: kc_token
+
+    - name: Get current app client config
+      ansible.builtin.uri:
+        url: "https://auth.pmon.dev/admin/realms/schnappy/clients?clientId=app&first=0&max=1"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+        validate_certs: true
+      register: kc_app_client
+
+    - name: Remove redirect URI for destroyed environment
+      ansible.builtin.uri:
+        url: "https://auth.pmon.dev/admin/realms/schnappy/clients/{{ kc_app_client.json[0].id }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          clientId: app
+          redirectUris: "{{ kc_app_client.json[0].redirectUris | reject('search', env_name + '.pmon.dev') | list }}"
+          webOrigins: "{{ kc_app_client.json[0].webOrigins }}"
+        validate_certs: true
+        status_code: 204
+
+    # ================================================================
     # Phase 3: Remove values files
     # ================================================================
 
