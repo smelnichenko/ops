@@ -415,7 +415,7 @@
             "{{ git_mirror_local_path }}"
           # Add Pi as push target
           git -C "{{ git_mirror_local_path }}" remote add pi \
-            "{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/git-mirror/monitor.git"
+            "{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git"
           # Configure SSH key for Pi remote
           git -C "{{ git_mirror_local_path }}" config \
             core.sshCommand "ssh -o StrictHostKeyChecking=no -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
@@ -441,7 +441,7 @@
 
           SSH_KEY="{{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
           SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i $SSH_KEY"
-          REMOTE="{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.4') }}"
+          REMOTE="{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.5') }}"
 
           # 1. Rsync MinIO backup data
           logger -t offsite-backup "Starting MinIO rsync to ${REMOTE}"
@@ -518,8 +518,8 @@
             - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
 
           Offsite replication:
-            - Target: {{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/offsite/
-            - Git mirror: {{ offsite_backup_host | default('192.168.11.4') }}:/mnt/backups/git-mirror/monitor.git
+            - Target: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/offsite/
+            - Git mirror: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git
             - Schedule: 4 AM daily (systemd timer)
             - Check: systemctl status offsite-backup.timer
             - Manual run: systemctl start offsite-backup.service
