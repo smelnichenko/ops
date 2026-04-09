@@ -49,25 +49,9 @@
         git config user.name "test"
       delegate_to: localhost
       become: false
+      register: playbook_result
       changed_when: true
-
-    - name: Ensure test template values exist in Vagrant infra
-      ansible.builtin.shell: |
-        cd {{ tmp_infra }}
-        REAL_INFRA={{ playbook_dir }}/../../../../infra
-        for chart in data apps mesh; do
-          DIR=clusters/production/schnappy-test-${chart}
-          if [ ! -f "$DIR/values.yaml" ]; then
-            mkdir -p "$DIR"
-            cp "$REAL_INFRA/$DIR/values.yaml" "$DIR/values.yaml"
-          fi
-        done
-        git add -A
-        git diff --cached --quiet || git commit -m "add test template values"
-        git push origin main
-      delegate_to: localhost
-      become: false
-      changed_when: true
+      failed_when: playbook_result.rc != 0
 
     # ================================================================
     # Round 1: Create
@@ -86,7 +70,9 @@
           -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
+      register: playbook_result
       changed_when: true
+      failed_when: playbook_result.rc != 0
 
     - name: Wait for ArgoCD sync
       ansible.builtin.shell: |
@@ -131,7 +117,9 @@
           -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
+      register: playbook_result
       changed_when: true
+      failed_when: playbook_result.rc != 0
 
     - name: Wait for ArgoCD apps to disappear
       ansible.builtin.shell: |
@@ -150,7 +138,9 @@
     - name: Delete namespace
       ansible.builtin.command:
         cmd: kubectl delete namespace {{ ns }} --timeout=120s
+      register: playbook_result
       changed_when: true
+      failed_when: playbook_result.rc != 0
       failed_when: false
 
     - name: "ROUND 1 DESTROY: PASSED"
@@ -174,7 +164,9 @@
           -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
+      register: playbook_result
       changed_when: true
+      failed_when: playbook_result.rc != 0
 
     - name: Wait for ArgoCD sync (round 2)
       ansible.builtin.shell: |
@@ -207,12 +199,16 @@
           -e "infra_git_url_override={{ infra_git_url }}"
       delegate_to: localhost
       become: false
+      register: playbook_result
       changed_when: true
+      failed_when: playbook_result.rc != 0
 
     - name: Delete namespace (final)
       ansible.builtin.command:
         cmd: kubectl delete namespace {{ ns }} --timeout=120s
+      register: playbook_result
       changed_when: true
+      failed_when: playbook_result.rc != 0
       failed_when: false
 
     - name: Clean temp infra dir

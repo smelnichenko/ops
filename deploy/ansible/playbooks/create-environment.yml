@@ -196,25 +196,215 @@
       delegate_to: localhost
       become: false
 
-    - name: Copy and customize data values
-      ansible.builtin.shell: |
-        cp {{ cluster_dir }}/schnappy-test-data/values.yaml {{ cluster_dir }}/{{ namespace }}-data/values.yaml
-        sed -i 's|secret/data/schnappy-test|secret/data/{{ namespace }}|g' {{ cluster_dir }}/{{ namespace }}-data/values.yaml
-        sed -i 's|schnappy-test-|{{ namespace }}-|g' {{ cluster_dir }}/{{ namespace }}-data/values.yaml
+    - name: Create data values
+      ansible.builtin.copy:
+        dest: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
+        mode: '0644'
+        content: |
+          vault:
+            secretsEnabled: true
+            secretPathPrefix: "secret/data/{{ namespace }}"
+
+          networkPolicies:
+            enabled: true
+
+          postgres:
+            enabled: false
+
+          redis:
+            enabled: true
+            existingSecret: {{ namespace }}-redis
+            image: redis:7-alpine
+            resources:
+              requests: { cpu: 10m, memory: 32Mi }
+              limits: { cpu: 100m, memory: 128Mi }
+
+          kafka:
+            enabled: false
+            existingSecret: {{ namespace }}-kafka
+            resources:
+              requests: { cpu: 50m, memory: 512Mi }
+              limits: { cpu: 1000m, memory: 1536Mi }
+            retention:
+              hours: 24
+              bytes: "2147483648"
+            storage:
+              size: 2Gi
+              storageClass: local-path
+
+          scylla:
+            enabled: false
+            resources:
+              requests: { cpu: 50m, memory: 256Mi }
+              limits: { cpu: 1000m, memory: 512Mi }
+
+          scyllaOperator:
+            enabled: true
+            version: "6.2.3"
+            agentVersion: "3.9.0"
+            developerMode: true
+
+          minio:
+            enabled: true
+            existingSecret: {{ namespace }}-minio
+            bucket: email-attachments
+            buckets:
+              - email-attachments
+            image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+            storage:
+              size: 5Gi
+              storageClass: local-path
+            resources:
+              requests: { cpu: 25m, memory: 128Mi }
+              limits: { cpu: 500m, memory: 512Mi }
+
+          strimzi:
+            enabled: true
+
+          cnpg:
+            enabled: true
+            import: false
+            backup: false
+
+          aptCache:
+            enabled: false
       delegate_to: localhost
       become: false
-      changed_when: true
 
-    - name: Copy and customize apps values
-      ansible.builtin.shell: |
-        cp {{ cluster_dir }}/schnappy-test-apps/values.yaml {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
-        sed -i 's|secret/data/schnappy-test|secret/data/{{ namespace }}|g' {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
-        sed -i 's|schnappy-test-|{{ namespace }}-|g' {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
+    - name: Create apps values
+      ansible.builtin.copy:
+        dest: "{{ cluster_dir }}/{{ namespace }}-apps/values.yaml"
+        mode: '0644'
+        content: |
+          vault:
+            secretsEnabled: true
+            secretPathPrefix: "secret/data/{{ namespace }}"
+
+          app:
+            replicas: 1
+            javaOpts: -Xmx1g -XX:+UseZGC
+            image:
+              pullPolicy: IfNotPresent
+              repository: git.pmon.dev/schnappy/monitor
+              tag: "latest"
+            ingress:
+              enabled: false
+            resources:
+              requests: { cpu: 50m, memory: 512Mi }
+              limits: { cpu: 2000m, memory: 2Gi }
+
+          site:
+            enabled: true
+            replicas: 1
+            image:
+              pullPolicy: IfNotPresent
+              repository: git.pmon.dev/schnappy/site
+              tag: "latest"
+            resources:
+              requests: { cpu: 10m, memory: 32Mi }
+              limits: { cpu: 500m, memory: 128Mi }
+
+          games: []
+
+          auth:
+            existingSecret: {{ namespace }}-auth
+            registrationEnabled: true
+            secureCookies: true
+            tokenExpiration: 1h
+
+          captcha:
+            enabled: false
+
+          chess:
+            enabled: true
+
+          chat:
+            e2eEnabled: false
+
+          monitor:
+            enabled: true
+
+          networkPolicies:
+            enabled: true
+
+          strimzi:
+            enabled: true
+
+          cnpg:
+            enabled: true
+
+          scyllaOperator:
+            enabled: true
+
+          ai:
+            enabled: false
+
+          mail:
+            enabled: false
+
+          webhook:
+            enabled: false
+
+          admin:
+            enabled: true
+            image:
+              repository: git.pmon.dev/schnappy/admin
+              pullPolicy: IfNotPresent
+              tag: "latest"
+            replicas: 1
+            javaOpts: -Xmx512m -XX:+UseZGC
+            resources:
+              requests: { cpu: 50m, memory: 256Mi }
+              limits: { cpu: 1000m, memory: 1Gi }
+
+          chatService:
+            enabled: true
+            image:
+              repository: git.pmon.dev/schnappy/chat
+              pullPolicy: IfNotPresent
+              tag: "latest"
+            replicas: 1
+            javaOpts: -Xmx512m -XX:+UseZGC
+            resources:
+              requests: { cpu: 50m, memory: 256Mi }
+              limits: { cpu: 1000m, memory: 1Gi }
+
+          chessService:
+            enabled: true
+            image:
+              repository: git.pmon.dev/schnappy/chess
+              pullPolicy: IfNotPresent
+              tag: "latest"
+            replicas: 1
+            javaOpts: -Xmx512m -XX:+UseZGC
+            resources:
+              requests: { cpu: 50m, memory: 256Mi }
+              limits: { cpu: 1000m, memory: 1Gi }
+
+          tracing:
+            enabled: false
+
+          smokeTest:
+            enabled: false
+
+          hyperfoil:
+            enabled: false
+
+          postgres:
+            database: monitor
+            existingSecret: {{ namespace }}-postgres
+          redis:
+            existingSecret: {{ namespace }}-redis
+          minio:
+            existingSecret: {{ namespace }}-minio
+          alertmanager:
+            enabled: false
+          keycloak:
+            enabled: false
       delegate_to: localhost
       become: false
-      changed_when: true
 
-    - name: Create mesh values with external gateway
+    - name: Create mesh values
       ansible.builtin.copy:
         dest: "{{ cluster_dir }}/{{ namespace }}-mesh/values.yaml"
         mode: '0644'
