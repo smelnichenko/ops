@@ -50,14 +50,28 @@
         msg: "Environment {{ namespace }} already exists"
       when: env_exists.stat.exists
 
-    - name: Read Vault root token
+    - name: Read Vault root token (production path)
       ansible.builtin.slurp:
         src: /etc/vault-unseal/root-token
-      register: vault_token_raw
+      register: vault_token_prod
+      failed_when: false
+
+    - name: Read Vault root token (vagrant path)
+      ansible.builtin.shell: |
+        jq -r .root_token /tmp/vault-init.json
+      register: vault_token_vagrant
+      changed_when: false
+      failed_when: false
+      when: vault_token_prod.content is not defined
 
     - name: Set vault env
       ansible.builtin.set_fact:
-        vault_env: "VAULT_ADDR={{ vault_addr }} VAULT_SKIP_VERIFY=1 VAULT_TOKEN={{ vault_token_raw.content | b64decode | trim }}"
+        vault_env: >-
+          VAULT_ADDR={{ vault_addr }} VAULT_SKIP_VERIFY=1 VAULT_TOKEN={{
+          (vault_token_prod.content | b64decode | trim)
+          if vault_token_prod.content is defined
+          else vault_token_vagrant.stdout | trim
+          }}
 
     - name: Generate passwords
       ansible.builtin.set_fact:
@@ -103,11 +117,20 @@
     # Phase 2: Add Keycloak redirect URI
     # ================================================================
 
+    - name: Check if Keycloak schnappy realm exists
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/realms/schnappy/.well-known/openid-configuration"
+        validate_certs: false
+        status_code: [200, 404]
+      register: kc_realm_check
+      failed_when: false
+
     - name: Get Keycloak admin password
       ansible.builtin.shell: |
         {{ vault_env }} vault kv get -field=admin_password secret/schnappy/keycloak
       register: kc_password
       changed_when: false
+      when: kc_realm_check.status == 200
 
     - name: Get Keycloak admin token
       ansible.builtin.uri:
@@ -121,6 +144,7 @@
           grant_type: password
         validate_certs: false
       register: kc_token
+      when: kc_realm_check.status == 200
 
     - name: Get app client config
       ansible.builtin.uri:
@@ -129,6 +153,7 @@
           Authorization: "Bearer {{ kc_token.json.access_token }}"
         validate_certs: false
       register: kc_app_client
+      when: kc_realm_check.status == 200
 
     - name: Add redirect URI
       ansible.builtin.uri:
@@ -144,10 +169,11 @@
           webOrigins: "{{ kc_app_client.json[0].webOrigins }}"
         validate_certs: false
         status_code: 204
+      when: kc_realm_check.status == 200
 
     - name: "PHASE 2: Keycloak redirect URI added"
       ansible.builtin.debug:
-        msg: "Added https://{{ env_name }}.pmon.dev/* to Keycloak app client"
+        msg: "{{ 'Added https://' + env_name + '.pmon.dev/* to Keycloak' if kc_realm_check.status == 200 else 'Skipped (no schnappy realm)' }}"
 
     # ================================================================
     # Phase 3: Create infra files (runs on localhost)
