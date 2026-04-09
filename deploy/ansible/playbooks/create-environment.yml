@@ -88,6 +88,13 @@
     # Phase 1: Seed Vault secrets
     # ================================================================
 
+    - name: Ensure KV secrets engine is mounted
+      ansible.builtin.shell: |
+        {{ vault_env }} vault secrets list -format=json | grep -q '"secret/"' || \
+        {{ vault_env }} vault secrets enable -path=secret kv-v2
+      changed_when: false
+      failed_when: false
+
     - name: Seed Vault secrets for {{ namespace }}
       ansible.builtin.shell: |
         {{ vault_env }} vault kv put secret/{{ namespace }}/postgres \
