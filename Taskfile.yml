@@ -289,12 +289,53 @@ tasks:
         git push
 
   deploy:seed-test-secrets:
-    desc: Seed test environment secrets into Vault
+    desc: Seed test environment secrets into Vault (overrides from .env.test)
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env', '../../.env.test']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e vault_prefix=schnappy-test
+      - >-
+        venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
+        -e vault_prefix=schnappy-test
+        -e "MONITOR_DB_PASSWORD=$MONITOR_DB_PASSWORD"
+        -e "REDIS_PASSWORD=$REDIS_PASSWORD"
+        -e "JWT_SECRET=$JWT_SECRET"
+        -e "MAIL_PASSWORD=${MAIL_PASSWORD:-unused}"
+        -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-unused}"
+        -e "RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-unused}"
+        -e "RESEND_API_KEY=${RESEND_API_KEY:-unused}"
+        -e "MINIO_ROOT_USER=$MINIO_ROOT_USER"
+        -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD"
+        -e "ELASTICSEARCH_PASSWORD=$ELASTICSEARCH_PASSWORD"
+        -e "KIBANA_PASSWORD=$KIBANA_PASSWORD"
+        -e "GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-unused}"
+        -e "KAFKA_CLUSTER_ID=$KAFKA_CLUSTER_ID"
+        -e "FORGEJO_ADMIN_USER=${FORGEJO_ADMIN_USER:-forgejo_admin}"
+        -e "FORGEJO_ADMIN_PASSWORD=${FORGEJO_ADMIN_PASSWORD:-unused}"
+        -e "FORGEJO_ADMIN_EMAIL=${FORGEJO_ADMIN_EMAIL:-admin@pmon.dev}"
+        -e "KEYCLOAK_FORGEJO_CLIENT_SECRET=${KEYCLOAK_FORGEJO_CLIENT_SECRET:-unused}"
+        -e "SONARQUBE_ADMIN_PASSWORD=${SONARQUBE_ADMIN_PASSWORD:-unused}"
+        -e "SONARQUBE_POSTGRES_PASSWORD=${SONARQUBE_POSTGRES_PASSWORD:-unused}"
+        -e "SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-unused}"
+        -e "VELERO_MINIO_ACCESS_KEY=${VELERO_MINIO_ACCESS_KEY:-unused}"
+        -e "VELERO_MINIO_SECRET_KEY=${VELERO_MINIO_SECRET_KEY:-unused}"
+        -e "WOODPECKER_FORGEJO_CLIENT=${WOODPECKER_FORGEJO_CLIENT:-unused}"
+        -e "WOODPECKER_FORGEJO_SECRET=${WOODPECKER_FORGEJO_SECRET:-unused}"
+        -e "WOODPECKER_CLONE_TOKEN=${WOODPECKER_CLONE_TOKEN:-unused}"
+        -e "WOODPECKER_INFRA_REPO_TOKEN=${WOODPECKER_INFRA_REPO_TOKEN:-unused}"
+        -e "KEYCLOAK_ARGOCD_CLIENT_SECRET=${KEYCLOAK_ARGOCD_CLIENT_SECRET:-unused}"
+        -e "KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET=${KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET:-unused}"
+        -e "KEYCLOAK_K6_SMOKE_CLIENT_SECRET=${KEYCLOAK_K6_SMOKE_CLIENT_SECRET:-unused}"
+        -e "K6_SMOKE_CLIENT_SECRET=${KEYCLOAK_K6_SMOKE_CLIENT_SECRET:-unused}"
+        -e "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-unused}"
+        -e "KEYCLOAK_DB_PASSWORD=${KEYCLOAK_DB_PASSWORD:-unused}"
+        -e "GRAFANA_OAUTH_CLIENT_ID=${GRAFANA_OAUTH_CLIENT_ID:-unused}"
+        -e "GRAFANA_OAUTH_CLIENT_SECRET=${GRAFANA_OAUTH_CLIENT_SECRET:-unused}"
+        -e "PORKBUN_API_KEY=${PORKBUN_API_KEY:-unused}"
+        -e "PORKBUN_SECRET_KEY=${PORKBUN_SECRET_KEY:-unused}"
+        -e "ALERTMANAGER_WEBHOOK_SECRET=${ALERTMANAGER_WEBHOOK_SECRET:-unused}"
+        -e "NVD_API_KEY=${NVD_API_KEY:-unused}"
+        -e "PROMETHEUS_AUTH_TOKEN=${PROMETHEUS_AUTH_TOKEN:-unused}"
 
   test:vault:
     desc: Test Vault end-to-end in Vagrant
