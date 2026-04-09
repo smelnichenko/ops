@@ -234,126 +234,229 @@
           {{ heal_info.stdout }}
           ============================================
 
-# ─── Backups GlusterFS volume ──────────────────────────────────────────────
-- name: Create backups GlusterFS volume
+# ─── Remove old monolithic backups volume if present ───────────────────────
+- name: Remove old backups volume
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Unmount old /mnt/backups if GlusterFS
+      ansible.builtin.shell: |
+        if mount | grep -q 'backups on /mnt/backups.*glusterfs'; then
+          umount /mnt/backups
+          sed -i '/\/backups/d' /etc/fstab
+          echo "unmounted"
+        else
+          echo "skip"
+        fi
+      register: unmount_old
+      changed_when: "'unmounted' in unmount_old.stdout"
+
+- name: Stop old backups volume
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop and delete old backups volume
+      ansible.builtin.shell: |
+        if gluster volume info backups >/dev/null 2>&1; then
+          gluster volume stop backups force --mode=script
+          gluster volume delete backups --mode=script
+          echo "deleted"
+        else
+          echo "skip"
+        fi
+      register: delete_old
+      changed_when: "'deleted' in delete_old.stdout"
+
+# ─── Backup GlusterFS volumes (scylla, postgres, velero) ───────────────────
+- name: Create backup GlusterFS volumes
   hosts: pi1
   become: true
   gather_facts: false
 
   vars:
-    backup_brick: /var/lib/gluster/backups-brick
-    backup_mount: /mnt/backups
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    backup_volumes:
+      - name: backup-scylla
+        brick: /var/lib/gluster/backup-scylla-brick
+        mount: /mnt/backups/scylla
+        minio_bucket: scylla-backups
+      - name: backup-postgres
+        brick: /var/lib/gluster/backup-postgres-brick
+        mount: /mnt/backups/postgres
+        minio_bucket: postgres-backups
+      - name: backup-velero
+        brick: /var/lib/gluster/backup-velero-brick
+        mount: /mnt/backups/velero
+        minio_bucket: ""
 
   tasks:
-    - name: Create backup brick directories
+    - name: Create brick directories on both nodes
       ansible.builtin.file:
-        path: "{{ backup_brick }}"
+        path: "{{ item.1.brick }}"
         state: directory
         owner: root
         group: root
         mode: '0755'
-      delegate_to: "{{ item }}"
-      loop: [pi1, pi2]
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ ['pi1', 'pi2'] | product(backup_volumes) | list }}"
 
-    - name: Check if backups volume exists
+    - name: Create replicated volumes
       ansible.builtin.shell: |
-        gluster volume info backups 2>/dev/null && echo "exists" || echo "not-found"
-      register: backup_vol_info
-      changed_when: false
-
-    - name: Copy existing backups to brick on pi1
-      ansible.builtin.shell: |
-        if [ -d {{ backup_mount }} ] && [ ! -d {{ backup_brick }}/offsite ]; then
-          cp -a {{ backup_mount }}/* {{ backup_brick }}/ 2>/dev/null || true
+        if gluster volume info {{ item.name }} >/dev/null 2>&1; then
+          echo "exists"
+        else
+          gluster volume create {{ item.name }} replica 2 \
+            {{ pi1_ip }}:{{ item.brick }} \
+            {{ pi2_ip }}:{{ item.brick }} \
+            force
+          gluster volume set {{ item.name }} auth.allow {{ pi1_ip }},{{ pi2_ip }},127.0.0.1
+          gluster volume set {{ item.name }} server.allow-insecure on
+          gluster volume start {{ item.name }}
+          echo "created"
         fi
-      when: "'not-found' in backup_vol_info.stdout"
-      changed_when: true
+      register: vol_create
+      changed_when: "'created' in vol_create.stdout"
+      loop: "{{ backup_volumes }}"
 
-    - name: Create replicated backups volume
+    - name: Migrate existing MinIO data to bricks
       ansible.builtin.shell: |
-        gluster volume create backups replica 2 \
-          {{ hostvars['pi1']['ansible_host'] }}:{{ backup_brick }} \
-          {{ hostvars['pi2']['ansible_host'] }}:{{ backup_brick }} \
-          force 2>&1
-      when: "'not-found' in backup_vol_info.stdout"
-      changed_when: true
+        SRC=/var/lib/minio/data/{{ item.minio_bucket }}
+        if [ -d "$SRC" ] && [ "$(ls -A {{ item.brick }}/ 2>/dev/null | head -1)" = "" ]; then
+          cp -a "$SRC"/* {{ item.brick }}/ 2>/dev/null || true
+          echo "migrated"
+        else
+          echo "skip"
+        fi
+      register: migrate
+      changed_when: "'migrated' in migrate.stdout"
+      loop: "{{ backup_volumes }}"
+      when: item.minio_bucket | length > 0
 
-    - name: Set backups volume options
+    - name: Migrate existing Velero offsite data to brick
       ansible.builtin.shell: |
-        gluster volume set backups auth.allow {{ hostvars['pi1']['ansible_host'] }},{{ hostvars['pi2']['ansible_host'] }},127.0.0.1
-        gluster volume set backups performance.cache-size 256MB
-        gluster volume set backups server.allow-insecure on
-      when: "'not-found' in backup_vol_info.stdout"
-      changed_when: true
+        SRC=/mnt/backups/offsite
+        BRICK=/var/lib/gluster/backup-velero-brick
+        if [ -d "$SRC" ] && [ "$(ls -A $BRICK/ 2>/dev/null | head -1)" = "" ]; then
+          cp -a "$SRC"/* $BRICK/ 2>/dev/null || true
+          echo "migrated"
+        else
+          echo "skip"
+        fi
+      register: velero_migrate
+      changed_when: "'migrated' in velero_migrate.stdout"
 
-    - name: Start backups volume
-      ansible.builtin.shell: |
-        gluster volume start backups 2>&1
-      when: "'not-found' in backup_vol_info.stdout"
-      changed_when: true
-
-- name: Mount backups GlusterFS volume
+- name: Mount backup GlusterFS volumes
   hosts: pi1,pi2
   become: true
   gather_facts: true
 
   vars:
-    backup_mount: /mnt/backups
     node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    backup_volumes:
+      - { name: backup-scylla, mount: /mnt/backups/scylla }
+      - { name: backup-postgres, mount: /mnt/backups/postgres }
+      - { name: backup-velero, mount: /mnt/backups/velero }
 
   tasks:
-    - name: Unmount if already mounted
-      ansible.builtin.mount:
-        path: "{{ backup_mount }}"
-        state: unmounted
+    - name: Create mount points
+      ansible.builtin.file:
+        path: "{{ item.mount }}"
+        state: directory
+        mode: '0755'
+      loop: "{{ backup_volumes }}"
 
-    - name: Mount backups GlusterFS volume
+    - name: Mount backup volumes
       ansible.builtin.mount:
-        path: "{{ backup_mount }}"
-        src: "{{ node_ip }}:/backups"
+        path: "{{ item.mount }}"
+        src: "{{ node_ip }}:/{{ item.name }}"
         fstype: glusterfs
         opts: "defaults,_netdev,backup-volfile-servers={{ pi2_ip if inventory_hostname == 'pi1' else pi1_ip }}"
         state: mounted
+      loop: "{{ backup_volumes }}"
 
-    - name: Ensure backup subdirectories exist
+- name: Reconfigure Pi MinIO to use GlusterFS-backed paths
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop MinIO
+      ansible.builtin.systemd:
+        name: minio
+        state: stopped
+      failed_when: false
+
+    - name: Replace MinIO bucket dirs with symlinks to GlusterFS
+      ansible.builtin.shell: |
+        for pair in "postgres-backups:/mnt/backups/postgres" "scylla-backups:/mnt/backups/scylla"; do
+          BUCKET="${pair%%:*}"
+          MOUNT="${pair##*:}"
+          DIR="/var/lib/minio/data/$BUCKET"
+          if [ -d "$DIR" ] && [ ! -L "$DIR" ]; then
+            # Move any remaining data to GlusterFS
+            cp -an "$DIR"/* "$MOUNT/" 2>/dev/null || true
+            rm -rf "$DIR"
+            ln -s "$MOUNT" "$DIR"
+            echo "linked $BUCKET"
+          elif [ ! -e "$DIR" ]; then
+            ln -s "$MOUNT" "$DIR"
+            echo "linked $BUCKET"
+          else
+            echo "skip $BUCKET"
+          fi
+        done
+      register: symlink_result
+      changed_when: "'linked' in symlink_result.stdout"
+
+    - name: Fix MinIO data ownership
       ansible.builtin.file:
-        path: "{{ backup_mount }}/{{ item }}"
-        state: directory
-        owner: sm
-        group: sm
-        mode: '0755'
-      loop:
-        - offsite
-        - git-mirror
+        path: "/var/lib/minio/data"
+        owner: minio
+        group: minio
+        recurse: true
+      failed_when: false
 
-- name: Verify backups volume
+    - name: Start MinIO
+      ansible.builtin.systemd:
+        name: minio
+        state: started
+      failed_when: false
+
+- name: Verify backup volumes
   hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Check backups volume status
+    - name: Check all backup volume statuses
       ansible.builtin.shell: |
-        gluster volume status backups
-      register: backup_vol_status
+        for vol in backup-scylla backup-postgres backup-velero; do
+          echo "=== $vol ==="
+          gluster volume status $vol 2>/dev/null | head -8
+        done
+      register: backup_status
       changed_when: false
 
-    - name: Check mount on both nodes
+    - name: Verify mounts on both nodes
       ansible.builtin.shell: |
-        set -o pipefail
-        mount | grep backups
-      register: backup_mount_check
+        mount | grep backup-
+      register: mount_check
       changed_when: false
       delegate_to: "{{ item }}"
       loop: [pi1, pi2]
 
-    - name: Print backups results
+    - name: Print results
       ansible.builtin.debug:
         msg: |
           ============================================
-          GlusterFS Backups Volume — Complete
+          GlusterFS Backup Volumes — Complete
           ============================================
-          {{ backup_vol_status.stdout }}
+          {{ backup_status.stdout }}
           ============================================
