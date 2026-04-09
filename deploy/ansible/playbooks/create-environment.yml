@@ -187,12 +187,17 @@
     # Phase 3: Create infra files (runs on localhost)
     # ================================================================
 
-    - name: Create values directories
+    - name: Create required directories
       ansible.builtin.file:
-        path: "{{ cluster_dir }}/{{ namespace }}-{{ item }}"
+        path: "{{ item }}"
         state: directory
         mode: '0755'
-      loop: [data, apps, mesh]
+      loop:
+        - "{{ cluster_dir }}/{{ namespace }}-data"
+        - "{{ cluster_dir }}/{{ namespace }}-apps"
+        - "{{ cluster_dir }}/{{ namespace }}-mesh"
+        - "{{ cluster_dir }}/cluster-config"
+        - "{{ cluster_dir }}/argocd/apps"
       delegate_to: localhost
       become: false
 
