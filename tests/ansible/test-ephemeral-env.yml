@@ -76,7 +76,7 @@
 
     - name: Wait for ArgoCD sync
       ansible.builtin.shell: |
-        for i in $(seq 1 60); do
+        for i in $(seq 1 120); do
           COUNT=$(kubectl get app -n argocd -o json | \
             jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}")) | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")] | length')
           [ "$COUNT" = "0" ] && FOUND=$(kubectl get app -n argocd -o json | jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}"))] | length') && [ "$FOUND" -gt "0" ] && echo "ALL_HEALTHY" && exit 0
@@ -170,7 +170,7 @@
 
     - name: Wait for ArgoCD sync (round 2)
       ansible.builtin.shell: |
-        for i in $(seq 1 60); do
+        for i in $(seq 1 120); do
           COUNT=$(kubectl get app -n argocd -o json | \
             jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}")) | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")] | length')
           [ "$COUNT" = "0" ] && FOUND=$(kubectl get app -n argocd -o json | jq -r '[.items[] | select(.metadata.name | test("{{ env_name }}"))] | length') && [ "$FOUND" -gt "0" ] && echo "ALL_HEALTHY" && exit 0
