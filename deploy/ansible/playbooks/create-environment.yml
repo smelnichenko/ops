@@ -652,7 +652,6 @@
 
     - name: Commit and push infra
       ansible.builtin.shell: |
-        cd {{ infra_dir }}
         git add -A
         git diff --cached --quiet && echo "no changes" && exit 0
         git commit -m "env: create {{ namespace }}"
@@ -661,6 +660,8 @@
         {% else %}
         git push origin main
         {% endif %}
+      args:
+        chdir: "{{ infra_dir }}"
       delegate_to: localhost
       become: false
       changed_when: true
