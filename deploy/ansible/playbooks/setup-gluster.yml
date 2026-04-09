@@ -413,7 +413,7 @@
 
     - name: Replace MinIO bucket dirs with symlinks to GlusterFS
       ansible.builtin.shell: |
-        for pair in "postgres-backups:/mnt/backups/postgres" "scylla-backups:/mnt/backups/scylla"; do
+        for pair in "postgres-backups:/mnt/backups/postgres" "scylla-backups:/mnt/backups/scylla" "velero:/mnt/backups/velero"; do
           BUCKET="${pair%%:*}"
           MOUNT="${pair##*:}"
           DIR="/var/lib/minio/data/$BUCKET"
