@@ -27,7 +27,7 @@
     test_ns: schnappy-test
     vault_ns: vault
     forgejo_admin_user: forgejo_admin
-    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('changeme', true) }}"
+    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('vagrant-forgejo-pw', true) }}"
     prod_pg_password: "vagrant-prod-pg-pw"
     test_pg_password: "vagrant-test-pg-pw"
     prod_redis_password: "vagrant-prod-redis-pw"
