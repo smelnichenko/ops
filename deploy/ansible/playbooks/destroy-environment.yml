@@ -36,6 +36,7 @@
         path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
       register: env_exists
       delegate_to: localhost
+      become: false
 
     - name: Fail if environment doesn't exist
       ansible.builtin.fail:
@@ -127,6 +128,7 @@
                 yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
         PYEOF
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Remove namespace from gateway allowedNamespaces
@@ -135,6 +137,7 @@
         line: "    - {{ namespace }}"
         state: absent
       delegate_to: localhost
+      become: false
 
     - name: "PHASE 2: ApplicationSets and gateway updated"
       ansible.builtin.debug:
@@ -150,18 +153,21 @@
         state: absent
       loop: [data, apps, mesh]
       delegate_to: localhost
+      become: false
 
     - name: Remove namespace manifest
       ansible.builtin.file:
         path: "{{ cluster_dir }}/cluster-config/{{ namespace }}-namespace.yaml"
         state: absent
       delegate_to: localhost
+      become: false
 
     - name: Remove default-deny + quota
       ansible.builtin.file:
         path: "{{ cluster_dir }}/cluster-config/{{ namespace }}-default-deny.yaml"
         state: absent
       delegate_to: localhost
+      become: false
 
     - name: Remove forgejo-registry block
       ansible.builtin.blockinfile:
@@ -169,6 +175,7 @@
         marker: "# {mark} {{ namespace }}"
         state: absent
       delegate_to: localhost
+      become: false
 
     - name: "PHASE 3: Infra files removed"
       ansible.builtin.debug:
@@ -186,6 +193,7 @@
         git commit -m "env: destroy {{ namespace }}"
         git push origin main
       delegate_to: localhost
+      become: false
       changed_when: true
       environment:
         GIT_AUTHOR_NAME: "env-automation"

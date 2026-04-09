@@ -43,6 +43,7 @@
         path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
       register: env_exists
       delegate_to: localhost
+      become: false
 
     - name: Fail if environment exists
       ansible.builtin.fail:
@@ -66,6 +67,7 @@
         gen_jwt_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
         gen_kafka_cluster_id: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=22') }}"
       delegate_to: localhost
+      become: false
 
   tasks:
     # ================================================================
@@ -158,6 +160,7 @@
         mode: '0755'
       loop: [data, apps, mesh]
       delegate_to: localhost
+      become: false
 
     - name: Copy and customize data values
       ansible.builtin.shell: |
@@ -165,6 +168,7 @@
         sed -i 's|secret/data/schnappy-test|secret/data/{{ namespace }}|g' {{ cluster_dir }}/{{ namespace }}-data/values.yaml
         sed -i 's|schnappy-test-|{{ namespace }}-|g' {{ cluster_dir }}/{{ namespace }}-data/values.yaml
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Copy and customize apps values
@@ -173,6 +177,7 @@
         sed -i 's|secret/data/schnappy-test|secret/data/{{ namespace }}|g' {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
         sed -i 's|schnappy-test-|{{ namespace }}-|g' {{ cluster_dir }}/{{ namespace }}-apps/values.yaml
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Create mesh values with external gateway
@@ -201,6 +206,7 @@
           jwt:
             enabled: false
       delegate_to: localhost
+      become: false
 
     - name: Create namespace manifest
       ansible.builtin.copy:
@@ -215,6 +221,7 @@
               istio.io/rev: default
               environment: {{ env_name }}
       delegate_to: localhost
+      become: false
 
     - name: Create default-deny + quota
       ansible.builtin.copy:
@@ -293,6 +300,7 @@
               limits.cpu: "32"
               limits.memory: 24Gi
       delegate_to: localhost
+      become: false
 
     - name: Add forgejo-registry secret
       ansible.builtin.blockinfile:
@@ -328,6 +336,7 @@
                   key: secret/data/schnappy/forgejo
                   property: admin_password
       delegate_to: localhost
+      become: false
 
     - name: "PHASE 3: Infra files created"
       ansible.builtin.debug:
@@ -363,6 +372,7 @@
                 yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
         PYEOF
       delegate_to: localhost
+      become: false
       changed_when: true
 
     - name: Add namespace to gateway allowedNamespaces
@@ -371,6 +381,7 @@
         insertafter: 'allowedNamespaces:'
         line: "    - {{ namespace }}"
       delegate_to: localhost
+      become: false
 
     - name: "PHASE 4: ApplicationSets and gateway updated"
       ansible.builtin.debug:
@@ -388,6 +399,7 @@
         git commit -m "env: create {{ namespace }}"
         git push origin main
       delegate_to: localhost
+      become: false
       changed_when: true
       environment:
         GIT_AUTHOR_NAME: "env-automation"
