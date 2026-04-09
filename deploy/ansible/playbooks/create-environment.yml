@@ -535,6 +535,7 @@
       ansible.builtin.blockinfile:
         path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
         marker: "# {mark} {{ namespace }}"
+        create: true
         insertbefore: EOF
         block: |
           ---
@@ -578,7 +579,7 @@
     - name: Add env to ApplicationSets
       ansible.builtin.shell: |
         python3 << 'PYEOF'
-        import yaml
+        import yaml, os
 
         appsets = {
             'data': '{{ cluster_dir }}/argocd/apps/schnappy-data-envs.yaml',
@@ -586,9 +587,37 @@
             'mesh': '{{ cluster_dir }}/argocd/apps/schnappy-mesh-envs.yaml',
         }
         for chart, path in appsets.items():
-            with open(path) as f:
-                doc = yaml.safe_load(f)
-            elements = doc['spec']['generators'][0]['list']['elements']
+            if os.path.exists(path):
+                with open(path) as f:
+                    doc = yaml.safe_load(f)
+                elements = doc['spec']['generators'][0]['list']['elements']
+            else:
+                # Create minimal ApplicationSet structure
+                doc = {
+                    'apiVersion': 'argoproj.io/v1alpha1',
+                    'kind': 'ApplicationSet',
+                    'metadata': {'name': f'schnappy-{chart}-envs', 'namespace': 'argocd'},
+                    'spec': {
+                        'generators': [{'list': {'elements': []}}],
+                        'template': {
+                            'metadata': {'name': f'schnappy-{"{{"}{chart}{"}}"}', 'namespace': 'argocd'},
+                            'spec': {
+                                'project': 'default',
+                                'sources': [
+                                    {'repoURL': 'http://{{ hostvars["pi1"]["ansible_host"] | default("192.168.11.5") }}:3000/schnappy/platform.git',
+                                     'targetRevision': 'main', 'path': f'helm/schnappy-{chart}',
+                                     'helm': {'releaseName': '{{"{{releaseName}}"}}', 'valueFiles': ['$values/{{"{{valuesPath}}"}}']}},
+                                    {'repoURL': 'http://{{ hostvars["pi1"]["ansible_host"] | default("192.168.11.5") }}:3000/schnappy/infra.git',
+                                     'targetRevision': 'main', 'ref': 'values'}
+                                ],
+                                'destination': {'server': 'https://kubernetes.default.svc', 'namespace': '{{"{{namespace}}"}}'},
+                                'syncPolicy': {'automated': {'selfHeal': True, 'prune': False}, 'syncOptions': ['CreateNamespace=true', 'RespectIgnoreDifferences=true']}
+                            }
+                        }
+                    }
+                }
+                elements = doc['spec']['generators'][0]['list']['elements']
+
             if not any(e['env'] == '{{ env_name }}' for e in elements):
                 elements.append({
                     'env': '{{ env_name }}',
@@ -609,6 +638,7 @@
         path: "{{ cluster_dir }}/schnappy-mesh/values.yaml"
         insertafter: 'allowedNamespaces:'
         line: "    - {{ namespace }}"
+        create: true
       delegate_to: localhost
       become: false
 
