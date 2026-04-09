@@ -241,17 +241,28 @@
   gather_facts: false
 
   tasks:
-    - name: Unmount old /mnt/backups if GlusterFS
+    - name: Unmount old GlusterFS backup mounts
       ansible.builtin.shell: |
-        if mount | grep -q 'backups on /mnt/backups.*glusterfs'; then
-          umount /mnt/backups
-          sed -i '/\/backups/d' /etc/fstab
-          echo "unmounted"
-        else
-          echo "skip"
-        fi
+        for mnt in /mnt/backups /mnt/backups/scylla /mnt/backups/postgres /mnt/backups/velero; do
+          if mount | grep -q "$mnt.*glusterfs"; then
+            umount "$mnt" 2>/dev/null || true
+            sed -i "\|$mnt|d" /etc/fstab
+            echo "unmounted $mnt"
+          fi
+        done
       register: unmount_old
       changed_when: "'unmounted' in unmount_old.stdout"
+
+    - name: Remove MinIO symlinks (replaced by GlusterFS mount)
+      ansible.builtin.shell: |
+        for link in /var/lib/minio/data/postgres-backups /var/lib/minio/data/scylla-backups /var/lib/minio/data/velero; do
+          if [ -L "$link" ]; then
+            rm "$link"
+            echo "removed $link"
+          fi
+        done
+      register: remove_symlinks
+      changed_when: "'removed' in remove_symlinks.stdout"
 
 - name: Stop old backups volume
   hosts: pi1
@@ -259,15 +270,15 @@
   gather_facts: false
 
   tasks:
-    - name: Stop and delete old backups volume
+    - name: Stop and delete old backup volumes
       ansible.builtin.shell: |
-        if gluster volume info backups >/dev/null 2>&1; then
-          gluster volume stop backups force --mode=script
-          gluster volume delete backups --mode=script
-          echo "deleted"
-        else
-          echo "skip"
-        fi
+        for vol in backups backup-scylla backup-postgres backup-velero; do
+          if gluster volume info $vol >/dev/null 2>&1; then
+            gluster volume stop $vol force --mode=script 2>/dev/null || true
+            gluster volume delete $vol --mode=script 2>/dev/null || true
+            echo "deleted $vol"
+          fi
+        done
       register: delete_old
       changed_when: "'deleted' in delete_old.stdout"
 
@@ -281,22 +292,14 @@
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
     backup_volumes:
-      - name: backup-scylla
-        brick: /var/lib/gluster/backup-scylla-brick
-        mount: /mnt/backups/scylla
-        minio_bucket: scylla-backups
-      - name: backup-postgres
-        brick: /var/lib/gluster/backup-postgres-brick
-        mount: /mnt/backups/postgres
-        minio_bucket: postgres-backups
-      - name: backup-velero
-        brick: /var/lib/gluster/backup-velero-brick
-        mount: /mnt/backups/velero
-        minio_bucket: ""
+      - name: backup-minio
+        brick: /var/lib/gluster/backup-minio-brick
+        mount: /var/lib/minio/data
+        minio_data: true
       - name: backup-git-mirror
         brick: /var/lib/gluster/backup-git-mirror-brick
         mount: /mnt/backups/git-mirror
-        minio_bucket: ""
+        minio_data: false
 
   tasks:
     - name: Create brick directories on both nodes
@@ -327,11 +330,10 @@
       changed_when: "'created' in vol_create.stdout"
       loop: "{{ backup_volumes }}"
 
-    - name: Migrate existing MinIO data to bricks
+    - name: Migrate existing data to bricks
       ansible.builtin.shell: |
-        SRC=/var/lib/minio/data/{{ item.minio_bucket }}
-        if [ -d "$SRC" ] && [ "$(ls -A {{ item.brick }}/ 2>/dev/null | head -1)" = "" ]; then
-          cp -a "$SRC"/* {{ item.brick }}/ 2>/dev/null || true
+        if [ -d "{{ item.mount }}" ] && [ ! -L "{{ item.mount }}" ] && [ "$(ls -A {{ item.brick }}/ 2>/dev/null | head -1)" = "" ]; then
+          cp -a "{{ item.mount }}"/* {{ item.brick }}/ 2>/dev/null || true
           echo "migrated"
         else
           echo "skip"
@@ -339,33 +341,6 @@
       register: migrate
       changed_when: "'migrated' in migrate.stdout"
       loop: "{{ backup_volumes }}"
-      when: item.minio_bucket | length > 0
-
-    - name: Migrate existing git-mirror data to brick
-      ansible.builtin.shell: |
-        SRC=/mnt/backups/git-mirror
-        BRICK=/var/lib/gluster/backup-git-mirror-brick
-        if [ -d "$SRC" ] && [ ! -L "$SRC" ] && [ "$(ls -A $BRICK/ 2>/dev/null | head -1)" = "" ]; then
-          cp -a "$SRC"/* $BRICK/ 2>/dev/null || true
-          echo "migrated"
-        else
-          echo "skip"
-        fi
-      register: git_mirror_migrate
-      changed_when: "'migrated' in git_mirror_migrate.stdout"
-
-    - name: Migrate existing Velero offsite data to brick
-      ansible.builtin.shell: |
-        SRC=/mnt/backups/offsite
-        BRICK=/var/lib/gluster/backup-velero-brick
-        if [ -d "$SRC" ] && [ "$(ls -A $BRICK/ 2>/dev/null | head -1)" = "" ]; then
-          cp -a "$SRC"/* $BRICK/ 2>/dev/null || true
-          echo "migrated"
-        else
-          echo "skip"
-        fi
-      register: velero_migrate
-      changed_when: "'migrated' in velero_migrate.stdout"
 
 - name: Mount backup GlusterFS volumes
   hosts: pi1,pi2
@@ -377,17 +352,29 @@
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
     backup_volumes:
-      - { name: backup-scylla, mount: /mnt/backups/scylla }
-      - { name: backup-postgres, mount: /mnt/backups/postgres }
-      - { name: backup-velero, mount: /mnt/backups/velero }
-      - { name: backup-git-mirror, mount: /mnt/backups/git-mirror }
+      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio }
+      - { name: backup-git-mirror, mount: /mnt/backups/git-mirror, stop_service: "" }
 
   tasks:
+    - name: Stop services before mounting
+      ansible.builtin.systemd:
+        name: "{{ item.stop_service }}"
+        state: stopped
+      loop: "{{ backup_volumes }}"
+      when: item.stop_service | length > 0
+      failed_when: false
+
     - name: Create mount points
       ansible.builtin.file:
         path: "{{ item.mount }}"
         state: directory
         mode: '0755'
+      loop: "{{ backup_volumes }}"
+
+    - name: Unmount if already mounted with different source
+      ansible.builtin.mount:
+        path: "{{ item.mount }}"
+        state: unmounted
       loop: "{{ backup_volumes }}"
 
     - name: Mount backup volumes
@@ -399,52 +386,19 @@
         state: mounted
       loop: "{{ backup_volumes }}"
 
-- name: Reconfigure Pi MinIO to use GlusterFS-backed paths
-  hosts: pi1,pi2
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Stop MinIO
-      ansible.builtin.systemd:
-        name: minio
-        state: stopped
-      failed_when: false
-
-    - name: Replace MinIO bucket dirs with symlinks to GlusterFS
-      ansible.builtin.shell: |
-        for pair in "postgres-backups:/mnt/backups/postgres" "scylla-backups:/mnt/backups/scylla" "velero:/mnt/backups/velero"; do
-          BUCKET="${pair%%:*}"
-          MOUNT="${pair##*:}"
-          DIR="/var/lib/minio/data/$BUCKET"
-          if [ -d "$DIR" ] && [ ! -L "$DIR" ]; then
-            # Move any remaining data to GlusterFS
-            cp -an "$DIR"/* "$MOUNT/" 2>/dev/null || true
-            rm -rf "$DIR"
-            ln -s "$MOUNT" "$DIR"
-            echo "linked $BUCKET"
-          elif [ ! -e "$DIR" ]; then
-            ln -s "$MOUNT" "$DIR"
-            echo "linked $BUCKET"
-          else
-            echo "skip $BUCKET"
-          fi
-        done
-      register: symlink_result
-      changed_when: "'linked' in symlink_result.stdout"
-
     - name: Fix MinIO data ownership
       ansible.builtin.file:
-        path: "/var/lib/minio/data"
+        path: /var/lib/minio/data
         owner: minio
         group: minio
-        recurse: true
-      failed_when: false
+        mode: '0755'
 
-    - name: Start MinIO
+    - name: Start services after mounting
       ansible.builtin.systemd:
-        name: minio
+        name: "{{ item.stop_service }}"
         state: started
+      loop: "{{ backup_volumes }}"
+      when: item.stop_service | length > 0
       failed_when: false
 
 - name: Verify backup volumes
@@ -455,7 +409,7 @@
   tasks:
     - name: Check all backup volume statuses
       ansible.builtin.shell: |
-        for vol in backup-scylla backup-postgres backup-velero backup-git-mirror; do
+        for vol in backup-minio backup-git-mirror; do
           echo "=== $vol ==="
           gluster volume status $vol 2>/dev/null | head -8
         done
