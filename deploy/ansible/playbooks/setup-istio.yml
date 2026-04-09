@@ -5,8 +5,7 @@
 #   - Istio sidecar (base, istiod, cni)
 #   - Enables sidecar injection for schnappy namespace
 #
-# kube-proxy handles LoadBalancer VIP (192.168.11.2:80/443) → gateway pods.
-# No HAProxy needed.
+# Gateway uses ClusterIP + externalIPs (192.168.11.2) — no LB controller needed.
 #
 # Prerequisites:
 #   - kubeadm cluster running (setup-kubeadm.yml)
@@ -107,7 +106,7 @@
 
     - name: Wait for Istio gateway service
       ansible.builtin.shell: |
-        kubectl get svc schnappy-gateway-istio -n {{ ns }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+        kubectl get svc schnappy-gateway-istio -n {{ ns }} -o jsonpath='{.spec.externalIPs[0]}'
       register: gateway_vip
       retries: 30
       delay: 10
