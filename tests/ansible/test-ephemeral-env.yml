@@ -23,8 +23,10 @@
     env_name: ephemeral
     ns: "schnappy-{{ env_name }}"
     forgejo_host: "{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}"
+    forgejo_admin_user: forgejo_admin
+    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('vagrant-forgejo-pw', true) }}"
     forgejo_url: "http://{{ forgejo_host }}:3000"
-    infra_git_url: "http://forgejo_admin:vagrant-forgejo-pw@{{ forgejo_host }}:3000/schnappy/infra.git"
+    infra_git_url: "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_host }}:3000/schnappy/infra.git"
     tmp_infra: /tmp/test-infra-ephemeral
 
   tasks:
