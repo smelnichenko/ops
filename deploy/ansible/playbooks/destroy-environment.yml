@@ -1,0 +1,122 @@
+---
+# Destroy a schnappy environment
+#
+# Usage:
+#   task env:destroy ENV_NAME=pr-123
+#
+# What it does:
+#   1. Removes env from ArgoCD ApplicationSets
+#   2. Removes cluster-config (namespace, NP, quota, forgejo-registry)
+#   3. Removes values files
+#   4. Commits and pushes infra repo
+#   5. ArgoCD deletes the Applications (namespace stays for manual cleanup)
+
+- name: "Destroy environment: schnappy-{{ env_name }}"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    env_name: "{{ env_name }}"
+    namespace: "schnappy-{{ env_name }}"
+    infra_dir: "{{ playbook_dir }}/../../../../infra"
+    cluster_dir: "{{ infra_dir }}/clusters/production"
+
+  pre_tasks:
+    - name: Validate env_name
+      ansible.builtin.assert:
+        that:
+          - env_name is defined
+          - env_name | length > 0
+          - env_name != "production"
+          - env_name != "test"
+        fail_msg: "Cannot destroy production or test environments (got: '{{ env_name | default('undefined') }}')"
+
+    - name: Check environment exists
+      ansible.builtin.stat:
+        path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
+      register: env_exists
+
+    - name: Fail if environment doesn't exist
+      ansible.builtin.fail:
+        msg: "Environment {{ namespace }} not found"
+      when: not env_exists.stat.exists
+
+  tasks:
+    # ================================================================
+    # Phase 1: Remove from ApplicationSets
+    # ================================================================
+
+    - name: Remove env from data ApplicationSet
+      ansible.builtin.replace:
+        path: "{{ cluster_dir }}/argocd/apps/schnappy-data-envs.yaml"
+        regexp: |
+          \s+- env: {{ env_name }}\n\s+namespace: {{ namespace }}\n\s+releaseName: {{ namespace }}\n\s+valuesPath: clusters/production/{{ namespace }}-data/values\.yaml\n\s+syncWave: "0"
+        replace: ''
+
+    - name: Remove env from apps ApplicationSet
+      ansible.builtin.replace:
+        path: "{{ cluster_dir }}/argocd/apps/schnappy-apps-envs.yaml"
+        regexp: |
+          \s+- env: {{ env_name }}\n\s+namespace: {{ namespace }}\n\s+releaseName: {{ namespace }}\n\s+valuesPath: clusters/production/{{ namespace }}-apps/values\.yaml\n\s+syncWave: "0"
+        replace: ''
+
+    - name: Remove env from mesh ApplicationSet
+      ansible.builtin.replace:
+        path: "{{ cluster_dir }}/argocd/apps/schnappy-mesh-envs.yaml"
+        regexp: |
+          \s+- env: {{ env_name }}\n\s+namespace: {{ namespace }}\n\s+releaseName: {{ namespace }}\n\s+valuesPath: clusters/production/{{ namespace }}-mesh/values\.yaml\n\s+syncWave: "0"
+        replace: ''
+
+    # ================================================================
+    # Phase 2: Remove cluster-config
+    # ================================================================
+
+    - name: Remove namespace manifest
+      ansible.builtin.file:
+        path: "{{ cluster_dir }}/cluster-config/{{ namespace }}-namespace.yaml"
+        state: absent
+
+    - name: Remove default-deny + quota
+      ansible.builtin.file:
+        path: "{{ cluster_dir }}/cluster-config/{{ namespace }}-default-deny.yaml"
+        state: absent
+
+    - name: Remove forgejo-registry block
+      ansible.builtin.blockinfile:
+        path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
+        marker: "# {mark} {{ namespace }}"
+        state: absent
+
+    # ================================================================
+    # Phase 3: Remove values files
+    # ================================================================
+
+    - name: Remove values directories
+      ansible.builtin.file:
+        path: "{{ cluster_dir }}/{{ namespace }}-{{ item }}"
+        state: absent
+      loop:
+        - data
+        - apps
+        - mesh
+
+    # ================================================================
+    # Phase 4: Commit and push
+    # ================================================================
+
+    - name: Commit and push infra changes
+      ansible.builtin.shell: |
+        cd {{ infra_dir }}
+        git add -A
+        git commit -m "env: destroy {{ namespace }} environment"
+        git push
+      register: git_push
+      changed_when: git_push.rc == 0
+
+    - name: "DONE: Environment {{ namespace }} removed"
+      ansible.builtin.debug:
+        msg: |
+          Environment {{ namespace }} removed from ArgoCD.
+          Namespace {{ namespace }} still exists on cluster — delete manually if needed:
+            kubectl delete namespace {{ namespace }}

@@ -686,6 +686,34 @@ tasks:
     cmds:
       - ssh -o ConnectTimeout=5 {{.TARGET_USER}}@{{.TARGET_HOST}} "hostname && uname -a"
 
+  # ============== ENVIRONMENTS ==============
+  env:create:
+    desc: "Create a new schnappy environment (usage: task env:create ENV_NAME=staging)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    requires:
+      vars: [ENV_NAME]
+    cmds:
+      - >-
+        venv/bin/ansible-playbook playbooks/create-environment.yml
+        -e "env_name={{.ENV_NAME}}"
+        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
+        -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+        -e "RESEND_WEBHOOK_SECRET=$RESEND_WEBHOOK_SECRET"
+        -e "RESEND_API_KEY=$RESEND_API_KEY"
+
+  env:destroy:
+    desc: "Destroy a schnappy environment (usage: task env:destroy ENV_NAME=staging)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    requires:
+      vars: [ENV_NAME]
+    cmds:
+      - >-
+        venv/bin/ansible-playbook playbooks/destroy-environment.yml
+        -e "env_name={{.ENV_NAME}}"
+
   # ============== DUAL-PI HA TEST ==============
   test:dual-pi:
     desc: Test dual-Pi HA (Consul, Patroni, GlusterFS, Keepalived, Vault, failover)
