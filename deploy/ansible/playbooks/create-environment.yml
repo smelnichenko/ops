@@ -160,9 +160,6 @@
                     podSelector:
                       matchLabels:
                         gateway.networking.k8s.io/gateway-name: schnappy-gateway
-                ports:
-                  - protocol: TCP
-                    port: 8080
               # Kubelet probes
               - ports:
                   - protocol: TCP
