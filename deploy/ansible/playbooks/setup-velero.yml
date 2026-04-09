@@ -447,7 +447,7 @@
           logger -t offsite-backup "Starting MinIO rsync to ${REMOTE}"
           rsync -az --delete \
             -e "ssh $SSH_OPTS" \
-            "{{ velero_backup_path }}/" "${REMOTE}:/mnt/backups/offsite/" 2>&1 | logger -t offsite-backup
+            "{{ velero_backup_path }}/" "${REMOTE}:/mnt/backups/velero/" 2>&1 | logger -t offsite-backup
           logger -t offsite-backup "MinIO rsync complete"
 
           # 2. Git mirror push (fetch from Forgejo, push to Pi)
@@ -518,7 +518,7 @@
             - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
 
           Offsite replication:
-            - Target: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/offsite/
+            - Target: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/velero/
             - Git mirror: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git
             - Schedule: 4 AM daily (systemd timer)
             - Check: systemctl status offsite-backup.timer

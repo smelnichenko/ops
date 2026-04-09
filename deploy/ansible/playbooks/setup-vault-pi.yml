@@ -501,7 +501,7 @@
 
     - name: Create offsite backup directory
       ansible.builtin.file:
-        path: /mnt/backups/offsite
+        path: /mnt/backups/velero
         state: directory
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
