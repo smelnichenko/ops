@@ -385,18 +385,16 @@
       changed_when: false
 
     # ================================================================
-    # Phase 5: Offsite backup replication (rsync to Vault Pi)
-    # Syncs /mnt/backups/minio → Pi:/mnt/backups/offsite daily at 4 AM
-    # Runs after Velero daily (2 AM) and Vault snapshots (every 6h)
+    # Phase 5: Git mirror replication to Pi
+    # Velero now writes directly to Pi MinIO — no rsync needed.
+    # Git mirror still pushes to Pi for offsite code backup.
     # ================================================================
 
-    - name: Install rsync and git
+    - name: Install git
       ansible.builtin.apt:
-        name:
-          - rsync
-          - git
+        name: git
         state: present
-      when: offsite_backup_enabled | default(true) | bool
+      when: git_mirror_enabled | default(true) | bool
 
     - name: Create local git mirror directory
       ansible.builtin.file:
@@ -435,33 +433,20 @@
         group: root
         content: |
           #!/bin/bash
-          # Sync MinIO backup data + git mirror to Vault Pi as offsite copy
-          # Runs as root, SSH as {{ offsite_backup_user | default('sm') }}
+          # Push git mirror to Pi for offsite code backup
+          # Velero writes directly to Pi MinIO — no rsync needed.
           set -euo pipefail
 
-          SSH_KEY="{{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
-          SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i $SSH_KEY"
-          REMOTE="{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default('192.168.11.5') }}"
-
-          # 1. Rsync MinIO backup data
-          logger -t offsite-backup "Starting MinIO rsync to ${REMOTE}"
-          rsync -az --delete \
-            -e "ssh $SSH_OPTS" \
-            "{{ velero_backup_path }}/" "${REMOTE}:/mnt/backups/velero/" 2>&1 | logger -t offsite-backup
-          logger -t offsite-backup "MinIO rsync complete"
-
-          # 2. Git mirror push (fetch from Forgejo, push to Pi)
-          # Runs as {{ offsite_backup_user | default('sm') }} who owns the mirror and SSH key
           MIRROR="{{ git_mirror_local_path }}"
           if [ -d "$MIRROR" ]; then
-            logger -t offsite-backup "Starting git mirror sync"
-            sudo -u {{ offsite_backup_user | default('sm') }} git -C "$MIRROR" fetch --prune origin 2>&1 | logger -t offsite-backup || \
-              logger -t offsite-backup "WARNING: git fetch from Forgejo failed (Forgejo down?)"
-            sudo -u {{ offsite_backup_user | default('sm') }} git -C "$MIRROR" push --mirror pi 2>&1 | logger -t offsite-backup || \
-              logger -t offsite-backup "WARNING: git push to Pi failed"
-            logger -t offsite-backup "Git mirror sync complete"
+            logger -t git-mirror "Starting git mirror sync"
+            sudo -u {{ offsite_backup_user | default('sm') }} git -C "$MIRROR" fetch --prune origin 2>&1 | logger -t git-mirror || \
+              logger -t git-mirror "WARNING: git fetch from Forgejo failed (Forgejo down?)"
+            sudo -u {{ offsite_backup_user | default('sm') }} git -C "$MIRROR" push --mirror pi 2>&1 | logger -t git-mirror || \
+              logger -t git-mirror "WARNING: git push to Pi failed"
+            logger -t git-mirror "Git mirror sync complete"
           fi
-      when: offsite_backup_enabled | default(true) | bool
+      when: git_mirror_enabled | default(true) | bool
 
     - name: Create offsite backup systemd service
       ansible.builtin.copy:
@@ -507,23 +492,18 @@
     - name: Display Velero status
       ansible.builtin.debug:
         msg: |
-          Velero + Backup MinIO deployed successfully!
+          Velero deployed successfully!
 
-          Namespace: {{ velero_namespace }}
-          Backup storage: {{ velero_backup_path }}
-          MinIO bucket: velero
+          Backup storage: Pi MinIO (192.168.11.5:9000), bucket: velero
+          Data replicated via GlusterFS across both Pis.
 
           Scheduled backups:
             - schnappy-daily: 2 AM UTC, schnappy namespace, 7-day retention
             - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
 
-          Offsite replication:
-            - Target: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/velero/
-            - Git mirror: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git
+          Git mirror:
+            - Target: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git
             - Schedule: 4 AM daily (systemd timer)
-            - Check: systemctl status offsite-backup.timer
-            - Manual run: systemctl start offsite-backup.service
-            - Logs: journalctl -u offsite-backup.service
 
           Commands:
             velero backup get
