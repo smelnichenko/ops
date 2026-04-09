@@ -159,7 +159,7 @@
                         kubernetes.io/metadata.name: schnappy
                     podSelector:
                       matchLabels:
-                        istio.io/gateway-name: schnappy-gateway
+                        gateway.networking.k8s.io/gateway-name: schnappy-gateway
                 ports:
                   - protocol: TCP
                     port: 8080
