@@ -13,7 +13,7 @@
 #   - Vault running on Pi
 #   - ArgoCD running with ApplicationSets
 
-- name: "Create environment: schnappy-{{ env_name }}"
+- name: "Create environment: schnappy-{{ env_name | default('UNNAMED') }}"
   hosts: pi1
   become: true
   gather_facts: false

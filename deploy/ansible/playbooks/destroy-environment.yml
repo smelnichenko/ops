@@ -9,7 +9,7 @@
 # Commits and pushes. ArgoCD deletes the Applications.
 # Namespace deletion is manual (safety).
 
-- name: "Destroy environment: schnappy-{{ env_name }}"
+- name: "Destroy environment: schnappy-{{ env_name | default('UNNAMED') }}"
   hosts: pi1
   become: true
   gather_facts: false
