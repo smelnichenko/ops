@@ -199,6 +199,40 @@
                 - .spec.data[]?.remoteRef.metadataPolicy
                 - .spec.target.creationPolicy
                 - .spec.target.deletionPolicy
+            resource.customizations.health.gateway.networking.k8s.io_HTTPRoute: |
+              hs = {}
+              hs.status = "Healthy"
+              return hs
+            resource.customizations.health.security.istio.io_PeerAuthentication: |
+              hs = {}
+              hs.status = "Healthy"
+              return hs
+            resource.customizations.health.security.istio.io_AuthorizationPolicy: |
+              hs = {}
+              hs.status = "Healthy"
+              return hs
+            resource.customizations.health.kafka.strimzi.io_KafkaTopic: |
+              hs = {}
+              hs.status = "Healthy"
+              return hs
+            resource.customizations.health.batch_CronJob: |
+              hs = {}
+              hs.status = "Healthy"
+              return hs
+            resource.customizations.health.batch_Job: |
+              hs = {}
+              if obj.status ~= nil then
+                if obj.status.succeeded ~= nil and obj.status.succeeded > 0 then
+                  hs.status = "Healthy"
+                elseif obj.status.failed ~= nil and obj.status.failed > 0 then
+                  hs.status = "Degraded"
+                else
+                  hs.status = "Progressing"
+                end
+              else
+                hs.status = "Progressing"
+              end
+              return hs
             oidc.config: |
               name: Keycloak
               issuer: https://{{ keycloak_host }}/realms/schnappy
