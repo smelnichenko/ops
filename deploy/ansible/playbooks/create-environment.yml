@@ -90,8 +90,11 @@
 
     - name: Ensure KV secrets engine is mounted
       ansible.builtin.shell: |
+        set -o pipefail
         {{ vault_env }} vault secrets list -format=json | grep -q '"secret/"' || \
         {{ vault_env }} vault secrets enable -path=secret kv-v2
+      args:
+        executable: /bin/bash
       changed_when: false
       failed_when: false
 
@@ -535,6 +538,7 @@
         path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
         marker: "# {mark} {{ env_ns }}"
         create: true
+        mode: "0644"
         insertbefore: EOF
         block: |
           ---
@@ -580,6 +584,8 @@
         python3 << 'PYEOF'
         import yaml, os
 
+        PI_HOST = '{{ hostvars["pi1"]["ansible_host"] | default("192.168.11.5") }}'
+        PI_URL = f'http://{PI_HOST}:3000'
         appsets = {
             'data': '{{ cluster_dir }}/argocd/apps/schnappy-data-envs.yaml',
             'apps': '{{ cluster_dir }}/argocd/apps/schnappy-apps-envs.yaml',
@@ -599,18 +605,39 @@
                     'spec': {
                         'generators': [{'list': {'elements': []}}],
                         'template': {
-                            'metadata': {'name': f'schnappy-{"{{"}{chart}{"}}"}', 'namespace': 'argocd'},
+                            'metadata': {
+                                'name': f'schnappy-{"{{"}{chart}{"}}"}',
+                                'namespace': 'argocd',
+                            },
                             'spec': {
                                 'project': 'default',
                                 'sources': [
-                                    {'repoURL': 'http://{{ hostvars["pi1"]["ansible_host"] | default("192.168.11.5") }}:3000/schnappy/platform.git',
-                                     'targetRevision': 'main', 'path': f'helm/schnappy-{chart}',
-                                     'helm': {'releaseName': '{{"{{releaseName}}"}}', 'valueFiles': ['$values/{{"{{valuesPath}}"}}']}},
-                                    {'repoURL': 'http://{{ hostvars["pi1"]["ansible_host"] | default("192.168.11.5") }}:3000/schnappy/infra.git',
-                                     'targetRevision': 'main', 'ref': 'values'}
+                                    {
+                                        'repoURL': PI_URL + '/schnappy/platform.git',
+                                        'targetRevision': 'main',
+                                        'path': f'helm/schnappy-{chart}',
+                                        'helm': {
+                                            'releaseName': '{{ "{{releaseName}}" }}',
+                                            'valueFiles': ['$values/{{ "{{valuesPath}}" }}'],
+                                        },
+                                    },
+                                    {
+                                        'repoURL': PI_URL + '/schnappy/infra.git',
+                                        'targetRevision': 'main',
+                                        'ref': 'values',
+                                    },
                                 ],
-                                'destination': {'server': 'https://kubernetes.default.svc', 'namespace': '{{"{{namespace}}"}}'},
-                                'syncPolicy': {'automated': {'selfHeal': True, 'prune': False}, 'syncOptions': ['CreateNamespace=true', 'RespectIgnoreDifferences=true']}
+                                'destination': {
+                                    'server': 'https://kubernetes.default.svc',
+                                    'namespace': '{{ "{{namespace}}" }}',
+                                },
+                                'syncPolicy': {
+                                    'automated': {'selfHeal': True, 'prune': False},
+                                    'syncOptions': [
+                                        'CreateNamespace=true',
+                                        'RespectIgnoreDifferences=true',
+                                    ],
+                                },
                             }
                         }
                     }
@@ -638,6 +665,7 @@
         insertafter: 'allowedNamespaces:'
         line: "    - {{ env_ns }}"
         create: true
+        mode: "0644"
       delegate_to: localhost
       become: false
 
@@ -649,26 +677,46 @@
     # Phase 5: Commit and push
     # ================================================================
 
-    - name: Commit and push infra
-      ansible.builtin.shell: |
-        git add -A
-        git diff --cached --quiet && echo "no changes" && exit 0
-        git commit -m "env: create {{ env_ns }}"
-        {% if infra_git_url %}
-        git push {{ infra_git_url }} main
-        {% else %}
-        git push origin main
-        {% endif %}
-      args:
+    - name: Stage infra changes
+      ansible.builtin.command:
+        cmd: git add -A
         chdir: "{{ infra_dir }}"
       delegate_to: localhost
       become: false
       changed_when: true
+
+    - name: Check for changes
+      ansible.builtin.command:
+        cmd: git diff --cached --quiet
+        chdir: "{{ infra_dir }}"
+      delegate_to: localhost
+      become: false
+      register: git_diff
+      changed_when: false
+      failed_when: false
+
+    - name: Commit infra changes
+      ansible.builtin.command:
+        cmd: "git commit -m 'env: create {{ env_ns }}'"
+        chdir: "{{ infra_dir }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+      when: git_diff.rc != 0
       environment:
         GIT_AUTHOR_NAME: "env-automation"
         GIT_AUTHOR_EMAIL: "automation@pmon.dev"
         GIT_COMMITTER_NAME: "env-automation"
         GIT_COMMITTER_EMAIL: "automation@pmon.dev"
+
+    - name: Push infra changes
+      ansible.builtin.command:
+        cmd: "git push {{ infra_git_url if infra_git_url else 'origin' }} main"
+        chdir: "{{ infra_dir }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+      when: git_diff.rc != 0
 
     - name: "DONE"
       ansible.builtin.debug:
