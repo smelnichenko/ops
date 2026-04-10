@@ -15,8 +15,7 @@
   gather_facts: false
 
   vars:
-    env_name: "{{ env_name }}"
-    namespace: "schnappy-{{ env_name }}"
+    env_ns: "schnappy-{{ env_name }}"
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
     cluster_dir: "{{ infra_dir }}/clusters/production"
     vault_addr: "https://127.0.0.1:8200"
@@ -34,14 +33,14 @@
 
     - name: Check environment exists
       ansible.builtin.stat:
-        path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
+        path: "{{ cluster_dir }}/{{ env_ns }}-data/values.yaml"
       register: env_exists
       delegate_to: localhost
       become: false
 
     - name: Fail if environment doesn't exist
       ansible.builtin.fail:
-        msg: "Environment {{ namespace }} not found"
+        msg: "Environment {{ env_ns }} not found"
       when: not env_exists.stat.exists
 
     - name: Read Vault root token (production path)
@@ -161,7 +160,7 @@
     - name: Remove namespace from gateway allowedNamespaces
       ansible.builtin.lineinfile:
         path: "{{ cluster_dir }}/schnappy-mesh/values.yaml"
-        line: "    - {{ namespace }}"
+        line: "    - {{ env_ns }}"
         state: absent
       delegate_to: localhost
       become: false
@@ -176,7 +175,7 @@
 
     - name: Remove values directories
       ansible.builtin.file:
-        path: "{{ cluster_dir }}/{{ namespace }}-{{ item }}"
+        path: "{{ cluster_dir }}/{{ env_ns }}-{{ item }}"
         state: absent
       loop: [data, apps, mesh]
       delegate_to: localhost
@@ -184,14 +183,14 @@
 
     - name: Remove namespace manifest
       ansible.builtin.file:
-        path: "{{ cluster_dir }}/cluster-config/{{ namespace }}-namespace.yaml"
+        path: "{{ cluster_dir }}/cluster-config/{{ env_ns }}-namespace.yaml"
         state: absent
       delegate_to: localhost
       become: false
 
     - name: Remove default-deny + quota
       ansible.builtin.file:
-        path: "{{ cluster_dir }}/cluster-config/{{ namespace }}-default-deny.yaml"
+        path: "{{ cluster_dir }}/cluster-config/{{ env_ns }}-default-deny.yaml"
         state: absent
       delegate_to: localhost
       become: false
@@ -199,14 +198,14 @@
     - name: Remove forgejo-registry block
       ansible.builtin.blockinfile:
         path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
-        marker: "# {mark} {{ namespace }}"
+        marker: "# {mark} {{ env_ns }}"
         state: absent
       delegate_to: localhost
       become: false
 
     - name: "PHASE 3: Infra files removed"
       ansible.builtin.debug:
-        msg: "Removed all {{ namespace }} files"
+        msg: "Removed all {{ env_ns }} files"
 
     # ================================================================
     # Phase 4: Commit and push
@@ -216,7 +215,7 @@
       ansible.builtin.shell: |
         git add -A
         git diff --cached --quiet && echo "no changes" && exit 0
-        git commit -m "env: destroy {{ namespace }}"
+        git commit -m "env: destroy {{ env_ns }}"
         {% if infra_git_url %}
         git push {{ infra_git_url }} main
         {% else %}
@@ -236,5 +235,5 @@
     - name: "DONE"
       ansible.builtin.debug:
         msg: |
-          Environment {{ namespace }} removed from ArgoCD.
-          To delete the namespace: kubectl delete namespace {{ namespace }}
+          Environment {{ env_ns }} removed from ArgoCD.
+          To delete the namespace: kubectl delete namespace {{ env_ns }}

@@ -224,10 +224,13 @@
 
     - name: Copy kubeconfig for non-root user
       ansible.builtin.shell: |
+        set -o pipefail
         USER_HOME=$(getent passwd {{ ansible_user }} | cut -d: -f6)
         mkdir -p "$USER_HOME/.kube"
         cp /etc/kubernetes/admin.conf "$USER_HOME/.kube/config"
         chown {{ ansible_user }}:{{ ansible_user }} "$USER_HOME/.kube/config"
+      args:
+        executable: /bin/bash
       changed_when: true
 
     - name: Remove control-plane taint (single node)
@@ -263,7 +266,7 @@
     # Phase 6b: Install Helm
     # ================================================================
 
-    - name: Install Helm
+    - name: Install Helm  # noqa: command-instead-of-module risky-shell-pipe
       ansible.builtin.shell: |
         curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       args:

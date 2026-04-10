@@ -19,8 +19,7 @@
   gather_facts: false
 
   vars:
-    env_name: "{{ env_name }}"
-    namespace: "schnappy-{{ env_name }}"
+    env_ns: "schnappy-{{ env_name }}"
     release_name: "schnappy-{{ env_name }}"
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
     cluster_dir: "{{ infra_dir }}/clusters/production"
@@ -41,14 +40,14 @@
 
     - name: Check environment doesn't already exist
       ansible.builtin.stat:
-        path: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
+        path: "{{ cluster_dir }}/{{ env_ns }}-data/values.yaml"
       register: env_exists
       delegate_to: localhost
       become: false
 
     - name: Fail if environment exists
       ansible.builtin.fail:
-        msg: "Environment {{ namespace }} already exists"
+        msg: "Environment {{ env_ns }} already exists"
       when: env_exists.stat.exists
 
     - name: Read Vault root token (production path)
@@ -96,30 +95,30 @@
       changed_when: false
       failed_when: false
 
-    - name: Seed Vault secrets for {{ namespace }}
+    - name: Seed Vault secrets for {{ env_ns }}
       ansible.builtin.shell: |
-        {{ vault_env }} vault kv put secret/{{ namespace }}/postgres \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/postgres \
           database=monitor username=monitor password="{{ gen_db_password }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/redis \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/redis \
           password="{{ gen_redis_password }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/auth \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/auth \
           jwt_secret="{{ gen_jwt_secret }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/minio \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/minio \
           access_key=admin secret_key="{{ gen_minio_password }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/kafka \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/kafka \
           cluster_id="{{ gen_kafka_cluster_id }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/ai \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/ai \
           api_key="{{ ANTHROPIC_API_KEY | default('placeholder') }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/mail \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/mail \
           password="{{ MAIL_PASSWORD | default('placeholder') }}"
-        {{ vault_env }} vault kv put secret/{{ namespace }}/webhook \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/webhook \
           signing_secret="{{ RESEND_WEBHOOK_SECRET | default('') }}" \
           api_key="{{ RESEND_API_KEY | default('') }}"
       changed_when: true
 
     - name: "PHASE 1: Vault secrets seeded"
       ansible.builtin.debug:
-        msg: "Seeded secrets at secret/{{ namespace }}/*"
+        msg: "Seeded secrets at secret/{{ env_ns }}/*"
 
     # ================================================================
     # Phase 2: Add Keycloak redirect URI
@@ -193,9 +192,9 @@
         state: directory
         mode: '0755'
       loop:
-        - "{{ cluster_dir }}/{{ namespace }}-data"
-        - "{{ cluster_dir }}/{{ namespace }}-apps"
-        - "{{ cluster_dir }}/{{ namespace }}-mesh"
+        - "{{ cluster_dir }}/{{ env_ns }}-data"
+        - "{{ cluster_dir }}/{{ env_ns }}-apps"
+        - "{{ cluster_dir }}/{{ env_ns }}-mesh"
         - "{{ cluster_dir }}/cluster-config"
         - "{{ cluster_dir }}/argocd/apps"
       delegate_to: localhost
@@ -203,12 +202,12 @@
 
     - name: Create data values
       ansible.builtin.copy:
-        dest: "{{ cluster_dir }}/{{ namespace }}-data/values.yaml"
+        dest: "{{ cluster_dir }}/{{ env_ns }}-data/values.yaml"
         mode: '0644'
         content: |
           vault:
             secretsEnabled: true
-            secretPathPrefix: "secret/data/{{ namespace }}"
+            secretPathPrefix: "secret/data/{{ env_ns }}"
 
           networkPolicies:
             enabled: true
@@ -218,7 +217,7 @@
 
           redis:
             enabled: true
-            existingSecret: {{ namespace }}-redis
+            existingSecret: {{ env_ns }}-redis
             image: redis:7-alpine
             resources:
               requests: { cpu: 10m, memory: 32Mi }
@@ -226,7 +225,7 @@
 
           kafka:
             enabled: false
-            existingSecret: {{ namespace }}-kafka
+            existingSecret: {{ env_ns }}-kafka
             resources:
               requests: { cpu: 50m, memory: 512Mi }
               limits: { cpu: 1000m, memory: 1536Mi }
@@ -251,7 +250,7 @@
 
           minio:
             enabled: true
-            existingSecret: {{ namespace }}-minio
+            existingSecret: {{ env_ns }}-minio
             bucket: email-attachments
             buckets:
               - email-attachments
@@ -278,12 +277,12 @@
 
     - name: Create apps values
       ansible.builtin.copy:
-        dest: "{{ cluster_dir }}/{{ namespace }}-apps/values.yaml"
+        dest: "{{ cluster_dir }}/{{ env_ns }}-apps/values.yaml"
         mode: '0644'
         content: |
           vault:
             secretsEnabled: true
-            secretPathPrefix: "secret/data/{{ namespace }}"
+            secretPathPrefix: "secret/data/{{ env_ns }}"
 
           app:
             replicas: 1
@@ -312,7 +311,7 @@
           games: []
 
           auth:
-            existingSecret: {{ namespace }}-auth
+            existingSecret: {{ env_ns }}-auth
             registrationEnabled: true
             secureCookies: true
             tokenExpiration: 1h
@@ -397,11 +396,11 @@
 
           postgres:
             database: monitor
-            existingSecret: {{ namespace }}-postgres
+            existingSecret: {{ env_ns }}-postgres
           redis:
-            existingSecret: {{ namespace }}-redis
+            existingSecret: {{ env_ns }}-redis
           minio:
-            existingSecret: {{ namespace }}-minio
+            existingSecret: {{ env_ns }}-minio
           alertmanager:
             enabled: false
           keycloak:
@@ -411,7 +410,7 @@
 
     - name: Create mesh values
       ansible.builtin.copy:
-        dest: "{{ cluster_dir }}/{{ namespace }}-mesh/values.yaml"
+        dest: "{{ cluster_dir }}/{{ env_ns }}-mesh/values.yaml"
         mode: '0644'
         content: |
           scyllaOperator:
@@ -439,13 +438,13 @@
 
     - name: Create namespace manifest
       ansible.builtin.copy:
-        dest: "{{ cluster_dir }}/cluster-config/{{ namespace }}-namespace.yaml"
+        dest: "{{ cluster_dir }}/cluster-config/{{ env_ns }}-namespace.yaml"
         mode: '0644'
         content: |
           apiVersion: v1
           kind: Namespace
           metadata:
-            name: {{ namespace }}
+            name: {{ env_ns }}
             labels:
               istio.io/rev: default
               environment: {{ env_name }}
@@ -454,14 +453,14 @@
 
     - name: Create default-deny + quota
       ansible.builtin.copy:
-        dest: "{{ cluster_dir }}/cluster-config/{{ namespace }}-default-deny.yaml"
+        dest: "{{ cluster_dir }}/cluster-config/{{ env_ns }}-default-deny.yaml"
         mode: '0644'
         content: |
           apiVersion: networking.k8s.io/v1
           kind: NetworkPolicy
           metadata:
-            name: {{ namespace }}-default-deny
-            namespace: {{ namespace }}
+            name: {{ env_ns }}-default-deny
+            namespace: {{ env_ns }}
           spec:
             podSelector: {}
             policyTypes:
@@ -520,8 +519,8 @@
           apiVersion: v1
           kind: ResourceQuota
           metadata:
-            name: {{ namespace }}-quota
-            namespace: {{ namespace }}
+            name: {{ env_ns }}-quota
+            namespace: {{ env_ns }}
           spec:
             hard:
               requests.cpu: "4"
@@ -534,7 +533,7 @@
     - name: Add forgejo-registry secret
       ansible.builtin.blockinfile:
         path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
-        marker: "# {mark} {{ namespace }}"
+        marker: "# {mark} {{ env_ns }}"
         create: true
         insertbefore: EOF
         block: |
@@ -543,7 +542,7 @@
           kind: ExternalSecret
           metadata:
             name: forgejo-registry-es
-            namespace: {{ namespace }}
+            namespace: {{ env_ns }}
           spec:
             refreshInterval: 1h
             secretStoreRef:
@@ -621,9 +620,9 @@
             if not any(e['env'] == '{{ env_name }}' for e in elements):
                 elements.append({
                     'env': '{{ env_name }}',
-                    'namespace': '{{ namespace }}',
+                    'namespace': '{{ env_ns }}',
                     'releaseName': '{{ release_name }}',
-                    'valuesPath': f'clusters/production/{{ namespace }}-{chart}/values.yaml',
+                    'valuesPath': f'clusters/production/{{ env_ns }}-{chart}/values.yaml',
                     'syncWave': '0',
                 })
             with open(path, 'w') as f:
@@ -637,7 +636,7 @@
       ansible.builtin.lineinfile:
         path: "{{ cluster_dir }}/schnappy-mesh/values.yaml"
         insertafter: 'allowedNamespaces:'
-        line: "    - {{ namespace }}"
+        line: "    - {{ env_ns }}"
         create: true
       delegate_to: localhost
       become: false
@@ -654,7 +653,7 @@
       ansible.builtin.shell: |
         git add -A
         git diff --cached --quiet && echo "no changes" && exit 0
-        git commit -m "env: create {{ namespace }}"
+        git commit -m "env: create {{ env_ns }}"
         {% if infra_git_url %}
         git push {{ infra_git_url }} main
         {% else %}
@@ -674,6 +673,6 @@
     - name: "DONE"
       ansible.builtin.debug:
         msg: |
-          Environment {{ namespace }} created.
+          Environment {{ env_ns }} created.
           ArgoCD will sync within 3 minutes.
           URL: https://{{ env_name }}.pmon.dev
