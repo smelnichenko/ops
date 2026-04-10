@@ -788,7 +788,7 @@ Caching proxy for Debian/Ubuntu apt packages, used by Kaniko during Docker image
 
 - **Image:** `git.pmon.dev/schnappy/apt-cacher-ng:1.0` (own build from `infra/apt-cache/Dockerfile`, Debian trixie-slim)
 - **Port 3142:** apt caching proxy
-- **CI integration:** Kaniko passes `--build-arg http_proxy=http://schnappy-apt-cache.schnappy.svc.cluster.local:3142` for backend image builds
+- **CI integration:** Kaniko passes `--build-arg http_proxy=http://schnappy-production-apt-cache.schnappy-production.svc.cluster.local:3142` for backend image builds
 - **Network policy:** Ingress from woodpecker namespace (pipeline pods), egress to external HTTP/HTTPS (upstream apt mirrors)
 - **Storage:** 10Gi PVC (production), 5Gi (default)
 - **Helm:** `aptCache.enabled: true` (default)
