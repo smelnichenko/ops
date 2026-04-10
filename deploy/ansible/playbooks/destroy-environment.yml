@@ -211,46 +211,17 @@
     # Phase 4: Commit and push
     # ================================================================
 
-    - name: Stage infra changes
-      ansible.builtin.command:
-        cmd: git add -A
-        chdir: "{{ infra_dir }}"
+    - name: Commit and push infra changes
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/scripts/git-commit-push.sh '{{ infra_dir }}' 'env: destroy {{ env_ns }}' '{{ infra_git_url }}'"
       delegate_to: localhost
       become: false
       changed_when: true
-
-    - name: Check for changes
-      ansible.builtin.command:
-        cmd: git diff --cached --quiet
-        chdir: "{{ infra_dir }}"
-      delegate_to: localhost
-      become: false
-      register: git_diff
-      changed_when: false
-      failed_when: false
-
-    - name: Commit infra changes
-      ansible.builtin.command:
-        cmd: "git commit -m 'env: destroy {{ env_ns }}'"
-        chdir: "{{ infra_dir }}"
-      delegate_to: localhost
-      become: false
-      changed_when: true
-      when: git_diff.rc != 0
       environment:
         GIT_AUTHOR_NAME: "env-automation"
         GIT_AUTHOR_EMAIL: "automation@pmon.dev"
         GIT_COMMITTER_NAME: "env-automation"
         GIT_COMMITTER_EMAIL: "automation@pmon.dev"
-
-    - name: Push infra changes
-      ansible.builtin.command:
-        cmd: "git push {{ infra_git_url if infra_git_url else 'origin' }} main"
-        chdir: "{{ infra_dir }}"
-      delegate_to: localhost
-      become: false
-      changed_when: true
-      when: git_diff.rc != 0
 
     - name: "DONE"
       ansible.builtin.debug:
