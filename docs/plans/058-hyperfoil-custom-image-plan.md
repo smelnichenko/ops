@@ -1,12 +1,14 @@
 # Plan 058: Custom Hyperfoil image with MinIO client
 
+## Status: COMPLETED (2026-04-11)
+
 ## Context
 
-Hyperfoil jobs download mc binary at runtime. Pre-install it in a custom image.
+Hyperfoil jobs downloaded mc binary at runtime (~15s, required external HTTPS egress). Pre-installed it in a custom image.
 
-## Step 1: Create Dockerfile in platform repo, build on ten
+## Implementation
 
-No separate repo, no Woodpecker pipeline. Dockerfile lives in `platform/docker/hyperfoil/Dockerfile`. Build manually on ten with Kaniko or docker, push to `git.pmon.dev/schnappy/hyperfoil:0.28.0`.
+### Repo: `schnappy/hyperfoil` on git.pmon.dev
 
 **Dockerfile:**
 ```dockerfile
@@ -19,16 +21,20 @@ RUN microdnf install -y wget && \
 USER default
 ```
 
-## Step 2: Update configmaps — remove mc download
+Woodpecker CD pipeline builds on push to main → `git.pmon.dev/schnappy/hyperfoil:latest`
 
-Replace `/tmp/mc` download + use with direct `mc` in both:
-- `platform/helm/schnappy/templates/hyperfoil-load-configmap.yaml`
-- `platform/helm/schnappy/templates/hyperfoil-stress-configmap.yaml`
+### Platform changes
 
-## Step 3: Update image reference
+- `helm/schnappy/values.yaml`: image changed to `git.pmon.dev/schnappy/hyperfoil:latest`
+- Load + stress configmaps: removed `curl` download of mc, use `mc` directly
+- Stress test expanded to 10 stages: 100→200→300→400→500→600→700→800→900→1000 req/s
 
-`platform/helm/schnappy/values.yaml`: `image: git.pmon.dev/schnappy/hyperfoil:0.28.0`
+### Also done in this session
 
-## Verification
-
-Trigger stress test, check logs show no mc download, report uploaded.
+- Reports service moved to `schnappy-observability` chart (infra namespace)
+- `hyperfoil-reports` bucket moved to infra MinIO
+- Resource requests updated to match stress test consumption
+- PriorityClasses for ordered boot after node restart
+- DestinationRules with outlier detection for app services
+- k6 smoke test converted from PostSync hook to sync-wave Job
+- All Jobs use `Delete=true` + `ignoreDifferences` for immutability handling
