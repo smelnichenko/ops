@@ -583,7 +583,6 @@
       ansible.builtin.command:
         cmd: >-
           python3 {{ playbook_dir }}/scripts/update-appsets.py
-          {{ hostvars["pi1"]["ansible_host"] | default("192.168.11.5") }}
           {{ cluster_dir }}
           {{ env_name }}
           {{ env_ns }}

@@ -4,13 +4,12 @@ import sys
 import os
 import yaml
 
-pi_host = sys.argv[1]
-cluster_dir = sys.argv[2]
-env_name = sys.argv[3]
-env_ns = sys.argv[4]
-release_name = sys.argv[5]
+cluster_dir = sys.argv[1]
+env_name = sys.argv[2]
+env_ns = sys.argv[3]
+release_name = sys.argv[4]
 
-pi_url = f"http://{pi_host}:3000"  # noqa: S105 # NOSONAR — internal Forgejo, no TLS
+pi_url = "https://git.pmon.dev"
 appsets = {
     "data": f"{cluster_dir}/argocd/apps/schnappy-data-envs.yaml",
     "apps": f"{cluster_dir}/argocd/apps/schnappy-apps-envs.yaml",
