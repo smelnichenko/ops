@@ -13,9 +13,8 @@ clone:
 
 steps:
   - name: ansible-lint
-    image: python:3.13-slim
+    image: git.pmon.dev/schnappy/ansible-lint:latest
     commands:
-      - pip install --quiet ansible-lint
       - ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/
     backend_options:
       kubernetes:
