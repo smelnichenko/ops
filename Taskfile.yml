@@ -789,6 +789,65 @@ tasks:
       - echo ""
       - echo "=== All Vagrant tests complete ==="
 
+  # ============== DEPLOY ==============
+  deploy:promote:
+    desc: "Promote image tags from test to production (SERVICE=monitor|admin|chat|chess|site|game-scp|all)"
+    vars:
+      INFRA_DIR: '{{.SRC_DIR}}/infra'
+      TEST_VALUES: '{{.INFRA_DIR}}/clusters/production/schnappy-test-apps/values.yaml'
+      PROD_VALUES: '{{.INFRA_DIR}}/clusters/production/schnappy-production-apps/values.yaml'
+      SERVICE: '{{.SERVICE | default "all"}}'
+    cmds:
+      - |
+        SERVICES="{{.SERVICE}}"
+        if [ "$SERVICES" = "all" ]; then
+          SERVICES="monitor admin chat chess site game-scp"
+        fi
+
+        # Map service names to tag comment markers
+        get_marker() {
+          case "$1" in
+            monitor)  echo "schnappy-monitor" ;;
+            admin)    echo "admin-service" ;;
+            chat)     echo "chat-service" ;;
+            chess)    echo "chess-service" ;;
+            site)     echo "site" ;;
+            game-scp) echo "game-scp" ;;
+            *) echo "unknown"; return 1 ;;
+          esac
+        }
+
+        PROMOTED=""
+        for svc in $SERVICES; do
+          marker=$(get_marker "$svc")
+          test_tag=$(grep "# $marker" "{{.TEST_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
+          prod_tag=$(grep "# $marker" "{{.PROD_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
+
+          if [ -z "$test_tag" ]; then
+            echo "SKIP $svc: no tag in test values"
+            continue
+          fi
+          if [ "$test_tag" = "$prod_tag" ]; then
+            echo "SKIP $svc: already at $test_tag"
+            continue
+          fi
+
+          echo "PROMOTE $svc: $prod_tag -> $test_tag"
+          sed -i "s|tag: \".*\"  # $marker|tag: \"$test_tag\"  # $marker|" "{{.PROD_VALUES}}"
+          PROMOTED="$PROMOTED $svc=$test_tag"
+        done
+
+        if [ -z "$PROMOTED" ]; then
+          echo "Nothing to promote"
+          exit 0
+        fi
+
+        cd "{{.INFRA_DIR}}"
+        git add clusters/production/schnappy-production-apps/values.yaml
+        git commit -m "deploy(prod):$PROMOTED"
+        git push
+        echo "Promoted:$PROMOTED"
+
   # ============== VAGRANT ==============
   vagrant:up:
     desc: Start Vagrant VMs
