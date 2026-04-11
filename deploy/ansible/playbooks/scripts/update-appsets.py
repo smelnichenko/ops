@@ -10,7 +10,7 @@ env_name = sys.argv[3]
 env_ns = sys.argv[4]
 release_name = sys.argv[5]
 
-pi_url = f"http://{pi_host}:3000"
+pi_url = f"http://{pi_host}:3000"  # noqa: S105 # NOSONAR — internal Forgejo, no TLS
 appsets = {
     "data": f"{cluster_dir}/argocd/apps/schnappy-data-envs.yaml",
     "apps": f"{cluster_dir}/argocd/apps/schnappy-apps-envs.yaml",
