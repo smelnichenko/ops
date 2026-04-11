@@ -804,24 +804,10 @@ tasks:
           SERVICES="monitor admin chat chess site game-scp"
         fi
 
-        # Map service names to tag comment markers
-        get_marker() {
-          case "$1" in
-            monitor)  echo "schnappy-monitor" ;;
-            admin)    echo "admin-service" ;;
-            chat)     echo "chat-service" ;;
-            chess)    echo "chess-service" ;;
-            site)     echo "site" ;;
-            game-scp) echo "game-scp" ;;
-            *) echo "unknown"; return 1 ;;
-          esac
-        }
-
         PROMOTED=""
         for svc in $SERVICES; do
-          marker=$(get_marker "$svc")
-          test_tag=$(grep "# $marker" "{{.TEST_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
-          prod_tag=$(grep "# $marker" "{{.PROD_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
+          test_tag=$(grep "# $svc" "{{.TEST_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
+          prod_tag=$(grep "# $svc" "{{.PROD_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
 
           if [ -z "$test_tag" ]; then
             echo "SKIP $svc: no tag in test values"
@@ -833,7 +819,7 @@ tasks:
           fi
 
           echo "PROMOTE $svc: $prod_tag -> $test_tag"
-          sed -i "s|tag: \".*\"  # $marker|tag: \"$test_tag\"  # $marker|" "{{.PROD_VALUES}}"
+          sed -i "s|tag: \".*\"  # $svc|tag: \"$test_tag\"  # $svc|" "{{.PROD_VALUES}}"
           PROMOTED="$PROMOTED $svc=$test_tag"
         done
 
