@@ -829,6 +829,7 @@ tasks:
         fi
 
         cd "{{.INFRA_DIR}}"
+        git pull --rebase
         git add clusters/production/schnappy-production-apps/values.yaml
         git commit -m "deploy(prod):$PROMOTED"
         git push
