@@ -228,10 +228,13 @@
         mode: '0700'
         content: |
           #!/bin/bash
+          # `vault status` exit codes: 0=unsealed, 2=sealed, 1=transport error.
+          # Accept rc=0|2 as "vault process is reachable"; the prior version
+          # waited only for rc=0 and spun forever whenever the pi booted sealed.
           export VAULT_ADDR=https://127.0.0.1:8200
           export VAULT_SKIP_VERIFY=1
           KEYS=/etc/vault-unseal/unseal-keys
-          until vault status 2>/dev/null; do sleep 1; done
+          until vault status >/dev/null 2>&1 || [ $? -eq 2 ]; do sleep 1; done
           if vault status -format=json 2>/dev/null | grep -q '"sealed":true'; then
             KEY1=$(sed -n '1p' $KEYS)
             KEY2=$(sed -n '2p' $KEYS)
