@@ -195,7 +195,9 @@
         content: |
           [Unit]
           Description=Forgejo Git Forge
-          After=network.target
+          After=network-online.target var-lib-forgejo-repos.mount patroni.service
+          Wants=network-online.target
+          RequiresMountsFor=/var/lib/forgejo/repos
           [Service]
           Type=simple
           User=forgejo
@@ -250,21 +252,45 @@
         dest: /usr/local/bin/mc
         mode: '0755'
 
-    - name: Create MinIO user and data dir
+    - name: Create MinIO group (fixed GID for Gluster-neutral ownership)
+      ansible.builtin.group:
+        name: minio
+        gid: 9000
+        system: true
+
+    - name: Create MinIO user (fixed UID)
       ansible.builtin.user:
         name: minio
+        uid: 9000
+        group: minio
         system: true
-        shell: /bin/false
+        shell: /usr/sbin/nologin
         home: /var/lib/minio
         create_home: true
 
-    - name: Create MinIO data directory
+    - name: Create MinIO local data drives (distributed, no Gluster)
       ansible.builtin.file:
-        path: /var/lib/minio/data
+        path: "/var/lib/minio/data/{{ item }}"
         state: directory
         owner: minio
         group: minio
-        mode: '0755'
+        mode: '0750'
+      loop:
+        - drive1
+        - drive2
+
+    - name: Write MinIO environment file (credentials, 0400 minio:minio)
+      ansible.builtin.copy:
+        dest: /etc/minio/env
+        owner: minio
+        group: minio
+        mode: '0400'
+        content: |
+          MINIO_ROOT_USER={{ minio_root_user }}
+          MINIO_ROOT_PASSWORD={{ minio_root_password }}
+          MINIO_CI_CD=on
+      notify: Restart MinIO
+      no_log: true
 
     - name: Install MinIO systemd service
       ansible.builtin.copy:
@@ -272,22 +298,23 @@
         mode: '0644'
         content: |
           [Unit]
-          Description=MinIO Object Storage
-          After=network.target
+          Description=MinIO Object Storage (distributed)
+          After=network-online.target
+          Wants=network-online.target
           [Service]
           Type=simple
           User=minio
           Group=minio
-          Environment="MINIO_ROOT_USER={{ minio_root_user }}"
-          Environment="MINIO_ROOT_PASSWORD={{ minio_root_password }}"
-          Environment="MINIO_SITE_NAME={{ inventory_hostname }}"
-          ExecStart=/usr/local/bin/minio server /var/lib/minio/data --address :9000
+          EnvironmentFile=/etc/minio/env
+          ExecStart=/usr/local/bin/minio server \
+            http://{{ hostvars['pi1']['ansible_host'] }}:9000/var/lib/minio/data/drive{1...2} \
+            http://{{ hostvars['pi2']['ansible_host'] }}:9000/var/lib/minio/data/drive{1...2} \
+            --address :9000
           Restart=always
           RestartSec=5
           [Install]
           WantedBy=multi-user.target
       notify: Restart MinIO
-      no_log: true
 
     - name: Enable and start MinIO
       ansible.builtin.systemd:
@@ -296,20 +323,22 @@
         state: started
         daemon_reload: true
 
-    - name: Wait for MinIO
+    - name: Wait for MinIO cluster quorum
       ansible.builtin.uri:
-        url: http://localhost:9000/minio/health/live
+        url: http://localhost:9000/minio/health/cluster
         status_code: 200
-      retries: 10
+      retries: 30
       delay: 5
 
-    - name: Create MinIO buckets
+    - name: Create MinIO buckets (runs once; mc loads creds from env file)
       ansible.builtin.shell: |
-        HOME=/tmp mc alias set local http://localhost:9000 {{ minio_root_user }} {{ minio_root_password }}
+        set -a; . /etc/minio/env; set +a
+        HOME=/tmp mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
         HOME=/tmp mc mb local/velero --ignore-existing
         HOME=/tmp mc mb local/pg-dump --ignore-existing
         HOME=/tmp mc mb local/postgres-backups --ignore-existing
         HOME=/tmp mc mb local/scylla-backups --ignore-existing
+      run_once: true
       changed_when: true
       no_log: true
 
@@ -351,7 +380,9 @@
         content: |
           [Unit]
           Description=Keycloak SSO
-          After=network.target postgresql.service
+          After=network-online.target patroni.service
+          Wants=network-online.target
+          Requires=patroni.service
           [Service]
           Type=exec
           User=keycloak
