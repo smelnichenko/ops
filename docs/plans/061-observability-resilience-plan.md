@@ -1,6 +1,16 @@
 # Plan 061: Observability & resilience remaining work
 
-## Status: TODO
+## Status: PARTIAL (2026-04-20)
+
+Completed:
+- **B** Forgejo/Keycloak active/passive — code in `da66835` (ops), not yet deployed
+- **D** Reliability dashboard (Vault/ESO/ArgoCD/Velero/PublicURLs) — `9b8e18f`
+- **E** Runbook URLs + 6 stub runbooks — `db0cc85` (ops) + `1327621`, `aff84e7` (platform)
+
+Still TODO:
+- **C** Restore verification — needs dedicated session (target cluster choice, DR creds)
+
+Skipped/deferred: A (Vault KMS), F (MinIO consolidation), G (k8s HA)
 
 ## Context
 
