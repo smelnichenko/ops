@@ -15,35 +15,6 @@ design/testing. Ordered by risk-reduction value × effort.
 
 ---
 
-## Sub-plan A: Pi Vault KMS auto-unseal (HIGH VALUE)
-
-**Why:** current unseal keys live in `/etc/vault-unseal/unseal-keys`
-(mode 0400 root), defeating the purpose of Shamir. Anyone with root on
-the Pi can read vault. Also: a Pi wipe loses the keys unless manually
-restored.
-
-**Approach:**
-1. Stand up a second Vault (KMS-provider) somewhere independent of the Pis:
-   options ranked — (a) a lightweight cloud vault on fly.io/render/hetzner
-   with auto-unseal via a cloud KMS (AWS KMS free tier covers it), or
-   (b) a transit-mode Vault on `ten` that's itself shamir-unsealed from a
-   file (we don't gain much), or (c) an actual AWS/GCP KMS key directly.
-2. Configure Pi Vault with `seal "transit"` stanza pointing at (a) or (c).
-3. Re-key the existing Vault to switch from Shamir to transit (one-way
-   migration).
-4. Delete `/etc/vault-unseal/*`, disable the `vault-unseal.service`.
-
-**Files:** `deploy/ansible/playbooks/migrate-vault-consul.yml`
-(seal stanza), new playbook `playbooks/vault-transit-migrate.yml`.
-
-**Risk:** if KMS provider goes down, Vault can't unseal on Pi reboot. Must
-pick a reliable KMS tier. Keep ability to fall back to Shamir until
-confident.
-
-**Effort:** 1-2 days.
-
----
-
 ## Sub-plan B: Forgejo/Keycloak active/passive (MEDIUM VALUE)
 
 **Why:** same architectural bug MinIO had — two processes writing to
@@ -184,18 +155,16 @@ workload is gone. Plan 045 migration notes reserved this for future.
 
 ## Proposed execution order
 
-1. **A (Vault KMS unseal)** — highest security value
-2. **C (restore verify)** — real confidence in DR posture
-3. **B (Forgejo/Keycloak A/P)** — structural fragility
-4. **D (dashboards)** — quality-of-life
-5. **E (runbooks)** — quality-of-life
+1. **C (restore verify)** — real confidence in DR posture
+2. **B (Forgejo/Keycloak A/P)** — structural fragility
+3. **D (dashboards)** — quality-of-life
+4. **E (runbooks)** — quality-of-life
 
 Skip F, G unless constraints change.
 
 ## Verification (across all sub-plans)
 
 - `kubectl -n schnappy-infra get probe,podmonitor,prometheusrule` — expected resources present
-- `curl -k https://192.168.11.5:8200/v1/sys/seal-status` shows transit seal after A
 - `amtool alert query` after a simulated outage returns expected alerts
 - `VeleroRestoreVerificationFailing` absent for a week after C ships
 - Grafana dashboards visible at `grafana.pmon.dev/d/*` after D
