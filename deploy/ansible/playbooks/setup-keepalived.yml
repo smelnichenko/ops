@@ -46,38 +46,18 @@
         mode: '0755'
         content: |
           #!/bin/bash
-          # Probe Patroni on both nodes; probe forgejo+keycloak+minio only if
-          # this node currently holds the VIP (they run active/passive).
+          # Check critical services — if any fails, reduce priority to trigger failover
 
+          # Forgejo
+          curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
+
+          # Keycloak
+          curl -sf -o /dev/null -m 3 http://localhost:8080/realms/master || exit 1
+
+          # Patroni
           curl -sf -o /dev/null -m 3 http://localhost:8008/health || exit 1
 
-          # MinIO runs distributed A/A on both Pis — probe it unconditionally
-          curl -sf -o /dev/null -m 3 http://localhost:9000/minio/health/live || exit 1
-
-          if ip addr show | grep -q "{{ vip }}/"; then
-            curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
-            curl -sf -o /dev/null -m 3 http://localhost:8080/realms/master || exit 1
-          fi
-
           exit 0
-
-    - name: Create notify_master script (promote to active)
-      ansible.builtin.copy:
-        dest: /etc/keepalived/notify_master.sh
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          logger -t keepalived "notify_master: starting active/passive services"
-          systemctl start forgejo keycloak
-
-    - name: Create notify_backup script (demote, stop active/passive services)
-      ansible.builtin.copy:
-        dest: /etc/keepalived/notify_backup.sh
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          logger -t keepalived "notify_backup: stopping active/passive services"
-          systemctl stop forgejo keycloak
 
     - name: Write Keepalived config
       ansible.builtin.copy:
@@ -118,11 +98,6 @@
             track_script {
               check_services
             }
-
-            notify_master "/etc/keepalived/notify_master.sh"
-            notify_backup "/etc/keepalived/notify_backup.sh"
-            notify_fault  "/etc/keepalived/notify_backup.sh"
-            notify_stop   "/etc/keepalived/notify_backup.sh"
           }
       notify: Restart Keepalived
 
