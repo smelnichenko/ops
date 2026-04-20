@@ -242,10 +242,13 @@
             sleep 2
           done
 
-          # Vault process reachable (rc=0 unsealed, rc=2 sealed; both OK)
-          until vault status >/dev/null 2>&1 || [ $? -eq 2 ]; do sleep 1; done
+          # Wait for vault process; rc=0 unsealed, rc=2 sealed; rc=1 unreachable
+          until vault status >/dev/null 2>&1; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ]; do sleep 1; done
 
-          if vault status -format=json 2>/dev/null | grep -q '"sealed":true'; then
+          # vault status exit code 2 == sealed (version-proof; earlier grep
+          # on pretty-printed JSON missed the space after the colon)
+          vault status >/dev/null 2>&1
+          if [ $? -eq 2 ]; then
             KEY1=$(sed -n '1p' $KEYS)
             KEY2=$(sed -n '2p' $KEYS)
             vault operator unseal "$KEY1" | grep -E 'Sealed|Unseal Progress'
