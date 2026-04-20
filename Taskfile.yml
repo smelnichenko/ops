@@ -574,6 +574,14 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
 
+  deploy:pi-services:
+    desc: Install/update shared Pi services (Forgejo, Keycloak, MinIO, HAProxy)
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml -e @vars/pi-services.yml
+
   deploy:woodpecker:
     desc: Deploy Woodpecker CI
     dir: deploy/ansible

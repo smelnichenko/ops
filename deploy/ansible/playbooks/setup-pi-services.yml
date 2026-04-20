@@ -116,6 +116,53 @@
       notify: Restart Postgres
 
     # ================================================================
+    # Phase 2.5: HAProxy → Patroni primary
+    # ================================================================
+    # Each Pi runs HAProxy on localhost:5000. It health-checks Patroni's
+    # REST /primary endpoint on both nodes and forwards TCP to whichever
+    # returns 200 (the current leader). Forgejo and anything else that
+    # needs read-write connects to localhost:5000; failover is transparent.
+
+    - name: Install HAProxy
+      ansible.builtin.apt:
+        name: haproxy
+        state: present
+
+    - name: Write HAProxy config
+      ansible.builtin.copy:
+        dest: /etc/haproxy/haproxy.cfg
+        mode: '0644'
+        content: |
+          global
+            maxconn 200
+            log 127.0.0.1 local0
+
+          defaults
+            log global
+            mode tcp
+            retries 2
+            timeout connect 3s
+            timeout client 30m
+            timeout server 30m
+            timeout check 5s
+
+          listen postgres_primary
+            bind 127.0.0.1:5000
+            option httpchk GET /primary
+            http-check expect status 200
+            default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+            server pi1 {{ pi1_ip }}:5432 maxconn 100 check port 8008
+            server pi2 {{ pi2_ip }}:5432 maxconn 100 check port 8008
+      notify: Restart HAProxy
+
+    - name: Enable and start HAProxy
+      ansible.builtin.systemd:
+        name: haproxy
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # ================================================================
     # Phase 3: Forgejo
     # ================================================================
 
@@ -170,12 +217,10 @@
 
           [database]
           DB_TYPE = postgres
-          # Patroni primary only — forgejo's pgx driver ignores
-          # TARGET_SESSION_ATTRS, so listing both hosts led to connects
-          # against the read-only replica and SQLSTATE 25006 errors.
-          # Point only at the leader; if Patroni fails over, re-run this
-          # playbook with forgejo_db_host overridden to the new leader.
-          HOST = {{ forgejo_db_host | default(pi2_ip + ':5432') }}
+          # HAProxy on localhost:5000 routes to whichever Pi is the current
+          # Patroni leader (checked via REST /primary). Transparent failover
+          # without forgejo needing to know which host is primary.
+          HOST = {{ forgejo_db_host | default('127.0.0.1:5000') }}
           NAME = forgejo
           USER = postgres
           PASSWD = {{ forgejo_db_password }}
@@ -199,8 +244,9 @@
         content: |
           [Unit]
           Description=Forgejo Git Forge
-          After=network-online.target var-lib-forgejo-repos.mount patroni.service
+          After=network-online.target var-lib-forgejo-repos.mount patroni.service haproxy.service
           Wants=network-online.target
+          Requires=haproxy.service
           RequiresMountsFor=/var/lib/forgejo/repos
           [Service]
           Type=simple
@@ -384,15 +430,15 @@
         content: |
           [Unit]
           Description=Keycloak SSO
-          After=network-online.target patroni.service
+          After=network-online.target patroni.service haproxy.service
           Wants=network-online.target
-          Requires=patroni.service
+          Requires=patroni.service haproxy.service
           [Service]
           Type=exec
           User=keycloak
           Group=keycloak
           Environment=KC_DB=postgres
-          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host | default(pi1_ip + ':5432,' + pi2_ip + ':5432') }}/keycloak?targetServerType=primary
+          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host | default('127.0.0.1:5000') }}/keycloak
           Environment=KC_DB_USERNAME=postgres
           Environment=KC_DB_PASSWORD={{ keycloak_db_password }}
           Environment=KC_HOSTNAME=auth.pmon.dev
@@ -458,3 +504,8 @@
         name: keycloak
         state: restarted
         daemon_reload: true
+
+    - name: Restart HAProxy
+      ansible.builtin.systemd:
+        name: haproxy
+        state: restarted
