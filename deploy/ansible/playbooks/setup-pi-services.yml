@@ -170,12 +170,16 @@
 
           [database]
           DB_TYPE = postgres
-          HOST = {{ forgejo_db_host | default(pi1_ip + ':5432,' + pi2_ip + ':5432') }}
+          # Patroni primary only — forgejo's pgx driver ignores
+          # TARGET_SESSION_ATTRS, so listing both hosts led to connects
+          # against the read-only replica and SQLSTATE 25006 errors.
+          # Point only at the leader; if Patroni fails over, re-run this
+          # playbook with forgejo_db_host overridden to the new leader.
+          HOST = {{ forgejo_db_host | default(pi2_ip + ':5432') }}
           NAME = forgejo
           USER = postgres
           PASSWD = {{ forgejo_db_password }}
           SSL_MODE = disable
-          TARGET_SESSION_ATTRS = read-write
 
           [repository]
           ROOT = /var/lib/forgejo/repos

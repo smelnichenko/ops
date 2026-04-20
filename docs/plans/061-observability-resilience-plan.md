@@ -3,12 +3,28 @@
 ## Status: PARTIAL (2026-04-20)
 
 Completed:
-- **B** Forgejo/Keycloak active/passive — code in `da66835` (ops), not yet deployed
 - **D** Reliability dashboard (Vault/ESO/ArgoCD/Velero/PublicURLs) — `9b8e18f`
 - **E** Runbook URLs + 6 stub runbooks — `db0cc85` (ops) + `1327621`, `aff84e7` (platform)
 
+Reverted:
+- **B** Forgejo/Keycloak A/P — `da66835` then `0ba2f08`. Reveal during rollout:
+  forgejo's pgx driver silently ignored `TARGET_SESSION_ATTRS`, so multi-host
+  `HOST = pi1,pi2` connected to the replica and hit SQLSTATE 25006 whenever
+  it tried to run migrations after a (re)start. Pre-existing latent bug,
+  not visible in dual-active because migrations only run once per lifetime.
+
+  Interim: forgejo `HOST` pinned to the Patroni leader (pi2) only.
+  If Patroni fails over, re-run `task deploy:pi-services` with
+  `forgejo_db_host` overridden to the new leader.
+
+  **Proper fix (new sub-plan C2)**: put a pgBouncer or pg-auto-failover
+  instance in front of Patroni that routes to leader by default. Or run a
+  second keepalived VRRP that follows the Patroni leader (separate VIP for
+  DB writes) and point forgejo at that VIP. Until that lands, A/P is blocked.
+
 Still TODO:
 - **C** Restore verification — needs dedicated session (target cluster choice, DR creds)
+- **C2** Patroni-leader-aware DB routing (enables B when done)
 
 Skipped/deferred: A (Vault KMS), F (MinIO consolidation), G (k8s HA)
 
