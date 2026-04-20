@@ -127,7 +127,6 @@
           /vagrant-platform/helm/schnappy-observability \
           -n {{ ns }} --wait --timeout 5m \
           --set fullnameOverride=schnappy \
-          --set victoriametrics.enabled=false \
           --set grafana.enabled=false \
           --set alertmanager.enabled=false \
           --set elk.enabled=false \
