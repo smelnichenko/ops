@@ -228,18 +228,28 @@
         mode: '0700'
         content: |
           #!/bin/bash
-          # `vault status` exit codes: 0=unsealed, 2=sealed, 1=transport error.
-          # Accept rc=0|2 as "vault process is reachable"; the prior version
-          # waited only for rc=0 and spun forever whenever the pi booted sealed.
+          # Wait for Consul leader (vault's storage backend) before touching
+          # vault. Previously we only waited for the vault process, so on boot
+          # vault was "up but sealed" with Consul not yet ready — unseal calls
+          # silently failed and vault stayed sealed until someone noticed.
           export VAULT_ADDR=https://127.0.0.1:8200
           export VAULT_SKIP_VERIFY=1
           KEYS=/etc/vault-unseal/unseal-keys
+
+          # Consul leader election (up to 120s)
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8500/v1/status/leader 2>/dev/null | grep -q ':' && break
+            sleep 2
+          done
+
+          # Vault process reachable (rc=0 unsealed, rc=2 sealed; both OK)
           until vault status >/dev/null 2>&1 || [ $? -eq 2 ]; do sleep 1; done
+
           if vault status -format=json 2>/dev/null | grep -q '"sealed":true'; then
             KEY1=$(sed -n '1p' $KEYS)
             KEY2=$(sed -n '2p' $KEYS)
-            vault operator unseal $KEY1 > /dev/null 2>&1
-            vault operator unseal $KEY2 > /dev/null 2>&1
+            vault operator unseal "$KEY1" | grep -E 'Sealed|Unseal Progress'
+            vault operator unseal "$KEY2" | grep -E 'Sealed|Unseal Progress'
           fi
 
     - name: Create auto-unseal systemd service

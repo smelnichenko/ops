@@ -243,8 +243,9 @@
         content: |
           [Unit]
           Description=Vault Unseal Server
-          After=network-online.target
+          After=network-online.target consul.service
           Wants=network-online.target
+          Requires=consul.service
 
           [Service]
           User=vault
