@@ -136,8 +136,7 @@ task test:nexus       # Vagrant: Nexus repository manager
 task test:argocd      # Vagrant: Argo CD GitOps integration
 
 # Deploy to target
-task deploy:argocd    # Install/update Argo CD (GitOps controller)
-task deploy:prod         # Deploy/update app (legacy — Argo CD handles ongoing deploys)
+task deploy:argocd       # Install/update Argo CD (GitOps controller)
 task deploy:nexus        # Deploy Nexus repository manager on Pi
 task deploy:pi-services  # Forgejo, Keycloak, MinIO, HAProxy on Pis
 task deploy:woodpecker   # Deploy Woodpecker CI
@@ -543,8 +542,7 @@ PORKBUN_SECRET_KEY=sk1_...
 #   -e "vault_seed_secrets=true" -e "vault_seed_token=$VAULT_ROOT_TOKEN"
 
 # Deploy
-task deploy:argocd    # Install/update Argo CD (GitOps controller)
-task deploy:prod         # Deploy app (legacy — use Argo CD for ongoing deploys)
+task deploy:argocd       # Install/update Argo CD (GitOps controller)
 task deploy:full         # Fresh kubeadm + pi-services + argocd + app
 task deploy:pi-services  # Forgejo, Keycloak, MinIO, HAProxy on Pis
 task deploy:woodpecker   # Deploy Woodpecker CI

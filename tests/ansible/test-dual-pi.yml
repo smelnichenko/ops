@@ -79,7 +79,7 @@
   ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-keepalived.yml"
 
 # Vault skipped in Vagrant (requires TLS certs + binary install)
-# Production uses: setup-vault-tls.yml + migrate-vault-consul.yml
+# Production uses: migrate-vault-consul.yml (TLS certs seeded inline)
 
 # ─── Verify services ────────────────────────────────────────────────────────
 - name: Verify all services

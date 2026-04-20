@@ -184,12 +184,6 @@ tasks:
       - venv/bin/pip install -q -r requirements.txt
       - venv/bin/ansible-galaxy collection install -r requirements.yml
 
-  deploy:prod:
-    desc: Deploy to production
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml deploy.yml -e @vars/production.yml
   deploy:bootstrap:
     desc: "Tier 0: Install pre-GitOps infrastructure (cert-manager, ESO, Istio, Velero)"
     cmds:
@@ -573,7 +567,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/production.yml -e @vars/woodpecker.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/woodpecker.yml
 
   deploy:kubeadm:
     desc: Install kubeadm cluster (replaces k3s)
