@@ -210,7 +210,7 @@
           WantedBy=multi-user.target
       notify: Restart Forgejo
 
-    - name: Enable and start Forgejo
+    - name: Enable and start Forgejo (keepalived stops on backup Pi)
       ansible.builtin.systemd:
         name: forgejo
         enabled: true
@@ -316,7 +316,7 @@
           WantedBy=multi-user.target
       notify: Restart MinIO
 
-    - name: Enable and start MinIO
+    - name: Enable and start MinIO (distributed, runs on both Pis)
       ansible.builtin.systemd:
         name: minio
         enabled: true
@@ -405,7 +405,7 @@
       notify: Restart Keycloak
       no_log: true
 
-    - name: Enable and start Keycloak
+    - name: Enable and start Keycloak (keepalived stops on backup Pi)
       ansible.builtin.systemd:
         name: keycloak
         enabled: true
