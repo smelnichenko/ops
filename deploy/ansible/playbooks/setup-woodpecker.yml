@@ -2,8 +2,8 @@
 # Setup Woodpecker CI with Kubernetes backend alongside Forgejo
 #
 # Prerequisites:
-#   - k3s running (setup-k3s.yml)
-#   - Forgejo running (setup-forgejo.yml)
+#   - kubeadm cluster running (setup-kubeadm.yml)
+#   - Forgejo running (setup-pi-services.yml)
 #   - cert-manager installed
 #   - DNS: ci.pmon.dev -> 192.168.11.2
 #

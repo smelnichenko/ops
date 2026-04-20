@@ -206,7 +206,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e @vars/vault.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml -e @vars/pi-services.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
       # ArgoCD now syncs all Tier 1 apps from Forgejo
   deploy:vault-pi:
@@ -244,14 +244,6 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/migrate-vault-consul.yml
-
-  deploy:caddy:
-    desc: Setup Caddy reverse proxy with auto-TLS on both Pis
-    dir: deploy/ansible
-    deps: [deploy:install]
-    dotenv: ['../../.env']
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-caddy.yml
 
   deploy:keepalived:
     desc: Setup Keepalived VIP (192.168.11.5) between pi1 and pi2
@@ -559,20 +551,6 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
-
-  deploy:k3s:
-    desc: Setup k3s only
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml -e registry_mirror_ip=192.168.11.4
-
-  deploy:forgejo:
-    desc: Deploy Forgejo (self-hosted Git forge)
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-forgejo.yml
 
   deploy:pi-services:
     desc: Install/update shared Pi services (Forgejo, Keycloak, MinIO, HAProxy)

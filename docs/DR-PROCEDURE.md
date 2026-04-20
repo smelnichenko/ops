@@ -35,7 +35,7 @@ task deploy:seed-vault  # Populate secrets from .env
 ### 4. Setup Forgejo (Git Forge)
 
 ```bash
-task deploy:forgejo
+task deploy:pi-services
 ```
 
 Wait for Forgejo to be ready, then push repos if needed:
@@ -97,7 +97,7 @@ If only specific components are down:
 ./bootstrap.sh velero
 
 # Forgejo only
-task deploy:forgejo
+task deploy:pi-services
 
 # ArgoCD only
 task deploy:argocd

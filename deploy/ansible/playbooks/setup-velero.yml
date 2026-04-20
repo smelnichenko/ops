@@ -2,7 +2,7 @@
 # Setup Velero + Backup MinIO for k8s cluster backups
 #
 # Prerequisites:
-#   - k3s running (setup-k3s.yml)
+#   - kubeadm cluster running (setup-kubeadm.yml)
 #   - /mnt/backups mounted (backup partition)
 #
 # Environment variables required:

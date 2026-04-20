@@ -3,7 +3,7 @@
 #
 # Prerequisites:
 #   - Kubernetes cluster running (kubeadm or k3s)
-#   - cert-manager installed (setup-k3s.yml or setup-forgejo.yml)
+#   - cert-manager installed (setup-kubeadm.yml)
 #   - setup-vault-pi.yml completed (produces vars/vault-pi-runtime.yml)
 #   - Velero + backup MinIO deployed (setup-velero.yml) — for Raft snapshot CronJob
 #

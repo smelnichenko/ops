@@ -15,8 +15,8 @@ deploy/
 │   │   ├── localhost.yml       # Local inventory (development)
 │   │   └── production.yml      # Production inventory
 │   ├── playbooks/
-│   │   ├── setup-k3s.yml       # Setup k3s on fresh target
-│   │   └── full-deploy.yml     # Full deployment (k3s + app)
+│   │   ├── setup-kubeadm.yml   # Setup kubeadm on fresh target
+│   │   └── full-deploy.yml     # Full deployment (kubeadm + app)
 │   ├── roles/
 │   │   └── monitor/            # Monitor deployment role
 │   │       ├── tasks/main.yml
@@ -107,13 +107,10 @@ This will:
 
 ### Setup k3s Only
 
-To only setup k3s without deploying the app:
+To only setup kubeadm without deploying the app:
 
 ```bash
-./gradlew setupK3s
-
-# Or
-ansible-playbook -i inventory/production.yml playbooks/setup-k3s.yml
+task deploy:kubeadm
 ```
 
 ## Configuration

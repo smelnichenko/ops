@@ -317,7 +317,7 @@ main() {
       log "Next steps:"
       log "  1. task deploy:vault-pi    # If Vault Pi needs setup"
       log "  2. task deploy:vault       # Vault HA in cluster"
-      log "  3. task deploy:forgejo     # Git forge"
+      log "  3. task deploy:pi-services     # Git forge"
       log "  4. task deploy:argocd      # GitOps controller"
       log "  5. ArgoCD syncs all Tier 1 apps automatically"
       ;;

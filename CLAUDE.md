@@ -137,12 +137,12 @@ task test:argocd      # Vagrant: Argo CD GitOps integration
 
 # Deploy to target
 task deploy:argocd    # Install/update Argo CD (GitOps controller)
-task deploy:prod      # Deploy/update app (legacy — Argo CD handles ongoing deploys)
-task deploy:nexus     # Deploy Nexus repository manager on Pi
-task deploy:forgejo   # Deploy Forgejo
-task deploy:woodpecker # Deploy Woodpecker CI
-task deploy:velero    # Deploy Velero + Backup MinIO
-task deploy:full      # Fresh kubeadm + forgejo + woodpecker + velero + argocd + app
+task deploy:prod         # Deploy/update app (legacy — Argo CD handles ongoing deploys)
+task deploy:nexus        # Deploy Nexus repository manager on Pi
+task deploy:pi-services  # Forgejo, Keycloak, MinIO, HAProxy on Pis
+task deploy:woodpecker   # Deploy Woodpecker CI
+task deploy:velero       # Deploy Velero + Backup MinIO
+task deploy:full         # Fresh kubeadm + pi-services + argocd + app
 task deploy:status    # Check pods
 
 # Backups (velero CLI installed on ten)
@@ -544,12 +544,12 @@ PORKBUN_SECRET_KEY=sk1_...
 
 # Deploy
 task deploy:argocd    # Install/update Argo CD (GitOps controller)
-task deploy:prod      # Deploy app (legacy — use Argo CD for ongoing deploys)
-task deploy:full      # Fresh kubeadm + forgejo + woodpecker + velero + argocd + app
-task deploy:forgejo   # Deploy Forgejo
-task deploy:woodpecker # Deploy Woodpecker CI
-task deploy:velero    # Deploy Velero + backups
-task deploy:status    # Check status
+task deploy:prod         # Deploy app (legacy — use Argo CD for ongoing deploys)
+task deploy:full         # Fresh kubeadm + pi-services + argocd + app
+task deploy:pi-services  # Forgejo, Keycloak, MinIO, HAProxy on Pis
+task deploy:woodpecker   # Deploy Woodpecker CI
+task deploy:velero       # Deploy Velero + backups
+task deploy:status       # Check status
 task deploy:undeploy  # Remove (keeps data)
 ```
 
@@ -732,9 +732,10 @@ Self-hosted Git forge at `https://git.pmon.dev/` for source hosting. CI/CD handl
 - **Chart:** `oci://code.forgejo.org/forgejo-helm/forgejo` (v16.2.0)
 - **Database:** SQLite (single-node, no extra pod)
 - **Image:** Rootless, SSH disabled (HTTPS only)
-- **Ingress:** `git.pmon.dev` via Traefik + cert-manager TLS
-- **Secrets:** `forgejo-admin` k8s secret via ESO from `secret/schnappy/forgejo` (admin_username, admin_password, admin_email)
-- **Key files:** `deploy/ansible/playbooks/setup-forgejo.yml` (platform repo)
+- **Ingress:** `git.pmon.dev` via Istio Gateway + cert-manager TLS
+- **Secrets:** forgejo admin seeded by `seed-vault-secrets.yml`, consumed at install time
+- **DB:** Patroni-backed Postgres via HAProxy on localhost:5000 on each Pi
+- **Key files:** `deploy/ansible/playbooks/setup-pi-services.yml` — Forgejo bare-metal on Pis
 
 ## Woodpecker CI
 

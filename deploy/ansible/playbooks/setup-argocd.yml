@@ -2,7 +2,7 @@
 # Setup Argo CD for GitOps-based cluster management
 #
 # Prerequisites:
-#   - k3s running (setup-k3s.yml)
+#   - kubeadm cluster running (setup-kubeadm.yml)
 #   - Forgejo running with schnappy/infra repo
 #   - cert-manager installed (for TLS to cd.pmon.dev)
 #   - Vault + ESO running (for secrets)

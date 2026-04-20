@@ -41,13 +41,12 @@ task deploy:status    # Check production pod status
 
 | Playbook | Command | Purpose |
 |----------|---------|---------|
-| `setup-k3s.yml` | `task deploy:full` | k3s cluster provisioning |
-| `setup-flux.yml` | `task deploy:flux` | Flux CD GitOps controller |
-| `setup-forgejo.yml` | `task deploy:forgejo` | Forgejo git forge |
+| `setup-kubeadm.yml` | `task deploy:kubeadm` | kubeadm cluster provisioning |
+| `setup-pi-services.yml` | `task deploy:pi-services` | Forgejo, Keycloak, MinIO, HAProxy on Pis |
 | `setup-woodpecker.yml` | `task deploy:woodpecker` | Woodpecker CI |
 | `setup-velero.yml` | `task deploy:velero` | Velero backups + MinIO |
 | `setup-vault-pi.yml` | `task deploy:vault-pi` | Vault unseal server (Pi) |
-| `setup-vault.yml` | `task deploy:vault` | Vault on k3s + ESO |
+| `setup-vault.yml` | `task deploy:vault` | Vault on kubeadm + ESO |
 | `setup-nexus.yml` | `task deploy:nexus` | Nexus repository manager (Pi) |
 
 ## Integration Tests (Vagrant)
