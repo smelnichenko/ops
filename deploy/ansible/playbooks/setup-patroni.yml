@@ -219,8 +219,35 @@
         daemon_reload: true
 
 # ─── Restore Keycloak DB ─────────────────────────────────────────────────────
-- name: Restore Keycloak database
-  hosts: pi1
+# Must run against the Patroni primary, which is non-deterministic on a
+# fresh cluster — either pi1 or pi2 can win the first election. Discover
+# the leader first, then delegate_to it.
+- name: Discover Patroni primary
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Wait for a Patroni leader to exist (from any node)
+      ansible.builtin.shell: |
+        for i in $(seq 1 60); do
+          LEADER=$(curl -sf http://localhost:8008/cluster 2>/dev/null | \
+            python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((m["name"] for m in d.get("members",[]) if m.get("role") in ["leader","master","primary"]), ""))' 2>/dev/null)
+          [ -n "$LEADER" ] && echo "$LEADER" && exit 0
+          sleep 5
+        done
+        exit 1
+      register: _leader
+      changed_when: false
+      run_once: true
+
+    - name: Set patroni_primary fact
+      ansible.builtin.set_fact:
+        patroni_primary: "{{ _leader.stdout | trim }}"
+      run_once: true
+
+- name: Restore Keycloak database on the Patroni primary
+  hosts: "{{ hostvars['pi1']['patroni_primary'] }}"
   become: true
   gather_facts: false
 
@@ -228,17 +255,6 @@
     pg_password: "{{ kc_db_pw | default('changeme') }}"
 
   tasks:
-    - name: Wait for Patroni primary
-      ansible.builtin.shell: |
-        set -o pipefail
-        for i in $(seq 1 60); do
-          ROLE=$(curl -sf http://localhost:8008 | python3 -c 'import sys,json; print(json.load(sys.stdin).get("role",""))' 2>/dev/null)
-          [ "$ROLE" = "master" ] || [ "$ROLE" = "primary" ] && echo "primary" && exit 0
-          sleep 5
-        done
-        exit 1
-      changed_when: false
-
     - name: Create keycloak database
       ansible.builtin.shell: |
         PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -c "CREATE DATABASE keycloak" 2>/dev/null || true
