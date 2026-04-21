@@ -244,8 +244,10 @@
           [Unit]
           Description=Vault Unseal Server
           After=network-online.target consul.service
-          Wants=network-online.target
-          Requires=consul.service
+          # Wants (soft): order AFTER consul when present; don't hard-fail
+          # start if consul unit isn't installed. Vault will retry its
+          # consul backend connection internally.
+          Wants=network-online.target consul.service
 
           [Service]
           User=vault

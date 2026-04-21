@@ -471,8 +471,12 @@
           [Unit]
           Description=Keycloak SSO
           After=network-online.target patroni.service haproxy.service
-          Wants=network-online.target
-          Requires=patroni.service haproxy.service
+          # Wants (soft) rather than Requires (hard): orders start AFTER
+          # patroni+haproxy when they exist, but doesn't block keycloak
+          # from starting if those units aren't installed yet (fresh
+          # vagrant run where playbook order matters). Keycloak retries
+          # its DB connection internally so eventual-consistency is fine.
+          Wants=network-online.target patroni.service haproxy.service
           [Service]
           Type=exec
           User=keycloak
