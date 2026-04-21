@@ -361,6 +361,14 @@
         - drive1
         - drive2
 
+    - name: Create /etc/minio (parent dir for env file)
+      ansible.builtin.file:
+        path: /etc/minio
+        state: directory
+        owner: minio
+        group: minio
+        mode: '0750'
+
     - name: Write MinIO environment file (credentials, 0400 minio:minio)
       ansible.builtin.copy:
         dest: /etc/minio/env
