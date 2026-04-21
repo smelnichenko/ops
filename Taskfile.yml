@@ -747,8 +747,11 @@ tasks:
       - cmd: vagrant destroy -f
         ignore_error: true
       - cmd: vagrant up
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      # test-dual-pi imports setup-consul + setup-pi-services + setup-patroni.
+      # Run it first so consul.service exists when setup-vault-pi sets up
+      # vault (vault.service has Requires=consul.service).
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/migrate-vault-consul.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
