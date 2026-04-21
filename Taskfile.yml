@@ -731,6 +731,13 @@ tasks:
     cmds:
       - cmd: vagrant up
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
+
+  test:vault-unseal:
+    desc: Test Vault auto-unseal after cold start (regressions from 2026-04-20)
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
   test:dual-pi-clean:
     desc: Full clean dual-Pi test (destroy + up + test)

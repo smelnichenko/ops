@@ -1,0 +1,91 @@
+---
+# Test Vault auto-unseal resilience
+#
+# Simulates the cold-boot sequence that has broken vault-unseal three
+# different ways (the whole sequence happened on 2026-04-20):
+#   1. Infinite `until vault status` loop — spun forever on rc=2
+#   2. Consul race — unseal script ran before Consul leader elected
+#   3. JSON pretty-print grep — vault 1.21.3 renders `"sealed": true`
+#      with a space, grep pattern had no space, `if` block skipped
+#
+# The single test below catches all three regressions: it stops
+# consul + vault + vault-unseal on a Pi, starts them together as
+# systemd does on boot, then asserts vault is UNSEALED within 60s.
+# A bug in any of the three layers above makes this assertion fail.
+#
+# Run inside a Vagrant test harness that already deployed the full
+# pi-services stack. Usage:
+#   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-vault-unseal.yml
+
+- name: Test vault auto-unseal after cold start
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop vault-unseal (oneshot — ensures rerun)
+      ansible.builtin.systemd:
+        name: vault-unseal
+        state: stopped
+
+    - name: Stop vault
+      ansible.builtin.systemd:
+        name: vault
+        state: stopped
+
+    - name: Stop consul (vault's backend — forces cold-start race)
+      ansible.builtin.systemd:
+        name: consul
+        state: stopped
+
+    - name: Pause to ensure all three processes are fully down
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Start consul + vault + vault-unseal in parallel (simulates boot)
+      ansible.builtin.shell: |
+        set -e
+        systemctl start consul vault vault-unseal
+      changed_when: true
+
+    - name: Vault-unseal must complete within 60s (no infinite loop)
+      ansible.builtin.shell: |
+        systemctl is-active vault-unseal
+      register: vu_active
+      retries: 30
+      delay: 2
+      until: vu_active.rc == 0 and vu_active.stdout == 'active'
+      changed_when: false
+
+    - name: Vault must be UNSEALED within 90s (not silently sealed)
+      ansible.builtin.shell: |
+        VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 vault status
+      register: vault_status
+      retries: 45
+      delay: 2
+      # rc=0 => unsealed, rc=2 => still sealed (fail), rc=1 => transport error
+      until: vault_status.rc == 0
+      changed_when: false
+      failed_when: vault_status.rc != 0
+
+    - name: Inspect vault-unseal journal (regression guard — silent-success bug)
+      ansible.builtin.shell: |
+        set -o pipefail
+        journalctl -u vault-unseal --since '2 min ago' --no-pager
+      register: vu_journal
+      changed_when: false
+
+    - name: Journal must show unseal progress (not silent completion)
+      ansible.builtin.assert:
+        that:
+          - "'Unseal Progress' in vu_journal.stdout or 'Sealed             false' in vu_journal.stdout"
+        fail_msg: |
+          vault-unseal service exited cleanly but never reported an
+          unseal attempt. This was the 2026-04-20 JSON-grep bug:
+          script silently skipped the `if` block. Check
+          /etc/vault-unseal/unseal.sh — the sealed-check must use
+          `vault status` exit code (rc=2), not a JSON grep.
+
+    - name: Print success
+      ansible.builtin.debug:
+        msg: "vault-unseal passed: pi1 vault unsealed from cold start in <90s"
