@@ -313,6 +313,27 @@
         dest: /usr/local/bin/mc
         mode: '0755'
 
+    # Check if minio user exists with non-9000 UID (replay from older
+    # provisioning). usermod refuses to change UID while the process is
+    # running, so stop minio first — it'll be restarted after the user
+    # and data-drive setup finishes.
+    - name: Check existing minio UID
+      ansible.builtin.getent:
+        database: passwd
+        key: minio
+        fail_key: false
+      register: _minio_passwd
+
+    - name: Stop MinIO if current UID isn't 9000 (replay-only, idempotent)
+      ansible.builtin.systemd:
+        name: minio
+        state: stopped
+      when:
+        - _minio_passwd.ansible_facts.getent_passwd.minio is defined
+        - _minio_passwd.ansible_facts.getent_passwd.minio[1] is defined
+        - _minio_passwd.ansible_facts.getent_passwd.minio[1] != '9000'
+      ignore_errors: true
+
     - name: Create MinIO group (fixed GID for Gluster-neutral ownership)
       ansible.builtin.group:
         name: minio
