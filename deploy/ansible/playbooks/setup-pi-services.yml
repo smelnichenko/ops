@@ -146,13 +146,24 @@
             timeout server 30m
             timeout check 5s
 
+          # Runtime DNS resolution via local Consul agent. Nodes are
+          # registered as pi1.node.consul / pi2.node.consul; if a Pi IP
+          # ever changes, Consul updates and HAProxy re-resolves in
+          # ~hold valid without redeploy.
+          resolvers consul
+            nameserver consul1 127.0.0.1:8600
+            hold valid 10s
+            resolve_retries 3
+            timeout resolve 1s
+            timeout retry 1s
+
           listen postgres_primary
             bind 127.0.0.1:5000
             option httpchk GET /primary
             http-check expect status 200
-            default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
-            server pi1 {{ pi1_ip }}:5432 maxconn 100 check port 8008
-            server pi2 {{ pi2_ip }}:5432 maxconn 100 check port 8008
+            default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions resolvers consul resolve-prefer ipv4 init-addr last,libc,none
+            server pi1 pi1.node.consul:5432 maxconn 100 check port 8008
+            server pi2 pi2.node.consul:5432 maxconn 100 check port 8008
       notify: Restart HAProxy
 
     - name: Enable and start HAProxy
