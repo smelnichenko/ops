@@ -150,7 +150,7 @@
         fail_msg: "Expected at least 2 Consul members, got {{ consul_count.stdout }}"
 
 # ─── Test Patroni replication ───────────────────────────────────────────────
-- name: Test Patroni replication
+- name: Test Patroni replication — write on primary
   hosts: pi1
   become: true
   gather_facts: false
@@ -162,10 +162,18 @@
         sudo -u postgres psql -d forgejo -c "INSERT INTO test_ha (val) VALUES ('pi1-write')"
       changed_when: true
 
-    - name: Verify replication on pi2
+# Read on pi2 over its local postgres socket — avoids the pg_hba
+# md5/scram password prompt that blocks `psql -h pi2`.
+- name: Test Patroni replication — read on replica
+  hosts: pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Verify replication on pi2 (via local socket)
       ansible.builtin.shell: |
         set -o pipefail
-        sudo -u postgres psql -h {{ hostvars['pi2']['ansible_host'] }} -d forgejo -c "SELECT val FROM test_ha WHERE val='pi1-write'" | grep -c pi1-write
+        sudo -u postgres psql -d forgejo -c "SELECT val FROM test_ha WHERE val='pi1-write'" | grep -c pi1-write
       register: repl_check
       changed_when: false
       retries: 5

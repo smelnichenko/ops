@@ -18,10 +18,18 @@
   gather_facts: true
 
   tasks:
-    - name: Stop Vault
+    # vault.service only exists on pi1 after setup-vault-pi.yml; pi2 gets
+    # its unit installed later in this playbook. Skip if absent.
+    - name: Check if vault service is installed
+      ansible.builtin.stat:
+        path: /etc/systemd/system/vault.service
+      register: _vault_unit
+
+    - name: Stop Vault (if installed)
       ansible.builtin.systemd:
         name: vault
         state: stopped
+      when: _vault_unit.stat.exists
 
 - name: Reconfigure Vault for Consul storage
   hosts: pi1,pi2
