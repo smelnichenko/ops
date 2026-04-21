@@ -650,7 +650,7 @@ Located in the `schnappy/platform` repo under `helm/`. Split into 5 charts by li
 |---|---|---|---|
 | `schnappy` | `helm/schnappy` | `schnappy` | Code pushes (daily) — app, admin, chat, chess, envoy gateway, site, game |
 | `schnappy-data` | `helm/schnappy-data` | `schnappy-data` | Version bumps (monthly) — postgres, redis, kafka, scylla, minio, apt-cache |
-| `schnappy-auth` | `helm/schnappy-auth` | `schnappy-auth` | Auth config (rare) — keycloak |
+| `schnappy-auth` | `helm/schnappy-auth` | — | **TEST-ONLY** (Vagrant E2E). Production Keycloak is bare-metal on Pis via setup-pi-services.yml. |
 | `schnappy-observability` | `helm/schnappy-observability` | `schnappy-observability` | Dashboard/config (weekly) — ELK, prometheus, grafana, alertmanager, kube-state-metrics |
 | `schnappy-sonarqube` | `helm/schnappy-sonarqube` | `schnappy-sonarqube` | QG/rule changes (rare) — sonarqube + sonarqube-postgres |
 
@@ -658,7 +658,7 @@ Located in the `schnappy/platform` repo under `helm/`. Split into 5 charts by li
 
 **CD pipelines:** All 8 repos still target `clusters/production/schnappy/values.yaml` (the core app chart's values file). Only image tags live there; data/auth/observability/sonarqube values files are updated manually.
 
-**Infra repo values:** `clusters/production/schnappy/values.yaml`, `schnappy-data/values.yaml`, `schnappy-auth/values.yaml`, `schnappy-observability/values.yaml`, `schnappy-sonarqube/values.yaml`
+**Infra repo values:** `clusters/production/schnappy-production-apps/values.yaml`, `schnappy-production-data/values.yaml`, `schnappy-production-mesh/values.yaml`, `schnappy-observability/values.yaml`, `schnappy-sonarqube/values.yaml`, `schnappy-test-apps/values.yaml`. (No `schnappy-auth` values — chart is Vagrant-only.)
 
 ## Load Testing
 

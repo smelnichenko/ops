@@ -135,6 +135,6 @@ EOF
 |------|-----------|-------------|
 | 0 | cert-manager, ESO, Istio, Velero, cluster-config | bootstrap.sh |
 | 0 | Vault, Forgejo, ArgoCD | Ansible (task deploy:*) |
-| 1 | schnappy-data, schnappy-auth, schnappy-mesh, schnappy | ArgoCD |
-| 1 | schnappy-observability, schnappy-test, schnappy-sonarqube | ArgoCD |
+| 1 | schnappy-production-{apps,data,mesh}, schnappy-test-{apps,data,mesh} | ArgoCD |
+| 1 | schnappy-observability, schnappy-sonarqube | ArgoCD |
 | 1 | Woodpecker, Prometheus | ArgoCD |
