@@ -41,6 +41,46 @@
     node_ip: "{{ ansible_default_ipv4.address }}"
 
   tasks:
+    # Ensure vault user + binary exist on BOTH Pis before touching the
+    # config. setup-vault-pi.yml installs them only on pi1; pi2 needs
+    # them too once we're moving to multi-node consul storage.
+    - name: Ensure vault group exists
+      ansible.builtin.group:
+        name: vault
+        system: true
+
+    - name: Ensure vault user exists
+      ansible.builtin.user:
+        name: vault
+        group: vault
+        system: true
+        shell: /usr/sbin/nologin
+        home: /var/lib/vault
+        create_home: true
+
+    - name: Stat vault binary
+      ansible.builtin.stat:
+        path: /usr/local/bin/vault
+      register: _vault_bin
+
+    - name: Install vault binary if missing (copy from pi1)
+      when: not _vault_bin.stat.exists
+      block:
+        - name: Fetch vault binary from pi1
+          ansible.builtin.fetch:
+            src: /usr/local/bin/vault
+            dest: /tmp/vault-bin
+            flat: true
+          delegate_to: pi1
+          run_once: true
+        - name: Push vault binary to this host
+          ansible.builtin.copy:
+            src: /tmp/vault-bin
+            dest: /usr/local/bin/vault
+            mode: '0755'
+            owner: root
+            group: root
+
     - name: Backup old raft data
       ansible.builtin.shell: |
         if [ -d /var/lib/vault/raft ]; then
@@ -97,21 +137,29 @@
   gather_facts: false
 
   tasks:
+    # `vault operator init -status` is explicit for this check:
+    #   rc=0: initialized   rc=2: not initialized   rc=1: error
+    # Earlier impl parsed `vault status -format=json` via python and
+    # used `set -o pipefail`; vault status returns rc=2 when sealed,
+    # killing the pipeline and breaking the check on fresh installs.
     - name: Check if already initialized
-      ansible.builtin.shell: |
-        set -o pipefail
-        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
-        vault status -format=json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["initialized"])'
+      ansible.builtin.command: vault operator init -status
+      environment:
+        VAULT_ADDR: https://127.0.0.1:8200
+        VAULT_SKIP_VERIFY: "1"
       register: vault_init_status
       changed_when: false
+      failed_when: vault_init_status.rc not in [0, 2]
 
     - name: Initialize Vault
       ansible.builtin.shell: |
-        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         vault operator init -key-shares=3 -key-threshold=2 -format=json
+      environment:
+        VAULT_ADDR: https://127.0.0.1:8200
+        VAULT_SKIP_VERIFY: "1"
       register: vault_init
       changed_when: true
-      when: vault_init_status.stdout | trim == 'False'
+      when: vault_init_status.rc == 2
 
     - name: Save unseal keys  # noqa: no-handler
       ansible.builtin.copy:

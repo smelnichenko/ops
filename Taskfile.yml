@@ -740,13 +740,17 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
   test:dual-pi-clean:
-    desc: Full clean dual-Pi test (destroy + up + test)
+    desc: Full clean dual-Pi test (destroy + up + full stack + test-dual-pi + test-vault-unseal)
     deps: [deploy:install]
+    dotenv: ['../../.env']
     cmds:
       - cmd: vagrant destroy -f
         ignore_error: true
       - cmd: vagrant up
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/migrate-vault-consul.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
   # ============== VAGRANT TESTS (ALL) ==============
   test:vagrant-all:
