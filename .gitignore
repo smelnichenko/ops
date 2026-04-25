@@ -1,5 +1,6 @@
 .env*
 .vagrant/
+.ansible/
 deploy/ansible/vars/vault-pi-runtime.yml
 deploy/ansible/vars/sealed-secrets-key-backup.yaml
 deploy/ansible/venv/

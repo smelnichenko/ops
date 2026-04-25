@@ -1,5 +1,7 @@
 profile: production
 exclude_paths:
+  - .ansible/                # ansible-compat scratch dir created at repo root
+  - deploy/ansible/.ansible/ # …and another one wherever lint is invoked from
   - deploy/ansible/venv/
   - deploy/ansible/.cache/
   - deploy/ansible/vars/sealed-secrets-key-backup.yaml
