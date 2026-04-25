@@ -205,13 +205,34 @@ v1.
 
 ## Migration
 
-Logs are transient; no ES→ClickHouse data migration needed. Cut-over is
-a rolling chart deploy:
+Logs are transient; no ES→ClickHouse data migration needed.
 
-1. Deploy the new `clickhouse` StatefulSet + the fluentbit ConfigMap update + Grafana datasource in one `helm upgrade`.
-2. Fluent-bit picks up the new config via its configmap-watcher; new log lines go to ClickHouse.
-3. ES stays up for ~24 h so historical queries against Kibana still work.
-4. After 24 h of happy ingest (verified by `SELECT count() FROM logs.podlogs WHERE timestamp > now() - INTERVAL 1 HOUR` in Grafana), delete the ES + Kibana manifests in a follow-up MR.
+**Original plan was a 24-hour staged cutover with both backends live.
+Final decision (during implementation): one-shot replacement.** Logs are
+ephemeral, dashboards are read-only, and the cluster is small enough
+that a brief gap (~minutes between `helm upgrade` removing ELK pods and
+ClickHouse coming up) is cheaper than maintaining a transition gate.
+
+The chart was cut to ClickHouse-only in a single PR:
+
+- Deleted: `elasticsearch-*.yaml`, `kibana-*.yaml`, `elk:` values block,
+  `schnappy.elasticsearch.*` and `schnappy.kibana.*` helpers, the ES
+  ILM job + helper, ES + Kibana NetworkPolicies, the Kibana HTTPRoute,
+  `elasticsearch`/`kibana` mesh ServiceAccounts and AuthorizationPolicy.
+- Repurposed: top-level `fluentbit:` block (was `elk.fluentbit`).
+  Fluent-bit DaemonSet, ConfigMap, RBAC, NetworkPolicy now gate on
+  `fluentbit.enabled` and Fluent-bit talks only to ClickHouse.
+- Vault: `secret/schnappy/elasticsearch` retired in
+  `seed-vault-secrets.yml`; replaced by `secret/schnappy/clickhouse`.
+
+Operationally:
+
+1. Argo CD picks up the chart change → ELK pods are deleted, ClickHouse
+   StatefulSet comes up + the post-install init Job creates the
+   `logs.podlogs` table.
+2. Fluent-bit DaemonSet rolls; new log lines go to ClickHouse.
+3. PVC reclaim post-merge (one-time):
+   `kubectl delete pvc -n schnappy -l app.kubernetes.io/component=elasticsearch`
 
 ## Vagrant tests are the merge gate (non-negotiable)
 

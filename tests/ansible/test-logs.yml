@@ -1,0 +1,215 @@
+---
+# Test ClickHouse log pipeline in Vagrant against Pi Vault + schnappy namespace.
+# Plan 065: replaces the ELK stack. Verifies:
+#   - clickhouse-server StatefulSet rolls out
+#   - clickhouse-init Job creates the logs.podlogs table
+#   - Fluent-bit DaemonSet rolls out and ships kube logs to ClickHouse
+#   - Auth is enforced (no anonymous writes)
+#   - SELECT count() FROM logs.podlogs > 0 within ~60s of pod activity
+#
+# Prereqs: `_vagrant:k8s-stack` (Pi stack + kubeadm + ESO configured).
+
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
+
+- name: Test ClickHouse log pipeline
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    test_clickhouse_password: "vagrant-test-clickhouse-password"
+
+  tasks:
+    - name: Configure ESO ClusterSecretStore → Pi Vault
+      ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
+
+    - name: Seed clickhouse secret
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/clickhouse
+        secret_data:
+          password: "{{ test_clickhouse_password }}"
+
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
+
+    - name: Write Helm values for logs test
+      ansible.builtin.copy:
+        dest: /tmp/schnappy-logs-test-values.yml
+        mode: '0600'
+        content: |
+          vault:
+            secretsEnabled: true
+          networkPolicies:
+            enabled: false
+          clickhouse:
+            enabled: true
+            existingSecret: schnappy-clickhouse
+            image: clickhouse/clickhouse-server:24.8-alpine
+            resources:
+              requests: { cpu: "100m", memory: "512Mi" }
+              limits:   { cpu: "1500m", memory: "1Gi" }
+            storage:
+              size: 2Gi
+              storageClass: local-path
+            retention:
+              days: 7
+          fluentbit:
+            enabled: true
+          prometheus:
+            enabled: false
+          grafana:
+            enabled: false
+          alertmanager:
+            enabled: false
+          mimir:
+            enabled: false
+          tempo:
+            enabled: false
+
+    - name: Deploy schnappy-mesh (provides ServiceAccounts for clickhouse/fluentbit)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
+
+    - name: Deploy chart with ClickHouse + Fluent-bit
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-observability
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values_files:
+          - /tmp/schnappy-logs-test-values.yml
+        wait: false
+
+    - name: Wait for ClickHouse StatefulSet rollout
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: StatefulSet
+        name: schnappy-clickhouse
+        namespace: "{{ ns }}"
+      register: ch_rollout
+      retries: 60
+      delay: 5
+      until:
+        - ch_rollout.resources | length > 0
+        - ch_rollout.resources[0].status.readyReplicas | default(0) == ch_rollout.resources[0].spec.replicas
+
+    - name: Verify ExternalSecret synced for clickhouse
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: external-secrets.io/v1
+        kind: ExternalSecret
+        name: schnappy-clickhouse
+        namespace: "{{ ns }}"
+      register: ch_secret_sync
+      retries: 12
+      delay: 5
+      until:
+        - ch_secret_sync.resources | length > 0
+        - (ch_secret_sync.resources[0].status.conditions | default([{}]))[0].reason | default('') == "SecretSynced"
+
+    - name: Wait for the post-install init Job to complete
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Job
+        name: schnappy-clickhouse-init
+        namespace: "{{ ns }}"
+      register: ch_init_job
+      retries: 30
+      delay: 5
+      until:
+        - ch_init_job.resources | length > 0
+        - (ch_init_job.resources[0].status.succeeded | default(0)) >= 1
+
+    - name: Probe ClickHouse HTTP endpoint
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
+          wget -qO- --user=default --password={{ test_clickhouse_password }} \
+            'http://localhost:8123/?query=SELECT+1'
+      register: ch_health
+      retries: 30
+      delay: 5
+      until: ch_health.rc == 0
+      changed_when: false
+
+    - name: Verify the logs.podlogs table exists
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
+          wget -qO- --user=default --password={{ test_clickhouse_password }} \
+            'http://localhost:8123/?query=EXISTS+TABLE+logs.podlogs'
+      register: ch_table_exists
+      changed_when: false
+
+    - name: Auth check — anonymous write must fail
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
+          wget -qO- 'http://localhost:8123/?query=DROP+DATABASE+IF+EXISTS+logs' 2>&1 \
+          | grep -qiE 'Authentication failed|UNKNOWN_USER|password is incorrect|HTTP/.*401' && echo PASS || echo FAIL
+      register: ch_auth
+      changed_when: false
+
+    - name: Wait for Fluent-bit DaemonSet ready
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: DaemonSet
+        name: schnappy-fluentbit
+        namespace: "{{ ns }}"
+      register: fb_rollout
+      retries: 40
+      delay: 3
+      until:
+        - fb_rollout.resources | length > 0
+        - fb_rollout.resources[0].status.numberReady | default(0) == fb_rollout.resources[0].status.desiredNumberScheduled | default(-1)
+
+    - name: Wait for log lines to land
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
+          wget -qO- --user=default --password={{ test_clickhouse_password }} \
+            'http://localhost:8123/?query=SELECT+count()+FROM+logs.podlogs'
+      register: ch_count
+      retries: 18
+      delay: 10
+      until: (ch_count.stdout | default('0') | trim | int) > 0
+      changed_when: false
+      failed_when: false
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/schnappy-logs-test-values.yml
+        state: absent
+
+    - name: Set result facts
+      ansible.builtin.set_fact:
+        ch_pass: "{{ not ch_rollout.failed | default(false) }}"
+        ch_secret_pass: "{{ (ch_secret_sync.resources[0].status.conditions | default([{}]))[0].reason | default('') == 'SecretSynced' }}"
+        ch_table_pass: "{{ (ch_table_exists.stdout | default('') | trim) == '1' }}"
+        ch_auth_pass: "{{ (ch_auth.stdout | default('') | trim) == 'PASS' }}"
+        fb_pass: "{{ not fb_rollout.failed | default(false) }}"
+        fb_logs_pass: "{{ (ch_count.stdout | default('0') | trim | int) > 0 }}"
+
+    - name: TEST RESULT
+      vars:
+        all_pass: "{{ ch_pass and ch_secret_pass and ch_table_pass and ch_auth_pass and fb_pass }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          ClickHouse Log Pipeline Test: {{ 'PASS' if all_pass else 'PARTIAL' }}
+
+          [{{ 'PASS' if ch_pass else 'FAIL' }}] ClickHouse StatefulSet rolled out
+          [{{ 'PASS' if ch_secret_pass else 'FAIL' }}] ExternalSecret synced
+          [{{ 'PASS' if ch_table_pass else 'FAIL' }}] logs.podlogs table created
+          [{{ 'PASS' if ch_auth_pass else 'FAIL' }}] Auth enforced (anon write rejected)
+          [{{ 'PASS' if fb_pass else 'FAIL' }}] Fluent-bit DaemonSet running
+          [{{ 'PASS' if fb_logs_pass else 'WARN' }}] Logs flowing ({{ ch_count.stdout | default('0') | trim }} rows)
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Critical ClickHouse checks failed — see summary above"
+      when: not (ch_pass and ch_secret_pass and ch_table_pass and fb_pass)

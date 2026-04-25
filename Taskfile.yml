@@ -360,15 +360,15 @@ tasks:
       - task: _vagrant:k8s-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-gateway.yml
 
-  test:elk:
-    desc: Test ELK stack in Vagrant
+  test:logs:
+    desc: Test ClickHouse + Fluent-bit log pipeline in Vagrant (Plan 065 — replaces test:elk)
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-elk.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-logs.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:keycloak:
     desc: Test Keycloak SSO in Vagrant
@@ -750,8 +750,8 @@ tasks:
     cmds:
       - echo "=== [1/12] test:dual-pi-clean ==="
       - task: test:dual-pi-clean
-      - echo "=== [2/12] test:elk ==="
-      - task: test:elk
+      - echo "=== [2/12] test:logs ==="
+      - task: test:logs
       - echo "=== [3/12] test:grafana ==="
       - task: test:grafana
       - echo "=== [4/12] test:kafka-scylla ==="
