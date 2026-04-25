@@ -624,6 +624,15 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-cleanup-policy.yml
 
+  deploy:pgbouncer:
+    desc: 'PgBouncer in front of Patroni on each Pi (port 6432)'
+    dir: deploy/ansible
+    dotenv: ['../../.env']
+    cmds:
+      - >-
+        venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pgbouncer.yml
+        -e "KEYCLOAK_DB_PASSWORD=$KEYCLOAK_DB_PASSWORD"
+
   deploy:istio:
     desc: Install Istio ambient mesh + HAProxy
     dir: deploy/ansible
