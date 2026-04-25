@@ -1,0 +1,132 @@
+---
+# Provisions the scoped Vault token used by the stale-pr-envs-sweeper
+# CronJob (Plan 067 §"Vault GC").
+#
+# - Creates a Vault policy that allows LIST on `secret/metadata/` and
+#   DELETE on `secret/metadata/schnappy-pr-*` (no other paths, no
+#   read).
+# - Issues a periodic, non-renewable* token bound to that policy
+#   (*period: 720h auto-renewable in-place — Vault renews it as long
+#   as the cronjob runs at least once per period).
+# - Stores the token at `secret/argocd/vault-cleanup-token` so ESO
+#   can surface it as a Secret in the argocd namespace.
+#
+# Idempotent: re-runs reconcile the policy + skip token re-issue if
+# the path already has one.
+#
+# Usage:
+#   task deploy:setup-vault-cleanup-policy
+
+- name: Provision Vault cleanup token for PR-env GC
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    vault_addr: "https://127.0.0.1:8200"
+    policy_name: "argocd-pr-env-cleanup"
+
+  tasks:
+    - name: Ensure python3-hvac is installed
+      ansible.builtin.apt:
+        name: python3-hvac
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Read Vault root token
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/root-token
+      register: vault_token_raw
+
+    - name: Set token fact
+      ansible.builtin.set_fact:
+        vault_token_value: "{{ vault_token_raw.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Write Vault policy {{ policy_name }} (LIST + DELETE on schnappy-pr-*)
+      community.hashi_vault.vault_write:
+        url: "{{ vault_addr }}"
+        token: "{{ vault_token_value }}"
+        validate_certs: false
+        path: "sys/policies/acl/{{ policy_name }}"
+        data:
+          policy: |
+            # List the secret mount root to discover schnappy-pr-* prefixes.
+            path "secret/metadata/" {
+              capabilities = ["list"]
+            }
+            # List inside each PR prefix.
+            path "secret/metadata/schnappy-pr-+/" {
+              capabilities = ["list"]
+            }
+            # Delete keys under schnappy-pr-*. Metadata DELETE = full purge.
+            path "secret/metadata/schnappy-pr-+/+" {
+              capabilities = ["delete"]
+            }
+            # Explicitly DENY everything else under secret/ (defense in depth).
+            path "secret/data/*" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/schnappy" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/schnappy/*" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/schnappy-test" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/schnappy-test/*" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/schnappy-infra" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/schnappy-infra/*" {
+              capabilities = ["deny"]
+            }
+
+    - name: Check if cleanup token already provisioned
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ vault_addr }}"
+        token: "{{ vault_token_value }}"
+        validate_certs: false
+        path: "argocd/vault-cleanup-token"
+      register: _existing_token
+      failed_when: false
+      no_log: true
+
+    - name: Issue new periodic token bound to {{ policy_name }}
+      community.hashi_vault.vault_write:
+        url: "{{ vault_addr }}"
+        token: "{{ vault_token_value }}"
+        validate_certs: false
+        path: "auth/token/create"
+        data:
+          policies: ["{{ policy_name }}"]
+          # Periodic (auto-renewable indefinitely as long as renewed
+          # within the period). 720h = 30d.
+          period: "720h"
+          display_name: "argocd-pr-env-cleanup"
+          renewable: true
+      register: _new_token
+      no_log: true
+      when: _existing_token.secret is not defined or _existing_token.secret.token | default('') == ''
+
+    - name: Store cleanup token at secret/argocd/vault-cleanup-token
+      community.hashi_vault.vault_kv2_write:
+        url: "{{ vault_addr }}"
+        token: "{{ vault_token_value }}"
+        validate_certs: false
+        path: "argocd/vault-cleanup-token"
+        data:
+          token: "{{ _new_token.data.auth.client_token }}"
+      when: _new_token is changed
+      no_log: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: |
+          Policy `{{ policy_name }}` reconciled.
+          Cleanup token: {{ 'reused (already at secret/argocd/vault-cleanup-token)' if _new_token is skipped else 'newly issued + stored at secret/argocd/vault-cleanup-token' }}

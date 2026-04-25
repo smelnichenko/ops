@@ -1,0 +1,123 @@
+---
+# Purge one environment's Vault prefix.
+#
+# Deletes ALL paths under `secret/<vault_prefix>/*` (metadata + every
+# version), then verifies the prefix is empty. Refuses to run against
+# the protected prefixes (schnappy / schnappy-test / schnappy-infra)
+# unless `confirm_destroy=yes` is also passed.
+#
+# Usage:
+#   # Per-PR env cleanup
+#   task deploy:delete-environment -- -e vault_prefix=schnappy-pr-42
+#
+#   # Or via raw playbook
+#   ansible-playbook -i inventory/production.yml \
+#     playbooks/delete-environment.yml \
+#     -e vault_prefix=schnappy-pr-42
+#
+#   # Force-purge a protected prefix (don't)
+#   ansible-playbook ... -e vault_prefix=schnappy -e confirm_destroy=yes
+
+- name: Purge Vault prefix
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    vault_addr: "https://127.0.0.1:8200"
+    confirm_destroy: "no"
+    protected_prefixes:
+      - schnappy
+      - schnappy-test
+      - schnappy-infra
+      - argocd
+
+  tasks:
+    - name: Validate vault_prefix is set
+      ansible.builtin.fail:
+        msg: "Required variable `vault_prefix` not set (e.g. -e vault_prefix=schnappy-pr-42)"
+      when: vault_prefix is not defined or vault_prefix | length == 0
+
+    - name: Refuse to purge protected prefix without explicit confirmation
+      ansible.builtin.fail:
+        msg: |
+          `{{ vault_prefix }}` is a protected prefix. Re-run with
+          `-e confirm_destroy=yes` if you really mean to purge it.
+      when:
+        - vault_prefix in protected_prefixes
+        - confirm_destroy != "yes"
+
+    - name: Ensure python3-hvac is installed
+      ansible.builtin.apt:
+        name: python3-hvac
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Read Vault root token
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/root-token
+      register: vault_token_raw
+
+    - name: Set token fact
+      ansible.builtin.set_fact:
+        vault_token_value: "{{ vault_token_raw.content | b64decode | trim }}"
+      no_log: true
+
+    - name: List paths under secret/{{ vault_prefix }}/
+      community.hashi_vault.vault_list:
+        url: "{{ vault_addr }}"
+        token: "{{ vault_token_value }}"
+        validate_certs: false
+        path: "secret/metadata/{{ vault_prefix }}"
+      register: _list_result
+      failed_when: false
+
+    - name: Resolve key list (empty if prefix doesn't exist)
+      ansible.builtin.set_fact:
+        keys_to_purge: "{{ _list_result.data.data.keys | default([]) }}"
+
+    - name: Show what will be purged
+      ansible.builtin.debug:
+        msg: |
+          About to purge {{ keys_to_purge | length }} key(s) under
+          secret/{{ vault_prefix }}/:
+          {{ keys_to_purge | to_nice_yaml }}
+
+    - name: Skip purge if nothing to do
+      ansible.builtin.meta: end_play
+      when: keys_to_purge | length == 0
+
+    # Full purge = delete the metadata. KV-v2's `vault_kv2_delete`
+    # only soft-deletes the latest version; the metadata API DELETE
+    # removes the secret completely (all versions + metadata).
+    - name: Purge each key (metadata + all versions)
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/secret/metadata/{{ vault_prefix }}/{{ item }}"
+        method: DELETE
+        headers:
+          X-Vault-Token: "{{ vault_token_value }}"
+        validate_certs: false
+        status_code: [200, 204, 404]
+      loop: "{{ keys_to_purge }}"
+      loop_control:
+        label: "{{ vault_prefix }}/{{ item }}"
+
+    - name: Verify prefix is empty
+      community.hashi_vault.vault_list:
+        url: "{{ vault_addr }}"
+        token: "{{ vault_token_value }}"
+        validate_certs: false
+        path: "secret/metadata/{{ vault_prefix }}"
+      register: _verify
+      failed_when: false
+
+    - name: Confirm purge
+      ansible.builtin.debug:
+        msg: |
+          {% if _verify.data.data.keys | default([]) | length == 0 %}
+          PASS — secret/{{ vault_prefix }}/ is empty.
+          {% else %}
+          PARTIAL — {{ _verify.data.data.keys | length }} key(s) still present:
+          {{ _verify.data.data.keys | to_nice_yaml }}
+          {% endif %}

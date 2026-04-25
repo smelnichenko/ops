@@ -612,6 +612,18 @@ tasks:
         -e "PORKBUN_SECRET_KEY=$PORKBUN_SECRET_KEY"
         -e "FORGEJO_READONLY_TOKEN=$FORGEJO_READONLY_TOKEN"
 
+  deploy:delete-environment:
+    desc: 'Purge a Vault prefix (e.g. CLI_ARGS="-e vault_prefix=schnappy-pr-42")'
+    dir: deploy/ansible
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/delete-environment.yml {{.CLI_ARGS}}
+
+  deploy:setup-vault-cleanup-policy:
+    desc: 'Provision the scoped Vault token used by the PR-env GC CronJob'
+    dir: deploy/ansible
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-cleanup-policy.yml
+
   deploy:istio:
     desc: Install Istio ambient mesh + HAProxy
     dir: deploy/ansible
