@@ -16,6 +16,7 @@
   hosts: pis
   become: true
   gather_facts: true
+  strategy: linear
 
   vars:
     forgejo_version: "14.0.3"
@@ -466,7 +467,7 @@
       retries: 30
       delay: 5
 
-    - name: Create MinIO buckets (runs once; mc loads creds from env file)
+    - name: Create MinIO buckets (runs once; mc loads creds from env file)  # noqa: run-once[task]
       ansible.builtin.shell: |
         set -a; . /etc/minio/env; set +a
         HOME=/tmp mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
@@ -475,6 +476,7 @@
         HOME=/tmp mc mb local/postgres-backups --ignore-existing
         HOME=/tmp mc mb local/scylla-backups --ignore-existing
       run_once: true
+      delegate_to: "{{ groups['pis'] | first }}"
       changed_when: true
       no_log: true
 
