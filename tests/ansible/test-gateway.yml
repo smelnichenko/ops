@@ -1,498 +1,324 @@
 ---
-# Test API Gateway deployment and routing in Vagrant
+# Test Istio Gateway + HTTPRoute integration in Vagrant.
 #
-# Verifies the Spring Cloud Gateway deploys correctly, routes /api/**
-# traffic to the core monolith (passthrough mode), handles CORS,
-# and has network policies in place.
+# Deploys two tiny nginx backends in a dedicated namespace, attaches each
+# to the shared `vagrant-gateway` Gateway (from tasks/setup-istio-gateway.yml)
+# with distinct hostnames + path rules, then verifies:
+#   1. Gateway resource is Programmed
+#   2. Hostname-based routing (two hostnames → two backends)
+#   3. Path-based routing (/b vs / within one hostname)
+#   4. ResponseHeaderModifier filter pass-through
+#   5. HTTP methods (GET/POST/PUT/DELETE) reach the backend
+#   6. Unknown hostname → 404 from the gateway
 #
-# Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
-#   - setup-vault-pi.yml completed
-#   - setup-vault.yml completed (Vault + ESO deployed)
-#   - Gateway image built and available in containerd
+# Replaces the retired Spring Cloud Gateway service test (that Java
+# service no longer exists in the platform chart). The current
+# "API gateway" layer is Istio Gateway API + HTTPRoute — exactly what
+# this test exercises.
 #
 # Usage:
 #   cd deploy/ansible
-#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-gateway.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml \
+#     ../../tests/ansible/test-gateway.yml
 
-- name: Test API Gateway deployment and routing
+- name: Test Istio Gateway + HTTPRoute routing
   hosts: target
   become: true
   gather_facts: false
 
   vars:
-    ns: schnappy
-    vault_ns: vault
-    test_pg_password: "vagrant-test-gateway-pg-password"
-    test_email: "gateway-test@test.com"
-    test_password: "testpassword123"
-    kc_admin_password: "vagrant-test-kc-admin!!"
+    ns: gateway-test
+    host_a: "app-a.vagrant.test"
+    host_b: "app-b.vagrant.test"
+    host_unknown: "not-attached.vagrant.test"
 
   tasks:
-    # ================================================================
-    # Phase 1: Build images and deploy
-    # ================================================================
+    - ansible.builtin.import_tasks: tasks/setup-istio-gateway.yml
 
-    - name: Create schnappy namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
-
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
+    - name: Base URL fact
       ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
+        gateway_base: "http://{{ node_ip }}:{{ istio_gateway_nodeport }}"
 
-    - name: Build backend JAR
-      ansible.builtin.shell: |
-        source $HOME/.sdkman/bin/sdkman-init.sh
-        cd /vagrant-monitor && ./gradlew bootJar --no-daemon -x test
-      args:
-        executable: /bin/bash
-      become: false
-      register: backend_build
-      changed_when: true
+    # ── Setup: namespace + two backends ────────────────────────────────
+    - name: Create {{ ns }} namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
-    - name: Build backend container image
-      ansible.builtin.shell: |
-        STAGE=$(mktemp -d)
-        cp /vagrant-monitor/build/libs/*.jar "$STAGE/app.jar"
-        cp /vagrant-monitor/Dockerfile.runtime "$STAGE/Dockerfile"
-        nerdctl -n k8s.io build \
-          -t monitor:local "$STAGE"
-        rm -rf "$STAGE"
-      register: backend_image
-      changed_when: true
+    - name: Deploy backend A ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata: { name: backend-a-content, namespace: "{{ ns }}" }
+          data:
+            index.html: "backend-a"
+            a.html: "path-a-on-host-a"
 
-    - name: Build frontend
-      ansible.builtin.shell: |
-        source $HOME/.nvm/nvm.sh
-        cd /vagrant-site && npm ci && npm run build
-      args:
-        executable: /bin/bash
-      become: false
-      register: frontend_build
-      changed_when: true
-
-    - name: Build frontend container image
-      ansible.builtin.shell: |
-        STAGE=$(mktemp -d)
-        cp -r /vagrant-site/dist "$STAGE/"
-        cp /vagrant-site/Dockerfile.runtime "$STAGE/Dockerfile"
-        cp /vagrant-site/nginx.conf "$STAGE/"
-        cp /vagrant-site/nginx.conf.template "$STAGE/"
-        cp /vagrant-site/security-headers.conf "$STAGE/"
-        cp /vagrant-site/security-headers-base.conf "$STAGE/"
-        cp /vagrant-site/docker-entrypoint.sh "$STAGE/"
-        nerdctl -n k8s.io build \
-          -t monitor-frontend:local "$STAGE"
-        rm -rf "$STAGE"
-      register: frontend_image
-      changed_when: true
-
-    - name: Build gateway JAR
-      ansible.builtin.shell: |
-        source $HOME/.sdkman/bin/sdkman-init.sh
-        cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
-      args:
-        executable: /bin/bash
-      become: false
-      register: gateway_build
-      changed_when: true
-
-    - name: Build gateway container image
-      ansible.builtin.shell: |
-        STAGE=$(mktemp -d)
-        cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
-        cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
-        nerdctl -n k8s.io build \
-          -t monitor-gateway:local "$STAGE"
-        rm -rf "$STAGE"
-      register: gateway_image
-      changed_when: true
-
-    - name: Write Helm values for gateway test
-      ansible.builtin.copy:
-        dest: /tmp/schnappy-gateway-test-values.yml
-        mode: '0600'
-        content: |
-          vault:
-            secretsEnabled: true
-          networkPolicies:
-            enabled: true
-          site:
-            dnsResolver: "10.43.0.10"
-            enabled: true
-            image:
-              repository: monitor-frontend
-              tag: local
-              pullPolicy: Never
-          app:
+    - name: Deploy backend A Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata: { name: backend-a, namespace: "{{ ns }}" }
+          spec:
             replicas: 1
-            image:
-              repository: monitor
-              tag: local
-              pullPolicy: Never
-            javaOpts: "-Xmx384m -XX:+UseZGC"
-          gateway:
-            enabled: true
+            selector: { matchLabels: { app: backend-a } }
+            template:
+              metadata: { labels: { app: backend-a } }
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:1.29-alpine
+                    ports: [{ containerPort: 80 }]
+                    volumeMounts:
+                      - { name: content, mountPath: /usr/share/nginx/html }
+                volumes:
+                  - name: content
+                    configMap: { name: backend-a-content }
+
+    - name: Deploy backend A Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata: { name: backend-a, namespace: "{{ ns }}" }
+          spec:
+            selector: { app: backend-a }
+            ports: [{ port: 80, targetPort: 80 }]
+
+    - name: Deploy backend B ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata: { name: backend-b-content, namespace: "{{ ns }}" }
+          data:
+            index.html: "backend-b"
+
+    - name: Deploy backend B Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata: { name: backend-b, namespace: "{{ ns }}" }
+          spec:
             replicas: 1
-            image:
-              repository: monitor-gateway
-              tag: local
-              pullPolicy: Never
-            javaOpts: "-Xmx256m -XX:+UseZGC"
-          postgres:
-            enabled: true
-            existingSecret: "schnappy-postgres"
-            image: postgres:17-alpine
-            storage:
-              storageClass: "local-path"
-          redis:
-            enabled: true
-            image: redis:7-alpine
-          kafka:
-            enabled: false
-          scylla:
-            enabled: false
-          keycloak:
-            enabled: true
-            existingSecret: "schnappy-keycloak"
-            image: quay.io/keycloak/keycloak:26.5.6
-            hostname: localhost
-            mail:
-              from: "test@example.com"
-            clients:
-              app:
-                enabled: true
-                redirectUri: "http://localhost/auth/callback"
-              forgejo:
-                enabled: false
-                redirectUri: ""
-              grafana:
-                enabled: false
-                redirectUri: ""
-            resources:
-              requests: { cpu: 200m, memory: 512Mi }
-              limits: { cpu: 1000m, memory: 1Gi }
-            ingress:
-              enabled: false
-          aptCache:
-            enabled: false
-          elk:
-            enabled: false
-          ai:
-            enabled: false
-          mail:
-            enabled: false
-          webhook:
-            enabled: false
-          minio:
-            enabled: false
-          prometheus:
-            enabled: false
-          grafana:
-            enabled: false
+            selector: { matchLabels: { app: backend-b } }
+            template:
+              metadata: { labels: { app: backend-b } }
+              spec:
+                containers:
+                  - name: nginx
+                    image: nginx:1.29-alpine
+                    ports: [{ containerPort: 80 }]
+                    volumeMounts:
+                      - { name: content, mountPath: /usr/share/nginx/html }
+                volumes:
+                  - name: content
+                    configMap: { name: backend-b-content }
 
-    - name: Seed postgres secret
+    - name: Deploy backend B Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata: { name: backend-b, namespace: "{{ ns }}" }
+          spec:
+            selector: { app: backend-b }
+            ports: [{ port: 80, targetPort: 80 }]
+
+    - name: Wait for backend-a rollout
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: "backend-a"
+        namespace: "{{ ns }}"
+      register: _rollout
+      retries: 24
+      delay: 5
+      until:
+        - (_rollout.resources | default([]) | length) > 0
+        - _rollout.resources[0].status.readyReplicas | default(0) == _rollout.resources[0].spec.replicas | default(1) and _rollout.resources[0].status.updatedReplicas | default(0) == _rollout.resources[0].spec.replicas | default(1)
+
+    - name: Wait for backend-b rollout
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: "backend-b"
+        namespace: "{{ ns }}"
+      register: _rollout
+      retries: 24
+      delay: 5
+      until:
+        - (_rollout.resources | default([]) | length) > 0
+        - _rollout.resources[0].status.readyReplicas | default(0) == _rollout.resources[0].spec.replicas | default(1) and _rollout.resources[0].status.updatedReplicas | default(0) == _rollout.resources[0].spec.replicas | default(1)
+
+    # ── HTTPRoutes: hostname + path-based ─────────────────────────────
+    - name: HTTPRoute for host-a (path-based fan-out)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata: { name: host-a, namespace: "{{ ns }}" }
+          spec:
+            parentRefs:
+              - name: "{{ istio_gateway_name }}"
+                namespace: "{{ istio_gateway_ns }}"
+            hostnames: ["{{ host_a }}"]
+            rules:
+              - matches: [{ path: { type: PathPrefix, value: /b } }]
+                backendRefs: [{ name: backend-b, port: 80 }]
+              - matches: [{ path: { type: PathPrefix, value: / } }]
+                backendRefs: [{ name: backend-a, port: 80 }]
+
+    - name: HTTPRoute for host-b (ResponseHeaderModifier filter)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata: { name: host-b, namespace: "{{ ns }}" }
+          spec:
+            parentRefs:
+              - name: "{{ istio_gateway_name }}"
+                namespace: "{{ istio_gateway_ns }}"
+            hostnames: ["{{ host_b }}"]
+            rules:
+              - filters:
+                  - type: ResponseHeaderModifier
+                    responseHeaderModifier:
+                      add:
+                        - { name: X-Gateway-Test, value: "vagrant-ok" }
+                backendRefs: [{ name: backend-b, port: 80 }]
+
+    - name: /etc/hosts entries for test hostnames
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: "\\s{{ item }}(\\s|$)"
+        line: "{{ node_ip }} {{ item }}"
+        state: present
+      loop:
+        - "{{ host_a }}"
+        - "{{ host_b }}"
+        - "{{ host_unknown }}"
+
+    - name: Wait for HTTPRoutes to be Accepted
       ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/postgres \
-            database="monitor" \
-            username="postgres" \
-            password="{{ test_pg_password }}"
-      no_log: true
-
-    - name: Seed keycloak secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/keycloak \
-            admin_password="{{ kc_admin_password }}" \
-            db_password="vagrant-test-kc-db" \
-            forgejo_client_secret="not-used"
-      no_log: true
-
-    - name: Sync platform charts to VM
-      ansible.builtin.synchronize:
-        src: "{{ lookup('env', 'HOME') }}/src/platform/"
-        dest: /vagrant-platform/
-        delete: true
-      delegate_to: localhost
-      become: false
-
-    - name: Deploy chart with gateway enabled
-      ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant-platform/helm \
-          --namespace {{ ns }} \
-          --create-namespace \
-          --values /tmp/schnappy-gateway-test-values.yml \
-          --wait --timeout 300s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      register: helm_result
-
-    - name: Show pod status
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ ns }} -o wide
-      register: pod_status
+        for route in host-a host-b; do
+          kubectl wait --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True \
+            httproute/$route -n {{ ns }} --timeout=60s
+        done
       changed_when: false
 
-    - name: Pod status
-      ansible.builtin.debug:
-        msg: "{{ pod_status.stdout_lines }}"
-
-    # ================================================================
-    # Phase 2: Verify gateway deployment
-    # ================================================================
-
-    - name: Wait for gateway deployment rollout
+    # ── Assertions ─────────────────────────────────────────────────────
+    - name: "1. Gateway vagrant-gateway is Programmed"
       ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-gateway -n {{ ns }} --timeout=300s
-      register: gateway_rollout
+        kubectl get gateway {{ istio_gateway_name }} -n {{ istio_gateway_ns }} \
+          -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}'
+      register: _gw_programmed
       changed_when: false
-      failed_when: false
+      failed_when: _gw_programmed.stdout != "True"
 
-    - name: Check gateway service port
-      ansible.builtin.shell: |
-        kubectl get service schnappy-gateway -n {{ ns }} -o jsonpath='{.spec.ports[0].port}'
-      register: gateway_svc
-      changed_when: false
-      failed_when: false
-
-    - name: "Gateway deployment: {{ 'PASS' if gateway_rollout.rc == 0 else 'FAIL' }}"
-      ansible.builtin.debug:
-        msg: "Gateway deployment is running"
-
-    # ================================================================
-    # Phase 3: Verify gateway health
-    # ================================================================
-
-    - name: Wait for gateway health endpoint
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-gateway -- \
-          curl -sf http://localhost:8080/actuator/health
-      register: gateway_health
-      retries: 30
-      delay: 10
-      until: gateway_health.rc == 0
-      changed_when: false
-      failed_when: false
-
-    - name: "Gateway health: {{ 'PASS' if gateway_health.rc == 0 else 'FAIL' }}"
-      ansible.builtin.debug:
-        msg: "{{ gateway_health.stdout | default('no response') }}"
-
-    # ================================================================
-    # Phase 4: Verify route passthrough to core
-    # ================================================================
-
-    - name: Wait for core app to be ready
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
-          curl -sf http://localhost:8080/api/health
-      register: core_health
-      retries: 30
-      delay: 10
-      until: core_health.rc == 0
-      changed_when: false
-      failed_when: false
-
-    - name: Test /api/health route through gateway
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
-          curl -sf http://schnappy-gateway:8080/api/health
-      register: route_health
+    - name: "2a. host-a / → backend-a"
+      ansible.builtin.uri:
+        url: "{{ gateway_base }}/"
+        headers: { Host: "{{ host_a }}" }
+        return_content: true
+      register: _r_a_root
       retries: 6
       delay: 5
-      until: route_health.rc == 0
-      changed_when: false
-      failed_when: false
+      until: _r_a_root.status == 200
+      failed_when: "'backend-a' not in _r_a_root.content"
 
-    - name: "Route /api/health: {{ 'PASS' if route_health.rc == 0 else 'FAIL' }}"
-      ansible.builtin.debug:
-        msg: "{{ route_health.stdout | default('no response') }}"
+    - name: "2b. host-b / → backend-b"
+      ansible.builtin.uri:
+        url: "{{ gateway_base }}/"
+        headers: { Host: "{{ host_b }}" }
+        return_content: true
+      register: _r_b_root
+      failed_when: "'backend-b' not in _r_b_root.content"
 
-    - name: Test /api/build-info route through gateway
+    - name: "3a. host-a /b/ → backend-b (path fan-out)"
+      ansible.builtin.uri:
+        url: "{{ gateway_base }}/b/"
+        headers: { Host: "{{ host_a }}" }
+        return_content: true
+      register: _r_a_b
+      failed_when: "'backend-b' not in _r_a_b.content"
+
+    - name: "3b. host-a /a.html → backend-a (default match)"
+      ansible.builtin.uri:
+        url: "{{ gateway_base }}/a.html"
+        headers: { Host: "{{ host_a }}" }
+        return_content: true
+      register: _r_a_a
+      failed_when: "'path-a-on-host-a' not in _r_a_a.content"
+
+    - name: "4. ResponseHeaderModifier injects X-Gateway-Test on host-b"
+      ansible.builtin.uri:
+        url: "{{ gateway_base }}/"
+        headers: { Host: "{{ host_b }}" }
+        return_content: false
+      register: _r_b_hdr
+      failed_when: _r_b_hdr.x_gateway_test | default('') != 'vagrant-ok'
+
+    - name: "5. Unknown hostname → 404 from gateway"
+      ansible.builtin.uri:
+        url: "{{ gateway_base }}/"
+        headers: { Host: "{{ host_unknown }}" }
+        status_code: [404]
+        return_content: false
+      register: _r_unk
+      failed_when: _r_unk.status != 404
+
+    - name: "6. HTTP methods (GET/POST/PUT/DELETE) reach the backend"
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
-          curl -sf http://schnappy-gateway:8080/api/build-info
-      register: route_buildinfo
-      retries: 6
-      delay: 5
-      until: route_buildinfo.rc == 0
+        set -e
+        for method in GET POST PUT DELETE; do
+          code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -H "Host: {{ host_a }}" \
+            -X $method \
+            "{{ gateway_base }}/")
+          # nginx static content returns 200 for GET, 405 for write methods
+          # — both prove the request traversed the gateway and reached nginx.
+          case "$code" in
+            200|405) echo "$method -> $code OK" ;;
+            *) echo "FAIL $method -> $code"; exit 1 ;;
+          esac
+        done
       changed_when: false
-      failed_when: false
 
-    - name: "Route /api/build-info: {{ 'PASS' if route_buildinfo.rc == 0 else 'FAIL' }}"
-      ansible.builtin.debug:
-        msg: "{{ route_buildinfo.stdout | default('no response') }}"
-
-    # ================================================================
-    # Phase 5: Verify CORS headers
-    # ================================================================
-
-    - name: Test CORS preflight request
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-monitor -- \
-          curl -sf -I -X OPTIONS \
-          -H "Origin: https://pmon.dev" \
-          -H "Access-Control-Request-Method: GET" \
-          http://schnappy-gateway:8080/api/health
-      register: cors_response
-      changed_when: false
-      failed_when: false
-
-    - name: Set CORS fact
-      ansible.builtin.set_fact:
-        cors_ok: "{{ 'Access-Control-Allow' in cors_response.stdout | default('') or cors_response.rc == 0 }}"
-
-    - name: "CORS headers: {{ 'PASS' if cors_ok else 'WARN' }}"
-      ansible.builtin.debug:
-        msg: "{{ cors_response.stdout_lines | default(['no response']) }}"
-
-    # ================================================================
-    # Phase 6: Verify WebSocket route config
-    # ================================================================
-
-    - name: Check gateway config for WebSocket routes
-      ansible.builtin.shell: |
-        kubectl get configmap -n {{ ns }} -l app.kubernetes.io/component=gateway -o yaml 2>/dev/null || \
-        kubectl exec -n {{ ns }} deploy/schnappy-gateway -- \
-          env | grep -i "ws\|websocket\|chat\|chess" || true
-      register: ws_config
-      changed_when: false
-      failed_when: false
-
-    - name: Set WebSocket config fact
-      ansible.builtin.set_fact:
-        ws_config_ok: "{{ 'ws' in ws_config.stdout | default('') | lower or 'chat' in ws_config.stdout | default('') | lower }}"
-
-    - name: "WebSocket config: {{ 'PASS' if ws_config_ok else 'WARN — config not detected (may be in application.yml)' }}"
-      ansible.builtin.debug:
-        msg: "{{ ws_config.stdout_lines | default(['no WebSocket config found in env/configmap']) }}"
-
-    # ================================================================
-    # Phase 7: Verify network policies
-    # ================================================================
-
-    - name: Check gateway network policy exists
-      ansible.builtin.shell: |
-        kubectl get networkpolicy schnappy-gateway -n {{ ns }} -o name
-      register: gateway_np
-      changed_when: false
-      failed_when: false
-
-    - name: Set network policy fact
-      ansible.builtin.set_fact:
-        gateway_np_exists: "{{ gateway_np.rc == 0 }}"
-
-    - name: "Gateway network policy: {{ 'PASS' if gateway_np_exists else 'WARN' }}"
-      ansible.builtin.debug:
-        msg: "{{ 'Network policy exists' if gateway_np_exists else 'Network policy not found — will be created with Helm templates' }}"
-
-    # ================================================================
-    # Phase 8: Verify ingress routing
-    # ================================================================
-
-    - name: Check ingress routes /api to gateway
-      ansible.builtin.shell: |
-        kubectl get ingress -n {{ ns }} -o json | \
-          python3 -c "
-        import sys, json
-        data = json.load(sys.stdin)
-        for item in data.get('items', []):
-          for rule in item.get('spec', {}).get('rules', []):
-            for path in rule.get('http', {}).get('paths', []):
-              if path.get('path', '').startswith('/api'):
-                svc = path.get('backend', {}).get('service', {}).get('name', '')
-                print(f'PATH=/api -> SERVICE={svc}')
-        "
-      register: ingress_routing
-      changed_when: false
-      failed_when: false
-
-    - name: Set ingress routing fact
-      ansible.builtin.set_fact:
-        ingress_routes_to_gateway: "{{ 'schnappy-gateway' in ingress_routing.stdout | default('') }}"
-
-    - name: "Ingress routing: {{ 'PASS' if ingress_routes_to_gateway else 'WARN — /api not routing to gateway yet' }}"
-      ansible.builtin.debug:
-        msg: "{{ ingress_routing.stdout_lines | default(['no /api ingress rule found']) }}"
-
-    # ================================================================
-    # Phase 9: Verify auth flow through gateway
-    # ================================================================
-
-    - name: "AUTH: Create test user and get token"
-      ansible.builtin.include_tasks: tasks/keycloak-auth.yml
-      vars:
-
-    - name: Set auth flow fact
-      ansible.builtin.set_fact:
-        auth_flow_ok: "{{ auth_token | default('') | length > 0 }}"
-
-    - name: "Auth flow through gateway: {{ 'PASS' if auth_flow_ok else 'WARN' }}"
-      ansible.builtin.debug:
-        msg: "{{ 'Keycloak auth succeeded — JWT obtained' if auth_flow_ok else 'Auth flow failed — Keycloak may not be ready' }}"
-
-    # ================================================================
-    # Phase 10: Summary
-    # ================================================================
-
-    - name: Clean up values file
-      ansible.builtin.file:
-        path: /tmp/schnappy-gateway-test-values.yml
+    # ── Cleanup ────────────────────────────────────────────────────────
+    - name: Delete gateway-test namespace
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
         state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
+        wait: true
+      changed_when: false
+      failed_when: false
 
-    - name: Set result facts
-      ansible.builtin.set_fact:
-        gateway_running: "{{ gateway_rollout.rc is defined and gateway_rollout.rc == 0 }}"
-        gateway_svc_ok: "{{ gateway_svc.stdout | default('') == '8080' }}"
-        gateway_health_ok: "{{ gateway_health.rc is defined and gateway_health.rc == 0 }}"
-        route_health_ok: "{{ route_health.rc is defined and route_health.rc == 0 }}"
-        route_buildinfo_ok: "{{ route_buildinfo.rc is defined and route_buildinfo.rc == 0 }}"
-
-    - name: "TEST RESULT"
-      vars:
-        critical_pass: "{{ gateway_running and gateway_health_ok and route_health_ok }}"
-        all_pass: "{{ gateway_running and gateway_svc_ok and gateway_health_ok and route_health_ok and route_buildinfo_ok and cors_ok and gateway_np_exists and ingress_routes_to_gateway and auth_flow_ok }}"
+    - name: TEST PASSED
       ansible.builtin.debug:
         msg: |
           ====================================================
-          API Gateway Test: {{ 'PASS' if all_pass else ('PARTIAL' if critical_pass else 'FAIL') }}
-
-          --- Deployment ---
-          [{{ 'PASS' if gateway_running else 'FAIL' }}] Gateway deployment running
-          [{{ 'PASS' if gateway_svc_ok else 'FAIL' }}] Gateway service (port 8080)
-          [{{ 'PASS' if gateway_health_ok else 'FAIL' }}] Gateway health endpoint
-
-          --- Route Passthrough ---
-          [{{ 'PASS' if route_health_ok else 'FAIL' }}] Route: /api/health -> core
-          [{{ 'PASS' if route_buildinfo_ok else 'FAIL' }}] Route: /api/build-info -> core
-          [{{ 'PASS' if auth_flow_ok else 'WARN' }}] Auth flow (register + login) through gateway
-
-          --- Configuration ---
-          [{{ 'PASS' if cors_ok else 'WARN' }}] CORS headers
-          [{{ 'PASS' if ws_config_ok else 'WARN' }}] WebSocket route config
-          [{{ 'PASS' if gateway_np_exists else 'WARN' }}] Gateway network policy
-          [{{ 'PASS' if ingress_routes_to_gateway else 'WARN' }}] Ingress routes /api to gateway
+          Istio Gateway + HTTPRoute test — PASSED
           ====================================================
-
-    - name: Fail if critical checks failed
-      ansible.builtin.fail:
-        msg: "Critical gateway checks failed — see summary above"
-      when: not (gateway_running and gateway_health_ok)
+          ✓ vagrant-gateway is Programmed
+          ✓ Hostname-based routing
+          ✓ Path-based routing within a hostname
+          ✓ Default-path match fallback
+          ✓ ResponseHeaderModifier filter pass-through
+          ✓ Unknown hostname → 404
+          ✓ GET/POST/PUT/DELETE reach backend
+          ====================================================

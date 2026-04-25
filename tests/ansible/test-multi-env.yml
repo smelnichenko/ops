@@ -10,12 +10,18 @@
 #   - vagrant up (kubeadm + pi1 + pi2)
 #   - setup-kubeadm.yml completed (Cilium, Istio, operators, ESO)
 #   - setup-vault-pi.yml completed (Vault on pi1)
-#   - setup-vault.yml completed (Vault + ESO in cluster)
 #
 # Usage:
 #   cd deploy/ansible
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
 
 - name: Test multi-environment isolation
   hosts: target
@@ -25,57 +31,56 @@
   vars:
     prod_ns: schnappy
     test_ns: schnappy-test
-    vault_ns: vault
     forgejo_admin_user: forgejo_admin
-    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('vagrant-forgejo-pw', true) }}"
+    # forgejo_admin_password from inventory (vagrant.yml test fixture)
     prod_pg_password: "vagrant-prod-pg-pw"
     test_pg_password: "vagrant-test-pg-pw"
     prod_redis_password: "vagrant-prod-redis-pw"
     test_redis_password: "vagrant-test-redis-pw"
 
   tasks:
-    # ================================================================
-    # Phase 1: Seed Vault secrets for both environments
-    # ================================================================
+    # ── Phase 1: Seed secrets for both envs into Pi Vault ────────────────
+    - name: Seed prod postgres
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/postgres
+        secret_data: { database: monitor, username: monitor, password: "{{ prod_pg_password }}" }
+    - name: Seed prod redis
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/redis
+        secret_data: { password: "{{ prod_redis_password }}" }
+    - name: Seed prod minio
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/minio
+        secret_data: { access_key: minioadmin, secret_key: minioadmin }
+    - name: Seed prod mail
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/mail
+        secret_data: { password: test-smtp }
 
-    - name: Get Vault root token
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
-
-    - name: Seed prod secrets (secret/schnappy/*)
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/{{ item.path }} {{ item.data }}
-      loop:
-        - { path: "postgres", data: "database=monitor username=monitor password={{ prod_pg_password }}" }
-        - { path: "redis", data: "password={{ prod_redis_password }}" }
-        - { path: "minio", data: "access_key=minioadmin secret_key=minioadmin" }
-        - { path: "mail", data: "password=test-smtp" }
-      no_log: true
-
-    - name: Seed test secrets (secret/schnappy-test/*)
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy-test/{{ item.path }} {{ item.data }}
-      loop:
-        - { path: "postgres", data: "database=monitor username=monitor password={{ test_pg_password }}" }
-        - { path: "redis", data: "password={{ test_redis_password }}" }
-        - { path: "minio", data: "access_key=testadmin secret_key=testadmin" }
-        - { path: "mail", data: "password=test-smtp" }
-      no_log: true
+    - name: Seed test postgres
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy-test/postgres
+        secret_data: { database: monitor, username: monitor, password: "{{ test_pg_password }}" }
+    - name: Seed test redis
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy-test/redis
+        secret_data: { password: "{{ test_redis_password }}" }
+    - name: Seed test minio
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy-test/minio
+        secret_data: { access_key: testadmin, secret_key: testadmin }
+    - name: Seed test mail
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy-test/mail
+        secret_data: { password: test-smtp }
 
     # ================================================================
     # Phase 2: Setup Forgejo repos with actual content
@@ -87,19 +92,32 @@
         forgejo_host: "{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}"
 
     - name: Create schnappy org in Forgejo
-      ansible.builtin.shell: |
-        curl -sf -X POST "{{ forgejo_url }}/api/v1/orgs" \
-          -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
-          -H "Content-Type: application/json" \
-          -d '{"username":"schnappy","visibility":"public"}' 2>/dev/null || true
+      ansible.builtin.uri:
+        url: "{{ forgejo_url }}/api/v1/orgs"
+        method: POST
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          username: schnappy
+          visibility: public
+        status_code: [201, 422]
       changed_when: false
 
     - name: Create repos in Forgejo
-      ansible.builtin.shell: |
-        curl -sf -X POST "{{ forgejo_url }}/api/v1/orgs/schnappy/repos" \
-          -u "{{ forgejo_admin_user }}:{{ forgejo_admin_password }}" \
-          -H "Content-Type: application/json" \
-          -d '{"name":"{{ item }}","auto_init":true,"default_branch":"main"}' 2>/dev/null || true
+      ansible.builtin.uri:
+        url: "{{ forgejo_url }}/api/v1/orgs/schnappy/repos"
+        method: POST
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ item }}"
+          auto_init: true
+          default_branch: main
+        status_code: [201, 409]
       loop:
         - infra
         - platform
@@ -182,12 +200,16 @@
     # ================================================================
 
     - name: Wait for root app to sync
-      ansible.builtin.shell: |
-        kubectl get application root -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: root
+        namespace: argocd
       register: root_sync
       retries: 30
       delay: 10
-      until: root_sync.stdout == "Synced"
+      until: root_sync.resources[0].status.sync.status | default('') == "Synced"
       changed_when: false
 
     - name: Wait for all applications to sync (10 min max)

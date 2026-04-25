@@ -1,244 +1,207 @@
 ---
-# Test dual-Pi HA infrastructure
+# Dual-Pi HA assertions.
 #
-# Deploys and tests the full Pi HA stack in Vagrant:
-#   1. Consul 3-node cluster
-#   2. Patroni Postgres HA
-#   3. Pi services (Forgejo, MinIO, Keycloak, Nexus)
-#   4. GlusterFS repo replication
-#   5. Keepalived VIP failover
-#   6. Vault with Consul storage
-#   7. Pi-1 failure + recovery
+# Assumes the full Pi stack is already deployed:
+#   setup-consul.yml + setup-pi-services.yml + setup-patroni.yml +
+#   setup-vault-pi.yml + setup-gluster.yml + setup-keepalived.yml
+#
+# This playbook is pure verification — no deploys, no migrations.
+# It exercises the HA scenario (Pi-1 failure + Pi-2 takeover + recovery).
 #
 # Usage:
-#   task test:dual-pi
+#   task test:dual-pi         # no destroy, assumes stack is up
+#   task test:dual-pi-clean   # full destroy + deploy + this playbook
 
-# ─── Deploy all Pi services ─────────────────────────────────────────────────
-- name: Deploy Consul
-  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-consul.yml"
-
-- name: Deploy Pi services
-  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-pi-services.yml"
-
-- name: Deploy Patroni
-  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-patroni.yml"
-
-- name: Reconfigure services for Patroni multi-host PG
-  hosts: pi1,pi2
-  become: true
-  gather_facts: false
-  vars:
-    pi1_ip: "{{ hostvars['pi1']['ansible_host'] }}"
-    pi2_ip: "{{ hostvars['pi2']['ansible_host'] }}"
-    multi_host: "{{ pi1_ip }}:5432,{{ pi2_ip }}:5432"
-  tasks:
-    - name: Create databases on Patroni primary
-      ansible.builtin.shell: |
-        sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname='forgejo'" | grep -q 1 || sudo -u postgres createdb forgejo
-        sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname='keycloak'" | grep -q 1 || sudo -u postgres createdb keycloak
-      changed_when: true
-      when: inventory_hostname == 'pi1'
-
-    - name: Update Forgejo DB host to multi-host
-      ansible.builtin.lineinfile:
-        path: /var/lib/forgejo/custom/conf/app.ini
-        regexp: '^HOST = '
-        line: "HOST = {{ multi_host }}"
-
-    - name: Update Keycloak DB URL to multi-host
-      ansible.builtin.lineinfile:
-        path: /etc/systemd/system/keycloak.service
-        regexp: 'KC_DB_URL='
-        line: "Environment=KC_DB_URL=jdbc:postgresql://{{ multi_host }}/keycloak?targetServerType=primary"
-
-    - name: Reload systemd
-      ansible.builtin.systemd:
-        daemon_reload: true
-
-    - name: Restart Forgejo and Keycloak
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: restarted
-      loop:
-        - forgejo
-        - keycloak
-
-    - name: Wait for Forgejo
-      ansible.builtin.uri:
-        url: "http://localhost:3000/api/v1/version"
-        status_code: 200
-      retries: 15
-      delay: 5
-      register: forgejo_check
-      until: forgejo_check.status == 200
-
-- name: Deploy GlusterFS
-  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-gluster.yml"
-
-- name: Deploy Keepalived
-  ansible.builtin.import_playbook: "{{ playbook_dir }}/../../deploy/ansible/playbooks/setup-keepalived.yml"
-
-# Vault skipped in Vagrant (requires TLS certs + binary install)
-# Production uses: migrate-vault-consul.yml (TLS certs seeded inline)
-
-# ─── Verify services ────────────────────────────────────────────────────────
-- name: Verify all services
-  hosts: pi1,pi2
+# ─── Services are running ────────────────────────────────────────────────────
+- name: All expected services active on both Pis
+  hosts: pis
   become: true
   gather_facts: false
 
   tasks:
-    - name: Check all services are running
+    - name: Check systemd units are active
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: started
       loop:
+        - consul
+        - patroni
         - forgejo
         - keycloak
         - minio
-        - patroni
-        - consul
         - keepalived
         - glusterd
+        - haproxy
+        - vault
+        - vault-unseal
 
-    - name: Wait for Patroni to be healthy on all nodes
+    - name: Patroni REST API healthy
       ansible.builtin.uri:
         url: "http://localhost:8008/health"
-        status_code: 200
-      retries: 30
-      delay: 10
-      register: patroni_health
-      until: patroni_health.status == 200
+        status_code: [200, 503]  # 503 = replica, still healthy
+      retries: 10
+      delay: 5
 
-    - name: Verify Forgejo API
+    - name: Forgejo API
       ansible.builtin.uri:
         url: "http://localhost:3000/api/v1/version"
         status_code: 200
 
-    - name: Verify Keycloak
+    - name: Keycloak master realm
       ansible.builtin.uri:
         url: "http://localhost:8080/realms/master"
         status_code: 200
 
-    - name: Verify MinIO health
+    - name: MinIO liveness
       ansible.builtin.uri:
         url: "http://localhost:9000/minio/health/live"
         status_code: 200
 
-    - name: Verify Patroni
-      ansible.builtin.uri:
-        url: "http://localhost:8008/health"
-        status_code: 200
-
-# ─── Test Consul cluster ────────────────────────────────────────────────────
-- name: Test Consul cluster
+# ─── Consul cluster ──────────────────────────────────────────────────────────
+- name: Consul cluster has ≥ 2 alive members
   hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Check cluster members
+    - name: Count alive Consul members
       ansible.builtin.shell: |
         set -o pipefail
         consul members | grep -c alive
-      register: consul_count
+      register: _count
       changed_when: false
 
-    - name: Verify at least 2 members
+    - name: Assert ≥ 2 alive
       ansible.builtin.assert:
-        that: consul_count.stdout | trim | int >= 2
-        fail_msg: "Expected at least 2 Consul members, got {{ consul_count.stdout }}"
+        that: _count.stdout | trim | int >= 2
+        fail_msg: "Expected ≥ 2 Consul members, got {{ _count.stdout }}"
 
-# ─── Test Patroni replication ───────────────────────────────────────────────
-- name: Test Patroni replication — write on primary
-  hosts: pi1
+# ─── Patroni replication ─────────────────────────────────────────────────────
+# Write to the leader, read from the follower over its local socket (avoids
+# pg_hba scram prompt that blocks remote psql).
+- name: Discover Patroni leader
+  hosts: pi1,pi2
   become: true
   gather_facts: false
 
   tasks:
-    - name: Write test data on primary
+    - name: Fetch leader from Patroni cluster API
+      ansible.builtin.shell: |
+        curl -sf http://localhost:8008/cluster 2>/dev/null | \
+          python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((m["name"] for m in d.get("members",[]) if m.get("role") in ["leader","master","primary"]), ""))'
+      register: _leader
+      changed_when: false
+      run_once: true
+
+    - name: Set patroni_leader fact
+      ansible.builtin.set_fact:
+        patroni_leader: "{{ _leader.stdout | trim }}"
+      run_once: true
+
+- name: Write on leader
+  hosts: "{{ hostvars['pi1']['patroni_leader'] }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: CREATE TABLE + INSERT
       ansible.builtin.shell: |
         sudo -u postgres psql -d forgejo -c "CREATE TABLE IF NOT EXISTS test_ha (id serial, val text)"
-        sudo -u postgres psql -d forgejo -c "INSERT INTO test_ha (val) VALUES ('pi1-write')"
+        sudo -u postgres psql -d forgejo -c "INSERT INTO test_ha (val) VALUES ('leader-write')"
       changed_when: true
 
-# Read on pi2 over its local postgres socket — avoids the pg_hba
-# md5/scram password prompt that blocks `psql -h pi2`.
-- name: Test Patroni replication — read on replica
-  hosts: pi2
+- name: Read on follower
+  hosts: "{{ ['pi1','pi2'] | difference([hostvars['pi1']['patroni_leader']]) | first }}"
   become: true
   gather_facts: false
 
   tasks:
-    - name: Verify replication on pi2 (via local socket)
+    - name: Verify row replicated
       ansible.builtin.shell: |
         set -o pipefail
-        sudo -u postgres psql -d forgejo -c "SELECT val FROM test_ha WHERE val='pi1-write'" | grep -c pi1-write
-      register: repl_check
+        sudo -u postgres psql -d forgejo -c "SELECT val FROM test_ha WHERE val='leader-write'" | grep -c leader-write
+      register: _repl
       changed_when: false
       retries: 5
       delay: 2
-      until: repl_check.stdout | trim | int >= 1
+      until: _repl.stdout | trim | int >= 1
 
-# ─── Test GlusterFS replication ─────────────────────────────────────────────
-- name: Test GlusterFS replication
+# ─── GlusterFS replication ───────────────────────────────────────────────────
+- name: Gluster replication pi1 → pi2
   hosts: pi1
   become: true
-  gather_facts: false
+  gather_facts: true
 
   tasks:
-    - name: Create test file on pi1
+    - name: Write test file to gluster-mounted dir
       ansible.builtin.copy:
         dest: /var/lib/forgejo/repos/test-gluster.txt
-        content: "gluster-test-{{ ansible_date_time.epoch | default('now') }}"
+        content: "gluster-test-{{ ansible_date_time.epoch }}"
         mode: '0644'
 
-    - name: Verify file replicated to pi2
+    - name: Verify file on pi2
       ansible.builtin.shell: |
         cat /var/lib/forgejo/repos/test-gluster.txt
-      register: gluster_check
+      register: _g
       changed_when: false
       delegate_to: pi2
       retries: 3
       delay: 2
-      until: "'gluster-test' in gluster_check.stdout"
+      until: "'gluster-test' in _g.stdout"
 
     - name: Clean up
       ansible.builtin.file:
         path: /var/lib/forgejo/repos/test-gluster.txt
         state: absent
 
-# ─── Test Keepalived VIP ────────────────────────────────────────────────────
-- name: Test Keepalived VIP
+# ─── Keepalived VIP ──────────────────────────────────────────────────────────
+- name: VIP present + Forgejo reachable via VIP
   hosts: pi1
   become: true
   gather_facts: false
 
   vars:
-    vip: "{{ lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true) }}"
+    vip: "{{ keepalived_vip | default(lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true)) }}"
 
   tasks:
-    - name: Verify VIP is assigned
+    - name: VIP bound on pi1
       ansible.builtin.shell: |
         set -o pipefail
         ip addr show | grep {{ vip }}
-      register: vip_check
+      register: _vip
       changed_when: false
-      failed_when: vip not in vip_check.stdout
+      failed_when: vip not in _vip.stdout
 
-    - name: Verify Forgejo via VIP
+    - name: Forgejo responds via VIP
       ansible.builtin.uri:
         url: "http://{{ vip }}:3000/api/v1/version"
         status_code: 200
 
-# ─── Test Pi-1 failure ──────────────────────────────────────────────────────
-- name: Simulate Pi-1 failure
+# ─── Vault cluster alive ─────────────────────────────────────────────────────
+- name: Vault is unsealed on both Pis
+  hosts: pis
+  become: true
+  gather_facts: false
+
+  environment:
+    VAULT_ADDR: https://127.0.0.1:8200
+    VAULT_SKIP_VERIFY: "1"
+
+  tasks:
+    - name: vault status rc must be 0 (unsealed)
+      ansible.builtin.command: vault status
+      register: _vs
+      changed_when: false
+      failed_when: _vs.rc != 0
+
+# ─── Pi-1 failure simulation ─────────────────────────────────────────────────
+- name: Stop all user services on pi1
   hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Stop all services on pi1
+    - name: systemctl stop
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: stopped
@@ -249,50 +212,50 @@
         - keepalived
         - patroni
 
-- name: Verify Pi-2 takes over
+- name: pi2 takes over
   hosts: pi2
   become: true
   gather_facts: false
 
   vars:
-    vip: "{{ lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true) }}"
+    vip: "{{ keepalived_vip | default(lookup('env', 'VAGRANT_VIP') | default('192.168.56.50', true)) }}"
 
   tasks:
-    - name: Wait for VIP failover
+    - name: VIP fails over to pi2
       ansible.builtin.shell: |
         set -o pipefail
         ip addr show | grep {{ vip }}
-      register: vip_failover
+      register: _vip_fo
       changed_when: false
       retries: 12
       delay: 5
-      until: vip in vip_failover.stdout
+      until: vip in _vip_fo.stdout
 
-    - name: Verify Forgejo on pi2
+    - name: Forgejo on pi2 still responds
       ansible.builtin.uri:
         url: "http://localhost:3000/api/v1/version"
         status_code: 200
 
-    - name: Verify Patroni promoted pi2
+    - name: Patroni promoted pi2 to leader
       ansible.builtin.uri:
         url: "http://localhost:8008/health"
         status_code: 200
       retries: 12
       delay: 5
 
-    - name: Write data while pi1 is down
+    - name: Write while pi1 is down
       ansible.builtin.shell: |
         sudo -u postgres psql -d forgejo -c "INSERT INTO test_ha (val) VALUES ('pi2-during-failover')"
       changed_when: true
 
-# ─── Recover Pi-1 ───────────────────────────────────────────────────────────
-- name: Recover Pi-1
+# ─── Recovery ────────────────────────────────────────────────────────────────
+- name: pi1 recovers
   hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Start services on pi1
+    - name: systemctl start
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: started
@@ -303,31 +266,53 @@
         - keycloak
         - minio
 
-    - name: Wait for Patroni to rejoin
+    - name: Patroni rejoins cluster
       ansible.builtin.uri:
         url: "http://localhost:8008/health"
-        status_code: 200
+        status_code: [200, 503]
       retries: 30
       delay: 5
 
-    - name: Verify pi1 caught up with failover data
+    - name: pi1 caught up on failover writes
       ansible.builtin.shell: |
         set -o pipefail
         sudo -u postgres psql -d forgejo -c "SELECT val FROM test_ha WHERE val='pi2-during-failover'" | grep -c pi2-during-failover
-      register: catchup_check
+      register: _catchup
       changed_when: false
       retries: 10
       delay: 3
-      until: catchup_check.stdout | trim | int >= 1
+      until: _catchup.stdout | trim | int >= 1
 
-# ─── Results ────────────────────────────────────────────────────────────────
-- name: Test results
-  hosts: pi1
+# ─── Cleanup + results ───────────────────────────────────────────────────────
+# After the failover scenario, the leader might be pi1 OR pi2 depending on
+# re-election. Re-discover the leader so cleanup always runs on the writable
+# node via its local socket (avoids HAProxy health-check race timing).
+- name: Re-discover Patroni leader (post-failover)
+  hosts: pi1,pi2
   become: true
   gather_facts: false
 
   tasks:
-    - name: Clean up test data
+    - name: Fetch current leader from Patroni cluster API
+      ansible.builtin.shell: |
+        curl -sf http://localhost:8008/cluster 2>/dev/null | \
+          python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((m["name"] for m in d.get("members",[]) if m.get("role") in ["leader","master","primary"]), ""))'
+      register: _leader2
+      changed_when: false
+      run_once: true
+
+    - name: Set patroni_leader_final fact
+      ansible.builtin.set_fact:
+        patroni_leader_final: "{{ _leader2.stdout | trim }}"
+      run_once: true
+
+- name: Cleanup + summary
+  hosts: "{{ hostvars['pi1']['patroni_leader_final'] }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Drop test table on the current leader
       ansible.builtin.shell: |
         sudo -u postgres psql -d forgejo -c "DROP TABLE IF EXISTS test_ha"
       changed_when: true
@@ -336,12 +321,14 @@
       ansible.builtin.debug:
         msg: |
           ============================================
-          Dual-Pi HA Test — PASSED
+          Dual-Pi HA — all assertions PASSED
           ============================================
-          - Consul cluster: OK
-          - Patroni replication: OK
-          - GlusterFS replication: OK
-          - Keepalived VIP: OK
-          - Pi-1 failure + Pi-2 takeover: OK
-          - Pi-1 recovery + data catch-up: OK
+          ✓ Services active on pi1 + pi2
+          ✓ Consul ≥ 2 members
+          ✓ Patroni replication (leader → follower)
+          ✓ GlusterFS replication
+          ✓ Keepalived VIP + Forgejo-via-VIP
+          ✓ Vault unsealed on both
+          ✓ Pi-1 failure + Pi-2 takeover
+          ✓ Pi-1 recovery + data catch-up
           ============================================

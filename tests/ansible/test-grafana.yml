@@ -5,14 +5,20 @@
 # ExternalSecret syncs from Vault, and dashboard is accessible.
 #
 # Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
+#   - vagrant up (kubeadm + pi1 + pi2 VMs)
 #   - setup-vault-pi.yml completed
-#   - setup-vault.yml completed (Vault + ESO deployed)
 #
 # Usage:
 #   cd deploy/ansible
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-grafana.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
 
 - name: Test Grafana integration
   hosts: target
@@ -21,51 +27,27 @@
 
   vars:
     ns: schnappy
-    vault_ns: vault
     test_grafana_user: "admin"
     test_grafana_password: "vagrant-test-grafana-password"
 
   tasks:
-    # ================================================================
-    # Phase 1: Seed Grafana credentials into Vault
-    # ================================================================
-
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
+    - name: Configure ESO ClusterSecretStore → Pi Vault
+      ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
 
     - name: Seed grafana secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/grafana \
-            admin_user="{{ test_grafana_user }}" \
-            admin_password="{{ test_grafana_password }}"
-      no_log: true
-
-    - name: "SEED: Grafana credentials written to Vault KV"
-      ansible.builtin.debug:
-        msg: "Seeded grafana secret into Vault KV"
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/grafana
+        secret_data:
+          admin_user: "{{ test_grafana_user }}"
+          admin_password: "{{ test_grafana_password }}"
 
     # ================================================================
     # Phase 2: Deploy chart with Grafana + Prometheus enabled
     # ================================================================
 
-    - name: Create schnappy namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
     - name: Write Helm values for Grafana test
       ansible.builtin.copy:
@@ -101,6 +83,9 @@
           prometheus:
             enabled: true
             scrapeInterval: 30s
+            # Skip cross-namespace NetworkPolicies — argocd/velero/external-secrets
+            # namespaces aren't present in the test-grafana scope.
+            crossNsScrapePolicies: false
           mimir:
             enabled: true
             image: grafana/mimir:2.16.0
@@ -131,64 +116,75 @@
             ingress:
               enabled: false
 
-    - name: Sync platform charts to VM
-      ansible.builtin.synchronize:
-        src: "{{ lookup('env', 'HOME') }}/src/platform/"
-        dest: /vagrant-platform/
-        delete: true
-      delegate_to: localhost
-      become: false
+    - name: Deploy schnappy-mesh (ServiceAccounts for mesh-dependent pods)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
 
-    - name: Deploy chart with Grafana + Prometheus
-      ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant-platform/helm \
-          --namespace {{ ns }} \
-          --create-namespace \
-          --values /tmp/schnappy-grafana-test-values.yml \
-          --wait --timeout 300s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+    - name: Deploy chart with Grafana + Prometheus (no wait — k8s_info below handles readiness)
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-observability
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values_files:
+          - /tmp/schnappy-grafana-test-values.yml
+        wait: false
       register: helm_result
 
     - name: Show pod status
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ ns }} -o wide
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ ns }}"
       register: pod_status
-      changed_when: false
 
     - name: Pod status
       ansible.builtin.debug:
-        msg: "{{ pod_status.stdout_lines }}"
+        msg: "{{ pod_status.resources | map(attribute='metadata.name') | list }}"
 
     # ================================================================
     # Phase 3: Verify Grafana
     # ================================================================
 
-    - name: Wait for Grafana deployment rollout
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-grafana -n {{ ns }} --timeout=120s
+    - name: Wait for Grafana deployment rollout (up to 20 min)
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: schnappy-grafana
+        namespace: "{{ ns }}"
       register: grafana_rollout
-      changed_when: false
+      retries: 120
+      delay: 10
+      until:
+        - grafana_rollout.resources | length > 0
+        - grafana_rollout.resources[0].status.readyReplicas | default(0) == grafana_rollout.resources[0].spec.replicas
+        - grafana_rollout.resources[0].status.updatedReplicas | default(0) == grafana_rollout.resources[0].spec.replicas
 
     - name: Verify ExternalSecret synced for grafana
-      ansible.builtin.shell: |
-        kubectl get externalsecret schnappy-grafana -n {{ ns }} \
-          -o jsonpath='{.status.conditions[0].reason}'
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: external-secrets.io/v1
+        kind: ExternalSecret
+        name: schnappy-grafana
+        namespace: "{{ ns }}"
       register: grafana_secret_sync
       retries: 12
       delay: 5
-      until: grafana_secret_sync.stdout == "SecretSynced"
-      changed_when: false
+      until:
+        - grafana_secret_sync.resources | length > 0
+        - (grafana_secret_sync.resources[0].status.conditions | default([{}]))[0].reason | default('') == "SecretSynced"
+
+    - name: Set Grafana ExternalSecret reason fact
+      ansible.builtin.set_fact:
+        grafana_secret_reason: "{{ (grafana_secret_sync.resources[0].status.conditions | default([{}]))[0].reason | default('') }}"
 
     - name: Check Grafana HTTP health
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
-          curl -sf -o /dev/null -w '%{http_code}' http://localhost:3000/api/health
+        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- curl -sf -o /dev/null -w '%{http_code}' http://localhost:3000/api/health
       register: grafana_health
       retries: 12
       delay: 10
       until: grafana_health.stdout | default('') == '200'
-      changed_when: false
 
     - name: "Grafana health: HTTP {{ grafana_health.stdout | default('unreachable') }}"
       ansible.builtin.debug:
@@ -200,15 +196,11 @@
 
     - name: Test Grafana login with seeded credentials
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
-          curl -sf -o /dev/null -w '%{http_code}' \
-          -u {{ test_grafana_user }}:{{ test_grafana_password }} \
-          http://localhost:3000/api/org
+        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- curl -sf -o /dev/null -w '%{http_code}'  -u {{ test_grafana_user }}:{{ test_grafana_password }}  http://localhost:3000/api/org
       register: grafana_login
       retries: 6
       delay: 5
       until: grafana_login.stdout | default('') == '200'
-      changed_when: false
       failed_when: false
 
     - name: "Grafana login: {{ 'PASS' if grafana_login.stdout | default('') == '200' else 'FAIL — HTTP ' + grafana_login.stdout | default('N/A') }}"
@@ -221,14 +213,11 @@
 
     - name: Check Grafana datasources
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
-          curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }} \
-          http://localhost:3000/api/datasources
+        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }}  http://localhost:3000/api/datasources
       register: grafana_datasources
       retries: 6
       delay: 5
       until: grafana_datasources.rc == 0
-      changed_when: false
       failed_when: false
 
     - name: Check Mimir datasource exists
@@ -245,14 +234,11 @@
 
     - name: Search for dashboards
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- \
-          curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }} \
-          'http://localhost:3000/api/search?type=dash-db'
+        kubectl exec -n {{ ns }} deploy/schnappy-grafana -- curl -sf -u {{ test_grafana_user }}:{{ test_grafana_password }}  'http://localhost:3000/api/search?type=dash-db'
       register: grafana_dashboards
       retries: 6
       delay: 5
       until: grafana_dashboards.rc == 0
-      changed_when: false
       failed_when: false
 
     - name: Check dashboard loaded
@@ -274,8 +260,8 @@
 
     - name: Set result facts
       ansible.builtin.set_fact:
-        grafana_running: "{{ grafana_rollout.rc is defined and grafana_rollout.rc == 0 }}"
-        secret_synced: "{{ grafana_secret_sync.stdout == 'SecretSynced' }}"
+        grafana_running: "{{ not grafana_rollout.failed | default(false) }}"
+        secret_synced: "{{ grafana_secret_reason == 'SecretSynced' }}"
         health_pass: "{{ grafana_health.stdout | default('') == '200' }}"
         login_pass: "{{ grafana_login.stdout | default('') == '200' }}"
 

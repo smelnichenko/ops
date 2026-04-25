@@ -1,70 +1,120 @@
 ---
-# Test Nexus Repository Manager + apt-cacher-ng deployment in Vagrant
+# Test Nexus Repository Manager HA (active-passive with Gluster-shared state).
 #
-# Verifies Nexus deploys correctly, repositories are provisioned,
-# proxy functionality works for Docker, Maven, npm, PyPI, and apt.
+# Topology under test:
+#   - Nexus installed on pi1 + pi2 via setup-nexus.yml
+#   - /mnt/data/nexus on a replica-3 GlusterFS volume (pi1 data + pi2 data +
+#     ten arbiter) — split-brain-safe
+#   - Keepalived VIP arbitrates which Pi runs Nexus (notify_master starts,
+#     notify_backup stops)
+#   - Nexus's own H2 lock is the hard fence against concurrent writes
 #
-# Prerequisites:
-#   - vagrant up vault-pi
-#   - setup-nexus.yml completed
-#
-# Usage:
-#   cd deploy/ansible
-#   venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-nexus.yml
+# Assertions:
+#   - Exactly ONE Pi has nexus.service active at any time (the VIP holder)
+#   - VIP-level HTTP curl returns 200 on /service/rest/v1/status
+#   - 10 repos provisioned (shared via Gluster — visible regardless of which
+#     Pi is active)
+#   - Docker group port 8082 accessible on the active Pi
+#   - Maven / npm / PyPI proxy flows work
+#   - Failover scenario:
+#     1. stop keepalived on the active Pi
+#     2. within 90s: VIP floats to the other Pi, its Nexus comes up, VIP
+#        curl still responds 200
+#     3. sentinel artifact (maven-releases upload) is intact on the new
+#        active Pi (Gluster replicated it)
+#     4. restart keepalived on the original Pi; no flap-back (nopreempt)
 
-- name: Test Nexus Repository Manager
-  hosts: vault_pi
+- name: Discover which Pi holds the VIP
+  hosts: pi1,pi2
   become: true
   gather_facts: false
 
   vars:
-    nexus_port: 8081
-    nexus_docker_port: 8082
-    nexus_admin_password: "{{ lookup('env', 'NEXUS_ADMIN_PASSWORD') | default('changeme', true) }}"
+    vip: "{{ keepalived_vip | default('192.168.56.50') }}"
 
   tasks:
-    # ================================================================
-    # Phase 1: Verify Nexus is running
-    # ================================================================
+    - name: Check VIP ownership
+      ansible.builtin.shell: |
+        ip addr show | grep -q '{{ vip }}/' && echo "active" || echo "backup"
+      register: _vip_check
+      changed_when: false
 
-    - name: "CHECK: Nexus systemd service is running"
+    - name: Publish VIP-holder fact
+      ansible.builtin.set_fact:
+        is_vip_holder: "{{ _vip_check.stdout == 'active' }}"
+
+    - name: Identify VIP holder across the group
+      ansible.builtin.set_fact:
+        nexus_active_host: "{{ inventory_hostname }}"
+      when: is_vip_holder
+      delegate_to: pi1
+      delegate_facts: true
+      run_once: false
+
+- name: Verify Nexus service state is exactly-one-active
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Get nexus.service ActiveState
       ansible.builtin.systemd:
         name: nexus
-        state: started
-      check_mode: true
-      register: nexus_service
-      failed_when: nexus_service.changed
+      register: _nexus_state
 
-    - name: "CHECK: Nexus health endpoint responds"
+    - name: Active Pi has nexus.service = active
+      ansible.builtin.assert:
+        that: _nexus_state.status.ActiveState == 'active'
+        fail_msg: "VIP holder {{ inventory_hostname }} has Nexus state {{ _nexus_state.status.ActiveState }} (expected active)"
+      when: is_vip_holder
+
+    - name: Non-VIP Pi has nexus.service != active
+      # "inactive" or "failed" both satisfy "not running"; the invariant
+      # is exactly-one-active, not a specific stopped-state label.
+      ansible.builtin.assert:
+        that: _nexus_state.status.ActiveState != 'active'
+        fail_msg: "Non-VIP {{ inventory_hostname }} has Nexus state {{ _nexus_state.status.ActiveState }} (expected != active — double-active risks H2 corruption)"
+      when: not is_vip_holder
+
+- name: Nexus functional assertions (run against active Pi)
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    vip: "{{ keepalived_vip | default('192.168.56.50') }}"
+    nexus_port: 8081
+    nexus_docker_port: 8082
+
+  tasks:
+    - name: Resolve active host
+      ansible.builtin.set_fact:
+        active: "{{ hostvars['pi1']['nexus_active_host'] | default('pi1') }}"
+
+    - name: Nexus health on active Pi
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/status"
+        url: "http://{{ hostvars[active]['ansible_host'] }}:{{ nexus_port }}/service/rest/v1/status"
         status_code: 200
-      register: health
       retries: 5
       delay: 5
 
-    - name: "PASS: Nexus is running and healthy"
-      ansible.builtin.debug:
-        msg: "Nexus status: {{ health.status }}"
-
-    # ================================================================
-    # Phase 2: Verify repositories are provisioned
-    # ================================================================
-
-    - name: "CHECK: List all repositories"
+    - name: Nexus health via VIP
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
+        url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/status"
+        status_code: 200
+      retries: 5
+      delay: 5
+
+    - name: List repositories (10 expected)
+      ansible.builtin.uri:
+        url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/repositories"
         url_username: admin
         url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         return_content: true
       register: repos
 
-    - name: Parse repository list (normalize to .json key)
-      ansible.builtin.set_fact:
-        repos: "{{ {'json': repos.json} }}"
-
-    - name: "CHECK: Expected repositories exist"
+    - name: Assert expected repos exist
       ansible.builtin.assert:
         that:
           - "'docker-hub' in repo_names"
@@ -77,176 +127,224 @@
           - "'npm-public' in repo_names"
           - "'pypi-proxy' in repo_names"
           - "'pypi-public' in repo_names"
-        fail_msg: "Missing repositories. Found: {{ repo_names }}"
+        fail_msg: "Missing repos. Found: {{ repo_names }}"
       vars:
         repo_names: "{{ repos.json | map(attribute='name') | list }}"
 
-    - name: "PASS: All 10 repositories provisioned"
-      ansible.builtin.debug:
-        msg: "Repositories: {{ repos.json | map(attribute='name') | sort | join(', ') }}"
-
-    # ================================================================
-    # Phase 3: Verify Docker group port
-    # ================================================================
-
-    - name: "CHECK: Docker group port responds"
+    - name: Docker group port via VIP
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_docker_port }}/v2/"
+        url: "http://{{ vip }}:{{ nexus_docker_port }}/v2/"
         status_code: [200, 401]
-      register: docker_port
 
-    - name: "PASS: Docker group port {{ nexus_docker_port }} is accessible"
-      ansible.builtin.debug:
-        msg: "Docker registry API responded with status {{ docker_port.status }}"
-
-    # ================================================================
-    # Phase 4: Verify Docker Bearer Token Realm is active
-    # ================================================================
-
-    - name: "CHECK: Active security realms"
+    - name: DockerToken realm active
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
+        url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/security/realms/active"
         url_username: admin
         url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         return_content: true
       register: realms
 
-    - name: Parse realms list (normalize to .json key)
-      ansible.builtin.set_fact:
-        realms: "{{ {'json': realms.json} }}"
-
-    - name: "CHECK: DockerToken realm is active"
+    - name: Assert DockerToken in active realms
       ansible.builtin.assert:
-        that:
-          - "'DockerToken' in realms.json"
-        fail_msg: "DockerToken realm not active. Active realms: {{ realms.json }}"
+        that: "'DockerToken' in realms.json"
 
-    - name: "PASS: DockerToken realm is active"
-      ansible.builtin.debug:
-        msg: "Active realms: {{ realms.json | join(', ') }}"
-
-    # ================================================================
-    # Phase 5: Test Maven proxy (fetch a small artifact)
-    # ================================================================
-
-    - name: "CHECK: Maven proxy can fetch artifact metadata"
+    - name: Maven proxy fetch via VIP
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/repository/maven-public/org/junit/jupiter/junit-jupiter-api/maven-metadata.xml"
-        status_code: 200
+        url: "http://{{ vip }}:{{ nexus_port }}/repository/maven-public/org/junit/jupiter/junit-jupiter-api/maven-metadata.xml"
         return_content: true
       register: maven_test
       retries: 3
       delay: 5
 
-    - name: "PASS: Maven proxy works"
-      ansible.builtin.debug:
-        msg: "Fetched junit-jupiter-api metadata ({{ maven_test.content | length }} bytes)"
-
-    # ================================================================
-    # Phase 6: Test npm proxy (fetch a small package)
-    # ================================================================
-
-    - name: "CHECK: npm proxy can fetch package metadata"
+    - name: npm proxy fetch via VIP
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/repository/npm-public/is-odd"
-        status_code: 200
+        url: "http://{{ vip }}:{{ nexus_port }}/repository/npm-public/is-odd"
         return_content: true
-      register: npm_test
       retries: 3
       delay: 5
 
-    - name: "PASS: npm proxy works"
-      ansible.builtin.debug:
-        msg: "Fetched is-odd package metadata ({{ npm_test.content | length }} bytes)"
-
-    # ================================================================
-    # Phase 7: Test PyPI proxy
-    # ================================================================
-
-    - name: "CHECK: PyPI proxy can fetch package metadata"
+    - name: PyPI proxy fetch via VIP
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/repository/pypi-public/simple/six/"
-        status_code: 200
+        url: "http://{{ vip }}:{{ nexus_port }}/repository/pypi-public/simple/six/"
         return_content: true
-      register: pypi_test
       retries: 3
       delay: 5
 
-    - name: "PASS: PyPI proxy works"
-      ansible.builtin.debug:
-        msg: "Fetched six package page ({{ pypi_test.content | length }} bytes)"
+# ─── Failover scenario ─────────────────────────────────────────────────────
+- name: Upload sentinel artifact before failover
+  hosts: pi1
+  become: true
+  gather_facts: false
 
-    # ================================================================
-    # Phase 8: Verify old registry mirrors are stopped
-    # ================================================================
+  vars:
+    vip: "{{ keepalived_vip | default('192.168.56.50') }}"
+    nexus_port: 8081
+    sentinel_group: "com.example.failover-test"
+    sentinel_artifact: "sentinel"
 
-    - name: "CHECK: Old registry services are stopped"
+  tasks:
+    - name: Lock in stable random sentinel values
+      # `{{ ... | random }}` is re-evaluated on every reference, so
+      # declaring these in `vars:` would produce a different value
+      # per task (copy body vs upload URL vs fact). Pin via set_fact.
+      # Version is unique per test run so we don't collide with a
+      # leftover artifact from a previous run — maven-releases is
+      # immutable and returns 400 on re-deploy of the same GAV.
+      ansible.builtin.set_fact:
+        sentinel_content: "failover-sentinel-content-{{ 999999999 | random }}"
+        sentinel_version: "1.0.{{ 999999 | random }}"
+
+    - name: Prepare sentinel JAR body
+      ansible.builtin.copy:
+        dest: /tmp/nexus-sentinel.jar
+        content: "{{ sentinel_content }}"
+        mode: '0644'
+
+    - name: Upload sentinel to maven-releases via VIP
+      ansible.builtin.shell: |
+        set -o pipefail
+        code=$(curl -sf -o /dev/null -w '%{http_code}' \
+          -u admin:{{ nexus_admin_password }} \
+          --upload-file /tmp/nexus-sentinel.jar \
+          "http://{{ vip }}:{{ nexus_port }}/repository/maven-releases/{{ sentinel_group | replace('.','/') }}/{{ sentinel_artifact }}/{{ sentinel_version }}/{{ sentinel_artifact }}-{{ sentinel_version }}.jar")
+        echo "upload HTTP $code"
+        [ "$code" = "201" ] || [ "$code" = "200" ]
+      changed_when: true
+
+    - name: Publish sentinel facts
+      ansible.builtin.set_fact:
+        _sentinel_url: >-
+          http://{{ vip }}:{{ nexus_port }}/repository/maven-releases/{{
+            sentinel_group | replace('.','/') }}/{{ sentinel_artifact }}/{{
+            sentinel_version }}/{{ sentinel_artifact }}-{{ sentinel_version }}.jar
+        _sentinel_content: "{{ sentinel_content }}"
+
+- name: Trigger failover (stop keepalived on active Pi)
+  hosts: "{{ hostvars['pi1']['nexus_active_host'] | default('pi1') }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Stop keepalived to force VIP failover
       ansible.builtin.systemd:
-        name: "registry-{{ item }}"
-      register: old_services
-      loop:
-        - dockerhub
-        - elastic
-        - quay
-      failed_when: false
-
-    - name: "CHECK: Old registry ports are not listening"
-      ansible.builtin.wait_for:
-        host: localhost
-        port: "{{ item }}"
+        name: keepalived
         state: stopped
-        timeout: 5
-      loop:
-        - 5000
-        - 5001
-        - 5002
-      failed_when: false
-      register: old_ports
 
-    - name: "PASS: Old registry mirrors decommissioned"
-      ansible.builtin.debug:
-        msg: "Old registry ports 5000-5002 are no longer in use"
+- name: Wait for failover to complete on the other Pi
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
 
-    # ================================================================
-    # Phase 10: Verify UFW rules
-    # ================================================================
+  vars:
+    vip: "{{ keepalived_vip | default('192.168.56.50') }}"
+    nexus_port: 8081
+    orig_active: "{{ hostvars['pi1']['nexus_active_host'] | default('pi1') }}"
+    new_active: "{{ 'pi2' if orig_active == 'pi1' else 'pi1' }}"
 
-    - name: "CHECK: UFW status"
-      ansible.builtin.shell: ufw status
-      register: ufw_status
+  tasks:
+    - name: Wait for VIP to arrive on the new active Pi
+      ansible.builtin.shell: |
+        ip addr show | grep -q '{{ vip }}/' && echo "yes" || echo "no"
+      register: _vip_moved
+      retries: 18
+      delay: 5
+      until: _vip_moved.stdout == "yes"
       changed_when: false
-      failed_when: false
+      when: inventory_hostname == new_active
 
-    - name: "CHECK: UFW allows Nexus ports (if UFW active)"
-      ansible.builtin.shell: "ufw status | grep {{ item }}"
-      register: ufw_check
+    - name: Wait for Nexus on new active Pi to respond via VIP
+      ansible.builtin.uri:
+        url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/status"
+        status_code: 200
+      retries: 24
+      delay: 5
+      when: inventory_hostname == new_active
+
+- name: Verify sentinel artifact survived failover
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Fetch sentinel via VIP (new active Pi is serving)
+      ansible.builtin.uri:
+        url: "{{ hostvars['pi1']['_sentinel_url'] }}"
+        url_username: admin
+        url_password: "{{ nexus_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+      register: sentinel_check
+
+    - name: Assert sentinel content matches
+      ansible.builtin.assert:
+        that:
+          - sentinel_check.content == hostvars['pi1']['_sentinel_content']
+        fail_msg: "Sentinel artifact mismatch after failover — Gluster replication didn't propagate the upload"
+        success_msg: "Sentinel artifact intact across failover"
+
+# ─── Recovery: restart original keepalived, verify no flap-back ────────────
+- name: Restart keepalived on original Pi
+  hosts: "{{ hostvars['pi1']['nexus_active_host'] | default('pi1') }}"
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Restart keepalived (with nopreempt it shouldn't reclaim VIP)
+      ansible.builtin.systemd:
+        name: keepalived
+        state: started
+
+    - name: Give cluster 10s to settle
+      ansible.builtin.pause:
+        seconds: 10
+
+- name: Confirm VIP stayed on the failover Pi (nopreempt behaviour)
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+
+  vars:
+    vip: "{{ keepalived_vip | default('192.168.56.50') }}"
+    new_active: "{{ 'pi2' if (hostvars['pi1']['nexus_active_host'] | default('pi1')) == 'pi1' else 'pi1' }}"
+
+  tasks:
+    - name: VIP check
+      ansible.builtin.shell: |
+        ip addr show | grep -q '{{ vip }}/' && echo "has-vip" || echo "no-vip"
+      register: _vip_final
       changed_when: false
-      failed_when: false
-      loop:
-        - "{{ nexus_port }}"
-        - "{{ nexus_docker_port }}"
-      when: "'active' in ufw_status.stdout"
 
-    - name: "PASS: UFW rules configured (or UFW inactive in Vagrant)"
-      ansible.builtin.debug:
-        msg: "UFW status: {{ 'active' if 'active' in ufw_status.stdout else 'inactive (Vagrant)' }}"
+    - name: Assert new_active still holds VIP
+      ansible.builtin.assert:
+        that: _vip_final.stdout == "has-vip"
+        fail_msg: "{{ new_active }} should still hold VIP (nopreempt), got no-vip"
+      when: inventory_hostname == new_active
 
-    # ================================================================
-    # Summary
-    # ================================================================
+    - name: Assert orig_active does NOT hold VIP
+      ansible.builtin.assert:
+        that: _vip_final.stdout == "no-vip"
+        fail_msg: "VIP flapped back to {{ inventory_hostname }} — nopreempt didn't hold"
+      when: inventory_hostname != new_active
 
-    - name: "ALL TESTS PASSED"
+- name: TEST PASSED
+  hosts: pi1
+  become: false
+  gather_facts: false
+
+  tasks:
+    - name: Summary
       ansible.builtin.debug:
         msg: |
-          Caching proxy test results:
-            ✓ Nexus service running
-            ✓ Health endpoint healthy
-            ✓ 10 repositories provisioned
-            ✓ Docker group port {{ nexus_docker_port }} accessible
-            ✓ DockerToken realm active
-            ✓ Maven proxy works (junit-jupiter-api)
-            ✓ npm proxy works (is-odd)
-            ✓ PyPI proxy works (six)
-            ✓ Old registry mirrors decommissioned
-            ✓ UFW rules configured
+          ====================================================
+          Nexus HA test — PASSED
+          ====================================================
+          ✓ Exactly one Pi has nexus.service active (VIP holder)
+          ✓ Non-VIP Pi has nexus.service inactive (no double-write risk)
+          ✓ Nexus health, 10 repos, Docker/Maven/npm/PyPI proxies via VIP
+          ✓ DockerToken realm active
+          ✓ Sentinel artifact uploaded to maven-releases
+          ✓ Forced failover (stop keepalived on active) → VIP + Nexus move
+          ✓ Sentinel intact on new active Pi (Gluster replicated)
+          ✓ Recovery: original keepalived restarted, nopreempt holds
+          ====================================================

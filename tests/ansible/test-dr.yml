@@ -5,7 +5,7 @@
 # restore from Velero backup, and offsite restore from 3rd copy.
 #
 # Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
+#   - vagrant up (kubeadm + pi1 + pi2 VMs)
 #   - App accessible at http://localhost (Traefik)
 #
 # Usage:
@@ -15,26 +15,26 @@
 # Suite 2: Velero backup + namespace destroy + restore
 # Suite 3: Offsite restore (rsync to vault-pi, wipe primary, rsync back, restore)
 
-# ─── Play 0: Prepare vault-pi as offsite backup target ──────────────────────
-- name: "Prepare vault-pi for offsite backup tests"
-  hosts: vault_pi
+# ─── Play 0: Prepare pi1 (offsite backup target) + fetch Pi Vault token ────
+- name: Prepare pi1 for offsite backup tests + fetch Vault token
+  hosts: pi1
   become: true
   gather_facts: false
 
   tasks:
-    - name: Wait for vault-pi SSH
+    - name: Wait for pi1 SSH
       ansible.builtin.wait_for_connection:
         delay: 2
         timeout: 60
 
-    - name: Install rsync on vault-pi
+    - name: Install rsync on pi1
       ansible.builtin.apt:
         name: rsync
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Create offsite backup directory
+    - name: Ensure offsite backup directory exists
       ansible.builtin.file:
         path: /mnt/backups/velero
         state: directory
@@ -42,7 +42,7 @@
         group: vagrant
         mode: '0755'
 
-    - name: Ensure vagrant user has authorized_keys for k3s root SSH
+    - name: Ensure vagrant user has authorized_keys for root SSH from kubeadm
       ansible.builtin.file:
         path: /home/vagrant/.ssh
         state: directory
@@ -50,7 +50,9 @@
         group: vagrant
         mode: '0700'
 
-# ─── Play 1: DR Tests on k3s ────────────────────────────────────────────────
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
+
+# ─── Play 1: DR Tests on the kubeadm cluster ────────────────────────────────
 - name: Disaster Recovery Tests
   hosts: target
   become: true
@@ -58,12 +60,11 @@
 
   vars:
     ns: schnappy
-    vault_ns: vault
-    app_url: http://localhost
+    app_hostname: "schnappy-app.vagrant.test"
     test_password: dr-test-pass-12345
     test_email: dr-test@test.com
     test_monitor_name: dr-test-page
-    kc_admin_password: "vagrant-test-kc-admin!!"
+    # keycloak_admin_password comes from inventory.
     velero_ns: velero
     velero_chart_version: "11.4.0"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
@@ -76,28 +77,20 @@
     # Prerequisites: Deploy the app
     # ================================================================
 
-    - name: Verify k3s is running
-      ansible.builtin.command: kubectl get nodes
-      changed_when: false
+    - name: Verify k8s is running
+      kubernetes.core.k8s_info:
+        kind: Node
+      register: _nodes_check
+      failed_when: (_nodes_check.resources | default([]) | length) == 0
 
-    - name: Create schnappy namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+    - ansible.builtin.import_tasks: tasks/setup-istio-gateway.yml
 
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
+    - name: Compose app_url via Istio gateway NodePort
       ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
+        app_url: "http://{{ app_hostname }}:{{ istio_gateway_nodeport }}"
+
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
     - name: Build gateway JAR
       ansible.builtin.shell: |
@@ -117,6 +110,25 @@
           -t monitor-gateway:local "$STAGE"
         rm -rf "$STAGE"
       changed_when: true
+
+    - name: Build monitor (app) container image
+      # Multi-stage Dockerfile in /vagrant-monitor builds the JAR + runtime
+      # in one shot; no pre-staging needed.
+      ansible.builtin.shell: |
+        cd /vagrant-monitor
+        nerdctl -n k8s.io build -t monitor:local .
+      changed_when: true
+      timeout: 900
+
+    - name: Build site (frontend) container image
+      ansible.builtin.shell: |
+        cd /vagrant-site
+        nerdctl -n k8s.io build \
+          --build-arg GIT_HASH=dr-test \
+          --build-arg BUILD_TIME="2026-01-01T00:00:00Z" \
+          -t monitor-frontend:local .
+      changed_when: true
+      timeout: 900
 
     - name: Write Helm values for DR test
       ansible.builtin.copy:
@@ -140,10 +152,9 @@
               repository: monitor
               tag: local
               pullPolicy: Never
+            # ingress disabled — HTTPRoute attaches to vagrant-gateway below
             ingress:
-              enabled: true
-              className: traefik
-              host: ""
+              enabled: false
           gateway:
             enabled: true
             replicas: 1
@@ -206,43 +217,61 @@
           scylla:
             enabled: false
 
+    - name: Configure ESO ClusterSecretStore → Pi Vault
+      ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
+
     - name: Seed postgres secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/postgres \
-            database="monitor" \
-            username="postgres" \
-            password="vagrant-test-pw"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/postgres
+        secret_data:
+          database: monitor
+          username: postgres
+          password: vagrant-test-pw
 
     - name: Seed keycloak secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/keycloak \
-            admin_password="{{ kc_admin_password }}" \
-            db_password="vagrant-test-kc-db" \
-            forgejo_client_secret="not-used"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/keycloak
+        secret_data:
+          admin_password: "{{ keycloak_admin_password }}"
+          db_password: vagrant-test-kc-db
+          forgejo_client_secret: not-used
 
+
+    - name: Deploy schnappy-mesh (ServiceAccounts)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
+
+    - name: Stand up in-cluster test postgres + per-service DB Secrets
+      ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
+
+    - name: Stand up in-cluster test redis
+      ansible.builtin.import_tasks: tasks/setup-test-redis.yml
 
     - name: Deploy chart for DR test
-      ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant-platform/helm \
-          --namespace {{ ns }} \
-          --create-namespace \
-          --values /tmp/schnappy-dr-test-values.yml \
-          --timeout 300s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+      kubernetes.core.helm:
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values_files:
+          - /tmp/schnappy-dr-test-values.yml
+        timeout: 300s
+        kubeconfig: /etc/kubernetes/admin.conf
+
+    - name: Attach HTTPRoute schnappy-app → vagrant-gateway
+      ansible.builtin.include_tasks: tasks/create-httproute.yml
+      vars:
+        route_name: schnappy-app
+        route_ns: "{{ ns }}"
+        route_host: "{{ app_hostname }}"
+        route_service: schnappy-monitor
+        route_port: 8080
 
     - name: Wait for app to be ready
       ansible.builtin.shell: |
         for i in $(seq 1 60); do
-          READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+          READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=monitor \
             -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
           if [ "$READY" = "true" ]; then
             echo "OK: App pod ready"
@@ -253,7 +282,7 @@
         done
         echo "FAIL: app not ready after 10 minutes"
         kubectl get pods -n {{ ns }} -o wide
-        kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+        kubectl logs -l app.kubernetes.io/component=monitor -n {{ ns }} --tail=20
         exit 1
       register: app_readiness
       changed_when: false
@@ -326,14 +355,31 @@
     # ── Test 1: Kill app pod ──
 
     - name: "POD-RECOVERY: Delete app pod"
-      ansible.builtin.shell: |
-        kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=app -n {{ ns }} --wait=false
-      changed_when: true
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/name=schnappy"
+          - "app.kubernetes.io/component=monitor"
+        state: absent
+        wait: false
 
     - name: "POD-RECOVERY: Wait for app deployment rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
+      register: _rollout_app
+      retries: 60
+      delay: 2
+      until: >-
+        (_rollout_app.resources | default([]) | length > 0) and
+        (_rollout_app.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_app.resources[0].status.replicas | default(-1)) and
+        (_rollout_app.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_app.resources[0].status.replicas | default(-1))
 
     - name: "POD-RECOVERY: Verify app health after restart"
       ansible.builtin.uri:
@@ -366,14 +412,31 @@
     # ── Test 2: Kill postgres pod ──
 
     - name: "POD-RECOVERY: Delete postgres pod"
-      ansible.builtin.shell: |
-        kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=postgres -n {{ ns }} --wait=false
-      changed_when: true
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/name=schnappy"
+          - "app.kubernetes.io/component=postgres"
+        state: absent
+        wait: false
 
     - name: "POD-RECOVERY: Wait for postgres deployment rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-postgres -n {{ ns }} --timeout=180s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+      register: _rollout_pg
+      retries: 90
+      delay: 2
+      until: >-
+        (_rollout_pg.resources | default([]) | length > 0) and
+        (_rollout_pg.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_pg.resources[0].status.replicas | default(-1)) and
+        (_rollout_pg.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_pg.resources[0].status.replicas | default(-1))
 
     - name: "POD-RECOVERY: Wait for app to reconnect to postgres"
       ansible.builtin.uri:
@@ -406,14 +469,31 @@
     # ── Test 3: Kill redis pod ──
 
     - name: "POD-RECOVERY: Delete redis pod"
-      ansible.builtin.shell: |
-        kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=redis -n {{ ns }} --wait=false
-      changed_when: true
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/name=schnappy"
+          - "app.kubernetes.io/component=redis"
+        state: absent
+        wait: false
 
     - name: "POD-RECOVERY: Wait for redis deployment rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-redis -n {{ ns }} --timeout=60s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-redis
+        namespace: "{{ ns }}"
+      register: _rollout_redis
+      retries: 30
+      delay: 2
+      until: >-
+        (_rollout_redis.resources | default([]) | length > 0) and
+        (_rollout_redis.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_redis.resources[0].status.replicas | default(-1)) and
+        (_rollout_redis.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_redis.resources[0].status.replicas | default(-1))
 
     - name: "POD-RECOVERY: Verify app health after redis restart"
       ansible.builtin.uri:
@@ -433,14 +513,31 @@
     # ── Test 4: Kill frontend pod ──
 
     - name: "POD-RECOVERY: Delete frontend pod"
-      ansible.builtin.shell: |
-        kubectl delete pod -l app.kubernetes.io/name=schnappy,app.kubernetes.io/component=site -n {{ ns }} --wait=false
-      changed_when: true
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/name=schnappy"
+          - "app.kubernetes.io/component=site"
+        state: absent
+        wait: false
 
     - name: "POD-RECOVERY: Wait for frontend deployment rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-site -n {{ ns }} --timeout=60s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-site
+        namespace: "{{ ns }}"
+      register: _rollout_site
+      retries: 30
+      delay: 2
+      until: >-
+        (_rollout_site.resources | default([]) | length > 0) and
+        (_rollout_site.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_site.resources[0].status.replicas | default(-1)) and
+        (_rollout_site.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_site.resources[0].status.replicas | default(-1))
 
     - name: "POD-RECOVERY: Verify frontend serves pages"
       ansible.builtin.uri:
@@ -460,16 +557,36 @@
     # ── Test 5: Kill ALL pods simultaneously ──
 
     - name: "POD-RECOVERY: Delete ALL pods in namespace"
-      ansible.builtin.shell: |
-        kubectl delete pods --all -n {{ ns }} --wait=false
-      changed_when: true
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "--all"
+        namespace: "{{ ns }}"
 
     - name: "POD-RECOVERY: Wait for all deployments to roll out"
-      ansible.builtin.shell: |
-        for deploy in schnappy-gateway schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
-          kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=180s
-        done
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ item }}"
+        namespace: "{{ ns }}"
+      loop:
+        - schnappy-gateway
+        - schnappy-monitor
+        - schnappy-postgres
+        - schnappy-redis
+        - schnappy-site
+        - schnappy-keycloak
+      register: _rollout_all
+      retries: 90
+      delay: 2
+      until: >-
+        (_rollout_all.resources | default([]) | length > 0) and
+        (_rollout_all.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_all.resources[0].status.replicas | default(-1)) and
+        (_rollout_all.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_all.resources[0].status.replicas | default(-1))
 
     - name: "POD-RECOVERY: Wait for app health after full restart"
       ansible.builtin.uri:
@@ -510,18 +627,17 @@
     # ── Step 1: Deploy Velero + test MinIO ──
 
     - name: "DR: Create velero namespace"
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: {{ velero_ns }}
-          labels:
-            pod-security.kubernetes.io/enforce: privileged
-            pod-security.kubernetes.io/audit: privileged
-            pod-security.kubernetes.io/warn: privileged
-        EOF
-      changed_when: false
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ velero_ns }}"
+            labels:
+              pod-security.kubernetes.io/enforce: privileged
+              pod-security.kubernetes.io/audit: privileged
+              pod-security.kubernetes.io/warn: privileged
 
     - name: "DR: Create backup directory"
       ansible.builtin.file:
@@ -531,131 +647,156 @@
         group: "1000"
         mode: '0755'
 
-    - name: "DR: Deploy test MinIO"
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        ---
-        apiVersion: v1
-        kind: PersistentVolume
-        metadata:
-          name: minio-test-pv
-          labels:
-            app: minio-test
-        spec:
-          capacity:
-            storage: 5Gi
-          accessModes:
-            - ReadWriteOnce
-          storageClassName: manual-test
-          hostPath:
-            path: /tmp/velero-test-backups
-            type: DirectoryOrCreate
-          persistentVolumeReclaimPolicy: Delete
-        ---
-        apiVersion: v1
-        kind: PersistentVolumeClaim
-        metadata:
-          name: minio-test-pvc
-          namespace: {{ velero_ns }}
-        spec:
-          accessModes:
-            - ReadWriteOnce
-          storageClassName: manual-test
-          resources:
-            requests:
+    - name: "DR: Deploy test MinIO — PersistentVolume"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: minio-test-pv
+            labels:
+              app: minio-test
+          spec:
+            capacity:
               storage: 5Gi
-          selector:
-            matchLabels:
-              app: minio-test
-        ---
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: minio-test-secret
-          namespace: {{ velero_ns }}
-        type: Opaque
-        stringData:
-          MINIO_ROOT_USER: "minioadmin"
-          MINIO_ROOT_PASSWORD: "minioadmin"
-        ---
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: minio-test
-          namespace: {{ velero_ns }}
-        spec:
-          replicas: 1
-          strategy:
-            type: Recreate
-          selector:
-            matchLabels:
-              app: minio-test
-          template:
-            metadata:
-              labels:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: manual-test
+            hostPath:
+              path: /tmp/velero-test-backups
+              type: DirectoryOrCreate
+            persistentVolumeReclaimPolicy: Delete
+
+    - name: "DR: Deploy test MinIO — PersistentVolumeClaim"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: minio-test-pvc
+            namespace: "{{ velero_ns }}"
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: manual-test
+            resources:
+              requests:
+                storage: 5Gi
+            selector:
+              matchLabels:
                 app: minio-test
-            spec:
-              securityContext:
-                runAsNonRoot: true
-                runAsUser: 1000
-                runAsGroup: 1000
-                fsGroup: 1000
-                seccompProfile:
-                  type: RuntimeDefault
-              containers:
-                - name: minio
-                  image: {{ minio_image }}
-                  command: ["minio", "server", "/data", "--console-address", ":9001"]
-                  envFrom:
-                    - secretRef:
-                        name: minio-test-secret
-                  ports:
-                    - containerPort: 9000
-                    - containerPort: 9001
-                  securityContext:
-                    allowPrivilegeEscalation: false
-                    capabilities:
-                      drop: ["ALL"]
-                  resources:
-                    requests:
-                      cpu: 50m
-                      memory: 128Mi
-                    limits:
-                      cpu: 500m
-                      memory: 512Mi
-                  volumeMounts:
-                    - name: data
-                      mountPath: /data
-                  readinessProbe:
-                    httpGet:
-                      path: /minio/health/ready
-                      port: 9000
-                    initialDelaySeconds: 5
-                    periodSeconds: 10
-              volumes:
-                - name: data
-                  persistentVolumeClaim:
-                    claimName: minio-test-pvc
-        ---
-        apiVersion: v1
-        kind: Service
-        metadata:
-          name: minio-test
-          namespace: {{ velero_ns }}
-        spec:
-          selector:
-            app: minio-test
-          ports:
-            - name: api
-              port: 9000
-              targetPort: 9000
-        EOF
-      changed_when: false
+
+    - name: "DR: Deploy test MinIO — Secret"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: minio-test-secret
+            namespace: "{{ velero_ns }}"
+          type: Opaque
+          stringData:
+            MINIO_ROOT_USER: "minioadmin"
+            MINIO_ROOT_PASSWORD: "minioadmin"
+
+    - name: "DR: Deploy test MinIO — Deployment"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: minio-test
+            namespace: "{{ velero_ns }}"
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: minio-test
+            template:
+              metadata:
+                labels:
+                  app: minio-test
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  fsGroup: 1000
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: minio
+                    image: "{{ minio_image }}"
+                    command: ["minio", "server", "/data", "--console-address", ":9001"]
+                    envFrom:
+                      - secretRef:
+                          name: minio-test-secret
+                    ports:
+                      - containerPort: 9000
+                      - containerPort: 9001
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: ["ALL"]
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 128Mi
+                      limits:
+                        cpu: 500m
+                        memory: 512Mi
+                    volumeMounts:
+                      - name: data
+                        mountPath: /data
+                    readinessProbe:
+                      httpGet:
+                        path: /minio/health/ready
+                        port: 9000
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                volumes:
+                  - name: data
+                    persistentVolumeClaim:
+                      claimName: minio-test-pvc
+
+    - name: "DR: Deploy test MinIO — Service"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: minio-test
+            namespace: "{{ velero_ns }}"
+          spec:
+            selector:
+              app: minio-test
+            ports:
+              - name: api
+                port: 9000
+                targetPort: 9000
 
     - name: "DR: Wait for test MinIO"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/minio-test -n {{ velero_ns }} --timeout=120s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: minio-test
+        namespace: "{{ velero_ns }}"
+      register: _rollout_minio
+      retries: 60
+      delay: 2
+      until: >-
+        (_rollout_minio.resources | default([]) | length > 0) and
+        (_rollout_minio.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_minio.resources[0].status.replicas | default(-1)) and
+        (_rollout_minio.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_minio.resources[0].status.replicas | default(-1))
 
     - name: "DR: Create velero bucket"
       ansible.builtin.shell: |
@@ -676,29 +817,25 @@
       changed_when: false
 
     - name: "DR: Add vmware-tanzu Helm repo"
-      ansible.builtin.shell: |
-        helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts 2>/dev/null || true
-        helm repo update vmware-tanzu
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm_repository:
+        name: vmware-tanzu
+        repo_url: https://vmware-tanzu.github.io/helm-charts
 
     - name: "DR: Create Velero credentials"
-      ansible.builtin.shell: |
-        cat <<EOF | kubectl apply -f -
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: velero-credentials
-          namespace: {{ velero_ns }}
-        type: Opaque
-        stringData:
-          cloud: |
-            [default]
-            aws_access_key_id=minioadmin
-            aws_secret_access_key=minioadmin
-        EOF
-      changed_when: false
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: velero-credentials
+            namespace: "{{ velero_ns }}"
+          type: Opaque
+          stringData:
+            cloud: |
+              [default]
+              aws_access_key_id=minioadmin
+              aws_secret_access_key=minioadmin
 
     - name: "DR: Install Velero CRDs"
       ansible.builtin.shell: |
@@ -719,69 +856,93 @@
       changed_when: false
 
     - name: "DR: Deploy Velero"
-      ansible.builtin.shell: |
-        helm upgrade --install velero vmware-tanzu/velero \
-          --version {{ velero_chart_version }} \
-          --namespace {{ velero_ns }} \
-          --skip-crds \
-          --no-hooks \
-          --values - <<'HELMEOF'
-        initContainers:
-          - name: velero-plugin-for-aws
-            image: velero/velero-plugin-for-aws:v1.11.1
-            volumeMounts:
-              - name: plugins
-                mountPath: /target
-        credentials:
-          useSecret: true
-          existingSecret: velero-credentials
-        configuration:
-          backupStorageLocation:
-            - name: default
-              provider: aws
-              bucket: velero
-              config:
-                region: us-east-1
-                s3ForcePathStyle: "true"
-                s3Url: http://minio-test.{{ velero_ns }}.svc:9000
-          volumeSnapshotLocation: []
-          defaultVolumesToFsBackup: true
-          features: ""
-        deployNodeAgent: true
-        snapshotsEnabled: false
-        resources:
-          requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
-            cpu: 1000m
-            memory: 512Mi
-        HELMEOF
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+      kubernetes.core.helm:
+        name: velero
+        chart_ref: vmware-tanzu/velero
+        chart_version: "{{ velero_chart_version }}"
+        release_namespace: "{{ velero_ns }}"
+        skip_crds: true
+        disable_hook: true
+        kubeconfig: /etc/kubernetes/admin.conf
+        values:
+          initContainers:
+            - name: velero-plugin-for-aws
+              image: velero/velero-plugin-for-aws:v1.11.1
+              volumeMounts:
+                - name: plugins
+                  mountPath: /target
+          credentials:
+            useSecret: true
+            existingSecret: velero-credentials
+          configuration:
+            backupStorageLocation:
+              - name: default
+                provider: aws
+                bucket: velero
+                config:
+                  region: us-east-1
+                  s3ForcePathStyle: "true"
+                  s3Url: "http://minio-test.{{ velero_ns }}.svc:9000"
+            volumeSnapshotLocation: []
+            defaultVolumesToFsBackup: true
+            features: ""
+          deployNodeAgent: true
+          snapshotsEnabled: false
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
 
     - name: "DR: Wait for Velero"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/velero -n {{ velero_ns }} --timeout=120s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: velero
+        namespace: "{{ velero_ns }}"
+      register: _rollout_velero
+      retries: 60
+      delay: 2
+      until: >-
+        (_rollout_velero.resources | default([]) | length > 0) and
+        (_rollout_velero.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_velero.resources[0].status.replicas | default(-1)) and
+        (_rollout_velero.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_velero.resources[0].status.replicas | default(-1))
 
     - name: "DR: Wait for node-agent DaemonSet"
-      ansible.builtin.shell: |
-        kubectl rollout status daemonset/node-agent -n {{ velero_ns }} --timeout=120s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: DaemonSet
+        name: node-agent
+        namespace: "{{ velero_ns }}"
+      register: _rollout_node_agent
+      retries: 60
+      delay: 2
+      until: >-
+        (_rollout_node_agent.resources | default([]) | length > 0) and
+        (_rollout_node_agent.resources[0].status.numberReady | default(0)) ==
+        (_rollout_node_agent.resources[0].status.desiredNumberScheduled | default(-1)) and
+        (_rollout_node_agent.resources[0].status.desiredNumberScheduled | default(0)) > 0
 
     - name: "DR: Wait for BSL to be available"
-      ansible.builtin.shell: |
-        kubectl get backupstoragelocation default -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      kubernetes.core.k8s_info:
+        api_version: velero.io/v1
+        kind: BackupStorageLocation
+        name: default
+        namespace: "{{ velero_ns }}"
       register: bsl_status
       retries: 30
       delay: 10
-      until: bsl_status.stdout == "Available"
-      changed_when: false
+      until: >-
+        (bsl_status.resources | default([]) | length > 0) and
+        (bsl_status.resources[0].status.phase | default('')) == "Available"
 
     - name: "DR: Velero ready"
       ansible.builtin.debug:
-        msg: "Velero deployed, BSL status: {{ bsl_status.stdout }}"
+        msg: "Velero deployed, BSL status: {{ bsl_status.resources[0].status.phase }}"
 
     # ── Step 2: Verify seed data still present ──
 
@@ -815,35 +976,39 @@
       failed_when: false
 
     - name: "DR: Create Velero backup"
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: velero.io/v1
-        kind: Backup
-        metadata:
-          name: dr-test
-          namespace: {{ velero_ns }}
-        spec:
-          includedNamespaces:
-            - {{ ns }}
-          defaultVolumesToFsBackup: true
-          ttl: 1h0m0s
-        EOF
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: velero.io/v1
+          kind: Backup
+          metadata:
+            name: dr-test
+            namespace: "{{ velero_ns }}"
+          spec:
+            includedNamespaces:
+              - "{{ ns }}"
+            defaultVolumesToFsBackup: true
+            ttl: 1h0m0s
       register: backup_result
 
     - name: "DR: Wait for backup to complete"
-      ansible.builtin.shell: |
-        kubectl get backup dr-test -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      kubernetes.core.k8s_info:
+        api_version: velero.io/v1
+        kind: Backup
+        name: dr-test
+        namespace: "{{ velero_ns }}"
       register: backup_status
       retries: 60
       delay: 10
-      until: backup_status.stdout in ["Completed", "Failed", "PartiallyFailed"]
-      changed_when: false
+      until: >-
+        (backup_status.resources | default([]) | length > 0) and
+        (backup_status.resources[0].status.phase | default('')) in ["Completed", "Failed", "PartiallyFailed"]
 
     - name: "DR: Assert backup succeeded"
       ansible.builtin.assert:
         that:
-          - backup_status.stdout == "Completed"
-        fail_msg: "Backup failed: {{ backup_status.stdout }}"
+          - backup_status.resources[0].status.phase == "Completed"
+        fail_msg: "Backup failed: {{ backup_status.resources[0].status.phase | default('unknown') }}"
         success_msg: "PASS: Velero backup completed"
 
     # ── Step 4: Destroy schnappy namespace ──
@@ -853,16 +1018,22 @@
         msg: "Deleting namespace {{ ns }} — simulating disaster"
 
     - name: "DR: Delete schnappy namespace"
-      ansible.builtin.shell: |
-        kubectl delete namespace {{ ns }} --wait=true --timeout=120s
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
+        state: absent
+        wait: true
+        wait_timeout: 120
       register: delete_ns
 
     - name: "DR: Verify namespace is gone"
-      ansible.builtin.shell: |
-        kubectl get namespace {{ ns }} 2>&1
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
       register: ns_check
-      failed_when: ns_check.rc == 0
-      changed_when: false
+      failed_when: (ns_check.resources | default([]) | length) > 0
 
     - name: "DR: Namespace destroyed"
       ansible.builtin.debug:
@@ -871,43 +1042,62 @@
     # ── Step 5: Restore from backup ──
 
     - name: "DR: Restore from Velero backup"
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: velero.io/v1
-        kind: Restore
-        metadata:
-          name: dr-test-restore
-          namespace: {{ velero_ns }}
-        spec:
-          backupName: dr-test
-        EOF
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: velero.io/v1
+          kind: Restore
+          metadata:
+            name: dr-test-restore
+            namespace: "{{ velero_ns }}"
+          spec:
+            backupName: dr-test
       register: restore_result
 
     - name: "DR: Wait for restore to complete"
-      ansible.builtin.shell: |
-        kubectl get restore dr-test-restore -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      kubernetes.core.k8s_info:
+        api_version: velero.io/v1
+        kind: Restore
+        name: dr-test-restore
+        namespace: "{{ velero_ns }}"
       register: restore_status
       retries: 60
       delay: 10
-      until: restore_status.stdout in ["Completed", "Failed", "PartiallyFailed"]
-      changed_when: false
+      until: >-
+        (restore_status.resources | default([]) | length > 0) and
+        (restore_status.resources[0].status.phase | default('')) in ["Completed", "Failed", "PartiallyFailed"]
 
     - name: "DR: Assert restore succeeded"
       ansible.builtin.assert:
         that:
-          - restore_status.stdout in ["Completed", "PartiallyFailed"]
-        fail_msg: "Restore failed: {{ restore_status.stdout }}"
-        success_msg: "PASS: Velero restore {{ restore_status.stdout }}"
+          - restore_status.resources[0].status.phase in ["Completed", "PartiallyFailed"]
+        fail_msg: "Restore failed: {{ restore_status.resources[0].status.phase | default('unknown') }}"
+        success_msg: "PASS: Velero restore {{ restore_status.resources[0].status.phase }}"
 
     # ── Step 6: Wait for pods to recover ──
 
     - name: "DR: Wait for all deployments after restore"
-      ansible.builtin.shell: |
-        for deploy in schnappy-gateway schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
-          echo "Waiting for $deploy..."
-          kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
-        done
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ item }}"
+        namespace: "{{ ns }}"
+      loop:
+        - schnappy-gateway
+        - schnappy-monitor
+        - schnappy-postgres
+        - schnappy-redis
+        - schnappy-site
+        - schnappy-keycloak
+      register: _rollout_after_restore
+      retries: 150
+      delay: 2
+      until: >-
+        (_rollout_after_restore.resources | default([]) | length > 0) and
+        (_rollout_after_restore.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_after_restore.resources[0].status.replicas | default(-1)) and
+        (_rollout_after_restore.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_after_restore.resources[0].status.replicas | default(-1))
 
     - name: "DR: Wait for app health after restore"
       ansible.builtin.uri:
@@ -977,15 +1167,21 @@
     # ── Suite 2 cleanup (keep dr-test backup for Suite 3) ──
 
     - name: "DR: Delete restore object (keep backup for Suite 3)"
-      ansible.builtin.shell: |
-        kubectl delete restore dr-test-restore -n {{ velero_ns }} 2>/dev/null || true
-      changed_when: false
+      kubernetes.core.k8s:
+        api_version: velero.io/v1
+        kind: Restore
+        name: dr-test-restore
+        namespace: "{{ velero_ns }}"
+        state: absent
       failed_when: false
 
     - name: "DR: Delete pg_dump job"
-      ansible.builtin.shell: |
-        kubectl delete job dr-pgdump -n {{ ns }} 2>/dev/null || true
-      changed_when: false
+      kubernetes.core.k8s:
+        api_version: batch/v1
+        kind: Job
+        name: dr-pgdump
+        namespace: "{{ ns }}"
+        state: absent
       failed_when: false
 
     - name: "=== Suite 2 Complete ==="
@@ -997,13 +1193,13 @@
     #
     # Simulates: primary backup storage (SATA SSD) is lost.
     # 1. Rsync MinIO data → vault-pi (offsite copy)
-    # 2. Wipe MinIO data on k3s + destroy schnappy namespace
-    # 3. Rsync back from vault-pi → k3s
+    # 2. Wipe MinIO data on kubeadm + destroy schnappy namespace
+    # 3. Rsync back from pi1 → kubeadm
     # 4. Restart MinIO, Velero restore
     # 5. Verify data integrity
     # ================================================================
 
-    # ── Setup SSH from k3s → vault-pi ──
+    # ── Setup SSH from kubeadm → vault-pi ──
 
     - name: "OFFSITE: Install rsync"
       ansible.builtin.apt:
@@ -1040,7 +1236,7 @@
     - name: "OFFSITE: SSH connectivity verified"
       ansible.builtin.assert:
         that: ssh_test.stdout == "OK"
-        success_msg: "PASS: SSH k3s → vault-pi working"
+        success_msg: "PASS: SSH kubeadm → vault-pi working"
 
     # ── Step 1: Rsync MinIO data to vault-pi ──
 
@@ -1070,22 +1266,28 @@
       ansible.builtin.debug:
         msg: "Simulating primary backup storage failure + full disaster"
 
-    - name: "OFFSITE: Wipe MinIO data on k3s"
+    - name: "OFFSITE: Wipe MinIO data on kubeadm"
       ansible.builtin.shell: |
         rm -rf /tmp/velero-test-backups/*
       changed_when: true
 
     - name: "OFFSITE: Delete schnappy namespace"
-      ansible.builtin.shell: |
-        kubectl delete namespace {{ ns }} --wait=true --timeout=120s
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
+        state: absent
+        wait: true
+        wait_timeout: 120
       register: delete_ns_offsite
 
     - name: "OFFSITE: Verify namespace gone"
-      ansible.builtin.shell: |
-        kubectl get namespace {{ ns }} 2>&1
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
       register: ns_check_offsite
-      failed_when: ns_check_offsite.rc == 0
-      changed_when: false
+      failed_when: (ns_check_offsite.resources | default([]) | length) > 0
 
     # ── Step 3: Restore MinIO data from vault-pi ──
 
@@ -1111,78 +1313,122 @@
     # ── Step 4: Restart MinIO and wait for Velero ──
 
     - name: "OFFSITE: Restart MinIO pod to pick up restored data"
-      ansible.builtin.shell: |
-        kubectl delete pod -l app=minio-test -n {{ velero_ns }} --wait=false
-      changed_when: true
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ velero_ns }}"
+        label_selectors:
+          - "app=minio-test"
+        state: absent
+        wait: false
 
     - name: "OFFSITE: Wait for MinIO ready"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/minio-test -n {{ velero_ns }} --timeout=120s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: minio-test
+        namespace: "{{ velero_ns }}"
+      register: _rollout_minio_offsite
+      retries: 60
+      delay: 2
+      until: >-
+        (_rollout_minio_offsite.resources | default([]) | length > 0) and
+        (_rollout_minio_offsite.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_minio_offsite.resources[0].status.replicas | default(-1)) and
+        (_rollout_minio_offsite.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_minio_offsite.resources[0].status.replicas | default(-1))
 
     - name: "OFFSITE: Wait for Velero BSL available"
-      ansible.builtin.shell: |
-        kubectl get backupstoragelocation default -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      kubernetes.core.k8s_info:
+        api_version: velero.io/v1
+        kind: BackupStorageLocation
+        name: default
+        namespace: "{{ velero_ns }}"
       register: bsl_offsite
       retries: 30
       delay: 10
-      until: bsl_offsite.stdout == "Available"
-      changed_when: false
+      until: >-
+        (bsl_offsite.resources | default([]) | length > 0) and
+        (bsl_offsite.resources[0].status.phase | default('')) == "Available"
 
     - name: "OFFSITE: BSL available after restore"
       ansible.builtin.debug:
-        msg: "BSL status: {{ bsl_offsite.stdout }}"
+        msg: "BSL status: {{ bsl_offsite.resources[0].status.phase }}"
 
     # ── Step 5: Velero restore from offsite-recovered backup ──
 
     - name: "OFFSITE: Verify dr-test backup still visible"
-      ansible.builtin.shell: |
-        kubectl get backup dr-test -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      kubernetes.core.k8s_info:
+        api_version: velero.io/v1
+        kind: Backup
+        name: dr-test
+        namespace: "{{ velero_ns }}"
       register: backup_after_offsite
-      changed_when: false
 
     - name: "OFFSITE: Assert backup visible"
       ansible.builtin.assert:
-        that: backup_after_offsite.stdout == "Completed"
-        fail_msg: "Backup not visible after offsite restore! Got: {{ backup_after_offsite.stdout }}"
+        that:
+          - (backup_after_offsite.resources | default([]) | length) > 0
+          - backup_after_offsite.resources[0].status.phase == "Completed"
+        fail_msg: "Backup not visible after offsite restore! Got: {{ backup_after_offsite.resources[0].status.phase | default('missing') }}"
         success_msg: "PASS: dr-test backup visible from restored MinIO data"
 
     - name: "OFFSITE: Create Velero restore from offsite-recovered backup"
-      ansible.builtin.shell: |
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: velero.io/v1
-        kind: Restore
-        metadata:
-          name: dr-offsite-restore
-          namespace: {{ velero_ns }}
-        spec:
-          backupName: dr-test
-        EOF
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: velero.io/v1
+          kind: Restore
+          metadata:
+            name: dr-offsite-restore
+            namespace: "{{ velero_ns }}"
+          spec:
+            backupName: dr-test
 
     - name: "OFFSITE: Wait for restore to complete"
-      ansible.builtin.shell: |
-        kubectl get restore dr-offsite-restore -n {{ velero_ns }} -o jsonpath='{.status.phase}'
+      kubernetes.core.k8s_info:
+        api_version: velero.io/v1
+        kind: Restore
+        name: dr-offsite-restore
+        namespace: "{{ velero_ns }}"
       register: offsite_restore_status
       retries: 60
       delay: 10
-      until: offsite_restore_status.stdout in ["Completed", "Failed", "PartiallyFailed"]
-      changed_when: false
+      until: >-
+        (offsite_restore_status.resources | default([]) | length > 0) and
+        (offsite_restore_status.resources[0].status.phase | default('')) in ["Completed", "Failed", "PartiallyFailed"]
 
     - name: "OFFSITE: Assert restore succeeded"
       ansible.builtin.assert:
         that:
-          - offsite_restore_status.stdout in ["Completed", "PartiallyFailed"]
-        fail_msg: "Offsite restore failed: {{ offsite_restore_status.stdout }}"
-        success_msg: "PASS: Velero restore from offsite backup {{ offsite_restore_status.stdout }}"
+          - offsite_restore_status.resources[0].status.phase in ["Completed", "PartiallyFailed"]
+        fail_msg: "Offsite restore failed: {{ offsite_restore_status.resources[0].status.phase | default('unknown') }}"
+        success_msg: "PASS: Velero restore from offsite backup {{ offsite_restore_status.resources[0].status.phase }}"
 
     # ── Step 6: Verify app + data integrity ──
 
     - name: "OFFSITE: Wait for all deployments"
-      ansible.builtin.shell: |
-        for deploy in schnappy-gateway schnappy-monitor schnappy-postgres schnappy-redis schnappy-site schnappy-keycloak; do
-          kubectl rollout status deployment/$deploy -n {{ ns }} --timeout=300s
-        done
-      changed_when: false
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: "{{ item }}"
+        namespace: "{{ ns }}"
+      loop:
+        - schnappy-gateway
+        - schnappy-monitor
+        - schnappy-postgres
+        - schnappy-redis
+        - schnappy-site
+        - schnappy-keycloak
+      register: _rollout_offsite
+      retries: 150
+      delay: 2
+      until: >-
+        (_rollout_offsite.resources | default([]) | length > 0) and
+        (_rollout_offsite.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_offsite.resources[0].status.replicas | default(-1)) and
+        (_rollout_offsite.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_offsite.resources[0].status.replicas | default(-1))
 
     - name: "OFFSITE: Wait for app health"
       ansible.builtin.uri:
@@ -1244,10 +1490,15 @@
     # ── Cleanup ──
 
     - name: "OFFSITE: Cleanup restore objects"
-      ansible.builtin.shell: |
-        kubectl delete backup dr-test -n {{ velero_ns }} 2>/dev/null || true
-        kubectl delete restore dr-offsite-restore -n {{ velero_ns }} 2>/dev/null || true
-      changed_when: false
+      kubernetes.core.k8s:
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ velero_ns }}"
+        state: absent
+      loop:
+        - { api_version: "velero.io/v1", kind: "Backup", name: "dr-test" }
+        - { api_version: "velero.io/v1", kind: "Restore", name: "dr-offsite-restore" }
       failed_when: false
 
     - name: "OFFSITE: Cleanup SSH key"
@@ -1287,35 +1538,42 @@
         msg: "Running k6 smoke test to validate restored endpoints"
 
     - name: "K6: Check if k6-smoke CronJob exists"
-      ansible.builtin.shell: kubectl get cronjob schnappy-k6-smoke -n {{ ns }} --no-headers 2>/dev/null
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: CronJob
+        name: schnappy-k6-smoke
+        namespace: "{{ ns }}"
       register: k6_cronjob_check
-      changed_when: false
       failed_when: false
+
+    - name: "K6: Set fact for whether k6 CronJob exists"
+      ansible.builtin.set_fact:
+        k6_cronjob_exists: "{{ (k6_cronjob_check.resources | default([]) | length) > 0 }}"
 
     - name: "K6: Run smoke test after restore"
       ansible.builtin.shell: |
         kubectl delete job k6-dr-verify -n {{ ns }} 2>/dev/null || true
         kubectl create job k6-dr-verify --from=cronjob/schnappy-k6-smoke -n {{ ns }}
         kubectl wait --for=condition=complete job/k6-dr-verify -n {{ ns }} --timeout=120s
-      when: k6_cronjob_check.rc == 0
+      when: k6_cronjob_exists
       register: k6_dr_result
       changed_when: false
 
     - name: "K6: Get results"
       ansible.builtin.shell: kubectl logs job/k6-dr-verify -n {{ ns }} 2>/dev/null | grep -E '✓|✗|checks'
       register: k6_dr_logs
-      when: k6_cronjob_check.rc == 0
+      when: k6_cronjob_exists
       changed_when: false
 
     - name: "K6: Display results"
       ansible.builtin.debug:
         msg: "{{ k6_dr_logs.stdout }}"
-      when: k6_cronjob_check.rc == 0
+      when: k6_cronjob_exists
 
     - name: "K6: Smoke test skipped (no CronJob)"
       ansible.builtin.debug:
         msg: "k6 smoke test skipped — CronJob not deployed in this environment"
-      when: k6_cronjob_check.rc != 0
+      when: not k6_cronjob_exists
 
     - name: "=== ALL DR TESTS PASSED ==="
       ansible.builtin.debug:
@@ -1340,4 +1598,4 @@
               - Data integrity after offsite restore: PASS
               - App functional after offsite restore: PASS
             Suite 4 - Post-restore smoke test:
-              - k6 endpoint validation: {{ 'PASS' if k6_cronjob_check.rc == 0 else 'SKIPPED' }}
+              - k6 endpoint validation: {{ 'PASS' if k6_cronjob_exists else 'SKIPPED' }}

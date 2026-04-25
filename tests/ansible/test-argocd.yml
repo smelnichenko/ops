@@ -17,139 +17,43 @@
   vars:
     argocd_namespace: argocd
     test_namespace: argocd-test
-    forgejo_host: "localhost"
-    forgejo_admin_user: testadmin
-    forgejo_admin_password: testpassword123
-    forgejo_port: 3000
+    # Pi Forgejo from tasks/use-pi-forgejo.yml (sets forgejo_host + admin_user)
+    test_repo_name: "argocd-test-infra"
 
   tasks:
     # ================================================================
-    # Phase 1: Deploy Forgejo (Git server)
+    # Phase 1: Verify Pi Forgejo + create test repo
     # ================================================================
+    - ansible.builtin.import_tasks: tasks/use-pi-forgejo.yml
 
-    - name: "PHASE 1: Deploy Forgejo"
-      ansible.builtin.debug:
-        msg: "Setting up Forgejo as Git server for Argo CD test"
-
-    - name: Create forgejo namespace
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: forgejo
-          labels:
-            pod-security.kubernetes.io/enforce: baseline
-            pod-security.kubernetes.io/audit: restricted
-            pod-security.kubernetes.io/warn: restricted
-        EOF
-      args:
-        executable: /bin/bash
+    - name: Delete prior test repo if it exists (idempotent)
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}"
+        method: DELETE
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]
       changed_when: false
 
-    - name: Configure CoreDNS for Forgejo
-      ansible.builtin.shell: |
-        FORGEJO_IP=$(kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
-        if [ -z "$FORGEJO_IP" ]; then
-          echo "Forgejo not yet deployed, skipping CoreDNS config"
-          exit 0
-        fi
-        kubectl get configmap coredns -n kube-system -o json | \
-          jq --arg ip "$FORGEJO_IP" '.data.Corefile |= . + "\nlocalhost:53 {\n  hosts {\n    " + $ip + " localhost\n    fallthrough\n  }\n}\n"' | \
-          kubectl apply -f -
-        kubectl rollout restart deployment/coredns -n kube-system
-      changed_when: false
-      failed_when: false
-
-    - name: Deploy Forgejo via Helm
-      ansible.builtin.shell: |
-        helm upgrade --install forgejo oci://code.forgejo.org/forgejo-helm/forgejo \
-          --version 16.2.0 \
-          --namespace forgejo \
-          --wait --timeout 5m \
-          --values - <<'HELMEOF'
-        gitea:
-          admin:
-            username: {{ forgejo_admin_user }}
-            password: {{ forgejo_admin_password }}
-            email: admin@test.local
-          config:
-            database:
-              DB_TYPE: sqlite3
-            service:
-              DISABLE_REGISTRATION: true
-            repository:
-              DEFAULT_BRANCH: main
-        image:
-          rootless: true
-        redis-cluster:
-          enabled: false
-        postgresql:
-          enabled: false
-        postgresql-ha:
-          enabled: false
-        persistence:
-          enabled: true
-          size: 1Gi
-        HELMEOF
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+    - name: Create fresh test repo in Pi Forgejo
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_host }}/api/v1/user/repos"
+        method: POST
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ test_repo_name }}"
+          auto_init: true
+          default_branch: main
+        status_code: [201, 409]
       changed_when: false
 
-    - name: Wait for Forgejo to be ready
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/forgejo -n forgejo --timeout=300s
-      changed_when: false
-
-    - name: Get Forgejo ClusterIP
-      ansible.builtin.shell: |
-        kubectl get svc forgejo-http -n forgejo -o jsonpath='{.spec.clusterIP}'
-      register: forgejo_ip_result
-      changed_when: false
-
-    - name: Set Forgejo IP fact
+    - name: Set forgejo URL facts (for repo clone + Argo CD)
       ansible.builtin.set_fact:
-        forgejo_cluster_ip: "{{ forgejo_ip_result.stdout }}"
-
-    - name: Wait for Forgejo API
-      ansible.builtin.shell: |
-        for i in $(seq 1 30); do
-          if kubectl exec deploy/forgejo -n forgejo -- \
-            wget -qO- --timeout=5 "http://localhost:3000/api/v1/version" 2>/dev/null | grep -q version; then
-            exit 0
-          fi
-          sleep 5
-        done
-        exit 1
-      changed_when: false
-
-    - name: Clear must-change-password on admin
-      ansible.builtin.shell: |
-        kubectl exec deploy/forgejo -n forgejo -- \
-          gitea admin user change-password \
-          -u {{ forgejo_admin_user }} \
-          -p '{{ forgejo_admin_password }}' \
-          --must-change-password=false
-      changed_when: false
-
-    # ================================================================
-    # Phase 2: Create test repo with seed content
-    # ================================================================
-
-    - name: "PHASE 2: Create infra repo with seed content"
-      ansible.builtin.debug:
-        msg: "Creating test repository with Kubernetes manifests"
-
-    - name: Create infra repo in Forgejo
-      ansible.builtin.shell: |
-        kubectl exec deploy/forgejo -n forgejo -- \
-          wget -qO- --timeout=10 \
-          --header="Content-Type: application/json" \
-          --header="Authorization: Basic $(echo -n '{{ forgejo_admin_user }}:{{ forgejo_admin_password }}' | base64)" \
-          --post-data='{"name":"infra","auto_init":true,"default_branch":"main"}' \
-          "http://localhost:3000/api/v1/user/repos" 2>/dev/null || true
-      changed_when: false
+        forgejo_repo_url: "http://{{ forgejo_host }}/{{ forgejo_admin_user }}/{{ test_repo_name }}.git"
 
     - name: Write seed manifests
       ansible.builtin.copy:
@@ -182,7 +86,7 @@
         git init
         git config user.email "test@test.local"
         git config user.name "Test"
-        git remote add origin "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_cluster_ip }}:3000/{{ forgejo_admin_user }}/infra.git"
+        git remote add origin "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_host }}/{{ forgejo_admin_user }}/{{ test_repo_name }}.git"
         git fetch origin main 2>/dev/null || true
         git checkout -b main
         git pull origin main 2>/dev/null || true
@@ -206,80 +110,99 @@
         msg: "Deploying Argo CD controllers"
 
     - name: Create argocd namespace
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: {{ argocd_namespace }}
-          labels:
-            pod-security.kubernetes.io/enforce: baseline
-            pod-security.kubernetes.io/audit: restricted
-            pod-security.kubernetes.io/warn: restricted
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ argocd_namespace }}"
+            labels:
+              pod-security.kubernetes.io/enforce: baseline
+              pod-security.kubernetes.io/audit: restricted
+              pod-security.kubernetes.io/warn: restricted
 
     - name: Add Argo Helm repo
-      ansible.builtin.shell: |
-        helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
-        helm repo update argo
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm_repository:
+        name: argo
+        repo_url: https://argoproj.github.io/argo-helm
 
     - name: Deploy Argo CD
-      ansible.builtin.shell: |
-        helm upgrade --install argocd argo/argo-cd \
-          --namespace {{ argocd_namespace }} \
-          --wait --timeout 5m \
-          --values - <<'HELMEOF'
-        configs:
-          params:
-            server.insecure: true
-        dex:
-          enabled: false
-        notifications:
-          enabled: false
-        applicationSet:
-          enabled: false
-        server:
-          resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 500m, memory: 256Mi }
-        repoServer:
-          resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { cpu: 500m, memory: 512Mi }
-        controller:
-          resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
-        redis:
-          resources:
-            requests: { cpu: 25m, memory: 32Mi }
-            limits: { cpu: 100m, memory: 128Mi }
-        HELMEOF
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: argocd
+        chart_ref: argo/argo-cd
+        release_namespace: "{{ argocd_namespace }}"
+        wait: true
+        wait_timeout: 5m
+        values:
+          configs:
+            params:
+              server.insecure: true
+          dex:
+            enabled: false
+          notifications:
+            enabled: false
+          applicationSet:
+            enabled: false
+          server:
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { cpu: 500m, memory: 256Mi }
+          repoServer:
+            resources:
+              requests: { cpu: 50m, memory: 64Mi }
+              limits: { cpu: 500m, memory: 512Mi }
+          controller:
+            resources:
+              requests: { cpu: 50m, memory: 128Mi }
+              limits: { cpu: 500m, memory: 512Mi }
+          redis:
+            resources:
+              requests: { cpu: 25m, memory: 32Mi }
+              limits: { cpu: 100m, memory: 128Mi }
 
     - name: Wait for argocd-server
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: argocd-server
+        namespace: "{{ argocd_namespace }}"
+      register: argocd_server
+      retries: 60
+      delay: 5
+      until:
+        - argocd_server.resources | default([]) | length > 0
+        - (argocd_server.resources[0].status.readyReplicas | default(0)) == (argocd_server.resources[0].spec.replicas | default(1))
+        - (argocd_server.resources[0].status.updatedReplicas | default(0)) == (argocd_server.resources[0].spec.replicas | default(1))
 
     - name: Wait for argocd-repo-server
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: argocd-repo-server
+        namespace: "{{ argocd_namespace }}"
+      register: argocd_repo_server
+      retries: 60
+      delay: 5
+      until:
+        - argocd_repo_server.resources | default([]) | length > 0
+        - (argocd_repo_server.resources[0].status.readyReplicas | default(0)) == (argocd_repo_server.resources[0].spec.replicas | default(1))
+        - (argocd_repo_server.resources[0].status.updatedReplicas | default(0)) == (argocd_repo_server.resources[0].spec.replicas | default(1))
 
     - name: Wait for argocd-application-controller
-      ansible.builtin.shell: |
-        kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: StatefulSet
+        name: argocd-application-controller
+        namespace: "{{ argocd_namespace }}"
+      register: argocd_controller
+      retries: 60
+      delay: 5
+      until:
+        - argocd_controller.resources | default([]) | length > 0
+        - (argocd_controller.resources[0].status.readyReplicas | default(0)) == (argocd_controller.resources[0].spec.replicas | default(1))
+        - (argocd_controller.resources[0].status.updatedReplicas | default(0)) == (argocd_controller.resources[0].spec.replicas | default(1))
 
     # ================================================================
     # Phase 4: Configure Argo CD source and Application
@@ -290,54 +213,46 @@
         msg: "Configuring Argo CD to watch test repo"
 
     - name: Create repo credentials secret
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: forgejo-repo-creds
-          namespace: {{ argocd_namespace }}
-          labels:
-            argocd.argoproj.io/secret-type: repo-creds
-        type: Opaque
-        stringData:
-          type: git
-          url: "http://{{ forgejo_cluster_ip }}:3000"
-          username: "{{ forgejo_admin_user }}"
-          password: "{{ forgejo_admin_password }}"
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: forgejo-repo-creds
+            namespace: "{{ argocd_namespace }}"
+            labels:
+              argocd.argoproj.io/secret-type: repo-creds
+          type: Opaque
+          stringData:
+            type: git
+            url: "http://{{ forgejo_host }}"
+            username: "{{ forgejo_admin_user }}"
+            password: "{{ forgejo_admin_password }}"
 
     - name: Create test Application
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: argoproj.io/v1alpha1
-        kind: Application
-        metadata:
-          name: test-app
-          namespace: {{ argocd_namespace }}
-        spec:
-          project: default
-          source:
-            repoURL: http://{{ forgejo_cluster_ip }}:3000/{{ forgejo_admin_user }}/infra.git
-            targetRevision: main
-            path: clusters/production
-          destination:
-            server: https://kubernetes.default.svc
-          syncPolicy:
-            automated:
-              selfHeal: true
-              prune: true
-            syncOptions:
-              - CreateNamespace=true
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: test-app
+            namespace: "{{ argocd_namespace }}"
+          spec:
+            project: default
+            source:
+              repoURL: "http://{{ forgejo_host }}/{{ forgejo_admin_user }}/{{ test_repo_name }}.git"
+              targetRevision: main
+              path: clusters/production
+            destination:
+              server: https://kubernetes.default.svc
+            syncPolicy:
+              automated:
+                selfHeal: true
+                prune: true
+              syncOptions:
+                - CreateNamespace=true
 
     # ================================================================
     # Phase 5: Verify initial reconciliation
@@ -348,43 +263,44 @@
         msg: "Waiting for Argo CD to sync test manifests"
 
     - name: Wait for Application to sync
-      ansible.builtin.shell: |
-        for i in $(seq 1 60); do
-          STATUS=$(kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.sync.status}' 2>/dev/null)
-          HEALTH=$(kubectl get application test-app -n {{ argocd_namespace }} -o jsonpath='{.status.health.status}' 2>/dev/null)
-          if [ "$STATUS" = "Synced" ] && [ "$HEALTH" = "Healthy" ]; then
-            exit 0
-          fi
-          sleep 5
-        done
-        echo "Timeout: status=$STATUS health=$HEALTH"
-        exit 1
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: test-app
+        namespace: "{{ argocd_namespace }}"
       register: sync_result
+      retries: 60
+      delay: 5
+      until:
+        - sync_result.resources | default([]) | length > 0
+        - (sync_result.resources[0].status.sync.status | default('')) == 'Synced'
+        - (sync_result.resources[0].status.health.status | default('')) == 'Healthy'
       failed_when: false
 
     - name: Set initial sync fact
       ansible.builtin.set_fact:
-        initial_sync_passed: "{{ sync_result.rc == 0 }}"
+        initial_sync_passed: "{{ not (sync_result.failed | default(false)) }}"
 
     - name: Check test namespace exists
-      ansible.builtin.shell: |
-        kubectl get namespace {{ test_namespace }} -o name 2>/dev/null
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Namespace
+        name: "{{ test_namespace }}"
       register: ns_check
-      changed_when: false
-      failed_when: false
 
     - name: Check ConfigMap v1 exists
-      ansible.builtin.shell: |
-        kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: ConfigMap
+        name: argocd-test
+        namespace: "{{ test_namespace }}"
       register: cm_check
-      changed_when: false
-      failed_when: false
 
     - name: Set v1 facts
       ansible.builtin.set_fact:
-        namespace_created: "{{ ns_check.rc == 0 }}"
-        configmap_v1: "{{ cm_check.stdout == 'v1' }}"
+        namespace_created: "{{ (ns_check.resources | default([]) | length) > 0 }}"
+        configmap_v1: "{{ (cm_check.resources | default([]) | length) > 0 and (cm_check.resources[0].data.version | default('')) == 'v1' }}"
 
     # ================================================================
     # Phase 6: Test git-push reconciliation
@@ -402,7 +318,7 @@
         git init
         git config user.email "test@test.local"
         git config user.name "Test"
-        git remote add origin "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_cluster_ip }}:3000/{{ forgejo_admin_user }}/infra.git"
+        git remote add origin "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_host }}/{{ forgejo_admin_user }}/{{ test_repo_name }}.git"
         git fetch origin main
         git checkout main
 
@@ -424,23 +340,22 @@
       changed_when: false
 
     - name: Wait for ConfigMap v2
-      ansible.builtin.shell: |
-        for i in $(seq 1 90); do
-          VERSION=$(kubectl get configmap argocd-test -n {{ test_namespace }} -o jsonpath='{.data.version}' 2>/dev/null)
-          if [ "$VERSION" = "v2" ]; then
-            exit 0
-          fi
-          sleep 5
-        done
-        echo "Timeout: version=$VERSION"
-        exit 1
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: ConfigMap
+        name: argocd-test
+        namespace: "{{ test_namespace }}"
       register: v2_result
-      changed_when: false
+      retries: 90
+      delay: 5
+      until:
+        - v2_result.resources | default([]) | length > 0
+        - (v2_result.resources[0].data.version | default('')) == 'v2'
       failed_when: false
 
     - name: Set v2 fact
       ansible.builtin.set_fact:
-        configmap_v2: "{{ v2_result.rc == 0 }}"
+        configmap_v2: "{{ not (v2_result.failed | default(false)) }}"
 
     # ================================================================
     # Phase 7: Verify and report
@@ -451,52 +366,77 @@
         msg: "Checking final state"
 
     - name: Check controller pods
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ argocd_namespace }} -o wide
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
       register: pods
-      changed_when: false
 
     - name: Check Application status
-      ansible.builtin.shell: |
-        kubectl get applications -n {{ argocd_namespace }} -o wide 2>/dev/null || echo "No applications"
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: "{{ argocd_namespace }}"
       register: apps
-      changed_when: false
 
     - name: Check server pod running
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=server -o jsonpath='{.items[0].status.phase}'
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/component=server
       register: server_status
-      changed_when: false
-      failed_when: false
 
     - name: Check repo-server pod running
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=repo-server -o jsonpath='{.items[0].status.phase}'
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/component=repo-server
       register: repo_server_status
-      changed_when: false
-      failed_when: false
 
     - name: Check controller pod running
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ argocd_namespace }} -l app.kubernetes.io/component=application-controller -o jsonpath='{.items[0].status.phase}'
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
+        label_selectors:
+          - app.kubernetes.io/component=application-controller
       register: controller_status
-      changed_when: false
-      failed_when: false
+
+    - name: Set pod-running facts
+      ansible.builtin.set_fact:
+        server_running: "{{ (server_status.resources | default([]) | length) > 0 and (server_status.resources[0].status.phase | default('')) == 'Running' }}"
+        repo_server_running: "{{ (repo_server_status.resources | default([]) | length) > 0 and (repo_server_status.resources[0].status.phase | default('')) == 'Running' }}"
+        controller_running: "{{ (controller_status.resources | default([]) | length) > 0 and (controller_status.resources[0].status.phase | default('')) == 'Running' }}"
 
     - name: TEST RESULT
       ansible.builtin.debug:
         msg: |
           ====================================================
-          Argo CD Integration Test: {{ 'PASS' if (initial_sync_passed and namespace_created and configmap_v1 and configmap_v2 and server_status.stdout == 'Running' and repo_server_status.stdout == 'Running' and controller_status.stdout == 'Running') else 'FAIL' }}
+          Argo CD Integration Test: {{ 'PASS' if (initial_sync_passed and namespace_created and configmap_v1 and configmap_v2 and server_running and repo_server_running and controller_running) else 'FAIL' }}
 
-          [{{ 'PASS' if server_status.stdout == 'Running' else 'FAIL' }}] argocd-server running
-          [{{ 'PASS' if repo_server_status.stdout == 'Running' else 'FAIL' }}] argocd-repo-server running
-          [{{ 'PASS' if controller_status.stdout == 'Running' else 'FAIL' }}] argocd-application-controller running
+          [{{ 'PASS' if server_running else 'FAIL' }}] argocd-server running
+          [{{ 'PASS' if repo_server_running else 'FAIL' }}] argocd-repo-server running
+          [{{ 'PASS' if controller_running else 'FAIL' }}] argocd-application-controller running
           [{{ 'PASS' if initial_sync_passed else 'FAIL' }}] Initial sync (Synced + Healthy)
           [{{ 'PASS' if namespace_created else 'FAIL' }}] Test namespace created
           [{{ 'PASS' if configmap_v1 else 'FAIL' }}] ConfigMap v1 applied
           [{{ 'PASS' if configmap_v2 else 'FAIL' }}] ConfigMap v2 reconciled after git push
           ====================================================
+
+    - name: Cleanup — delete test repo from Pi Forgejo
+      ansible.builtin.uri:
+        url: "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}"
+        method: DELETE
+        user: "{{ forgejo_admin_user }}"
+        password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]
+      changed_when: false
 
     - name: Fail if critical checks failed
       ansible.builtin.fail:

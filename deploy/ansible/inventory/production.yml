@@ -8,6 +8,23 @@
 #     export TARGET_USER=pi
 #
 all:
+  vars:
+    # ── Credentials from operator's env (single source of truth) ───────────
+    # All playbooks and tests reference these names. No per-play defaults.
+    # If an env var is missing, Ansible fails loud — no silent `changeme`
+    # fallback that lets misconfigured deploys run with a placeholder.
+    forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('forgejo_admin', true) }}"
+    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
+    forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
+    keycloak_admin_password: "{{ lookup('env', 'KEYCLOAK_ADMIN_PASSWORD') }}"
+    postgres_admin_password: "{{ lookup('env', 'KEYCLOAK_DB_PASSWORD') }}"
+    postgres_replication_password: "{{ lookup('env', 'POSTGRES_REPLICATION_PASSWORD') }}"
+    minio_root_user: "{{ lookup('env', 'VELERO_MINIO_ACCESS_KEY') | default('velero-admin', true) }}"
+    minio_root_password: "{{ lookup('env', 'VELERO_MINIO_SECRET_KEY') }}"
+    nexus_admin_password: "{{ lookup('env', 'NEXUS_ADMIN_PASSWORD') }}"
+    keepalived_vrrp_password: "{{ lookup('env', 'KEEPALIVED_PASSWORD') }}"
+    argocd_keycloak_client_secret: "{{ lookup('env', 'KEYCLOAK_ARGOCD_CLIENT_SECRET') }}"
+
   hosts:
     target:
       ansible_host: "{{ lookup('env', 'TARGET_HOST') | default('192.168.11.2', true) }}"

@@ -1,0 +1,104 @@
+---
+# Stand up an in-cluster postgres with all schnappy service databases
+# pre-created (monitor, admin, chat, chess) + per-service `schnappy-postgres-<svc>`
+# Secrets that the chart wires into pod env vars (DB_HOST, DB_NAME,
+# DB_USERNAME, DB_PASSWORD).
+#
+# Production wires schnappy-postgres to the Pi Patroni HAProxy via an
+# ExternalName Service and creates the per-service Secrets via ESO. The
+# vagrant tests don't want that path — they just want a Spring Boot pod
+# to be able to connect to *some* postgres with the right schema name.
+#
+# Required vars:
+#   ns: Kubernetes namespace
+#
+# Usage (from a target-host play, after schnappy-mesh is deployed):
+#   - ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
+
+- name: Test postgres init script + per-service Secrets + Deployment + Service
+  kubernetes.core.k8s:
+    kubeconfig: /etc/kubernetes/admin.conf
+    state: present
+    definition:
+      - apiVersion: v1
+        kind: ConfigMap
+        metadata: { name: schnappy-postgres-init, namespace: "{{ ns }}" }
+        data:
+          init.sql: |
+            CREATE DATABASE monitor;
+            CREATE DATABASE admin;
+            CREATE DATABASE chat;
+            CREATE DATABASE chess;
+            ALTER USER postgres WITH PASSWORD 'vagrant';
+      - apiVersion: v1
+        kind: Secret
+        metadata: { name: schnappy-postgres-monitor, namespace: "{{ ns }}" }
+        type: Opaque
+        stringData: { DB_NAME: monitor, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+      - apiVersion: v1
+        kind: Secret
+        metadata: { name: schnappy-postgres-admin, namespace: "{{ ns }}" }
+        type: Opaque
+        stringData: { DB_NAME: admin, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+      - apiVersion: v1
+        kind: Secret
+        metadata: { name: schnappy-postgres-chat, namespace: "{{ ns }}" }
+        type: Opaque
+        stringData: { DB_NAME: chat, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+      - apiVersion: v1
+        kind: Secret
+        metadata: { name: schnappy-postgres-chess, namespace: "{{ ns }}" }
+        type: Opaque
+        stringData: { DB_NAME: chess, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+      - apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: schnappy-postgres, namespace: "{{ ns }}", labels: { app: schnappy-postgres } }
+        spec:
+          replicas: 1
+          selector: { matchLabels: { app: schnappy-postgres } }
+          template:
+            metadata: { labels: { app: schnappy-postgres } }
+            spec:
+              containers:
+                - name: postgres
+                  image: postgres:17
+                  env:
+                    - { name: POSTGRES_PASSWORD, value: vagrant }
+                    - { name: POSTGRES_DB, value: postgres }
+                    - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+                  ports: [{ name: postgres, containerPort: 5432 }]
+                  readinessProbe:
+                    exec: { command: ["pg_isready", "-U", "postgres"] }
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                  resources:
+                    requests: { cpu: 100m, memory: 256Mi }
+                    limits: { cpu: 500m, memory: 512Mi }
+                  volumeMounts:
+                    - { name: data, mountPath: /var/lib/postgresql/data }
+                    - { name: init, mountPath: /docker-entrypoint-initdb.d }
+              volumes:
+                - name: data
+                  emptyDir: { sizeLimit: 1Gi }
+                - name: init
+                  configMap: { name: schnappy-postgres-init }
+      - apiVersion: v1
+        kind: Service
+        metadata: { name: schnappy-postgres, namespace: "{{ ns }}" }
+        spec:
+          selector: { app: schnappy-postgres }
+          ports: [{ name: postgres, port: 5432, targetPort: 5432 }]
+
+- name: Wait for test postgres to be Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/kubernetes/admin.conf
+    api_version: apps/v1
+    kind: Deployment
+    name: schnappy-postgres
+    namespace: "{{ ns }}"
+  register: _pg
+  retries: 30
+  delay: 10
+  until:
+    - _pg.resources | default([]) | length > 0
+    - (_pg.resources[0].status.readyReplicas | default(0)) >= 1

@@ -1,0 +1,33 @@
+---
+# Rsync the host's ~/src/platform/ into /vagrant-platform/ on the target VM.
+# Used by every helm-based test so the kubeadm node has the current chart
+# without relying on Vagrant's default /vagrant synced folder.
+#
+# Usage:
+#   - ansible.builtin.import_tasks: tasks/sync-platform-charts.yml
+
+- name: Ensure rsync on the VM (synchronize needs it on both sides)
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure /vagrant-platform exists + writable by vagrant user
+  ansible.builtin.file:
+    path: /vagrant-platform
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: '0755'
+
+- name: Sync platform charts to VM
+  ansible.posix.synchronize:
+    src: "{{ lookup('env', 'HOME') }}/src/platform/"
+    dest: /vagrant-platform/
+    delete: true
+    # delegate_to: localhost breaks auto-wiring of the target's
+    # ansible_ssh_private_key_file into rsync's ssh. Pass it explicitly.
+    private_key: "{{ ansible_ssh_private_key_file }}"
+  delegate_to: localhost
+  become: false

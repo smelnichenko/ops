@@ -1,0 +1,44 @@
+---
+# Verify Pi Forgejo (the production Forgejo running on pi1) is reachable
+# from the kubeadm node, and that the admin user auth still works.
+#
+# Used by tests that previously stood up a throwaway in-cluster Forgejo
+# (test:cicd, test:argocd, test:woodpecker) — Pi Forgejo is faster and
+# matches the production CI flow.
+#
+# Sets these facts:
+#   forgejo_host        — "192.168.56.20:3000" (Pi1 IP + Forgejo HTTP port)
+#   forgejo_admin_user  — "forgejo_admin" (the inventory admin)
+#
+# Required inventory vars (already in vagrant.yml all.vars):
+#   forgejo_admin_password
+#
+# Usage (from a target-host play):
+#   - ansible.builtin.import_tasks: tasks/use-pi-forgejo.yml
+
+- name: Set Pi Forgejo facts
+  ansible.builtin.set_fact:
+    forgejo_host: "192.168.56.20:3000"
+    forgejo_admin_user: forgejo_admin
+
+- name: Verify Pi Forgejo API reachable
+  ansible.builtin.uri:
+    url: "http://{{ forgejo_host }}/api/v1/settings/api"
+    status_code: 200
+  register: _pi_forgejo_ready
+  retries: 30
+  delay: 5
+  until: _pi_forgejo_ready.status == 200
+
+- name: Verify Pi Forgejo admin auth
+  ansible.builtin.uri:
+    url: "http://{{ forgejo_host }}/api/v1/user"
+    user: "{{ forgejo_admin_user }}"
+    password: "{{ forgejo_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: _pi_forgejo_auth
+  changed_when: false
+  failed_when:
+    - _pi_forgejo_auth.status != 200
+    - (_pi_forgejo_auth.json.login | default('')) != forgejo_admin_user

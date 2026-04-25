@@ -24,7 +24,7 @@
     ns: "schnappy-{{ env_name }}"
     forgejo_host: "{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}"
     forgejo_admin_user: forgejo_admin
-    forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') | default('vagrant-forgejo-pw', true) }}"
+    # forgejo_admin_password from inventory (vagrant.yml test fixture)
     forgejo_url: "http://{{ forgejo_host }}:3000"
     infra_git_url: "http://{{ forgejo_admin_user }}:{{ forgejo_admin_password }}@{{ forgejo_host }}:3000/schnappy/infra.git"
     tmp_infra: /tmp/test-infra-ephemeral
@@ -90,11 +90,12 @@
       failed_when: "'ALL_HEALTHY' not in sync_wait.stdout"
 
     - name: Verify HTTPRoutes exist
-      ansible.builtin.shell: |
-        kubectl get httproute -n {{ ns }} --no-headers | wc -l
+      kubernetes.core.k8s_info:
+        api_version: gateway.networking.k8s.io/v1
+        kind: HTTPRoute
+        namespace: "{{ ns }}"
       register: routes
-      changed_when: false
-      failed_when: routes.stdout | int == 0
+      failed_when: (routes.resources | default([]) | length) == 0
 
     - name: "ROUND 1 CREATE: PASSED"
       ansible.builtin.debug:
@@ -135,12 +136,15 @@
       changed_when: false
       failed_when: "'GONE' not in destroy_wait.stdout"
 
-    - name: Delete namespace
-      ansible.builtin.command:
-        cmd: kubectl delete namespace {{ ns }} --timeout=120s
-      register: playbook_result
+    - name: Delete namespace (best-effort — may already be gone from ArgoCD prune)
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
+        wait: true
       changed_when: true
-      failed_when: playbook_result.rc != 0
       failed_when: false
 
     - name: "ROUND 1 DESTROY: PASSED"
@@ -203,12 +207,15 @@
       changed_when: true
       failed_when: playbook_result.rc != 0
 
-    - name: Delete namespace (final)
-      ansible.builtin.command:
-        cmd: kubectl delete namespace {{ ns }} --timeout=120s
-      register: playbook_result
+    - name: Delete namespace (final — best-effort)
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
+        wait: true
       changed_when: true
-      failed_when: playbook_result.rc != 0
       failed_when: false
 
     - name: Clean temp infra dir

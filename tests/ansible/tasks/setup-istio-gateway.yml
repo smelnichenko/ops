@@ -1,0 +1,134 @@
+---
+# Deploy a shared Gateway resource for Vagrant tests. Istio auto-provisions
+# the gateway Deployment + Service from the CR (no separate helm install).
+#
+# Production deploys this via ArgoCD (cluster-config app); the Vagrant test
+# harness doesn't run ArgoCD, so we create the Gateway CR directly and pin
+# the auto-provisioned Service to NodePort 30080 so tests have a stable
+# ingress port without needing a cloud LoadBalancer.
+# Tests attach HTTPRoute resources to `vagrant-gateway` in `istio-system`
+# and curl via the gateway's fixed NodePort (30080).
+#
+# Usage (expected from a target-host play):
+#   - ansible.builtin.import_tasks: tasks/setup-istio-gateway.yml
+#
+# Published facts:
+#   istio_gateway_nodeport  — int, NodePort the Istio gateway listens on
+#   istio_gateway_ns        — "istio-system"
+#   istio_gateway_name      — "vagrant-gateway"
+#   node_ip                 — cluster node's internal IPv4
+
+- name: Discover cluster NodeIP
+  ansible.builtin.shell: |
+    kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+  register: _node_ip
+  changed_when: false
+
+- name: Set node_ip fact
+  ansible.builtin.set_fact:
+    node_ip: "{{ _node_ip.stdout | trim }}"
+    istio_gateway_ns: istio-system
+    istio_gateway_name: vagrant-gateway
+    istio_gateway_nodeport: 30080
+
+# Don't install istio/gateway helm chart — that creates a standalone gateway
+# Deployment/Service that no HTTPRoute attaches to. Instead let Istio's
+# gateway controller auto-provision a matching Deployment+Service *from*
+# the Gateway CR below (Service name: `<gateway-name>-istio`). Then patch
+# that auto-provisioned Service to fixed NodePort so tests can hit a
+# known port without a LoadBalancer.
+
+- name: Create shared vagrant-gateway Gateway (HTTP, all hostnames, all namespaces)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: Gateway
+      metadata:
+        name: "{{ istio_gateway_name }}"
+        namespace: "{{ istio_gateway_ns }}"
+        annotations:
+          # Istio-specific: tell the gateway controller to provision a
+          # NodePort Service instead of the default LoadBalancer (vagrant
+          # has no cloud LB, so LoadBalancer stays <pending> forever).
+          networking.istio.io/service-type: NodePort
+      spec:
+        gatewayClassName: istio
+        listeners:
+          - name: http
+            port: 80
+            protocol: HTTP
+            hostname: "*.vagrant.test"
+            allowedRoutes:
+              namespaces:
+                from: All
+
+- name: Wait for auto-provisioned gateway Service to exist
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/kubernetes/admin.conf
+    api_version: v1
+    kind: Service
+    name: "{{ istio_gateway_name }}-istio"
+    namespace: "{{ istio_gateway_ns }}"
+  register: _gw_svc
+  retries: 30
+  delay: 5
+  until: _gw_svc.resources | default([]) | length > 0
+
+- name: Patch gateway Service to fixed NodePort 30080 (HTTP)
+  # Istio auto-provisions a NodePort Service but with a random port. Pin
+  # it so tests know exactly where to curl.
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: /etc/kubernetes/admin.conf
+    api_version: v1
+    kind: Service
+    name: "{{ istio_gateway_name }}-istio"
+    namespace: "{{ istio_gateway_ns }}"
+    patch:
+      - op: replace
+        path: /spec/type
+        value: NodePort
+  register: _gw_svc_type_patch
+
+- name: Find index of port 80 in gateway Service
+  ansible.builtin.set_fact:
+    _gw_http_port_idx: >-
+      {{ (_gw_svc.resources[0].spec.ports
+          | map(attribute='port')
+          | list).index(80) }}
+
+- name: Pin NodePort for HTTP to 30080
+  kubernetes.core.k8s_json_patch:
+    kubeconfig: /etc/kubernetes/admin.conf
+    api_version: v1
+    kind: Service
+    name: "{{ istio_gateway_name }}-istio"
+    namespace: "{{ istio_gateway_ns }}"
+    patch:
+      - op: replace
+        path: "/spec/ports/{{ _gw_http_port_idx }}/nodePort"
+        value: "{{ istio_gateway_nodeport }}"
+
+- name: Wait for Gateway listener to become Programmed (up to 5 min)
+  # NOTE: The top-level Gateway Programmed condition stays False with reason
+  # AddressNotAssigned when using service.type=NodePort — Istio's GW API
+  # controller can't resolve the Service clusterDNS name to an address to
+  # report in .status.addresses. The listener-level Programmed is what
+  # actually determines whether traffic flows, so gate on that instead.
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/kubernetes/admin.conf
+    api_version: gateway.networking.k8s.io/v1
+    kind: Gateway
+    name: "{{ istio_gateway_name }}"
+    namespace: "{{ istio_gateway_ns }}"
+  register: _gw_programmed
+  retries: 30
+  delay: 10
+  until:
+    - _gw_programmed.resources | default([]) | length > 0
+    - ((_gw_programmed.resources[0].status.listeners | default([]))
+        | selectattr('name', 'equalto', 'http')
+        | map(attribute='conditions') | first | default([])
+        | selectattr('type', 'equalto', 'Programmed')
+        | selectattr('status', 'equalto', 'True')
+        | list | length) > 0

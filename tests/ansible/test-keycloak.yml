@@ -6,14 +6,20 @@
 # self-registration + password reset are enabled.
 #
 # Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
+#   - vagrant up (kubeadm + pi1 + pi2 VMs)
 #   - setup-vault-pi.yml completed
-#   - setup-vault.yml completed (Vault + ESO deployed)
 #
 # Usage:
 #   cd deploy/ansible
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-keycloak.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
 
 - name: Test Keycloak integration
   hosts: target
@@ -22,7 +28,6 @@
 
   vars:
     ns: schnappy
-    vault_ns: vault
     test_admin_password: "vagrant-test-admin-password!!"
     test_db_password: "vagrant-test-kc-db-password"
     test_smtp_password: "vagrant-test-smtp-password"
@@ -31,68 +36,41 @@
     test_mail_password: "vagrant-test-mail-password"
 
   tasks:
-    # ================================================================
-    # Phase 1: Seed secrets into Vault
-    # ================================================================
-
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
+    - name: Configure ESO ClusterSecretStore → Pi Vault
+      ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
 
     - name: Seed keycloak secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/keycloak \
-            admin_password="{{ test_admin_password }}" \
-            db_password="{{ test_db_password }}" \
-            forgejo_client_secret="{{ test_forgejo_client_secret }}"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/keycloak
+        secret_data:
+          admin_password: "{{ test_admin_password }}"
+          db_password: "{{ test_db_password }}"
+          forgejo_client_secret: "{{ test_forgejo_client_secret }}"
 
     - name: Seed mail secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/mail \
-            password="{{ test_mail_password }}"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/mail
+        secret_data:
+          password: "{{ test_mail_password }}"
 
     - name: Seed grafana secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/grafana \
-            admin_user=admin \
-            admin_password=vagrant-grafana-pw \
-            oauth-client-id=grafana \
-            oauth-client-secret="{{ test_grafana_client_secret }}"
-      no_log: true
-
-    - name: "SEED: Keycloak, mail, grafana credentials written to Vault KV"
-      ansible.builtin.debug:
-        msg: "Seeded keycloak, mail, grafana secrets into Vault KV"
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/grafana
+        secret_data:
+          admin_user: admin
+          admin_password: vagrant-grafana-pw
+          oauth-client-id: grafana
+          oauth-client-secret: "{{ test_grafana_client_secret }}"
 
     # ================================================================
     # Phase 2: Deploy chart with Keycloak enabled
     # ================================================================
 
-    - name: Create schnappy namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
     - name: Write Helm values for Keycloak test
       ansible.builtin.copy:
@@ -167,42 +145,117 @@
               enabled: false
 
     - name: Seed postgres secret (for keycloak DB)
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/postgres \
-            database="keycloak" \
-            username="postgres" \
-            password="vagrant-test-pg-password"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/postgres
+        secret_data:
+          database: keycloak
+          username: postgres
+          password: vagrant-test-pg-password
 
     - name: Seed auth secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/auth \
-            jwt_secret="test-only-not-used-32-chars-long!!"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/auth
+        secret_data:
+          jwt_secret: "test-only-not-used-32-chars-long!!"
 
-    - name: Sync platform charts to VM
-      ansible.builtin.synchronize:
-        src: "{{ lookup('env', 'HOME') }}/src/platform/"
-        dest: /vagrant-platform/
-        delete: true
-      delegate_to: localhost
-      become: false
+    - name: Deploy schnappy-mesh (ServiceAccounts for mesh-dependent pods)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
+
+    # schnappy-auth chart assumes postgres exists in-cluster as a Service
+    # named `schnappy-postgres:5432` and a Secret `schnappy-postgres` with
+    # POSTGRES_USER/POSTGRES_PASSWORD keys. In prod Keycloak runs on Pi
+    # against Pi postgres (no k8s objects needed); the chart never had to
+    # deploy postgres. For the Vagrant test, create the Secret and stand up
+    # a minimal in-cluster postgres so the initContainer doesn't block
+    # forever on `nc -z schnappy-postgres 5432`.
+    - name: Create schnappy-postgres + schnappy-mail Secrets (test-only)
+      # Prod would have ExternalSecrets for these but schnappy-auth chart
+      # only creates the schnappy-keycloak ExternalSecret. For the test,
+      # stand up the deps directly instead of reworking the production chart.
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          - apiVersion: v1
+            kind: Secret
+            metadata:
+              name: schnappy-postgres
+              namespace: "{{ ns }}"
+            type: Opaque
+            stringData:
+              POSTGRES_USER: postgres
+              POSTGRES_PASSWORD: vagrant-test-pg-password
+          - apiVersion: v1
+            kind: Secret
+            metadata:
+              name: schnappy-mail
+              namespace: "{{ ns }}"
+            type: Opaque
+            stringData:
+              MAIL_PASSWORD: test-mail-password-not-used
+
+    - name: Deploy test postgres (for keycloak DB)
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: schnappy-postgres
+              namespace: "{{ ns }}"
+              labels: { app: schnappy-postgres }
+            spec:
+              replicas: 1
+              selector: { matchLabels: { app: schnappy-postgres } }
+              template:
+                metadata:
+                  labels: { app: schnappy-postgres }
+                spec:
+                  containers:
+                    - name: postgres
+                      image: postgres:17
+                      env:
+                        - { name: POSTGRES_DB, value: keycloak }
+                        - name: POSTGRES_USER
+                          valueFrom: { secretKeyRef: { name: schnappy-postgres, key: POSTGRES_USER } }
+                        - name: POSTGRES_PASSWORD
+                          valueFrom: { secretKeyRef: { name: schnappy-postgres, key: POSTGRES_PASSWORD } }
+                        - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+                      ports: [{ name: postgres, containerPort: 5432 }]
+                      resources:
+                        requests: { cpu: 100m, memory: 256Mi }
+                        limits: { cpu: 500m, memory: 512Mi }
+                      volumeMounts:
+                        - { name: data, mountPath: /var/lib/postgresql/data }
+                  volumes:
+                    - name: data
+                      emptyDir: { sizeLimit: 1Gi }
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: schnappy-postgres
+              namespace: "{{ ns }}"
+            spec:
+              selector: { app: schnappy-postgres }
+              ports:
+                - { name: postgres, port: 5432, targetPort: 5432 }
 
     - name: Deploy chart with Keycloak enabled
-      ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant-platform/helm \
-          --namespace {{ ns }} \
-          --create-namespace \
-          --values /tmp/schnappy-keycloak-test-values.yml \
-          --wait --timeout 600s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+      # wait=false — under vagrant constraints Keycloak bootstrap + first
+      # ExternalSecret sync can blow past 15m. The downstream rollout/readiness
+      # waits at lines 193–217 gate the real success anyway.
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-auth
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values_files:
+          - /tmp/schnappy-keycloak-test-values.yml
+        wait: false
       register: helm_result
 
     - name: Show pod status
@@ -219,21 +272,54 @@
     # Phase 3: Verify Keycloak deployment
     # ================================================================
 
-    - name: Wait for Keycloak deployment rollout
-      ansible.builtin.shell: |
-        kubectl rollout status deploy/schnappy-keycloak -n {{ ns }} --timeout=300s
-      register: kc_rollout
-      changed_when: false
-
+    # Verify ExternalSecret FIRST — if Vault-backed secret isn't synced,
+    # Deployment can't create pods (Secret ref in pod spec blocks scheduling).
+    # Failing here gives a clearer signal than "exceeded progress deadline".
     - name: Verify ExternalSecret synced for keycloak
       ansible.builtin.shell: |
         kubectl get externalsecret schnappy-keycloak -n {{ ns }} \
           -o jsonpath='{.status.conditions[0].reason}'
       register: kc_secret_sync
-      retries: 12
+      retries: 60
       delay: 5
       until: kc_secret_sync.stdout == "SecretSynced"
       changed_when: false
+
+    - name: Wait for Keycloak deployment rollout (diag on failure)
+      block:
+        - name: Wait for Keycloak deployment rollout
+          ansible.builtin.shell: |
+            kubectl rollout status deploy/schnappy-keycloak -n {{ ns }} --timeout=1200s
+          register: kc_rollout
+          changed_when: false
+      rescue:
+        - name: DIAG events + describe + eso + secret
+          ansible.builtin.shell: |
+            echo "--- events (last 30) ---"
+            kubectl get events -n {{ ns }} --sort-by=.lastTimestamp | tail -30
+            echo "--- describe deploy ---"
+            kubectl describe deploy/schnappy-keycloak -n {{ ns }} | tail -60
+            echo "--- describe pod ---"
+            kubectl describe pod -n {{ ns }} -l app.kubernetes.io/component=keycloak | tail -60
+            echo "--- replicaset ---"
+            kubectl get rs -n {{ ns }} -l app.kubernetes.io/component=keycloak -o yaml | tail -60
+            echo "--- ExternalSecret ---"
+            kubectl get externalsecret -n {{ ns }} schnappy-keycloak -o yaml | tail -40
+            echo "--- Secret keys ---"
+            kubectl get secret -n {{ ns }} schnappy-keycloak -o jsonpath='{.data}' 2>&1 | head -5
+            echo "--- Node capacity + allocatable ---"
+            kubectl describe nodes | grep -E "Capacity:|Allocatable:|cpu:|memory:" | head -20
+            echo "--- schnappy-postgres CNPG cluster ---"
+            kubectl get cluster -n {{ ns }} 2>&1 | head -5
+            kubectl get pods -n {{ ns }} 2>&1 | head -30
+          changed_when: false
+          register: _kc_diag
+        - name: DIAG output
+          ansible.builtin.debug:
+            var: _kc_diag.stdout_lines
+        - name: Fail after diag
+          ansible.builtin.fail:
+            msg: "Keycloak rollout failed — see DIAG output above"
 
     - name: Wait for Keycloak readiness probe
       ansible.builtin.shell: |

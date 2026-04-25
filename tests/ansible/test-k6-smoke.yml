@@ -7,12 +7,18 @@
 #   3. Prometheus alert rules for smoke tests are loaded
 #
 # Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
+#   - vagrant up (kubeadm + pi1 + pi2 VMs)
 #   - setup-vault-pi.yml completed
-#   - setup-vault.yml completed (Vault + ESO deployed)
 #
 # Usage:
 #   task test:k6-smoke
+
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
 
 - name: Test k6 smoke tests
   hosts: target
@@ -21,126 +27,170 @@
 
   vars:
     ns: schnappy
-    vault_ns: vault
 
   tasks:
-    # ================================================================
-    # Phase 1: Seed secrets into Vault
-    # ================================================================
-
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
-
     - name: Seed postgres secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/postgres \
-            database=monitor username=monitor password=vagrant-test
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/postgres
+        secret_data:
+          database: monitor
+          username: monitor
+          password: vagrant-test
 
     - name: Seed redis secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/redis password=vagrant-redis
-      no_log: true
-
-    - name: "PHASE 1: Secrets seeded into Vault"
-      ansible.builtin.debug:
-        msg: "Vault secrets ready"
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/redis
+        secret_data:
+          password: vagrant-redis
 
     # ================================================================
     # Phase 2: Deploy charts
     # ================================================================
 
     - name: Create schnappy namespace
-      ansible.builtin.shell: kubectl create namespace {{ ns }} --dry-run=client -o yaml | kubectl apply -f -
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ ns }}"
+
+    - name: Deploy schnappy-mesh (ServiceAccounts)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
 
     - name: Deploy schnappy-data chart
-      ansible.builtin.shell: |
-        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-data \
-          /vagrant-platform/helm/schnappy-data \
-          -n {{ ns }} --wait --timeout 5m \
-          --set fullnameOverride=schnappy \
-          --set vault.secretsEnabled=true \
-          --set postgres.enabled=true \
-          --set postgres.existingSecret=schnappy-postgres \
-          --set redis.enabled=true \
-          --set redis.existingSecret=schnappy-redis \
-          --set kafka.enabled=false \
-          --set minio.enabled=false \
-          --set aptCache.enabled=false \
-          --set networkPolicies.enabled=false
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy-data
+        chart_ref: /vagrant-platform/helm/schnappy-data
+        release_namespace: "{{ ns }}"
+        wait: true
+        wait_timeout: 5m
+        values:
+          fullnameOverride: schnappy
+          vault:
+            secretsEnabled: true
+          postgres:
+            enabled: true
+            existingSecret: schnappy-postgres
+          redis:
+            enabled: true
+            existingSecret: schnappy-redis
+          kafka:
+            enabled: false
+          minio:
+            enabled: false
+          aptCache:
+            enabled: false
+          networkPolicies:
+            enabled: false
 
     - name: Wait for postgres
-      ansible.builtin.shell: kubectl rollout status deploy/schnappy-postgres -n {{ ns }} --timeout=180s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+      register: postgres_dep
+      retries: 60
+      delay: 3
+      until:
+        - postgres_dep.resources | length > 0
+        - postgres_dep.resources[0].status.readyReplicas | default(0) == postgres_dep.resources[0].spec.replicas
+        - postgres_dep.resources[0].status.updatedReplicas | default(0) == postgres_dep.resources[0].spec.replicas
 
     - name: Deploy schnappy-observability chart (Prometheus only)
-      ansible.builtin.shell: |
-        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-observability \
-          /vagrant-platform/helm/schnappy-observability \
-          -n {{ ns }} --wait --timeout 5m \
-          --set fullnameOverride=schnappy \
-          --set prometheus.enabled=true \
-          --set prometheus.image=prom/prometheus:v3.10.0 \
-          --set grafana.enabled=false \
-          --set alertmanager.enabled=false \
-          --set elk.enabled=false \
-          --set kubeStateMetrics.enabled=false \
-          --set networkPolicies.enabled=false
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy-observability
+        chart_ref: /vagrant-platform/helm/schnappy-observability
+        release_namespace: "{{ ns }}"
+        wait: true
+        wait_timeout: 5m
+        values:
+          fullnameOverride: schnappy
+          prometheus:
+            enabled: true
+            image: prom/prometheus:v3.10.0
+          grafana:
+            enabled: false
+          alertmanager:
+            enabled: false
+          elk:
+            enabled: false
+          kubeStateMetrics:
+            enabled: false
+          networkPolicies:
+            enabled: false
 
     - name: Wait for prometheus
-      ansible.builtin.shell: kubectl rollout status deploy/schnappy-prometheus -n {{ ns }} --timeout=180s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: schnappy-prometheus
+        namespace: "{{ ns }}"
+      register: prom_dep
+      retries: 60
+      delay: 3
+      until:
+        - prom_dep.resources | length > 0
+        - prom_dep.resources[0].status.readyReplicas | default(0) == prom_dep.resources[0].spec.replicas
+        - prom_dep.resources[0].status.updatedReplicas | default(0) == prom_dep.resources[0].spec.replicas
 
     - name: Deploy schnappy core chart
-      ansible.builtin.shell: |
-        KUBECONFIG=/etc/kubernetes/admin.conf helm upgrade --install schnappy-app \
-          /vagrant-platform/helm/schnappy \
-          -n {{ ns }} --wait --timeout 5m \
-          --set fullnameOverride=schnappy \
-          --set site.dnsResolver=10.43.0.10 \
-          --set site.enabled=false \
-          --set gateway.enabled=false \
-          --set admin.enabled=false \
-          --set chatService.enabled=false \
-          --set chessService.enabled=false \
-          --set vault.secretsEnabled=true \
-          --set networkPolicies.enabled=false \
-          --set smokeTest.enabled=true \
-          --set smokeTest.baseUrl=http://schnappy-monitor:8080/api \
-          --set app.ingress.enabled=false \
-          --set app.ingress.host=localhost \
-          --set postgres.existingSecret=schnappy-postgres \
-          --set redis.existingSecret=schnappy-redis
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy-app
+        chart_ref: /vagrant-platform/helm/schnappy
+        release_namespace: "{{ ns }}"
+        wait: true
+        wait_timeout: 5m
+        values:
+          fullnameOverride: schnappy
+          site:
+            dnsResolver: 10.43.0.10
+            enabled: false
+          gateway:
+            enabled: false
+          admin:
+            enabled: false
+          chatService:
+            enabled: false
+          chessService:
+            enabled: false
+          vault:
+            secretsEnabled: true
+          networkPolicies:
+            enabled: false
+          smokeTest:
+            enabled: true
+            baseUrl: http://schnappy-monitor:8080/api
+          app:
+            ingress:
+              enabled: false
+              host: localhost
+          postgres:
+            existingSecret: schnappy-postgres
+          redis:
+            existingSecret: schnappy-redis
 
     - name: Wait for app
-      ansible.builtin.shell: kubectl rollout status deploy/schnappy-monitor -n {{ ns }} --timeout=180s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
+      register: app_dep
+      retries: 60
+      delay: 3
+      until:
+        - app_dep.resources | length > 0
+        - app_dep.resources[0].status.readyReplicas | default(0) == app_dep.resources[0].spec.replicas
+        - app_dep.resources[0].status.updatedReplicas | default(0) == app_dep.resources[0].spec.replicas
 
     - name: "PHASE 2: Charts deployed"
       ansible.builtin.debug:
@@ -153,16 +203,28 @@
     - name: Create k6 smoke test Job
       ansible.builtin.shell: |
         kubectl create job k6-test --from=cronjob/schnappy-k6-smoke -n {{ ns }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
       changed_when: false
 
     - name: Wait for k6 Job to complete
-      ansible.builtin.shell: |
-        kubectl wait --for=condition=complete job/k6-test -n {{ ns }} --timeout=180s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Job
+        name: k6-test
+        namespace: "{{ ns }}"
       register: k6_result
-      changed_when: false
+      retries: 60
+      delay: 3
+      until:
+        - k6_result.resources | length > 0
+        - (k6_result.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Complete') | selectattr('status', 'equalto', 'True') | list | length > 0)
+          or (k6_result.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Failed') | selectattr('status', 'equalto', 'True') | list | length > 0)
 
     - name: Get k6 Job logs
       ansible.builtin.shell: kubectl logs job/k6-test -n {{ ns }}
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
       register: k6_logs
       changed_when: false
 
@@ -172,7 +234,8 @@
 
     - name: Verify k6 Job succeeded
       ansible.builtin.assert:
-        that: k6_result.rc == 0
+        that:
+          - k6_result.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Complete') | selectattr('status', 'equalto', 'True') | list | length > 0
         fail_msg: "k6 smoke test FAILED"
         success_msg: "k6 smoke test PASSED — all checks OK"
 

@@ -1,0 +1,22 @@
+---
+# Reads Pi Vault's root token from pi1:/etc/vault-unseal/root-token and
+# publishes it as the `vault_root_token` fact on pi1 (retrieve from other
+# plays via hostvars['pi1']['vault_root_token']).
+#
+# Include from a play that has hosts: pi1. Usage:
+#
+#   - name: Read Pi Vault root token
+#     hosts: pi1
+#     tasks:
+#       - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
+
+- name: Slurp root-token
+  ansible.builtin.slurp:
+    src: /etc/vault-unseal/root-token
+  register: _fetch_pi_vault_token
+  no_log: true
+
+- name: Publish token fact
+  ansible.builtin.set_fact:
+    vault_root_token: "{{ _fetch_pi_vault_token.content | b64decode | trim }}"
+  no_log: true

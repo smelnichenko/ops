@@ -1,0 +1,43 @@
+---
+# Deploy the schnappy-mesh chart (ServiceAccounts + optional Istio mesh).
+#
+# Required for any test that installs a chart whose pods mount
+# serviceAccountName: schnappy-<component> (elasticsearch, kibana,
+# keycloak, sonarqube, monitor, admin, chat, chess, etc.).
+#
+# Disables PeerAuthentication / AuthorizationPolicies / Istio gateway —
+# not needed for Vagrant tests, and without sidecars they'd break connectivity.
+#
+# Import from a play with hosts: target.
+#
+# Required vars:
+#   ns: Kubernetes namespace
+#
+# Usage:
+#   - ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
+
+- name: Sync platform charts (needed for mesh chart source)
+  ansible.builtin.import_tasks: sync-platform-charts.yml
+
+- name: Deploy schnappy-mesh (ServiceAccounts only for Vagrant tests)
+  kubernetes.core.helm:
+    kubeconfig: /etc/kubernetes/admin.conf
+    name: schnappy-mesh
+    chart_ref: /vagrant-platform/helm/schnappy-mesh
+    release_namespace: "{{ ns }}"
+    create_namespace: true
+    values:
+      # Override fullname so SAs are named `schnappy-<component>` (not
+      # `schnappy-mesh-<component>`). Other charts (schnappy-observability,
+      # schnappy-auth, schnappy-data, schnappy-sonarqube) reference
+      # `serviceAccountName: schnappy-<component>` via
+      # `include "schnappy.fullname"`.
+      fullnameOverride: schnappy
+      gateway:
+        enabled: false
+      peerAuthentication:
+        enabled: false
+      authorizationPolicies:
+        enabled: false
+      scyllaOperator:
+        enabled: false

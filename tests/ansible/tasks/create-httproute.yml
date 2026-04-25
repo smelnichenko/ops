@@ -1,0 +1,68 @@
+---
+# Attach an HTTPRoute to the vagrant-gateway Istio Gateway.
+#
+# Required vars:
+#   route_name     — name of the HTTPRoute (unique per service)
+#   route_ns       — namespace where the route + backend Service live
+#   route_host     — hostname the route matches (e.g. "git.vagrant.test")
+#   route_service  — backend Service name
+#   route_port     — backend Service port
+#
+# Assumes `setup-istio-gateway.yml` has been imported (so the facts
+# istio_gateway_ns/istio_gateway_name/istio_gateway_nodeport/node_ip exist).
+#
+# Also writes an /etc/hosts entry so local curls from the VM host resolve
+# `route_host` → NodeIP, and patches CoreDNS so in-cluster pods do the same.
+
+- name: "Create HTTPRoute {{ route_name }} → {{ route_service }}:{{ route_port }}"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: HTTPRoute
+      metadata:
+        name: "{{ route_name }}"
+        namespace: "{{ route_ns }}"
+      spec:
+        parentRefs:
+          - name: "{{ istio_gateway_name }}"
+            namespace: "{{ istio_gateway_ns }}"
+        hostnames:
+          - "{{ route_host }}"
+        rules:
+          - backendRefs:
+              - name: "{{ route_service }}"
+                port: "{{ route_port }}"
+
+- name: "/etc/hosts → {{ route_host }}"
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: "\\s{{ route_host }}(\\s|$)"
+    line: "{{ node_ip }} {{ route_host }}"
+    state: present
+
+- name: "CoreDNS → {{ route_host }}"
+  ansible.builtin.shell: |
+    NODE_IP="{{ node_ip }}" ROUTE_HOST="{{ route_host }}" python3 <<'PY'
+    import json, os, subprocess, sys
+    host = os.environ['ROUTE_HOST']
+    ip = os.environ['NODE_IP']
+    cm = json.loads(subprocess.check_output(
+        ['kubectl', 'get', 'configmap', 'coredns', '-n', 'kube-system', '-o', 'json']))
+    corefile = cm['data']['Corefile']
+    if host in corefile:
+        sys.exit(0)
+    entry = ip + ' ' + host
+    if 'hosts {' in corefile:
+        corefile = corefile.replace('hosts {', 'hosts {\n        ' + entry, 1)
+    else:
+        block = '\n    hosts {\n        ' + entry + '\n        fallthrough\n    }'
+        corefile = corefile.replace(
+            'kubernetes cluster.local', block + '\n    kubernetes cluster.local', 1)
+    patch = json.dumps({'data': {'Corefile': corefile}})
+    subprocess.check_call(['kubectl', 'patch', 'configmap', 'coredns',
+                           '-n', 'kube-system', '--type=merge', '-p', patch])
+    subprocess.check_call(['kubectl', 'rollout', 'restart',
+                           'deployment', 'coredns', '-n', 'kube-system'])
+    PY
+  changed_when: true

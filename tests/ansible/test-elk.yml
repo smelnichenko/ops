@@ -1,18 +1,19 @@
 ---
-# Test ELK stack deployment in Vagrant
+# Test ELK stack deployment in Vagrant against Pi Vault + schnappy namespace.
 #
-# Verifies Elasticsearch, Kibana, and Fluent-bit deploy correctly,
-# logs flow from pods into ES, and ILM retention is configured.
+# Seeds test credentials into Pi Vault (pi1:8200); deploys the ELK chart with
+# externalSecrets pointing at `secret/schnappy/elasticsearch`; verifies ES +
+# Fluent-bit + Kibana + ILM.
 #
-# Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
-#   - setup-vault-pi.yml completed
-#   - setup-vault.yml completed (Vault + ESO deployed)
-#
-# Usage:
-#   cd deploy/ansible
-#   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-elk.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+# Prereqs: `_vagrant:k8s-stack` (Pi stack + kubeadm + ESO configured).
+
+# ─── Fetch Pi Vault root token ──────────────────────────────────────────────
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
 
 - name: Test ELK stack integration
   hosts: target
@@ -21,51 +22,24 @@
 
   vars:
     ns: schnappy
-    vault_ns: vault
     test_es_password: "vagrant-test-elastic-password"
     test_kibana_password: "vagrant-test-kibana-password"
 
   tasks:
-    # ================================================================
-    # Phase 1: Seed Elasticsearch credentials into Vault
-    # ================================================================
-
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
+# ─── Seed + deploy + assert ─────────────────────────────────────────────────
+    - name: Configure ESO ClusterSecretStore → Pi Vault
+      ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
 
     - name: Seed elasticsearch secret
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/elasticsearch \
-            password="{{ test_es_password }}" \
-            kibana_password="{{ test_kibana_password }}"
-      no_log: true
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/elasticsearch
+        secret_data:
+          password: "{{ test_es_password }}"
+          kibana_password: "{{ test_kibana_password }}"
 
-    - name: "SEED: Elasticsearch credentials written to Vault KV"
-      ansible.builtin.debug:
-        msg: "Seeded auth, postgres, elasticsearch secrets into Vault KV"
-
-    # ================================================================
-    # Phase 2: Deploy chart with ELK enabled
-    # ================================================================
-
-    - name: Create schnappy namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
     - name: Write Helm values for ELK test
       ansible.builtin.copy:
@@ -141,66 +115,75 @@
           grafana:
             enabled: false
 
-    - name: Sync platform charts to VM
-      ansible.builtin.synchronize:
-        src: "{{ lookup('env', 'HOME') }}/src/platform/"
-        dest: /vagrant-platform/
-        delete: true
-      delegate_to: localhost
-      become: false
+    - name: Deploy schnappy-mesh (provides ServiceAccounts for ES/Kibana)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
 
-    - name: Deploy chart with ELK enabled
-      ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant-platform/helm \
-          --namespace {{ ns }} \
-          --create-namespace \
-          --values /tmp/schnappy-elk-test-values.yml \
-          --wait --timeout 600s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+    - name: Deploy chart with ELK enabled (no wait — k8s_info below handles readiness)
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-observability
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values_files:
+          - /tmp/schnappy-elk-test-values.yml
+        wait: false
       register: helm_result
 
     - name: Show pod status
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ ns }} -o wide
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ ns }}"
       register: pod_status
-      changed_when: false
 
     - name: Pod status
       ansible.builtin.debug:
-        msg: "{{ pod_status.stdout_lines }}"
+        msg: "{{ pod_status.resources | map(attribute='metadata.name') | list }}"
 
-    # ================================================================
-    # Phase 3: Verify Elasticsearch
-    # ================================================================
-
-    - name: Wait for Elasticsearch StatefulSet rollout
-      ansible.builtin.shell: |
-        kubectl rollout status statefulset/schnappy-elasticsearch -n {{ ns }} --timeout=300s
+    - name: Wait for Elasticsearch StatefulSet rollout (up to 30 min)
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: StatefulSet
+        name: schnappy-elasticsearch
+        namespace: "{{ ns }}"
       register: es_rollout
-      changed_when: false
+      retries: 180
+      delay: 10
+      until:
+        - es_rollout.resources | length > 0
+        - es_rollout.resources[0].status.readyReplicas | default(0) == es_rollout.resources[0].spec.replicas
 
     - name: Verify ExternalSecret synced for elasticsearch
-      ansible.builtin.shell: |
-        kubectl get externalsecret schnappy-elasticsearch -n {{ ns }} \
-          -o jsonpath='{.status.conditions[0].reason}'
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: external-secrets.io/v1
+        kind: ExternalSecret
+        name: schnappy-elasticsearch
+        namespace: "{{ ns }}"
       register: es_secret_sync
       retries: 12
       delay: 5
-      until: es_secret_sync.stdout == "SecretSynced"
-      changed_when: false
+      until:
+        - es_secret_sync.resources | length > 0
+        - (es_secret_sync.resources[0].status.conditions | default([{}]))[0].reason | default('') == "SecretSynced"
+
+    - name: Set ExternalSecret reason fact
+      ansible.builtin.set_fact:
+        es_secret_reason: "{{ (es_secret_sync.resources[0].status.conditions | default([{}]))[0].reason | default('') }}"
 
     - name: Wait for Elasticsearch to respond
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
-          curl -sf -u elastic:{{ test_es_password }} http://localhost:9200/_cluster/health?pretty
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "schnappy-elasticsearch-0"
+        command: curl -sf -u elastic:{{ test_es_password }} http://localhost:9200/_cluster/health?pretty
       register: es_health
       retries: 30
       delay: 10
       until: es_health.rc == 0
-      changed_when: false
 
-    - name: "ES cluster health"
+    - name: ES cluster health
       ansible.builtin.debug:
         msg: "{{ es_health.stdout_lines }}"
 
@@ -211,19 +194,22 @@
       register: es_noauth
       changed_when: false
 
-    - name: "ES auth check"
+    - name: ES auth check
       ansible.builtin.debug:
         msg: "{{ 'PASS — unauthenticated request rejected' if 'AUTH_REQUIRED' in es_noauth.stdout else 'FAIL — ES accessible without auth!' }}"
 
-    # ================================================================
-    # Phase 4: Verify Fluent-bit
-    # ================================================================
-
     - name: Wait for Fluent-bit DaemonSet ready
-      ansible.builtin.shell: |
-        kubectl rollout status daemonset/schnappy-fluentbit -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: DaemonSet
+        name: schnappy-fluentbit
+        namespace: "{{ ns }}"
       register: fb_rollout
-      changed_when: false
+      retries: 40
+      delay: 3
+      until:
+        - fb_rollout.resources | length > 0
+        - fb_rollout.resources[0].status.numberReady | default(0) == fb_rollout.resources[0].status.desiredNumberScheduled | default(-1)
 
     - name: Wait for logs to be shipped
       ansible.builtin.pause:
@@ -242,58 +228,52 @@
       changed_when: false
       failed_when: false
 
-    - name: "Fluent-bit: {{ fb_count.stdout | default('0') }} documents indexed"
+    - name: Fluent-bit ingestion
       ansible.builtin.debug:
-        msg: "{{ 'PASS — logs are flowing' if (fb_count.stdout | default('0') | int) > 0 else 'WARN — no logs yet (may need more time)' }}"
-
-    # ================================================================
-    # Phase 5: Verify Kibana
-    # ================================================================
+        msg: "{{ 'PASS — logs are flowing' if (fb_count.stdout | default('0') | int) > 0 else 'WARN — no logs yet (may need more time)' }} ({{ fb_count.stdout | default('0') }} docs)"
 
     - name: Wait for Kibana deployment rollout
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-kibana -n {{ ns }} --timeout=300s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: schnappy-kibana
+        namespace: "{{ ns }}"
       register: kb_rollout
-      changed_when: false
+      retries: 100
+      delay: 3
+      until:
+        - kb_rollout.resources | length > 0
+        - kb_rollout.resources[0].status.readyReplicas | default(0) == kb_rollout.resources[0].spec.replicas
+        - kb_rollout.resources[0].status.updatedReplicas | default(0) == kb_rollout.resources[0].spec.replicas
 
     - name: Check Kibana HTTP status
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-kibana -- \
-          curl -sf -o /dev/null -w '%{http_code}' http://localhost:5601/api/status
+        kubectl exec -n {{ ns }} deploy/schnappy-kibana -- curl -sf -o /dev/null -w '%{http_code}' http://localhost:5601/api/status
       register: kb_health
       retries: 24
       delay: 15
       until: kb_health.stdout | default('') == '200'
-      changed_when: false
       failed_when: false
 
-    - name: "Kibana: HTTP {{ kb_health.stdout | default('unreachable') }}"
+    - name: Kibana HTTP
       ansible.builtin.debug:
         msg: "{{ 'PASS — Kibana responding' if kb_health.stdout | default('') == '200' else 'WARN — Kibana not ready (HTTP ' + kb_health.stdout | default('N/A') + ')' }}"
 
-    # ================================================================
-    # Phase 6: Verify ILM policy
-    # ================================================================
-
     - name: Check ILM policy exists
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} schnappy-elasticsearch-0 -- \
-          curl -sf -u elastic:{{ test_es_password }} \
-            'http://localhost:9200/_ilm/policy/logs-30d-retention' 2>/dev/null
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "schnappy-elasticsearch-0"
+        command: curl -sf -u elastic:{{ test_es_password }}  'http://localhost:9200/_ilm/policy/logs-30d-retention' 2>/dev/null
       register: ilm_check
       retries: 12
       delay: 5
       until: ilm_check.rc == 0
-      changed_when: false
       failed_when: false
 
-    - name: "ILM policy: {{ 'exists' if ilm_check.rc == 0 else 'missing' }}"
+    - name: ILM policy
       ansible.builtin.debug:
-        msg: "ILM policy status: {{ 'exists' if ilm_check.rc == 0 else 'missing — ILM job may not have completed' }}"
-
-    # ================================================================
-    # Phase 7: Summary
-    # ================================================================
+        msg: "ILM policy: {{ 'exists' if ilm_check.rc == 0 else 'pending' }}"
 
     - name: Clean up values file
       ansible.builtin.file:
@@ -302,19 +282,14 @@
 
     - name: Set result facts
       ansible.builtin.set_fact:
-        es_pass: "{{ es_rollout.rc is defined and es_rollout.rc == 0 }}"
+        es_pass: "{{ not es_rollout.failed | default(false) }}"
         es_auth_pass: "{{ 'AUTH_REQUIRED' in es_noauth.stdout }}"
-        es_secret_pass: "{{ es_secret_sync.stdout == 'SecretSynced' }}"
-        fluentbit_pass: "{{ fb_rollout.rc is defined and fb_rollout.rc == 0 }}"
+        es_secret_pass: "{{ es_secret_reason == 'SecretSynced' }}"
+        fluentbit_pass: "{{ not fb_rollout.failed | default(false) }}"
         fluentbit_logs_pass: "{{ (fb_count.stdout | default('0') | int) > 0 }}"
         kb_pass: "{{ kb_health.stdout | default('') == '200' }}"
 
-    - name: Count passes
-      ansible.builtin.set_fact:
-        pass_count: "{{ [es_pass, es_auth_pass, es_secret_pass, fluentbit_pass, kb_pass] | select('equalto', true) | list | length }}"
-        total_checks: 5
-
-    - name: "TEST RESULT"
+    - name: TEST RESULT
       vars:
         all_pass: "{{ es_pass and es_auth_pass and es_secret_pass and fluentbit_pass and kb_pass }}"
       ansible.builtin.debug:

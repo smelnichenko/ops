@@ -190,32 +190,26 @@ tasks:
       - ./bootstrap.sh all
 
   deploy:full:
-    desc: Full deployment - kubeadm + bootstrap + forgejo + vault + argocd
+    desc: Full deployment - kubeadm + consul + pi services + patroni + vault + argocd
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
       - cd ../.. && ./bootstrap.sh all
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e @vars/vault.yml
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml -e @vars/pi-services.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
-      # ArgoCD now syncs all Tier 1 apps from Forgejo
+
   deploy:vault-pi:
-    desc: Setup Vault unseal Pi (transit engine + autounseal token)
+    desc: Deploy Pi Vault (Consul backend + Shamir + vault-unseal.service on both Pis)
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
-
-  deploy:vault:
-    desc: Deploy Vault HA on kubeadm (+ ESO + backups)
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-pi-runtime.yml
 
   deploy:keycloak-clients:
     desc: Configure Keycloak service account roles (k6-smoke PLAY role)
@@ -231,13 +225,6 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-gluster.yml
-
-  deploy:vault-consul:
-    desc: Migrate Vault from raft to Consul storage
-    dir: deploy/ansible
-    deps: [deploy:install]
-    cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/migrate-vault-consul.yml
 
   deploy:caddy:
     desc: Setup Caddy TLS reverse proxy for Pi-hosted services (git, auth, nexus)
@@ -331,28 +318,47 @@ tasks:
         -e "NVD_API_KEY=${NVD_API_KEY:-unused}"
         -e "PROMETHEUS_AUTH_TOKEN=${PROMETHEUS_AUTH_TOKEN:-unused}"
 
-  test:vault:
-    desc: Test Vault end-to-end in Vagrant
+  # ============== VAGRANT DEPLOY HELPERS (internal) ==============
+  # Shared deploy chain used by every k8s-cluster Vagrant test. Assumes
+  # VMs are already up (pi1 + pi2 + kubeadm); brings up the Pi data plane
+  # (consul → pi-services → patroni → vault-pi) and then the kubeadm
+  # cluster. Each test:FOO just re-uses this and adds its own assertion
+  # playbook on top — same two-phase shape as test:dual-pi-clean.
+  _vagrant:pi-stack:
+    internal: true
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up
-      - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
+  _vagrant:k8s-stack:
+    internal: true
+    deps: [_vagrant:pi-stack]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
+  # ============== K8S-CLUSTER TESTS ==============
   test:eso:
-    desc: Test ESO Vault secrets integration in Vagrant
+    desc: Test ESO ↔ Pi Vault secret sync (ClusterSecretStore + ExternalSecret)
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-eso.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-eso.yml
+
+  test:gateway:
+    desc: Test Istio Gateway + HTTPRoute routing (hostname/path/header/404)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-gateway.yml
 
   test:elk:
     desc: Test ELK stack in Vagrant
@@ -361,10 +367,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-elk.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-elk.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:keycloak:
     desc: Test Keycloak SSO in Vagrant
@@ -373,10 +377,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-keycloak.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-keycloak.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:k6-smoke:
     desc: Test k6 smoke tests + Prometheus remote write in Vagrant
@@ -385,10 +387,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-k6-smoke.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-k6-smoke.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:hyperfoil-reports:
     desc: Test Hyperfoil report persistence + Nginx serving in Vagrant
@@ -397,10 +397,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-hyperfoil-reports.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-hyperfoil-reports.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:grafana:
     desc: Test Grafana + Prometheus in Vagrant
@@ -409,10 +407,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-grafana.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-grafana.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:multi-env:
     desc: Test multi-environment (test + prod) isolation in Vagrant — full stack with ArgoCD
@@ -421,13 +417,10 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e install_scylla_manager=false
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml -e @vars/pi-services.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:kafka-scylla:
     desc: Test Kafka + ScyllaDB infrastructure in Vagrant
@@ -436,10 +429,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-kafka-scylla.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-kafka-scylla.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:sonarqube:
     desc: Test SonarQube in Vagrant
@@ -448,47 +439,53 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-sonarqube.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-
-  test:cicd:
-    desc: Test CI/CD pipeline with Forgejo registry in Vagrant
-    deps: [deploy:install]
-    cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up k3s
-      - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cicd.yml
-
-  test:woodpecker:
-    desc: Test Woodpecker CI deployment in Vagrant
-    deps: [deploy:install]
-    cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up k3s
-      - defer: vagrant halt
-      - cmd: ssh-keygen -f "$HOME/.ssh/known_hosts" -R 192.168.56.10 2>/dev/null; true
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-woodpecker.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-sonarqube.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:argocd:
     desc: Test Argo CD GitOps in Vagrant
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up k3s
+      - cmd: vagrant up
       - defer: vagrant halt
+      - task: _vagrant:k8s-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-argocd.yml
 
-  test:nexus:
-    desc: Test Nexus repository manager in Vagrant
+  test:cicd:
+    desc: Test CI/CD pipeline with Forgejo container registry in Vagrant (image push/pull via registry)
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up vault-pi
+      - cmd: vagrant up
       - defer: vagrant halt
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cicd.yml
+
+  test:woodpecker:
+    desc: Test Woodpecker CI pipeline execution in Vagrant (Forgejo + Woodpecker + Kubernetes backend)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-woodpecker.yml
+
+  test:nexus:
+    desc: Test Nexus HA (active-passive on pi1+pi2, Gluster-shared, Keepalived-controlled, ten arbiter)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      # Full Pi data-plane stack (consul → pi-services → patroni → vault-pi)
+      # needed because setup-gluster runs after consul, and keepalived's
+      # check_services.sh probes Forgejo/Keycloak/Patroni.
+      - task: _vagrant:pi-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-nexus.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-nexus.yml
 
   test:dr:
@@ -498,10 +495,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:failure-modes:
     desc: Test failure modes under load in Vagrant (pod kill, pool exhaustion, Kafka outage, memory pressure, rate limiting)
@@ -510,22 +505,8 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-failure-modes.yml
-
-  test:gateway:
-    desc: Test API Gateway deployment in Vagrant
-    deps: [deploy:install]
-    cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
-      - cmd: vagrant up
-      - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-gateway.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
 
   test:microservices:
     desc: Test full microservice deployment in Vagrant
@@ -534,14 +515,12 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-microservices.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-microservices.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
 
   deploy:apt-cache:
-    desc: Build apt-cacher-ng image and import to k3s
+    desc: Build apt-cacher-ng image and import to the cluster's containerd
     cmds:
       - docker build -t git.pmon.dev/schnappy/apt-cacher-ng:1.0 {{.SRC_DIR}}/platform/apt-cache/
       - docker save git.pmon.dev/schnappy/apt-cacher-ng:1.0 | ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'sudo ctr -n k8s.io images import -'
@@ -560,7 +539,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml -e @vars/pi-services.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
 
   deploy:woodpecker:
     desc: Deploy Woodpecker CI
@@ -570,7 +549,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/woodpecker.yml
 
   deploy:kubeadm:
-    desc: Install kubeadm cluster (replaces k3s)
+    desc: Install kubeadm cluster on ten
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
@@ -715,21 +694,28 @@ tasks:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - defer: vagrant halt
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e install_scylla_manager=false
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml -e @vars/pi-services.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml
 
   # ============== DUAL-PI HA TEST ==============
+  # Clean two-phase chain: deploy each service (idempotent, final-state) then
+  # assert. The test playbooks are pure verification — no imports, no deploys.
   test:dual-pi:
-    desc: Test dual-Pi HA (Consul, Patroni, GlusterFS, Keepalived, Vault, failover)
+    desc: Dual-Pi HA — deploy + assert (no destroy; fast iteration)
     deps: [deploy:install]
     cmds:
       - cmd: vagrant up
+      # deploy
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
+      # assert
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
@@ -740,19 +726,21 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
   test:dual-pi-clean:
-    desc: Full clean dual-Pi test (destroy + up + full stack + test-dual-pi + test-vault-unseal)
+    desc: Full clean dual-Pi test (destroy + up + deploy + assert)
     deps: [deploy:install]
-    dotenv: ['../../.env']
     cmds:
       - cmd: vagrant destroy -f
         ignore_error: true
       - cmd: vagrant up
-      # test-dual-pi imports setup-consul + setup-pi-services + setup-patroni.
-      # Run it first so consul.service exists when setup-vault-pi sets up
-      # vault (vault.service has Requires=consul.service).
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
+      # deploy (each idempotent, final-state)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/migrate-vault-consul.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
+      # assert
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dual-pi.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-unseal.yml
 
   # ============== VAGRANT TESTS (ALL) ==============
@@ -760,33 +748,29 @@ tasks:
     desc: Run all Vagrant integration tests sequentially
     deps: [deploy:install]
     cmds:
-      - echo "=== [1/14] test:vault ==="
-      - task: test:vault
-      - echo "=== [2/14] test:eso ==="
-      - task: test:eso
-      - echo "=== [3/14] test:elk ==="
+      - echo "=== [1/12] test:dual-pi-clean ==="
+      - task: test:dual-pi-clean
+      - echo "=== [2/12] test:elk ==="
       - task: test:elk
-      - echo "=== [4/14] test:grafana ==="
+      - echo "=== [3/12] test:grafana ==="
       - task: test:grafana
-      - echo "=== [5/14] test:kafka-scylla ==="
+      - echo "=== [4/12] test:kafka-scylla ==="
       - task: test:kafka-scylla
-      - echo "=== [6/14] test:sonarqube ==="
+      - echo "=== [5/12] test:sonarqube ==="
       - task: test:sonarqube
-      - echo "=== [7/14] test:dr ==="
+      - echo "=== [6/12] test:dr ==="
       - task: test:dr
-      - echo "=== [8/14] test:cicd ==="
+      - echo "=== [7/12] test:cicd ==="
       - task: test:cicd
-      - echo "=== [9/14] test:nexus ==="
+      - echo "=== [8/12] test:nexus ==="
       - task: test:nexus
-      - echo "=== [10/14] test:woodpecker ==="
+      - echo "=== [9/12] test:woodpecker ==="
       - task: test:woodpecker
-      - echo "=== [11/14] test:gateway ==="
-      - task: test:gateway
-      - echo "=== [12/14] test:microservices ==="
+      - echo "=== [10/12] test:microservices ==="
       - task: test:microservices
-      - echo "=== [13/14] test:argocd ==="
+      - echo "=== [11/12] test:argocd ==="
       - task: test:argocd
-      - echo "=== [14/14] test:keycloak ==="
+      - echo "=== [12/12] test:keycloak ==="
       - task: test:keycloak
       - echo ""
       - echo "=== All Vagrant tests complete ==="

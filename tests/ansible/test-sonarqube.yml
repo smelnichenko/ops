@@ -5,14 +5,20 @@
 # SonarQube web UI responds, and ExternalSecret syncs from Vault.
 #
 # Prerequisites:
-#   - vagrant up (k3s + vault-pi VMs)
+#   - vagrant up (kubeadm + pi1 + pi2 VMs)
 #   - setup-vault-pi.yml completed
-#   - setup-vault.yml completed (Vault + ESO deployed)
 #
 # Usage:
 #   cd deploy/ansible
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-sonarqube.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
 
 - name: Test SonarQube integration
   hosts: target
@@ -21,64 +27,28 @@
 
   vars:
     ns: schnappy
-    vault_ns: vault
     test_sonarqube_pg_password: "vagrant-test-sonarqube-pg-password"
     sonarqube_default_password: "admin"
 
   tasks:
-    # ================================================================
-    # Phase 1: Seed SonarQube credentials into Vault
-    # ================================================================
+    - name: Configure ESO ClusterSecretStore → Pi Vault
+      ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
 
-    - name: Get Vault root token from k8s secret
-      ansible.builtin.shell: |
-        kubectl get secret vault-root-token -n {{ vault_ns }} \
-          -o jsonpath='{.data.token}' | base64 -d
-      register: vault_token_result
-      changed_when: false
-      no_log: true
-
-    - name: Set Vault token fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ vault_token_result.stdout }}"
-      no_log: true
-
-    - name: Check if sonarqube secret exists in Vault
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv get secret/schnappy/sonarqube
-      register: sq_vault_check
-      changed_when: false
-      failed_when: false
-      no_log: true
-
-    - name: Seed sonarqube secret into Vault
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/sonarqube \
-            postgres_password="{{ test_sonarqube_pg_password }}" \
-            admin_password="placeholder" \
-            token="placeholder"
-      no_log: true
-      when: sq_vault_check.rc != 0
-
-    - name: "SEED: SonarQube credentials written to Vault KV"
-      ansible.builtin.debug:
-        msg: "Seeded sonarqube secret into Vault KV"
+    - name: Seed sonarqube secret
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/sonarqube
+        secret_data:
+          postgres_password: "{{ test_sonarqube_pg_password }}"
+          admin_password: "placeholder"
+          token: "placeholder"
 
     # ================================================================
     # Phase 2: Pre-pull images and deploy chart
     # ================================================================
 
-    - name: Create schnappy namespace
-      ansible.builtin.command: kubectl create namespace {{ ns }}
-      register: ns_result
-      changed_when: ns_result.rc == 0
-      failed_when: ns_result.rc != 0 and 'already exists' not in ns_result.stderr
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
     - name: Pre-pull SonarQube image
       ansible.builtin.shell: |
@@ -168,73 +138,95 @@
           grafana:
             enabled: false
 
-    - name: Sync platform charts to VM
-      ansible.builtin.synchronize:
-        src: "{{ lookup('env', 'HOME') }}/src/platform/"
-        dest: /vagrant-platform/
-        delete: true
-      delegate_to: localhost
-      become: false
+    - name: Deploy schnappy-mesh (ServiceAccounts for mesh-dependent pods)
+      ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
 
     - name: Deploy chart with SonarQube enabled
-      ansible.builtin.shell: |
-        helm upgrade --install schnappy /vagrant-platform/helm \
-          --namespace {{ ns }} \
-          --create-namespace \
-          --values /tmp/schnappy-sonarqube-test-values.yml \
-          --timeout 600s
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
+      kubernetes.core.helm:
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-sonarqube
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values_files:
+          - /tmp/schnappy-sonarqube-test-values.yml
+        timeout: 600s
+        kubeconfig: /etc/kubernetes/admin.conf
       register: helm_result
 
     - name: Show pod status
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ ns }} -o wide
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ ns }}"
+        kubeconfig: /etc/kubernetes/admin.conf
       register: pod_status
       changed_when: false
 
     - name: Pod status
       ansible.builtin.debug:
-        msg: "{{ pod_status.stdout_lines }}"
+        msg: "{{ pod_status.resources | map(attribute='metadata.name') | list }}"
 
     # ================================================================
     # Phase 3: Verify SonarQube PostgreSQL
     # ================================================================
 
     - name: Wait for SonarQube PostgreSQL StatefulSet rollout
-      ansible.builtin.shell: |
-        kubectl rollout status statefulset/schnappy-sonarqube-postgres -n {{ ns }} --timeout=180s
+      kubernetes.core.k8s_info:
+        kind: StatefulSet
+        name: schnappy-sonarqube-postgres
+        namespace: "{{ ns }}"
+        kubeconfig: /etc/kubernetes/admin.conf
       register: sq_pg_rollout
+      retries: 36
+      delay: 5
+      until:
+        - sq_pg_rollout.resources | length > 0
+        - sq_pg_rollout.resources[0].status.readyReplicas | default(0) == sq_pg_rollout.resources[0].spec.replicas
       changed_when: false
 
     - name: Verify ExternalSecret synced for sonarqube
-      ansible.builtin.shell: |
-        kubectl get externalsecret schnappy-sonarqube -n {{ ns }} \
-          -o jsonpath='{.status.conditions[0].reason}'
+      kubernetes.core.k8s_info:
+        api_version: external-secrets.io/v1
+        kind: ExternalSecret
+        name: schnappy-sonarqube
+        namespace: "{{ ns }}"
+        kubeconfig: /etc/kubernetes/admin.conf
       register: sq_secret_sync
       retries: 12
       delay: 5
-      until: sq_secret_sync.stdout == "SecretSynced"
+      until:
+        - sq_secret_sync.resources | length > 0
+        - sq_secret_sync.resources[0].status.conditions | default([]) | length > 0
+        - sq_secret_sync.resources[0].status.conditions[0].reason == "SecretSynced"
       changed_when: false
 
     - name: Verify PostgreSQL is accepting connections
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} schnappy-sonarqube-postgres-0 -- \
-          pg_isready -U sonarqube
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "schnappy-sonarqube-postgres-0"
+        command: pg_isready -U sonarqube
       register: sq_pg_ready
       retries: 12
       delay: 5
       until: sq_pg_ready.rc == 0
-      changed_when: false
 
     # ================================================================
     # Phase 4: Verify SonarQube application
     # ================================================================
 
     - name: Wait for SonarQube deployment rollout
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-sonarqube -n {{ ns }} --timeout=600s
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: schnappy-sonarqube
+        namespace: "{{ ns }}"
+        kubeconfig: /etc/kubernetes/admin.conf
       register: sq_rollout
+      retries: 120
+      delay: 5
+      until:
+        - sq_rollout.resources | length > 0
+        - sq_rollout.resources[0].status.readyReplicas | default(0) == sq_rollout.resources[0].spec.replicas
+        - sq_rollout.resources[0].status.updatedReplicas | default(0) == sq_rollout.resources[0].spec.replicas
       changed_when: false
       failed_when: false
 
@@ -243,38 +235,60 @@
         kubectl logs -n {{ ns }} -l app.kubernetes.io/component=sonarqube --tail=50
       register: sq_logs
       changed_when: false
-      when: sq_rollout.rc is defined and sq_rollout.rc != 0
+      when: sq_rollout.failed | default(false)
 
     - name: SonarQube logs (on failure)
       ansible.builtin.debug:
         msg: "{{ sq_logs.stdout_lines }}"
       when: sq_logs is defined and sq_logs.stdout_lines is defined
 
+    - name: Resolve SonarQube pod name (reused for all k8s_exec calls below)
+      # Chart labels pods with app.kubernetes.io/name=schnappy +
+      # app.kubernetes.io/component=sonarqube. Filter by component.
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/component=sonarqube"
+      register: _sq_pods
+      retries: 30
+      delay: 5
+      until: (_sq_pods.resources | default([]) | length) > 0
+
+    - name: Set sonarqube_pod fact
+      ansible.builtin.set_fact:
+        sonarqube_pod: "{{ _sq_pods.resources[0].metadata.name }}"
+
     - name: Wait for SonarQube to be UP
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf http://localhost:9000/api/system/status 2>/dev/null | \
-          python3 -c "import sys,json; print(json.load(sys.stdin).get('status', 'UNKNOWN'))"
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: curl -sf http://localhost:9000/api/system/status
       register: sq_status
       retries: 40
       delay: 15
-      until: sq_status.stdout == "UP"
-      changed_when: false
+      until: sq_status.rc == 0 and (sq_status.stdout | from_json).status == 'UP'
       failed_when: false
 
-    - name: "SonarQube status: {{ sq_status.stdout | default('UNKNOWN') }}"
+    - name: "SonarQube status"
       ansible.builtin.debug:
-        msg: "{{ 'PASS — SonarQube is UP' if sq_status.stdout == 'UP' else 'WARN — SonarQube status: ' + sq_status.stdout | default('UNKNOWN') }}"
+        msg: >-
+          {{ 'PASS — SonarQube is UP'
+             if (sq_status.stdout is defined and sq_status.stdout | length > 0 and (sq_status.stdout | from_json).status == 'UP')
+             else 'WARN — SonarQube not UP' }}
 
     - name: Verify SonarQube web UI responds
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -o /dev/null -w '%{http_code}' http://localhost:9000/
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: curl -sf -o /dev/null -w '%{http_code}' http://localhost:9000/
       register: sq_http
       retries: 6
       delay: 10
       until: sq_http.stdout | default('') == '200'
-      changed_when: false
       failed_when: false
 
     # ================================================================
@@ -282,33 +296,41 @@
     # ================================================================
 
     - name: Check if admin password is still default
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "admin:{{ sonarqube_default_password }}" \
-          http://localhost:9000/api/authentication/validate
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: curl -sf -u admin:{{ sonarqube_default_password }} http://localhost:9000/api/authentication/validate
       register: sq_default_auth
-      changed_when: false
       failed_when: false
 
-    - name: Fetch admin password from Vault (if default no longer works)
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv get -field=admin_password secret/schnappy/sonarqube
-      register: sq_vault_admin_pw
+    - name: Fetch admin password from Pi Vault (if default no longer works)
+      ansible.builtin.uri:
+        url: "https://{{ hostvars['pi1']['ansible_host'] }}:8200/v1/secret/data/schnappy/sonarqube"
+        method: GET
+        validate_certs: false
+        headers:
+          X-Vault-Token: "{{ hostvars['pi1']['vault_root_token'] }}"
+        status_code: [200, 404]
+      register: sq_vault_admin_pw_resp
       changed_when: false
-      failed_when: false
+      no_log: true
+      when: "'true' not in sq_default_auth.stdout | default('')"
+
+    - name: Set admin password from Vault response
+      ansible.builtin.set_fact:
+        sq_vault_admin_pw:
+          stdout: "{{ sq_vault_admin_pw_resp.json.data.data.admin_password | default('') }}"
       no_log: true
       when: "'true' not in sq_default_auth.stdout | default('')"
 
     - name: Validate Vault admin password
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "admin:{{ sq_vault_admin_pw.stdout }}" \
-          http://localhost:9000/api/authentication/validate
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: curl -sf -u admin:{{ sq_vault_admin_pw.stdout }} http://localhost:9000/api/authentication/validate
       register: sq_vault_auth
-      changed_when: false
       failed_when: false
       no_log: true
       when: sq_vault_admin_pw.stdout | default('') not in ['', 'placeholder']
@@ -328,13 +350,16 @@
       when: sq_admin_changed | bool
 
     - name: Change admin password from default
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "admin:{{ sonarqube_default_password }}" \
-          -X POST "http://localhost:9000/api/users/change_password" \
-          --data-urlencode "login=admin" \
-          --data-urlencode "previousPassword={{ sonarqube_default_password }}" \
-          --data-urlencode "password={{ sonarqube_admin_password }}"
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: >-
+          curl -sf -u admin:{{ sonarqube_default_password }}
+          -X POST http://localhost:9000/api/users/change_password
+          --data-urlencode login=admin
+          --data-urlencode previousPassword={{ sonarqube_default_password }}
+          --data-urlencode password={{ sonarqube_admin_password }}
       no_log: true
       when: sq_admin_changed | bool
 
@@ -350,12 +375,15 @@
       when: sq_admin_changed | bool
 
     - name: Generate API token for CI
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "admin:{{ sq_api_password }}" \
-          -X POST "http://localhost:9000/api/user_tokens/generate" \
-          -d "name=ci-token" \
-          -d "type=GLOBAL_ANALYSIS_TOKEN"
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: >-
+          curl -sf -u admin:{{ sq_api_password }}
+          -X POST http://localhost:9000/api/user_tokens/generate
+          -d name=ci-token
+          -d type=GLOBAL_ANALYSIS_TOKEN
       register: sq_token_result
       no_log: true
       when: sq_admin_changed | bool
@@ -366,16 +394,14 @@
       no_log: true
       when: sq_admin_changed | bool and sq_token_result.rc == 0
 
-    - name: Seed sonarqube credentials into Vault
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_root_token }}" \
-          vault kv put secret/schnappy/sonarqube \
-            postgres_password="{{ test_sonarqube_pg_password }}" \
-            admin_password="{{ sonarqube_admin_password }}" \
-            token="{{ sonarqube_token | default('') }}"
-      no_log: true
+    - name: Seed sonarqube credentials into Pi Vault
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/sonarqube
+        secret_data:
+          postgres_password: "{{ test_sonarqube_pg_password }}"
+          admin_password: "{{ sonarqube_admin_password }}"
+          token: "{{ sonarqube_token | default('') }}"
       when: sq_admin_changed | bool
 
     - name: "CONFIGURE: Credentials seeded to Vault"
@@ -393,10 +419,11 @@
       no_log: true
 
     - name: Check if custom quality gate exists
-      ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualitygates/show?name=Monitor"
+      kubernetes.core.k8s_exec:
+        kubeconfig: /etc/kubernetes/admin.conf
+        namespace: "{{ ns }}"
+        pod: "{{ sonarqube_pod }}"
+        command: curl -sf -u {{ sq_auth }} http://localhost:9000/api/qualitygates/show?name=Monitor
       register: sq_qg_check
       changed_when: false
       failed_when: false
@@ -404,20 +431,14 @@
 
     - name: Create custom quality gate
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/qualitygates/create" \
-          -d "name=Monitor"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/qualitygates/create"  -d "name=Monitor"
       no_log: true
       when: sq_qg_check.rc != 0
 
     - name: Get existing quality gate conditions
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualitygates/show?name=Monitor"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualitygates/show?name=Monitor"
       register: sq_qg_conditions
-      changed_when: false
       no_log: true
 
     - name: Parse existing condition metrics
@@ -458,13 +479,7 @@
 
     - name: Add quality gate conditions
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/qualitygates/create_condition" \
-          -d "gateName=Monitor" \
-          -d "metric={{ item.metric }}" \
-          -d "op={{ item.op }}" \
-          -d "error={{ item.error }}"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/qualitygates/create_condition"  -d "gateName=Monitor"  -d "metric={{ item.metric }}"  -d "op={{ item.op }}"  -d "error={{ item.error }}"
       loop: "{{ sq_qg_desired_conditions }}"
       when: item.metric not in sq_existing_metrics
       no_log: true
@@ -472,10 +487,7 @@
 
     - name: Set Monitor quality gate as default
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/qualitygates/set_as_default" \
-          -d "name=Monitor"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/qualitygates/set_as_default"  -d "name=Monitor"
       no_log: true
 
     # ================================================================
@@ -484,11 +496,8 @@
 
     - name: Check if Monitor Java quality profile exists
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
       register: sq_java_profile
-      changed_when: false
       failed_when: false
       no_log: true
 
@@ -498,11 +507,8 @@
 
     - name: Get Sonar way Java profile key
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=java"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=java"
       register: sq_java_profile_sonarway
-      changed_when: false
       no_log: true
       when: not sq_java_profile_exists | bool
 
@@ -518,11 +524,8 @@
 
     - name: Get Monitor Java profile key
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=java"
       register: sq_java_monitor_profile
-      changed_when: false
       no_log: true
 
     - name: Set cognitive complexity threshold to 15
@@ -537,21 +540,14 @@
 
     - name: Set Monitor as default Java profile
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/qualityprofiles/set_default" \
-          -d "qualityProfile=Monitor" \
-          -d "language=java"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/qualityprofiles/set_default"  -d "qualityProfile=Monitor"  -d "language=java"
       no_log: true
 
     # TypeScript profile
     - name: Check if Monitor TypeScript quality profile exists
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
       register: sq_ts_profile
-      changed_when: false
       failed_when: false
       no_log: true
 
@@ -561,11 +557,8 @@
 
     - name: Get Sonar way TypeScript profile key
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=ts"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Sonar%20way&language=ts"
       register: sq_ts_profile_sonarway
-      changed_when: false
       no_log: true
       when: not sq_ts_profile_exists | bool
 
@@ -581,11 +574,8 @@
 
     - name: Get Monitor TypeScript profile key
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  "http://localhost:9000/api/qualityprofiles/search?qualityProfile=Monitor&language=ts"
       register: sq_ts_monitor_profile
-      changed_when: false
       no_log: true
 
     - name: Set TS cognitive complexity threshold to 15
@@ -600,11 +590,7 @@
 
     - name: Set Monitor as default TypeScript profile
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/qualityprofiles/set_default" \
-          -d "qualityProfile=Monitor" \
-          -d "language=ts"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/qualityprofiles/set_default"  -d "qualityProfile=Monitor"  -d "language=ts"
       no_log: true
 
     - name: "CONFIGURE: Quality gate and profiles"
@@ -640,12 +626,7 @@
 
     - name: Create SonarQube projects
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/projects/create" \
-          -d "name={{ item.name }}" \
-          -d "project={{ item.key }}" \
-          -d "mainBranch=master"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/projects/create"  -d "name={{ item.name }}"  -d "project={{ item.key }}"  -d "mainBranch=master"
       loop: "{{ sq_projects }}"
       loop_control:
         label: "{{ item.key }}"
@@ -655,11 +636,7 @@
 
     - name: Set quality gate for each project
       ansible.builtin.shell: |
-        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- \
-          curl -sf -u "{{ sq_auth }}" \
-          -X POST "http://localhost:9000/api/qualitygates/select" \
-          -d "projectKey={{ item.key }}" \
-          -d "gateName=Monitor"
+        kubectl exec -n {{ ns }} deploy/schnappy-sonarqube -- curl -sf -u "{{ sq_auth }}"  -X POST "http://localhost:9000/api/qualitygates/select"  -d "projectKey={{ item.key }}"  -d "gateName=Monitor"
       loop: "{{ sq_projects }}"
       loop_control:
         label: "{{ item.key }}"
@@ -702,9 +679,9 @@
 
     - name: Set result facts
       ansible.builtin.set_fact:
-        sq_pg_pass: "{{ sq_pg_rollout.rc is defined and sq_pg_rollout.rc == 0 }}"
-        sq_secret_pass: "{{ sq_secret_sync.stdout == 'SecretSynced' }}"
-        sq_deploy_pass: "{{ sq_rollout.rc is defined and sq_rollout.rc == 0 }}"
+        sq_pg_pass: "{{ not (sq_pg_rollout.failed | default(false)) }}"
+        sq_secret_pass: "{{ not (sq_secret_sync.failed | default(false)) }}"
+        sq_deploy_pass: "{{ not (sq_rollout.failed | default(false)) }}"
         sq_up_pass: "{{ sq_status.stdout | default('') == 'UP' }}"
         sq_http_pass: "{{ sq_http.stdout | default('') == '200' }}"
         sq_admin_pass: "{{ sq_admin_changed | bool or ('true' not in sq_default_auth.stdout | default('')) }}"

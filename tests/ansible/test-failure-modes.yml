@@ -13,6 +13,13 @@
 # Suite 4: Memory pressure
 # Suite 5: Rate limiting under load
 
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/fetch-pi-vault-token.yml
+
 - name: Failure Mode Tests
   hosts: target
   become: true
@@ -20,8 +27,7 @@
 
   vars:
     ns: schnappy
-    app_url: http://localhost
-    kc_admin_password: "vagrant-test-kc-admin!!"
+    # keycloak_admin_password comes from inventory.
     test_email: fm-test@test.com
     test_password: fm-test-pass-12345
     k6_duration: "90s"
@@ -32,11 +38,13 @@
     # Prerequisites: Deploy the app
     # ================================================================
 
-    - name: Verify k3s is running
+    - name: Verify k8s is running
       ansible.builtin.command: kubectl get nodes
       changed_when: false
 
-    - name: Deploy app
+    - ansible.builtin.import_tasks: tasks/setup-istio-gateway.yml
+
+    - name: Deploy app (publishes app_url via vagrant-gateway NodePort)
       ansible.builtin.include_tasks: tasks/deploy-app.yml
 
     - name: Create test user and get token
@@ -114,16 +122,32 @@
         seconds: 15
 
     - name: "S1: Kill app pod"
-      ansible.builtin.shell: |
-        kubectl delete pod -l app.kubernetes.io/component=app -n {{ ns }} --grace-period=0 --force
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: absent
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/component=monitor"
+        delete_options:
+          gracePeriodSeconds: 0
+          propagationPolicy: Background
 
     - name: "S1: Wait for new pod to be ready"
-      ansible.builtin.shell: |
-        kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=app -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
       register: pod_recovery
-      retries: 3
+      retries: 24
       delay: 5
-      until: pod_recovery.rc == 0
+      until:
+        - pod_recovery.resources | length > 0
+        - pod_recovery.resources[0].status.readyReplicas | default(0) == pod_recovery.resources[0].spec.replicas
+        - pod_recovery.resources[0].status.updatedReplicas | default(0) == pod_recovery.resources[0].spec.replicas
 
     - name: "S1: Wait for k6 to finish"
       ansible.builtin.shell: |
@@ -163,8 +187,19 @@
           SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE=3
 
     - name: "S2: Wait for rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
+      register: s2_rollout
+      retries: 24
+      delay: 5
+      until:
+        - s2_rollout.resources | length > 0
+        - s2_rollout.resources[0].status.readyReplicas | default(0) == s2_rollout.resources[0].spec.replicas
+        - s2_rollout.resources[0].status.updatedReplicas | default(0) == s2_rollout.resources[0].spec.replicas
 
     - name: "S2: Wait for app healthy"
       ansible.builtin.uri:
@@ -200,8 +235,19 @@
           SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE-
 
     - name: "S2: Wait for rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
+      register: s2_restore_rollout
+      retries: 24
+      delay: 5
+      until:
+        - s2_restore_rollout.resources | length > 0
+        - s2_restore_rollout.resources[0].status.readyReplicas | default(0) == s2_restore_rollout.resources[0].spec.replicas
+        - s2_restore_rollout.resources[0].status.updatedReplicas | default(0) == s2_restore_rollout.resources[0].spec.replicas
 
     - name: "=== Suite 2 Complete ==="
       ansible.builtin.debug:
@@ -234,8 +280,13 @@
             seconds: 10
 
         - name: "S3: Scale Kafka to 0"
-          ansible.builtin.shell: |
-            kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=0
+          kubernetes.core.k8s_scale:
+            kubeconfig: /etc/kubernetes/admin.conf
+            api_version: apps/v1
+            kind: StatefulSet
+            name: schnappy-kafka
+            namespace: "{{ ns }}"
+            replicas: 0
 
         - name: "S3: Verify health endpoint still responds (Kafka down)"
           ansible.builtin.uri:
@@ -260,15 +311,27 @@
             seconds: 30
 
         - name: "S3: Restore Kafka"
-          ansible.builtin.shell: |
-            kubectl scale statefulset schnappy-kafka -n {{ ns }} --replicas=1
+          kubernetes.core.k8s_scale:
+            kubeconfig: /etc/kubernetes/admin.conf
+            api_version: apps/v1
+            kind: StatefulSet
+            name: schnappy-kafka
+            namespace: "{{ ns }}"
+            replicas: 1
 
         - name: "S3: Wait for Kafka ready"
-          ansible.builtin.shell: |
-            kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=kafka -n {{ ns }} --timeout=180s
-          retries: 3
-          delay: 10
-          until: true
+          kubernetes.core.k8s_info:
+            kubeconfig: /etc/kubernetes/admin.conf
+            api_version: apps/v1
+            kind: StatefulSet
+            name: schnappy-kafka
+            namespace: "{{ ns }}"
+          register: s3_kafka_ready
+          retries: 36
+          delay: 5
+          until:
+            - s3_kafka_ready.resources | length > 0
+            - s3_kafka_ready.resources[0].status.readyReplicas | default(0) == s3_kafka_ready.resources[0].spec.replicas
 
         - name: "S3: Wait for k6 to finish"
           ansible.builtin.shell: |
@@ -299,8 +362,19 @@
           JAVA_OPTS="-Xmx256m -XX:+UseZGC"
 
     - name: "S4: Wait for rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
+      register: s4_rollout
+      retries: 24
+      delay: 5
+      until:
+        - s4_rollout.resources | length > 0
+        - s4_rollout.resources[0].status.readyReplicas | default(0) == s4_rollout.resources[0].spec.replicas
+        - s4_rollout.resources[0].status.updatedReplicas | default(0) == s4_rollout.resources[0].spec.replicas
 
     - name: "S4: Wait for app healthy"
       ansible.builtin.uri:
@@ -322,11 +396,21 @@
       failed_when: false
 
     - name: "S4: Check pod not OOMKilled"
-      ansible.builtin.shell: |
-        kubectl get pod -l app.kubernetes.io/component=app -n {{ ns }} \
-          -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.reason}'
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: v1
+        kind: Pod
+        namespace: "{{ ns }}"
+        label_selectors:
+          - "app.kubernetes.io/component=monitor"
       register: s4_oom
-      failed_when: "'OOMKilled' in s4_oom.stdout"
+      failed_when: >-
+        s4_oom.resources
+        | map(attribute='status.containerStatuses', default=[])
+        | flatten
+        | map(attribute='lastState.terminated.reason', default='')
+        | select('equalto', 'OOMKilled')
+        | list | length > 0
 
     - name: "S4: Restore heap"
       ansible.builtin.shell: |
@@ -334,8 +418,19 @@
           JAVA_OPTS="-Xmx1536m -XX:+UseZGC"
 
     - name: "S4: Wait for rollout"
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/schnappy-monitor -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: schnappy-monitor
+        namespace: "{{ ns }}"
+      register: s4_restore_rollout
+      retries: 24
+      delay: 5
+      until:
+        - s4_restore_rollout.resources | length > 0
+        - s4_restore_rollout.resources[0].status.readyReplicas | default(0) == s4_restore_rollout.resources[0].spec.replicas
+        - s4_restore_rollout.resources[0].status.updatedReplicas | default(0) == s4_restore_rollout.resources[0].spec.replicas
 
     - name: "=== Suite 4 Complete ==="
       ansible.builtin.debug:

@@ -1,27 +1,26 @@
-# Reusable tasks: Deploy app in Vagrant via Helm
+# Reusable tasks: Deploy app in Vagrant via Helm, attached to vagrant-gateway
 #
 # Required vars:
 #   ns: Kubernetes namespace (default: schnappy)
-#   kc_admin_password: Keycloak admin password
+#   keycloak_admin_password: Keycloak admin password (from inventory)
 #   helm_values_extra: Additional Helm values YAML (optional)
 #
-# Assumes:
-#   - k3s running, Vault initialized
+# Assumes (caller must import these first in a target-host play):
+#   - kubeadm running + ESO configured against Pi Vault
+#   - Pi Vault root token fact published on pi1 (via tasks/fetch-pi-vault-token.yml
+#     — run that from a prior hosts:pi1 play)
+#   - Istio vagrant-gateway deployed (via tasks/setup-istio-gateway.yml) —
+#     publishes node_ip + istio_gateway_nodeport facts
 #   - Container images built (monitor:local, monitor-frontend:local)
 #   - Gateway repo at /vagrant-gateway
+#
+# Publishes:
+#   app_url — http://schnappy-app.vagrant.test:<gateway NodePort>
 
-- name: Get Vault root token
-  ansible.builtin.shell: |
-    kubectl get secret vault-root-token -n vault \
-      -o jsonpath='{.data.token}' | base64 -d
-  register: vault_token_result
-  changed_when: false
-  no_log: true
-
-- name: Set Vault token fact
+- name: Compose app_url for this environment
   ansible.builtin.set_fact:
-    vault_root_token: "{{ vault_token_result.stdout }}"
-  no_log: true
+    app_hostname: "schnappy-app.vagrant.test"
+    app_url: "http://schnappy-app.vagrant.test:{{ istio_gateway_nodeport }}"
 
 - name: Create namespace
   ansible.builtin.command: kubectl create namespace {{ ns }}
@@ -51,10 +50,9 @@
           repository: monitor
           tag: local
           pullPolicy: Never
+        # ingress disabled — HTTPRoute below attaches to vagrant-gateway
         ingress:
-          enabled: true
-          className: traefik
-          host: ""
+          enabled: false
       gateway:
         enabled: true
         replicas: 1
@@ -118,36 +116,26 @@
         enabled: false
       {{ helm_values_extra | default('') | indent(6) }}
 
-- name: Seed postgres secret in Vault
-  ansible.builtin.shell: |
-    kubectl exec -n vault vault-0 -- env \
-      VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-      VAULT_TOKEN="{{ vault_root_token }}" \
-      vault kv put secret/schnappy/postgres \
-        database="monitor" \
-        username="postgres" \
-        password="vagrant-test-pw"
-  no_log: true
+- name: Seed postgres secret
+  ansible.builtin.include_tasks: seed-pi-vault-secret.yml
+  vars:
+    secret_path: schnappy/postgres
+    secret_data: { database: monitor, username: postgres, password: vagrant-test-pw }
 
-- name: Seed keycloak secret in Vault
-  ansible.builtin.shell: |
-    kubectl exec -n vault vault-0 -- env \
-      VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-      VAULT_TOKEN="{{ vault_root_token }}" \
-      vault kv put secret/schnappy/keycloak \
-        admin_password="{{ kc_admin_password }}" \
-        db_password="vagrant-test-kc-db" \
-        forgejo_client_secret="not-used"
-  no_log: true
+- name: Seed keycloak secret
+  ansible.builtin.include_tasks: seed-pi-vault-secret.yml
+  vars:
+    secret_path: schnappy/keycloak
+    secret_data:
+      admin_password: "{{ keycloak_admin_password }}"
+      db_password: vagrant-test-kc-db
+      forgejo_client_secret: not-used
 
-- name: Seed kafka secret in Vault (if needed)
-  ansible.builtin.shell: |
-    kubectl exec -n vault vault-0 -- env \
-      VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-      VAULT_TOKEN="{{ vault_root_token }}" \
-      vault kv put secret/schnappy/kafka \
-        password="vagrant-test-kafka"
-  no_log: true
+- name: Seed kafka secret (if needed)
+  ansible.builtin.include_tasks: seed-pi-vault-secret.yml
+  vars:
+    secret_path: schnappy/kafka
+    secret_data: { password: vagrant-test-kafka }
   when: deploy_kafka | default(false) | bool
 
 - name: Build gateway JAR
@@ -199,10 +187,19 @@
   environment:
     KUBECONFIG: /etc/kubernetes/admin.conf
 
+- name: Attach HTTPRoute schnappy-app → vagrant-gateway
+  ansible.builtin.include_tasks: create-httproute.yml
+  vars:
+    route_name: schnappy-app
+    route_ns: "{{ ns }}"
+    route_host: "{{ app_hostname }}"
+    route_service: schnappy-monitor
+    route_port: 8080
+
 - name: Wait for app to be ready
   ansible.builtin.shell: |
     for i in $(seq 1 60); do
-      READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=app \
+      READY=$(kubectl get pods -n {{ ns }} -l app.kubernetes.io/component=monitor \
         -o jsonpath='{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)
       if [ "$READY" = "true" ]; then
         echo "OK: App pod ready"
@@ -213,7 +210,7 @@
     done
     echo "FAIL: app not ready after 10 minutes"
     kubectl get pods -n {{ ns }} -o wide
-    kubectl logs -l app.kubernetes.io/component=app -n {{ ns }} --tail=20
+    kubectl logs -l app.kubernetes.io/component=monitor -n {{ ns }} --tail=20
     exit 1
   register: app_readiness
   changed_when: false

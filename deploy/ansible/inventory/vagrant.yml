@@ -12,10 +12,39 @@ all:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     # Override default IP (Vagrant NAT) with private network IP for service binding
     node_ip_override: "{{ ansible_host }}"
-    # localhost for initial setup (before Patroni). Test restarts services after Patroni.
+    # setup-pi-services runs BEFORE Patroni, so Forgejo/Keycloak talk to raw
+    # postgres at localhost:5432 during initial bring-up. setup-patroni's
+    # final play reconfigures them to localhost:5000 (HAProxy → leader) once
+    # the cluster is up.
     forgejo_db_host: "localhost:5432"
     keycloak_db_host: "localhost:5432"
     keepalived_vip: "192.168.56.50"
+
+    # ── Test-only credential fixtures ──────────────────────────────────────
+    # Production inventory maps each of these to a lookup('env', ...). All
+    # playbooks and tests reference these names directly — no per-play
+    # `| default('changeme', true)` wrappers.
+    forgejo_admin_user: "forgejo_admin"
+    forgejo_admin_password: "vagrant-forgejo-pw"
+    forgejo_admin_email: "admin@pmon.dev"
+    # Vagrant: Forgejo binds to a Pi static IP, no DNS / TLS in front.
+    # Override the hardcoded prod URLs from setup-pi-services.yml so the
+    # registry's WWW-Authenticate redirect points back at the same host.
+    forgejo_domain: "192.168.56.20"
+    forgejo_root_url: "http://192.168.56.20:3000/"
+    keycloak_admin_password: "vagrant-keycloak-pw"
+    postgres_admin_password: "vagrant-pg-pw"
+    postgres_replication_password: "vagrant-pg-repl-pw"
+    minio_root_user: "velero-admin"
+    minio_root_password: "vagrant-minio-pw"
+    nexus_admin_password: "vagrant-nexus-pw"
+    keepalived_vrrp_password: "k33p4l1v"
+    argocd_keycloak_client_secret: "vagrant-argocd-oidc-secret"
+
+    # scylla-manager is production-only (backup schedules for ScyllaDB). No
+    # vagrant test depends on it, and its helm install times out reliably
+    # in resource-constrained VMs. Skip.
+    install_scylla_manager: false
 
   hosts:
     target:

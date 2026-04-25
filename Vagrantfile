@@ -26,7 +26,7 @@ VAGRANTFILE_API_VERSION = "2"
 BASE_SCRIPT = <<-'BASESCRIPT'
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq curl unzip jq ufw openssl python3 git > /dev/null 2>&1
+  apt-get install -y -qq curl unzip zip jq ufw openssl python3 git > /dev/null 2>&1
 
   # UFW base rules
   ufw allow 22/tcp comment "SSH"
@@ -87,6 +87,36 @@ KUBEADM_SCRIPT = <<-'KUBESCRIPT'
   ufw allow 10250/tcp comment "Kubelet"
   ufw allow 10257/tcp comment "Controller Manager"
   ufw allow 10259/tcp comment "Scheduler"
+  ufw allow 30000:32767/tcp comment "NodePort range"
+
+  # Rsync target + build deps for tests that build monitor/gateway/site JARs
+  # (test:dr, test:microservices). Skipped cleanly if repos not mounted.
+  # Debian's apt nodejs is 18 — too old for the site's Vite. Pull Node 22
+  # from NodeSource so `npm run build` succeeds.
+  apt-get install -y -qq rsync ca-certificates curl gnupg > /dev/null 2>&1 || true
+  if ! command -v node >/dev/null || [ "$(node -v 2>/dev/null | cut -d. -f1)" != "v22" ]; then
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list
+    apt-get update -qq
+    apt-get install -y -qq nodejs > /dev/null 2>&1 || true
+  fi
+
+  # SDKMAN + Java 25 + Gradle (for source builds)
+  if [ ! -d /home/vagrant/.sdkman ]; then
+    sudo -iu vagrant bash <<'VSDK'
+set -e
+export HOME=/home/vagrant
+curl -fsSL "https://get.sdkman.io?rcupdate=false" | bash
+set +e
+source "$HOME/.sdkman/bin/sdkman-init.sh"
+yes | sdk install java 25.0.2-tem
+yes | sdk install gradle
+VSDK
+    [ -f /home/vagrant/.sdkman/bin/sdkman-init.sh ] && echo "SDKMAN ready" || echo "SDKMAN install FAILED"
+  fi
 
   echo "kubeadm node provisioned with IP $KUBEADM_IP"
 KUBESCRIPT
@@ -127,6 +157,20 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       v.memory = 20480
       v.cpus = 8
     end
+    # Source repos mounted for in-cluster image builds (test:dr, test:microservices).
+    # rsync (not NFS) to avoid cross-host mount races and keep the guest fs fast.
+    k.vm.synced_folder "../monitor",     "/vagrant-monitor",  type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/", "node_modules/"], create: true
+    k.vm.synced_folder "../api-gateway", "/vagrant-gateway",  type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"], create: true
+    k.vm.synced_folder "../site",        "/vagrant-site",     type: "rsync",
+      rsync__exclude: [".git/", "node_modules/", "dist/"], create: true
+    k.vm.synced_folder "../admin",       "/vagrant-admin",    type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"], create: true
+    k.vm.synced_folder "../chat",        "/vagrant-chat",     type: "rsync",
+      rsync__exclude: [".git/", "build/", ".gradle/"], create: true
+    k.vm.synced_folder "../platform",    "/vagrant-platform", type: "rsync",
+      rsync__exclude: [".git/"], create: true
     k.vm.provision "shell", inline: BASE_SCRIPT
     k.vm.provision "shell", inline: KUBEADM_SCRIPT, args: ["192.168.56.10"]
   end

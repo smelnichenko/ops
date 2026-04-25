@@ -1,23 +1,14 @@
 ---
-# Vagrant-specific overrides — pass with -e @vars/vault-vagrant.yml for local Vagrant testing.
-# These override the production values in vars/vault.yml.
+# Vagrant overrides for setup-vault-pi.yml.
+# Apply with: -e @vars/vault.yml -e @vars/vault-vagrant.yml
 #
-# Usage (both playbooks):
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault.yml \
-#     -e @vars/vault.yml -e @vars/vault-vagrant.yml -e @vars/vault-pi-runtime.yml
+# Usage:
+#   venv/bin/ansible-playbook -i inventory/vagrant.yml \
+#     playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
-vault_arch: "amd64"                   # x86_64 Vagrant VM (arm64 in production)
-vault_pi_ip: "192.168.56.20"          # Vagrant private network (192.168.11.4 in production)
-vault_pi_dns: "vault.schnappy.io"     # same as production (resolved via CoreDNS patch)
-vault_cluster_ip: "192.168.56.10"         # Vagrant kubeadm node IP (192.168.11.2 in production)
-vault_cluster_ipv6: ""                    # no IPv6 in Vagrant private network
-
-# UFW rules for vault-pi VM (allow from Vagrant private + NAT networks)
-vault_pi_ssh_allow_ipv4: "192.168.56.0/24"
+vault_arch: "amd64"                                # x86_64 VM
+vault_cluster_ip: "192.168.56.10"                  # kubeadm node (for UFW)
+vault_cluster_ipv6: ""                             # no IPv6 in Vagrant
+vault_pi_ssh_allow_ipv4: "192.168.56.0/24"         # Vagrant private net
 vault_pi_ssh_allow_ipv6: ""
-vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"  # Vagrant NAT (for 'vagrant ssh')
-
-# Store root token as k8s secret (for test playbooks to retrieve it)
-vault_store_root_token: true
+vault_pi_ssh_allow_extra_ipv4: "192.168.121.0/24"  # Vagrant NAT

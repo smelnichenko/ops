@@ -1,0 +1,100 @@
+---
+# Bootstrap ESO ↔ Pi Vault wiring for Vagrant tests.
+#
+# Production deploys a ClusterSecretStore via ArgoCD (cluster-config app)
+# using Kubernetes auth. In Vagrant we don't run ArgoCD, so this task
+# creates a functionally-equivalent ClusterSecretStore using Vault token
+# auth (simpler for tests; exercises the same ESO → Vault → k8s-Secret
+# pipe that production uses).
+#
+# Requires facts from tasks/fetch-pi-vault-token.yml (run first in a pi1 play).
+#
+# Publishes: ClusterSecretStore `vault-backend` pointing at Pi Vault.
+
+- name: Slurp Pi Vault CA cert (from pi1)
+  ansible.builtin.slurp:
+    src: /etc/vault.d/tls/vault-cert.pem
+  register: _pi_vault_ca
+  delegate_to: pi1
+  no_log: true
+
+- name: Set vault_pi_ca fact
+  ansible.builtin.set_fact:
+    vault_pi_ca: "{{ _pi_vault_ca.content | b64decode }}"
+    vault_pi_ip: "{{ hostvars['pi1']['ansible_host'] }}"
+  no_log: true
+
+- name: Ensure external-secrets namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: external-secrets
+
+- name: Create vault-pi-ca Secret (CA for ESO to trust Pi Vault's self-signed cert)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: vault-pi-ca
+        namespace: external-secrets
+      stringData:
+        ca.crt: "{{ vault_pi_ca }}"
+  no_log: true
+
+- name: Create vault-pi-token Secret (root token for ESO token auth)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: vault-pi-token
+        namespace: external-secrets
+      stringData:
+        token: "{{ hostvars['pi1']['vault_root_token'] }}"
+  no_log: true
+
+- name: Create ClusterSecretStore vault-backend
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: external-secrets.io/v1
+      kind: ClusterSecretStore
+      metadata:
+        name: vault-backend
+      spec:
+        provider:
+          vault:
+            server: "https://{{ vault_pi_ip }}:8200"
+            path: "secret"
+            version: "v2"
+            caProvider:
+              type: Secret
+              name: vault-pi-ca
+              namespace: external-secrets
+              key: ca.crt
+            auth:
+              tokenSecretRef:
+                name: vault-pi-token
+                namespace: external-secrets
+                key: token
+
+- name: Wait for ClusterSecretStore to become Ready
+  kubernetes.core.k8s_info:
+    api_version: external-secrets.io/v1
+    kind: ClusterSecretStore
+    name: vault-backend
+  register: _css
+  retries: 30
+  delay: 2
+  until: >-
+    (_css.resources | default([]) | length > 0) and
+    ((_css.resources[0].status.conditions | default([])
+      | selectattr('type', 'equalto', 'Ready')
+      | selectattr('status', 'equalto', 'True')
+      | list | length) > 0)
