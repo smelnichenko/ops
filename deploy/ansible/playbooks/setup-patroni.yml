@@ -433,7 +433,7 @@
     # are wiped. Forgejo migrates the schema on first connect, but no admin
     # user is recreated automatically. Re-create it here on the primary if
     # missing so downstream tests / GUI access works.
-    - name: List Forgejo users (post-Patroni)  # noqa: run-once[task]
+    - name: List Forgejo users (post-Patroni)
       ansible.builtin.shell: |
         set -eo pipefail
         su - forgejo -c "forgejo admin user list \

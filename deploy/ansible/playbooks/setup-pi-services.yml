@@ -481,7 +481,7 @@
       retries: 30
       delay: 5
 
-    - name: Create MinIO buckets (runs once; mc loads creds from env file)  # noqa: run-once[task]
+    - name: Create MinIO buckets (runs once; mc loads creds from env file)
       ansible.builtin.shell: |
         set -a; . /etc/minio/env; set +a
         HOME=/tmp mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"

@@ -56,7 +56,7 @@
     # Both Pis must share the same password — they all log into the
     # same Patroni role. Generate on pi1 (run_once), distribute to
     # the rest.
-    - name: Generate pgbouncer auth_user password on pi1 (idempotent)  # noqa: run-once[task]
+    - name: Generate pgbouncer auth_user password on pi1 (idempotent)
       ansible.builtin.shell: |
         set -eo pipefail
         if [ ! -f {{ auth_secret_dir }}/auth_user.password ]; then
@@ -68,7 +68,7 @@
       delegate_to: pi1
       changed_when: false
 
-    - name: Read auth_user password from pi1  # noqa: run-once[task]
+    - name: Read auth_user password from pi1
       ansible.builtin.slurp:
         src: "{{ auth_secret_dir }}/auth_user.password"
       register: _auth_user_pw_raw
@@ -90,7 +90,7 @@
         content: "{{ auth_user_password }}"
       no_log: true
 
-    - name: Provision auth_user role + lookup function in Patroni (run_once)  # noqa: run-once[task]
+    - name: Provision auth_user role + lookup function in Patroni (run_once)
       ansible.builtin.shell: |
         set -eo pipefail
         PGPASSWORD='{{ postgres_admin_password }}' psql -h 127.0.0.1 -p {{ haproxy_port }} -U postgres -d postgres <<'SQL'
