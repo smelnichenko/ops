@@ -130,7 +130,7 @@
     - name: Probe ClickHouse HTTP endpoint
       ansible.builtin.shell: |
         kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
-          wget -qO- --user=default --password={{ test_clickhouse_password }} \
+          wget -qO- --user=schnappy --password={{ test_clickhouse_password }} \
             'http://localhost:8123/?query=SELECT+1'
       register: ch_health
       retries: 30
@@ -141,7 +141,7 @@
     - name: Verify the logs.podlogs table exists
       ansible.builtin.shell: |
         kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
-          wget -qO- --user=default --password={{ test_clickhouse_password }} \
+          wget -qO- --user=schnappy --password={{ test_clickhouse_password }} \
             'http://localhost:8123/?query=EXISTS+TABLE+logs.podlogs'
       register: ch_table_exists
       changed_when: false
@@ -170,7 +170,7 @@
     - name: Wait for log lines to land
       ansible.builtin.shell: |
         kubectl exec -n {{ ns }} schnappy-clickhouse-0 -- \
-          wget -qO- --user=default --password={{ test_clickhouse_password }} \
+          wget -qO- --user=schnappy --password={{ test_clickhouse_password }} \
             'http://localhost:8123/?query=SELECT+count()+FROM+logs.podlogs'
       register: ch_count
       retries: 18
