@@ -1,14 +1,14 @@
 ---
 # Install vanilla Kubernetes via kubeadm on ten
 #
-# Replaces k3s with:
+# Components:
 # - kubeadm + kubelet + kubectl
-# - containerd (standalone)
-# - Calico CNI (nftables native NetworkPolicy)
+# - containerd (standalone) + nerdctl-full (buildkit for image builds)
+# - Cilium CNI (eBPF) + Istio sidecar mesh
 # - HAProxy (host-level, forwards 80/443 to Istio gateway NodePorts)
+# - Operators: cert-manager, ESO, Prometheus CRDs, CNPG, Strimzi, ScyllaDB
 #
 # Prerequisites:
-#   - k3s stopped
 #   - PVC data backed up at /mnt/backups/
 #   - Vault running on Pi (transit unseal)
 #
@@ -31,27 +31,7 @@
 
   tasks:
     # ================================================================
-    # Phase 1: Stop k3s
-    # ================================================================
-
-    - name: Stop and disable k3s  # noqa: ignore-errors
-      ansible.builtin.systemd:
-        name: k3s
-        state: stopped
-        enabled: false
-      ignore_errors: true
-
-    - name: Uninstall k3s  # noqa: ignore-errors command-instead-of-shell risky-shell-pipe no-changed-when
-      ansible.builtin.shell: /usr/local/bin/k3s-uninstall.sh
-      ignore_errors: true
-
-    - name: Clean stale nftables rules from k3s
-      ansible.builtin.shell: |
-        nft flush ruleset 2>/dev/null || true
-      changed_when: true
-
-    # ================================================================
-    # Phase 2: Install containerd
+    # Phase 1: Install containerd
     # ================================================================
 
     - name: Install containerd and dependencies
@@ -62,8 +42,35 @@
           - ca-certificates
           - curl
           - gnupg
+          # Python libs required by kubernetes.core.* Ansible modules
+          # (k8s / k8s_info / helm). Used throughout setup-kubeadm,
+          # setup-argocd, setup-velero, setup-woodpecker.
+          - python3-yaml
+          - python3-kubernetes
         state: present
         update_cache: true
+
+    - name: Check if nerdctl is installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/nerdctl
+      register: _nerdctl_stat
+
+    - name: Install nerdctl-full (CLI + buildkit + buildctl — used by test:cicd image build/push)
+      # nerdctl-full bundles buildkitd + buildctl (separate from the containerd
+      # apt package, which doesn't ship them). `nerdctl build` needs buildkitd;
+      # without it the build fails with "no buildkit host is available".
+      ansible.builtin.shell: |
+        set -e
+        ARCH=$(dpkg --print-architecture)
+        VERSION=2.0.3
+        curl -fsSL -o /tmp/nerdctl-full.tar.gz \
+          "https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
+        tar -C /usr/local -xzf /tmp/nerdctl-full.tar.gz
+        rm -f /tmp/nerdctl-full.tar.gz
+        systemctl daemon-reload
+        systemctl enable --now buildkit
+      when: not _nerdctl_stat.stat.exists
+      changed_when: true
 
     - name: Create containerd config directory
       ansible.builtin.file:
@@ -81,23 +88,33 @@
         regexp: 'SystemdCgroup = false'
         replace: 'SystemdCgroup = true'
 
-    - name: Configure containerd registry mirror for Forgejo
-      ansible.builtin.blockinfile:
+    - name: Set containerd CRI registry config_path (v2 plugin path)
+      # containerd v2.x's default config already has
+      #   [plugins.'io.containerd.cri.v1.images'.registry]
+      #     config_path = ''
+      # Edit it in place (don't append — duplicate table is a TOML error).
+      # Setting config_path makes kubelet → CRI read
+      # /etc/containerd/certs.d/<host>/hosts.toml so vagrant-test plain-HTTP
+      # registries (Forgejo on NodePort) actually work.
+      ansible.builtin.replace:
         path: /etc/containerd/config.toml
-        block: |
-          [plugins."io.containerd.grpc.v1.cri".registry.mirrors."git.pmon.dev"]
-            endpoint = ["https://git.pmon.dev"]
-        marker: "# {mark} FORGEJO REGISTRY"
-        insertafter: EOF
+        regexp: "^(\\s*)config_path = ''$"
+        replace: "\\1config_path = '/etc/containerd/certs.d'"
+
+    - name: Create /etc/containerd/certs.d
+      ansible.builtin.file:
+        path: /etc/containerd/certs.d
+        state: directory
+        mode: '0755'
 
     - name: Restart containerd
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: containerd
         state: restarted
         enabled: true
 
     # ================================================================
-    # Phase 3: Install kubeadm, kubelet, kubectl
+    # Phase 2: Install kubeadm, kubelet, kubectl
     # ================================================================
 
     - name: Add Kubernetes apt key  # noqa: command-instead-of-module risky-shell-pipe
@@ -134,7 +151,7 @@
         - kubectl
 
     # ================================================================
-    # Phase 4: Kernel prerequisites
+    # Phase 3: Kernel prerequisites
     # ================================================================
 
     - name: Load required kernel modules
@@ -163,7 +180,7 @@
       changed_when: true
 
     # ================================================================
-    # Phase 4b: Base firewall rules (survives CNI removal/crash)
+    # Phase 3b: Base firewall rules (survives CNI removal/crash)
     # ================================================================
 
     - name: Write base nftables config
@@ -193,13 +210,13 @@
           }
 
     - name: Enable and start nftables
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: nftables
         enabled: true
         state: started
 
     # ================================================================
-    # Phase 5: Initialize cluster
+    # Phase 4: Initialize cluster
     # ================================================================
 
     - name: Initialize kubeadm cluster
@@ -254,12 +271,12 @@
         replace: 'shutdownGracePeriodCriticalPods: 15s'
 
     - name: Restart kubelet for shutdown config
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: kubelet
         state: restarted
 
     # ================================================================
-    # Phase 6: Install kube-proxy with nftables
+    # Phase 5: Install kube-proxy with nftables
     # ================================================================
 
     - name: Install kube-proxy via kubeadm
@@ -283,7 +300,7 @@
       changed_when: true
 
     # ================================================================
-    # Phase 6b: Install Helm
+    # Phase 5b: Install Helm
     # ================================================================
 
     - name: Install Helm  # noqa: command-instead-of-module risky-shell-pipe
@@ -293,123 +310,246 @@
         creates: /usr/local/bin/helm
 
     # ================================================================
-    # Phase 7: Install Cilium CNI
+    # Phase 6: Install Cilium CNI
     # ================================================================
+
+    - name: Add Cilium Helm repo
+      kubernetes.core.helm_repository:
+        name: cilium
+        repo_url: https://helm.cilium.io/
 
     - name: Install Cilium via Helm
-      ansible.builtin.shell: |
-        helm repo add cilium https://helm.cilium.io/
-        helm upgrade --install cilium cilium/cilium \
-          --version {{ cilium_version }} \
-          --namespace kube-system \
-          --set cluster.name=kubernetes \
-          --set ipam.operator.clusterPoolIPv4PodCIDRList={{ pod_cidr }} \
-          --set k8sServiceHost={{ node_ip }} \
-          --set k8sServicePort=6443 \
-          --set kubeProxyReplacement=true \
-          --set routingMode=tunnel \
-          --set tunnelProtocol=vxlan \
-          --set operator.replicas=1 \
-          --set hubble.enabled=true \
-          --set hubble.relay.enabled=true \
-          --set hubble.ui.enabled=true \
-          --set cni.exclusive=false \
-          --wait --timeout 180s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: cilium
+        chart_ref: cilium/cilium
+        chart_version: "{{ cilium_version }}"
+        release_namespace: kube-system
+        values:
+          cluster:
+            name: kubernetes
+          ipam:
+            operator:
+              clusterPoolIPv4PodCIDRList: "{{ pod_cidr }}"
+          k8sServiceHost: "{{ node_ip }}"
+          k8sServicePort: 6443
+          kubeProxyReplacement: true
+          routingMode: tunnel
+          tunnelProtocol: vxlan
+          operator:
+            replicas: 1
+          hubble:
+            enabled: true
+            relay:
+              enabled: true
+            ui:
+              enabled: true
+          cni:
+            exclusive: false
+        wait: true
+        wait_timeout: 180s
 
     - name: Wait for Cilium pods
-      ansible.builtin.command:
-        cmd: kubectl wait --for=condition=ready pod -l k8s-app=cilium -n kube-system --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: kube-system
+        label_selectors:
+          - k8s-app=cilium
       register: cilium_wait
-      changed_when: false
-      retries: 6
+      retries: 12
       delay: 10
-      until: cilium_wait.rc == 0
+      until:
+        - cilium_wait.resources | length > 0
+        - cilium_wait.resources | map(attribute='status.conditions', default=[]) | map('selectattr', 'type', 'equalto', 'Ready') | map('selectattr', 'status', 'equalto', 'True') | map('list') | map('length') | min > 0
 
     # ================================================================
-    # Phase 7b: Install Istio service mesh
+    # Phase 6b: Install Istio service mesh
     # ================================================================
 
     - name: Add Istio Helm repo
-      ansible.builtin.shell: |
-        helm repo add istio https://istio-release.storage.googleapis.com/charts
-        helm repo update istio
-      changed_when: true
+      kubernetes.core.helm_repository:
+        name: istio
+        repo_url: https://istio-release.storage.googleapis.com/charts
 
     - name: Install Istio base (CRDs)
-      ansible.builtin.shell: |
-        helm upgrade --install istio-base istio/base \
-          --version {{ istio_version }} \
-          --namespace istio-system --create-namespace \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: istio-base
+        chart_ref: istio/base
+        chart_version: "{{ istio_version }}"
+        release_namespace: istio-system
+        create_namespace: true
+        wait: true
+        wait_timeout: 300s
 
     - name: Install Istiod (control plane)
-      ansible.builtin.shell: |
-        helm upgrade --install istiod istio/istiod \
-          --version {{ istio_version }} \
-          --namespace istio-system \
-          --set global.proxy.holdApplicationUntilProxyStarts=true \
-          --set meshConfig.accessLogFile=/dev/stdout \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: istiod
+        chart_ref: istio/istiod
+        chart_version: "{{ istio_version }}"
+        release_namespace: istio-system
+        values:
+          global:
+            proxy:
+              holdApplicationUntilProxyStarts: true
+          meshConfig:
+            accessLogFile: /dev/stdout
+        wait: true
+        wait_timeout: 300s
 
     - name: Install Istio CNI
-      ansible.builtin.shell: |
-        helm upgrade --install istio-cni istio/cni \
-          --version {{ istio_version }} \
-          --namespace istio-system \
-          --set cni.cniConfDir=/etc/cni/net.d \
-          --set cni.cniBinDir=/opt/cni/bin \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: istio-cni
+        chart_ref: istio/cni
+        chart_version: "{{ istio_version }}"
+        release_namespace: istio-system
+        values:
+          cni:
+            cniConfDir: /etc/cni/net.d
+            cniBinDir: /opt/cni/bin
+        wait: true
+        wait_timeout: 300s
 
     - name: Wait for Istiod
-      ansible.builtin.command:
-        cmd: kubectl wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=120s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: istio-system
+        label_selectors:
+          - app=istiod
+      register: istiod_wait
+      retries: 12
+      delay: 10
+      until:
+        - istiod_wait.resources | length > 0
+        - istiod_wait.resources | map(attribute='status.conditions', default=[]) | map('selectattr', 'type', 'equalto', 'Ready') | map('selectattr', 'status', 'equalto', 'True') | map('list') | map('length') | min > 0
 
     # ================================================================
-    # Phase 8: Install local-path-provisioner
+    # Phase 7: Install local-path-provisioner
     # ================================================================
+
+    - name: Add local-path-provisioner Helm repo
+      kubernetes.core.helm_repository:
+        name: local-path-provisioner
+        repo_url: https://charts.containeroo.ch
 
     - name: Install local-path-provisioner via Helm
-      ansible.builtin.shell: |
-        helm repo add local-path-provisioner https://charts.containeroo.ch
-        helm upgrade --install local-path-provisioner local-path-provisioner/local-path-provisioner \
-          --namespace local-path-storage --create-namespace \
-          --set storageClass.defaultClass=true \
-          --wait --timeout 300s
-      changed_when: true
+      # wait=false so vagrant cold-starts (image pull + CNI ready) don't blow
+      # past helm timeout; downstream wait below polls the deployment.
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: local-path-provisioner
+        chart_ref: local-path-provisioner/local-path-provisioner
+        release_namespace: local-path-storage
+        create_namespace: true
+        values:
+          storageClass:
+            defaultClass: true
+        wait: false
+
+    - name: Wait for local-path-provisioner deployment to be Ready (up to 15 min)
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: local-path-provisioner
+        namespace: local-path-storage
+      register: _lpp
+      retries: 90
+      delay: 10
+      until:
+        - _lpp.resources | default([]) | length > 0
+        - (_lpp.resources[0].status.readyReplicas | default(0)) >= 1
 
     # ================================================================
-    # Phase 9: Install metrics-server
+    # Phase 7b: PriorityClasses (production-aligned; tests reference them)
     # ================================================================
+
+    - name: Create PriorityClass infra-critical
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: scheduling.k8s.io/v1
+          kind: PriorityClass
+          metadata:
+            name: infra-critical
+          value: 1000000
+          preemptionPolicy: PreemptLowerPriority
+          description: "Infrastructure: cert-manager, external-secrets, operators"
+
+    - name: Create PriorityClass data-critical
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: scheduling.k8s.io/v1
+          kind: PriorityClass
+          metadata:
+            name: data-critical
+          value: 500000
+          preemptionPolicy: PreemptLowerPriority
+          description: "Data stores: PostgreSQL, Kafka, Redis, ScyllaDB, MinIO"
+
+    - name: Create PriorityClass app-default
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: scheduling.k8s.io/v1
+          kind: PriorityClass
+          metadata:
+            name: app-default
+          value: 100000
+          globalDefault: true
+          preemptionPolicy: PreemptLowerPriority
+          description: "Application workloads"
+
+    # ================================================================
+    # Phase 8: Install metrics-server
+    # ================================================================
+
+    - name: Add metrics-server Helm repo
+      kubernetes.core.helm_repository:
+        name: metrics-server
+        repo_url: https://kubernetes-sigs.github.io/metrics-server/
 
     - name: Install metrics-server
-      ansible.builtin.shell: |
-        helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
-        helm upgrade --install metrics-server metrics-server/metrics-server \
-          --namespace kube-system \
-          --set args="{--kubelet-insecure-tls}" \
-          --wait --timeout 60s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: metrics-server
+        chart_ref: metrics-server/metrics-server
+        release_namespace: kube-system
+        values:
+          args:
+            - --kubelet-insecure-tls
+        wait: true
+        wait_timeout: 60s
 
     # ================================================================
-    # Phase 10: Install cert-manager
+    # Phase 9: Install cert-manager
     # ================================================================
+
+    - name: Add Jetstack Helm repo
+      kubernetes.core.helm_repository:
+        name: jetstack
+        repo_url: https://charts.jetstack.io
 
     - name: Install cert-manager
-      ansible.builtin.shell: |
-        helm repo add jetstack https://charts.jetstack.io
-        helm upgrade --install cert-manager jetstack/cert-manager \
-          --namespace cert-manager --create-namespace \
-          --set crds.enabled=true \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: cert-manager
+        chart_ref: jetstack/cert-manager
+        release_namespace: cert-manager
+        create_namespace: true
+        values:
+          crds:
+            enabled: true
+        wait: true
+        wait_timeout: 300s
 
     # ================================================================
-    # Phase 11: Install Gateway API CRDs
+    # Phase 10: Install Gateway API CRDs
     # ================================================================
 
     - name: Install Gateway API CRDs
@@ -418,60 +558,122 @@
       changed_when: true
 
     # ================================================================
-    # Phase 12: Install ESO
+    # Phase 11: Install ESO
     # ================================================================
 
+    - name: Add External Secrets Helm repo
+      kubernetes.core.helm_repository:
+        name: external-secrets
+        repo_url: https://charts.external-secrets.io
+
     - name: Install External Secrets Operator
-      ansible.builtin.shell: |
-        helm repo add external-secrets https://charts.external-secrets.io
-        helm upgrade --install external-secrets external-secrets/external-secrets \
-          --namespace external-secrets --create-namespace \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: external-secrets
+        chart_ref: external-secrets/external-secrets
+        release_namespace: external-secrets
+        create_namespace: true
+        wait: true
+        wait_timeout: 300s
+
+    - name: Add Prometheus Operator CRDs Helm repo
+      kubernetes.core.helm_repository:
+        name: prometheus-community
+        repo_url: https://prometheus-community.github.io/helm-charts
+
+    # Install only the CRDs (PodMonitor, ServiceMonitor, Probe, etc.)
+    # so schnappy-observability's monitoring resources can be applied
+    # in tests. Production installs the full kube-prometheus-stack via
+    # ArgoCD; Vagrant tests just need the CRDs.
+    - name: Install Prometheus Operator CRDs
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: prometheus-operator-crds
+        chart_ref: prometheus-community/prometheus-operator-crds
+        release_namespace: monitoring
+        create_namespace: true
+        wait: true
+        wait_timeout: 300s
 
     # ================================================================
     # Phase 13: Install database/streaming operators
     # ================================================================
 
+    - name: Add CNPG Helm repo
+      kubernetes.core.helm_repository:
+        name: cnpg
+        repo_url: https://cloudnative-pg.github.io/charts
+
     - name: Install CNPG operator
-      ansible.builtin.shell: |
-        helm repo add cnpg https://cloudnative-pg.github.io/charts
-        helm upgrade --install cnpg cnpg/cloudnative-pg \
-          --version 0.28.0 \
-          --namespace cnpg-system --create-namespace \
-          --set resources.requests.cpu=50m \
-          --set resources.requests.memory=128Mi \
-          --set resources.limits.cpu=500m \
-          --set resources.limits.memory=256Mi \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: cnpg
+        chart_ref: cnpg/cloudnative-pg
+        chart_version: "0.28.0"
+        release_namespace: cnpg-system
+        create_namespace: true
+        values:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+        wait: true
+        wait_timeout: 300s
+
+    - name: Add Strimzi Helm repo
+      kubernetes.core.helm_repository:
+        name: strimzi
+        repo_url: https://strimzi.io/charts/
 
     - name: Install Strimzi operator
-      ansible.builtin.shell: |
-        helm repo add strimzi https://strimzi.io/charts/
-        helm upgrade --install strimzi strimzi/strimzi-kafka-operator \
-          --version 0.51.0 \
-          --namespace strimzi --create-namespace \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: strimzi
+        chart_ref: strimzi/strimzi-kafka-operator
+        chart_version: "0.51.0"
+        release_namespace: strimzi
+        create_namespace: true
+        values:
+          # Watch all namespaces — by default the operator watches only
+          # its own install namespace, which breaks any chart that
+          # deploys a Kafka CR outside `strimzi` (e.g. `schnappy` in
+          # the vagrant tests and in production).
+          watchAnyNamespace: true
+        wait: true
+        wait_timeout: 300s
+
+    - name: Add ScyllaDB operator Helm repo
+      kubernetes.core.helm_repository:
+        name: scylla-operator
+        repo_url: https://scylla-operator-charts.storage.googleapis.com/stable
 
     - name: Install ScyllaDB operator
-      ansible.builtin.shell: |
-        helm repo add scylla-operator https://scylla-operator-charts.storage.googleapis.com/stable
-        helm upgrade --install scylla-operator scylla-operator/scylla-operator \
-          --version 1.20.2 \
-          --namespace scylla-operator --create-namespace \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: scylla-operator
+        chart_ref: scylla-operator/scylla-operator
+        chart_version: "1.20.2"
+        release_namespace: scylla-operator
+        create_namespace: true
+        wait: true
+        wait_timeout: 300s
 
     - name: Install ScyllaDB Manager
-      ansible.builtin.shell: |
-        helm upgrade --install scylla-manager scylla-operator/scylla-manager \
-          --version 1.20.2 \
-          --namespace scylla-manager --create-namespace \
-          --set scylla.developerMode=true \
-          --wait --timeout 300s
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: scylla-manager
+        chart_ref: scylla-operator/scylla-manager
+        chart_version: "1.20.2"
+        release_namespace: scylla-manager
+        create_namespace: true
+        values:
+          scylla:
+            developerMode: true
+        wait: true
+        wait_timeout: 15m
       when: install_scylla_manager | default(true) | bool
 
     # ================================================================
@@ -497,6 +699,6 @@
             - Operators: CNPG, Strimzi, ScyllaDB
             - StorageClass: local-path
           Next steps:
-            1. Install Vault (setup-vault-pi.yml + setup-vault.yml)
+            1. Install Pi Vault (setup-vault-pi.yml) — Consul backend on both Pis
             2. Install ArgoCD (setup-argocd.yml)
             3. Seed secrets (deploy:seed-secrets)

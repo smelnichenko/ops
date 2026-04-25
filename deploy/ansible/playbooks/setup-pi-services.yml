@@ -23,15 +23,11 @@
     pi_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
-    pi_postgres_password: "{{ pi_pg_pw | default(kc_db_pw) | default('changeme') }}"
-    forgejo_db_password: "{{ pi_postgres_password }}"
-    forgejo_admin_user: forgejo_admin
-    forgejo_admin_password: "{{ forgejo_admin_pw | default('changeme') }}"
-    forgejo_admin_email: "{{ forgejo_admin_mail | default('admin@pmon.dev') }}"
-    keycloak_admin_password: "{{ kc_admin_pw | default('changeme') }}"
-    keycloak_db_password: "{{ pi_postgres_password }}"
-    minio_root_user: "{{ minio_user | default('velero-admin') }}"
-    minio_root_password: "{{ minio_password | default('changeme') }}"
+    # Credentials come from inventory (vagrant.yml: test fixtures;
+    # production.yml: lookup('env', ...)). Names map 1:1 with the
+    # inventory vars — no per-play defaults.
+    forgejo_db_password: "{{ postgres_admin_password }}"
+    keycloak_db_password: "{{ postgres_admin_password }}"
 
   tasks:
     # ================================================================
@@ -70,20 +66,47 @@
         - { port: "8200", name: "Vault" }
 
     # ================================================================
-    # Phase 2: Postgres
+    # Phase 2: Postgres (idempotency-aware)
     # ================================================================
+    # On first install: Patroni isn't running yet → raw postgres on
+    # localhost:5432 is the writable single-master. We set the password
+    # and pre-create Forgejo + Keycloak DBs directly.
+    # On re-run: Patroni is already running → this Pi's localhost:5432
+    # may be a read-only replica, and createdb/ALTER USER on a replica
+    # fails. Skip those DB-side ops (setup-patroni will re-create the
+    # databases on the leader) and bind Forgejo/Keycloak to HAProxy
+    # (:5000) from the start.
 
-    - name: Set Postgres password (shared by Forgejo + Keycloak)
+    - name: Detect Patroni state (drives Forgejo DB-host resolution below)
+      ansible.builtin.systemd:
+        name: patroni
+      register: _patroni_state
+      failed_when: false
+
+    - name: Set effective DB host for Forgejo/Keycloak
+      ansible.builtin.set_fact:
+        forgejo_db_host_effective: >-
+          {{ '127.0.0.1:5000'
+             if _patroni_state.status.ActiveState | default('') == 'active'
+             else (forgejo_db_host | default('127.0.0.1:5000')) }}
+        keycloak_db_host_effective: >-
+          {{ '127.0.0.1:5000'
+             if _patroni_state.status.ActiveState | default('') == 'active'
+             else (keycloak_db_host | default('127.0.0.1:5000')) }}
+
+    - name: Set Postgres password (first install only — Patroni owns the DB afterwards)
       ansible.builtin.shell: |
-        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ pi_postgres_password }}';" 2>/dev/null || true
+        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ postgres_admin_password }}';" 2>/dev/null || true
       changed_when: true
       no_log: true
+      when: _patroni_state.status.ActiveState | default('') != 'active'
 
-    - name: Create Forgejo and Keycloak databases
+    - name: Create Forgejo and Keycloak databases (first install only)
       ansible.builtin.shell: |
         sudo -u postgres createdb forgejo 2>/dev/null || true
         sudo -u postgres createdb keycloak 2>/dev/null || true
       changed_when: true
+      when: _patroni_state.status.ActiveState | default('') != 'active'
 
     - name: Find Postgres config directory
       ansible.builtin.shell: |
@@ -221,8 +244,8 @@
           [server]
           HTTP_PORT = 3000
           HTTP_ADDR = 0.0.0.0
-          DOMAIN = git.pmon.dev
-          ROOT_URL = https://git.pmon.dev/
+          DOMAIN = {{ forgejo_domain | default('git.pmon.dev') }}
+          ROOT_URL = {{ forgejo_root_url | default('https://git.pmon.dev/') }}
           APP_DATA_PATH = /var/lib/forgejo/data
           LFS_START_SERVER = false
 
@@ -231,7 +254,7 @@
           # HAProxy on localhost:5000 routes to whichever Pi is the current
           # Patroni leader (checked via REST /primary). Transparent failover
           # without forgejo needing to know which host is primary.
-          HOST = {{ forgejo_db_host | default('127.0.0.1:5000') }}
+          HOST = {{ forgejo_db_host_effective }}
           NAME = forgejo
           USER = postgres
           PASSWD = {{ forgejo_db_password }}
@@ -287,15 +310,27 @@
       until: forgejo_wait.status | default(0) == 200
       register: forgejo_wait
 
-    - name: Create Forgejo admin user
+    - name: Check if Forgejo admin user exists
+      ansible.builtin.shell: |
+        su - forgejo -c "forgejo admin user list \
+          --config /var/lib/forgejo/custom/conf/app.ini" 2>&1 \
+          | awk 'NR>1 { print $2 }'
+      register: _forgejo_users
+      changed_when: false
+
+    - name: Create Forgejo admin user (with retries — Forgejo can be slow to settle after first start)
       ansible.builtin.shell: |
         su - forgejo -c "forgejo admin user create \
           --admin --username {{ forgejo_admin_user }} \
           --password '{{ forgejo_admin_password }}' \
           --email '{{ forgejo_admin_email }}' \
-          --config /var/lib/forgejo/custom/conf/app.ini" 2>/dev/null || true
+          --config /var/lib/forgejo/custom/conf/app.ini"
+      register: _forgejo_admin_create
+      retries: 5
+      delay: 5
+      until: _forgejo_admin_create.rc == 0
+      when: forgejo_admin_user not in (_forgejo_users.stdout_lines | default([]))
       changed_when: true
-      no_log: true
 
     # ================================================================
     # Phase 4: MinIO
@@ -436,9 +471,19 @@
     # Phase 5: Keycloak
     # ================================================================
 
-    - name: Download and extract Keycloak
+    - name: Download Keycloak tarball (retry — github.com is flaky from vagrant NAT)
+      ansible.builtin.get_url:
+        url: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"
+        dest: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
+        timeout: 60
+      register: _kc_dl
+      retries: 5
+      delay: 15
+      until: _kc_dl is succeeded
+
+    - name: Extract Keycloak
       ansible.builtin.unarchive:
-        src: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"
+        src: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
         dest: /opt
         remote_src: true
         creates: "/opt/keycloak-{{ keycloak_version }}"
@@ -482,7 +527,7 @@
           User=keycloak
           Group=keycloak
           Environment=KC_DB=postgres
-          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host | default('127.0.0.1:5000') }}/keycloak
+          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host_effective }}/keycloak
           Environment=KC_DB_USERNAME=postgres
           Environment=KC_DB_PASSWORD={{ keycloak_db_password }}
           Environment=KC_HOSTNAME=auth.pmon.dev

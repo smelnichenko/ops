@@ -7,34 +7,49 @@
 # Usage:
 #   task deploy:keycloak-clients
 
+- name: Read Pi Vault root token (from pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Slurp root token
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/root-token
+      register: _root_token_b64
+      no_log: true
+
+    - name: Publish as group fact
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ _root_token_b64.content | b64decode | trim }}"
+      no_log: true
+
 - name: Configure Keycloak client service account roles
   hosts: target
   become: true
   gather_facts: false
 
   vars:
-    vault_ns: vault
     keycloak_url: https://auth.pmon.dev
+    vault_addr: "https://{{ hostvars['pi1']['ansible_host'] }}:8200"
     realm: schnappy
     clients_roles:
       - client_id: k6-smoke
         roles: [PLAY, VIEW, CHAT]
 
   tasks:
-    - name: Read Vault root token from init file
-      ansible.builtin.set_fact:
-        vault_token_value: "{{ (lookup('file', playbook_dir + '/../vars/vault-k3s-init.json') | from_json).root_token }}"
-      delegate_to: localhost
+    - name: Get Keycloak admin password from Pi Vault
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/secret/data/schnappy/keycloak"
+        headers:
+          X-Vault-Token: "{{ hostvars['pi1']['vault_root_token'] }}"
+        validate_certs: false
+      register: _kc_pw
       no_log: true
 
-    - name: Get Keycloak admin password from Vault
-      ansible.builtin.shell: |
-        kubectl exec -n {{ vault_ns }} vault-0 -- env \
-          VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt \
-          VAULT_TOKEN="{{ vault_token_value }}" \
-          vault kv get -field=admin_password secret/schnappy/keycloak
-      register: kc_password
-      changed_when: false
+    - name: Extract admin_password
+      ansible.builtin.set_fact:
+        kc_password: "{{ _kc_pw.json.data.data.admin_password }}"
       no_log: true
 
     - name: Get Keycloak admin token
@@ -45,7 +60,7 @@
         body:
           client_id: admin-cli
           username: admin
-          password: "{{ kc_password.stdout }}"
+          password: "{{ kc_password }}"
           grant_type: password
         validate_certs: true
       register: kc_token

@@ -32,8 +32,8 @@
     argocd_chart_version: "{{ argocd_version | default('9.4.16') }}"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
-    _forgejo_user: "{{ forgejo_admin_user | default(lookup('env', 'FORGEJO_ADMIN_USER')) | default('forgejo_admin', true) }}"
-    _forgejo_password: "{{ forgejo_admin_password | default(lookup('env', 'FORGEJO_ADMIN_PASSWORD')) }}"
+    _forgejo_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
+    _forgejo_password: "{{ forgejo_admin_password }}"
     validate_certs: "{{ argocd_validate_certs | default(true) }}"
     target_host: "{{ ansible_host | default('192.168.11.2') }}"
     argocd_host: "{{ argocd_domain | default('cd.pmon.dev') }}"
@@ -51,21 +51,17 @@
         msg: "Setting up Argo CD in namespace {{ argocd_namespace }}"
 
     - name: Create argocd namespace with Pod Security Standards
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: {{ argocd_namespace }}
-          labels:
-            pod-security.kubernetes.io/enforce: baseline
-            pod-security.kubernetes.io/audit: restricted
-            pod-security.kubernetes.io/warn: restricted
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ argocd_namespace }}"
+            labels:
+              pod-security.kubernetes.io/enforce: baseline
+              pod-security.kubernetes.io/audit: restricted
+              pod-security.kubernetes.io/warn: restricted
 
     # ================================================================
     # Phase 2: Forgejo PAT for Git access
@@ -124,26 +120,22 @@
       no_log: true
 
     - name: Create Forgejo repo credentials secret for Argo CD
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: forgejo-repo-creds
-          namespace: {{ argocd_namespace }}
-          labels:
-            argocd.argoproj.io/secret-type: repo-creds
-        type: Opaque
-        stringData:
-          type: git
-          url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
-          username: "{{ _forgejo_user }}"
-          password: "{{ argocd_git_token }}"
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: forgejo-repo-creds
+            namespace: "{{ argocd_namespace }}"
+            labels:
+              argocd.argoproj.io/secret-type: repo-creds
+          type: Opaque
+          stringData:
+            type: git
+            url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
+            username: "{{ _forgejo_user }}"
+            password: "{{ argocd_git_token }}"
       no_log: true
 
     # ================================================================
@@ -155,173 +147,196 @@
         msg: "Installing Argo CD via Helm"
 
     - name: Set OIDC client secret
+      # argocd_keycloak_client_secret comes from inventory.
       ansible.builtin.set_fact:
         vault_argocd_secret:
-          stdout: "{{ argocd_keycloak_client_secret | default(lookup('env', 'KEYCLOAK_ARGOCD_CLIENT_SECRET')) | default('changeme') }}"
+          stdout: "{{ argocd_keycloak_client_secret }}"
       no_log: true
 
     - name: Add Argo Helm repository
-      ansible.builtin.shell: |
-        helm repo add argo {{ argocd_chart_repo }} 2>/dev/null || true
-        helm repo update argo
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+      kubernetes.core.helm_repository:
+        name: argo
+        repo_url: "{{ argocd_chart_repo }}"
 
     - name: Deploy Argo CD
-      ansible.builtin.shell: |
-        set -o pipefail
-        helm upgrade --install argocd \
-          {{ argocd_chart }} \
-          --version {{ argocd_chart_version }} \
-          --namespace {{ argocd_namespace }} \
-          --wait --timeout 5m \
-          --values - <<'HELMEOF'
-        global:
-          domain: {{ argocd_host }}
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: argocd
+        chart_ref: "{{ argocd_chart }}"
+        chart_version: "{{ argocd_chart_version }}"
+        release_namespace: "{{ argocd_namespace }}"
+        wait: true
+        wait_timeout: 5m
+        values:
+          global:
+            domain: "{{ argocd_host }}"
 
-        configs:
-          params:
-            server.insecure: true  # TLS terminated at Traefik
-          cm:
-            url: "https://{{ argocd_host }}"
-            resource.customizations.ignoreDifferences.apps_StatefulSet: |
-              jqPathExpressions:
-                - .spec.persistentVolumeClaimRetentionPolicy
-                - .spec.volumeClaimTemplates[]?.apiVersion
-                - .spec.volumeClaimTemplates[]?.kind
-                - .spec.volumeClaimTemplates[]?.spec.volumeMode
-                - .spec.volumeClaimTemplates[]?.status
-            resource.customizations.ignoreDifferences.external-secrets.io_ExternalSecret: |
-              jqPathExpressions:
-                - .spec.data[]?.remoteRef.conversionStrategy
-                - .spec.data[]?.remoteRef.decodingStrategy
-                - .spec.data[]?.remoteRef.metadataPolicy
-                - .spec.target.creationPolicy
-                - .spec.target.deletionPolicy
-            resource.customizations.health.gateway.networking.k8s.io_HTTPRoute: |
-              hs = {}
-              hs.status = "Healthy"
-              return hs
-            resource.customizations.health.security.istio.io_PeerAuthentication: |
-              hs = {}
-              hs.status = "Healthy"
-              return hs
-            resource.customizations.health.security.istio.io_AuthorizationPolicy: |
-              hs = {}
-              hs.status = "Healthy"
-              return hs
-            resource.customizations.health.kafka.strimzi.io_KafkaTopic: |
-              hs = {}
-              hs.status = "Healthy"
-              return hs
-            resource.customizations.health.batch_CronJob: |
-              hs = {}
-              hs.status = "Healthy"
-              return hs
-            resource.customizations.health.batch_Job: |
-              hs = {}
-              if obj.status ~= nil then
-                if obj.status.succeeded ~= nil and obj.status.succeeded > 0 then
-                  hs.status = "Healthy"
-                elseif obj.status.failed ~= nil and obj.status.failed > 0 then
-                  hs.status = "Degraded"
+          configs:
+            params:
+              server.insecure: true  # TLS terminated at Traefik
+            cm:
+              url: "https://{{ argocd_host }}"
+              resource.customizations.ignoreDifferences.apps_StatefulSet: |
+                jqPathExpressions:
+                  - .spec.persistentVolumeClaimRetentionPolicy
+                  - .spec.volumeClaimTemplates[]?.apiVersion
+                  - .spec.volumeClaimTemplates[]?.kind
+                  - .spec.volumeClaimTemplates[]?.spec.volumeMode
+                  - .spec.volumeClaimTemplates[]?.status
+              resource.customizations.ignoreDifferences.external-secrets.io_ExternalSecret: |
+                jqPathExpressions:
+                  - .spec.data[]?.remoteRef.conversionStrategy
+                  - .spec.data[]?.remoteRef.decodingStrategy
+                  - .spec.data[]?.remoteRef.metadataPolicy
+                  - .spec.target.creationPolicy
+                  - .spec.target.deletionPolicy
+              resource.customizations.health.gateway.networking.k8s.io_HTTPRoute: |
+                hs = {}
+                hs.status = "Healthy"
+                return hs
+              resource.customizations.health.security.istio.io_PeerAuthentication: |
+                hs = {}
+                hs.status = "Healthy"
+                return hs
+              resource.customizations.health.security.istio.io_AuthorizationPolicy: |
+                hs = {}
+                hs.status = "Healthy"
+                return hs
+              resource.customizations.health.kafka.strimzi.io_KafkaTopic: |
+                hs = {}
+                hs.status = "Healthy"
+                return hs
+              resource.customizations.health.batch_CronJob: |
+                hs = {}
+                hs.status = "Healthy"
+                return hs
+              resource.customizations.health.batch_Job: |
+                hs = {}
+                if obj.status ~= nil then
+                  if obj.status.succeeded ~= nil and obj.status.succeeded > 0 then
+                    hs.status = "Healthy"
+                  elseif obj.status.failed ~= nil and obj.status.failed > 0 then
+                    hs.status = "Degraded"
+                  else
+                    hs.status = "Progressing"
+                  end
                 else
                   hs.status = "Progressing"
                 end
-              else
-                hs.status = "Progressing"
-              end
-              return hs
-            oidc.config: |
-              name: Keycloak
-              issuer: https://{{ keycloak_host }}/realms/schnappy
-              clientID: argocd
-              clientSecret: $argocd-secret:oidc.keycloak.clientSecret
-              enablePKCEAuthentication: true
-              requestedScopes:
-                - openid
-                - profile
-                - email
-                - roles
-          rbac:
-            policy.csv: |
-              g, Admins, role:admin
-              g, Users, role:readonly
-            policy.default: "role:readonly"
-            scopes: "[groups, roles]"
-          secret:
-            extra:
-              oidc.keycloak.clientSecret: "{{ vault_argocd_secret.stdout | default(argocd_keycloak_client_secret) | default('changeme') }}"
+                return hs
+              oidc.config: |
+                name: Keycloak
+                issuer: https://{{ keycloak_host }}/realms/schnappy
+                clientID: argocd
+                clientSecret: $argocd-secret:oidc.keycloak.clientSecret
+                enablePKCEAuthentication: true
+                requestedScopes:
+                  - openid
+                  - profile
+                  - email
+                  - roles
+            rbac:
+              policy.csv: |
+                g, Admins, role:admin
+                g, Users, role:readonly
+              policy.default: "role:readonly"
+              scopes: "[groups, roles]"
+            secret:
+              extra:
+                oidc.keycloak.clientSecret: "{{ vault_argocd_secret.stdout }}"
 
-        server:
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
+          server:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 128Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
 
-        repoServer:
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 1000m
-              memory: 2Gi
-          livenessProbe:
-            initialDelaySeconds: 120
-            timeoutSeconds: 10
+          repoServer:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 1000m
+                memory: 2Gi
+            livenessProbe:
+              initialDelaySeconds: 120
+              timeoutSeconds: 10
 
-        controller:
-          resources:
-            requests:
-              cpu: 100m
-              memory: 1Gi
-            limits:
-              cpu: 1000m
-              memory: 2Gi
+          controller:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 1Gi
+              limits:
+                cpu: 1000m
+                memory: 2Gi
 
-        redis:
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
+          redis:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi
 
-        dex:
-          enabled: false
+          dex:
+            enabled: false
 
-        notifications:
-          enabled: false
+          notifications:
+            enabled: false
 
-        applicationSet:
-          enabled: false
-        HELMEOF
-      args:
-        executable: /bin/bash
-      environment:
-        KUBECONFIG: /etc/kubernetes/admin.conf
-      changed_when: false
+          applicationSet:
+            enabled: false
 
     - name: Wait for argocd-server to be ready
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/argocd-server -n {{ argocd_namespace }} --timeout=300s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: argocd-server
+        namespace: "{{ argocd_namespace }}"
+      register: argocd_server_rollout
+      retries: 30
+      delay: 10
+      until:
+        - argocd_server_rollout.resources | length > 0
+        - argocd_server_rollout.resources[0].status.readyReplicas | default(0) == argocd_server_rollout.resources[0].spec.replicas
+        - argocd_server_rollout.resources[0].status.updatedReplicas | default(0) == argocd_server_rollout.resources[0].spec.replicas
 
     - name: Wait for argocd-repo-server to be ready
-      ansible.builtin.shell: |
-        kubectl rollout status deployment/argocd-repo-server -n {{ argocd_namespace }} --timeout=300s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: argocd-repo-server
+        namespace: "{{ argocd_namespace }}"
+      register: argocd_repo_server_rollout
+      retries: 30
+      delay: 10
+      until:
+        - argocd_repo_server_rollout.resources | length > 0
+        - argocd_repo_server_rollout.resources[0].status.readyReplicas | default(0) == argocd_repo_server_rollout.resources[0].spec.replicas
+        - argocd_repo_server_rollout.resources[0].status.updatedReplicas | default(0) == argocd_repo_server_rollout.resources[0].spec.replicas
 
     - name: Wait for argocd-application-controller to be ready
-      ansible.builtin.shell: |
-        kubectl rollout status statefulset/argocd-application-controller -n {{ argocd_namespace }} --timeout=300s
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: StatefulSet
+        name: argocd-application-controller
+        namespace: "{{ argocd_namespace }}"
+      register: argocd_controller_rollout
+      retries: 30
+      delay: 10
+      until:
+        - argocd_controller_rollout.resources | length > 0
+        - argocd_controller_rollout.resources[0].status.readyReplicas | default(0) == argocd_controller_rollout.resources[0].spec.replicas
+        - argocd_controller_rollout.resources[0].status.updatedReplicas | default(0) == argocd_controller_rollout.resources[0].spec.replicas
 
     # ================================================================
     # Phase 4: Read Keycloak OIDC secret from Vault (used in Helm values above)
@@ -340,37 +355,33 @@
         msg: "{{ 'Creating Ingress for ' + argocd_host if ingress_enabled else 'Skipping Ingress (disabled)' }}"
 
     - name: Create Argo CD Ingress
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-          name: argocd-server
-          namespace: {{ argocd_namespace }}
-          annotations:
-            cert-manager.io/cluster-issuer: letsencrypt-dns
-        spec:
-          ingressClassName: "{{ ingress_class | default('traefik') }}"
-          tls:
-            - hosts:
-                - {{ argocd_host }}
-              secretName: argocd-tls
-          rules:
-            - host: {{ argocd_host }}
-              http:
-                paths:
-                  - path: /
-                    pathType: Prefix
-                    backend:
-                      service:
-                        name: argocd-server
-                        port:
-                          number: 80
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: argocd-server
+            namespace: "{{ argocd_namespace }}"
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-dns
+          spec:
+            ingressClassName: "{{ ingress_class | default('traefik') }}"
+            tls:
+              - hosts:
+                  - "{{ argocd_host }}"
+                secretName: argocd-tls
+            rules:
+              - host: "{{ argocd_host }}"
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: argocd-server
+                          port:
+                            number: 80
       when: ingress_enabled | bool
 
     # ================================================================
@@ -381,111 +392,110 @@
       ansible.builtin.debug:
         msg: "Applying network policies for argocd namespace"
 
-    - name: Apply Argo CD network policies
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        ---
-        # Argo CD controllers: egress to Forgejo, k8s API, external HTTPS
-        # Default deny is managed by cluster-config (applied after ArgoCD syncs)
-        apiVersion: networking.k8s.io/v1
-        kind: NetworkPolicy
-        metadata:
-          name: argocd-controllers
-          namespace: {{ argocd_namespace }}
-        spec:
-          podSelector: {}
-          policyTypes:
-            - Ingress
-            - Egress
-          ingress:
-            # Istio gateway → argocd-server (UI/API)
-            - from:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: schnappy
-              ports:
-                - protocol: TCP
-                  port: 8080
-            # Internal: controller ↔ repo-server ↔ redis
-            - from:
-                - podSelector: {}
-              ports:
-                - protocol: TCP
-                  port: 8080
-                - protocol: TCP
-                  port: 8081
-                - protocol: TCP
-                  port: 8082
-                - protocol: TCP
-                  port: 6379
-          egress:
-            # To Pi (Forgejo on 3000, Keycloak/OIDC on 443)
-            - to:
-                - ipBlock:
-                    cidr: {{ hostvars['pi1']['ansible_host'] | default('192.168.11.5') }}/32
-              ports:
-                - protocol: TCP
-                  port: 3000
-                - protocol: TCP
-                  port: 443
-            # To Istio gateway (OIDC discovery via auth.pmon.dev)
-            - to:
-                - namespaceSelector:
-                    matchLabels:
-                      kubernetes.io/metadata.name: schnappy
-              ports:
-                - protocol: TCP
-                  port: 443
-                - protocol: TCP
-                  port: 8443
-            # External HTTPS (Helm repos, OCI registries)
-            - to:
-                - ipBlock:
-                    cidr: 0.0.0.0/0
-                    except:
-                      - 10.0.0.0/8
-                      - 172.16.0.0/12
-                      - 192.168.0.0/16
-              ports:
-                - protocol: TCP
-                  port: 443
-            # Internal pod communication
-            - to:
-                - podSelector: {}
-              ports:
-                - protocol: TCP
-                  port: 8080
-                - protocol: TCP
-                  port: 8081
-                - protocol: TCP
-                  port: 8082
-                - protocol: TCP
-                  port: 6379
-            # DNS
-            - ports:
-                - protocol: UDP
-                  port: 53
-                - protocol: TCP
-                  port: 53
-        ---
-        # Cilium-specific: allow egress to kube-apiserver (host-network endpoint)
-        # Standard K8s NetworkPolicy ipBlock/namespaceSelector cannot match
-        # host-network processes with Cilium CNI
-        apiVersion: cilium.io/v2
-        kind: CiliumNetworkPolicy
-        metadata:
-          name: argocd-kube-api
-          namespace: {{ argocd_namespace }}
-        spec:
-          endpointSelector: {}
-          egress:
-            - toEntities:
-                - kube-apiserver
-        EOF
-      args:
-        executable: /bin/bash
-      changed_when: false
+    # Argo CD controllers: egress to Forgejo, k8s API, external HTTPS
+    # Default deny is managed by cluster-config (applied after ArgoCD syncs)
+    - name: Apply Argo CD controllers NetworkPolicy
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: argocd-controllers
+            namespace: "{{ argocd_namespace }}"
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+              - Egress
+            ingress:
+              # Istio gateway → argocd-server (UI/API)
+              - from:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: schnappy
+                ports:
+                  - protocol: TCP
+                    port: 8080
+              # Internal: controller ↔ repo-server ↔ redis
+              - from:
+                  - podSelector: {}
+                ports:
+                  - protocol: TCP
+                    port: 8080
+                  - protocol: TCP
+                    port: 8081
+                  - protocol: TCP
+                    port: 8082
+                  - protocol: TCP
+                    port: 6379
+            egress:
+              # To Pi (Forgejo on 3000, Keycloak/OIDC on 443)
+              - to:
+                  - ipBlock:
+                      cidr: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.5') }}/32"
+                ports:
+                  - protocol: TCP
+                    port: 3000
+                  - protocol: TCP
+                    port: 443
+              # To Istio gateway (OIDC discovery via auth.pmon.dev)
+              - to:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: schnappy
+                ports:
+                  - protocol: TCP
+                    port: 443
+                  - protocol: TCP
+                    port: 8443
+              # External HTTPS (Helm repos, OCI registries)
+              - to:
+                  - ipBlock:
+                      cidr: 0.0.0.0/0
+                      except:
+                        - 10.0.0.0/8
+                        - 172.16.0.0/12
+                        - 192.168.0.0/16
+                ports:
+                  - protocol: TCP
+                    port: 443
+              # Internal pod communication
+              - to:
+                  - podSelector: {}
+                ports:
+                  - protocol: TCP
+                    port: 8080
+                  - protocol: TCP
+                    port: 8081
+                  - protocol: TCP
+                    port: 8082
+                  - protocol: TCP
+                    port: 6379
+              # DNS
+              - ports:
+                  - protocol: UDP
+                    port: 53
+                  - protocol: TCP
+                    port: 53
+
+    # Cilium-specific: allow egress to kube-apiserver (host-network endpoint)
+    # Standard K8s NetworkPolicy ipBlock/namespaceSelector cannot match
+    # host-network processes with Cilium CNI
+    - name: Apply Argo CD kube-apiserver CiliumNetworkPolicy
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: cilium.io/v2
+          kind: CiliumNetworkPolicy
+          metadata:
+            name: argocd-kube-api
+            namespace: "{{ argocd_namespace }}"
+          spec:
+            endpointSelector: {}
+            egress:
+              - toEntities:
+                  - kube-apiserver
 
     # ================================================================
     # Phase 7: Verify
@@ -496,10 +506,11 @@
         msg: "Verifying Argo CD deployment"
 
     - name: Check Argo CD pods
-      ansible.builtin.shell: |
-        kubectl get pods -n {{ argocd_namespace }} -o wide
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ argocd_namespace }}"
       register: argocd_pods
-      changed_when: false
 
     - name: Display Argo CD status
       ansible.builtin.debug:
@@ -507,7 +518,9 @@
           Argo CD deployed successfully!
 
           Pods:
-          {{ argocd_pods.stdout }}
+          {% for pod in argocd_pods.resources %}
+          {{ pod.metadata.name }}  {{ pod.status.phase }}  {{ pod.status.podIP | default('-') }}  {{ pod.spec.nodeName | default('-') }}
+          {% endfor %}
 
           Next steps:
             1. Access UI at https://{{ argocd_host }}
@@ -518,41 +531,41 @@
     # ================================================================
 
     - name: Wait for ESO CRDs to be available
-      ansible.builtin.shell: |
-        kubectl get crd externalsecrets.external-secrets.io >/dev/null 2>&1
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: externalsecrets.external-secrets.io
+      register: eso_crd
       retries: 30
       delay: 10
-      changed_when: false
-      register: eso_crd
-      until: eso_crd.rc == 0
+      until: eso_crd.resources | length > 0
 
     - name: Create root application
-      ansible.builtin.shell: |
-        set -o pipefail
-        cat <<'EOF' | kubectl apply -f -
-        apiVersion: argoproj.io/v1alpha1
-        kind: Application
-        metadata:
-          name: root
-          namespace: {{ argocd_namespace }}
-          finalizers:
-            - resources-finalizer.argocd.argoproj.io
-        spec:
-          project: default
-          source:
-            repoURL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/schnappy/infra.git"
-            targetRevision: main
-            path: clusters/production/argocd/apps
-            directory:
-              recurse: false
-          destination:
-            server: https://kubernetes.default.svc
-            namespace: {{ argocd_namespace }}
-          syncPolicy:
-            automated:
-              selfHeal: true
-              prune: false
-            syncOptions:
-              - ServerSideApply=false
-        EOF
-      changed_when: true
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: root
+            namespace: "{{ argocd_namespace }}"
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
+          spec:
+            project: default
+            source:
+              repoURL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/schnappy/infra.git"
+              targetRevision: main
+              path: clusters/production/argocd/apps
+              directory:
+                recurse: false
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: "{{ argocd_namespace }}"
+            syncPolicy:
+              automated:
+                selfHeal: true
+                prune: false
+              syncOptions:
+                - ServerSideApply=false

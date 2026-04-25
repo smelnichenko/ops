@@ -1,29 +1,29 @@
 ---
-# Setup Sonatype Nexus Repository Manager + apt-cacher-ng on Pi
+# Setup Sonatype Nexus Repository Manager on BOTH Pis (active-passive HA).
 #
-# Deploys caching proxies on the Pi for all package managers:
-#   - Docker Hub, Elastic.co, Quay.io  (port 8082, Nexus Docker group)
-#   - Maven Central                     (port 8081, Nexus /repository/maven-public/)
-#   - npmjs.org                         (port 8081, Nexus /repository/npm-public/)
-#   - PyPI                              (port 8081, Nexus /repository/pypi-public/)
-#   - Debian/Ubuntu apt                 (port 3142, apt-cacher-ng)
+# Data model:
+#   - Binaries at /opt/nexus on both Pis (local, independent installs)
+#   - Runtime data at /mnt/data/nexus — a GlusterFS replica-2 volume shared
+#     between pi1 + pi2 (blobs + H2 DB live there); see setup-gluster.yml
+#   - systemd unit on both Pis, enabled=true but state=stopped
+#   - Keepalived's notify_master / notify_backup scripts (see
+#     setup-keepalived.yml) arbitrate which Pi runs Nexus — exactly one at a
+#     time. A stray concurrent start would corrupt the shared H2 DB.
 #
-# Replaces the 3 separate distribution/distribution registry mirrors
-# (ports 5000-5002) with a single Nexus instance.
+# First-time bootstrap runs on pi1 only: service is started temporarily,
+# admin password / EULA / repos are configured via REST, then the service
+# is stopped so Keepalived can take over authoritative control.
 #
 # Requires: nexus_admin_password variable (set in .env or -e flag)
-#
-# Idempotent: safe to re-run. Only restarts Nexus if install/config changes.
+# Idempotent: safe to re-run.
 #
 # Usage:
-#   # Production (Pi)
-#   ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
-#
-#   # Vagrant
 #   ansible-playbook -i inventory/vagrant.yml playbooks/setup-nexus.yml
+#   ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
 
-- name: Setup Nexus Repository Manager
-  hosts: pi1,pi2
+# ─── Play 1: install binaries + local system state on both Pis ─────────────
+- name: Install Nexus on pi1 + pi2
+  hosts: pis
   become: true
   gather_facts: true
 
@@ -32,17 +32,15 @@
     nexus_install_dir: /opt/nexus
     nexus_data_dir: /mnt/data/nexus
     nexus_user: nexus
+    # Explicit UID/GID — must match on pi1 + pi2 so the shared Gluster volume's
+    # ownership works from either side (same pattern Forgejo uses with 900).
+    nexus_uid: 901
+    nexus_gid: 901
     nexus_port: 8081
     nexus_docker_port: 8082
-    nexus_admin_password: "{{ lookup('env', 'NEXUS_ADMIN_PASSWORD') | default('changeme', true) }}"
     nexus_checksums:
       aarch_64: "sha256:e8aa707821fdf09838b1db5826b21753d926c1f9c692012fe061fba544241ae6"
       x86_64: "sha256:6f3240f34bb46b99d93b2c512333651ea227b4c65248c8154ae275933c320556"
-    # Old registry mirror services to decommission
-    old_registry_services:
-      - registry-dockerhub
-      - registry-elastic
-      - registry-quay
 
   pre_tasks:
     - name: Wait for SSH to be available
@@ -51,44 +49,47 @@
         timeout: 120
 
   tasks:
-    # ================================================================
-    # Phase 1: Install Java and Nexus
-    # ================================================================
-
-    - name: Install OpenJDK 21 JRE
+    # default-jre-headless pulls JDK 21 on trixie (production pi1) and JDK 17
+    # on bookworm (Vagrant box). Nexus 3.90 supports both.
+    - name: Install default JRE (headless)
       ansible.builtin.apt:
-        name: openjdk-21-jre-headless
+        name: default-jre-headless
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Create nexus group
+    - name: Create nexus group (fixed GID)
       ansible.builtin.group:
         name: "{{ nexus_user }}"
+        gid: "{{ nexus_gid }}"
         system: true
 
-    - name: Create nexus user
+    - name: Create nexus user (fixed UID)
       ansible.builtin.user:
         name: "{{ nexus_user }}"
+        uid: "{{ nexus_uid }}"
         group: "{{ nexus_user }}"
         system: true
         shell: /usr/sbin/nologin
         home: "{{ nexus_data_dir }}"
         create_home: false
 
-    - name: Create Nexus directories
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        owner: "{{ nexus_user }}"
-        group: "{{ nexus_user }}"
-        mode: "0755"
-      loop:
-        - "{{ nexus_data_dir }}"
-        - "{{ nexus_data_dir }}/tmp"
-        - "{{ nexus_data_dir }}/etc"
-        - "{{ nexus_data_dir }}/log"
-        - "{{ nexus_data_dir }}/log/audit"
+    # Align UID/GID if nexus already exists with a different one (same pattern
+    # Forgejo uses in setup-gluster.yml).
+    - name: Align existing Nexus UID/GID across nodes
+      ansible.builtin.shell: |
+        CURRENT_UID=$(id -u nexus)
+        CURRENT_GID=$(id -g nexus)
+        if [ "$CURRENT_UID" != "{{ nexus_uid }}" ] || [ "$CURRENT_GID" != "{{ nexus_gid }}" ]; then
+          systemctl stop nexus 2>/dev/null || true
+          groupmod -g {{ nexus_gid }} nexus || true
+          usermod -u {{ nexus_uid }} -g {{ nexus_gid }} nexus || true
+          echo "changed"
+        else
+          echo "ok"
+        fi
+      register: nexus_uid_align
+      changed_when: "'changed' in nexus_uid_align.stdout"
 
     - name: Check if Nexus is already installed
       ansible.builtin.stat:
@@ -106,12 +107,11 @@
       ansible.builtin.set_fact:
         nexus_arch: "{{ 'aarch_64' if ansible_architecture == 'aarch64' else 'x86_64' }}"
 
-    - name: Install Nexus
+    - name: Install Nexus binary
       when: >-
         not nexus_binary.stat.exists or
         nexus_version_file is failed or
         (nexus_version_file.content | default('') | b64decode | trim) != nexus_version
-      notify: Restart nexus
       block:
         - name: Download Nexus tarball
           ansible.builtin.get_url:
@@ -147,13 +147,10 @@
           args:
             removes: /tmp/nexus-{{ nexus_version }}
 
-        - name: Move sonatype-work contents to data directory
-          ansible.builtin.shell: |
-            if [ -d /tmp/sonatype-work/nexus3 ]; then
-              cp -rn /tmp/sonatype-work/nexus3/* {{ nexus_data_dir }}/ 2>/dev/null || true
-              rm -rf /tmp/sonatype-work
-            fi
-          changed_when: false
+        - name: Discard extracted sonatype-work (we use shared volume)
+          ansible.builtin.file:
+            path: /tmp/sonatype-work
+            state: absent
 
         - name: Record installed version
           ansible.builtin.copy:
@@ -176,11 +173,7 @@
             path: /tmp/nexus.tar.gz
             state: absent
 
-    # ================================================================
-    # Phase 2: Configure Nexus
-    # ================================================================
-
-    - name: Configure Nexus data directory
+    - name: Configure JVM options (karaf data → shared /mnt/data/nexus)
       ansible.builtin.copy:
         dest: "{{ nexus_install_dir }}/bin/nexus.vmoptions"
         owner: "{{ nexus_user }}"
@@ -200,35 +193,8 @@
           -Xmx{{ nexus_heap_max | default('4g') }}
           -XX:+UseG1GC
           -XX:MaxDirectMemorySize={{ nexus_direct_memory_max | default('2g') }}
-      notify: Restart nexus
 
-    - name: Set Nexus port
-      ansible.builtin.lineinfile:
-        path: "{{ nexus_data_dir }}/etc/nexus.properties"
-        regexp: "^application-port="
-        line: "application-port={{ nexus_port }}"
-        create: true
-        owner: "{{ nexus_user }}"
-        group: "{{ nexus_user }}"
-        mode: "0644"
-      notify: Restart nexus
-
-    - name: Set Nexus context path
-      ansible.builtin.lineinfile:
-        path: "{{ nexus_data_dir }}/etc/nexus.properties"
-        regexp: "^nexus-context-path="
-        line: "nexus-context-path=/"
-        create: true
-        owner: "{{ nexus_user }}"
-        group: "{{ nexus_user }}"
-        mode: "0644"
-      notify: Restart nexus
-
-    # ================================================================
-    # Phase 3: Systemd service
-    # ================================================================
-
-    - name: Create Nexus systemd service
+    - name: Create systemd service
       ansible.builtin.copy:
         dest: /etc/systemd/system/nexus.service
         mode: "0644"
@@ -236,13 +202,36 @@
           [Unit]
           Description=Sonatype Nexus Repository Manager
           After=network.target
+          # RequiresMountsFor delegates the mount-dep chain to systemd's
+          # generated mount unit, working whether the mount is in fstab,
+          # auto-mounted, or lazily established. More robust than an
+          # explicit `Requires=mnt-data-nexus.mount`.
+          RequiresMountsFor={{ nexus_data_dir }}
+          # Cap the Restart=on-failure loop. If Nexus fails 3 times in
+          # 10 minutes, systemd gives up. Prevents an infinite restart
+          # storm on the non-VIP Pi if something accidentally starts
+          # Nexus there — H2 lock collision would otherwise burn CPU
+          # forever. Keepalived's notify_master owns legitimate starts.
+          StartLimitIntervalSec=600
+          StartLimitBurst=3
 
           [Service]
           Type=forking
           User={{ nexus_user }}
           Group={{ nexus_user }}
           ExecStart={{ nexus_install_dir }}/bin/nexus start
-          ExecStop={{ nexus_install_dir }}/bin/nexus stop
+          # `-` prefix ignores ExecStop's exit status. Nexus's launcher
+          # writes an intermediate PID to the pidfile that drifts from
+          # the long-running Java Main PID systemd tracks — so when
+          # systemd runs `nexus stop`, the wrapper reports "not running"
+          # and exits 1 even though the Java process is still there.
+          # systemd then SIGTERM-s the Main PID (clean shutdown,
+          # exit 143), but marks the unit failed because of the wrapper
+          # exit 1. Ignoring the wrapper's exit code lets the unit
+          # settle as "inactive" after the Java process terminates.
+          ExecStop=-{{ nexus_install_dir }}/bin/nexus stop
+          # SIGTERM of the Java process during shutdown is clean.
+          SuccessExitStatus=143
           Restart=on-failure
           RestartSec=10
           LimitNOFILE=65536
@@ -250,24 +239,130 @@
 
           [Install]
           WantedBy=multi-user.target
-      notify:
-        - Reload systemd
-        - Restart nexus
+      notify: Reload systemd
 
-    - name: Flush handlers before starting
+    - name: Flush handlers
       ansible.builtin.meta: flush_handlers
 
-    - name: Enable and start Nexus
+    - name: Enable Nexus service (keep stopped — Keepalived drives state)
+      ansible.builtin.systemd:
+        name: nexus
+        enabled: true
+
+    - name: UFW allow Nexus web port IPv4
+      community.general.ufw:
+        rule: allow
+        port: "{{ nexus_port | string }}"
+        proto: tcp
+        from_ip: 192.168.11.0/24
+
+    - name: UFW allow Nexus docker port IPv4
+      community.general.ufw:
+        rule: allow
+        port: "{{ nexus_docker_port | string }}"
+        proto: tcp
+        from_ip: 192.168.11.0/24
+
+    - name: UFW allow Nexus web port IPv6
+      community.general.ufw:
+        rule: allow
+        port: "{{ nexus_port | string }}"
+        proto: tcp
+        from_ip: fd0a:94e6:20b4:9f6b::/64
+
+    - name: UFW allow Nexus docker port IPv6
+      community.general.ufw:
+        rule: allow
+        port: "{{ nexus_docker_port | string }}"
+        proto: tcp
+        from_ip: fd0a:94e6:20b4:9f6b::/64
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+# ─── Play 2: one-time bootstrap on pi1 only (shared-volume config + REST) ──
+# Runs the admin-password reset, EULA acceptance, realm config, and all
+# repository provisioning. Data lives in /mnt/data/nexus (Gluster-shared),
+# so once pi1 has done it, pi2 sees the same config via the shared volume.
+- name: Bootstrap Nexus on pi1 (shared data)
+  hosts: pi1
+  become: true
+  gather_facts: false
+
+  vars:
+    nexus_data_dir: /mnt/data/nexus
+    nexus_port: 8081
+    nexus_docker_port: 8082
+    # nexus_admin_password comes from the inventory (vagrant.yml: test default,
+    # production.yml: $NEXUS_ADMIN_PASSWORD). One source of truth.
+
+  tasks:
+    # On re-runs, the shared volume is already configured. The sentinel
+    # is written at the very end of this play, so its presence means the
+    # whole bootstrap ran successfully once. We skip to avoid starting
+    # Nexus on pi1 here — which would race pi2 for the H2 lock if pi2
+    # currently holds the VIP (Keepalived drives who's running).
+    - name: Check bootstrap sentinel
+      ansible.builtin.stat:
+        path: "{{ nexus_data_dir }}/.bootstrap-done"
+      register: _bootstrap_sentinel
+
+    - name: Skip bootstrap (already complete on shared volume)
+      ansible.builtin.meta: end_play
+      when: _bootstrap_sentinel.stat.exists
+    # The Gluster mount comes up as root:root by default. Chown the root of
+    # the shared volume so nexus can write nexus.pid / lock files in it. This
+    # runs from pi1 only because /mnt/data/nexus is shared — pi2 sees the
+    # ownership change immediately via Gluster replication.
+    - name: Chown Nexus data dir to nexus:nexus (shared via Gluster)
+      ansible.builtin.file:
+        path: "{{ nexus_data_dir }}"
+        state: directory
+        owner: nexus
+        group: nexus
+        mode: "0755"
+
+    - name: Create Nexus data subdirectories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: nexus
+        group: nexus
+        mode: "0755"
+      loop:
+        - "{{ nexus_data_dir }}/tmp"
+        - "{{ nexus_data_dir }}/etc"
+        - "{{ nexus_data_dir }}/log"
+        - "{{ nexus_data_dir }}/log/audit"
+
+    - name: Set Nexus port
+      ansible.builtin.lineinfile:
+        path: "{{ nexus_data_dir }}/etc/nexus.properties"
+        regexp: "^application-port="
+        line: "application-port={{ nexus_port }}"
+        create: true
+        owner: nexus
+        group: nexus
+        mode: "0644"
+
+    - name: Set Nexus context path
+      ansible.builtin.lineinfile:
+        path: "{{ nexus_data_dir }}/etc/nexus.properties"
+        regexp: "^nexus-context-path="
+        line: "nexus-context-path=/"
+        create: true
+        owner: nexus
+        group: nexus
+        mode: "0644"
+
+    - name: Start Nexus on pi1 for bootstrap (will be stopped after — Keepalived takes over)
       ansible.builtin.systemd:
         name: nexus
         state: started
-        enabled: true
 
-    # ================================================================
-    # Phase 4: Wait for Nexus to be ready
-    # ================================================================
-
-    - name: Wait for Nexus to be ready
+    - name: Wait for Nexus API
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/status"
         status_code: 200
@@ -276,18 +371,13 @@
       retries: 60
       delay: 10
 
-    # ================================================================
-    # Phase 5: Initial admin password setup
-    # ================================================================
-
-    - name: Wait for admin password file or verify auth works
+    - name: Wait for admin password file or verify configured password works
       ansible.builtin.shell: |
         for i in $(seq 1 30); do
           if [ -f "{{ nexus_data_dir }}/admin.password" ]; then
             echo "admin.password file found"
             exit 0
           fi
-          # File gone = password already changed; verify auth works
           HTTP=$(curl -sf -o /dev/null -w '%{http_code}' \
             -u "admin:{{ nexus_admin_password }}" \
             "http://localhost:{{ nexus_port }}/service/rest/v1/status")
@@ -301,7 +391,7 @@
         exit 1
       changed_when: false
 
-    - name: Check if initial admin password file exists
+    - name: Check initial admin password file
       ansible.builtin.stat:
         path: "{{ nexus_data_dir }}/admin.password"
       register: initial_password_file
@@ -316,7 +406,7 @@
       ansible.builtin.set_fact:
         current_admin_password: "{{ (initial_password.content | b64decode) if initial_password_file.stat.exists else nexus_admin_password }}"
 
-    - name: Change admin password
+    - name: Change admin password to configured value
       ansible.builtin.shell: |
         HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' \
           -u "admin:{{ current_admin_password }}" \
@@ -334,10 +424,6 @@
         path: "{{ nexus_data_dir }}/admin.password"
         state: absent
       when: initial_password_file.stat.exists
-
-    # ================================================================
-    # Phase 5b: Accept Community Edition EULA
-    # ================================================================
 
     - name: Get EULA status
       ansible.builtin.uri:
@@ -363,7 +449,7 @@
         status_code: [204]
       when: not eula_status.json.accepted
 
-    - name: Enable anonymous read access (CI pods pull without auth)
+    - name: Enable anonymous read
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/anonymous"
         method: PUT
@@ -376,10 +462,6 @@
           userId: anonymous
           realmName: NexusAuthorizingRealm
         status_code: [200]
-
-    # ================================================================
-    # Phase 6: Enable Docker Bearer Token Realm
-    # ================================================================
 
     - name: Get active realms
       ansible.builtin.uri:
@@ -399,24 +481,11 @@
         url_password: "{{ nexus_admin_password }}"
         force_basic_auth: true
         body_format: json
-        body: >-
-          {{
-            (active_realms.json + ['DockerToken'])
-            | unique
-            | list
-          }}
+        body: "{{ (active_realms.json + ['DockerToken']) | unique | list }}"
         status_code: [204]
       when: "'DockerToken' not in active_realms.json"
 
-    # ================================================================
-    # Phase 7: Create repositories via Script API
-    # ================================================================
-
-    # Nexus REST API for repository creation uses /service/rest/v1/repositories
-
-    # --- Docker proxy repositories ---
-
-    - name: Check existing repositories
+    - name: List existing repositories
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
         method: GET
@@ -426,12 +495,11 @@
         return_content: true
       register: existing_repos
 
-    - name: Build list of existing repository names
+    - name: Set existing_repo_names fact
       ansible.builtin.set_fact:
         existing_repo_names: "{{ existing_repos.json | map(attribute='name') | list }}"
 
-    # --- Docker proxy: Docker Hub ---
-    - name: Create docker-hub proxy repository
+    - name: Create docker-hub proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
@@ -442,33 +510,20 @@
         body:
           name: docker-hub
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: https://registry-1.docker.io
-            contentMaxAge: 10080
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 60
-          httpClient:
-            blocked: false
-            autoBlock: true
-          docker:
-            v1Enabled: false
-            forceBasicAuth: false
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://registry-1.docker.io", contentMaxAge: 10080, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 60 }
+          httpClient: { blocked: false, autoBlock: true }
+          docker: { v1Enabled: false, forceBasicAuth: false }
           dockerProxy:
             indexType: HUB
-            indexUrl: https://index.docker.io/
+            indexUrl: "https://index.docker.io/"
             cacheForeignLayers: true
-            foreignLayerUrlWhitelist:
-              - ".*"
+            foreignLayerUrlWhitelist: [".*"]
         status_code: [201]
       when: "'docker-hub' not in existing_repo_names"
 
-    # --- Docker proxy: Elastic ---
-    - name: Create docker-elastic proxy repository
+    - name: Create docker-elastic proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
@@ -479,29 +534,16 @@
         body:
           name: docker-elastic
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: https://docker.elastic.co
-            contentMaxAge: 10080
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 1440
-          httpClient:
-            blocked: false
-            autoBlock: true
-          docker:
-            v1Enabled: false
-            forceBasicAuth: false
-          dockerProxy:
-            indexType: REGISTRY
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://docker.elastic.co", contentMaxAge: 10080, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 1440 }
+          httpClient: { blocked: false, autoBlock: true }
+          docker: { v1Enabled: false, forceBasicAuth: false }
+          dockerProxy: { indexType: REGISTRY }
         status_code: [201]
       when: "'docker-elastic' not in existing_repo_names"
 
-    # --- Docker proxy: Quay ---
-    - name: Create docker-quay proxy repository
+    - name: Create docker-quay proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
@@ -512,29 +554,16 @@
         body:
           name: docker-quay
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: https://quay.io
-            contentMaxAge: 10080
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 1440
-          httpClient:
-            blocked: false
-            autoBlock: true
-          docker:
-            v1Enabled: false
-            forceBasicAuth: false
-          dockerProxy:
-            indexType: REGISTRY
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://quay.io", contentMaxAge: 10080, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 1440 }
+          httpClient: { blocked: false, autoBlock: true }
+          docker: { v1Enabled: false, forceBasicAuth: false }
+          dockerProxy: { indexType: REGISTRY }
         status_code: [201]
       when: "'docker-quay' not in existing_repo_names"
 
-    # --- Docker group ---
-    - name: Create docker-group repository
+    - name: Create docker-group
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
         method: POST
@@ -545,23 +574,13 @@
         body:
           name: docker-group
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          group:
-            memberNames:
-              - docker-hub
-              - docker-elastic
-              - docker-quay
-          docker:
-            v1Enabled: false
-            forceBasicAuth: false
-            httpPort: "{{ nexus_docker_port }}"
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          group: { memberNames: [docker-hub, docker-elastic, docker-quay] }
+          docker: { v1Enabled: false, forceBasicAuth: false, httpPort: "{{ nexus_docker_port }}" }
         status_code: [201]
       when: "'docker-group' not in existing_repo_names"
 
-    # --- Maven proxy ---
-    - name: Create maven-central proxy repository
+    - name: Create maven-central proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/proxy"
         method: POST
@@ -572,27 +591,15 @@
         body:
           name: maven-central
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: https://repo1.maven.org/maven2/
-            contentMaxAge: 10080
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 1440
-          httpClient:
-            blocked: false
-            autoBlock: true
-          maven:
-            versionPolicy: RELEASE
-            layoutPolicy: PERMISSIVE
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://repo1.maven.org/maven2/", contentMaxAge: 10080, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 1440 }
+          httpClient: { blocked: false, autoBlock: true }
+          maven: { versionPolicy: RELEASE, layoutPolicy: PERMISSIVE }
         status_code: [201]
       when: "'maven-central' not in existing_repo_names"
 
-    # --- Maven group ---
-    - name: Create maven-public group repository
+    - name: Create maven-public group
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/group"
         method: POST
@@ -603,20 +610,13 @@
         body:
           name: maven-public
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          group:
-            memberNames:
-              - maven-central
-          maven:
-            versionPolicy: RELEASE
-            layoutPolicy: PERMISSIVE
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          group: { memberNames: [maven-central] }
+          maven: { versionPolicy: RELEASE, layoutPolicy: PERMISSIVE }
         status_code: [201]
       when: "'maven-public' not in existing_repo_names"
 
-    # --- npm proxy ---
-    - name: Create npm-registry proxy repository
+    - name: Create npm-registry proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/npm/proxy"
         method: POST
@@ -627,24 +627,14 @@
         body:
           name: npm-registry
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: https://registry.npmjs.org/
-            contentMaxAge: 10080
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 1440
-          httpClient:
-            blocked: false
-            autoBlock: true
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://registry.npmjs.org/", contentMaxAge: 10080, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 1440 }
+          httpClient: { blocked: false, autoBlock: true }
         status_code: [201]
       when: "'npm-registry' not in existing_repo_names"
 
-    # --- npm group ---
-    - name: Create npm-public group repository
+    - name: Create npm-public group
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/npm/group"
         method: POST
@@ -655,17 +645,12 @@
         body:
           name: npm-public
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          group:
-            memberNames:
-              - npm-registry
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          group: { memberNames: [npm-registry] }
         status_code: [201]
       when: "'npm-public' not in existing_repo_names"
 
-    # --- PyPI proxy ---
-    - name: Create pypi-proxy repository
+    - name: Create pypi-proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/proxy"
         method: POST
@@ -676,24 +661,14 @@
         body:
           name: pypi-proxy
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: https://pypi.org/
-            contentMaxAge: 10080
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 1440
-          httpClient:
-            blocked: false
-            autoBlock: true
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://pypi.org/", contentMaxAge: 10080, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 1440 }
+          httpClient: { blocked: false, autoBlock: true }
         status_code: [201]
       when: "'pypi-proxy' not in existing_repo_names"
 
-    # --- PyPI group ---
-    - name: Create pypi-public group repository
+    - name: Create pypi-public group
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group"
         method: POST
@@ -704,17 +679,12 @@
         body:
           name: pypi-public
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          group:
-            memberNames:
-              - pypi-proxy
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          group: { memberNames: [pypi-proxy] }
         status_code: [201]
       when: "'pypi-public' not in existing_repo_names"
 
-    # --- Gradle distributions (raw proxy) ---
-    - name: Create gradle-distributions raw proxy repository
+    - name: Create gradle-distributions raw proxy
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/raw/proxy"
         method: POST
@@ -725,25 +695,12 @@
         body:
           name: gradle-distributions
           online: true
-          storage:
-            blobStoreName: default
-            strictContentTypeValidation: true
-          proxy:
-            remoteUrl: "https://services.gradle.org"
-            contentMaxAge: -1
-            metadataMaxAge: 1440
-          negativeCache:
-            enabled: true
-            timeToLive: 1440
-          httpClient:
-            blocked: false
-            autoBlock: true
+          storage: { blobStoreName: default, strictContentTypeValidation: true }
+          proxy: { remoteUrl: "https://services.gradle.org", contentMaxAge: -1, metadataMaxAge: 1440 }
+          negativeCache: { enabled: true, timeToLive: 1440 }
+          httpClient: { blocked: false, autoBlock: true }
         status_code: [201]
       when: "'gradle-distributions' not in existing_repo_names"
-
-    # ================================================================
-    # Phase 8: Configure cleanup policies
-    # ================================================================
 
     - name: Create cleanup policy for cached content
       ansible.builtin.uri:
@@ -757,70 +714,10 @@
           name: cleanup-cached-30d
           format: ALL_FORMATS
           notes: "Delete cached content not downloaded in 30 days"
-          criteria:
-            lastDownloaded: 30
+          criteria: { lastDownloaded: 30 }
         status_code: [200, 201, 400, 404]
 
-    # ================================================================
-    # Phase 9: Decommission old registry mirrors
-    # ================================================================
-
-    - name: Stop and disable old registry mirror services
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-        state: stopped
-        enabled: false
-      loop: "{{ old_registry_services }}"
-      failed_when: false
-
-    - name: Remove old registry mirror cron jobs
-      ansible.builtin.cron:
-        name: "registry-gc-{{ item }}"
-        user: registry
-        state: absent
-      loop:
-        - dockerhub
-        - elastic
-        - quay
-      failed_when: false
-
-    # ================================================================
-    # Phase 10: UFW firewall
-    # ================================================================
-
-    - name: Allow Nexus web port from LAN (IPv4)
-      community.general.ufw:
-        rule: allow
-        port: "{{ nexus_port | string }}"
-        proto: tcp
-        from_ip: 192.168.11.0/24
-
-    - name: Allow Nexus Docker port from LAN (IPv4)
-      community.general.ufw:
-        rule: allow
-        port: "{{ nexus_docker_port | string }}"
-        proto: tcp
-        from_ip: 192.168.11.0/24
-
-    - name: Allow Nexus web port from LAN (IPv6)
-      community.general.ufw:
-        rule: allow
-        port: "{{ nexus_port | string }}"
-        proto: tcp
-        from_ip: fd0a:94e6:20b4:9f6b::/64
-
-    - name: Allow Nexus Docker port from LAN (IPv6)
-      community.general.ufw:
-        rule: allow
-        port: "{{ nexus_docker_port | string }}"
-        proto: tcp
-        from_ip: fd0a:94e6:20b4:9f6b::/64
-
-    # ================================================================
-    # Verify
-    # ================================================================
-
-    - name: Verify Nexus API is accessible
+    - name: Show repository status
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
         method: GET
@@ -830,31 +727,21 @@
         return_content: true
       register: final_repos
 
-    - name: Show repository status
+    - name: Bootstrap summary
       ansible.builtin.debug:
-        msg: "Nexus repositories: {{ final_repos.json | map(attribute='name') | sort | join(', ') }}"
+        msg: "Nexus bootstrap on pi1 complete — {{ final_repos.json | length }} repos provisioned. Stopping service so Keepalived can own start/stop."
 
-    - name: Verify Docker group port is accessible
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_docker_port }}/v2/"
-        status_code: [200, 401]
-
-    - name: Show completion message
-      ansible.builtin.debug:
-        msg: |
-          Caching proxies deployed successfully!
-            Nexus UI:   http://{{ ansible_host }}:{{ nexus_port }}/
-            Docker:     http://{{ ansible_host }}:{{ nexus_docker_port }}/
-            Maven:      http://{{ ansible_host }}:{{ nexus_port }}/repository/maven-public/
-            npm:        http://{{ ansible_host }}:{{ nexus_port }}/repository/npm-public/
-            PyPI:       http://{{ ansible_host }}:{{ nexus_port }}/repository/pypi-public/simple/
-
-  handlers:
-    - name: Reload systemd
-      ansible.builtin.systemd:
-        daemon_reload: true
-
-    - name: Restart nexus
+    # Clean shutdown so the H2 DB releases locks — Keepalived's notify_master
+    # on the VIP-holding Pi will start Nexus next.
+    - name: Stop Nexus on pi1 (Keepalived will start it on whichever Pi holds the VIP)
       ansible.builtin.systemd:
         name: nexus
-        state: restarted
+        state: stopped
+
+    - name: Write bootstrap sentinel (shared volume — visible to both Pis)
+      ansible.builtin.file:
+        path: "{{ nexus_data_dir }}/.bootstrap-done"
+        state: touch
+        owner: nexus
+        group: nexus
+        mode: "0644"

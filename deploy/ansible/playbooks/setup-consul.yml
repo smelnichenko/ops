@@ -137,7 +137,7 @@
       notify: Restart Consul
 
     - name: Enable and start Consul
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: consul
         enabled: true
         state: started
@@ -157,7 +157,7 @@
 
   handlers:
     - name: Restart Consul
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: consul
         state: restarted
         daemon_reload: true

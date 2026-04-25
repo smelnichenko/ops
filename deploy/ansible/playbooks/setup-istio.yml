@@ -30,48 +30,61 @@
     # ================================================================
 
     - name: Add Istio Helm repo
-      ansible.builtin.shell: |
-        helm repo add istio https://istio-release.storage.googleapis.com/charts
-        helm repo update istio
-      changed_when: true
+      kubernetes.core.helm_repository:
+        name: istio
+        repo_url: https://istio-release.storage.googleapis.com/charts
 
     - name: Check if Istio is already installed
-      ansible.builtin.shell: |
-        kubectl get deployment istiod -n istio-system -o name 2>/dev/null
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: apps/v1
+        kind: Deployment
+        name: istiod
+        namespace: istio-system
       register: istio_exists
-      changed_when: false
-      failed_when: false
 
     - name: Install Istio base (CRDs)
-      ansible.builtin.shell: |
-        helm upgrade --install istio-base istio/base \
-          --namespace istio-system --create-namespace \
-          --version {{ istio_version }} \
-          --wait --timeout 60s
-      when: istio_exists.rc != 0
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: istio-base
+        chart_ref: istio/base
+        chart_version: "{{ istio_version }}"
+        release_namespace: istio-system
+        create_namespace: true
+        wait: true
+        wait_timeout: 60s
+      when: istio_exists.resources | length == 0
 
     - name: Install istiod
-      ansible.builtin.shell: |
-        helm upgrade --install istiod istio/istiod \
-          --namespace istio-system \
-          --version {{ istio_version }} \
-          --set meshConfig.accessLogFile=/dev/stdout \
-          --set meshConfig.defaultConfig.holdApplicationUntilProxyStarts=true \
-          --wait --timeout 120s
-      when: istio_exists.rc != 0
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: istiod
+        chart_ref: istio/istiod
+        chart_version: "{{ istio_version }}"
+        release_namespace: istio-system
+        wait: true
+        wait_timeout: 120s
+        values:
+          meshConfig:
+            accessLogFile: /dev/stdout
+            defaultConfig:
+              holdApplicationUntilProxyStarts: true
+      when: istio_exists.resources | length == 0
 
     - name: Install Istio CNI
-      ansible.builtin.shell: |
-        helm upgrade --install istio-cni istio/cni \
-          --namespace istio-system \
-          --version {{ istio_version }} \
-          --set cni.cniConfDir=/etc/cni/net.d \
-          --set cni.cniBinDir=/opt/cni/bin \
-          --wait --timeout 120s
-      when: istio_exists.rc != 0
-      changed_when: true
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: istio-cni
+        chart_ref: istio/cni
+        chart_version: "{{ istio_version }}"
+        release_namespace: istio-system
+        wait: true
+        wait_timeout: 120s
+        values:
+          cni:
+            cniConfDir: /etc/cni/net.d
+            cniBinDir: /opt/cni/bin
+      when: istio_exists.resources | length == 0
 
     - name: Verify Istio pods
       ansible.builtin.shell: |
@@ -92,9 +105,16 @@
     # ================================================================
 
     - name: Label schnappy namespace for sidecar injection
-      ansible.builtin.shell: |
-        kubectl label namespace {{ ns }} istio-injection=enabled --overwrite
-      changed_when: true
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: patched
+        api_version: v1
+        kind: Namespace
+        name: "{{ ns }}"
+        definition:
+          metadata:
+            labels:
+              istio-injection: enabled
 
     - name: "PHASE 2: schnappy namespace sidecar injection enabled"
       ansible.builtin.debug:
@@ -105,17 +125,28 @@
     # ================================================================
 
     - name: Wait for Istio gateway service
-      ansible.builtin.shell: |
-        kubectl get svc schnappy-gateway-istio -n {{ ns }} -o jsonpath='{.spec.externalIPs[0]}'
-      register: gateway_vip
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: v1
+        kind: Service
+        name: schnappy-gateway-istio
+        namespace: "{{ ns }}"
+      register: gateway_svc
       retries: 30
       delay: 10
-      until: gateway_vip.stdout | length > 0
-      changed_when: false
+      until:
+        - gateway_svc.resources | length > 0
+        - gateway_svc.resources[0].spec.externalIPs is defined
+        - gateway_svc.resources[0].spec.externalIPs | length > 0
+
+    - name: Set gateway VIP fact
+      ansible.builtin.set_fact:
+        gateway_vip_addr: "{{ gateway_svc.resources[0].spec.externalIPs[0] }}"
 
     - name: Test Istio gateway  # noqa: command-instead-of-module
+      # curl --resolve pins pmon.dev to the gateway VIP; uri module has no equivalent.
       ansible.builtin.shell: |
-        curl -sk -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:{{ gateway_vip.stdout }} https://pmon.dev/api/health
+        curl -sk -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:{{ gateway_vip_addr }} https://pmon.dev/api/health
       register: gateway_test
       changed_when: false
       failed_when: false
@@ -124,6 +155,6 @@
       ansible.builtin.debug:
         msg: |
           Istio sidecar mesh: RUNNING
-          Gateway VIP: {{ gateway_vip.stdout }}
+          Gateway VIP: {{ gateway_vip_addr }}
           Health check: {{ 'OK' if gateway_test.stdout == '200' else 'NOT YET (app pods may still be starting)' }}
           PeerAuth: STRICT mTLS

@@ -145,7 +145,7 @@
       notify: Reload systemd
 
     - name: Enable and start Caddy
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: caddy
         enabled: true
         state: started
@@ -153,12 +153,12 @@
 
   handlers:
     - name: Reload Caddy
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         name: caddy
         state: reloaded
 
     - name: Reload systemd
-      ansible.builtin.systemd:
+      ansible.builtin.systemd_service:
         daemon_reload: true
 
 # ─── Verify ─────────────────────────────────────────────────────────────────

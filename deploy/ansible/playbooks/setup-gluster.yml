@@ -10,16 +10,19 @@
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/setup-gluster.yml
 
-# ─── Install and configure GlusterFS on both Pis ────────────────────────────
-- name: Setup GlusterFS
-  hosts: pi1,pi2
+# ─── Install GlusterFS on pi1, pi2, ten ────────────────────────────────────
+# ten joins as a replica-3 arbiter node: it stores only metadata (filenames,
+# timestamps, permissions), no file content. Provides quorum to prevent
+# split-brain during pi1↔pi2 network partitions. Same tie-breaker role ten
+# already plays for Consul / Patroni / Vault.
+- name: Install GlusterFS
+  hosts: pi1,pi2,target
   become: true
   gather_facts: true
 
   vars:
-    pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
-    pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
     gluster_brick: /var/lib/gluster/forgejo-brick
+    gluster_arbiter_brick: /var/lib/gluster/forgejo-arbiter-brick
     forgejo_uid: 900
     forgejo_gid: 900
 
@@ -39,6 +42,7 @@
         - { port: "24007", proto: "tcp", name: "GlusterFS daemon" }
         - { port: "24008", proto: "tcp", name: "GlusterFS management" }
         - { port: "49152:61000", proto: "tcp", name: "GlusterFS bricks" }
+      failed_when: false  # ten may not have UFW active
 
     - name: Enable and start GlusterFS
       ansible.builtin.systemd:
@@ -46,6 +50,8 @@
         enabled: true
         state: started
 
+    # Forgejo UID alignment only on the data nodes — ten doesn't run Forgejo
+    # and doesn't need the local user.
     - name: Align Forgejo UID/GID across nodes
       ansible.builtin.shell: |
         CURRENT_UID=$(id -u forgejo)
@@ -60,94 +66,129 @@
         fi
       register: uid_result
       changed_when: "'changed' in uid_result.stdout"
+      when: inventory_hostname in ['pi1', 'pi2']
 
-    - name: Create brick directory
+    - name: Create brick directory (data on pi1+pi2)
       ansible.builtin.file:
         path: "{{ gluster_brick }}"
         state: directory
         owner: root
         group: root
         mode: '0755'
+      when: inventory_hostname in ['pi1', 'pi2']
 
-# ─── Probe peers and create volume from pi1 ─────────────────────────────────
-- name: Create GlusterFS volume
+    - name: Create arbiter brick directory (metadata-only, on ten)
+      ansible.builtin.file:
+        path: "{{ gluster_arbiter_brick }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: inventory_hostname == 'target'
+
+# ─── Probe peers and create/migrate forgejo-repos volume ──────────────────
+- name: Create GlusterFS forgejo-repos volume (replica 3 arbiter 1)
   hosts: pi1
   become: true
   gather_facts: false
 
   vars:
     gluster_brick: /var/lib/gluster/forgejo-brick
+    gluster_arbiter_brick: /var/lib/gluster/forgejo-arbiter-brick
     gluster_mount: /var/lib/forgejo/repos
     forgejo_uid: 900
     forgejo_gid: 900
+    pi1_ip: "{{ hostvars['pi1']['ansible_host'] }}"
+    pi2_ip: "{{ hostvars['pi2']['ansible_host'] }}"
+    ten_ip: "{{ hostvars['target']['ansible_host'] }}"
+
+    # Three peers: pi2 (data) and ten (arbiter). Probed from pi1.
+    gluster_peers:
+      - "{{ pi2_ip }}"
+      - "{{ ten_ip }}"
 
   tasks:
-    - name: Probe pi2
-      ansible.builtin.shell: |
-        gluster peer probe {{ hostvars['pi2']['ansible_host'] }} 2>&1
-      register: peer_probe
-      changed_when: "'already in peer list' not in peer_probe.stdout"
+    - name: Probe peers (pi2 + ten)
+      gluster.gluster.gluster_peer:
+        state: present
+        nodes: "{{ gluster_peers }}"
 
-    - name: Wait for peer to connect
+    - name: Wait for 2 peers connected (pi2 + ten)
       ansible.builtin.shell: |
         set -o pipefail
         gluster peer status | grep -c 'State: Peer in Cluster (Connected)'
       register: peer_status
-      until: peer_status.stdout | trim | int >= 1
+      until: peer_status.stdout | trim | int >= 2
       retries: 12
       delay: 5
       changed_when: false
 
-    - name: Check if volume exists
+    - name: Count existing forgejo-repos bricks
       ansible.builtin.shell: |
-        gluster volume info forgejo-repos 2>/dev/null && echo "exists" || echo "not-found"
-      register: vol_info
+        gluster volume info forgejo-repos 2>/dev/null | grep -c "^Brick[0-9]" || echo 0
+      register: brick_count
       changed_when: false
 
-    - name: Stop Forgejo on pi1
+    - name: Stop Forgejo on pi1 (new install — need to migrate existing data)
       ansible.builtin.systemd:
         name: forgejo
         state: stopped
-      when: "'not-found' in vol_info.stdout"
+      when: brick_count.stdout | trim | int == 0
+      failed_when: false
 
-    - name: Stop Forgejo on pi2
+    - name: Stop Forgejo on pi2 (new install)
       ansible.builtin.systemd:
         name: forgejo
         state: stopped
       delegate_to: pi2
-      when: "'not-found' in vol_info.stdout"
+      when: brick_count.stdout | trim | int == 0
+      failed_when: false
 
-    - name: Copy existing repos to brick on pi1
+    - name: Copy existing repos to data brick on pi1 (new install)
       ansible.builtin.shell: |
         if [ -d {{ gluster_mount }}/schnappy ]; then
           cp -a {{ gluster_mount }}/schnappy {{ gluster_brick }}/
           chown -R {{ forgejo_uid }}:{{ forgejo_gid }} {{ gluster_brick }}/
         fi
-      when: "'not-found' in vol_info.stdout"
+      when: brick_count.stdout | trim | int == 0
       changed_when: true
 
-    - name: Create replicated volume
+    - name: Create replica-3-arbiter volume (new install)
       ansible.builtin.shell: |
-        gluster volume create forgejo-repos replica 2 \
-          {{ hostvars['pi1']['ansible_host'] }}:{{ gluster_brick }} \
-          {{ hostvars['pi2']['ansible_host'] }}:{{ gluster_brick }} \
+        gluster volume create forgejo-repos replica 3 arbiter 1 \
+          {{ pi1_ip }}:{{ gluster_brick }} \
+          {{ pi2_ip }}:{{ gluster_brick }} \
+          {{ ten_ip }}:{{ gluster_arbiter_brick }} \
           force 2>&1
-      when: "'not-found' in vol_info.stdout"
+      when: brick_count.stdout | trim | int == 0
+      changed_when: true
+
+    - name: Migrate replica-2 → replica-3-arbiter (production migration)
+      ansible.builtin.shell: |
+        gluster volume add-brick forgejo-repos replica 3 arbiter 1 \
+          {{ ten_ip }}:{{ gluster_arbiter_brick }} \
+          force 2>&1
+      when: brick_count.stdout | trim | int == 2
       changed_when: true
 
     - name: Set volume options
       ansible.builtin.shell: |
-        gluster volume set forgejo-repos auth.allow {{ hostvars['pi1']['ansible_host'] }},{{ hostvars['pi2']['ansible_host'] }},127.0.0.1
+        gluster volume set forgejo-repos auth.allow {{ pi1_ip }},{{ pi2_ip }},{{ ten_ip }},127.0.0.1
         gluster volume set forgejo-repos performance.cache-size 256MB
         gluster volume set forgejo-repos server.allow-insecure on
-      when: "'not-found' in vol_info.stdout"
-      changed_when: true
+      changed_when: brick_count.stdout | trim | int != 3
 
-    - name: Start volume
+    - name: Ensure volume is started (idempotent)
       ansible.builtin.shell: |
-        gluster volume start forgejo-repos 2>&1
-      when: "'not-found' in vol_info.stdout"
-      changed_when: true
+        STATE=$(gluster volume info forgejo-repos | awk '/^Status:/ {print $2}')
+        if [ "$STATE" != "Started" ]; then
+          gluster volume start forgejo-repos
+          echo "started"
+        else
+          echo "already-started"
+        fi
+      register: vol_start
+      changed_when: "'started' in vol_start.stdout and 'already' not in vol_start.stdout"
 
 # ─── Mount GlusterFS on both Pis ────────────────────────────────────────────
 - name: Mount GlusterFS volume
@@ -291,18 +332,26 @@
   vars:
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    ten_ip: "{{ hostvars['target']['ansible_host'] | default('192.168.11.2') }}"
     backup_volumes:
       - name: backup-minio
         brick: /var/lib/gluster/backup-minio-brick
+        arbiter_brick: /var/lib/gluster/backup-minio-arbiter-brick
         mount: /var/lib/minio/data
         minio_data: true
       - name: backup-git-mirror
         brick: /var/lib/gluster/backup-git-mirror-brick
+        arbiter_brick: /var/lib/gluster/backup-git-mirror-arbiter-brick
         mount: /mnt/backups/git-mirror
+        minio_data: false
+      - name: nexus-data
+        brick: /var/lib/gluster/nexus-brick
+        arbiter_brick: /var/lib/gluster/nexus-arbiter-brick
+        mount: /mnt/data/nexus
         minio_data: false
 
   tasks:
-    - name: Create brick directories on both nodes
+    - name: Create data brick directories on pi1 + pi2
       ansible.builtin.file:
         path: "{{ item.1.brick }}"
         state: directory
@@ -312,22 +361,78 @@
       delegate_to: "{{ item.0 }}"
       loop: "{{ ['pi1', 'pi2'] | product(backup_volumes) | list }}"
 
-    - name: Create replicated volumes
+    - name: Create arbiter brick directories on ten
+      ansible.builtin.file:
+        path: "{{ item.arbiter_brick }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      delegate_to: target
+      loop: "{{ backup_volumes }}"
+
+    - name: Count existing bricks per volume
       ansible.builtin.shell: |
-        if gluster volume info {{ item.name }} >/dev/null 2>&1; then
-          echo "exists"
-        else
-          gluster volume create {{ item.name }} replica 2 \
-            {{ pi1_ip }}:{{ item.brick }} \
-            {{ pi2_ip }}:{{ item.brick }} \
-            force
-          gluster volume set {{ item.name }} auth.allow {{ pi1_ip }},{{ pi2_ip }},127.0.0.1
-          gluster volume set {{ item.name }} server.allow-insecure on
-          gluster volume start {{ item.name }}
-          echo "created"
-        fi
+        gluster volume info {{ item.name }} 2>/dev/null | grep -c "^Brick[0-9]" || echo 0
+      register: backup_brick_count
+      changed_when: false
+      loop: "{{ backup_volumes }}"
+
+    - name: Create replica-3-arbiter volume (new install)
+      ansible.builtin.shell: |
+        gluster volume create {{ item.item.name }} replica 3 arbiter 1 \
+          {{ pi1_ip }}:{{ item.item.brick }} \
+          {{ pi2_ip }}:{{ item.item.brick }} \
+          {{ ten_ip }}:{{ item.item.arbiter_brick }} \
+          force
+        gluster volume set {{ item.item.name }} auth.allow {{ pi1_ip }},{{ pi2_ip }},{{ ten_ip }},127.0.0.1
+        gluster volume set {{ item.item.name }} server.allow-insecure on
+        echo "created"
       register: vol_create
-      changed_when: "'created' in vol_create.stdout"
+      when: item.stdout | trim | int == 0
+      changed_when: "'created' in vol_create.stdout | default('')"
+      loop: "{{ backup_brick_count.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # Gluster re-asserts brick ownership from arbiter metadata on every
+    # mount / peer-reconnect / self-heal. Setting `storage.owner-*` options
+    # makes Gluster itself enforce the ownership, so client-side chown stays
+    # durable. nexus runs as uid/gid 901/901 (see setup-nexus.yml).
+    - name: Set nexus-data volume ownership (durable across heals)
+      ansible.builtin.shell: |
+        gluster volume set nexus-data storage.owner-uid 901
+        gluster volume set nexus-data storage.owner-gid 901
+      changed_when: true
+      failed_when: false  # volume may not exist yet on fresh install — next play creates it
+
+    - name: Migrate existing replica-2 → replica-3-arbiter
+      ansible.builtin.shell: |
+        gluster volume add-brick {{ item.item.name }} replica 3 arbiter 1 \
+          {{ ten_ip }}:{{ item.item.arbiter_brick }} \
+          force
+        gluster volume set {{ item.item.name }} auth.allow {{ pi1_ip }},{{ pi2_ip }},{{ ten_ip }},127.0.0.1
+        echo "migrated"
+      register: vol_migrate
+      when: item.stdout | trim | int == 2
+      changed_when: "'migrated' in vol_migrate.stdout | default('')"
+      loop: "{{ backup_brick_count.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # Idempotent start: gluster's 'start' refuses if already running.
+    # Check status first so reruns don't error and stopped volumes recover.
+    - name: Ensure volumes are started
+      ansible.builtin.shell: |
+        STATE=$(gluster volume info {{ item.name }} | awk '/^Status:/ {print $2}')
+        if [ "$STATE" != "Started" ]; then
+          gluster volume start {{ item.name }}
+          echo "started"
+        else
+          echo "already-started"
+        fi
+      register: vol_start
+      changed_when: "'started' in vol_start.stdout and 'already' not in vol_start.stdout"
       loop: "{{ backup_volumes }}"
 
     - name: Migrate existing data to bricks
@@ -354,6 +459,7 @@
     backup_volumes:
       - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio }
       - { name: backup-git-mirror, mount: /mnt/backups/git-mirror, stop_service: "" }
+      - { name: nexus-data, mount: /mnt/data/nexus, stop_service: nexus }
 
   tasks:
     - name: Stop services before mounting
@@ -393,6 +499,9 @@
         group: minio
         mode: '0755'
 
+    # Nexus ownership is handled by setup-nexus.yml (which runs after and
+    # creates the nexus user with a fixed UID first).
+
     - name: Start services after mounting
       ansible.builtin.systemd:
         name: "{{ item.stop_service }}"
@@ -409,7 +518,7 @@
   tasks:
     - name: Check all backup volume statuses
       ansible.builtin.shell: |
-        for vol in backup-minio backup-git-mirror; do
+        for vol in backup-minio backup-git-mirror nexus-data; do
           echo "=== $vol ==="
           gluster volume status $vol 2>/dev/null | head -8
         done
@@ -418,7 +527,7 @@
 
     - name: Verify mounts on both nodes
       ansible.builtin.shell: |
-        mount | grep backup-
+        mount | grep -E "backup-|nexus-data"
       register: mount_check
       changed_when: false
       delegate_to: "{{ item }}"

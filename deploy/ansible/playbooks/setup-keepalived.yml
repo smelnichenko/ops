@@ -19,15 +19,32 @@
   vars:
     vip: "{{ keepalived_vip | default('192.168.11.5') }}"
     vip_cidr: 24
-    vrrp_interface: "{{ ansible_default_ipv4.interface }}"
     vrrp_router_id: 51
-    vrrp_password: "{{ lookup('env', 'KEEPALIVED_PASSWORD') | default('k33p4l1v', true) }}"
+    vrrp_password: "{{ keepalived_vrrp_password }}"
     # pi1 is master (higher priority), pi2 is backup
     vrrp_priority: "{{ 150 if inventory_hostname == 'pi1' else 100 }}"
     # Both start as BACKUP — higher priority wins MASTER. nopreempt requires this.
     vrrp_state: BACKUP
+    # Unicast VRRP: explicit source + peer on the private-network IPs.
+    peer_src_ip: "{{ ansible_host }}"
+    peer_other_ip: "{{ hostvars['pi2']['ansible_host'] if inventory_hostname == 'pi1' else hostvars['pi1']['ansible_host'] }}"
 
   tasks:
+    - name: Discover VRRP interface (the one carrying ansible_host)
+      ansible.builtin.shell: |
+        ip -o -4 addr show | awk -v ip="{{ ansible_host }}" '$4 ~ "^"ip"/" {print $2; exit}'
+      register: _vrrp_iface
+      changed_when: false
+
+    - name: Set vrrp_interface fact
+      ansible.builtin.set_fact:
+        vrrp_interface: "{{ _vrrp_iface.stdout | trim }}"
+
+    - name: Fail if we couldn't find the interface
+      ansible.builtin.assert:
+        that: vrrp_interface | length > 0
+        fail_msg: "Could not find an interface with IP {{ ansible_host }}"
+
     - name: Install Keepalived
       ansible.builtin.apt:
         name: keepalived
@@ -46,7 +63,9 @@
         mode: '0755'
         content: |
           #!/bin/bash
-          # Check critical services — if any fails, reduce priority to trigger failover
+          # Check critical services — if any fails, reduce priority to trigger failover.
+          # Nexus is intentionally excluded: it's controlled by notify_master /
+          # notify_backup scripts below, not by this health probe.
 
           # Forgejo
           curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
@@ -58,6 +77,86 @@
           curl -sf -o /dev/null -m 3 http://localhost:8008/health || exit 1
 
           exit 0
+
+    # Nexus active-passive controller scripts. Safety comes from three
+    # independent layers:
+    #   1. VRRP election: exactly one Pi holds VIP in the common case
+    #   2. /mnt/data/nexus/.active-on-<hostname> sentinel: informational +
+    #      split-brain detector; notify_master logs a warning if another
+    #      host's sentinel exists
+    #   3. Nexus's own H2 lock (/mnt/data/nexus/db/nexus.lock.db) refuses
+    #      concurrent starts — hard fencing, built into Nexus
+    # Gluster replica-3-arbiter on ten provides write-quorum: during a true
+    # pi1↔pi2 partition, the side that can still reach ten gets writes; the
+    # other side gets EROFS and its Nexus crashes cleanly — no corrupt blobs.
+    - name: Create Nexus notify_master script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/nexus_master.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set +e
+          HOSTNAME=$(hostname)
+          SENTINEL="/mnt/data/nexus/.active-on-${HOSTNAME}"
+          logger -t nexus-keepalived "notify_master: taking over Nexus on $HOSTNAME"
+
+          # Detect stale sentinels from other hosts (they should have been
+          # removed by notify_backup; if not, log and continue — Nexus's H2
+          # lock will refuse the start if another instance actually has it).
+          for stale in $(ls /mnt/data/nexus/.active-on-* 2>/dev/null); do
+            case "$stale" in
+              "$SENTINEL") ;;
+              *) logger -t nexus-keepalived "WARN: stale sentinel $stale" ;;
+            esac
+          done
+
+          mkdir -p /mnt/data/nexus
+          touch "$SENTINEL"
+          systemctl start nexus
+
+          # Wait bounded for API to come up.
+          for i in $(seq 1 18); do
+            if curl -sf -o /dev/null -m 3 http://localhost:8081/service/rest/v1/status; then
+              logger -t nexus-keepalived "Nexus on $HOSTNAME is ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          logger -t nexus-keepalived "WARN: Nexus on $HOSTNAME didn't become ready in 180s"
+
+    - name: Create Nexus notify_backup / notify_fault script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/nexus_backup.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set +e
+          HOSTNAME=$(hostname)
+          logger -t nexus-keepalived "notify_backup: releasing Nexus on $HOSTNAME"
+          systemctl stop nexus
+          rm -f "/mnt/data/nexus/.active-on-${HOSTNAME}"
+
+    # Ensure Nexus is stopped whenever Keepalived stops (systemctl stop,
+    # daemon crash, OOM, etc.) — notify_backup only fires on VRRP state
+    # transitions, not on daemon exit. Without this, `systemctl stop
+    # keepalived` on the active Pi leaves Nexus running while the other Pi
+    # takes VIP and starts its own Nexus — both race on the H2 lock.
+    - name: Systemd drop-in to stop Nexus when Keepalived stops
+      ansible.builtin.file:
+        path: /etc/systemd/system/keepalived.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Write drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/keepalived.service.d/stop-nexus.conf
+        mode: '0644'
+        content: |
+          [Service]
+          ExecStopPost=/etc/keepalived/nexus_backup.sh
+      notify:
+        - Reload systemd
+        - Restart Keepalived
 
     - name: Write Keepalived config
       ansible.builtin.copy:
@@ -86,6 +185,15 @@
             advert_int 1
             nopreempt
 
+            # Unicast VRRP — multicast may not cross Vagrant/libvirt bridged
+            # private networks; unicast explicitly targets the peer IP on the
+            # same interface so elections work reliably in both Vagrant and
+            # production (where multicast works but unicast is no-cost).
+            unicast_src_ip {{ peer_src_ip }}
+            unicast_peer {
+              {{ peer_other_ip }}
+            }
+
             authentication {
               auth_type PASS
               auth_pass {{ vrrp_password }}
@@ -98,6 +206,10 @@
             track_script {
               check_services
             }
+
+            notify_master "/etc/keepalived/nexus_master.sh"
+            notify_backup "/etc/keepalived/nexus_backup.sh"
+            notify_fault "/etc/keepalived/nexus_backup.sh"
           }
       notify: Restart Keepalived
 
@@ -109,6 +221,10 @@
         daemon_reload: true
 
   handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
     - name: Restart Keepalived
       ansible.builtin.systemd:
         name: keepalived
@@ -154,12 +270,14 @@
         ping -c 2 -W 2 {{ vip }}
       changed_when: false
 
+    # VRRP election + notify_master Nexus bootstrap + Forgejo readiness can
+    # all happen concurrently after keepalived restart. 2 min budget.
     - name: Check Forgejo via VIP
       ansible.builtin.uri:
         url: "http://{{ vip }}:3000/api/v1/version"
         status_code: 200
       register: forgejo_vip
-      retries: 6
+      retries: 24
       delay: 5
       until: forgejo_vip.status == 200
 

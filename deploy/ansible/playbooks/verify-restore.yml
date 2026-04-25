@@ -23,40 +23,67 @@
 
   tasks:
     - name: Check all pods are running
-      ansible.builtin.shell: |
-        set -o pipefail
-        NOT_READY=$(kubectl get pods -n {{ ns }} --no-headers | grep -v 'Running\|Completed' | wc -l)
-        echo "$NOT_READY pods not ready"
-        [ "$NOT_READY" -eq 0 ]
-      args:
-        executable: /bin/bash
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Pod
+        namespace: "{{ ns }}"
       register: pods_check
       retries: 30
       delay: 10
-      until: pods_check.rc == 0
-      changed_when: false
+      until: >-
+        pods_check.resources
+        | rejectattr('status.phase', 'in', ['Running', 'Succeeded'])
+        | list | length == 0
 
     - name: Check k6-smoke CronJob exists
-      ansible.builtin.command: kubectl get cronjob schnappy-k6-smoke -n {{ ns }} --no-headers
-      changed_when: false
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: CronJob
+        name: schnappy-k6-smoke
+        namespace: "{{ ns }}"
+      register: k6_cronjob
+      failed_when: k6_cronjob.resources | length == 0
 
     - name: Delete previous verify job if exists
-      ansible.builtin.shell: kubectl delete job {{ job_name }} -n {{ ns }} 2>/dev/null || true
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: absent
+        kind: Job
+        name: "{{ job_name }}"
+        namespace: "{{ ns }}"
+        wait: true
 
     - name: Create k6 smoke test Job from CronJob
-      ansible.builtin.shell: |
-        kubectl create job {{ job_name }} --from=cronjob/schnappy-k6-smoke -n {{ ns }}
+      ansible.builtin.command: kubectl create job {{ job_name }} --from=cronjob/schnappy-k6-smoke -n {{ ns }}
       changed_when: false
 
     - name: Wait for k6 Job to complete
-      ansible.builtin.shell: |
-        kubectl wait --for=condition=complete job/{{ job_name }} -n {{ ns }} --timeout=120s
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Job
+        name: "{{ job_name }}"
+        namespace: "{{ ns }}"
       register: k6_result
-      changed_when: false
+      retries: 24
+      delay: 5
+      until: >-
+        k6_result.resources | length > 0
+        and (
+          (k6_result.resources[0].status.conditions | default([])
+            | selectattr('type', 'equalto', 'Complete')
+            | selectattr('status', 'equalto', 'True') | list | length > 0)
+          or
+          (k6_result.resources[0].status.conditions | default([])
+            | selectattr('type', 'equalto', 'Failed')
+            | selectattr('status', 'equalto', 'True') | list | length > 0)
+        )
 
     - name: Get k6 Job logs
-      ansible.builtin.command: kubectl logs job/{{ job_name }} -n {{ ns }}
+      kubernetes.core.k8s_log:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Job
+        name: "{{ job_name }}"
+        namespace: "{{ ns }}"
       register: k6_logs
       changed_when: false
 
@@ -66,7 +93,10 @@
 
     - name: Verify all checks passed
       ansible.builtin.assert:
-        that: k6_result.rc == 0
+        that: >-
+          k6_result.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Complete')
+          | selectattr('status', 'equalto', 'True') | list | length > 0
         fail_msg: |
           POST-RESTORE SMOKE TEST FAILED
           One or more endpoints are not responding correctly after restore.
@@ -76,5 +106,9 @@
           All endpoints are healthy after restore.
 
     - name: Clean up verify job
-      ansible.builtin.command: kubectl delete job {{ job_name }} -n {{ ns }}
-      changed_when: false
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: absent
+        kind: Job
+        name: "{{ job_name }}"
+        namespace: "{{ ns }}"
