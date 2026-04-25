@@ -490,7 +490,7 @@
             name: data-critical
           value: 500000
           preemptionPolicy: PreemptLowerPriority
-          description: "Data stores: PostgreSQL, Kafka, Redis, ScyllaDB, MinIO"
+          description: "Data stores: PostgreSQL, Kafka, Valkey, ScyllaDB, MinIO"
 
     - name: Create PriorityClass app-default
       kubernetes.core.k8s:

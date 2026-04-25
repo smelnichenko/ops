@@ -606,7 +606,7 @@ task deploy:undeploy  # Remove (keeps data)
 | Chess | 100m / 2000m | 1Gi / 2Gi |
 | Frontend (site) | 100m / 2000m | 64Mi / 256Mi |
 | PostgreSQL | 250m / 4000m | 1Gi / 2Gi |
-| Redis | 100m / 1000m | 64Mi / 512Mi |
+| Valkey | 100m / 1000m | 64Mi / 512Mi |
 | Kafka | 250m / 2000m | 1536Mi / 2Gi |
 | ScyllaDB | 200m / 4000m | 2Gi / 4Gi |
 | Elasticsearch | 250m / 4000m | 2Gi / 4Gi |
@@ -925,9 +925,9 @@ Real-time messaging with Kafka message bus and ScyllaDB persistence.
 - **ScyllaDB:** 6.2, single node, CQL protocol on port 9042; `--developer-mode=1` only in Vagrant tests (production uses `--overprovisioned=1` without developer mode)
 - **Message flow:** REST/WebSocket → ChatService → KafkaProducer → Kafka → ChatMessageConsumer (persistence group → ScyllaDB, delivery group → WebSocket fan-out)
 - **Data model:** PostgreSQL for channels + members + user cache (relational), ScyllaDB for messages (day-bucketed partitions: `PRIMARY KEY ((channel_id, bucket), message_id)`)
-- **User cache:** `chat_users` table in monitor_chat DB, populated from Kafka user events and gateway headers; Redis is read-through cache
+- **User cache:** `chat_users` table in monitor_chat DB, populated from Kafka user events and gateway headers; Valkey is read-through cache
 - **WebSocket:** STOMP over SockJS at `/ws/chat`, JWT auth via HandshakeInterceptor (cookie or header)
-- **Presence:** Redis sorted set (`chat:presence`) with 60s heartbeat TTL
+- **Presence:** Valkey sorted set (`chat:presence`) with 60s heartbeat TTL
 - **Permission:** `CHAT` permission required (group-based RBAC)
 - **Key files:** `backend/src/main/java/io/schnappy/monitor/chat/` (all chat Java code), Helm templates `kafka-*.yaml`, `scylla-*.yaml` in platform repo
 - **Test:** `task test:kafka-scylla` (Vagrant integration test — Kafka + ScyllaDB + schema/topics jobs + network policies)

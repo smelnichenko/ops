@@ -43,7 +43,7 @@ tasks:
       - echo ""
       - echo "=== Infrastructure Started ==="
       - echo "PostgreSQL localhost:5432"
-      - echo "Redis      localhost:6379"
+      - echo "Valkey     localhost:6379"
       - echo "Kafka      localhost:9092"
       - echo "ScyllaDB   localhost:9042"
       - echo "MinIO      localhost:9000"
@@ -279,7 +279,7 @@ tasks:
         venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
         -e vault_prefix=schnappy-test
         -e "MONITOR_DB_PASSWORD=$MONITOR_DB_PASSWORD"
-        -e "REDIS_PASSWORD=$REDIS_PASSWORD"
+        -e "VALKEY_PASSWORD=$VALKEY_PASSWORD"
         -e "JWT_SECRET=$JWT_SECRET"
         -e "MAIL_PASSWORD=${MAIL_PASSWORD:-unused}"
         -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-unused}"
@@ -564,7 +564,7 @@ tasks:
       - >-
         venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
         -e "MONITOR_DB_PASSWORD=$MONITOR_DB_PASSWORD"
-        -e "REDIS_PASSWORD=$REDIS_PASSWORD"
+        -e "VALKEY_PASSWORD=$VALKEY_PASSWORD"
         -e "JWT_SECRET=$JWT_SECRET"
         -e "MAIL_PASSWORD=$MAIL_PASSWORD"
         -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"

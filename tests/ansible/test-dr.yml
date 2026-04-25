@@ -508,7 +508,7 @@
       ansible.builtin.assert:
         that:
           - health_after_valkey.json.status == "UP"
-        success_msg: "PASS: Redis pod recovery — app healthy"
+        success_msg: "PASS: Valkey pod recovery — app healthy"
 
     # ── Test 4: Kill frontend pod ──
 
@@ -1582,7 +1582,7 @@
             Suite 1 - Pod Recovery:
               - App pod kill + recovery: PASS
               - Postgres pod kill + recovery: PASS
-              - Redis pod kill + recovery: PASS
+              - Valkey pod kill + recovery: PASS
               - Frontend pod kill + recovery: PASS
               - All pods kill + recovery: PASS
             Suite 2 - Full DR (Velero):

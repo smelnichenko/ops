@@ -11,7 +11,7 @@ Contains everything needed to provision, deploy, and test the pmon.dev infrastru
 ```
 ops/
   Taskfile.yml           # Task runner (build, test, deploy commands)
-  docker-compose.yml     # Local development stack (PostgreSQL, Redis, Kafka, ScyllaDB, etc.)
+  docker-compose.yml     # Local development stack (PostgreSQL, Valkey, Kafka, ScyllaDB, etc.)
   Vagrantfile            # Vagrant VMs for integration testing
   deploy/
     ansible/
