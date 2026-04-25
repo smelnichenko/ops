@@ -56,15 +56,14 @@
             path "secret/metadata/" {
               capabilities = ["list"]
             }
-            # List inside each PR prefix.
-            path "secret/metadata/schnappy-pr-+/" {
-              capabilities = ["list"]
+            # LIST + DELETE on schnappy-pr-* (partial-segment match —
+            # Vault's `+` is single-segment-wildcard, not partial-match;
+            # `*` is glob-suffix and is the correct primitive here).
+            path "secret/metadata/schnappy-pr-*" {
+              capabilities = ["list", "delete"]
             }
-            # Delete keys under schnappy-pr-*. Metadata DELETE = full purge.
-            path "secret/metadata/schnappy-pr-+/+" {
-              capabilities = ["delete"]
-            }
-            # Explicitly DENY everything else under secret/ (defense in depth).
+            # Explicitly DENY everything else under secret/ (defense in
+            # depth — `deny` always wins over `allow` in Vault ACLs).
             path "secret/data/*" {
               capabilities = ["deny"]
             }
@@ -84,6 +83,12 @@
               capabilities = ["deny"]
             }
             path "secret/metadata/schnappy-infra/*" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/argocd" {
+              capabilities = ["deny"]
+            }
+            path "secret/metadata/argocd/*" {
               capabilities = ["deny"]
             }
 
