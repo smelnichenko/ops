@@ -44,7 +44,7 @@
         vault_token_value: "{{ vault_token_raw.content | b64decode | trim }}"
       no_log: true
 
-    - name: Write Vault policy {{ policy_name }} (LIST + DELETE on schnappy-pr-*)
+    - name: Write Vault ACL policy (LIST + DELETE on schnappy-pr-* paths)
       community.hashi_vault.vault_write:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
@@ -127,11 +127,17 @@
         path: "argocd/vault-cleanup-token"
         data:
           token: "{{ _new_token.data.auth.client_token }}"
-      when: _new_token is changed
+      # Only run after the previous task minted a fresh token; not a
+      # notify-handler chain because we need the register's payload.
+      when: _new_token is changed  # noqa: no-handler
       no_log: true
 
     - name: Report
       ansible.builtin.debug:
         msg: |
           Policy `{{ policy_name }}` reconciled.
-          Cleanup token: {{ 'reused (already at secret/argocd/vault-cleanup-token)' if _new_token is skipped else 'newly issued + stored at secret/argocd/vault-cleanup-token' }}
+          Cleanup token: {{
+            'reused (already at secret/argocd/vault-cleanup-token)'
+            if _new_token is skipped
+            else 'newly issued + stored at secret/argocd/vault-cleanup-token'
+          }}

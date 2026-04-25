@@ -427,7 +427,9 @@
       changed_when: "'unsealed' in _pi1_unseal.stdout"
 
     # ── First-time bootstrap: KV v2 + ESO policy + k8s auth ────────────
-    - name: Bootstrap KV + ESO + k8s-auth (first init only)
+    - name: Bootstrap KV + ESO + k8s-auth (first init only)  # noqa: no-handler
+      # A handler can't carry the bootstrap block (handlers don't accept
+      # nested tasks). Gate on the init task's `changed` instead.
       when: _init is changed
       block:
         - name: Enable KV v2

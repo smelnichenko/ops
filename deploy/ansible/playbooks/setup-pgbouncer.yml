@@ -29,8 +29,8 @@
     # Databases to expose. Each gets a [databases] entry pointing at
     # HAProxy. App-side DSN switches from :5000 → :6432.
     databases:
-      - { name: forgejo,  user: forgejo  }
-      - { name: keycloak, user: keycloak }
+      - {name: forgejo, user: forgejo}
+      - {name: keycloak, user: keycloak}
 
   tasks:
     - name: Install pgbouncer
@@ -56,8 +56,9 @@
     # Both Pis must share the same password — they all log into the
     # same Patroni role. Generate on pi1 (run_once), distribute to
     # the rest.
-    - name: Generate pgbouncer auth_user password on pi1 (idempotent)
+    - name: Generate pgbouncer auth_user password on pi1 (idempotent)  # noqa: run-once[task]
       ansible.builtin.shell: |
+        set -eo pipefail
         if [ ! -f {{ auth_secret_dir }}/auth_user.password ]; then
           umask 077
           openssl rand -hex 32 > {{ auth_secret_dir }}/auth_user.password
@@ -67,7 +68,7 @@
       delegate_to: pi1
       changed_when: false
 
-    - name: Read auth_user password from pi1
+    - name: Read auth_user password from pi1  # noqa: run-once[task]
       ansible.builtin.slurp:
         src: "{{ auth_secret_dir }}/auth_user.password"
       register: _auth_user_pw_raw
@@ -89,9 +90,9 @@
         content: "{{ auth_user_password }}"
       no_log: true
 
-    - name: Provision auth_user role + lookup function in Patroni (run_once)
+    - name: Provision auth_user role + lookup function in Patroni (run_once)  # noqa: run-once[task]
       ansible.builtin.shell: |
-        set -e
+        set -eo pipefail
         PGPASSWORD='{{ postgres_admin_password }}' psql -h 127.0.0.1 -p {{ haproxy_port }} -U postgres -d postgres <<'SQL'
         DO $do$
         BEGIN
@@ -166,7 +167,7 @@
           ;; Avoid PgBouncer's admin console being reachable without auth
           admin_users = postgres
           stats_users = postgres
-      notify: restart pgbouncer
+      notify: Restart pgbouncer
 
     - name: Render userlist.txt (only the auth_user; everything else uses auth_query)
       ansible.builtin.copy:
@@ -177,7 +178,7 @@
         content: |
           "pgbouncer" "{{ auth_user_password }}"
       no_log: true
-      notify: restart pgbouncer
+      notify: Restart pgbouncer
 
     - name: Enable + start pgbouncer
       ansible.builtin.systemd_service:
@@ -202,7 +203,7 @@
     # will surface any auth_query issue immediately).
 
   handlers:
-    - name: restart pgbouncer
+    - name: Restart pgbouncer
       ansible.builtin.systemd_service:
         name: pgbouncer
         state: restarted

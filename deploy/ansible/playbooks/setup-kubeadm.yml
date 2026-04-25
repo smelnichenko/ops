@@ -361,7 +361,12 @@
       delay: 10
       until:
         - cilium_wait.resources | length > 0
-        - cilium_wait.resources | map(attribute='status.conditions', default=[]) | map('selectattr', 'type', 'equalto', 'Ready') | map('selectattr', 'status', 'equalto', 'True') | map('list') | map('length') | min > 0
+        - >-
+          cilium_wait.resources
+          | map(attribute='status.conditions', default=[])
+          | map('selectattr', 'type', 'equalto', 'Ready')
+          | map('selectattr', 'status', 'equalto', 'True')
+          | map('list') | map('length') | min > 0
 
     # ================================================================
     # Phase 6b: Install Istio service mesh
@@ -425,7 +430,12 @@
       delay: 10
       until:
         - istiod_wait.resources | length > 0
-        - istiod_wait.resources | map(attribute='status.conditions', default=[]) | map('selectattr', 'type', 'equalto', 'Ready') | map('selectattr', 'status', 'equalto', 'True') | map('list') | map('length') | min > 0
+        - >-
+          istiod_wait.resources
+          | map(attribute='status.conditions', default=[])
+          | map('selectattr', 'type', 'equalto', 'Ready')
+          | map('selectattr', 'status', 'equalto', 'True')
+          | map('list') | map('length') | min > 0
 
     # ================================================================
     # Phase 7: Install local-path-provisioner

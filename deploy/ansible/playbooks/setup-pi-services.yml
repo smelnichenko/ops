@@ -333,6 +333,7 @@
 
     - name: Check if Forgejo admin user exists
       ansible.builtin.shell: |
+        set -eo pipefail
         su - forgejo -c "forgejo admin user list \
           --config /var/lib/forgejo/custom/conf/app.ini" 2>&1 \
           | awk 'NR>1 { print $2 }'
@@ -388,7 +389,11 @@
         - _minio_passwd.ansible_facts.getent_passwd.minio is defined
         - _minio_passwd.ansible_facts.getent_passwd.minio[1] is defined
         - _minio_passwd.ansible_facts.getent_passwd.minio[1] != '9000'
-      ignore_errors: true
+      register: _minio_stop
+      # Tolerate "unit not loaded" on first install — UID-fix is a no-op then.
+      failed_when: >-
+        _minio_stop is failed
+        and 'Could not find the requested service' not in (_minio_stop.msg | default(''))
 
     - name: Create MinIO group (fixed GID for Gluster-neutral ownership)
       ansible.builtin.group:
@@ -497,6 +502,7 @@
       ansible.builtin.get_url:
         url: "https://github.com/keycloak/keycloak/releases/download/{{ keycloak_version }}/keycloak-{{ keycloak_version }}.tar.gz"
         dest: "/opt/keycloak-{{ keycloak_version }}.tar.gz"
+        mode: '0644'
         timeout: 60
       register: _kc_dl
       retries: 5

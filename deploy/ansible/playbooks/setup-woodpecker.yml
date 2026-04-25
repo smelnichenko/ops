@@ -186,6 +186,17 @@
       register: sonar_token_lookup
       failed_when: false
 
+    - name: Resolve SonarQube token (explicit override → cluster secret → empty)
+      ansible.builtin.set_fact:
+        _resolved_sonar_token: >-
+          {{ woodpecker_sonar_token
+             | default(
+                 (sonar_token_lookup.resources[0].data.SONARQUBE_TOKEN | b64decode)
+                 if (sonar_token_lookup.resources | default([]) | length > 0
+                     and (sonar_token_lookup.resources[0].data.SONARQUBE_TOKEN | default('')) != '')
+                 else '') }}
+      no_log: true
+
     - name: Create CI pipeline secrets (SonarQube, registry credentials)
       kubernetes.core.k8s:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -197,7 +208,7 @@
             namespace: "{{ woodpecker_namespace }}"
           type: Opaque
           stringData:
-            sonar_token: "{{ woodpecker_sonar_token | default((sonar_token_lookup.resources[0].data.SONARQUBE_TOKEN | b64decode) if (sonar_token_lookup.resources | default([]) | length > 0 and (sonar_token_lookup.resources[0].data.SONARQUBE_TOKEN | default('')) != '') else '') }}"
+            sonar_token: "{{ _resolved_sonar_token }}"
             sonar_host_url: "{{ woodpecker_sonar_host_url | default('https://sonar.pmon.dev') }}"
             registry_user: "{{ woodpecker_registry_user | default(forgejo_admin_user) }}"
             registry_token: "{{ woodpecker_registry_token | default(forgejo_admin_password) }}"

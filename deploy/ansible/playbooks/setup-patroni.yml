@@ -238,9 +238,14 @@
   tasks:
     - name: Wait for a Patroni leader to exist (from any node)
       ansible.builtin.shell: |
+        set -eo pipefail
+        PYEXTRACT='import sys,json
+        d=json.load(sys.stdin)
+        roles=("leader","master","primary")
+        print(next((m["name"] for m in d.get("members",[]) if m.get("role") in roles), ""))'
         for i in $(seq 1 60); do
-          LEADER=$(curl -sf http://localhost:8008/cluster 2>/dev/null | \
-            python3 -c 'import sys,json; d=json.load(sys.stdin); print(next((m["name"] for m in d.get("members",[]) if m.get("role") in ["leader","master","primary"]), ""))' 2>/dev/null)
+          LEADER=$(curl -sf http://localhost:8008/cluster 2>/dev/null \
+            | python3 -c "$PYEXTRACT" 2>/dev/null) || true
           [ -n "$LEADER" ] && echo "$LEADER" && exit 0
           sleep 5
         done
@@ -254,8 +259,19 @@
         patroni_primary: "{{ _leader.stdout | trim }}"
       run_once: true
 
+    # add_host registers the leader into an in-memory group so the
+    # next play can target it with a static `hosts:` pattern (lint
+    # can statically resolve the group name; it can't resolve a
+    # `hostvars[...][...]` lookup at parse time).
+    - name: Register Patroni primary as a dynamic group
+      ansible.builtin.add_host:
+        name: "{{ patroni_primary }}"
+        groups: patroni_primary
+      run_once: true
+      changed_when: false
+
 - name: Bootstrap users + keycloak DB on the Patroni primary
-  hosts: "{{ hostvars['pi1']['patroni_primary'] }}"
+  hosts: patroni_primary
   become: true
   gather_facts: false
 
@@ -280,10 +296,13 @@
 
     - name: Create forgejo + keycloak databases
       ansible.builtin.shell: |
-        PGPASSWORD={{ pg_password }} psql -h localhost -U postgres \
-          -c "SELECT 1 FROM pg_database WHERE datname='{{ item }}'" | grep -q 1 \
-          || PGPASSWORD={{ pg_password }} psql -h localhost -U postgres \
-               -c "CREATE DATABASE {{ item }}"
+        set -eo pipefail
+        EXISTS=$(PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -tAc \
+          "SELECT 1 FROM pg_database WHERE datname='{{ item }}'")
+        if [ "$EXISTS" != "1" ]; then
+          PGPASSWORD={{ pg_password }} psql -h localhost -U postgres \
+            -c "CREATE DATABASE {{ item }}"
+        fi
       loop: [forgejo, keycloak]
       changed_when: true
 
@@ -312,8 +331,13 @@
     # the replica reached streaming.
     - name: Poll cluster until all members are running
       ansible.builtin.shell: |
-        curl -sf http://localhost:8008/cluster 2>/dev/null | \
-          python3 -c 'import sys,json; d=json.load(sys.stdin); states=[m.get("state") for m in d.get("members",[])]; sys.exit(0 if all(s in ("running","streaming") for s in states) and len(states) >= 2 else 1)'
+        set -eo pipefail
+        PYCHECK='import sys,json
+        d=json.load(sys.stdin)
+        states=[m.get("state") for m in d.get("members",[])]
+        ok=all(s in ("running","streaming") for s in states) and len(states) >= 2
+        sys.exit(0 if ok else 1)'
+        curl -sf http://localhost:8008/cluster 2>/dev/null | python3 -c "$PYCHECK"
       register: _cluster_ready
       retries: 60
       delay: 5
@@ -370,18 +394,23 @@
       changed_when: false
       when: _forgejo_cfg.changed or _keycloak_cfg.changed
 
-    - name: daemon-reload if keycloak unit changed
+    # These run after rewriting Forgejo/Keycloak DB configs above; the
+    # `_forgejo_cfg.changed` / `_keycloak_cfg.changed` registers are the
+    # only signal we have, and the writes happen in nearby tasks (not
+    # in a notify-handler chain), so a handler refactor would add more
+    # plumbing than it saves.
+    - name: Daemon-reload if keycloak unit changed  # noqa: no-handler
       ansible.builtin.systemd:
         daemon_reload: true
       when: _keycloak_cfg.changed
 
-    - name: Restart Forgejo if reconfigured
+    - name: Restart Forgejo if reconfigured  # noqa: no-handler
       ansible.builtin.systemd:
         name: forgejo
         state: restarted
       when: _forgejo_cfg.changed
 
-    - name: Restart Keycloak if reconfigured
+    - name: Restart Keycloak if reconfigured  # noqa: no-handler
       ansible.builtin.systemd:
         name: keycloak
         state: restarted
@@ -404,8 +433,9 @@
     # are wiped. Forgejo migrates the schema on first connect, but no admin
     # user is recreated automatically. Re-create it here on the primary if
     # missing so downstream tests / GUI access works.
-    - name: List Forgejo users (post-Patroni)
+    - name: List Forgejo users (post-Patroni)  # noqa: run-once[task]
       ansible.builtin.shell: |
+        set -eo pipefail
         su - forgejo -c "forgejo admin user list \
           --config /var/lib/forgejo/custom/conf/app.ini" 2>&1 \
           | awk 'NR>1 { print $2 }'
