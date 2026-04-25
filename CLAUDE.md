@@ -628,7 +628,7 @@ task deploy:undeploy  # Remove (keeps data)
 
 ```bash
 task dev              # http://localhost:3000 (all infra + backend + frontend)
-task dev:infra        # Start only infra (postgres, redis, kafka, scylla, minio) for IDE debugging
+task dev:infra        # Start only infra (postgres, valkey, kafka, scylla, minio) for IDE debugging
 task dev:monitoring   # + Prometheus :9090, Grafana :3001
 task dev:logs         # Tail logs
 task dev:clean        # Stop + remove volumes
@@ -649,7 +649,7 @@ Located in the `schnappy/platform` repo under `helm/`. Split into 5 charts by li
 | Chart | Path | Argo CD App | Changes when |
 |---|---|---|---|
 | `schnappy` | `helm/schnappy` | `schnappy` | Code pushes (daily) — app, admin, chat, chess, envoy gateway, site, game |
-| `schnappy-data` | `helm/schnappy-data` | `schnappy-data` | Version bumps (monthly) — postgres, redis, kafka, scylla, minio, apt-cache |
+| `schnappy-data` | `helm/schnappy-data` | `schnappy-data` | Version bumps (monthly) — postgres, valkey, kafka, scylla, minio, apt-cache |
 | `schnappy-auth` | `helm/schnappy-auth` | — | **TEST-ONLY** (Vagrant E2E). Production Keycloak is bare-metal on Pis via setup-pi-services.yml. |
 | `schnappy-observability` | `helm/schnappy-observability` | `schnappy-observability` | Dashboard/config (weekly) — ELK, prometheus, grafana, alertmanager, kube-state-metrics |
 | `schnappy-sonarqube` | `helm/schnappy-sonarqube` | `schnappy-sonarqube` | QG/rule changes (rare) — sonarqube + sonarqube-postgres |
@@ -909,10 +909,10 @@ Elasticsearch + Fluent-bit + Kibana for centralized log aggregation and search a
 - **Actuator:** Only `health` and `prometheus` endpoints exposed; `show-details: never` on public health endpoint
 - **SSRF protection:** URL validator blocks internal IPs, validates DNS at request time (prevents rebinding), checks every redirect hop
 - **ReDoS protection:** Nested quantifier detection, 500-char pattern limit, 5-second regex timeout, 512KB body limit
-- **Containers:** Run as non-root, drop all capabilities, `readOnlyRootFilesystem` on all containers (app/frontend/redis/postgres/minio/elasticsearch/kibana/grafana/prometheus); ES and Kibana use init containers to copy default config files to writable emptyDir volumes
+- **Containers:** Run as non-root, drop all capabilities, `readOnlyRootFilesystem` on all containers (app/frontend/valkey/postgres/minio/elasticsearch/kibana/grafana/prometheus); ES and Kibana use init containers to copy default config files to writable emptyDir volumes
 - **Secrets:** All secrets in Vault KV v2 (`secret/schnappy/*`), synced to k8s Secrets via ESO ExternalSecrets; Helm `existingSecret` pattern skips inline secret creation; Forgejo + Woodpecker secrets also via Vault + ESO (ExternalSecrets in `clusters/production/cluster-config/`); containerd registry config populated via Ansible (`setup-kubeadm.yml`); `.env` only for initial Vault seeding; `.env` in `.gitignore`
-- **Network policies:** Default-deny ingress+egress for all pods; DNS (port 53) allowed for all; explicit ingress+egress rules per pod (app→postgres/redis/minio/ES/external HTTPS, frontend→app, grafana→prometheus, etc.); app external egress blocks RFC1918 ranges; also applied to forgejo and velero namespaces
-- **Docker images:** `postgres:17-alpine` and `redis:7-alpine` pinned (no mutable `:latest` tags)
+- **Network policies:** Default-deny ingress+egress for all pods; DNS (port 53) allowed for all; explicit ingress+egress rules per pod (app→postgres/valkey/minio/ES/external HTTPS, frontend→app, grafana→prometheus, etc.); app external egress blocks RFC1918 ranges; also applied to forgejo and velero namespaces
+- **Docker images:** `postgres:17-alpine` and `valkey/valkey:8.1-alpine` pinned (no mutable `:latest` tags)
 - **Frontend:** No `dangerouslySetInnerHTML`; postMessage origin validation on Game iframe; open redirect protection on login redirects
 - **Nginx:** Security headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy) on all locations including `/game/`
 

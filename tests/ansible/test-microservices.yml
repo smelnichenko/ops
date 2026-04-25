@@ -224,9 +224,9 @@
             image: postgres:17-alpine
             storage:
               storageClass: "local-path"
-          redis:
+          valkey:
             enabled: true
-            image: redis:7-alpine
+            image: valkey/valkey:8.1-alpine
           kafka:
             enabled: true
             image: apache/kafka:4.2.0
@@ -342,8 +342,8 @@
     - name: Stand up in-cluster test postgres + per-service DB Secrets
       ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
 
-    - name: Stand up in-cluster test redis (chess + chat use it for pub/sub)
-      ansible.builtin.import_tasks: tasks/setup-test-redis.yml
+    - name: Stand up in-cluster test valkey (chess + chat use it for pub/sub)
+      ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
 
     - name: Deploy chart with all microservices
       kubernetes.core.helm:

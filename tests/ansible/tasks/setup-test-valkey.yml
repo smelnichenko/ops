@@ -1,0 +1,60 @@
+---
+# Stand up an in-cluster valkey with the Service name `schnappy-valkey`
+# that the chart's `schnappy.valkey.serviceName` resolves to.
+#
+# Production wires schnappy-valkey via ESO + an Argo CD-managed Helm
+# release. The vagrant tests just need a Spring Boot pod to reach a
+# valkey-protocol-compatible cache on `schnappy-valkey:6379`.
+# (Spring Data Redis library is wire-compatible with Valkey.)
+#
+# Required vars:
+#   ns: Kubernetes namespace
+#
+# Usage:
+#   - ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
+
+- name: Test valkey Deployment + Service
+  kubernetes.core.k8s:
+    kubeconfig: /etc/kubernetes/admin.conf
+    state: present
+    definition:
+      - apiVersion: apps/v1
+        kind: Deployment
+        metadata: { name: schnappy-valkey, namespace: "{{ ns }}", labels: { app: schnappy-valkey, app.kubernetes.io/component: valkey } }
+        spec:
+          replicas: 1
+          selector: { matchLabels: { app: schnappy-valkey } }
+          template:
+            metadata: { labels: { app: schnappy-valkey, app.kubernetes.io/component: valkey } }
+            spec:
+              containers:
+                - name: valkey
+                  image: valkey/valkey:8.1-alpine
+                  ports: [{ name: valkey, containerPort: 6379 }]
+                  readinessProbe:
+                    exec: { command: ["valkey-cli", "ping"] }
+                    initialDelaySeconds: 2
+                    periodSeconds: 5
+                  resources:
+                    requests: { cpu: 50m, memory: 64Mi }
+                    limits: { cpu: 200m, memory: 256Mi }
+      - apiVersion: v1
+        kind: Service
+        metadata: { name: schnappy-valkey, namespace: "{{ ns }}" }
+        spec:
+          selector: { app: schnappy-valkey }
+          ports: [{ name: valkey, port: 6379, targetPort: 6379 }]
+
+- name: Wait for test valkey to be Ready
+  kubernetes.core.k8s_info:
+    kubeconfig: /etc/kubernetes/admin.conf
+    api_version: apps/v1
+    kind: Deployment
+    name: schnappy-valkey
+    namespace: "{{ ns }}"
+  register: _valkey
+  retries: 12
+  delay: 5
+  until:
+    - _valkey.resources | default([]) | length > 0
+    - (_valkey.resources[0].status.readyReplicas | default(0)) >= 1

@@ -36,9 +36,9 @@ tasks:
       - echo "Backend API http://localhost:8080/api"
 
   dev:infra:
-    desc: Start only infrastructure (postgres, redis, kafka, scylla, minio) for IDE debugging
+    desc: Start only infrastructure (postgres, valkey, kafka, scylla, minio) for IDE debugging
     cmds:
-      - docker compose up -d postgres redis kafka scylla minio
+      - docker compose up -d postgres valkey kafka scylla minio
       - docker compose up scylla-init
       - echo ""
       - echo "=== Infrastructure Started ==="

@@ -92,7 +92,7 @@
             enabled: false
           app:
             replicas: 0
-          redis:
+          valkey:
             enabled: false
           postgres:
             enabled: false

@@ -67,9 +67,9 @@
         image: postgres:17-alpine
         storage:
           storageClass: "local-path"
-      redis:
+      valkey:
         enabled: true
-        image: redis:7-alpine
+        image: valkey/valkey:8.1-alpine
       keycloak:
         enabled: true
         existingSecret: "schnappy-keycloak"

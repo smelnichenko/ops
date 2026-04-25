@@ -76,7 +76,7 @@
     - name: Generate passwords
       ansible.builtin.set_fact:
         gen_db_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        gen_redis_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
+        gen_valkey_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
         gen_minio_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
         gen_jwt_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
         gen_kafka_cluster_id: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=22') }}"
@@ -102,8 +102,8 @@
       ansible.builtin.shell: |
         {{ vault_env }} vault kv put secret/{{ env_ns }}/postgres \
           database=monitor username=monitor password="{{ gen_db_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/redis \
-          password="{{ gen_redis_password }}"
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/valkey \
+          password="{{ gen_valkey_password }}"
         {{ vault_env }} vault kv put secret/{{ env_ns }}/auth \
           jwt_secret="{{ gen_jwt_secret }}"
         {{ vault_env }} vault kv put secret/{{ env_ns }}/minio \
@@ -218,10 +218,10 @@
           postgres:
             enabled: false
 
-          redis:
+          valkey:
             enabled: true
-            existingSecret: {{ env_ns }}-redis
-            image: redis:7-alpine
+            existingSecret: {{ env_ns }}-valkey
+            image: valkey/valkey:8.1-alpine
             resources:
               requests: { cpu: 10m, memory: 32Mi }
               limits: { cpu: 100m, memory: 128Mi }
@@ -400,8 +400,8 @@
           postgres:
             database: monitor
             existingSecret: {{ env_ns }}-postgres
-          redis:
-            existingSecret: {{ env_ns }}-redis
+          valkey:
+            existingSecret: {{ env_ns }}-valkey
           minio:
             existingSecret: {{ env_ns }}-minio
           alertmanager:

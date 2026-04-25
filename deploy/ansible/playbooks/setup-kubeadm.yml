@@ -676,6 +676,26 @@
         wait_timeout: 15m
       when: install_scylla_manager | default(true) | bool
 
+    # Plan 064 — Valkey operator (replaces hand-rolled redis Deployment).
+    # The chart still renders a hand-rolled Deployment when
+    # valkey.operator.enabled=false, so installing the operator here is
+    # safe even if no Valkey CR is applied yet.
+    - name: Add hyperspike (valkey-operator) Helm repo
+      kubernetes.core.helm_repository:
+        name: hyperspike
+        repo_url: https://hyperspike.github.io/valkey-operator
+
+    - name: Install valkey-operator
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: valkey-operator
+        chart_ref: hyperspike/valkey-operator
+        release_namespace: valkey-operator-system
+        create_namespace: true
+        wait: true
+        wait_timeout: 300s
+      when: install_valkey_operator | default(true) | bool
+
     # ================================================================
     # Phase 14: Configure HAProxy
     # ================================================================

@@ -38,12 +38,12 @@
           username: monitor
           password: vagrant-test
 
-    - name: Seed redis secret
+    - name: Seed valkey secret
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
-        secret_path: schnappy/redis
+        secret_path: schnappy/valkey
         secret_data:
-          password: vagrant-redis
+          password: vagrant-valkey
 
     # ================================================================
     # Phase 2: Deploy charts
@@ -77,9 +77,9 @@
           postgres:
             enabled: true
             existingSecret: schnappy-postgres
-          redis:
+          valkey:
             enabled: true
-            existingSecret: schnappy-redis
+            existingSecret: schnappy-valkey
           kafka:
             enabled: false
           minio:
@@ -175,8 +175,8 @@
               host: localhost
           postgres:
             existingSecret: schnappy-postgres
-          redis:
-            existingSecret: schnappy-redis
+          valkey:
+            existingSecret: schnappy-valkey
 
     - name: Wait for app
       kubernetes.core.k8s_info:

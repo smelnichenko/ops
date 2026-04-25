@@ -169,9 +169,9 @@
             image: postgres:17-alpine
             storage:
               storageClass: "local-path"
-          redis:
+          valkey:
             enabled: true
-            image: redis:7-alpine
+            image: valkey/valkey:8.1-alpine
           keycloak:
             enabled: true
             existingSecret: "schnappy-keycloak"
@@ -245,8 +245,8 @@
     - name: Stand up in-cluster test postgres + per-service DB Secrets
       ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
 
-    - name: Stand up in-cluster test redis
-      ansible.builtin.import_tasks: tasks/setup-test-redis.yml
+    - name: Stand up in-cluster test valkey
+      ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
 
     - name: Deploy chart for DR test
       kubernetes.core.helm:
@@ -466,48 +466,48 @@
         fail_msg: "Data lost after postgres pod kill!"
         success_msg: "PASS: Postgres pod recovery — data intact ({{ pages_after_pg.json | length }} monitors)"
 
-    # ── Test 3: Kill redis pod ──
+    # ── Test 3: Kill valkey pod ──
 
-    - name: "POD-RECOVERY: Delete redis pod"
+    - name: "POD-RECOVERY: Delete valkey pod"
       kubernetes.core.k8s:
         api_version: v1
         kind: Pod
         namespace: "{{ ns }}"
         label_selectors:
           - "app.kubernetes.io/name=schnappy"
-          - "app.kubernetes.io/component=redis"
+          - "app.kubernetes.io/component=valkey"
         state: absent
         wait: false
 
-    - name: "POD-RECOVERY: Wait for redis deployment rollout"
+    - name: "POD-RECOVERY: Wait for valkey deployment rollout"
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: Deployment
-        name: schnappy-redis
+        name: schnappy-valkey
         namespace: "{{ ns }}"
-      register: _rollout_redis
+      register: _rollout_valkey
       retries: 30
       delay: 2
       until: >-
-        (_rollout_redis.resources | default([]) | length > 0) and
-        (_rollout_redis.resources[0].status.readyReplicas | default(0)) ==
-        (_rollout_redis.resources[0].status.replicas | default(-1)) and
-        (_rollout_redis.resources[0].status.updatedReplicas | default(0)) ==
-        (_rollout_redis.resources[0].status.replicas | default(-1))
+        (_rollout_valkey.resources | default([]) | length > 0) and
+        (_rollout_valkey.resources[0].status.readyReplicas | default(0)) ==
+        (_rollout_valkey.resources[0].status.replicas | default(-1)) and
+        (_rollout_valkey.resources[0].status.updatedReplicas | default(0)) ==
+        (_rollout_valkey.resources[0].status.replicas | default(-1))
 
-    - name: "POD-RECOVERY: Verify app health after redis restart"
+    - name: "POD-RECOVERY: Verify app health after valkey restart"
       ansible.builtin.uri:
         url: "{{ app_url }}/api/actuator/health"
         return_content: true
-      register: health_after_redis
+      register: health_after_valkey
       retries: 20
       delay: 5
-      until: health_after_redis.status == 200 and health_after_redis.json.status == "UP"
+      until: health_after_valkey.status == 200 and health_after_valkey.json.status == "UP"
 
-    - name: "POD-RECOVERY: Assert app healthy after redis kill"
+    - name: "POD-RECOVERY: Assert app healthy after valkey kill"
       ansible.builtin.assert:
         that:
-          - health_after_redis.json.status == "UP"
+          - health_after_valkey.json.status == "UP"
         success_msg: "PASS: Redis pod recovery — app healthy"
 
     # ── Test 4: Kill frontend pod ──
@@ -575,7 +575,7 @@
         - schnappy-gateway
         - schnappy-monitor
         - schnappy-postgres
-        - schnappy-redis
+        - schnappy-valkey
         - schnappy-site
         - schnappy-keycloak
       register: _rollout_all
@@ -1086,7 +1086,7 @@
         - schnappy-gateway
         - schnappy-monitor
         - schnappy-postgres
-        - schnappy-redis
+        - schnappy-valkey
         - schnappy-site
         - schnappy-keycloak
       register: _rollout_after_restore
@@ -1417,7 +1417,7 @@
         - schnappy-gateway
         - schnappy-monitor
         - schnappy-postgres
-        - schnappy-redis
+        - schnappy-valkey
         - schnappy-site
         - schnappy-keycloak
       register: _rollout_offsite

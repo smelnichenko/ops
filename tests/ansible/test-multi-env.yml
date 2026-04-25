@@ -35,8 +35,8 @@
     # forgejo_admin_password from inventory (vagrant.yml test fixture)
     prod_pg_password: "vagrant-prod-pg-pw"
     test_pg_password: "vagrant-test-pg-pw"
-    prod_redis_password: "vagrant-prod-redis-pw"
-    test_redis_password: "vagrant-test-redis-pw"
+    prod_valkey_password: "vagrant-prod-valkey-pw"
+    test_valkey_password: "vagrant-test-valkey-pw"
 
   tasks:
     # ── Phase 1: Seed secrets for both envs into Pi Vault ────────────────
@@ -45,11 +45,11 @@
       vars:
         secret_path: schnappy/postgres
         secret_data: { database: monitor, username: monitor, password: "{{ prod_pg_password }}" }
-    - name: Seed prod redis
+    - name: Seed prod valkey
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
-        secret_path: schnappy/redis
-        secret_data: { password: "{{ prod_redis_password }}" }
+        secret_path: schnappy/valkey
+        secret_data: { password: "{{ prod_valkey_password }}" }
     - name: Seed prod minio
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
@@ -66,11 +66,11 @@
       vars:
         secret_path: schnappy-test/postgres
         secret_data: { database: monitor, username: monitor, password: "{{ test_pg_password }}" }
-    - name: Seed test redis
+    - name: Seed test valkey
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
-        secret_path: schnappy-test/redis
-        secret_data: { password: "{{ test_redis_password }}" }
+        secret_path: schnappy-test/valkey
+        secret_data: { password: "{{ test_valkey_password }}" }
     - name: Seed test minio
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:

@@ -195,8 +195,8 @@
     - name: Stand up in-cluster test postgres + per-service DB Secrets
       ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
 
-    - name: Stand up in-cluster test redis (monitor pod connects on startup)
-      ansible.builtin.import_tasks: tasks/setup-test-redis.yml
+    - name: Stand up in-cluster test valkey (monitor pod connects on startup)
+      ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
 
     - name: Create Forgejo registry pull secret
       # Forgejo packages default to private visibility — pods need explicit

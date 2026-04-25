@@ -17,17 +17,17 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis (volatile cache)
-  redis:
-    image: redis:7-alpine
-    container_name: schnappy-redis
-    command: ["redis-server", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+  # Valkey (volatile cache; was Redis pre-Plan-064 — Spring Data Redis lib stays)
+  valkey:
+    image: valkey/valkey:8.1-alpine
+    container_name: schnappy-valkey
+    command: ["valkey-server", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
-      - redis_data:/data
+      - valkey_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -109,14 +109,14 @@ services:
       ADMIN_URL: http://backend:8080
       CHAT_URL: http://backend:8080
       CHESS_URL: http://backend:8080
-      REDIS_HOST: redis
+      VALKEY_HOST: valkey
       CORS_ALLOWED_ORIGINS: "*"
     ports:
       - "8082:8080"
     depends_on:
       backend:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
@@ -135,7 +135,7 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-monitor}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USERNAME:-postgres}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      REDIS_HOST: redis
+      VALKEY_HOST: valkey
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SCYLLA_CONTACT_POINTS: scylla
       JWT_SECRET: ${JWT_SECRET:-local-dev-jwt-secret-please-change-in-production}
@@ -144,7 +144,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      valkey:
         condition: service_healthy
       kafka:
         condition: service_healthy
@@ -210,7 +210,7 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
+  valkey_data:
   minio_data:
   kafka_data:
   scylla_data:

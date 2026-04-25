@@ -82,7 +82,7 @@
           --set fullnameOverride=schnappy \
           --set vault.secretsEnabled=true \
           --set postgres.enabled=false \
-          --set redis.enabled=false \
+          --set valkey.enabled=false \
           --set kafka.enabled=false \
           --set scylla.enabled=false \
           --set aptCache.enabled=false \
