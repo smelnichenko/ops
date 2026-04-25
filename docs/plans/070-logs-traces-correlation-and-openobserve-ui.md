@@ -1,4 +1,4 @@
-# Plan 072: Logs↔traces correlation, plus OpenObserve as a Discover-like UI
+# Plan 070: Logs↔traces correlation, plus OpenObserve as a Discover-like UI
 
 ## TL;DR
 
