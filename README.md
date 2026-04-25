@@ -4,7 +4,7 @@ Operational tooling, deployment automation, and testing for pmon.dev.
 
 ## Architecture
 
-Contains everything needed to provision, deploy, and test the pmon.dev infrastructure. Ansible playbooks set up the k3s cluster and all supporting services. Vagrant provides reproducible integration test environments. The Taskfile is the primary interface for all operations.
+Contains everything needed to provision, deploy, and test the pmon.dev infrastructure. Ansible playbooks set up the kubeadm cluster and all supporting services. Vagrant provides reproducible integration test environments. The Taskfile is the primary interface for all operations.
 
 ## Contents
 
@@ -45,27 +45,30 @@ task deploy:status    # Check production pod status
 | `setup-pi-services.yml` | `task deploy:pi-services` | Forgejo, Keycloak, MinIO, HAProxy on Pis |
 | `setup-woodpecker.yml` | `task deploy:woodpecker` | Woodpecker CI |
 | `setup-velero.yml` | `task deploy:velero` | Velero backups + MinIO |
-| `setup-vault-pi.yml` | `task deploy:vault-pi` | Vault unseal server (Pi) |
-| `setup-vault.yml` | `task deploy:vault` | Vault on kubeadm + ESO |
+| `setup-consul.yml` | (via test chain) | Consul cluster on both Pis |
+| `setup-patroni.yml` | (via test chain) | Patroni Postgres HA |
+| `setup-vault-pi.yml` | `task deploy:vault-pi` | Pi Vault (Consul backend) — both Pis |
+| `setup-gluster.yml` | `task deploy:gluster` | GlusterFS repo replication |
+| `setup-keepalived.yml` | `task deploy:keepalived` | Keepalived VIP |
 | `setup-nexus.yml` | `task deploy:nexus` | Nexus repository manager (Pi) |
 
 ## Integration Tests (Vagrant)
 
 ```bash
-task test:vault           # Vault + ESO integration
+task test:dual-pi-clean   # Full HA stack: destroy → up → deploy → assert
+task test:dual-pi         # Same, no destroy (fast iteration)
+task test:vault-unseal    # Vault auto-unseal after cold start
 task test:elk             # ELK stack integration
 task test:grafana         # Grafana + Prometheus
 task test:kafka-scylla    # Kafka + ScyllaDB
 task test:dr              # Disaster recovery
-task test:hashcash        # Hashcash PoW captcha
 task test:nexus           # Nexus repository manager
-task test:flux            # Flux CD GitOps
 ```
 
 ## Deployment
 
 This repo does not deploy directly to production. It provides the tooling:
 
-- **Initial setup:** `task deploy:full` provisions k3s and installs all infrastructure
-- **Ongoing deploys:** Handled by Flux CD GitOps (image tags committed to `schnappy/infra` by Woodpecker)
+- **Initial setup:** `task deploy:full` provisions kubeadm and installs all infrastructure
+- **Ongoing deploys:** Handled by Argo CD GitOps (image tags committed to `schnappy/infra` by Woodpecker)
 - **Infrastructure changes:** Run the relevant `task deploy:*` command

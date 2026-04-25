@@ -126,7 +126,9 @@ task test             # Backend + E2E
 task test:backend     # Gradle tests
 task test:e2e         # Playwright E2E
 task test:load        # k6 load test
-task test:vault       # Vagrant: Vault + ESO integration
+task test:dual-pi-clean  # Vagrant: full dual-Pi HA from fresh destroy
+task test:dual-pi        # Vagrant: dual-Pi HA without destroy (fast iteration)
+task test:vault-unseal   # Vagrant: Vault auto-unseal after cold start
 task test:elk         # Vagrant: ELK stack integration
 task test:grafana     # Vagrant: Grafana + Prometheus integration
 task test:kafka-scylla        # Vagrant: Kafka + ScyllaDB integration
@@ -536,10 +538,8 @@ VELERO_MINIO_SECRET_KEY=<secure>
 PORKBUN_API_KEY=pk1_...              # DNS-01 cert validation
 PORKBUN_SECRET_KEY=sk1_...
 
-# One-time: Seed all secrets into Vault (from .env on ten)
-# set -a && source .env && set +a
-# ansible-playbook playbooks/setup-vault.yml -e @vars/vault.yml \
-#   -e "vault_seed_secrets=true" -e "vault_seed_token=$VAULT_ROOT_TOKEN"
+# One-time: Seed all secrets into Pi Vault (from .env on ten)
+# task deploy:seed-secrets
 
 # Deploy
 task deploy:argocd       # Install/update Argo CD (GitOps controller)
@@ -847,25 +847,20 @@ ssh ten 'sudo kubectl delete pod -l app=minio-backup -n velero'
 ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero restore create --from-backup <backup-name> --kubeconfig /etc/kubernetes/admin.conf'
 ```
 
-**Vault (from Raft snapshot):**
+**Vault (both Pis lost):**
+Pi Vault uses Consul as its storage backend — data lives in Consul KV, not
+in Vault's own files. Recovery means restoring the Consul cluster + re-sealing:
+
 ```bash
-# 1. List snapshots in MinIO
-ssh ten 'sudo kubectl exec deploy/minio-backup -n velero -- mc ls minio/vault-backups/ --insecure'
-
-# 2. Copy snapshot to vault pod
-ssh ten 'sudo kubectl cp velero/<minio-pod>:/data/vault-backups/<snapshot>.snap /tmp/vault.snap'
-ssh ten 'sudo kubectl cp /tmp/vault.snap vault/vault-0:/tmp/vault.snap'
-
-# 3. Restore (requires root token)
-ssh ten 'sudo kubectl exec -n vault vault-0 -- env VAULT_CACERT=/vault/userconfig/vault-tls/ca.crt VAULT_TOKEN="<root-token>" vault operator raft snapshot restore /tmp/vault.snap'
-```
-
-**Vault Pi (transit unseal server lost):**
-```bash
-# Re-run Ansible with offline init keys to rebuild from scratch
+# 1. Bring Consul + Vault back up on both Pis
 task deploy:vault-pi
-# Then re-run vault setup to update autounseal token
-task deploy:vault
+
+# 2. Keys are on /etc/vault-unseal/unseal-keys (root-only). If both Pis are
+# completely destroyed, restore the keys from offline backup (USB/safe/paper)
+# and place them at /etc/vault-unseal/unseal-keys before starting vault-unseal.
+
+# 3. Re-seed app secrets from .env
+task deploy:seed-secrets
 ```
 
 **DR test:** `task test:dr` — automated Vagrant test covering pod recovery, Velero backup/restore, and offsite restore.

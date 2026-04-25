@@ -1,6 +1,6 @@
 # Plan 062: Rewrite Vagrant test harness as final-state, not migrations
 
-## Status: TODO
+## Status: DONE (2026-04-22)
 
 ## Context
 
@@ -198,3 +198,61 @@ today's interleaved debug-and-re-run:
 - Plan 061 sub-plan B follow-up ("run test:vault-unseal in Vagrant")
 - The 9 interim fixes will remain in git history as the step-stones
   that produced the knowledge captured in this plan.
+
+## Execution notes (2026-04-22)
+
+Beyond the scope outlined above, the rewrite surfaced latent bugs in
+`setup-patroni.yml` that the migration-era chain had been papering
+over. All fixes below are now in the consolidated playbook:
+
+1. **Replicator role not created by Patroni bootstrap.** The patroni
+   version we run ignores `bootstrap.users.replicator` — the non-leader
+   Pi's `pg_basebackup` fails with `Role "replicator" does not exist`,
+   and the data-dir wipes on each retry. Fix: explicit `CREATE ROLE
+   replicator WITH REPLICATION LOGIN PASSWORD ...` on the discovered
+   leader (not hardcoded pi1).
+
+2. **Data-dir wipe wasn't gated.** `rm -rf /var/lib/postgresql/*/main/*`
+   ran unconditionally, which would destroy a healthy cluster on the
+   second playbook run. Gated on `patroni.service` not already being
+   `active`.
+
+3. **Data-dir path lookup was fragile.** `ls /var/lib/postgresql/*/main`
+   fails after Patroni's "Removing data directory" during a failed
+   bootstrap loop. Switched to computing the path from `pg_version`.
+
+4. **Cluster-convergence wait.** Downstream playbooks (vault, gluster,
+   keepalived) raced against a replica still doing `pg_basebackup`.
+   Added a poll-until-all-members-streaming gate at the end of
+   setup-patroni.
+
+5. **Forgejo/Keycloak reconfigure needs HAProxy health first.** The old
+   chain flipped these services from raw `localhost:5432` to HAProxy
+   `localhost:5000` via an ad-hoc block in `test-dual-pi.yml` (migration
+   smell). Moved to a dedicated final play in `setup-patroni.yml` that
+   (a) waits for HAProxy's L7 `/primary` check to pass before (b)
+   restarting Forgejo + Keycloak. Without the wait, Forgejo crash-loops
+   during HAProxy's ~60–90s backend-discovery window.
+
+6. **Test cleanup must route through HAProxy.** The failover scenario
+   can leave pi1 as replica (read-only), so `test-dual-pi.yml`'s final
+   `DROP TABLE` ran against pi1's local socket and hit "cannot execute
+   in a read-only transaction". Routed it through `localhost:5000`.
+
+7. **Taskfile needs `-e @vars/pi-services.yml` on setup-patroni.yml.**
+   Without it, `kc_db_pw` is undefined and Patroni bootstraps the
+   postgres superuser with `changeme` — but setup-pi-services already
+   set the real password on raw Postgres, so Forgejo/Keycloak then
+   can't authenticate after Patroni takes over.
+
+## Verification result
+
+`task test:dual-pi-clean` (fresh `vagrant destroy -f` → `vagrant up` →
+full deploy chain → both assertion playbooks) ends with `failed=0` for
+every PLAY RECAP. Specifically:
+
+- deploy chain (consul, pi-services, patroni, vault-pi, gluster,
+  keepalived) — all PLAY RECAPs green
+- `test-dual-pi.yml` — all HA assertions pass, including Pi-1
+  failure/takeover/recovery scenario with data catch-up
+- `test-vault-unseal.yml` — pi1 vault unsealed from cold start in <90s

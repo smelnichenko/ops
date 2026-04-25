@@ -26,9 +26,10 @@ This installs: cert-manager, porkbun-webhook, external-secrets, Istio, Velero, c
 
 ### 3. Setup Vault
 
+Pi Vault runs on both Pis with a Consul backend (no in-cluster Vault).
+
 ```bash
-task deploy:vault-pi   # If Pi needs setup
-task deploy:vault       # Vault HA in cluster
+task deploy:vault-pi    # Pi Vault — Consul backend, Shamir + vault-unseal.service
 task deploy:seed-vault  # Populate secrets from .env
 ```
 
