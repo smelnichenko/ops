@@ -281,6 +281,15 @@
 
           [security]
           INSTALL_LOCK = true
+
+          [webhook]
+          # Forgejo's outbound-webhook deliverer rejects private-IP
+          # targets by default to block SSRF. Both Woodpecker
+          # (ci.pmon.dev) and Argo CD (cd.pmon.dev) live on the same
+          # LAN and resolve to 192.168.11.2, so they have to be
+          # whitelisted explicitly. List domains, not CIDRs, so a new
+          # service on this LAN doesn't accidentally inherit access.
+          ALLOWED_HOST_LIST = ci.pmon.dev,cd.pmon.dev,git.pmon.dev,external
       notify: Restart Forgejo
 
     - name: Install Forgejo systemd service
