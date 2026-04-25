@@ -370,6 +370,16 @@ tasks:
       - task: _vagrant:k8s-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-logs.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
+  test:realtime:
+    desc: Test Centrifugo + Kafka + Valkey realtime chart in Vagrant (Plan 066 Phase 1)
+    deps: [deploy:install]
+    cmds:
+      - cmd: vagrant destroy -f 2>/dev/null; true
+      - cmd: vagrant up
+      - defer: vagrant halt
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-realtime.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
   test:keycloak:
     desc: Test Keycloak SSO in Vagrant
     deps: [deploy:install]

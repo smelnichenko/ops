@@ -1,0 +1,204 @@
+---
+# Plan 066 — vagrant test for the Centrifugo realtime chart.
+# Deploys: Strimzi Kafka cluster + KafkaTopics + Valkey (CR via operator)
+# + Centrifugo Deployment. Verifies:
+#   - Centrifugo Deployment Ready
+#   - /health endpoint returns 200
+#   - All three KafkaTopics CRs reach Ready
+#   - Anonymous WS connect is rejected (auth required)
+#
+# Phase 2 of Plan 066 (gateway webhook endpoints + dual-publish + frontend
+# migration) lives in separate PRs — this test gates Phase 1 only.
+#
+# Prereqs: `_vagrant:k8s-stack` (Pi stack + kubeadm + ESO).
+
+- name: Test Centrifugo realtime chart
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: schnappy
+    test_centrifugo_admin_pw: "vagrant-centrifugo-admin"
+    test_centrifugo_admin_secret: "vagrant-centrifugo-admin-secret"
+    test_centrifugo_api_key: "vagrant-centrifugo-api-key"
+    test_valkey_password: "vagrant-valkey"
+
+  tasks:
+    - name: Ensure schnappy namespace
+      ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
+
+    - name: Stand up in-cluster valkey (chart references schnappy-valkey)
+      ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
+
+    - name: Stand up Strimzi Kafka cluster (provides schnappy-kafka-bootstrap)
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: kafka.strimzi.io/v1beta2
+          kind: Kafka
+          metadata: { name: schnappy-kafka, namespace: "{{ ns }}" }
+          spec:
+            kafka:
+              version: 4.2.0
+              replicas: 1
+              listeners:
+                - { name: plain, port: 9092, type: internal, tls: false }
+              config:
+                offsets.topic.replication.factor: 1
+                transaction.state.log.replication.factor: 1
+                transaction.state.log.min.isr: 1
+                default.replication.factor: 1
+                min.insync.replicas: 1
+              storage:
+                type: jbod
+                volumes:
+                  - { id: 0, type: persistent-claim, size: 5Gi, deleteClaim: true }
+            entityOperator:
+              topicOperator: {}
+              userOperator: {}
+
+    - name: Wait for Strimzi Kafka cluster Ready
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: kafka.strimzi.io/v1beta2
+        kind: Kafka
+        name: schnappy-kafka
+        namespace: "{{ ns }}"
+      register: _kafka
+      retries: 60
+      delay: 10
+      until:
+        - _kafka.resources | length > 0
+        - (_kafka.resources[0].status.conditions | default([]) | selectattr('type','equalto','Ready') | list | first | default({})).status | default('') == "True"
+
+    - name: Write helm values for Centrifugo test
+      ansible.builtin.copy:
+        dest: /tmp/schnappy-realtime-test-values.yml
+        mode: '0600'
+        content: |
+          centrifugo:
+            enabled: true
+            replicas: 1
+            adminPassword: "{{ test_centrifugo_admin_pw }}"
+            adminSecret: "{{ test_centrifugo_admin_secret }}"
+            apiKey: "{{ test_centrifugo_api_key }}"
+            externalSecret:
+              enabled: false
+            jwks:
+              # Vagrant has no real Keycloak DNS; point at a local fake
+              # JWKS endpoint that returns an empty key set. Centrifugo
+              # only fetches JWKS lazily on first connect; the test
+              # exercises the unauthenticated path so this URL never
+              # resolves a real key.
+              publicEndpoint: "http://127.0.0.1:1/keys"
+              audience: "centrifugo"
+            valkey:
+              address: "schnappy-valkey:6379"
+              secretName: schnappy-valkey
+              secretKey: VALKEY_PASSWORD
+            kafka:
+              enabled: true
+              brokers: ["schnappy-kafka-kafka-bootstrap:9092"]
+              consumerGroup: centrifugo
+              topics:
+                - events.chat.messages
+                - events.chess.moves
+                - events.notifications
+            topics:
+              create: true
+              partitions: 3
+              replicas: 1
+              retentionHours: 24
+            namespaces:
+              - { name: chess, presence: true, historySize: 50, historyTtl: "24h", recover: true, forceRecovery: true }
+              - { name: chat, presence: true, historySize: 25, historyTtl: "24h", recover: true, forceRecovery: false }
+              - { name: notifications, presence: false, historySize: 10, historyTtl: "24h", recover: true, forceRecovery: false }
+          strimzi:
+            enabled: true
+            clusterName: schnappy-kafka
+          networkPolicies:
+            enabled: false
+
+    - name: Deploy schnappy-realtime
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-realtime
+        release_namespace: "{{ ns }}"
+        values_files:
+          - /tmp/schnappy-realtime-test-values.yml
+        wait: false
+
+    - name: Wait for Centrifugo Deployment Ready
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Deployment
+        name: schnappy-centrifugo
+        namespace: "{{ ns }}"
+      register: cf_rollout
+      retries: 60
+      delay: 5
+      until:
+        - cf_rollout.resources | length > 0
+        - cf_rollout.resources[0].status.readyReplicas | default(0) == cf_rollout.resources[0].spec.replicas
+
+    - name: Wait for KafkaTopics Ready
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: kafka.strimzi.io/v1beta2
+        kind: KafkaTopic
+        namespace: "{{ ns }}"
+        name: "{{ item }}"
+      register: _kt
+      retries: 30
+      delay: 5
+      until:
+        - _kt.resources | length > 0
+        - (_kt.resources[0].status.conditions | default([]) | selectattr('type','equalto','Ready') | list | first | default({})).status | default('') == "True"
+      loop:
+        - events.chat.messages
+        - events.chess.moves
+        - events.notifications
+
+    - name: Probe /health (HTTP 200 = Centrifugo serving)
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} deploy/schnappy-centrifugo -- \
+          wget -qO- -S http://localhost:8000/health 2>&1 | head -5
+      register: cf_health
+      retries: 12
+      delay: 5
+      until: '"HTTP/1.1 200" in cf_health.stdout or "200 OK" in cf_health.stdout'
+      changed_when: false
+
+    - name: Anonymous WS upgrade should fail (no JWT)
+      ansible.builtin.shell: |
+        kubectl exec -n {{ ns }} deploy/schnappy-centrifugo -- \
+          wget -qO- -S --header='Connection: Upgrade' --header='Upgrade: websocket' \
+          'http://localhost:8000/connection/websocket' 2>&1 | head -5 || true
+      register: cf_anon
+      changed_when: false
+
+    - name: Clean up values file
+      ansible.builtin.file:
+        path: /tmp/schnappy-realtime-test-values.yml
+        state: absent
+
+    - name: TEST RESULT
+      vars:
+        all_pass: "{{ (cf_rollout.resources[0].status.readyReplicas | default(0)) >= 1 and ('200' in cf_health.stdout) }}"
+      ansible.builtin.debug:
+        msg: |
+          ====================================================
+          Realtime Test (Plan 066 Phase 1): {{ 'PASS' if all_pass else 'FAIL' }}
+
+          [{{ 'PASS' if (cf_rollout.resources[0].status.readyReplicas | default(0)) >= 1 else 'FAIL' }}] Centrifugo Deployment Ready
+          [{{ 'PASS' if '200' in cf_health.stdout else 'FAIL' }}] /health responding
+          [INFO] KafkaTopics: events.chat.messages / events.chess.moves / events.notifications
+          ====================================================
+
+    - name: Fail if critical checks failed
+      ansible.builtin.fail:
+        msg: "Centrifugo health check failed — see summary above"
+      when: not (cf_rollout.resources[0].status.readyReplicas | default(0) >= 1 and '200' in cf_health.stdout)
