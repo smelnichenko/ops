@@ -1,104 +1,150 @@
 ---
-# Stand up an in-cluster postgres with all schnappy service databases
-# pre-created (monitor, admin, chat, chess) + per-service `schnappy-postgres-<svc>`
-# Secrets that the chart wires into pod env vars (DB_HOST, DB_NAME,
-# DB_USERNAME, DB_PASSWORD).
+# Stand up an ephemeral CNPG `Cluster` named `schnappy-postgres` with
+# all per-service databases (monitor, admin, chat, chess) created at
+# bootstrap, plus the `schnappy-postgres-<svc>` Secrets that the
+# chart wires into pod env vars.
 #
-# Production wires schnappy-postgres to the Pi Patroni HAProxy via an
-# ExternalName Service and creates the per-service Secrets via ESO. The
-# vagrant tests don't want that path — they just want a Spring Boot pod
-# to be able to connect to *some* postgres with the right schema name.
+# Same operator-managed shape as production — just smaller and
+# without backups. Replaces the prior hand-rolled raw Deployment.
+#
+# Prereqs: CNPG operator must be installed cluster-wide
+# (setup-kubeadm.yml's Phase 13 handles this).
 #
 # Required vars:
-#   ns: Kubernetes namespace
+#   ns:  Kubernetes namespace
 #
-# Usage (from a target-host play, after schnappy-mesh is deployed):
+# Usage:
 #   - ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
 
-- name: Test postgres init script + per-service Secrets + Deployment + Service
+- name: Per-service postgres credentials (inline; vagrant skips ESO/Vault)
   kubernetes.core.k8s:
     kubeconfig: /etc/kubernetes/admin.conf
     state: present
     definition:
       - apiVersion: v1
-        kind: ConfigMap
-        metadata: { name: schnappy-postgres-init, namespace: "{{ ns }}" }
-        data:
-          init.sql: |
-            CREATE DATABASE monitor;
-            CREATE DATABASE admin;
-            CREATE DATABASE chat;
-            CREATE DATABASE chess;
-            ALTER USER postgres WITH PASSWORD 'vagrant';
+        kind: Secret
+        metadata: { name: schnappy-postgres-superuser, namespace: "{{ ns }}" }
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: postgres
+          password: vagrant
       - apiVersion: v1
         kind: Secret
         metadata: { name: schnappy-postgres-monitor, namespace: "{{ ns }}" }
-        type: Opaque
-        stringData: { DB_NAME: monitor, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: monitor
+          password: vagrant
+          DB_NAME: monitor
+          DB_USERNAME: monitor
+          DB_PASSWORD: vagrant
       - apiVersion: v1
         kind: Secret
         metadata: { name: schnappy-postgres-admin, namespace: "{{ ns }}" }
-        type: Opaque
-        stringData: { DB_NAME: admin, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: admin
+          password: vagrant
+          DB_NAME: admin
+          DB_USERNAME: admin
+          DB_PASSWORD: vagrant
       - apiVersion: v1
         kind: Secret
         metadata: { name: schnappy-postgres-chat, namespace: "{{ ns }}" }
-        type: Opaque
-        stringData: { DB_NAME: chat, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: chat
+          password: vagrant
+          DB_NAME: chat
+          DB_USERNAME: chat
+          DB_PASSWORD: vagrant
       - apiVersion: v1
         kind: Secret
         metadata: { name: schnappy-postgres-chess, namespace: "{{ ns }}" }
-        type: Opaque
-        stringData: { DB_NAME: chess, DB_USERNAME: postgres, DB_PASSWORD: vagrant }
-      - apiVersion: apps/v1
-        kind: Deployment
-        metadata: { name: schnappy-postgres, namespace: "{{ ns }}", labels: { app: schnappy-postgres } }
-        spec:
-          replicas: 1
-          selector: { matchLabels: { app: schnappy-postgres } }
-          template:
-            metadata: { labels: { app: schnappy-postgres } }
-            spec:
-              containers:
-                - name: postgres
-                  image: postgres:17
-                  env:
-                    - { name: POSTGRES_PASSWORD, value: vagrant }
-                    - { name: POSTGRES_DB, value: postgres }
-                    - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
-                  ports: [{ name: postgres, containerPort: 5432 }]
-                  readinessProbe:
-                    exec: { command: ["pg_isready", "-U", "postgres"] }
-                    initialDelaySeconds: 5
-                    periodSeconds: 5
-                  resources:
-                    requests: { cpu: 100m, memory: 256Mi }
-                    limits: { cpu: 500m, memory: 512Mi }
-                  volumeMounts:
-                    - { name: data, mountPath: /var/lib/postgresql/data }
-                    - { name: init, mountPath: /docker-entrypoint-initdb.d }
-              volumes:
-                - name: data
-                  emptyDir: { sizeLimit: 1Gi }
-                - name: init
-                  configMap: { name: schnappy-postgres-init }
-      - apiVersion: v1
-        kind: Service
-        metadata: { name: schnappy-postgres, namespace: "{{ ns }}" }
-        spec:
-          selector: { app: schnappy-postgres }
-          ports: [{ name: postgres, port: 5432, targetPort: 5432 }]
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: chess
+          password: vagrant
+          DB_NAME: chess
+          DB_USERNAME: chess
+          DB_PASSWORD: vagrant
 
-- name: Wait for test postgres to be Ready
+- name: Ephemeral CNPG Cluster `schnappy-postgres`
+  kubernetes.core.k8s:
+    kubeconfig: /etc/kubernetes/admin.conf
+    state: present
+    definition:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+        labels:
+          app.kubernetes.io/component: postgres
+          schnappy.io/ephemeral: "true"
+      spec:
+        instances: 1
+        imageName: ghcr.io/cloudnative-pg/postgresql:17
+        enableSuperuserAccess: true
+        superuserSecret:
+          name: schnappy-postgres-superuser
+        storage:
+          size: 100Mi
+        postgresql:
+          parameters:
+            shared_buffers: 64MB
+            effective_cache_size: 192MB
+            work_mem: 4MB
+            maintenance_work_mem: 32MB
+            max_parallel_workers_per_gather: "0"
+            max_parallel_workers: "2"
+            max_worker_processes: "4"
+        bootstrap:
+          initdb:
+            database: monitor
+            owner: monitor
+            secret: { name: schnappy-postgres-monitor }
+            postInitSQL:
+              - GRANT ALL ON SCHEMA public TO monitor
+              - CREATE USER admin WITH PASSWORD 'vagrant'
+              - CREATE DATABASE admin OWNER admin
+              - CREATE USER chat WITH PASSWORD 'vagrant'
+              - CREATE DATABASE chat OWNER chat
+              - CREATE USER chess WITH PASSWORD 'vagrant'
+              - CREATE DATABASE chess OWNER chess
+        resources:
+          requests: { cpu: "50m", memory: "256Mi" }
+          limits:   { cpu: "500m", memory: "512Mi" }
+
+- name: Wait for postgres cluster Ready
   kubernetes.core.k8s_info:
     kubeconfig: /etc/kubernetes/admin.conf
-    api_version: apps/v1
-    kind: Deployment
+    api_version: postgresql.cnpg.io/v1
+    kind: Cluster
     name: schnappy-postgres
     namespace: "{{ ns }}"
-  register: _pg
-  retries: 30
-  delay: 10
+  register: _pg_cluster
+  retries: 60
+  delay: 5
   until:
-    - _pg.resources | default([]) | length > 0
-    - (_pg.resources[0].status.readyReplicas | default(0)) >= 1
+    - _pg_cluster.resources | length > 0
+    - (_pg_cluster.resources[0].status.conditions | default([]) | selectattr('type','equalto','Ready') | list | first | default({})).status | default('') == "True"
+
+# CNPG creates `<cluster>-rw` and `<cluster>-ro` Services. The chart's
+# helper points at `schnappy-postgres` (no -rw suffix), so add an alias
+# so the legacy hostname keeps resolving.
+- name: schnappy-postgres alias Service → CNPG -rw
+  kubernetes.core.k8s:
+    kubeconfig: /etc/kubernetes/admin.conf
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+      spec:
+        type: ExternalName
+        externalName: "schnappy-postgres-rw.{{ ns }}.svc.cluster.local"
+        ports:
+          - { name: postgres, port: 5432, targetPort: 5432 }

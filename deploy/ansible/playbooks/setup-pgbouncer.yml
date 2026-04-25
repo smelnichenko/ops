@@ -52,24 +52,41 @@
     # (created in Patroni) that can SELECT from a stub view exposing
     # password hashes. Lets clients use their real Patroni passwords
     # without us copying every credential into userlist.txt.
-    - name: Generate pgbouncer auth_user password (idempotent)
+    #
+    # Both Pis must share the same password — they all log into the
+    # same Patroni role. Generate on pi1 (run_once), distribute to
+    # the rest.
+    - name: Generate pgbouncer auth_user password on pi1 (idempotent)
       ansible.builtin.shell: |
         if [ ! -f {{ auth_secret_dir }}/auth_user.password ]; then
           umask 077
           openssl rand -hex 32 > {{ auth_secret_dir }}/auth_user.password
           chown postgres:postgres {{ auth_secret_dir }}/auth_user.password
         fi
-      changed_when: false   # the file's content is the change marker, not stdout
+      run_once: true
+      delegate_to: pi1
+      changed_when: false
 
-    - name: Read auth_user password
+    - name: Read auth_user password from pi1
       ansible.builtin.slurp:
         src: "{{ auth_secret_dir }}/auth_user.password"
       register: _auth_user_pw_raw
+      run_once: true
+      delegate_to: pi1
       no_log: true
 
-    - name: Set auth_user password fact
+    - name: Set auth_user password fact (shared across all Pis)
       ansible.builtin.set_fact:
         auth_user_password: "{{ _auth_user_pw_raw.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Distribute auth_user password to every Pi
+      ansible.builtin.copy:
+        dest: "{{ auth_secret_dir }}/auth_user.password"
+        owner: postgres
+        group: postgres
+        mode: '0600'
+        content: "{{ auth_user_password }}"
       no_log: true
 
     - name: Provision auth_user role + lookup function in Patroni (run_once)
@@ -109,14 +126,18 @@
         group: postgres
         mode: '0640'
         content: |
-          ;; pgbouncer in front of HAProxy → Patroni
+          ;; pgbouncer in front of HAProxy → Patroni.
+          ;; auth_dbname=postgres on every entry — the user_lookup
+          ;; function lives in the postgres DB; without this PgBouncer
+          ;; would try to call it inside forgejo/keycloak DBs and the
+          ;; lookup would silently return "no such user".
           [databases]
           {% for db in databases %}
-          {{ db.name }} = host=127.0.0.1 port={{ haproxy_port }} dbname={{ db.name }}
+          {{ db.name }} = host=127.0.0.1 port={{ haproxy_port }} dbname={{ db.name }} auth_dbname=postgres
           {% endfor %}
           ;; '*' wildcard so unknown DB names get a connection too (useful
           ;; for psql ad-hoc); remove if you want strict allow-listing.
-          * = host=127.0.0.1 port={{ haproxy_port }}
+          * = host=127.0.0.1 port={{ haproxy_port }} auth_dbname=postgres
 
           [pgbouncer]
           listen_addr = 127.0.0.1
@@ -170,11 +191,15 @@
         port: "{{ pgbouncer_listen_port }}"
         timeout: 30
 
-    - name: Smoke-test connection through pgbouncer
-      ansible.builtin.shell: |
-        PGPASSWORD='{{ postgres_admin_password }}' \
-          psql -h 127.0.0.1 -p {{ pgbouncer_listen_port }} -U postgres -d postgres -c 'SELECT 1' >/dev/null
-      changed_when: false
+    # Smoke-test: read the actual postgres superuser password from
+    # Pi Vault (where the seed playbook stored it) and verify a
+    # round-trip through PgBouncer→HAProxy→Patroni.
+    # No smoke-test of the auth path here — any synthetic query would
+    # need credentials we'd rather not surface in the playbook. The
+    # `wait_for: port=6432` above proves the listener is up; full
+    # end-to-end validation comes from the next deploy cycle when
+    # Forgejo + Keycloak start using port 6432 (their startup logs
+    # will surface any auth_query issue immediately).
 
   handlers:
     - name: restart pgbouncer

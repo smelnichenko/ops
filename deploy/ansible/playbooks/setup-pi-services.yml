@@ -74,8 +74,9 @@
     # On re-run: Patroni is already running → this Pi's localhost:5432
     # may be a read-only replica, and createdb/ALTER USER on a replica
     # fails. Skip those DB-side ops (setup-patroni will re-create the
-    # databases on the leader) and bind Forgejo/Keycloak to HAProxy
-    # (:5000) from the start.
+    # databases on the leader) and bind Forgejo/Keycloak to PgBouncer
+    # (:6432) which proxies to HAProxy (:5000) → Patroni leader.
+    # PgBouncer optional: if not installed, fall back to HAProxy direct.
 
     - name: Detect Patroni state (drives Forgejo DB-host resolution below)
       ansible.builtin.systemd:
@@ -83,16 +84,26 @@
       register: _patroni_state
       failed_when: false
 
+    - name: Detect PgBouncer state
+      ansible.builtin.systemd:
+        name: pgbouncer
+      register: _pgbouncer_state
+      failed_when: false
+
+    - name: Pick effective DB port (pgbouncer if up, else haproxy direct)
+      ansible.builtin.set_fact:
+        _db_port: "{{ '6432' if _pgbouncer_state.status.ActiveState | default('') == 'active' else '5000' }}"
+
     - name: Set effective DB host for Forgejo/Keycloak
       ansible.builtin.set_fact:
         forgejo_db_host_effective: >-
-          {{ '127.0.0.1:5000'
+          {{ ('127.0.0.1:' ~ _db_port)
              if _patroni_state.status.ActiveState | default('') == 'active'
-             else (forgejo_db_host | default('127.0.0.1:5000')) }}
+             else (forgejo_db_host | default('127.0.0.1:' ~ _db_port)) }}
         keycloak_db_host_effective: >-
-          {{ '127.0.0.1:5000'
+          {{ ('127.0.0.1:' ~ _db_port)
              if _patroni_state.status.ActiveState | default('') == 'active'
-             else (keycloak_db_host | default('127.0.0.1:5000')) }}
+             else (keycloak_db_host | default('127.0.0.1:' ~ _db_port)) }}
 
     - name: Set Postgres password (first install only — Patroni owns the DB afterwards)
       ansible.builtin.shell: |
