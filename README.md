@@ -20,7 +20,6 @@ ops/
       vars/              # Configuration variables
   tests/
     ansible/             # Vagrant integration test playbooks
-    k6/                  # k6 load test scripts
   scripts/               # Utility scripts
   docs/
     plans/               # Design and implementation plans

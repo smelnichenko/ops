@@ -113,43 +113,10 @@ tasks:
     cmds:
       - npx playwright test --ui
 
-  # ============== LOAD TEST ==============
-  test:load:
-    desc: Run k6 load test (requires running app)
-    cmds:
-      - mkdir -p /tmp/k6-results
-      - K6_TEST_NAME=load-test k6 run tests/k6/load-test.js
-
-  test:load:stress:
-    desc: Run k6 stress test locally — find breaking point
-    cmds:
-      - mkdir -p /tmp/k6-results
-      - K6_TEST_NAME=stress-test k6 run tests/k6/stress-test.js
-
-  test:load:stress:prod:
-    desc: Run distributed k6 stress test in production (4 parallel pods)
-    cmds:
-      - ssh ten 'kubectl delete job schnappy-k6-stress-manual -n schnappy 2>/dev/null; kubectl create job schnappy-k6-stress-manual --from=cronjob/schnappy-k6-stress -n schnappy'
-
-  test:load:spike:
-    desc: Run k6 spike test — sudden traffic surge
-    cmds:
-      - mkdir -p /tmp/k6-results
-      - K6_TEST_NAME=spike-test k6 run tests/k6/spike-test.js
-
-  test:load:soak:
-    desc: Run k6 soak test (30 VUs, 30min — detects memory leaks)
-    cmds:
-      - mkdir -p /tmp/k6-results
-      - K6_TEST_NAME=soak-test k6 run tests/k6/soak-test.js
-
-  test:load:baseline:
-    desc: Save current load test results as baseline
-    cmds:
-      - mkdir -p /tmp/k6-results
-      - K6_TEST_NAME=load-test K6_SAVE_BASELINE=true k6 run tests/k6/load-test.js
-
-  # ============== HYPERFOIL (production) ==============
+  # ============== HYPERFOIL (production load/stress tests) ==============
+  # k6 is no longer used for load testing — only post-sync smoke tests
+  # (see schnappy-test/templates/k6-smoke-*). All load/stress/spike/soak
+  # work runs through Hyperfoil, which reports to MinIO + reports.pmon.dev.
   test:hyperfoil:load:
     desc: Run Hyperfoil load test in production (5min, reports to MinIO)
     cmds:

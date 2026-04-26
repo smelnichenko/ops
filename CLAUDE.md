@@ -125,7 +125,8 @@ task dev:stop         # Stop
 task test             # Backend + E2E
 task test:backend     # Gradle tests
 task test:e2e         # Playwright E2E
-task test:load        # k6 load test
+task test:hyperfoil:load    # Hyperfoil load test in prod (~5min)
+task test:hyperfoil:stress  # Hyperfoil stress test in prod (~6min)
 task test:dual-pi-clean  # Vagrant: full dual-Pi HA from fresh destroy
 task test:dual-pi        # Vagrant: dual-Pi HA without destroy (fast iteration)
 task test:vault-unseal   # Vagrant: Vault auto-unseal after cold start
