@@ -125,13 +125,49 @@ tasks:
       - ssh ten 'kubectl wait --for=condition=complete job/hf-load -n schnappy-production --timeout=600s'
       - ssh ten 'kubectl logs job/hf-load -n schnappy-production 2>/dev/null | tail -10'
 
-  test:hyperfoil:stress:
-    desc: Run Hyperfoil stress test in production (6min, reports to MinIO)
+  # The stress / spike / soak tasks share one chart-templated Job spec
+  # (cm/schnappy-production-hyperfoil-jobspec) so all the in-cluster
+  # values — image, hostnames, secrets — stay under GitOps. The task
+  # seds the scenario filename + report prefix into the spec, then
+  # `kubectl create -f`s it. CronJobs aren't used: stress and spike
+  # are operator-driven, soak is too long for a regular schedule.
+  test:hyperfoil:_run:
+    internal: true
+    requires: { vars: [BENCHMARK_FILE, REPORT_PREFIX, TIMEOUT] }
     cmds:
-      - ssh ten 'kubectl delete job hf-stress -n schnappy-production 2>/dev/null; kubectl create job hf-stress --from=cronjob/schnappy-production-hyperfoil-stress -n schnappy-production'
-      - echo "Waiting for completion (~6min)..."
-      - ssh ten 'kubectl wait --for=condition=complete job/hf-stress -n schnappy-production --timeout=600s'
-      - ssh ten 'kubectl logs job/hf-stress -n schnappy-production 2>/dev/null | tail -10'
+      - |
+        ssh ten "kubectl -n schnappy-production get cm schnappy-production-hyperfoil-jobspec \
+          -o jsonpath='{.data.job\.yaml}' \
+          | sed -e 's|__BENCHMARK_FILE__|{{.BENCHMARK_FILE}}|g' \
+                -e 's|__REPORT_PREFIX__|{{.REPORT_PREFIX}}|g' \
+          | kubectl create -f -"
+      - echo "Started, waiting (timeout {{.TIMEOUT}})..."
+      - |
+        ssh ten "kubectl -n schnappy-production wait --for=condition=complete \
+          --timeout={{.TIMEOUT}} \
+          job -l app.kubernetes.io/component=hyperfoil-stress \
+          --field-selector=status.successful=0 || true; \
+          kubectl -n schnappy-production logs --tail=10 \
+          job -l app.kubernetes.io/component=hyperfoil-stress \
+          --max-log-requests=10 2>/dev/null | tail -15"
+
+  test:hyperfoil:stress:
+    desc: Hyperfoil stress test (10min ramp 100→1000 users/sec)
+    cmds:
+      - task: test:hyperfoil:_run
+        vars: { BENCHMARK_FILE: stress-test.hf.yaml, REPORT_PREFIX: stress, TIMEOUT: 900s }
+
+  test:hyperfoil:spike:
+    desc: Hyperfoil spike test (60s baseline → 30s burst @ 1000/s → 90s recovery)
+    cmds:
+      - task: test:hyperfoil:_run
+        vars: { BENCHMARK_FILE: spike-test.hf.yaml, REPORT_PREFIX: spike, TIMEOUT: 300s }
+
+  test:hyperfoil:soak:
+    desc: Hyperfoil soak test (30min sustained @ 200 users/sec — surfaces leaks)
+    cmds:
+      - task: test:hyperfoil:_run
+        vars: { BENCHMARK_FILE: soak-test.hf.yaml, REPORT_PREFIX: soak, TIMEOUT: 2400s }
 
   # ============== JOOQ ==============
   jooq:generate:
