@@ -120,18 +120,18 @@ tasks:
   test:hyperfoil:load:
     desc: Run Hyperfoil load test in production (5min, reports to MinIO)
     cmds:
-      - ssh ten 'kubectl delete job hf-load -n schnappy 2>/dev/null; kubectl create job hf-load --from=cronjob/schnappy-hyperfoil-load -n schnappy'
+      - ssh ten 'kubectl delete job hf-load -n schnappy-production 2>/dev/null; kubectl create job hf-load --from=cronjob/schnappy-production-hyperfoil-load -n schnappy-production'
       - echo "Waiting for completion (~5min)..."
-      - ssh ten 'kubectl wait --for=condition=complete job/hf-load -n schnappy --timeout=600s'
-      - ssh ten 'kubectl logs job/hf-load -n schnappy 2>/dev/null | tail -10'
+      - ssh ten 'kubectl wait --for=condition=complete job/hf-load -n schnappy-production --timeout=600s'
+      - ssh ten 'kubectl logs job/hf-load -n schnappy-production 2>/dev/null | tail -10'
 
   test:hyperfoil:stress:
     desc: Run Hyperfoil stress test in production (6min, reports to MinIO)
     cmds:
-      - ssh ten 'kubectl delete job hf-stress -n schnappy 2>/dev/null; kubectl create job hf-stress --from=cronjob/schnappy-hyperfoil-stress -n schnappy'
+      - ssh ten 'kubectl delete job hf-stress -n schnappy-production 2>/dev/null; kubectl create job hf-stress --from=cronjob/schnappy-production-hyperfoil-stress -n schnappy-production'
       - echo "Waiting for completion (~6min)..."
-      - ssh ten 'kubectl wait --for=condition=complete job/hf-stress -n schnappy --timeout=600s'
-      - ssh ten 'kubectl logs job/hf-stress -n schnappy 2>/dev/null | tail -10'
+      - ssh ten 'kubectl wait --for=condition=complete job/hf-stress -n schnappy-production --timeout=600s'
+      - ssh ten 'kubectl logs job/hf-stress -n schnappy-production 2>/dev/null | tail -10'
 
   # ============== JOOQ ==============
   jooq:generate:
