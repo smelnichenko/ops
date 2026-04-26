@@ -283,7 +283,6 @@ tasks:
         -e "PORKBUN_SECRET_KEY=${PORKBUN_SECRET_KEY:-unused}"
         -e "ALERTMANAGER_WEBHOOK_SECRET=${ALERTMANAGER_WEBHOOK_SECRET:-unused}"
         -e "NVD_API_KEY=${NVD_API_KEY:-unused}"
-        -e "PROMETHEUS_AUTH_TOKEN=${PROMETHEUS_AUTH_TOKEN:-unused}"
 
   # ============== VAGRANT DEPLOY HELPERS (internal) ==============
   # Shared deploy chain used by every k8s-cluster Vagrant test. Assumes
