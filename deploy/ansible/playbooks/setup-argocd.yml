@@ -29,7 +29,7 @@
   vars:
     argocd_namespace: "{{ argocd_ns | default('argocd') }}"
     argocd_chart: "argo/argo-cd"
-    argocd_chart_version: "{{ argocd_version | default('9.4.16') }}"
+    argocd_chart_version: "{{ argocd_version | default('9.5.4') }}"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
     _forgejo_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
@@ -157,6 +157,13 @@
       kubernetes.core.helm_repository:
         name: argo
         repo_url: "{{ argocd_chart_repo }}"
+
+    # helm_repository module only adds the repo, never refreshes its
+    # index. Bumping argocd_chart_version to a release newer than the
+    # cached index fails with "no chart version found". Force a refresh.
+    - name: Refresh Helm repo index (so new chart versions are visible)
+      ansible.builtin.command: helm repo update argo
+      changed_when: false
 
     - name: Deploy Argo CD
       kubernetes.core.helm:
@@ -430,10 +437,19 @@
                   - protocol: TCP
                     port: 6379
             egress:
-              # To Pi (Forgejo on 3000, Keycloak/OIDC on 443)
+              # To Pi (Forgejo on 3000, Keycloak/OIDC on 443).
+              # Allow VIP + both Pi statics so Argo reaches Forgejo
+              # regardless of which Pi currently owns the VIP.
+              # Earlier this was hostvars['pi1']['ansible_host'] which
+              # only opened pi1's static (.4) — git.pmon.dev resolves
+              # to .5 (the VIP), so all repo-server fetches timed out.
               - to:
                   - ipBlock:
-                      cidr: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.5') }}/32"
+                      cidr: 192.168.11.5/32
+                  - ipBlock:
+                      cidr: 192.168.11.4/32
+                  - ipBlock:
+                      cidr: 192.168.11.6/32
                 ports:
                   - protocol: TCP
                     port: 3000
