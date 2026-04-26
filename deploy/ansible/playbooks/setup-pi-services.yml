@@ -35,7 +35,7 @@
     # Phase 1: System dependencies
     # ================================================================
 
-    - name: Install system packages
+    - name: install system packages
       ansible.builtin.apt:
         name:
           - curl
