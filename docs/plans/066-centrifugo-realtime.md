@@ -162,45 +162,51 @@ centrifugo:
   # pod as $CENTRIFUGO_SUB_TOKEN_SECRET via the ESO-managed Secret.
   subscription_token_hmac_secret_key: ${CENTRIFUGO_SUB_TOKEN_SECRET}
 
-  namespaces:
-    - name: chess
-      protected: true           # subscriptions require a sub-token from admin
-      presence: true
-      history_size: 200         # last 200 moves per game, replayable
-      history_ttl: 7d
-      recover: true             # client reconnect → resume from last seen offset
-      force_recovery: true
-    - name: chat
-      protected: true           # subscriptions require a sub-token from admin
-      presence: true
-      history_size: 100
-      history_ttl: 30d
-      recover: true
-    - name: notifications
-      allowed_user_channels: "$"   # user can subscribe to notifications#{own-sub} natively
-      presence: false
-      history_size: 50
-      history_ttl: 7d
-    - name: presence
-      allowed_user_channels: "$"   # presence#{own-sub} natively
-      presence: false
+  channel:
+    namespaces:
+      - name: chess
+        # No allow_subscribe_for_client → defaults to false → sub-token required.
+        presence: true
+        history_size: 200       # last 200 moves per game, replayable
+        history_ttl: 7d
+        force_recovery: true    # client reconnect → resume from last seen offset
+      - name: chat
+        # Same — sub-token required for subscribe.
+        presence: true
+        history_size: 100
+        history_ttl: 30d
+      - name: notifications
+        # User-limited channels: format `notifications:<id>#<userid>`.
+        # Centrifugo enforces the suffix matches the JWT `sub`.
+        allow_user_limited_channels: true
+        presence: false
+        history_size: 50
+        history_ttl: 7d
+      - name: presence
+        allow_user_limited_channels: true
+        presence: false
 
   # Consume realtime events from Kafka instead of apps publishing via
   # Centrifugo's HTTP API. Apps only publish to Kafka.
-  async_consumers:
-    - type: kafka
+  consumers:
+    - name: kafka_events       # ^[a-zA-Z0-9_]{2,}$ — no hyphens
+      enabled: true
+      type: kafka
       kafka:
-        brokers: [schnappy-kafka:9092]
+        brokers: [schnappy-production-kafka-bootstrap:9092]
         topics:
           - events.chat.messages
           - events.chess.moves
           - events.notifications
         consumer_group: centrifugo
-      # Centrifugo expects a specific shape in the Kafka value —
-      # channel + data. Our envelope has `service` + `subject` which
-      # we map via JSON template:
-      channel_template: "{{ .service }}:{{ .subject }}"
-      data_template: "{{ . }}"  # whole envelope
+      # Centrifugo v6 routes a Kafka publication to one or more channels
+      # using a Kafka header — NOT a JSON body template (v5 model).
+      # Publishers must set `x-centrifugo-channels: <channel1>,<channel2>`
+      # on each Kafka message. The message body becomes the publication
+      # data verbatim.
+      publication_data_mode:
+        enabled: true
+        channels_header: "x-centrifugo-channels"
 
   # No HTTP proxy block. Auth is fully token-based:
   #   - connection token (Keycloak JWT, JWKS-verified)
@@ -216,10 +222,12 @@ correct without putting a webhook in the request hot path.
 
 | Channel namespace | Auth model | Authority |
 |-------------------|------------|-----------|
-| `chat:room:{id}`        | `protected: true` — requires Centrifugo subscription token | admin service mints token after checking `channel_members` |
-| `chess:game:{uuid}`     | `protected: true` — requires Centrifugo subscription token | admin service mints token after checking game players |
-| `notifications#{user}`  | `allowed_user_channels: "$"` — Centrifugo native (channel suffix must equal JWT `sub`) | none — Centrifugo enforces |
-| `presence#{user}`       | `allowed_user_channels: "$"` — Centrifugo native | none |
+| `chat:room:{id}`           | `allow_subscribe_for_client: false` — requires sub-token | admin service mints token after checking `channel_members` |
+| `chess:game:{uuid}`        | `allow_subscribe_for_client: false` — requires sub-token | admin service mints token after checking game players |
+| `notifications:<id>#{user}` | `allow_user_limited_channels: true` — Centrifugo enforces channel `#`-suffix matches JWT `sub` | none — Centrifugo enforces |
+| `presence:<id>#{user}`     | `allow_user_limited_channels: true` | none |
+
+**v6 channel naming**: in Centrifugo v6 the user-limited convention is `name#userid`, not the v5 `:user:<id>` shape. The `<id>` part can be anything (an entity name like `inbox`); the `#<userid>` suffix is what Centrifugo enforces.
 
 ### Connection auth
 
