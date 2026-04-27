@@ -1,17 +1,17 @@
 # Ops
 
-Operational tooling, deployment automation, and testing for pmon.dev.
+Operational tooling, deployment automation, and integration testing for pmon.dev.
 
 ## Architecture
 
-Contains everything needed to provision, deploy, and test the pmon.dev infrastructure. Ansible playbooks set up the kubeadm cluster and all supporting services. Vagrant provides reproducible integration test environments. The Taskfile is the primary interface for all operations.
+Everything needed to provision, deploy, and test the pmon.dev infrastructure. Ansible playbooks set up the kubeadm cluster and the bare-metal services on the Pis (Vault, Keycloak, Forgejo, MinIO, HAProxy, Patroni, Consul). Vagrant provides reproducible integration test environments. The Taskfile is the primary interface for all operations — never run `ansible-playbook` directly, always use `task deploy:*`.
 
 ## Contents
 
 ```
 ops/
-  Taskfile.yml           # Task runner (build, test, deploy commands)
-  docker-compose.yml     # Local development stack (PostgreSQL, Valkey, Kafka, ScyllaDB, etc.)
+  Taskfile.yml           # Task runner — single entry point for build/test/deploy
+  docker-compose.yml     # Local development stack (PostgreSQL, Valkey, Kafka, ScyllaDB, …)
   Vagrantfile            # Vagrant VMs for integration testing
   deploy/
     ansible/
@@ -30,10 +30,11 @@ ops/
 ```bash
 task dev              # Start all infra + backend + frontend
 task dev:infra        # Start only infra (for IDE debugging)
+task dev:monitoring   # Start dev observability stack
 task dev:stop         # Stop local environment
 task test             # Run backend + E2E tests
 task test:backend     # Gradle tests only
-task deploy:status    # Check production pod status
+task deploy:status    # Production pod status
 ```
 
 ## Ansible Playbooks
@@ -41,15 +42,20 @@ task deploy:status    # Check production pod status
 | Playbook | Command | Purpose |
 |----------|---------|---------|
 | `setup-kubeadm.yml` | `task deploy:kubeadm` | kubeadm cluster provisioning |
-| `setup-pi-services.yml` | `task deploy:pi-services` | Forgejo, Keycloak, MinIO, HAProxy on Pis |
-| `setup-woodpecker.yml` | `task deploy:woodpecker` | Woodpecker CI |
+| `setup-pi-services.yml` | `task deploy:pi-services` | Forgejo, Keycloak, MinIO, HAProxy on the Pis |
+| `setup-consul.yml` + `setup-patroni.yml` | (via Pi-services chain) | Consul + Patroni Postgres HA |
+| `setup-vault-pi.yml` | `task deploy:vault-pi` | Pi Vault with Consul backend (both Pis) |
+| `setup-keycloak-clients.yml` | `task deploy:keycloak-clients` | OIDC client provisioning |
+| `setup-argocd.yml` | `task deploy:argocd` | Argo CD bootstrap |
+| `setup-istio.yml` | `task deploy:istio` | Istio control plane + ingress |
 | `setup-velero.yml` | `task deploy:velero` | Velero backups + MinIO |
-| `setup-consul.yml` | (via test chain) | Consul cluster on both Pis |
-| `setup-patroni.yml` | (via test chain) | Patroni Postgres HA |
-| `setup-vault-pi.yml` | `task deploy:vault-pi` | Pi Vault (Consul backend) — both Pis |
+| `setup-woodpecker.yml` | `task deploy:woodpecker` | Woodpecker CI |
+| `setup-nexus.yml` | `task deploy:nexus` | Nexus repository manager (Pi) |
 | `setup-gluster.yml` | `task deploy:gluster` | GlusterFS repo replication |
 | `setup-keepalived.yml` | `task deploy:keepalived` | Keepalived VIP |
-| `setup-nexus.yml` | `task deploy:nexus` | Nexus repository manager (Pi) |
+| `setup-pgbouncer.yml` | `task deploy:pgbouncer` | PgBouncer |
+| `setup-caddy.yml` | `task deploy:caddy` | Caddy reverse proxy |
+| `verify-restore.yml` | `task deploy:restore:verify` | Velero restore verification |
 
 ## Integration Tests (Vagrant)
 
@@ -57,17 +63,20 @@ task deploy:status    # Check production pod status
 task test:dual-pi-clean   # Full HA stack: destroy → up → deploy → assert
 task test:dual-pi         # Same, no destroy (fast iteration)
 task test:vault-unseal    # Vault auto-unseal after cold start
-task test:elk             # ELK stack integration
-task test:grafana         # Grafana + Prometheus
+task test:logs            # ELK stack
+task test:grafana         # Grafana + Prometheus + Mimir
 task test:kafka-scylla    # Kafka + ScyllaDB
+task test:realtime        # Centrifugo realtime
 task test:dr              # Disaster recovery
-task test:nexus           # Nexus repository manager
+task test:failure-modes   # Fault injection
+task test:argocd          # Argo CD bootstrap
+task test:cicd            # End-to-end CI/CD
 ```
 
 ## Deployment
 
-This repo does not deploy directly to production. It provides the tooling:
+This repo does not deploy applications directly — it provisions and configures the infrastructure they run on:
 
 - **Initial setup:** `task deploy:full` provisions kubeadm and installs all infrastructure
-- **Ongoing deploys:** Handled by Argo CD GitOps (image tags committed to `schnappy/infra` by Woodpecker)
+- **Application deploys:** Argo CD GitOps (image tags committed to `schnappy/infra` by Woodpecker)
 - **Infrastructure changes:** Run the relevant `task deploy:*` command
