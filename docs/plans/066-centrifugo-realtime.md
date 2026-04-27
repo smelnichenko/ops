@@ -1,5 +1,13 @@
 # Plan 066: Centralize realtime fanout — Valkey + Centrifugo + Kafka + ClickHouse
 
+> **Revision (post-2026-04-27):** original plan referenced an
+> `api-gateway` service for `/internal/centrifugo/{connect,subscribe,refresh}`
+> proxy endpoints. The gateway has since been archived (Istio handles ingress
+> + Keycloak JWT validation now). Connect/refresh are gone — Centrifugo
+> verifies the Keycloak JWT directly via JWKS. Per-channel ACL moves to
+> Centrifugo subscription tokens minted by the **admin** service. See
+> "Channel access control (post-revision)" below.
+
 ## TL;DR
 
 Replace the ad-hoc WebSocket + STOMP setup in each service with one
@@ -144,27 +152,38 @@ centrifugo:
     use_lists: true             # history + recovery support
     presence_user_mapping: true
 
-  token_hmac_secret_key: ""     # unset — using RSA/JWKS instead
+  # Connection auth: Keycloak JWT verified via JWKS. No proxy hop.
   token_jwks_public_endpoint: https://auth.pmon.dev/realms/schnappy/protocol/openid-connect/certs
   token_audience: centrifugo
 
+  # Channel auth: separate HS256 token type (Centrifugo "subscription token")
+  # minted per-channel by admin service. Shared secret comes from Vault path
+  # secret/schnappy/centrifugo, key `sub_token_secret`, projected into the
+  # pod as $CENTRIFUGO_SUB_TOKEN_SECRET via the ESO-managed Secret.
+  subscription_token_hmac_secret_key: ${CENTRIFUGO_SUB_TOKEN_SECRET}
+
   namespaces:
     - name: chess
+      protected: true           # subscriptions require a sub-token from admin
       presence: true
       history_size: 200         # last 200 moves per game, replayable
       history_ttl: 7d
       recover: true             # client reconnect → resume from last seen offset
       force_recovery: true
     - name: chat
+      protected: true           # subscriptions require a sub-token from admin
       presence: true
       history_size: 100
       history_ttl: 30d
       recover: true
-      publish_proxy: on         # server-side ACL check before fanout
     - name: notifications
+      allowed_user_channels: "$"   # user can subscribe to notifications#{own-sub} natively
       presence: false
       history_size: 50
       history_ttl: 7d
+    - name: presence
+      allowed_user_channels: "$"   # presence#{own-sub} natively
+      presence: false
 
   # Consume realtime events from Kafka instead of apps publishing via
   # Centrifugo's HTTP API. Apps only publish to Kafka.
@@ -183,15 +202,82 @@ centrifugo:
       channel_template: "{{ .service }}:{{ .subject }}"
       data_template: "{{ . }}"  # whole envelope
 
-  proxy:
-    connect_endpoint: http://schnappy-gateway:8080/internal/centrifugo/connect
-    subscribe_endpoint: http://schnappy-gateway:8080/internal/centrifugo/subscribe
-    publish_endpoint: ""        # disabled; clients don't publish directly
-    refresh_endpoint: http://schnappy-gateway:8080/internal/centrifugo/refresh
-    http:
-      timeout: 2s
-      retries: 2
+  # No HTTP proxy block. Auth is fully token-based:
+  #   - connection token (Keycloak JWT, JWKS-verified)
+  #   - subscription token (HS256, minted by admin per channel)
 ```
+
+## Channel access control (post-revision)
+
+The original plan delegated connect/subscribe/refresh decisions to an
+HTTP proxy on the api-gateway service. That service is gone. The
+replacement is **token-scoped channels (Option C)**, which keeps ACL
+correct without putting a webhook in the request hot path.
+
+| Channel namespace | Auth model | Authority |
+|-------------------|------------|-----------|
+| `chat:room:{id}`        | `protected: true` — requires Centrifugo subscription token | admin service mints token after checking `channel_members` |
+| `chess:game:{uuid}`     | `protected: true` — requires Centrifugo subscription token | admin service mints token after checking game players |
+| `notifications#{user}`  | `allowed_user_channels: "$"` — Centrifugo native (channel suffix must equal JWT `sub`) | none — Centrifugo enforces |
+| `presence#{user}`       | `allowed_user_channels: "$"` — Centrifugo native | none |
+
+### Connection auth
+
+Centrifugo accepts the **same Keycloak access token** the SPA already
+holds (no extra mint). Centrifugo verifies the signature against the
+Keycloak realm JWKS at `https://auth.pmon.dev/realms/schnappy/protocol/openid-connect/certs`,
+checks `exp`, uses `sub` as the user identity. Reuses the existing
+OIDC PKCE flow in the site — zero new auth code on the client.
+
+### Per-channel subscription tokens
+
+For protected namespaces (`chat`, `chess`), the centrifuge-js client
+calls a `getToken({ channel })` callback when subscribing. We wire that
+to a new endpoint:
+
+```
+POST /api/realtime/sub-token       (auth: Keycloak JWT, permission: CHAT or PLAY)
+body:  { "channel": "chat:room:42" }
+200:   { "token": "<HS256 JWT>", "expires_in": 60 }
+403:   user is not a member / not in this game
+```
+
+Owner: **admin service** (it already exposes user identity via
+`GatewayAuthFilter` and has DB access to `channel_members` via a small
+read-only adapter, or queries `chat`/`chess` services over HTTP for the
+membership check).
+
+Token shape (signed HS256 with `sub_token_secret` from Vault):
+
+```json
+{
+  "sub": "<keycloak-user-uuid>",
+  "channel": "chat:room:42",
+  "exp": <now + 60s>
+}
+```
+
+Short TTL (60 s) is enough — Centrifugo only validates on the
+SUBSCRIBE frame; once subscribed, the channel stays open until the
+connection drops. If a user is kicked from a channel mid-session, we
+push an `unsubscribe` via Centrifugo's server API (admin-secret
+authenticated). Without that, the kicked user keeps receiving messages
+until they reconnect — acceptable for v1, deferred for v2.
+
+### Why not connection-bound `subs` claim
+
+A simpler scheme is putting all allowed channels into the connection
+JWT's `subs` claim. We reject that because:
+
+1. Channel set changes (channel join/leave) → token must be reissued →
+   the client must reconnect. Per-channel sub-tokens don't drop the
+   connection.
+2. The connection token is the Keycloak JWT (we don't want to replace
+   it with a Centrifugo-specific one — that'd duplicate user identity).
+3. A user in 100 chat rooms would carry a 100-channel JWT on every
+   request.
+
+Per-channel mint on demand is more granular for ~30 LOC extra in admin.
 
 ### ClickHouse Kafka engine
 
@@ -349,32 +435,71 @@ style call, default to observability.
 Grafana: new dashboard `Realtime Events` — panels for event rate per
 service/type, top-N active subjects per hour, retention-to-disk chart.
 
-### `schnappy/chat`, `schnappy/chess`, `schnappy/admin`, `schnappy/monitor`
+### `schnappy/admin` — sub-token mint endpoint
 
-- **Remove**: `WebSocketConfig`, `WebSocketAuthInterceptor`,
-  `ChatWebSocketController`, STOMP broker config, session registry code.
+- **Add**: `POST /api/realtime/sub-token` (permission: any of CHAT, PLAY).
+  Reads `channel` from request, dispatches the membership check by
+  namespace prefix (`chat:` → call `chat-service`, `chess:` → call
+  `chess-service`), returns an HS256 JWT signed with
+  `CENTRIFUGO_SUB_TOKEN_SECRET`. Response 403 on miss.
+- **Add**: `RealtimeTokenService` and `MembershipChecker` interface
+  with `ChatMembershipChecker` and `ChessMembershipChecker`
+  implementations that call the per-service REST endpoints. Each
+  service exposes `GET /internal/membership?user={uuid}&channel={id}`
+  on a network-policy-restricted port (admin-only).
+- ~80 LOC total, plus 20 LOC per service-side check endpoint.
+
+### `schnappy/chat`, `schnappy/chess`, `schnappy/monitor`
+
+- **Remove (Phase 3)**: `WebSocketConfig`, `WebSocketAuthInterceptor`,
+  `ChatWebSocketController`, STOMP broker config, `SubscriptionGuard`,
+  session registry code.
 - **Keep**: `ChatKafkaProducer`, `ChatMessageConsumer` (the
-  ScyllaDB-persistence side — still needed).
-- **Add**: `/internal/centrifugo/connect`, `/subscribe`, `/refresh`
-  endpoints in the gateway service — these are HTTP webhooks Centrifugo
-  calls to authorize connections / subscriptions. They validate the JWT
-  and map `user → allowed channels`.
+  ScyllaDB-persistence side — still needed). Add envelope publication
+  to `events.chat.messages` / `events.chess.moves` topics alongside
+  existing `chat.messages` / `chess.moves`. Existing topics retire with
+  STOMP.
+- **Add (Phase 1)**: `GET /internal/membership?user={uuid}&channel={id}` —
+  read-only membership check for the admin sub-token endpoint. NetworkPolicy
+  restricts callers to the admin namespace.
 
-The net effect on each service is a code reduction: WebSocket is no
-longer its problem.
+The net effect on each service after Phase 3 is a code reduction:
+WebSocket is no longer its problem.
 
 ### `schnappy/site` (frontend)
 
-- Drop `@stomp/stompjs`; add `centrifuge` (~30 kB gzipped).
-- Replace all STOMP subscription code with Centrifugo subscriptions
-  (~4 files in chat UI + game UI).
+- Add `centrifuge` (~30 kB gzipped). **No STOMP code to remove** — the
+  site never had a STOMP client; it polls REST today.
+- Replace polling with Centrifugo subscriptions in:
+  - `pages/Chat.tsx` (channel list polling, every 10s)
+  - `components/chat/MessageArea.tsx` (message polling, every 3s)
+  - `pages/Chess.tsx` (game polling, every 3s)
+- Wire `centrifuge-js` constructor with two callbacks:
+  ```ts
+  new Centrifuge('wss://rt.pmon.dev/connection/websocket', {
+    token: () => getKeycloakToken(),                       // connection auth
+    getToken: ({ channel }) =>                              // sub-token for protected ns
+      api.post('/realtime/sub-token', { channel }).then(r => r.token),
+  })
+  ```
+- Keep one fallback poll cycle (every 30 s) for the first release; remove
+  in Phase 3 after stability.
 
 ### `schnappy/ops`
 
-- `deploy/ansible/playbooks/seed-vault-secrets.yml` — add
-  `secret/schnappy/centrifugo` with `token_hmac_secret_key` (HS256
-  fallback for admin API) and `admin_password` for the Centrifugo
-  admin web UI.
+- `deploy/ansible/playbooks/seed-vault-secrets.yml` — `secret/schnappy/centrifugo`
+  is already in the generatable list with `admin_password`, `admin_secret`, `api_key`.
+  **Add** `sub_token_secret` — HS256 secret for subscription tokens (shared with
+  admin service via ESO). Each value is a 32-char auto-generated password on
+  first run, persisted in Vault thereafter. `.env` is **not** updated (these
+  are not env-sourced).
+
+  Centrifugo field mapping:
+  - `admin_password`     → admin web UI login
+  - `admin_secret`       → HMAC for admin-API token issuance
+  - `api_key`            → HTTP API bearer (used by chat/chess to push
+                           `unsubscribe` commands on kick)
+  - `sub_token_secret`   → `subscription_token_hmac_secret_key` for Option C
 - `tests/ansible/test-realtime.yml` — new integration test:
   1. Publish envelope to `events.chat.messages`.
   2. Verify `ClickHouse.events.all` row appears within 5 s.
@@ -385,8 +510,16 @@ longer its problem.
 
 ### `schnappy/infra`
 
-- `clusters/production/schnappy/` — new subdir for `schnappy-realtime`
-  Application + SyncWave (after schnappy-data, before schnappy-app).
+- `clusters/production/schnappy-production-realtime/values.yaml` — new
+  values file for the `schnappy-realtime` chart (image tag, replicas,
+  histogram TTLs, namespace gating).
+- `clusters/production/argocd/apps/schnappy-realtime.yaml` (or extend
+  the existing ApplicationSet) — Argo CD Application pointing at the
+  chart + values file. SyncWave: after `schnappy-production-data`
+  (Valkey + Kafka), before `schnappy-production-apps` (apps depend on
+  Centrifugo for end-to-end test).
+- Production namespace: `schnappy-production-realtime` to match the
+  Plan 057 namespace-split convention.
 
 ## How this relates to plans 064 and 065
 
@@ -509,14 +642,42 @@ Net added: ~2 small pods. No persistent storage.
   has OTLP trace support in v6; wiring it up belongs with plan 065-B
   (ClickHouse traces) if we go that route.
 
-## Execution order
+## Execution order (post-revision)
 
-1. Save this plan (done).
-2. Finish Plan 064 (Valkey rename) — prerequisite for Centrifugo engine.
-3. Finish Plan 065 phase 1 (ClickHouse logs + events database).
-4. Build `schnappy-realtime` chart (this plan, Phase 1).
-5. Gateway service: implement `/internal/centrifugo/{connect,subscribe,refresh}` webhook endpoints.
-6. Dual-publish in apps (STOMP + Kafka envelope).
-7. Frontend migration (per-surface — chess, chat, notifications).
-8. Delete STOMP code + tests.
-9. Prod cutover per surface with a 1-week soak between phases.
+Strikethrough = done. Plan 064 (Valkey) and Plan 065 phase 1 (ClickHouse
++ `events` schema) are complete; chart templates for `schnappy-realtime`
+are in `platform/helm/schnappy-realtime/templates/`.
+
+1. ~~Save this plan~~. ✅
+2. ~~Plan 064 (Valkey rename)~~. ✅
+3. ~~Plan 065 phase 1 (ClickHouse + `events` schema)~~. ✅
+4. ~~Build `schnappy-realtime` chart skeleton~~. ✅ (templates exist;
+   may need namespace/protected-flag updates per the post-revision
+   namespace config above).
+5. **Wire Vault secret + ESO**: add `sub_token_secret` to the existing
+   `centrifugo` entry in `seed-vault-secrets.yml` (already has
+   `admin_password`, `admin_secret`, `api_key`). Update
+   `centrifugo-externalsecret.yaml` to project all four into the cluster
+   Secret. Update `centrifugo-configmap.yaml` to render
+   `subscription_token_hmac_secret_key` and per-namespace `protected:` /
+   `allowed_user_channels:` settings.
+6. **Production deploy of Centrifugo (Phase 1)**: add
+   `infra/clusters/production/schnappy-production-realtime/values.yaml`
+   + Argo Application. Centrifugo runs but no apps publish to it yet.
+   Verify `/health`, JWKS connectivity, Kafka consumer group registers.
+7. **Admin service: `POST /api/realtime/sub-token`** + per-service
+   membership check endpoints in chat and chess. Unit-test the token
+   shape against Centrifugo's `subscription_token_hmac_secret_key`
+   verification.
+8. **Apps publish to Kafka envelopes** (`events.chat.messages`,
+   `events.chess.moves`, `events.notifications`) alongside existing
+   topics. Verify ClickHouse `events.all` rows appear.
+9. **Frontend migration, per surface** (chess → chat → notifications).
+   Each surface: replace polling loop with `centrifuge-js` subscription;
+   keep a 30 s fallback poll for the first release.
+10. **Soak (1 week per surface)**: alerts on Centrifugo lag, message
+    drop, sub-token 5xx rate.
+11. **Phase 3 cleanup**: delete `WebSocketConfig`, `WebSocketAuthInterceptor`,
+    `ChatWebSocketController`, `SubscriptionGuard`, STOMP broker config
+    in chat/chess. Drop `spring-boot-starter-websocket` dep. Drop the
+    fallback poll on the frontend.
