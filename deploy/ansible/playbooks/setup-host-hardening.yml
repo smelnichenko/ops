@@ -1,0 +1,100 @@
+---
+# Host-level kernel hardening for crash recovery and forensics.
+#
+# Background: ten has hard-locked four times in 19 days (Apr 9/11/12/25),
+# each time leaving the journal cut off mid-line, the NIC echoing TCP
+# SYN+ACK from interrupt context, and userspace dead. Power button
+# (short press) goes through the ACPI → logind → systemd path which is
+# wedged with the rest of the kernel; only a long-press / hard reset
+# recovers, and no panic trace survives.
+#
+# This playbook installs two passive backstops:
+# - efi_pstore: panic kmsg lands in EFI NVRAM, readable next boot via
+#   /sys/fs/pstore (systemd-pstore.service then archives it under
+#   /var/lib/systemd/pstore/).
+# - systemd hardware watchdog: PID 1 pets /dev/watchdog0 (iTCO_wdt in
+#   the Intel PCH) every 30s; if the scheduler wedges and PID 1 stops,
+#   the chipset hard-resets the box after 60s. Self-recovery without a
+#   physical long-press.
+#
+# Not included (deliberately):
+# - kernel.softlockup_panic / hung_task_panic — risk of false-tripping
+#   on legit slow kernel work; revisit after we have one captured trace.
+# - kdump / kexec — heavier (reserves a crash kernel at boot); pstore
+#   captures enough to debug a recurring same-bug crash.
+#
+# Usage:
+#   task deploy:host-hardening
+
+- name: Host-level crash-recovery hardening
+  hosts: target
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Persist efi_pstore module load on boot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/pstore.conf
+        mode: '0644'
+        content: |
+          efi_pstore
+      register: _pstore_conf
+
+    - name: Load efi_pstore now
+      community.general.modprobe:
+        name: efi_pstore
+        state: present
+        persistent: present
+
+    - name: Ensure /etc/systemd/system.conf.d exists
+      ansible.builtin.file:
+        path: /etc/systemd/system.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Drop in systemd RuntimeWatchdogSec=60s
+      ansible.builtin.copy:
+        dest: /etc/systemd/system.conf.d/watchdog.conf
+        mode: '0644'
+        content: |
+          [Manager]
+          RuntimeWatchdogSec=60s
+          RebootWatchdogSec=10min
+      register: _watchdog_conf
+
+    - name: Re-exec systemd to pick up watchdog drop-in
+      ansible.builtin.command: systemctl daemon-reexec
+      when: _watchdog_conf.changed
+      changed_when: true
+
+    - name: Verify watchdog is armed
+      ansible.builtin.shell: |
+        set -e
+        # systemd reports its own perception of the watchdog via show
+        ts=$(systemctl show -p RuntimeWatchdogUSec --value)
+        echo "RuntimeWatchdogUSec=$ts"
+        # iTCO driver also exposes timeout in /sys
+        if [ -e /sys/class/watchdog/watchdog0/timeout ]; then
+          echo "watchdog0 timeout=$(cat /sys/class/watchdog/watchdog0/timeout)s"
+        fi
+      register: _wd_verify
+      changed_when: false
+
+    - name: Show watchdog state
+      ansible.builtin.debug:
+        msg: "{{ _wd_verify.stdout_lines }}"
+
+    - name: Verify pstore filesystem mounted
+      ansible.builtin.shell: |
+        if mountpoint -q /sys/fs/pstore; then
+          echo "pstore mounted; backends: $(ls /sys/fs/pstore/ 2>/dev/null | head -5 || echo empty)"
+        else
+          echo "pstore not mounted"
+          exit 1
+        fi
+      register: _pstore_verify
+      changed_when: false
+
+    - name: Show pstore state
+      ansible.builtin.debug:
+        msg: "{{ _pstore_verify.stdout }}"

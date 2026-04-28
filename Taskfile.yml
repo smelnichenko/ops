@@ -568,6 +568,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
 
+  deploy:host-hardening:
+    desc: Host kernel hardening on ten (efi_pstore + systemd hardware watchdog)
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-host-hardening.yml
+
   deploy:seed-secrets:
     desc: Seed Vault secrets from .env
     dir: deploy/ansible
