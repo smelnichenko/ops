@@ -48,6 +48,14 @@
   become: true
   gather_facts: false
 
+  vars:
+    smartctl_exporter_version: "0.14.0"
+    smartctl_exporter_port: 9633
+    # Bind to the node's LAN IP, not 0.0.0.0; nftables blocks LAN-external
+    # access. Cluster Prometheus scrapes via Service + Endpoints (defined
+    # in schnappy-observability chart).
+    smartctl_exporter_bind: "{{ node_ip_override | default('192.168.11.2') }}"
+
   tasks:
     - name: Detect EFI firmware (efi_pstore + nvme cmdline are no-ops without it)
       ansible.builtin.stat:
@@ -250,3 +258,95 @@
       ansible.builtin.systemd:
         daemon_reload: true
       when: _fr_unit.changed
+
+    # ================================================================
+    # smartctl_exporter — surface NVMe SMART (Unsafe Shutdowns,
+    # Media Errors, wear, temps) to Prometheus. Without this we had no
+    # visibility into the firmware bug on the 980 PROs until the unsafe
+    # shutdown counter had ticked 823 times. Cluster scrape config +
+    # alert + dashboard live in the schnappy-observability chart.
+    # ================================================================
+
+    - name: Ensure smartmontools (provides smartctl binary)
+      ansible.builtin.apt:
+        name: smartmontools
+        state: present
+        update_cache: false
+
+    - name: Check installed smartctl_exporter version
+      ansible.builtin.shell: |
+        /usr/local/bin/smartctl_exporter --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      register: _smartctl_version
+      changed_when: false
+      failed_when: false
+
+    - name: Download + install smartctl_exporter
+      ansible.builtin.unarchive:
+        src: "https://github.com/prometheus-community/smartctl_exporter/releases/download/v{{ smartctl_exporter_version }}/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64.tar.gz"
+        dest: /tmp/
+        remote_src: true
+        creates: "/tmp/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64/smartctl_exporter"
+      when: _smartctl_version.stdout != smartctl_exporter_version
+
+    - name: Move smartctl_exporter into place
+      ansible.builtin.copy:
+        src: "/tmp/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64/smartctl_exporter"
+        dest: /usr/local/bin/smartctl_exporter
+        remote_src: true
+        mode: '0755'
+        owner: root
+        group: root
+      when: _smartctl_version.stdout != smartctl_exporter_version
+      register: _smartctl_bin
+
+    - name: Write smartctl_exporter systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/smartctl_exporter.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Prometheus smartctl_exporter
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          # Needs root for SMART access; smartctl uses ioctl on /dev/nvme*
+          User=root
+          Group=root
+          ExecStart=/usr/local/bin/smartctl_exporter \
+            --web.listen-address={{ smartctl_exporter_bind }}:{{ smartctl_exporter_port }} \
+            --smartctl.interval=60s
+          Restart=on-failure
+          RestartSec=10s
+          # Hardening
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          ProtectKernelTunables=true
+          ProtectControlGroups=true
+
+          [Install]
+          WantedBy=multi-user.target
+      register: _smartctl_unit
+
+    - name: Enable + start smartctl_exporter
+      ansible.builtin.systemd:
+        name: smartctl_exporter
+        enabled: true
+        state: "{{ 'restarted' if (_smartctl_bin.changed or _smartctl_unit.changed) else 'started' }}"
+        daemon_reload: true
+
+    - name: Verify smartctl_exporter is serving metrics
+      ansible.builtin.uri:
+        url: "http://{{ smartctl_exporter_bind }}:{{ smartctl_exporter_port }}/metrics"
+        return_content: true
+      register: _smartctl_check
+      retries: 5
+      delay: 2
+      until: _smartctl_check.status == 200
+
+    - name: Show first SMART metric line (proof scrape works)
+      ansible.builtin.debug:
+        msg: "{{ _smartctl_check.content.split('\n') | select('match', '^smartctl_device') | first | default('no smartctl_ metrics yet') }}"
