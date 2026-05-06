@@ -49,12 +49,25 @@
   gather_facts: false
 
   tasks:
+    - name: Detect EFI firmware (efi_pstore + nvme cmdline are no-ops without it)
+      ansible.builtin.stat:
+        path: /sys/firmware/efi
+      register: _efi
+
+    - name: Detect NVMe presence
+      ansible.builtin.find:
+        paths: /sys/block
+        patterns: 'nvme*'
+        file_type: link
+      register: _nvme
+
     - name: Persist efi_pstore module load on boot
       ansible.builtin.copy:
         dest: /etc/modules-load.d/pstore.conf
         mode: '0644'
         content: |
           efi_pstore
+      when: _efi.stat.exists
       register: _pstore_conf
 
     - name: Load efi_pstore now
@@ -62,6 +75,7 @@
         name: efi_pstore
         state: present
         persistent: present
+      when: _efi.stat.exists
 
     - name: Ensure /etc/systemd/system.conf.d exists
       ansible.builtin.file:
@@ -109,12 +123,13 @@
           echo "pstore not mounted"
           exit 1
         fi
+      when: _efi.stat.exists
       register: _pstore_verify
       changed_when: false
 
     - name: Show pstore state
       ansible.builtin.debug:
-        msg: "{{ _pstore_verify.stdout }}"
+        msg: "{{ _pstore_verify.stdout | default('skipped (no EFI)') }}"
 
     # ================================================================
     # Panic-on-hang sysctls — turn the soft hangs into auto-rebooting
@@ -163,12 +178,14 @@
     - name: Read /etc/default/grub
       ansible.builtin.slurp:
         src: /etc/default/grub
+      when: _nvme.matched > 0
       register: _grub_raw
 
     - name: Compute desired GRUB_CMDLINE_LINUX value
       ansible.builtin.set_fact:
         _grub_current: "{{ (_grub_raw.content | b64decode).split('\n') | select('match', '^GRUB_CMDLINE_LINUX=') | first }}"
         _nvme_param: "nvme_core.default_ps_max_latency_us=0"
+      when: _nvme.matched > 0
 
     - name: Inject nvme_core.default_ps_max_latency_us=0 into GRUB_CMDLINE_LINUX
       ansible.builtin.lineinfile:
@@ -176,7 +193,9 @@
         regexp: '^GRUB_CMDLINE_LINUX="(.*)"$'
         line: 'GRUB_CMDLINE_LINUX="{{ ((_grub_current | regex_replace(''^GRUB_CMDLINE_LINUX="(.*)"$'', ''\1'')) ~ '' '' ~ _nvme_param) | trim }}"'
         backup: true
-      when: _nvme_param not in _grub_current
+      when:
+        - _nvme.matched > 0
+        - _nvme_param not in _grub_current
       register: _grub_edit
 
     - name: update-grub if cmdline changed
@@ -187,7 +206,9 @@
     - name: Reboot reminder
       ansible.builtin.debug:
         msg: |
-          {% if _grub_edit.changed | default(false) %}
+          {% if _nvme.matched == 0 %}
+          No NVMe devices detected — APST mitigation skipped.
+          {% elif _grub_edit.changed | default(false) %}
           GRUB cmdline updated with {{ _nvme_param }}.
           REBOOT REQUIRED for the NVMe APST mitigation to take effect.
           After reboot verify with:  cat /proc/cmdline

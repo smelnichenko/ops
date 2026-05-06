@@ -276,6 +276,49 @@
         state: restarted
 
     # ================================================================
+    # Phase 4b: Lower terminated-pod-gc-threshold (default 12500 means
+    # Failed pods accumulate forever and poison Argo's resource health
+    # walk; 100 is enough breathing room without letting them pile up
+    # for hours after a node reboot)
+    # ================================================================
+
+    - name: Ensure --terminated-pod-gc-threshold=100 in controller-manager manifest
+      ansible.builtin.lineinfile:
+        path: /etc/kubernetes/manifests/kube-controller-manager.yaml
+        insertafter: '    - --use-service-account-credentials=true'
+        line: '    - --terminated-pod-gc-threshold=100'
+        state: present
+
+    - name: Persist --terminated-pod-gc-threshold in kubeadm-config so upgrades preserve it
+      ansible.builtin.shell: |
+        set -o pipefail
+        # Idempotent: only patch if not already set
+        if kubectl -n kube-system get cm kubeadm-config -o yaml \
+            | grep -q 'terminated-pod-gc-threshold'; then
+          echo unchanged
+          exit 0
+        fi
+        kubectl -n kube-system get cm kubeadm-config -o json | \
+          python3 -c '
+        import json, sys, yaml
+        cm = json.loads(sys.stdin.read())
+        cluster_cfg = yaml.safe_load(cm["data"]["ClusterConfiguration"])
+        cm_args = cluster_cfg.setdefault("controllerManager", {}).setdefault("extraArgs", [])
+        # extraArgs in v1beta4 is a list of {name, value}; pre-v1beta4 was a dict
+        if isinstance(cm_args, dict):
+            cm_args["terminated-pod-gc-threshold"] = "100"
+        else:
+            cm_args.append({"name": "terminated-pod-gc-threshold", "value": "100"})
+        cm["data"]["ClusterConfiguration"] = yaml.safe_dump(cluster_cfg, default_flow_style=False)
+        print(json.dumps(cm))
+        ' | kubectl apply -f -
+        echo patched
+      args:
+        executable: /bin/bash
+      register: _gc_patch
+      changed_when: "'patched' in _gc_patch.stdout"
+
+    # ================================================================
     # Phase 5: Install kube-proxy with nftables
     # ================================================================
 

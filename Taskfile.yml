@@ -341,6 +341,7 @@ tasks:
     deps: [_vagrant:pi-stack]
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
 
   # ============== K8S-CLUSTER TESTS ==============
   test:eso:
