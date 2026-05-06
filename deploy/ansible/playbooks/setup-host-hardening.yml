@@ -98,3 +98,37 @@
     - name: Show pstore state
       ansible.builtin.debug:
         msg: "{{ _pstore_verify.stdout }}"
+
+    # ================================================================
+    # Cleanup: zombie forgejo-runner left behind by Plan 017
+    # (Woodpecker CI migration). Unit references a wrapper script that
+    # was deleted; systemd has been crash-looping it every 10s ever
+    # since (~10k restarts/day, ~56k+ counter). Pure noise that makes
+    # the journal hard to read post-crash.
+    # ================================================================
+
+    - name: Stop and disable forgejo-runner.service
+      ansible.builtin.systemd:
+        name: forgejo-runner.service
+        state: stopped
+        enabled: false
+      register: _fr_stop
+      failed_when:
+        - _fr_stop.failed
+        - "'Could not find the requested service' not in (_fr_stop.msg | default(''))"
+
+    - name: Remove forgejo-runner unit file
+      ansible.builtin.file:
+        path: /etc/systemd/system/forgejo-runner.service
+        state: absent
+      register: _fr_unit
+
+    - name: Remove forgejo-runner binary
+      ansible.builtin.file:
+        path: /usr/local/bin/forgejo-runner
+        state: absent
+
+    - name: daemon-reload after unit removal
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: _fr_unit.changed
