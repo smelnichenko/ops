@@ -27,6 +27,15 @@
 #   compactions, layer extracts).
 # - kernel.softlockup_panic=1 — CPU stuck in kernel mode >20s panics.
 #
+# After confirming the storage is two Samsung 980 PRO 1TB on firmware
+# 1B2QGXA7 — a known-buggy revision whose APST/D3 power-state machine
+# causes random kernel hangs (823 unsafe shutdowns / 1,323 power-on
+# hours on the data drive matches one hang every ~1.6h):
+# - nvme_core.default_ps_max_latency_us=0 on the kernel cmdline
+#   disables APST + D3 entirely so the buggy firmware never gets a
+#   chance to wedge. Standard mitigation pending firmware update to
+#   5B2QGXA7+. Costs a few watts of idle draw. Requires reboot.
+#
 # Not included:
 # - kdump / kexec — heavier (reserves a crash kernel at boot); pstore
 #   captures enough to debug a recurring same-bug crash.
@@ -144,6 +153,48 @@
     - name: Show panic sysctls
       ansible.builtin.debug:
         msg: "{{ _panic_verify.stdout_lines }}"
+
+    # ================================================================
+    # Disable NVMe APST — the Samsung 980 PRO firmware 1B2QGXA7 hangs
+    # the host when the controller transitions into low-power states.
+    # Mitigation until firmware can be flashed to 5B2QGXA7+.
+    # ================================================================
+
+    - name: Read /etc/default/grub
+      ansible.builtin.slurp:
+        src: /etc/default/grub
+      register: _grub_raw
+
+    - name: Compute desired GRUB_CMDLINE_LINUX value
+      ansible.builtin.set_fact:
+        _grub_current: "{{ (_grub_raw.content | b64decode).split('\n') | select('match', '^GRUB_CMDLINE_LINUX=') | first }}"
+        _nvme_param: "nvme_core.default_ps_max_latency_us=0"
+
+    - name: Inject nvme_core.default_ps_max_latency_us=0 into GRUB_CMDLINE_LINUX
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX="(.*)"$'
+        line: 'GRUB_CMDLINE_LINUX="{{ ((_grub_current | regex_replace(''^GRUB_CMDLINE_LINUX="(.*)"$'', ''\1'')) ~ '' '' ~ _nvme_param) | trim }}"'
+        backup: true
+      when: _nvme_param not in _grub_current
+      register: _grub_edit
+
+    - name: update-grub if cmdline changed
+      ansible.builtin.command: update-grub
+      when: _grub_edit.changed | default(false)
+      changed_when: true
+
+    - name: Reboot reminder
+      ansible.builtin.debug:
+        msg: |
+          {% if _grub_edit.changed | default(false) %}
+          GRUB cmdline updated with {{ _nvme_param }}.
+          REBOOT REQUIRED for the NVMe APST mitigation to take effect.
+          After reboot verify with:  cat /proc/cmdline
+          And:  sudo nvme get-feature /dev/nvme0 -f 0x0c   # current value should be 0
+          {% else %}
+          NVMe APST mitigation already on cmdline; no change needed.
+          {% endif %}
 
     # ================================================================
     # Cleanup: zombie forgejo-runner left behind by Plan 017
