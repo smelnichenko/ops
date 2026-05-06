@@ -55,6 +55,8 @@
     # access. Cluster Prometheus scrapes via Service + Endpoints (defined
     # in schnappy-observability chart).
     smartctl_exporter_bind: "{{ node_ip_override | default('192.168.11.2') }}"
+    smartctl_exporter_release_base: "https://github.com/prometheus-community/smartctl_exporter/releases/download"
+    smartctl_exporter_archive_name: "smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64.tar.gz"
 
   tasks:
     - name: Detect EFI firmware (efi_pstore + nvme cmdline are no-ops without it)
@@ -99,12 +101,7 @@
           [Manager]
           RuntimeWatchdogSec=60s
           RebootWatchdogSec=10min
-      register: _watchdog_conf
-
-    - name: Re-exec systemd to pick up watchdog drop-in
-      ansible.builtin.command: systemctl daemon-reexec
-      when: _watchdog_conf.changed
-      changed_when: true
+      notify: Re-exec systemd
 
     - name: Verify watchdog is armed
       ansible.builtin.shell: |
@@ -125,12 +122,15 @@
 
     - name: Verify pstore filesystem mounted
       ansible.builtin.shell: |
+        set -o pipefail
         if mountpoint -q /sys/fs/pstore; then
           echo "pstore mounted; backends: $(ls /sys/fs/pstore/ 2>/dev/null | head -5 || echo empty)"
         else
           echo "pstore not mounted"
           exit 1
         fi
+      args:
+        executable: /bin/bash
       when: _efi.stat.exists
       register: _pstore_verify
       changed_when: false
@@ -160,16 +160,19 @@
           # headroom while still catching a real wedge well before the
           # 32-hour outage we just had.
           kernel.hung_task_timeout_secs = 300
-      register: _panic_sysctl
+      notify: Reload sysctl
 
-    - name: Apply panic sysctls now
-      ansible.builtin.command: sysctl --system
-      when: _panic_sysctl.changed
-      changed_when: true
+    # Force the handler to fire here so the verify task below sees the
+    # post-reload values; default behaviour runs handlers at end of play.
+    - name: Flush handlers before sysctl verification
+      ansible.builtin.meta: flush_handlers
 
     - name: Verify panic sysctls live
       ansible.builtin.shell: |
+        set -o pipefail
         sysctl kernel.softlockup_panic kernel.hung_task_panic kernel.hung_task_timeout_secs kernel.panic kernel.panic_on_oops
+      args:
+        executable: /bin/bash
       register: _panic_verify
       changed_when: false
 
@@ -204,12 +207,8 @@
       when:
         - _nvme.matched > 0
         - _nvme_param not in _grub_current
+      notify: Update grub
       register: _grub_edit
-
-    - name: update-grub if cmdline changed
-      ansible.builtin.command: update-grub
-      when: _grub_edit.changed | default(false)
-      changed_when: true
 
     - name: Reboot reminder
       ansible.builtin.debug:
@@ -247,17 +246,12 @@
       ansible.builtin.file:
         path: /etc/systemd/system/forgejo-runner.service
         state: absent
-      register: _fr_unit
+      notify: Reload systemd daemon
 
     - name: Remove forgejo-runner binary
       ansible.builtin.file:
         path: /usr/local/bin/forgejo-runner
         state: absent
-
-    - name: daemon-reload after unit removal
-      ansible.builtin.systemd:
-        daemon_reload: true
-      when: _fr_unit.changed
 
     # ================================================================
     # smartctl_exporter — surface NVMe SMART (Unsafe Shutdowns,
@@ -275,14 +269,17 @@
 
     - name: Check installed smartctl_exporter version
       ansible.builtin.shell: |
+        set -o pipefail
         /usr/local/bin/smartctl_exporter --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      args:
+        executable: /bin/bash
       register: _smartctl_version
       changed_when: false
       failed_when: false
 
     - name: Download + install smartctl_exporter
       ansible.builtin.unarchive:
-        src: "https://github.com/prometheus-community/smartctl_exporter/releases/download/v{{ smartctl_exporter_version }}/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64.tar.gz"
+        src: "{{ smartctl_exporter_release_base }}/v{{ smartctl_exporter_version }}/{{ smartctl_exporter_archive_name }}"
         dest: /tmp/
         remote_src: true
         creates: "/tmp/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64/smartctl_exporter"
@@ -349,4 +346,23 @@
 
     - name: Show first SMART metric line (proof scrape works)
       ansible.builtin.debug:
-        msg: "{{ _smartctl_check.content.split('\n') | select('match', '^smartctl_device') | first | default('no smartctl_ metrics yet') }}"
+        msg: "{{ _smartctl_check.content.split('\n')
+              | select('match', '^smartctl_device') | first
+              | default('no smartctl_ metrics yet') }}"
+
+  handlers:
+    - name: Re-exec systemd
+      ansible.builtin.systemd:
+        daemon_reexec: true
+
+    - name: Reload sysctl
+      ansible.builtin.command: sysctl --system
+      changed_when: true
+
+    - name: Update grub
+      ansible.builtin.command: update-grub
+      changed_when: true
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
