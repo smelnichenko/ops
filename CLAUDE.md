@@ -205,8 +205,8 @@ Nexus Repository Manager (Pi, systemd) ← caching proxy for artifacts + Docker
 apt-cacher-ng (namespace: schnappy)     ← caching proxy for apt in Docker builds
   └─ :3142 → Debian/Ubuntu mirrors (used by Kaniko via http_proxy build-arg)
 
-MinIO-backup (namespace: velero) ← S3 storage at /mnt/backups/minio
-Velero (namespace: velero)       ← k8s backup orchestrator → MinIO
+Pi MinIO (192.168.11.5:9000)     ← S3 storage, distributed across pi1+pi2 (4 drives)
+Velero (namespace: velero)       ← k8s backup orchestrator → Pi MinIO
   ├─ schnappy-daily (2 AM)        ← schnappy namespace, 7-day retention
   └─ full-weekly (Sun 3 AM)      ← all namespaces, 30-day retention
 ```
@@ -793,12 +793,13 @@ Caching proxy for Debian/Ubuntu apt packages, used by Kaniko during Docker image
 - **Storage:** 10Gi PVC (production), 5Gi (default)
 - **Helm:** `aptCache.enabled: true` (default)
 
-## Backups (Velero + MinIO)
+## Backups (Velero → Pi MinIO)
 
-Automated k8s cluster backups using Velero with a dedicated backup MinIO instance.
+Automated k8s cluster backups using Velero with the distributed MinIO
+cluster running on the Pis (4 drives across pi1 + pi2).
 
 - **Namespace:** `velero`
-- **Backup storage:** `/mnt/backups/minio` (HostPath PV, not local-path-provisioner)
+- **Backup storage:** Pi MinIO at `192.168.11.5:9000` (distributed mode, 4 drives across pi1+pi2 — credentials in `/etc/minio/env` on each Pi)
 - **MinIO image:** `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` (pinned)
 - **Velero chart:** `vmware-tanzu/velero` (v11.4.0) with `velero-plugin-for-aws`
 - **Node agent:** Enabled for PVC filesystem backups (`defaultVolumesToFsBackup: true`)
@@ -807,17 +808,14 @@ Automated k8s cluster backups using Velero with a dedicated backup MinIO instanc
 - **Scheduled backups:**
   - `schnappy-daily`: 2 AM UTC, `schnappy` namespace, 7-day retention
   - `full-weekly`: Sunday 3 AM UTC, all namespaces, 30-day retention
-- **Offsite replication:** rsync `/mnt/backups/minio/` → Pi `192.168.11.4:/mnt/backups/offsite/`, systemd timer at 4 AM daily
-- **Git mirror:** bare repo on Pi at `/mnt/backups/git-mirror/monitor.git`, pushed daily with offsite backup; local mirror at `/var/lib/git-mirror/monitor.git` on ten
 - **Vault Raft snapshots:** CronJob every 6h, uploaded to MinIO `vault-backups` bucket, 30 retained
-- **Key files:** `deploy/ansible/playbooks/setup-velero.yml` (platform repo), Helm templates in platform repo
+- **Key files:** `deploy/ansible/playbooks/setup-velero.yml` (ops repo), Helm templates in platform repo
 
-**Backup storage layout:**
-```
-SATA SSD (/mnt/backups/minio)          ← primary backup storage (Velero + Vault snapshots)
-Pi NVMe (/mnt/backups/offsite)         ← 3rd copy, rsync'd daily at 4 AM from SATA SSD
-Pi NVMe (/mnt/backups/git-mirror/)     ← bare git mirror, pushed daily at 4 AM from ten
-```
+The previous setup ran a local MinIO instance on ten's SATA SSD at
+`/mnt/backups/minio` with rsync replication to a Pi. That tier was
+retired during the 2026-04-20/21 hardening session when MinIO moved
+to its distributed Pi deployment; the SATA SSD itself was unmounted +
+removed 2026-05-08 once nothing referenced it any more.
 
 **Backup commands:**
 ```bash
@@ -827,7 +825,7 @@ task deploy:backup:status   # Check backup status
 
 ### Restore Procedures
 
-**Monitor app (from Velero backup):**
+**App restore (from Velero backup):**
 ```bash
 # List available backups
 ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero backup get --kubeconfig /etc/kubernetes/admin.conf'
@@ -836,17 +834,12 @@ ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero backup get --kubeco
 ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero restore create --from-backup <backup-name> --kubeconfig /etc/kubernetes/admin.conf'
 ```
 
-**Monitor app (from offsite copy, primary SATA SSD lost):**
-```bash
-# 1. Rsync offsite data back to ten
-ssh ten 'sudo rsync -az sm@192.168.11.4:/mnt/backups/offsite/ /mnt/backups/minio/'
-
-# 2. Restart MinIO to pick up restored data
-ssh ten 'sudo kubectl delete pod -l app=minio-backup -n velero'
-
-# 3. Wait for BSL available, then restore
-ssh ten 'sudo kubectl exec deploy/velero -n velero -- velero restore create --from-backup <backup-name> --kubeconfig /etc/kubernetes/admin.conf'
-```
+**Pi MinIO outage:**
+The two-Pi distributed mode tolerates single-drive or single-Pi failure
+(erasure coding stripe is 4-drive 2-parity). If both Pis are lost, the
+Velero BSL goes Unavailable until MinIO is restored — there's currently
+no offsite copy beyond Pi MinIO itself. Plan 061 sub-plan C (restore
+verification) is the open follow-up here.
 
 **Vault (both Pis lost):**
 Pi Vault uses Consul as its storage backend — data lives in Consul KV, not
