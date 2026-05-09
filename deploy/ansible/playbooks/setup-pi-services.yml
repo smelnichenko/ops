@@ -271,6 +271,11 @@
           USER = postgres
           PASSWD = {{ forgejo_db_password }}
           SSL_MODE = disable
+          # Force connections to be recycled hourly. Default 0 = forever,
+          # which kept Forgejo glued to PgBouncer's stale-cached failure
+          # state for ~16 h after the 2026-05-08 switch flap. Hourly
+          # recycle bounds worst-case recovery from this kind of cascade.
+          CONN_MAX_LIFETIME = 1h
 
           [repository]
           ROOT = /var/lib/forgejo/repos
