@@ -293,6 +293,72 @@
         state: absent
 
     # ================================================================
+    # Disable unused radios. ten has Intel onboard WiFi (`iwlwifi` /
+    # `iwlmvm`, surfaces as `wlo1` — currently link-down, never used)
+    # and a full Bluetooth stack (`bluetooth` core + 5 vendor HCI
+    # modules). The mt7921u USB dongle (separate hardware, used for
+    # the WiFi AP bridge `br0`) shares cfg80211/mac80211 with iwlwifi
+    # but doesn't depend on it, so unloading iwlwifi is safe.
+    # Saves ~1 W idle, a bit more under load — these subsystems run
+    # background timers + hold PCI/USB devices in higher D-states.
+    # ================================================================
+
+    - name: Blacklist unused radio modules
+      ansible.builtin.copy:
+        dest: /etc/modprobe.d/disable-unused-radios.conf
+        mode: '0644'
+        content: |
+          # Managed by ops/deploy/ansible/playbooks/setup-host-hardening.yml
+          # ten doesn't use onboard WiFi (wlo1 stays down) or Bluetooth.
+          # USB WiFi dongle for AP bridge uses mt7921u + cfg80211/mac80211
+          # which are unaffected by these blacklists.
+          blacklist iwlmvm
+          blacklist iwlwifi
+          blacklist btusb
+          blacklist btintel
+          blacklist btrtl
+          blacklist btbcm
+          blacklist btmtk
+          blacklist bluetooth
+          blacklist ecdh_generic
+
+    # Order matters: leaves first, then their dependencies. Each step
+    # is idempotent — community.general.modprobe state=absent is a no-op
+    # if the module isn't loaded.
+    - name: Unload bluetooth HCI leaf modules
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - btusb
+        - btintel
+        - btrtl
+        - btbcm
+        - btmtk
+      failed_when: false  # vendor modules may be absent on different kernels
+
+    - name: Unload bluetooth core
+      community.general.modprobe:
+        name: bluetooth
+        state: absent
+      failed_when: false
+
+    - name: Unload ecdh_generic (only consumer was bluetooth)
+      community.general.modprobe:
+        name: ecdh_generic
+        state: absent
+      failed_when: false
+
+    - name: Unload iwlwifi stack
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - iwlmvm
+        - iwlwifi
+      failed_when: false
+
+    # ================================================================
     # smartctl_exporter — surface NVMe SMART (Unsafe Shutdowns,
     # Media Errors, wear, temps) to Prometheus. Without this we had no
     # visibility into the firmware bug on the 980 PROs until the unsafe
