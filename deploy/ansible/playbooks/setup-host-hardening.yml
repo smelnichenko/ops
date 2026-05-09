@@ -189,14 +189,14 @@
         set -e
         if grep -qE 'GRUB_CMDLINE_LINUX="[^"]*nvme_core\.default_ps_max_latency_us=0' /etc/default/grub; then
           sed -i.bak 's| *nvme_core\.default_ps_max_latency_us=0||g' /etc/default/grub
-          echo changed
+          echo STRIPPED
         else
-          echo unchanged
+          echo NOOP
         fi
       args:
         executable: /bin/bash
       register: _grub_strip
-      changed_when: "'changed' in _grub_strip.stdout"
+      changed_when: "_grub_strip.stdout == 'STRIPPED'"
       notify: Update grub
 
     - name: Reboot reminder for cmdline change
@@ -280,6 +280,34 @@
       when: _smartctl_version.stdout != smartctl_exporter_version
       register: _smartctl_bin
 
+    # Discover stable per-drive identifiers (model+serial via /dev/disk/by-id)
+    # so the exporter's `device` label is invariant across NVMe rename churn.
+    # Without this, kernel device names (nvme0/nvme1) swap between physical
+    # drives across reboots, which makes PromQL increase() over counters
+    # produce huge spurious values when the label re-binds to a different
+    # drive (the May 8 fumagician + reboots produced false
+    # SmartctlExcessivePowerCycles alerts of ~3800/24h vs the real ~10).
+    # Filter:
+    #   - prefer model-serial paths (nvme-Samsung_SSD_*, ata-MODEL_*)
+    #   - skip partition aliases (-part*)
+    #   - skip the duplicate _1 alias
+    #   - skip eui.* (cryptic, less useful in alert text)
+    - name: Discover stable by-id paths for SMART-capable drives
+      ansible.builtin.shell: |
+        set -o pipefail
+        for f in /dev/disk/by-id/nvme-* /dev/disk/by-id/ata-*; do
+          [ -e "$f" ] || continue
+          bn=$(basename "$f")
+          case "$bn" in
+            *-part*|*_1|*_1-*|nvme-eui.*) continue ;;
+          esac
+          echo "$f"
+        done | sort -u
+      args:
+        executable: /bin/bash
+      register: _smartctl_devices
+      changed_when: false
+
     - name: Write smartctl_exporter systemd unit
       ansible.builtin.copy:
         dest: /etc/systemd/system/smartctl_exporter.service
@@ -295,9 +323,19 @@
           # Needs root for SMART access; smartctl uses ioctl on /dev/nvme*
           User=root
           Group=root
+          # --no-smartctl.scan + explicit per-drive --smartctl.device flags
+          # lock the `device` label to /dev/disk/by-id/<model>-<serial>, which
+          # is stable across reboots regardless of kernel enumeration order.
+          # Auto-scan would (additionally) pick the same drives up under
+          # nvme0/nvme1 short names → duplicate metrics; explicit list avoids that.
           ExecStart=/usr/local/bin/smartctl_exporter \
             --web.listen-address={{ smartctl_exporter_bind }}:{{ smartctl_exporter_port }} \
-            --smartctl.interval=60s
+            --smartctl.interval=60s \
+            --no-smartctl.scan \
+          {% for dev in _smartctl_devices.stdout_lines %}
+            --smartctl.device={{ dev }}{% if not loop.last %} \{% endif %}
+
+          {% endfor %}
           Restart=on-failure
           RestartSec=10s
           # Hardening
