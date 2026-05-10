@@ -108,10 +108,20 @@
       - "{{ ten_ip }}"
 
   tasks:
+    # Use the gluster CLI directly: the gluster.gluster.gluster_peer
+    # Ansible module imports `distutils`, which Python 3.12+ removed
+    # from the stdlib (Trixie ships Python 3.13). `gluster peer probe`
+    # is idempotent — re-probing an already-known peer just reports
+    # "Peer hostname is already in peer list" and returns 0.
     - name: Probe peers (pi2 + ten)
-      gluster.gluster.gluster_peer:
-        state: present
-        nodes: "{{ gluster_peers }}"
+      ansible.builtin.shell: |
+        set -e
+        for node in {{ gluster_peers | join(' ') }}; do
+          gluster peer probe "$node" 2>&1 | grep -vE "already in peer list|Probe successful" || true
+        done
+        gluster peer status
+      register: peer_probe
+      changed_when: "'Probe successful' in peer_probe.stdout"
 
     - name: Wait for 2 peers connected (pi2 + ten)
       ansible.builtin.shell: |
@@ -294,6 +304,21 @@
       register: unmount_old
       changed_when: "'unmounted' in unmount_old.stdout"
 
+    # Empty stub directories left behind after the old monolithic
+    # backups volume was retired. Only remove if truly empty — never
+    # rmdir something that still has content.
+    - name: Remove empty leftover mountpoint dirs
+      ansible.builtin.shell: |
+        removed=""
+        for d in /mnt/backups/scylla /mnt/backups/postgres /mnt/backups/velero; do
+          if [ -d "$d" ] && [ -z "$(ls -A "$d" 2>/dev/null)" ] && ! mountpoint -q "$d"; then
+            rmdir "$d" && removed="$removed $d"
+          fi
+        done
+        [ -n "$removed" ] && echo "removed:$removed" || echo "noop"
+      register: rmdir_leftovers
+      changed_when: "'removed:' in rmdir_leftovers.stdout"
+
     - name: Remove MinIO symlinks (replaced by GlusterFS mount)
       ansible.builtin.shell: |
         for link in /var/lib/minio/data/postgres-backups /var/lib/minio/data/scylla-backups /var/lib/minio/data/velero; do
@@ -349,6 +374,18 @@
         arbiter_brick: /var/lib/gluster/nexus-arbiter-brick
         mount: /mnt/data/nexus
         minio_data: false
+      # Forgejo APP_DATA_PATH (packages, attachments, avatars,
+      # actions_artifacts, etc.). Without this, only the git repo dir
+      # is replicated — a VIP failover to whichever Pi doesn't have
+      # the local 31 GB packages dir would make the container registry
+      # return MANIFEST_UNKNOWN. Forgejo finds the row in PG but the
+      # blob file isn't on that Pi's disk. Replicating the whole data
+      # dir keeps state consistent regardless of which Pi serves.
+      - name: forgejo-data
+        brick: /var/lib/gluster/forgejo-data-brick
+        arbiter_brick: /var/lib/gluster/forgejo-data-arbiter-brick
+        mount: /var/lib/forgejo/data
+        minio_data: false
 
   tasks:
     - name: Create data brick directories on pi1 + pi2
@@ -378,6 +415,56 @@
       changed_when: false
       loop: "{{ backup_volumes }}"
 
+    # === Fresh-install ordering: stop service → migrate-to-brick → create volume ===
+    # The migration MUST run before `gluster volume create` because once
+    # the volume is created, gluster writes its own .glusterfs metadata
+    # into the brick directory, which both confuses the "is brick empty"
+    # check and means subsequent direct-to-brick writes bypass GFID
+    # tracking (files become invisible through the mount until a full
+    # heal). Same pattern the forgejo-repos migration above uses (see
+    # 'Copy existing repos to data brick on pi1' / 'Create replica-3-arbiter
+    # volume' ordering).
+    - name: Build list of services to stop before fresh-install migration
+      ansible.builtin.set_fact:
+        fresh_install_services: >-
+          {{
+            backup_brick_count.results
+            | selectattr('stdout', 'match', '^\\s*0\\s*$')
+            | map(attribute='item')
+            | rejectattr('stop_service', 'equalto', '')
+            | rejectattr('stop_service', 'equalto', None)
+            | list
+          }}
+
+    - name: Stop owning services before fresh-install migration
+      ansible.builtin.systemd:
+        name: "{{ item.0.stop_service }}"
+        state: stopped
+      delegate_to: "{{ item.1 }}"
+      loop: "{{ fresh_install_services | product(['pi1', 'pi2']) | list }}"
+      loop_control:
+        label: "{{ item.0.name }} on {{ item.1 }}"
+      failed_when: false
+
+    - name: Migrate existing data to bricks (only when brick truly empty)
+      ansible.builtin.shell: |
+        # Brick must have NO files yet — neither user data nor gluster
+        # .glusterfs metadata. If gluster has already created the volume,
+        # this step is a no-op (data must be migrated through the mount
+        # in that case — see manual recovery in CLAUDE.md).
+        if [ -d "{{ item.item.mount }}" ] && [ ! -L "{{ item.item.mount }}" ] && [ -z "$(ls -A {{ item.item.brick }}/ 2>/dev/null)" ]; then
+          cp -a "{{ item.item.mount }}"/. "{{ item.item.brick }}/" 2>/dev/null || true
+          echo "migrated"
+        else
+          echo "skip"
+        fi
+      register: migrate
+      when: item.stdout | trim | int == 0
+      changed_when: "'migrated' in migrate.stdout | default('')"
+      loop: "{{ backup_brick_count.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
     - name: Create replica-3-arbiter volume (new install)
       ansible.builtin.shell: |
         gluster volume create {{ item.item.name }} replica 3 arbiter 1 \
@@ -403,6 +490,15 @@
       ansible.builtin.shell: |
         gluster volume set nexus-data storage.owner-uid 901
         gluster volume set nexus-data storage.owner-gid 901
+      changed_when: true
+      failed_when: false  # volume may not exist yet on fresh install — next play creates it
+
+    # forgejo runs as uid/gid 900 (set by 'Align Forgejo UID/GID'
+    # in the first play of this file).
+    - name: Set forgejo-data volume ownership (durable across heals)
+      ansible.builtin.shell: |
+        gluster volume set forgejo-data storage.owner-uid 900
+        gluster volume set forgejo-data storage.owner-gid 900
       changed_when: true
       failed_when: false  # volume may not exist yet on fresh install — next play creates it
 
@@ -435,18 +531,6 @@
       changed_when: "'started' in vol_start.stdout and 'already' not in vol_start.stdout"
       loop: "{{ backup_volumes }}"
 
-    - name: Migrate existing data to bricks
-      ansible.builtin.shell: |
-        if [ -d "{{ item.mount }}" ] && [ ! -L "{{ item.mount }}" ] && [ "$(ls -A {{ item.brick }}/ 2>/dev/null | head -1)" = "" ]; then
-          cp -a "{{ item.mount }}"/* {{ item.brick }}/ 2>/dev/null || true
-          echo "migrated"
-        else
-          echo "skip"
-        fi
-      register: migrate
-      changed_when: "'migrated' in migrate.stdout"
-      loop: "{{ backup_volumes }}"
-
 - name: Mount backup GlusterFS volumes
   hosts: pi1,pi2
   become: true
@@ -456,10 +540,20 @@
     node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
+    # autostart: false → service is stopped before mounting but NOT
+    # auto-started after. Nexus uses this because keepalived's
+    # notify_master script owns Nexus start/stop (exactly one
+    # instance at a time across the cluster — see setup-keepalived.yml).
+    # An unconditional auto-start here would race the keepalived notify
+    # script and risk starting Nexus on the non-VIP Pi, where the H2
+    # lock would refuse the start in a restart loop.
     backup_volumes:
-      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio }
-      - { name: backup-git-mirror, mount: /mnt/backups/git-mirror, stop_service: "" }
-      - { name: nexus-data, mount: /mnt/data/nexus, stop_service: nexus }
+      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio, autostart: true }
+      - { name: backup-git-mirror, mount: /mnt/backups/git-mirror, stop_service: "", autostart: true }
+      - { name: nexus-data, mount: /mnt/data/nexus, stop_service: nexus, autostart: false }
+      # Forgejo can run active-active because Postgres provides locking
+      # for shared filesystem access (unlike Nexus's H2 DB).
+      - { name: forgejo-data, mount: /var/lib/forgejo/data, stop_service: forgejo, autostart: true }
 
   tasks:
     - name: Stop services before mounting
@@ -507,7 +601,7 @@
         name: "{{ item.stop_service }}"
         state: started
       loop: "{{ backup_volumes }}"
-      when: item.stop_service | length > 0
+      when: item.stop_service | length > 0 and item.autostart | bool
       failed_when: false
 
 - name: Verify backup volumes

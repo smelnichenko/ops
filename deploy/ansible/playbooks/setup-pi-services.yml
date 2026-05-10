@@ -242,6 +242,13 @@
         - /var/lib/forgejo/repos
         - /var/lib/forgejo/log
         - /var/lib/forgejo/custom/conf
+        # Node-local dirs for queues / indexers / sessions — see
+        # commentary in app.ini below for why these can't live on
+        # the shared Gluster mount under APP_DATA_PATH.
+        - /var/local/forgejo
+        - /var/local/forgejo/queues
+        - /var/local/forgejo/indexers
+        - /var/local/forgejo/sessions
 
     - name: Write Forgejo config
       ansible.builtin.copy:
@@ -286,6 +293,26 @@
 
           [security]
           INSTALL_LOCK = true
+
+          # Queues + indexers + sessions are LevelDB / Bleve backed and
+          # use file locks, which collide if two Forgejo instances try
+          # to open them through the same shared mount. The packages /
+          # attachments / avatars / actions_artifacts / jwt subdirs of
+          # APP_DATA_PATH are safe to share via Gluster (immutable blobs
+          # + Postgres-coordinated metadata), but these three need to
+          # stay node-local. Per-Pi paths under /var/local/forgejo
+          # avoid the shared mount entirely; loss of in-flight queue
+          # state on failover is acceptable for a homelab.
+          [queue]
+          DATADIR = /var/local/forgejo/queues
+
+          [indexer]
+          ISSUE_INDEXER_PATH = /var/local/forgejo/indexers/issues.bleve
+          REPO_INDEXER_PATH = /var/local/forgejo/indexers/repos.bleve
+
+          [session]
+          PROVIDER = file
+          PROVIDER_CONFIG = /var/local/forgejo/sessions
 
           [webhook]
           # Forgejo's outbound-webhook deliverer rejects private-IP

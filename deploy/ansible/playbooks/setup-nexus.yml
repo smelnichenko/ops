@@ -75,15 +75,27 @@
         create_home: false
 
     # Align UID/GID if nexus already exists with a different one (same pattern
-    # Forgejo uses in setup-gluster.yml).
+    # Forgejo uses in setup-gluster.yml). The find re-chowns existing files
+    # under the install + data dirs so they don't end up orphaned at the old
+    # numeric uid after usermod. /mnt/data/nexus is the Gluster mount on
+    # production — chown propagates to the brick on both replicas.
     - name: Align existing Nexus UID/GID across nodes
       ansible.builtin.shell: |
         CURRENT_UID=$(id -u nexus)
         CURRENT_GID=$(id -g nexus)
+        OLD_UID=$CURRENT_UID
+        OLD_GID=$CURRENT_GID
         if [ "$CURRENT_UID" != "{{ nexus_uid }}" ] || [ "$CURRENT_GID" != "{{ nexus_gid }}" ]; then
           systemctl stop nexus 2>/dev/null || true
           groupmod -g {{ nexus_gid }} nexus || true
           usermod -u {{ nexus_uid }} -g {{ nexus_gid }} nexus || true
+          # Re-chown files that were owned by the now-changed uid/gid.
+          # -uid uses the OLD numeric uid which is now orphaned.
+          for path in {{ nexus_install_dir }} {{ nexus_data_dir }}; do
+            [ -d "$path" ] || continue
+            find "$path" -uid "$OLD_UID" -exec chown -h {{ nexus_uid }} {} + 2>/dev/null || true
+            find "$path" -gid "$OLD_GID" -exec chgrp -h {{ nexus_gid }} {} + 2>/dev/null || true
+          done
           echo "changed"
         else
           echo "ok"
