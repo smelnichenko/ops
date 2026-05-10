@@ -541,18 +541,19 @@
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
     # autostart: false → service is stopped before mounting but NOT
-    # auto-started after. Nexus uses this because keepalived's
-    # notify_master script owns Nexus start/stop (exactly one
-    # instance at a time across the cluster — see setup-keepalived.yml).
-    # An unconditional auto-start here would race the keepalived notify
-    # script and risk starting Nexus on the non-VIP Pi, where the H2
-    # lock would refuse the start in a restart loop.
+    # auto-started after. Used by services whose keepalived notify
+    # scripts own start/stop (exactly one instance at a time across
+    # the cluster — see setup-keepalived.yml). An unconditional
+    # auto-start here would race the keepalived notify script and
+    # risk starting the service on the non-VIP Pi, where xl-single
+    # MinIO / H2 in Nexus would refuse the second start in a loop.
+    #
+    # Forgejo can run active-active (autostart: true) because
+    # Postgres provides locking for shared filesystem access.
     backup_volumes:
-      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio, autostart: true }
+      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio, autostart: false }
       - { name: backup-git-mirror, mount: /mnt/backups/git-mirror, stop_service: "", autostart: true }
       - { name: nexus-data, mount: /mnt/data/nexus, stop_service: nexus, autostart: false }
-      # Forgejo can run active-active because Postgres provides locking
-      # for shared filesystem access (unlike Nexus's H2 DB).
       - { name: forgejo-data, mount: /var/lib/forgejo/data, stop_service: forgejo, autostart: true }
 
   tasks:

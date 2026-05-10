@@ -443,17 +443,6 @@
         home: /var/lib/minio
         create_home: true
 
-    - name: Create MinIO local data drives (distributed, no Gluster)
-      ansible.builtin.file:
-        path: "/var/lib/minio/data/{{ item }}"
-        state: directory
-        owner: minio
-        group: minio
-        mode: '0750'
-      loop:
-        - drive1
-        - drive2
-
     - name: Create /etc/minio (parent dir for env file)
       ansible.builtin.file:
         path: /etc/minio
@@ -475,56 +464,113 @@
       notify: Restart MinIO
       no_log: true
 
+    # MinIO runs in single-server (xl-single) mode against the
+    # Gluster-backed /var/lib/minio/data. Active-passive across the Pis,
+    # arbitrated by keepalived's notify_master / notify_backup scripts
+    # (see setup-keepalived.yml) — same pattern as Nexus.
+    #
+    # Why xl-single instead of distributed: with 2 Pis each holding 1
+    # NVMe under a Gluster replica-3-arbiter volume, MinIO's own
+    # erasure coding adds nothing — every "drive" subdirectory shares a
+    # fault domain (NVMe), and Gluster already gives cross-Pi durability.
+    # Distributed-on-Gluster meant double-replication for every write.
+    #
+    # Why active-passive: xl-single's cluster state in .minio.sys/
+    # doesn't tolerate concurrent writers. H2 in Nexus has the same
+    # constraint, so we reuse Nexus's keepalived notify-script pattern.
     - name: Install MinIO systemd service
       ansible.builtin.copy:
         dest: /etc/systemd/system/minio.service
         mode: '0644'
         content: |
           [Unit]
-          Description=MinIO Object Storage (distributed)
+          Description=MinIO Object Storage
           After=network-online.target
           Wants=network-online.target
+          # RequiresMountsFor delegates the mount-dep chain to systemd's
+          # generated mount unit. Without this, MinIO can race the
+          # Gluster mount on boot, write its UUID to the pre-mount dir,
+          # and then think it's a brand-new install once the mount
+          # comes up over it.
+          RequiresMountsFor=/var/lib/minio/data
+          # Cap restart loop on the non-VIP Pi if something accidentally
+          # starts MinIO there — xl-single's lock would refuse the
+          # second start, otherwise systemd would burn CPU retrying.
+          # Keepalived's notify_master owns legitimate starts.
+          StartLimitIntervalSec=600
+          StartLimitBurst=3
           [Service]
           Type=simple
           User=minio
           Group=minio
           EnvironmentFile=/etc/minio/env
-          ExecStart=/usr/local/bin/minio server \
-            http://{{ hostvars['pi1']['ansible_host'] }}:9000/var/lib/minio/data/drive{1...2} \
-            http://{{ hostvars['pi2']['ansible_host'] }}:9000/var/lib/minio/data/drive{1...2} \
-            --address :9000
-          Restart=always
-          RestartSec=5
+          ExecStart=/usr/local/bin/minio server /var/lib/minio/data --address :9000
+          Restart=on-failure
+          RestartSec=10
           [Install]
           WantedBy=multi-user.target
       notify: Restart MinIO
 
-    - name: Enable and start MinIO
+    # Enabled but stopped — keepalived's notify_master starts it on
+    # whichever Pi holds the VIP. (Same as Nexus.)
+    - name: Enable MinIO service (keep stopped — Keepalived drives state)
       ansible.builtin.systemd:
         name: minio
         enabled: true
-        state: started
         daemon_reload: true
 
-    - name: Wait for MinIO cluster quorum
-      ansible.builtin.uri:
-        url: http://localhost:9000/minio/health/cluster
-        status_code: 200
-      retries: 30
-      delay: 5
-
-    - name: Create MinIO buckets (runs once; mc loads creds from env file)
-      ansible.builtin.shell: |
-        set -a; . /etc/minio/env; set +a
-        HOME=/tmp mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-        HOME=/tmp mc mb local/velero --ignore-existing
-        HOME=/tmp mc mb local/pg-dump --ignore-existing
-        HOME=/tmp mc mb local/postgres-backups --ignore-existing
-        HOME=/tmp mc mb local/scylla-backups --ignore-existing
+    # Bucket create runs only when the volume is fresh (no .minio.sys
+    # at the data root). On a recovered xl-single mount, the original
+    # buckets (velero, pg-dump, postgres-backups, scylla-backups) come
+    # back automatically with their data; this step skips. Conditional
+    # uses the bootstrap sentinel pattern Nexus uses.
+    - name: Check MinIO bootstrap sentinel
+      ansible.builtin.stat:
+        path: /var/lib/minio/data/.bootstrap-done
+      register: _minio_bootstrap_sentinel
       run_once: true
       delegate_to: "{{ groups['pis'] | first }}"
-      changed_when: true
-      no_log: true
+
+    - name: Bootstrap MinIO (one-shot start + bucket create + stop) — fresh volumes only
+      when: not _minio_bootstrap_sentinel.stat.exists
+      run_once: true
+      delegate_to: "{{ groups['pis'] | first }}"
+      block:
+        - name: Start MinIO temporarily for bootstrap
+          ansible.builtin.systemd:
+            name: minio
+            state: started
+
+        - name: Wait for MinIO health
+          ansible.builtin.uri:
+            url: http://localhost:9000/minio/health/cluster
+            status_code: 200
+          retries: 30
+          delay: 5
+
+        - name: Create MinIO buckets
+          ansible.builtin.shell: |
+            set -a; . /etc/minio/env; set +a
+            HOME=/tmp mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+            HOME=/tmp mc mb local/velero --ignore-existing
+            HOME=/tmp mc mb local/pg-dump --ignore-existing
+            HOME=/tmp mc mb local/postgres-backups --ignore-existing
+            HOME=/tmp mc mb local/scylla-backups --ignore-existing
+          changed_when: true
+          no_log: true
+
+        - name: Stop MinIO (Keepalived will start it on whichever Pi holds the VIP)
+          ansible.builtin.systemd:
+            name: minio
+            state: stopped
+
+        - name: Write bootstrap sentinel (shared volume — visible to both Pis)
+          ansible.builtin.file:
+            path: /var/lib/minio/data/.bootstrap-done
+            state: touch
+            owner: minio
+            group: minio
+            mode: '0644'
 
     # ================================================================
     # Phase 5: Keycloak

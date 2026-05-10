@@ -65,8 +65,10 @@
         content: |
           #!/bin/bash
           # Check critical services — if any fails, reduce priority to trigger failover.
-          # Nexus is intentionally excluded: it's controlled by notify_master /
-          # notify_backup scripts below, not by this health probe.
+          # Nexus and MinIO are intentionally excluded: they're controlled by
+          # notify_master / notify_backup scripts below, not by this health probe.
+          # (They're stopped on the BACKUP Pi, so probing them there would
+          # always fail and pin the VIP to the MASTER incorrectly.)
 
           # Forgejo
           curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
@@ -79,17 +81,19 @@
 
           exit 0
 
-    # Nexus active-passive controller scripts. Safety comes from three
-    # independent layers:
+    # Active-passive controller scripts (Nexus + MinIO). Same safety
+    # model for both:
     #   1. VRRP election: exactly one Pi holds VIP in the common case
-    #   2. /mnt/data/nexus/.active-on-<hostname> sentinel: informational +
+    #   2. <data-dir>/.active-on-<hostname> sentinel: informational +
     #      split-brain detector; notify_master logs a warning if another
     #      host's sentinel exists
-    #   3. Nexus's own H2 lock (/mnt/data/nexus/db/nexus.lock.db) refuses
-    #      concurrent starts — hard fencing, built into Nexus
+    #   3. Service-level lock: Nexus's H2 (/mnt/data/nexus/db/nexus.lock.db)
+    #      refuses concurrent starts. MinIO's xl-single doesn't have an
+    #      equivalent fencing primitive — we rely on layers 1+2 plus the
+    #      systemd unit's StartLimitBurst=3 cap as a backstop.
     # Gluster replica-3-arbiter on ten provides write-quorum: during a true
     # pi1↔pi2 partition, the side that can still reach ten gets writes; the
-    # other side gets EROFS and its Nexus crashes cleanly — no corrupt blobs.
+    # other side gets EROFS and its services crash cleanly — no corruption.
     - name: Create Nexus notify_master script
       ansible.builtin.copy:
         dest: /etc/keepalived/nexus_master.sh
@@ -137,24 +141,111 @@
           systemctl stop nexus
           rm -f "/mnt/data/nexus/.active-on-${HOSTNAME}"
 
-    # Ensure Nexus is stopped whenever Keepalived stops (systemctl stop,
-    # daemon crash, OOM, etc.) — notify_backup only fires on VRRP state
-    # transitions, not on daemon exit. Without this, `systemctl stop
-    # keepalived` on the active Pi leaves Nexus running while the other Pi
-    # takes VIP and starts its own Nexus — both race on the H2 lock.
-    - name: Systemd drop-in to stop Nexus when Keepalived stops
+    # MinIO active-passive controller scripts (same pattern as Nexus).
+    # Safety layers:
+    #   1. VRRP election: exactly one Pi holds VIP in the common case
+    #   2. /var/lib/minio/data/.active-on-<hostname> sentinel
+    #   3. MinIO's xl-single .minio.sys/format.json embeds a unique
+    #      cluster ID; concurrent starts on the same data dir would
+    #      have to write competing format files, but on shared Gluster
+    #      the second writer just sees the first's UUID and proceeds —
+    #      we rely on layers (1) + (2) here, plus the StartLimitBurst=3
+    #      cap in the systemd unit if something goes wrong.
+    - name: Create MinIO notify_master script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/minio_master.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set +e
+          HOSTNAME=$(hostname)
+          SENTINEL="/var/lib/minio/data/.active-on-${HOSTNAME}"
+          logger -t minio-keepalived "notify_master: taking over MinIO on $HOSTNAME"
+
+          for stale in $(ls /var/lib/minio/data/.active-on-* 2>/dev/null); do
+            case "$stale" in
+              "$SENTINEL") ;;
+              *) logger -t minio-keepalived "WARN: stale sentinel $stale" ;;
+            esac
+          done
+
+          mkdir -p /var/lib/minio/data
+          touch "$SENTINEL"
+          systemctl start minio
+
+          for i in $(seq 1 18); do
+            if curl -sf -o /dev/null -m 3 http://localhost:9000/minio/health/cluster; then
+              logger -t minio-keepalived "MinIO on $HOSTNAME is ready"
+              exit 0
+            fi
+            sleep 5
+          done
+          logger -t minio-keepalived "WARN: MinIO on $HOSTNAME didn't become ready in 90s"
+
+    - name: Create MinIO notify_backup / notify_fault script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/minio_backup.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set +e
+          HOSTNAME=$(hostname)
+          logger -t minio-keepalived "notify_backup: releasing MinIO on $HOSTNAME"
+          systemctl stop minio
+          rm -f "/var/lib/minio/data/.active-on-${HOSTNAME}"
+
+    # Combined master/backup helpers — keepalived's notify_* directives
+    # take a single script path, but we have multiple active-passive
+    # services to coordinate (Nexus + MinIO). Each combined script
+    # invokes its per-service counterparts; per-service scripts stay
+    # independently testable.
+    - name: Create combined notify_master script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/active_services_master.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          /etc/keepalived/nexus_master.sh
+          /etc/keepalived/minio_master.sh
+
+    - name: Create combined notify_backup script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/active_services_backup.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          /etc/keepalived/nexus_backup.sh
+          /etc/keepalived/minio_backup.sh
+
+    # Ensure Nexus + MinIO are stopped whenever Keepalived stops
+    # (systemctl stop, daemon crash, OOM, etc.) — notify_backup only
+    # fires on VRRP state transitions, not on daemon exit. Without
+    # this, stopping keepalived on the active Pi leaves the active
+    # services running while the other Pi takes VIP and starts its
+    # own copies — both race on cluster locks.
+    - name: Systemd drop-in dir for keepalived
       ansible.builtin.file:
         path: /etc/systemd/system/keepalived.service.d
         state: directory
         mode: '0755'
 
-    - name: Write drop-in
+    - name: Drop-in to release active-passive services on keepalived stop
       ansible.builtin.copy:
-        dest: /etc/systemd/system/keepalived.service.d/stop-nexus.conf
+        dest: /etc/systemd/system/keepalived.service.d/release-active-services.conf
         mode: '0644'
         content: |
           [Service]
-          ExecStopPost=/etc/keepalived/nexus_backup.sh
+          ExecStopPost=/etc/keepalived/active_services_backup.sh
+      notify:
+        - Reload systemd
+        - Restart Keepalived
+
+    # Remove the old Nexus-only drop-in if it's still around — replaced
+    # by release-active-services.conf above.
+    - name: Remove obsolete stop-nexus drop-in
+      ansible.builtin.file:
+        path: /etc/systemd/system/keepalived.service.d/stop-nexus.conf
+        state: absent
       notify:
         - Reload systemd
         - Restart Keepalived
@@ -208,9 +299,9 @@
               check_services
             }
 
-            notify_master "/etc/keepalived/nexus_master.sh"
-            notify_backup "/etc/keepalived/nexus_backup.sh"
-            notify_fault "/etc/keepalived/nexus_backup.sh"
+            notify_master "/etc/keepalived/active_services_master.sh"
+            notify_backup "/etc/keepalived/active_services_backup.sh"
+            notify_fault "/etc/keepalived/active_services_backup.sh"
           }
       notify: Restart Keepalived
 
