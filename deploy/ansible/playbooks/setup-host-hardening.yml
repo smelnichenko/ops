@@ -241,7 +241,7 @@
 
     - name: Strip nvme_core.default_ps_max_latency_us=0 from GRUB cmdline if present
       ansible.builtin.shell: |
-        set -e
+        set -euo pipefail
         if grep -qE 'GRUB_CMDLINE_LINUX="[^"]*nvme_core\.default_ps_max_latency_us=0' /etc/default/grub; then
           sed -i.bak 's| *nvme_core\.default_ps_max_latency_us=0||g' /etc/default/grub
           echo STRIPPED
@@ -252,16 +252,9 @@
         executable: /bin/bash
       register: _grub_strip
       changed_when: "_grub_strip.stdout == 'STRIPPED'"
-      notify: Update grub
-
-    - name: Reboot reminder for cmdline change
-      ansible.builtin.debug:
-        msg: |
-          GRUB cmdline updated — APST workaround removed.
-          REBOOT REQUIRED for change to take effect.
-          After reboot verify with:  cat /proc/cmdline   (should NOT contain nvme_core.default_ps_max_latency_us)
-          And:  sudo nvme get-feature /dev/nvme0 -f 0x0c   # value should be back to 0x1 (APST enabled)
-      when: _grub_strip.changed
+      notify:
+        - Update grub
+        - Reboot reminder for cmdline change
 
     # ================================================================
     # Cleanup: zombie forgejo-runner left behind by Plan 017
@@ -505,6 +498,14 @@
     - name: Update grub
       ansible.builtin.command: update-grub
       changed_when: true
+
+    - name: Reboot reminder for cmdline change
+      ansible.builtin.debug:
+        msg: |
+          GRUB cmdline updated — APST workaround removed.
+          REBOOT REQUIRED for change to take effect.
+          After reboot verify with:  cat /proc/cmdline   (should NOT contain nvme_core.default_ps_max_latency_us)
+          And:  sudo nvme get-feature /dev/nvme0 -f 0x0c   # value should be back to 0x1 (APST enabled)
 
     - name: Reload systemd daemon
       ansible.builtin.systemd:
