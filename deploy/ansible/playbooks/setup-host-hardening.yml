@@ -256,6 +256,13 @@
         - Update grub
         - Reboot reminder for cmdline change
 
+    # Regenerate grub.cfg now rather than at end of play: if a later
+    # task aborts the play, handlers never fire — and a re-run sees the
+    # param already stripped (NOOP), so the notify never re-triggers
+    # and grub.cfg stays out of sync with /etc/default/grub.
+    - name: Flush handlers after GRUB cmdline strip
+      ansible.builtin.meta: flush_handlers
+
     # ================================================================
     # Cleanup: zombie forgejo-runner left behind by Plan 017
     # (Woodpecker CI migration). Unit references a wrapper script that
