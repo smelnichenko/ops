@@ -1,7 +1,7 @@
 ---
 name: full-review
 description: Unified review for schnappy repos — runs the built-in code-review and security-review skills, the code-architecture-reviewer agent, and a SonarQube server-state check over one scope, then merges everything into a single deduplicated report. Use when the user asks for a full/complete/thorough review of changes, a PR, or a plan doc.
-argument-hint: "[low|medium|high|xhigh|max|ultra] [PR# | commit | files... | plan-doc] [--simplify]"
+argument-hint: "[low|medium|high|xhigh|max|ultra] [PR# | commit | files... | plan-doc] [--no-simplify]"
 ---
 
 # Full review
@@ -36,6 +36,6 @@ If a built-in skill is unavailable in the current session (headless runs may not
 - Conflicting verdicts between passes: investigate yourself and resolve to one verdict; never print both.
 - End with a **Verified** section (what was checked and found clean) and a one-line note of which passes ran and which were skipped (with the reason).
 
-## 4. Optional: --simplify
+## 4. Simplify (automatic)
 
-Only when the user passed `--simplify` and the scope is local pending changes: after delivering the merged report, invoke the built-in `simplify` skill to apply quality cleanups (reuse, dead code, altitude, efficiency — it edits the working tree; it does not hunt bugs). Skip it with a note for PR, pushed-commit, or plan-doc scopes — there is no local tree to clean up. Never combine it with unreviewed Critical findings: fix-worthy bugs come first.
+When the scope is local pending changes, finish by invoking the built-in `simplify` skill to apply quality cleanups (reuse, dead code, altitude, efficiency — it edits the working tree; it does not hunt bugs), then summarize what it changed under the report. Skip it — with a note saying why — when the user passed `--no-simplify`, when the scope is a PR, pushed commit, or plan doc (no local tree to clean up), or while Critical findings remain unaddressed: fix-worthy bugs come first, and simplifying code that's about to be rewritten is wasted motion.
