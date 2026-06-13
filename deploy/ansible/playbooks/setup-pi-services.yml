@@ -309,9 +309,11 @@
 
           [security]
           INSTALL_LOCK = true
-          # Pinned (inventory, from .env) so the active-active Pis share one
-          # token and the deploy stops stripping it — Forgejo regenerates any
-          # it finds missing, which differed per Pi and broke OAuth on failover.
+          # Pinned (inventory, from .env) so the active-active Pis share one set
+          # and the deploy stops stripping them — Forgejo falls back to a public
+          # default SECRET_KEY and regenerates a missing INTERNAL_TOKEN (which
+          # differed per Pi and broke OAuth on failover).
+          {% if forgejo_secret_key | default('') %}SECRET_KEY = {{ forgejo_secret_key }}{% endif %}
           {% if forgejo_internal_token | default('') %}INTERNAL_TOKEN = {{ forgejo_internal_token }}{% endif %}
 
           # Queues + indexers + sessions are LevelDB / Bleve backed and

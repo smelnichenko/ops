@@ -21,6 +21,10 @@ all:
     # missing, which differed per Pi and broke OAuth/sessions on failover).
     forgejo_internal_token: "{{ lookup('env', 'FORGEJO_INTERNAL_TOKEN') }}"
     forgejo_jwt_secret: "{{ lookup('env', 'FORGEJO_JWT_SECRET') }}"
+    # SECRET_KEY encrypts 2FA secrets / SSH mirror keys / Actions secrets.
+    # Forgejo fell back to its public built-in default; pinned here (verified
+    # nothing was encrypted with the default, so this is a safe one-time set).
+    forgejo_secret_key: "{{ lookup('env', 'FORGEJO_SECRET_KEY') }}"
     keycloak_admin_password: "{{ lookup('env', 'KEYCLOAK_ADMIN_PASSWORD') }}"
     postgres_admin_password: "{{ lookup('env', 'KEYCLOAK_DB_PASSWORD') }}"
     postgres_replication_password: "{{ lookup('env', 'POSTGRES_REPLICATION_PASSWORD') }}"
