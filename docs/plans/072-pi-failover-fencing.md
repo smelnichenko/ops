@@ -1,5 +1,21 @@
 # Plan 072: Pi active-passive failover fencing (Consul lock + re-converge timer)
 
+## Status (2026-06-13)
+
+- **Part B (re-converge timer + reset-failed): DONE, deployed to prod**
+  (`setup-keepalived.yml`, non-disruptive — no keepalived restart). Timer
+  armed on both Pis, converge idempotent.
+- **Part A (Consul-lock fence): implemented + VALIDATED IN VAGRANT, NOT yet
+  prod-deployed.** Vagrant proofs: exactly-one-active (holder serves, holds
+  the lock; non-holder fenced), a second `consul lock minio/active` is
+  denied, and the lock releases+re-acquires across a failover. Prod deploy
+  (`task deploy:pi-services`, a brief MinIO failover) is the remaining step.
+- **Known blocker for a fully-green `task test:dual-pi`:** a pre-existing,
+  unrelated Vagrant harness issue — Forgejo crashes on
+  `/var/local/forgejo/queues/LOCK: permission denied` and HAProxy:5000 is
+  down. Tracked separately (stashed fix needs DB passwords in vagrant vars).
+  The fence assertions were validated directly against the live VMs.
+
 ## TL;DR
 
 The keepalived active-passive protocol for Nexus/MinIO on pi1/pi2 (Plan
