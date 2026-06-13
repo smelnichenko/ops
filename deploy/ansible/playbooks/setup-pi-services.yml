@@ -485,8 +485,11 @@
         content: |
           [Unit]
           Description=MinIO Object Storage
-          After=network-online.target
-          Wants=network-online.target
+          # consul lock needs the local Consul agent reachable; order after
+          # it but don't Requires= (a consul restart shouldn't bounce MinIO —
+          # consul lock handles runtime unavailability by releasing/killing).
+          After=network-online.target consul.service
+          Wants=network-online.target consul.service
           # RequiresMountsFor delegates the mount-dep chain to systemd's
           # generated mount unit. Without this, MinIO can race the
           # Gluster mount on boot, write its UUID to the pre-mount dir,
@@ -494,9 +497,9 @@
           # comes up over it.
           RequiresMountsFor=/var/lib/minio/data
           # Cap restart loop on the non-VIP Pi if something accidentally
-          # starts MinIO there — xl-single's lock would refuse the
-          # second start, otherwise systemd would burn CPU retrying.
-          # Keepalived's notify_master owns legitimate starts.
+          # starts MinIO there. Note the periodic keepalived-converge timer
+          # resets a start-limited unit, so a node that hit the cap during a
+          # partition re-arms once quorum returns.
           StartLimitIntervalSec=600
           StartLimitBurst=3
           [Service]
@@ -504,7 +507,17 @@
           User=minio
           Group=minio
           EnvironmentFile=/etc/minio/env
-          ExecStart=/usr/local/bin/minio server /var/lib/minio/data --address :9000
+          # Fence against dual-active on the SHARED Gluster data dir: MinIO is
+          # xl-single with no cross-host lock, and flock(2) doesn't propagate
+          # across GlusterFS clients. consul lock block-acquires a
+          # quorum-enforced lock (Consul 3-node incl. ten; ACLs disabled) and
+          # execs MinIO as its child — so only the lock holder runs MinIO, and
+          # a minority-partition node loses the lock and has its MinIO killed.
+          # The new holder's block-acquire (no -try) waits until the old
+          # holder's MinIO has exited and released, closing the stop/start
+          # race. -monitor-retry rides out transient Consul blips;
+          # -child-exit-code propagates a real MinIO crash so Restart fires.
+          ExecStart=/usr/local/bin/consul lock -name=minio-active -monitor-retry=3 -child-exit-code minio/active /usr/local/bin/minio server /var/lib/minio/data --address :9000
           Restart=on-failure
           RestartSec=10
           [Install]
