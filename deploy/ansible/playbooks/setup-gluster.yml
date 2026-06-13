@@ -594,6 +594,18 @@
         group: minio
         mode: '0755'
 
+    # forgejo-data carries Forgejo's whole APP_DATA_PATH (jwt key, packages,
+    # attachments, ...). On a freshly-created volume Gluster's
+    # storage.owner-uid=900 hasn't settled before Forgejo starts (pending
+    # self-heal re-asserts brick ownership from arbiter metadata), so
+    # jwt/private.pem reads as EACCES for uid 900 and Forgejo crash-loops.
+    # A chown through the mount normalizes it. This used to happen as a side
+    # effect of the uid-migration chown in the first play, which no longer
+    # runs now that Forgejo is created with a fixed uid 900 (setup-pi-services).
+    - name: Fix Forgejo data ownership (recursive — heal/ownership can lag)
+      ansible.builtin.command: chown -R forgejo:forgejo /var/lib/forgejo/data
+      changed_when: false
+
     # Nexus ownership is handled by setup-nexus.yml (which runs after and
     # creates the nexus user with a fixed UID first).
 
