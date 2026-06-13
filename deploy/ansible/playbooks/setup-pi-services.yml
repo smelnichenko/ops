@@ -517,7 +517,9 @@
           # holder's MinIO has exited and released, closing the stop/start
           # race. -monitor-retry rides out transient Consul blips;
           # -child-exit-code propagates a real MinIO crash so Restart fires.
-          ExecStart=/usr/local/bin/consul lock -name=minio-active -monitor-retry=3 -child-exit-code minio/active /usr/local/bin/minio server /var/lib/minio/data --address :9000
+          ExecStart=/usr/local/bin/consul lock -name=minio-active -monitor-retry=3 -child-exit-code \
+            minio/active \
+            /usr/local/bin/minio server /var/lib/minio/data --address :9000
           Restart=on-failure
           RestartSec=10
           [Install]
