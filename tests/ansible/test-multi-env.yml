@@ -382,7 +382,7 @@
         NOT_SYNCED=$(kubectl get applications -n argocd -o json | python3 -c "
         import sys,json
         # Data apps contain operator CRDs that take time to reconcile — allow OutOfSync
-        allowed_outsync = {'schnappy-production-data', 'schnappy-test-data'}
+        allowed_outsync = {'schnappy-production-data', 'schnappy-test-data', 'schnappy-infra-data'}
         items = json.load(sys.stdin)['items']
         bad = [a['metadata']['name'] for a in items
                if a.get('status',{}).get('sync',{}).get('status') != 'Synced'
