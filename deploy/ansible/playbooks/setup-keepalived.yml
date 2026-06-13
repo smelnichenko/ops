@@ -91,13 +91,16 @@
     #      refuses concurrent starts. MinIO's xl-single doesn't have an
     #      equivalent fencing primitive — we rely on layers 1+2 plus the
     #      systemd unit's StartLimitBurst=3 cap as a backstop.
-    #   4. Desired-state file + per-service flock: handlers converge to the
-    #      LATEST VRRP state. The combined notify script records the new
-    #      state in /run/keepalived-active.state before dispatching; every
-    #      handler re-reads it under the service lock and yields if it no
-    #      longer matches. Without this, a master handler stuck in its
-    #      readiness wait can outlive a MASTER->BACKUP flip and start its
-    #      service on the now-passive Pi (dual-active MinIO, 2026-06-12).
+    #   4. Live-VIP gating + per-service flock: handlers converge to the
+    #      LATEST VRRP state by re-reading kernel VIP ownership under the
+    #      service lock (keepalived updates the address BEFORE invoking
+    #      notify scripts). Kernel state cannot be written out of order,
+    #      unlike a recorded state file racing concurrent notify writers.
+    #      Without this, a master handler stuck in its readiness wait can
+    #      outlive a MASTER->BACKUP flip and start its service on the
+    #      now-passive Pi (dual-active MinIO, 2026-06-12). The ExecStopPost
+    #      path passes --force: keepalived is gone there, so a lingering
+    #      VIP no longer implies mastership.
     # Gluster replica-3-arbiter on ten provides write-quorum: during a true
     # pi1↔pi2 partition, the side that can still reach ten gets writes; the
     # other side gets EROFS and its services crash cleanly — no corruption.
@@ -108,210 +111,158 @@
         content: |
           #!/bin/bash
           # Shared protocol for keepalived notify handlers (sourced, not run).
-          # The combined notify scripts write the state file BEFORE dispatching
-          # handlers; handlers re-read it under their per-service lock, so the
-          # LATEST VRRP state always wins even when a slow handler outlives a
-          # flip. The VIP fallback is only for an absent file (fresh boot or
-          # first deploy of this protocol).
-          STATE_FILE=/run/keepalived-active.state
-
+          # Mastership is read from live VIP ownership — kernel state that
+          # keepalived updates BEFORE invoking notify scripts. A handler that
+          # re-reads it under its service lock always converges to the latest
+          # transition; kernel state cannot land out of order the way a
+          # recorded state file racing concurrent notify writers can.
           vip_present() {
-            ip -o addr show | grep -qF " {{ vip }}/"
+            [ -n "$(ip -o addr show to {{ vip }}/32)" ]
           }
 
-          desired_state() {
-            if [ -f "$STATE_FILE" ]; then cat "$STATE_FILE"
-            elif vip_present; then echo MASTER
-            else echo BACKUP; fi
+          # Single source of truth for the active-passive service set:
+          # <unit> <data-dir (sentinel home)> <health-url> <timeout-s> <probe-interval-s>
+          SERVICES="
+          nexus /mnt/data/nexus http://localhost:8081/service/rest/v1/status 180 10
+          minio /var/lib/minio/data http://localhost:9000/minio/health/cluster 90 5
+          "
+
+          # Run "$1 <svc args>" for every service in parallel; nonzero if any failed.
+          for_each_service() {
+            local cmd=$1 rc=0 pids=() svc dir url timeout interval
+            while read -r svc dir url timeout interval; do
+              [ -n "$svc" ] || continue
+              "$cmd" "$svc" "$dir" "$url" "$timeout" "$interval" &
+              pids+=($!)
+            done <<< "$SERVICES"
+            for p in "${pids[@]}"; do
+              wait "$p" || rc=1
+            done
+            return "$rc"
           }
 
-          # Master handlers require BOTH the recorded state and live VIP
-          # ownership: keepalived assigns the VIP before notify_master and
-          # removes it before notify_backup, so a legitimate master always
-          # sees both. This neutralizes a stale MASTER state value in the
-          # dangerous (service-starting) direction.
-          is_master_ok() {
-            [ "$(desired_state)" = "MASTER" ] && vip_present
-          }
-
-          # Unique tmp per writer: concurrent writers sharing one tmp name
-          # truncate each other and one rename lands the other's content.
-          write_state() {
-            local tmp="${STATE_FILE}.$$"
-            echo "$1" > "$tmp"
-            mv -f "$tmp" "$STATE_FILE"
-          }
-
-    - name: Create Nexus notify_master script
+    - name: Create per-service takeover script
       ansible.builtin.copy:
-        dest: /etc/keepalived/nexus_master.sh
+        dest: /etc/keepalived/service_master.sh
         mode: '0755'
         content: |
           #!/bin/bash
+          # Usage: service_master.sh <unit> <data-dir> <health-url> <timeout-s> <probe-interval-s>
           set +e
           . /etc/keepalived/notify_lib.sh
+          SVC=$1; DATA_DIR=$2; HEALTH_URL=$3; TIMEOUT=$4; INTERVAL=$5
+          TAG="${SVC}-keepalived"
           HOSTNAME=$(hostname)
-          SENTINEL="/mnt/data/nexus/.active-on-${HOSTNAME}"
+          SENTINEL="${DATA_DIR}/.active-on-${HOSTNAME}"
+
+          # Vagrant flows deploy keepalived without every service installed.
+          systemctl cat "$SVC" >/dev/null 2>&1 || { logger -t "$TAG" "unit $SVC not installed — skipping"; exit 0; }
 
           # Serialize against the backup handler for this service; a queued
-          # stale handler re-reads desired state under the lock and yields.
-          exec 9>/run/lock/keepalived-nexus.lock
-          flock 9
+          # stale handler re-reads VIP ownership under the lock and yields.
+          # Bounded so a Gluster-wedged peer handler can't park us forever.
+          exec 9>"/run/lock/keepalived-${SVC}.lock"
+          flock -w 300 9 || { logger -t "$TAG" "ERROR: lock timeout for $SVC"; exit 1; }
 
-          if ! is_master_ok; then
-            logger -t nexus-keepalived "skip takeover on $HOSTNAME: not master (state=$(desired_state))"
+          if ! vip_present; then
+            logger -t "$TAG" "skip takeover on $HOSTNAME: VIP not held"
             exit 0
           fi
-          logger -t nexus-keepalived "notify_master: taking over Nexus on $HOSTNAME"
+          logger -t "$TAG" "notify_master: taking over $SVC on $HOSTNAME"
 
-          # Detect stale sentinels from other hosts (they should have been
-          # removed by notify_backup; if not, log and continue — Nexus's H2
-          # lock will refuse the start if another instance actually has it).
-          for stale in $(ls /mnt/data/nexus/.active-on-* 2>/dev/null); do
-            case "$stale" in
-              "$SENTINEL") ;;
-              *) logger -t nexus-keepalived "WARN: stale sentinel $stale" ;;
-            esac
+          # Refuse a missing data dir — mkdir here would shadow an unmounted
+          # Gluster mountpoint with an empty rootfs dir and start the service
+          # against it.
+          [ -d "$DATA_DIR" ] || { logger -t "$TAG" "ERROR: data dir $DATA_DIR missing (unmounted?)"; exit 1; }
+
+          # Stale sentinels from other hosts should have been removed by
+          # their notify_backup; log and continue — service-level locks are
+          # the backstop.
+          for stale in "$DATA_DIR"/.active-on-*; do
+            [ -e "$stale" ] || continue
+            [ "$stale" = "$SENTINEL" ] || logger -t "$TAG" "WARN: stale sentinel $stale"
           done
-
-          mkdir -p /mnt/data/nexus
           touch "$SENTINEL"
-          # --no-block: a Gluster stall can wedge the forking start for up to
-          # TimeoutStartSec (300s) while we hold the service lock; the
-          # readiness loop below does the gating and stays abortable.
-          systemctl start --no-block nexus
 
-          # Bounded readiness wait; recheck mastership every second so the
-          # wait never outlives a MASTER->BACKUP flip.
+          # --no-block: a Gluster stall can wedge a forking start for up to
+          # TimeoutStartSec while we hold the service lock; the loop below
+          # gates readiness and stays abortable.
+          systemctl start --no-block "$SVC"
+
+          # Readiness wait: recheck VIP ownership every second (the wait must
+          # not outlive a MASTER->BACKUP flip) and fail fast on a failed unit
+          # (start-limit-hit is reported nowhere else with --no-block).
           elapsed=0
-          while [ "$elapsed" -lt 180 ]; do
-            if ! is_master_ok; then
-              logger -t nexus-keepalived "state changed during Nexus takeover on $HOSTNAME — yielding"
+          while [ "$elapsed" -lt "$TIMEOUT" ]; do
+            if ! vip_present; then
+              logger -t "$TAG" "VIP lost during $SVC takeover on $HOSTNAME — yielding"
               exit 0
             fi
-            if [ $((elapsed % 10)) -eq 0 ] && curl -sf -o /dev/null -m 3 http://localhost:8081/service/rest/v1/status; then
-              logger -t nexus-keepalived "Nexus on $HOSTNAME is ready"
+            if systemctl is-failed --quiet "$SVC"; then
+              logger -t "$TAG" "ERROR: $SVC entered failed state during takeover"
+              exit 1
+            fi
+            if [ $((elapsed % INTERVAL)) -eq 0 ] && curl -sf -o /dev/null -m 3 "$HEALTH_URL"; then
+              logger -t "$TAG" "$SVC on $HOSTNAME is ready"
               exit 0
             fi
             sleep 1
             elapsed=$((elapsed + 1))
           done
-          logger -t nexus-keepalived "WARN: Nexus on $HOSTNAME didn't become ready in 180s"
+          logger -t "$TAG" "ERROR: $SVC on $HOSTNAME not ready in ${TIMEOUT}s"
+          exit 1
 
-    - name: Create Nexus notify_backup / notify_fault script
+    - name: Create per-service release script
       ansible.builtin.copy:
-        dest: /etc/keepalived/nexus_backup.sh
+        dest: /etc/keepalived/service_backup.sh
         mode: '0755'
         content: |
           #!/bin/bash
+          # Usage: service_backup.sh <unit> <data-dir> [ignored extra args]
+          # RELEASE_FORCE=--force (ExecStopPost path) skips the master-again
+          # gate: keepalived is gone there, so a lingering VIP no longer
+          # implies mastership.
           set +e
           . /etc/keepalived/notify_lib.sh
+          SVC=$1; DATA_DIR=$2
+          TAG="${SVC}-keepalived"
           HOSTNAME=$(hostname)
 
-          exec 9>/run/lock/keepalived-nexus.lock
-          flock 9
+          systemctl cat "$SVC" >/dev/null 2>&1 || { logger -t "$TAG" "unit $SVC not installed — skipping"; exit 0; }
 
-          if [ "$(desired_state)" = "MASTER" ] && vip_present; then
-            logger -t nexus-keepalived "skip release on $HOSTNAME: master again"
+          exec 9>"/run/lock/keepalived-${SVC}.lock"
+          flock -w 300 9 || { logger -t "$TAG" "ERROR: lock timeout for $SVC"; exit 1; }
+
+          if [ "${RELEASE_FORCE:-}" != "--force" ] && vip_present; then
+            logger -t "$TAG" "skip release on $HOSTNAME: VIP held (master again)"
             exit 0
           fi
-          logger -t nexus-keepalived "notify_backup: releasing Nexus on $HOSTNAME"
-          systemctl stop nexus
-          rm -f "/mnt/data/nexus/.active-on-${HOSTNAME}"
-          if systemctl is-active --quiet nexus; then
-            logger -t nexus-keepalived "ERROR: Nexus still active after stop on $HOSTNAME"
+          logger -t "$TAG" "notify_backup: releasing $SVC on $HOSTNAME"
+          systemctl stop "$SVC"
+          rm -f "${DATA_DIR}/.active-on-${HOSTNAME}"
+          if systemctl is-active --quiet "$SVC"; then
+            logger -t "$TAG" "ERROR: $SVC still active after stop on $HOSTNAME"
             exit 1
           fi
 
-    # MinIO active-passive controller scripts (same pattern as Nexus).
-    # Safety layers:
-    #   1. VRRP election: exactly one Pi holds VIP in the common case
-    #   2. /var/lib/minio/data/.active-on-<hostname> sentinel
-    #   3. MinIO's xl-single .minio.sys/format.json embeds a unique
-    #      cluster ID; concurrent starts on the same data dir would
-    #      have to write competing format files, but on shared Gluster
-    #      the second writer just sees the first's UUID and proceeds —
-    #      we rely on layers (1) + (2) here, plus the StartLimitBurst=3
-    #      cap in the systemd unit if something goes wrong.
-    - name: Create MinIO notify_master script
-      ansible.builtin.copy:
-        dest: /etc/keepalived/minio_master.sh
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          set +e
-          . /etc/keepalived/notify_lib.sh
-          HOSTNAME=$(hostname)
-          SENTINEL="/var/lib/minio/data/.active-on-${HOSTNAME}"
-
-          exec 9>/run/lock/keepalived-minio.lock
-          flock 9
-
-          if ! is_master_ok; then
-            logger -t minio-keepalived "skip takeover on $HOSTNAME: not master (state=$(desired_state))"
-            exit 0
-          fi
-          logger -t minio-keepalived "notify_master: taking over MinIO on $HOSTNAME"
-
-          for stale in $(ls /var/lib/minio/data/.active-on-* 2>/dev/null); do
-            case "$stale" in
-              "$SENTINEL") ;;
-              *) logger -t minio-keepalived "WARN: stale sentinel $stale" ;;
-            esac
-          done
-
-          mkdir -p /var/lib/minio/data
-          touch "$SENTINEL"
-          systemctl start --no-block minio
-
-          elapsed=0
-          while [ "$elapsed" -lt 90 ]; do
-            if ! is_master_ok; then
-              logger -t minio-keepalived "state changed during MinIO takeover on $HOSTNAME — yielding"
-              exit 0
-            fi
-            if [ $((elapsed % 5)) -eq 0 ] && curl -sf -o /dev/null -m 3 http://localhost:9000/minio/health/cluster; then
-              logger -t minio-keepalived "MinIO on $HOSTNAME is ready"
-              exit 0
-            fi
-            sleep 1
-            elapsed=$((elapsed + 1))
-          done
-          logger -t minio-keepalived "WARN: MinIO on $HOSTNAME didn't become ready in 90s"
-
-    - name: Create MinIO notify_backup / notify_fault script
-      ansible.builtin.copy:
-        dest: /etc/keepalived/minio_backup.sh
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          set +e
-          . /etc/keepalived/notify_lib.sh
-          HOSTNAME=$(hostname)
-
-          exec 9>/run/lock/keepalived-minio.lock
-          flock 9
-
-          if [ "$(desired_state)" = "MASTER" ] && vip_present; then
-            logger -t minio-keepalived "skip release on $HOSTNAME: master again"
-            exit 0
-          fi
-          logger -t minio-keepalived "notify_backup: releasing MinIO on $HOSTNAME"
-          systemctl stop minio
-          rm -f "/var/lib/minio/data/.active-on-${HOSTNAME}"
-          if systemctl is-active --quiet minio; then
-            logger -t minio-keepalived "ERROR: MinIO still active after stop on $HOSTNAME"
-            exit 1
-          fi
+    # Remove the old hand-duplicated per-service scripts (nexus_*/minio_*),
+    # now superseded by the parameterized service_master.sh/service_backup.sh
+    # driven from the SERVICES table in notify_lib.sh.
+    - name: Remove superseded per-service notify scripts
+      ansible.builtin.file:
+        path: "/etc/keepalived/{{ item }}"
+        state: absent
+      loop:
+        - nexus_master.sh
+        - nexus_backup.sh
+        - minio_master.sh
+        - minio_backup.sh
 
     # Combined master/backup helpers — keepalived's notify_* directives
-    # take a single script path, but we have multiple active-passive
-    # services to coordinate (Nexus + MinIO). Each combined script
-    # records the new desired state (atomic rename — handlers re-read it
-    # under their service lock), then converges the services in PARALLEL:
+    # take a single script path, but we coordinate multiple active-passive
+    # services. Each combined script converges all services in PARALLEL:
     # a slow Nexus takeover must not delay MinIO by up to 180s, which is
-    # how the 2026-06-12 stale-takeover happened. Per-service scripts
-    # stay independently testable.
+    # how the 2026-06-12 stale-takeover happened.
     - name: Create combined notify_master script
       ansible.builtin.copy:
         dest: /etc/keepalived/active_services_master.sh
@@ -319,13 +270,7 @@
         content: |
           #!/bin/bash
           . /etc/keepalived/notify_lib.sh
-          write_state MASTER
-          /etc/keepalived/nexus_master.sh & p1=$!
-          /etc/keepalived/minio_master.sh & p2=$!
-          rc=0
-          wait "$p1" || rc=1
-          wait "$p2" || rc=1
-          exit "$rc"
+          for_each_service /etc/keepalived/service_master.sh
 
     - name: Create combined notify_backup script
       ansible.builtin.copy:
@@ -333,14 +278,12 @@
         mode: '0755'
         content: |
           #!/bin/bash
+          # --force (ExecStopPost path): unconditional release — keepalived
+          # is gone, a lingering VIP no longer implies mastership.
+          RELEASE_FORCE="${1:-}"
+          export RELEASE_FORCE
           . /etc/keepalived/notify_lib.sh
-          write_state BACKUP
-          /etc/keepalived/nexus_backup.sh & p1=$!
-          /etc/keepalived/minio_backup.sh & p2=$!
-          rc=0
-          wait "$p1" || rc=1
-          wait "$p2" || rc=1
-          exit "$rc"
+          for_each_service /etc/keepalived/service_backup.sh
 
     # Ensure Nexus + MinIO are stopped whenever Keepalived stops
     # (systemctl stop, daemon crash, OOM, etc.) — notify_backup only
@@ -360,7 +303,7 @@
         mode: '0644'
         content: |
           [Service]
-          ExecStopPost=/etc/keepalived/active_services_backup.sh
+          ExecStopPost=/etc/keepalived/active_services_backup.sh --force
       notify:
         - Reload systemd
         - Restart Keepalived
@@ -437,41 +380,51 @@
         state: started
         daemon_reload: true
 
+    # Fire any pending keepalived restart NOW, not at end of play — the
+    # converge + verify tasks below must assert the post-restart steady
+    # state, not a snapshot the restart immediately invalidates.
+    - name: Apply pending keepalived restarts before converging
+      ansible.builtin.meta: flush_handlers
+
     # Notify handlers only fire on VRRP transitions, so redeploying the
     # scripts (or a past stale handler leaving a service running on the
     # passive Pi) leaves service state unconverged until the next failover.
-    # Run each handler pair directly — NOT the combined scripts, which would
-    # overwrite the notify-written state file with a snapshot that can go
-    # stale mid-deploy. Every handler self-gates on the recorded state under
-    # its service lock (VIP fallback only when the file is absent), so the
-    # matching one of each pair acts and the other yields.
+    # Each handler self-gates on live VIP ownership under its service lock,
+    # so running both per service makes exactly the matching one act.
     - name: Converge active-passive services to current VIP ownership
       ansible.builtin.shell: |
         set -eo pipefail
-        /etc/keepalived/nexus_master.sh
-        /etc/keepalived/nexus_backup.sh
-        /etc/keepalived/minio_master.sh
-        /etc/keepalived/minio_backup.sh
+        . /etc/keepalived/notify_lib.sh
+        converge_one() {
+          /etc/keepalived/service_master.sh "$@" && /etc/keepalived/service_backup.sh "$@"
+        }
+        for_each_service converge_one
       changed_when: false
 
     # Don't trust the converge scripts' exit codes alone — assert the end
-    # state: services active exactly on the VIP holder. Retries cover a
-    # Nexus start still in flight (forking unit, up to ~180s readiness).
+    # state: services active exactly on the VIP holder. Budget must cover a
+    # cold async start: when converge runs during the post-restart VRRP
+    # election (VIP momentarily on neither node), it skips starting, and
+    # keepalived's own notify_master does the cold start afterwards — a JVM
+    # Nexus can take the full takeover envelope (180s) to report active.
     - name: Verify active-passive services match VIP ownership
       ansible.builtin.shell: |
         set -eo pipefail
-        if ip -o addr show | grep -qF " {{ vip }}/"; then want=active; else want=inactive; fi
-        for svc in nexus minio; do
+        . /etc/keepalived/notify_lib.sh
+        if vip_present; then want=active; else want=inactive; fi
+        while read -r svc _rest; do
+          [ -n "$svc" ] || continue
+          systemctl cat "$svc" >/dev/null 2>&1 || { echo "SKIP: $svc not installed"; continue; }
           if systemctl is-active --quiet "$svc"; then got=active; else got=inactive; fi
           if [ "$got" != "$want" ]; then
             echo "MISMATCH: $svc is $got, want $want"
             exit 1
           fi
-        done
-        echo "OK: nexus and minio are $want, matching VIP ownership"
+        done <<< "$SERVICES"
+        echo "OK: active-passive services match VIP ownership ($want)"
       register: _ap_state
       changed_when: false
-      retries: 40
+      retries: 36
       delay: 5
       until: _ap_state.rc == 0
 
