@@ -5,11 +5,13 @@
 - **Part B (re-converge timer + reset-failed): DONE, deployed to prod**
   (`setup-keepalived.yml`, non-disruptive — no keepalived restart). Timer
   armed on both Pis, converge idempotent.
-- **Part A (Consul-lock fence): implemented + VALIDATED IN VAGRANT, NOT yet
-  prod-deployed.** Vagrant proofs: exactly-one-active (holder serves, holds
-  the lock; non-holder fenced), a second `consul lock minio/active` is
-  denied, and the lock releases+re-acquires across a failover. Prod deploy
-  (`task deploy:pi-services`, a brief MinIO failover) is the remaining step.
+- **Part A (Consul-lock fence): DONE, deployed to prod 2026-06-13.**
+  Validated in Vagrant (exactly-one-active; second `consul lock minio/active`
+  denied; lock releases+re-acquires across failover) and verified on prod
+  after deploy: pi2 holds the VIP + lock + serves, pi1 cleanly `inactive`,
+  pi1's `consul lock` denied (`rc=1`). The cross-host dual-active gap is now
+  CLOSED in prod. (A follow-up fix: `service_backup.sh` resets a fenced
+  non-holder's unit after stop so it rests `inactive`, not `failed`.)
 - **Known blocker for a fully-green `task test:dual-pi`:** a pre-existing,
   unrelated Vagrant harness issue — Forgejo crashes on
   `/var/local/forgejo/queues/LOCK: permission denied` and HAProxy:5000 is
