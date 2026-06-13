@@ -16,6 +16,11 @@ all:
     forgejo_admin_user: "{{ lookup('env', 'FORGEJO_ADMIN_USER') | default('forgejo_admin', true) }}"
     forgejo_admin_password: "{{ lookup('env', 'FORGEJO_ADMIN_PASSWORD') }}"
     forgejo_admin_email: "{{ lookup('env', 'FORGEJO_ADMIN_EMAIL') | default('admin@pmon.dev', true) }}"
+    # Pinned so the active-active Pis share one INTERNAL_TOKEN/JWT_SECRET and the
+    # app.ini stops rotating them every deploy (Forgejo regenerates any it finds
+    # missing, which differed per Pi and broke OAuth/sessions on failover).
+    forgejo_internal_token: "{{ lookup('env', 'FORGEJO_INTERNAL_TOKEN') }}"
+    forgejo_jwt_secret: "{{ lookup('env', 'FORGEJO_JWT_SECRET') }}"
     keycloak_admin_password: "{{ lookup('env', 'KEYCLOAK_ADMIN_PASSWORD') }}"
     postgres_admin_password: "{{ lookup('env', 'KEYCLOAK_DB_PASSWORD') }}"
     postgres_replication_password: "{{ lookup('env', 'POSTGRES_REPLICATION_PASSWORD') }}"

@@ -272,6 +272,9 @@
         content: |
           APP_NAME = Forgejo
           RUN_USER = forgejo
+          # Forgejo writes WORK_PATH into app.ini on first run; set it here so
+          # the rendered file matches and the deploy stays idempotent.
+          WORK_PATH = /usr/local/bin
 
           [server]
           HTTP_PORT = 3000
@@ -306,6 +309,10 @@
 
           [security]
           INSTALL_LOCK = true
+          # Pinned (inventory, from .env) so the active-active Pis share one
+          # token and the deploy stops stripping it — Forgejo regenerates any
+          # it finds missing, which differed per Pi and broke OAuth on failover.
+          {% if forgejo_internal_token | default('') %}INTERNAL_TOKEN = {{ forgejo_internal_token }}{% endif %}
 
           # Queues + indexers + sessions are LevelDB / Bleve backed and
           # use file locks, which collide if two Forgejo instances try
@@ -335,6 +342,12 @@
           # whitelisted explicitly. List domains, not CIDRs, so a new
           # service on this LAN doesn't accidentally inherit access.
           ALLOWED_HOST_LIST = ci.pmon.dev,cd.pmon.dev,git.pmon.dev,external
+          {% if forgejo_jwt_secret | default('') %}
+          [oauth2]
+          # Pinned (inventory) — signs OAuth2 access tokens; must be identical
+          # on both Pis or tokens issued by one are rejected after a failover.
+          JWT_SECRET = {{ forgejo_jwt_secret }}
+          {% endif %}
       notify: Restart Forgejo
 
     - name: Install Forgejo systemd service
