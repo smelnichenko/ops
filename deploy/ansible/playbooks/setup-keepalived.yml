@@ -257,6 +257,9 @@
         - nexus_backup.sh
         - minio_master.sh
         - minio_backup.sh
+        # Even older combined-script names, before active_services_*.sh.
+        - notify_master.sh
+        - notify_backup.sh
 
     # Combined master/backup helpers — keepalived's notify_* directives
     # take a single script path, but we coordinate multiple active-passive
