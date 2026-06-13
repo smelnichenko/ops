@@ -184,6 +184,11 @@
           done
           touch "$SENTINEL"
 
+          # Clear a prior failed/start-limit state so the periodic converge
+          # timer can re-arm a service that crashed past StartLimitBurst on
+          # the stable master — where no VRRP transition re-fires notify.
+          systemctl reset-failed "$SVC" 2>/dev/null || true
+
           # --no-block: a Gluster stall can wedge a forking start for up to
           # TimeoutStartSec while we hold the service lock; the loop below
           # gates readiness and stays abortable.
@@ -389,19 +394,29 @@
     - name: Apply pending keepalived restarts before converging
       ansible.builtin.meta: flush_handlers
 
+    # Converge script — reused by the deploy task below AND the periodic
+    # keepalived-converge.timer. Runs both handlers per service: each
+    # self-gates on live VIP ownership under its per-service flock, so on
+    # the VIP holder the master pass acts (re-arming a service that crashed
+    # out, since service_master resets a failed unit) and backup skips; on
+    # the non-holder master skips and backup ensures stopped. Idempotent.
+    - name: Create converge script
+      ansible.builtin.copy:
+        dest: /etc/keepalived/converge.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          . /etc/keepalived/notify_lib.sh
+          converge_one() {
+            /etc/keepalived/service_master.sh "$@" && /etc/keepalived/service_backup.sh "$@"
+          }
+          for_each_service converge_one
+
     # Notify handlers only fire on VRRP transitions, so redeploying the
     # scripts (or a past stale handler leaving a service running on the
     # passive Pi) leaves service state unconverged until the next failover.
-    # Each handler self-gates on live VIP ownership under its service lock,
-    # so running both per service makes exactly the matching one act.
     - name: Converge active-passive services to current VIP ownership
-      ansible.builtin.shell: |
-        set -eo pipefail
-        . /etc/keepalived/notify_lib.sh
-        converge_one() {
-          /etc/keepalived/service_master.sh "$@" && /etc/keepalived/service_backup.sh "$@"
-        }
-        for_each_service converge_one
+      ansible.builtin.command: /etc/keepalived/converge.sh
       changed_when: false
 
     # Don't trust the converge scripts' exit codes alone — assert the end
@@ -430,6 +445,44 @@
       retries: 36
       delay: 5
       until: _ap_state.rc == 0
+
+    # Periodic re-converge — closes the stable-master crash strand:
+    # notify_master only fires on a VRRP transition, so a service that
+    # crashes past its systemd start-limit on the stable VIP holder is
+    # never re-armed. This timer re-runs the (idempotent) converge so the
+    # holder re-arms it within one interval; harmless on a healthy node.
+    - name: Install keepalived-converge oneshot service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/keepalived-converge.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Re-converge keepalived active-passive services to VIP ownership
+          After=keepalived.service
+          [Service]
+          Type=oneshot
+          ExecStart=/etc/keepalived/converge.sh
+      notify: Reload systemd
+
+    - name: Install keepalived-converge timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/keepalived-converge.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Periodic re-converge of keepalived active-passive services
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec=3min
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Enable and start keepalived-converge timer
+      ansible.builtin.systemd:
+        name: keepalived-converge.timer
+        enabled: true
+        state: started
+        daemon_reload: true
 
   handlers:
     - name: Reload systemd
