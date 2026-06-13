@@ -16,7 +16,7 @@ tasks:
   # ============== BUILD ==============
   build:backend:
     desc: Build backend JAR
-    dir: '{{.SRC_DIR}}/monitor/backend'
+    dir: '{{.SRC_DIR}}/monitor'
     cmds:
       - ./gradlew bootJar -x test
 
@@ -89,7 +89,7 @@ tasks:
 
   test:backend:
     desc: Run backend tests
-    dir: '{{.SRC_DIR}}/monitor/backend'
+    dir: '{{.SRC_DIR}}/monitor'
     cmds:
       - ./gradlew test
 
@@ -172,7 +172,7 @@ tasks:
   # ============== JOOQ ==============
   jooq:generate:
     desc: Generate jOOQ classes from database (requires running postgres)
-    dir: '{{.SRC_DIR}}/monitor/backend'
+    dir: '{{.SRC_DIR}}/monitor'
     cmds:
       - ./gradlew jooqCodegen
 

@@ -6,7 +6,7 @@ argument-hint: "[low|medium|high|xhigh|max|ultra] [PR# | commit | files... | pla
 
 # Full review
 
-Run up to four independent passes over one scope, merge them into a single report, then apply the automatic follow-ups (steps 4–5). Run end-to-end without pausing for confirmation — no AskUserQuestion, no "should I proceed?". The only thing that still requires the user's own keystroke is `ultra` (billed cloud review). Every actionable issue the review surfaces — on the diff under review or pre-existing — is fixed automatically (step 4); what can't be auto-fixed safely is listed under **Remaining**.
+Run up to four independent passes over one scope, merge them into a single report, then apply the automatic follow-ups (steps 4–5) without pausing for confirmation — no AskUserQuestion, no "should I proceed?". The only thing that still requires the user's own keystroke is `ultra` (billed cloud review). Step 4 defines what gets fixed automatically and what lands under **Remaining**.
 
 ## 1. Establish scope
 

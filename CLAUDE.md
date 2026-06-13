@@ -100,16 +100,14 @@ ssh ten 'PW=$(sudo kubectl get secret schnappy-elasticsearch -n schnappy -o json
 # Kibana UI: https://logs.pmon.dev/ — filter by kubernetes.namespace_name: "woodpecker"
 ```
 
-**SonarQube API** (via kubectl exec into SQ pod):
+**SonarQube API** — use the maintained helper (token from `ops/.env`, queries
+`https://sonar.pmon.dev` directly; the old kubectl-exec recipes targeted the
+retired `schnappy` namespace):
 ```bash
-# Quality gate status (token auth)
-ssh ten 'TOKEN=$(sudo kubectl get secret schnappy-sonarqube -n schnappy -o jsonpath="{.data.SONARQUBE_TOKEN}" | base64 -d) && sudo kubectl exec deploy/schnappy-sonarqube -n schnappy -- curl -sf -u "${TOKEN}:" "http://localhost:9000/api/qualitygates/project_status?projectKey=schnappy-monitor"' 2>/dev/null | jq .
+# Quality gate + unresolved issues (project key optional; defaults from cwd)
+bash ~/.claude/skills/full-review/sonar.sh schnappy-monitor
 
-# Open issues (token auth) — componentKeys: schnappy-monitor, schnappy-frontend, schnappy-infra
-ssh ten 'TOKEN=$(sudo kubectl get secret schnappy-sonarqube -n schnappy -o jsonpath="{.data.SONARQUBE_TOKEN}" | base64 -d) && sudo kubectl exec deploy/schnappy-sonarqube -n schnappy -- curl -sf -u "${TOKEN}:" "http://localhost:9000/api/issues/search?componentKeys=schnappy-monitor&resolved=false&ps=50"' 2>/dev/null | jq '.issues[] | {severity, component, line, message}'
-
-# Analysis status (admin auth required)
-ssh ten 'PW=$(sudo kubectl get secret schnappy-sonarqube -n schnappy -o jsonpath="{.data.SONARQUBE_TOKEN}" | base64 -d) && sudo kubectl exec deploy/schnappy-sonarqube -n schnappy -- curl -sf -u "admin:${PW}" "http://localhost:9000/api/ce/activity?component=schnappy-monitor&ps=5"' 2>/dev/null | jq .
+# Analysis/CE history: SonarQube UI at https://sonar.pmon.dev (admin login)
 ```
 
 ## Quick Start

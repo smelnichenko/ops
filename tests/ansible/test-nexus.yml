@@ -253,11 +253,13 @@
       changed_when: false
       when: inventory_hostname == new_active
 
+    # Budget must cover the takeover handler's own readiness envelope
+    # (service_master.sh waits up to 180s for Nexus).
     - name: Wait for Nexus on new active Pi to respond via VIP
       ansible.builtin.uri:
         url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/status"
         status_code: 200
-      retries: 24
+      retries: 40
       delay: 5
       when: inventory_hostname == new_active
 
