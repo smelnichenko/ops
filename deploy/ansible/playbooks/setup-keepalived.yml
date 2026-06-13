@@ -249,6 +249,12 @@
             logger -t "$TAG" "ERROR: $SVC still active after stop on $HOSTNAME"
             exit 1
           fi
+          # A deliberate stop of a consul-lock-fenced unit that was blocked
+          # acquiring (non-holder) leaves the unit `failed` (consul lock exits
+          # non-zero on SIGTERM before acquiring). Clear it so the non-holder
+          # rests cleanly `inactive`, not `failed` — this is a deliberate
+          # release, not a crash.
+          systemctl reset-failed "$SVC" 2>/dev/null || true
 
     # Remove the old hand-duplicated per-service scripts (nexus_*/minio_*),
     # now superseded by the parameterized service_master.sh/service_backup.sh
