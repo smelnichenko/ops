@@ -222,9 +222,22 @@
         dest: /usr/local/bin/forgejo
         mode: '0755'
 
+    # Fixed UID/GID 900: setup-gluster later usermods forgejo to 900 for
+    # Gluster-neutral ownership. If we let this auto-allocate, the usermod
+    # orphans node-local /var/local/forgejo (queues/indexers/sessions) to the
+    # old auto-uid and Forgejo can't write its LevelDB queue LOCK. Pin it here
+    # so both playbooks agree and the usermod is a no-op.
+    - name: Create Forgejo group (fixed GID, matches setup-gluster)
+      ansible.builtin.group:
+        name: forgejo
+        gid: 900
+        system: true
+
     - name: Create Forgejo user
       ansible.builtin.user:
         name: forgejo
+        uid: 900
+        group: forgejo
         system: true
         shell: /bin/bash
         home: /var/lib/forgejo
