@@ -313,8 +313,12 @@
           # and the deploy stops stripping them — Forgejo falls back to a public
           # default SECRET_KEY and regenerates a missing INTERNAL_TOKEN (which
           # differed per Pi and broke OAuth on failover).
-          {% if forgejo_secret_key | default('') %}SECRET_KEY = {{ forgejo_secret_key }}{% endif %}
-          {% if forgejo_internal_token | default('') %}INTERNAL_TOKEN = {{ forgejo_internal_token }}{% endif %}
+          {% if forgejo_secret_key | default('') %}
+          SECRET_KEY = {{ forgejo_secret_key }}
+          {% endif %}
+          {% if forgejo_internal_token | default('') %}
+          INTERNAL_TOKEN = {{ forgejo_internal_token }}
+          {% endif %}
 
           # Queues + indexers + sessions are LevelDB / Bleve backed and
           # use file locks, which collide if two Forgejo instances try
