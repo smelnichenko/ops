@@ -276,7 +276,7 @@ tasks:
   onboard:dev:
     desc: "Onboard a developer (Keycloak user + personal <username>-team org). Usage: task onboard:dev USER=jane EMAIL=jane@example.com [NAME=\"Jane Doe\"] [DRY_RUN=1]"
     cmds:
-      - ONBOARD_USER='{{.USER}}' ONBOARD_EMAIL='{{.EMAIL}}' python3 scripts/onboard-dev.py
+      - ONBOARD_USER='{{.USER}}' ONBOARD_EMAIL='{{.EMAIL}}' ONBOARD_NAME='{{.NAME}}' python3 scripts/onboard-dev.py
 
   deploy:seed-test-secrets:
     desc: Seed test environment secrets into Vault (overrides from .env.test)
