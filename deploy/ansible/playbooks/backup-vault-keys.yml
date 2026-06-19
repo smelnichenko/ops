@@ -1,0 +1,58 @@
+---
+# Offsite backup of Vault recovery material (architecture review, item L4).
+#
+# The Shamir unseal keys + root token are written once at init to
+# /etc/vault-unseal/ on the Pis and never rotate — but they live ONLY there, so
+# losing both Pis makes a restored Vault unrecoverable. This pulls a current copy
+# to the controller (off the Pis) with tight perms, into the same gitignored
+# vars/ area as the sealed-secrets key backup. From there, move it to TRUE
+# offsite custody (password manager / encrypted USB) — that step stays manual on
+# purpose, since only the operator should choose the final resting place.
+#
+# Read-only on the Pi (just a fetch); safe to run any time. Re-run only after a
+# Vault re-initialisation, since the keys change nowhere else.
+- name: Back up Vault recovery material off the Pis
+  hosts: pi1
+  become: true
+  gather_facts: false
+  vars:
+    vault_recovery_dir: "{{ playbook_dir }}/../vars/vault-recovery"
+  tasks:
+    - name: Pull unseal keys + root token to the controller (off the Pis)
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: "{{ vault_recovery_dir }}/"
+        flat: true
+        fail_on_missing: false
+      loop:
+        - /etc/vault-unseal/unseal-keys
+        - /etc/vault-unseal/root-token
+      no_log: true
+
+    - name: Lock down the local backup (0700 dir, 0600 files)
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        state: "{{ item.state | default('file') }}"
+      delegate_to: localhost
+      become: false
+      failed_when: false   # root-token is optional (may have been purged post-setup)
+      loop:
+        - { path: "{{ vault_recovery_dir }}", mode: '0700', state: directory }
+        - { path: "{{ vault_recovery_dir }}/unseal-keys", mode: '0600' }
+        - { path: "{{ vault_recovery_dir }}/root-token", mode: '0600' }
+
+    - name: Confirm what landed (filenames only, never contents)
+      ansible.builtin.find:
+        paths: "{{ vault_recovery_dir }}"
+      delegate_to: localhost
+      become: false
+      register: _backed_up
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Vault recovery material is now at {{ vault_recovery_dir }}
+          ({{ _backed_up.files | map(attribute='path') | map('basename') | list | join(', ') }}),
+          off the Pis. NEXT: move it to true-offsite custody (password manager /
+          encrypted USB). These keys are the only way to recover Vault if both Pis die.

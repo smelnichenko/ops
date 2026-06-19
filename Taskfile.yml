@@ -214,6 +214,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
 
+  deploy:vault-keys-backup:
+    desc: Back up Vault unseal keys + root token off the Pis to the controller (review L4)
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/backup-vault-keys.yml
+
   deploy:keycloak-clients:
     desc: Configure Keycloak service account roles (k6-smoke PLAY role)
     dir: deploy/ansible
