@@ -232,6 +232,23 @@
     - name: Deploy schnappy-mesh (ServiceAccounts)
       ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
 
+    # Test MinIO must be up before the CNPG cluster: the cluster's barman
+    # object store writes backups here, and the bucket must already exist.
+    - ansible.builtin.import_tasks: tasks/setup-test-minio.yml
+
+    - name: CNPG barman backup credentials Secret (schnappy-postgres-minio-backup)
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: { name: schnappy-postgres-minio-backup, namespace: "{{ ns }}" }
+          type: Opaque
+          stringData:
+            MINIO_ROOT_USER: minioadmin
+            MINIO_ROOT_PASSWORD: minioadmin
+
     - name: Stand up in-cluster test postgres + per-service DB Secrets
       ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
 
@@ -473,10 +490,10 @@
         state: absent
         wait: false
 
-    - name: "POD-RECOVERY: Wait for postgres deployment rollout"
+    - name: "POD-RECOVERY: Wait for postgres cluster Ready"
       kubernetes.core.k8s_info:
-        api_version: apps/v1
-        kind: Deployment
+        api_version: postgresql.cnpg.io/v1
+        kind: Cluster
         name: schnappy-postgres
         namespace: "{{ ns }}"
       register: _rollout_pg
@@ -484,10 +501,9 @@
       delay: 2
       until: >-
         (_rollout_pg.resources | default([]) | length > 0) and
-        (_rollout_pg.resources[0].status.readyReplicas | default(0)) ==
-        (_rollout_pg.resources[0].status.replicas | default(-1)) and
-        (_rollout_pg.resources[0].status.updatedReplicas | default(0)) ==
-        (_rollout_pg.resources[0].status.replicas | default(-1))
+        ((_rollout_pg.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') | list | first | default({})).status
+          | default('')) == "True"
 
     - name: "POD-RECOVERY: Wait for app to reconnect to postgres"
       ansible.builtin.uri:
@@ -616,6 +632,21 @@
         name: "--all"
         namespace: "{{ ns }}"
 
+    - name: "POD-RECOVERY: Wait for postgres cluster Ready (full restart)"
+      kubernetes.core.k8s_info:
+        api_version: postgresql.cnpg.io/v1
+        kind: Cluster
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+      register: _rollout_all_pg
+      retries: 90
+      delay: 2
+      until: >-
+        (_rollout_all_pg.resources | default([]) | length > 0) and
+        ((_rollout_all_pg.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') | list | first | default({})).status
+          | default('')) == "True"
+
     - name: "POD-RECOVERY: Wait for all deployments to roll out"
       kubernetes.core.k8s_info:
         api_version: apps/v1
@@ -624,7 +655,6 @@
         namespace: "{{ ns }}"
       loop:
         - schnappy-monitor
-        - schnappy-postgres
         - schnappy-valkey
         - schnappy-site
         - schnappy-keycloak
@@ -674,197 +704,7 @@
     # Suite 2: Full Disaster Recovery (Velero Backup/Restore)
     # ================================================================
 
-    # ── Step 1: Deploy Velero + test MinIO ──
-
-    - name: "DR: Create velero namespace"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Namespace
-          metadata:
-            name: "{{ velero_ns }}"
-            labels:
-              pod-security.kubernetes.io/enforce: privileged
-              pod-security.kubernetes.io/audit: privileged
-              pod-security.kubernetes.io/warn: privileged
-
-    - name: "DR: Create backup directory"
-      ansible.builtin.file:
-        path: /tmp/velero-test-backups
-        state: directory
-        owner: "1000"
-        group: "1000"
-        mode: '0755'
-
-    - name: "DR: Deploy test MinIO — PersistentVolume"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: PersistentVolume
-          metadata:
-            name: minio-test-pv
-            labels:
-              app: minio-test
-          spec:
-            capacity:
-              storage: 5Gi
-            accessModes:
-              - ReadWriteOnce
-            storageClassName: manual-test
-            hostPath:
-              path: /tmp/velero-test-backups
-              type: DirectoryOrCreate
-            persistentVolumeReclaimPolicy: Delete
-
-    - name: "DR: Deploy test MinIO — PersistentVolumeClaim"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: PersistentVolumeClaim
-          metadata:
-            name: minio-test-pvc
-            namespace: "{{ velero_ns }}"
-          spec:
-            accessModes:
-              - ReadWriteOnce
-            storageClassName: manual-test
-            resources:
-              requests:
-                storage: 5Gi
-            selector:
-              matchLabels:
-                app: minio-test
-
-    - name: "DR: Deploy test MinIO — Secret"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: minio-test-secret
-            namespace: "{{ velero_ns }}"
-          type: Opaque
-          stringData:
-            MINIO_ROOT_USER: "minioadmin"
-            MINIO_ROOT_PASSWORD: "minioadmin"
-
-    - name: "DR: Deploy test MinIO — Deployment"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: minio-test
-            namespace: "{{ velero_ns }}"
-          spec:
-            replicas: 1
-            strategy:
-              type: Recreate
-            selector:
-              matchLabels:
-                app: minio-test
-            template:
-              metadata:
-                labels:
-                  app: minio-test
-              spec:
-                securityContext:
-                  runAsNonRoot: true
-                  runAsUser: 1000
-                  runAsGroup: 1000
-                  fsGroup: 1000
-                  seccompProfile:
-                    type: RuntimeDefault
-                containers:
-                  - name: minio
-                    image: "{{ minio_image }}"
-                    command: ["minio", "server", "/data", "--console-address", ":9001"]
-                    envFrom:
-                      - secretRef:
-                          name: minio-test-secret
-                    ports:
-                      - containerPort: 9000
-                      - containerPort: 9001
-                    securityContext:
-                      allowPrivilegeEscalation: false
-                      capabilities:
-                        drop: ["ALL"]
-                    resources:
-                      requests:
-                        cpu: 50m
-                        memory: 128Mi
-                      limits:
-                        cpu: 500m
-                        memory: 512Mi
-                    volumeMounts:
-                      - name: data
-                        mountPath: /data
-                    readinessProbe:
-                      httpGet:
-                        path: /minio/health/ready
-                        port: 9000
-                      initialDelaySeconds: 5
-                      periodSeconds: 10
-                volumes:
-                  - name: data
-                    persistentVolumeClaim:
-                      claimName: minio-test-pvc
-
-    - name: "DR: Deploy test MinIO — Service"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: minio-test
-            namespace: "{{ velero_ns }}"
-          spec:
-            selector:
-              app: minio-test
-            ports:
-              - name: api
-                port: 9000
-                targetPort: 9000
-
-    - name: "DR: Wait for test MinIO"
-      kubernetes.core.k8s_info:
-        api_version: apps/v1
-        kind: Deployment
-        name: minio-test
-        namespace: "{{ velero_ns }}"
-      register: _rollout_minio
-      retries: 60
-      delay: 2
-      until: >-
-        (_rollout_minio.resources | default([]) | length > 0) and
-        (_rollout_minio.resources[0].status.readyReplicas | default(0)) ==
-        (_rollout_minio.resources[0].status.replicas | default(-1)) and
-        (_rollout_minio.resources[0].status.updatedReplicas | default(0)) ==
-        (_rollout_minio.resources[0].status.replicas | default(-1))
-
-    - name: "DR: Create velero bucket"
-      ansible.builtin.shell: |
-        kubectl run minio-setup --rm -i --restart=Never \
-          -n {{ velero_ns }} \
-          --image=quay.io/minio/mc:latest \
-          --overrides='{
-            "spec": {
-              "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
-              "containers": [{
-                "name": "minio-setup",
-                "image": "quay.io/minio/mc:latest",
-                "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://minio-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero"],
-                "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
-              }]
-            }
-          }' 2>&1 || true
-      changed_when: false
+    # ── Step 1: Deploy Velero (test MinIO already up from setup-test-minio) ──
 
     - name: "DR: Add vmware-tanzu Helm repo"
       kubernetes.core.helm_repository:
@@ -1020,12 +860,45 @@
 
     # ── Step 3: Create Velero backup ──
 
-    - name: "DR: Trigger pg_dump before backup"
-      ansible.builtin.shell: |
-        kubectl create job --from=cronjob/schnappy-postgres-backup dr-pgdump -n {{ ns }} 2>/dev/null || true
-        kubectl wait --for=condition=complete job/dr-pgdump -n {{ ns }} --timeout=120s 2>/dev/null || true
-      changed_when: false
-      failed_when: false
+    # Postgres is backed up the production way: a CNPG barman Backup to the
+    # test MinIO `postgres-backups` bucket. The CNPG Cluster + PVCs are
+    # excluded from the Velero backup (Velero-restoring a CNPG cluster is
+    # broken upstream — CNPG issue #5912); Postgres is recovered later by a
+    # fresh Cluster with bootstrap.recovery from this barman backup.
+    - name: "DR: Trigger CNPG barman backup"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Backup
+          metadata:
+            name: dr-pg-backup
+            namespace: "{{ ns }}"
+          spec:
+            method: barmanObjectStore
+            cluster:
+              name: schnappy-postgres
+      register: pg_backup_result
+
+    - name: "DR: Wait for CNPG barman backup to finish"
+      kubernetes.core.k8s_info:
+        api_version: postgresql.cnpg.io/v1
+        kind: Backup
+        name: dr-pg-backup
+        namespace: "{{ ns }}"
+      register: pg_backup_status
+      retries: 60
+      delay: 10
+      until: >-
+        (pg_backup_status.resources | default([]) | length > 0) and
+        (pg_backup_status.resources[0].status.phase | default('')) in ["completed", "failed"]
+
+    - name: "DR: Assert CNPG barman backup completed"
+      ansible.builtin.assert:
+        that:
+          - pg_backup_status.resources[0].status.phase == "completed"
+        fail_msg: "CNPG barman backup failed: {{ pg_backup_status.resources[0].status.phase | default('unknown') }}"
+        success_msg: "PASS: CNPG barman backup completed"
 
     - name: "DR: Create Velero backup"
       kubernetes.core.k8s:
@@ -1039,6 +912,14 @@
           spec:
             includedNamespaces:
               - "{{ ns }}"
+            excludedResources:
+              - clusters.postgresql.cnpg.io
+              - backups.postgresql.cnpg.io
+              - scheduledbackups.postgresql.cnpg.io
+            labelSelector:
+              matchExpressions:
+                - key: cnpg.io/cluster
+                  operator: DoesNotExist
             defaultVolumesToFsBackup: true
             ttl: 1h0m0s
       register: backup_result
@@ -1126,7 +1007,82 @@
         fail_msg: "Restore failed: {{ restore_status.resources[0].status.phase | default('unknown') }}"
         success_msg: "PASS: Velero restore {{ restore_status.resources[0].status.phase }}"
 
+    # ── Step 5b: Recover Postgres from the CNPG barman backup ──
+    #
+    # The CNPG Cluster + PVCs were excluded from the Velero backup (restoring
+    # them is broken upstream — CNPG issue #5912). Recover Postgres the
+    # production way: a fresh Cluster that bootstraps via barman recovery from
+    # the dr-pg-backup written to the test MinIO `postgres-backups` bucket.
+
+    - name: "DR: Re-create CNPG barman backup credentials Secret"
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: { name: schnappy-postgres-minio-backup, namespace: "{{ ns }}" }
+          type: Opaque
+          stringData:
+            MINIO_ROOT_USER: minioadmin
+            MINIO_ROOT_PASSWORD: minioadmin
+
+    - name: "DR: Recover Postgres via CNPG bootstrap.recovery"
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: schnappy-postgres
+            namespace: "{{ ns }}"
+          spec:
+            instances: 1
+            imageName: ghcr.io/cloudnative-pg/postgresql:17
+            enableSuperuserAccess: true
+            superuserSecret:
+              name: schnappy-postgres-superuser
+            inheritedMetadata:
+              annotations:
+                traffic.sidecar.istio.io/excludeOutboundPorts: "9000"
+            storage:
+              size: 100Mi
+            bootstrap:
+              recovery:
+                source: backup-source
+            externalClusters:
+              - name: backup-source
+                barmanObjectStore:
+                  destinationPath: s3://postgres-backups/
+                  endpointURL: http://minio-test.velero.svc:9000
+                  serverName: schnappy-postgres
+                  s3Credentials:
+                    accessKeyId:
+                      name: schnappy-postgres-minio-backup
+                      key: MINIO_ROOT_USER
+                    secretAccessKey:
+                      name: schnappy-postgres-minio-backup
+                      key: MINIO_ROOT_PASSWORD
+                  wal:
+                    maxParallel: 4
+
     # ── Step 6: Wait for pods to recover ──
+
+    - name: "DR: Wait for postgres cluster Ready after restore"
+      kubernetes.core.k8s_info:
+        api_version: postgresql.cnpg.io/v1
+        kind: Cluster
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+      register: _rollout_pg_after_restore
+      retries: 120
+      delay: 5
+      until: >-
+        (_rollout_pg_after_restore.resources | default([]) | length > 0) and
+        ((_rollout_pg_after_restore.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') | list | first | default({})).status
+          | default('')) == "True"
 
     - name: "DR: Wait for all deployments after restore"
       kubernetes.core.k8s_info:
@@ -1136,7 +1092,6 @@
         namespace: "{{ ns }}"
       loop:
         - schnappy-monitor
-        - schnappy-postgres
         - schnappy-valkey
         - schnappy-site
         - schnappy-keycloak
@@ -1223,15 +1178,6 @@
         kind: Restore
         name: dr-test-restore
         namespace: "{{ velero_ns }}"
-        state: absent
-      failed_when: false
-
-    - name: "DR: Delete pg_dump job"
-      kubernetes.core.k8s:
-        api_version: batch/v1
-        kind: Job
-        name: dr-pgdump
-        namespace: "{{ ns }}"
         state: absent
       failed_when: false
 
@@ -1456,7 +1402,81 @@
         fail_msg: "Offsite restore failed: {{ offsite_restore_status.resources[0].status.phase | default('unknown') }}"
         success_msg: "PASS: Velero restore from offsite backup {{ offsite_restore_status.resources[0].status.phase }}"
 
+    # ── Step 5b: Recover Postgres from the offsite-recovered barman backup ──
+    #
+    # As in Suite 2: the CNPG Cluster was excluded from Velero (CNPG #5912),
+    # so recover Postgres via a fresh Cluster bootstrapping from the barman
+    # backup now restored into the MinIO `postgres-backups` bucket.
+
+    - name: "OFFSITE: Re-create CNPG barman backup credentials Secret"
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: { name: schnappy-postgres-minio-backup, namespace: "{{ ns }}" }
+          type: Opaque
+          stringData:
+            MINIO_ROOT_USER: minioadmin
+            MINIO_ROOT_PASSWORD: minioadmin
+
+    - name: "OFFSITE: Recover Postgres via CNPG bootstrap.recovery"
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata:
+            name: schnappy-postgres
+            namespace: "{{ ns }}"
+          spec:
+            instances: 1
+            imageName: ghcr.io/cloudnative-pg/postgresql:17
+            enableSuperuserAccess: true
+            superuserSecret:
+              name: schnappy-postgres-superuser
+            inheritedMetadata:
+              annotations:
+                traffic.sidecar.istio.io/excludeOutboundPorts: "9000"
+            storage:
+              size: 100Mi
+            bootstrap:
+              recovery:
+                source: backup-source
+            externalClusters:
+              - name: backup-source
+                barmanObjectStore:
+                  destinationPath: s3://postgres-backups/
+                  endpointURL: http://minio-test.velero.svc:9000
+                  serverName: schnappy-postgres
+                  s3Credentials:
+                    accessKeyId:
+                      name: schnappy-postgres-minio-backup
+                      key: MINIO_ROOT_USER
+                    secretAccessKey:
+                      name: schnappy-postgres-minio-backup
+                      key: MINIO_ROOT_PASSWORD
+                  wal:
+                    maxParallel: 4
+
     # ── Step 6: Verify app + data integrity ──
+
+    - name: "OFFSITE: Wait for postgres cluster Ready"
+      kubernetes.core.k8s_info:
+        api_version: postgresql.cnpg.io/v1
+        kind: Cluster
+        name: schnappy-postgres
+        namespace: "{{ ns }}"
+      register: _rollout_pg_offsite
+      retries: 120
+      delay: 5
+      until: >-
+        (_rollout_pg_offsite.resources | default([]) | length > 0) and
+        ((_rollout_pg_offsite.resources[0].status.conditions | default([]) |
+          selectattr('type', 'equalto', 'Ready') | list | first | default({})).status
+          | default('')) == "True"
 
     - name: "OFFSITE: Wait for all deployments"
       kubernetes.core.k8s_info:
@@ -1466,7 +1486,6 @@
         namespace: "{{ ns }}"
       loop:
         - schnappy-monitor
-        - schnappy-postgres
         - schnappy-valkey
         - schnappy-site
         - schnappy-keycloak

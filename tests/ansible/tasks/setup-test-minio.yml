@@ -1,0 +1,204 @@
+---
+# Stand up an in-cluster test MinIO that backs both the Velero
+# BackupStorageLocation (`velero` bucket) and the CNPG barman object
+# store (`postgres-backups` bucket).
+#
+# Moved out of test-dr.yml so the CNPG cluster (which now writes barman
+# backups here) can depend on MinIO being up first.
+#
+# Required vars:
+#   velero_ns:    namespace for the test MinIO + Velero
+#   minio_image:  MinIO container image
+#
+# Usage:
+#   - ansible.builtin.import_tasks: tasks/setup-test-minio.yml
+
+- name: "DR: Create velero namespace"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ velero_ns }}"
+        labels:
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: privileged
+          pod-security.kubernetes.io/warn: privileged
+
+- name: "DR: Create backup directory"
+  ansible.builtin.file:
+    path: /tmp/velero-test-backups
+    state: directory
+    owner: "1000"
+    group: "1000"
+    mode: '0755'
+
+- name: "DR: Deploy test MinIO — PersistentVolume"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolume
+      metadata:
+        name: minio-test-pv
+        labels:
+          app: minio-test
+      spec:
+        capacity:
+          storage: 5Gi
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: manual-test
+        hostPath:
+          path: /tmp/velero-test-backups
+          type: DirectoryOrCreate
+        persistentVolumeReclaimPolicy: Delete
+
+- name: "DR: Deploy test MinIO — PersistentVolumeClaim"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: minio-test-pvc
+        namespace: "{{ velero_ns }}"
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: manual-test
+        resources:
+          requests:
+            storage: 5Gi
+        selector:
+          matchLabels:
+            app: minio-test
+
+- name: "DR: Deploy test MinIO — Secret"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: minio-test-secret
+        namespace: "{{ velero_ns }}"
+      type: Opaque
+      stringData:
+        MINIO_ROOT_USER: "minioadmin"
+        MINIO_ROOT_PASSWORD: "minioadmin"
+
+- name: "DR: Deploy test MinIO — Deployment"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: minio-test
+        namespace: "{{ velero_ns }}"
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: minio-test
+        template:
+          metadata:
+            labels:
+              app: minio-test
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              fsGroup: 1000
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: minio
+                image: "{{ minio_image }}"
+                command: ["minio", "server", "/data", "--console-address", ":9001"]
+                envFrom:
+                  - secretRef:
+                      name: minio-test-secret
+                ports:
+                  - containerPort: 9000
+                  - containerPort: 9001
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 128Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+                volumeMounts:
+                  - name: data
+                    mountPath: /data
+                readinessProbe:
+                  httpGet:
+                    path: /minio/health/ready
+                    port: 9000
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+            volumes:
+              - name: data
+                persistentVolumeClaim:
+                  claimName: minio-test-pvc
+
+- name: "DR: Deploy test MinIO — Service"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: minio-test
+        namespace: "{{ velero_ns }}"
+      spec:
+        selector:
+          app: minio-test
+        ports:
+          - name: api
+            port: 9000
+            targetPort: 9000
+
+- name: "DR: Wait for test MinIO"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: minio-test
+    namespace: "{{ velero_ns }}"
+  register: _rollout_minio
+  retries: 60
+  delay: 2
+  until: >-
+    (_rollout_minio.resources | default([]) | length > 0) and
+    (_rollout_minio.resources[0].status.readyReplicas | default(0)) ==
+    (_rollout_minio.resources[0].status.replicas | default(-1)) and
+    (_rollout_minio.resources[0].status.updatedReplicas | default(0)) ==
+    (_rollout_minio.resources[0].status.replicas | default(-1))
+
+- name: "DR: Create velero bucket"
+  ansible.builtin.shell: |
+    kubectl run minio-setup --rm -i --restart=Never \
+      -n {{ velero_ns }} \
+      --image=quay.io/minio/mc:latest \
+      --overrides='{
+        "spec": {
+          "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
+          "containers": [{
+            "name": "minio-setup",
+            "image": "quay.io/minio/mc:latest",
+            "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://minio-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero && mc mb --ignore-existing test/postgres-backups"],
+            "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
+          }]
+        }
+      }' 2>&1 || true
+  changed_when: false

@@ -119,6 +119,24 @@
         resources:
           requests: { cpu: "50m", memory: "256Mi" }
           limits:   { cpu: "500m", memory: "512Mi" }
+        inheritedMetadata:
+          annotations:
+            traffic.sidecar.istio.io/excludeOutboundPorts: "9000"
+        backup:
+          barmanObjectStore:
+            destinationPath: s3://postgres-backups/
+            endpointURL: http://minio-test.velero.svc:9000
+            s3Credentials:
+              accessKeyId:
+                name: schnappy-postgres-minio-backup
+                key: MINIO_ROOT_USER
+              secretAccessKey:
+                name: schnappy-postgres-minio-backup
+                key: MINIO_ROOT_PASSWORD
+            wal:
+              compression: gzip
+            data:
+              compression: gzip
 
 - name: Wait for postgres cluster Ready
   kubernetes.core.k8s_info:
