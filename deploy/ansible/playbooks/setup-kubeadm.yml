@@ -113,6 +113,28 @@
         state: restarted
         enabled: true
 
+    # Pre-pull the heaviest CNI/mesh/storage images into containerd's k8s.io
+    # namespace, with ansible-native retries, BEFORE their deadline-gated Helm
+    # installs later in this play. A slow or transient cold pull then can't trip
+    # a Deployment progress deadline (the observed DR-drill flake mode). Best
+    # effort (failed_when:false): a miss just falls back to the lazy pull at
+    # pod-schedule time, i.e. today's behaviour.
+    - name: Pre-pull heavy provisioning images (retried, decoupled from helm waits)
+      ansible.builtin.command: "ctr -n k8s.io images pull {{ item }}"
+      loop:
+        - "quay.io/cilium/cilium:v{{ cilium_version }}"
+        - "quay.io/cilium/operator-generic:v{{ cilium_version }}"
+        - "docker.io/istio/pilot:{{ istio_version }}"
+        - "docker.io/istio/proxyv2:{{ istio_version }}"
+        - "docker.io/rancher/local-path-provisioner:v0.0.36"
+      loop_control: { label: "{{ item }}" }
+      register: _prepull
+      retries: 6
+      delay: 15
+      until: _prepull is succeeded
+      changed_when: true
+      failed_when: false
+
     # ================================================================
     # Phase 2: Install kubeadm, kubelet, kubectl
     # ================================================================
@@ -337,7 +359,7 @@
             print(json.dumps(cm))" | \
           kubectl apply -f -
         kubectl rollout restart daemonset kube-proxy -n kube-system
-        kubectl rollout status daemonset kube-proxy -n kube-system --timeout=60s
+        kubectl rollout status daemonset kube-proxy -n kube-system --timeout=300s
       args:
         executable: /bin/bash
       changed_when: true
@@ -511,7 +533,7 @@
         name: local-path-provisioner
         namespace: local-path-storage
       register: _lpp
-      retries: 90
+      retries: 180
       delay: 10
       until:
         - _lpp.resources | default([]) | length > 0
@@ -577,7 +599,7 @@
           args:
             - --kubelet-insecure-tls
         wait: true
-        wait_timeout: 60s
+        wait_timeout: 300s
 
     # ================================================================
     # Phase 9: Install cert-manager
