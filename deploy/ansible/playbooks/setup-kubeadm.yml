@@ -733,16 +733,17 @@
     # The chart still renders a hand-rolled Deployment when
     # valkey.operator.enabled=false, so installing the operator here is
     # safe even if no Valkey CR is applied yet.
-    - name: Add hyperspike (valkey-operator) Helm repo
-      kubernetes.core.helm_repository:
-        name: hyperspike
-        repo_url: https://hyperspike.github.io/valkey-operator
-
+    #
+    # The chart ships only as an OCI artifact on ghcr.io (the old
+    # gh-pages Helm repo at hyperspike.github.io/valkey-operator is gone).
+    # The chart tag carries a `-chart` suffix; the bare semver tag is the
+    # operator container image, not the chart.
     - name: Install valkey-operator
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
         name: valkey-operator
-        chart_ref: hyperspike/valkey-operator
+        chart_ref: oci://ghcr.io/hyperspike/valkey-operator
+        chart_version: "v0.0.61-chart"
         release_namespace: valkey-operator-system
         create_namespace: true
         wait: true

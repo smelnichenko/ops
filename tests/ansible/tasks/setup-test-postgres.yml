@@ -112,6 +112,10 @@
               - CREATE DATABASE chat OWNER chat
               - CREATE USER chess WITH PASSWORD 'vagrant'
               - CREATE DATABASE chess OWNER chess
+              # Keycloak (schnappy-auth chart) connects as the postgres
+              # superuser to its own database; the DR test deploys KC against
+              # this same CNPG cluster.
+              - CREATE DATABASE keycloak OWNER postgres
         resources:
           requests: { cpu: "50m", memory: "256Mi" }
           limits:   { cpu: "500m", memory: "512Mi" }

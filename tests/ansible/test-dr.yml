@@ -92,25 +92,6 @@
     - name: Ensure schnappy namespace
       ansible.builtin.include_tasks: tasks/k8s-ensure-namespace.yml
 
-    - name: Build gateway JAR
-      ansible.builtin.shell: |
-        source $HOME/.sdkman/bin/sdkman-init.sh
-        cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
-      args:
-        executable: /bin/bash
-      become: false
-      changed_when: true
-
-    - name: Build gateway container image
-      ansible.builtin.shell: |
-        STAGE=$(mktemp -d)
-        cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
-        cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
-        nerdctl -n k8s.io build \
-          -t monitor-gateway:local "$STAGE"
-        rm -rf "$STAGE"
-      changed_when: true
-
     - name: Build monitor (app) container image
       # Multi-stage Dockerfile in /vagrant-monitor builds the JAR + runtime
       # in one shot; no pre-staging needed.
@@ -152,17 +133,9 @@
               repository: monitor
               tag: local
               pullPolicy: Never
-            # ingress disabled — HTTPRoute attaches to vagrant-gateway below
+            # ingress disabled — HTTPRoute attaches directly to the monitor service
             ingress:
               enabled: false
-          gateway:
-            enabled: true
-            replicas: 1
-            image:
-              repository: monitor-gateway
-              tag: local
-              pullPolicy: Never
-            javaOpts: "-Xmx256m -XX:+UseZGC"
           postgres:
             enabled: true
             existingSecret: "schnappy-postgres"
@@ -177,6 +150,12 @@
             existingSecret: "schnappy-keycloak"
             image: quay.io/keycloak/keycloak:26.5.6
             hostname: localhost
+            # B-era in-app JWT validation: the monitor verifies the token
+            # signature against JWKS, so point key-fetching at the in-cluster
+            # Keycloak service the pod can reach (public hostname=localhost is
+            # not resolvable from inside the pod). iss still validates against
+            # the hostname-derived issuer.
+            jwksUri: "http://schnappy-keycloak:8080/realms/schnappy/protocol/openid-connect/certs"
             mail:
               from: "test@example.com"
             clients:
@@ -216,6 +195,15 @@
             enabled: false
           scylla:
             enabled: false
+          # Chart defaults smokeTest on; rendered as a one-shot Job it runs
+          # immediately, fails on the empty DR baseUrl, and its failing pods
+          # get swept into the Velero backup. Keep the DR run clean.
+          smokeTest:
+            enabled: false
+          loadTest:
+            enabled: false
+          hyperfoil:
+            enabled: false
 
     - name: Configure ESO ClusterSecretStore → Pi Vault
       ansible.builtin.import_tasks: tasks/setup-eso-vault-backend.yml
@@ -247,6 +235,40 @@
 
     - name: Stand up in-cluster test valkey
       ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
+
+    # Keycloak lives in the separate schnappy-auth chart (not the app chart).
+    # It authenticates to the CNPG `postgres` superuser against the `keycloak`
+    # database (created in setup-test-postgres postInitSQL) via a Secret named
+    # schnappy-postgres with POSTGRES_USER/POSTGRES_PASSWORD keys. Deployed as
+    # its own release with fullnameOverride=schnappy so the Deployment renders
+    # as `schnappy-keycloak` (the proven tasks/deploy-app.yml 3-chart pattern).
+    - name: Keycloak DB-credentials Secret (schnappy-postgres)
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata: { name: schnappy-postgres, namespace: "{{ ns }}" }
+          type: Opaque
+          stringData:
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: vagrant
+
+    - name: Deploy schnappy-auth (Keycloak) for DR test
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy-auth
+        chart_ref: /vagrant-platform/helm/schnappy-auth
+        release_namespace: "{{ ns }}"
+        create_namespace: true
+        values:
+          fullnameOverride: schnappy
+        values_files:
+          - /tmp/schnappy-dr-test-values.yml
+        # KC bootstrap + first ExternalSecret sync can exceed 15m under vagrant;
+        # the readiness gate before SEED is the real success check.
+        wait: false
 
     - name: Deploy chart for DR test
       kubernetes.core.helm:
@@ -300,6 +322,33 @@
     - name: Display initial health
       ansible.builtin.debug:
         msg: "App healthy: {{ health.json.status }}"
+
+    # Keycloak (deployed earlier, bootstrapping in parallel with the app) must
+    # be ready before SEED mints a token against it.
+    - name: "KEYCLOAK: Wait for ExternalSecret schnappy-keycloak synced"
+      ansible.builtin.shell: |
+        kubectl get externalsecret schnappy-keycloak -n {{ ns }} \
+          -o jsonpath='{.status.conditions[0].reason}'
+      register: dr_kc_secret_sync
+      retries: 60
+      delay: 5
+      until: dr_kc_secret_sync.stdout == "SecretSynced"
+      changed_when: false
+
+    - name: "KEYCLOAK: Wait for deployment rollout"
+      ansible.builtin.shell: |
+        kubectl rollout status deploy/schnappy-keycloak -n {{ ns }} --timeout=1200s
+      changed_when: false
+
+    - name: "KEYCLOAK: Wait for readiness probe"
+      ansible.builtin.shell: |
+        kubectl get pod -n {{ ns }} -l app.kubernetes.io/component=keycloak \
+          -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="keycloak")].ready}'
+      register: dr_kc_ready
+      retries: 60
+      delay: 10
+      until: dr_kc_ready.stdout == "true"
+      changed_when: false
 
     # ================================================================
     # Suite 1: Seed Test Data
@@ -572,7 +621,6 @@
         name: "{{ item }}"
         namespace: "{{ ns }}"
       loop:
-        - schnappy-gateway
         - schnappy-monitor
         - schnappy-postgres
         - schnappy-valkey
@@ -867,7 +915,9 @@
         values:
           initContainers:
             - name: velero-plugin-for-aws
-              image: velero/velero-plugin-for-aws:v1.11.1
+              # Match the Velero server (chart 11.4.0 → appVersion 1.17.x);
+              # plugin v1.11.x targets 1.15.x and risks BSL never going Available.
+              image: velero/velero-plugin-for-aws:v1.13.2
               volumeMounts:
                 - name: plugins
                   mountPath: /target
@@ -1083,7 +1133,6 @@
         name: "{{ item }}"
         namespace: "{{ ns }}"
       loop:
-        - schnappy-gateway
         - schnappy-monitor
         - schnappy-postgres
         - schnappy-valkey
@@ -1414,7 +1463,6 @@
         name: "{{ item }}"
         namespace: "{{ ns }}"
       loop:
-        - schnappy-gateway
         - schnappy-monitor
         - schnappy-postgres
         - schnappy-valkey

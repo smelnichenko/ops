@@ -50,17 +50,9 @@
           repository: monitor
           tag: local
           pullPolicy: Never
-        # ingress disabled — HTTPRoute below attaches to vagrant-gateway
+        # ingress disabled — HTTPRoute below attaches directly to the monitor service
         ingress:
           enabled: false
-      gateway:
-        enabled: true
-        replicas: 1
-        image:
-          repository: monitor-gateway
-          tag: local
-          pullPolicy: Never
-        javaOpts: "-Xmx256m -XX:+UseZGC"
       postgres:
         enabled: true
         existingSecret: "schnappy-postgres"
@@ -137,25 +129,6 @@
     secret_path: schnappy/kafka
     secret_data: { password: vagrant-test-kafka }
   when: deploy_kafka | default(false) | bool
-
-- name: Build gateway JAR
-  ansible.builtin.shell: |
-    source $HOME/.sdkman/bin/sdkman-init.sh
-    cd /vagrant-gateway && ./gradlew bootJar --no-daemon -x test
-  args:
-    executable: /bin/bash
-  become: false
-  changed_when: true
-
-- name: Build gateway container image
-  ansible.builtin.shell: |
-    STAGE=$(mktemp -d)
-    cp /vagrant-gateway/build/libs/*.jar "$STAGE/app.jar"
-    cp /vagrant-gateway/Dockerfile "$STAGE/Dockerfile"
-    nerdctl -n k8s.io build \
-      -t monitor-gateway:local "$STAGE"
-    rm -rf "$STAGE"
-  changed_when: true
 
 - name: Deploy schnappy-data chart
   ansible.builtin.shell: |
