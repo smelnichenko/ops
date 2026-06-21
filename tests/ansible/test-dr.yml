@@ -64,7 +64,9 @@
     test_password: dr-test-pass-12345
     test_email: dr-test@test.com
     test_monitor_name: dr-test-page
-    # keycloak_admin_password comes from inventory.
+    # keycloak_admin_password comes from inventory; keycloak-auth.yml refers to
+    # the same value under the name kc_admin_password.
+    kc_admin_password: "{{ keycloak_admin_password }}"
     velero_ns: velero
     velero_chart_version: "11.4.0"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
