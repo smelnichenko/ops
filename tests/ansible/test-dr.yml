@@ -13,7 +13,7 @@
 #
 # Suite 1: Pod recovery (kill individual/all pods, verify data)
 # Suite 2: Velero backup + namespace destroy + restore
-# Suite 3: Offsite restore (rsync to vault-pi, wipe primary, rsync back, restore)
+# Suite 3: Offsite restore (rsync to pi1, wipe primary, rsync back, restore)
 
 # ─── Play 0: Prepare pi1 (offsite backup target) + fetch Pi Vault token ────
 - name: Prepare pi1 for offsite backup tests + fetch Vault token
@@ -1226,17 +1226,17 @@
         msg: "All Velero DR tests passed"
 
     # ================================================================
-    # Suite 3: Offsite Restore (3rd copy on vault-pi)
+    # Suite 3: Offsite Restore (3rd copy on pi1)
     #
     # Simulates: primary backup storage (SATA SSD) is lost.
-    # 1. Rsync MinIO data → vault-pi (offsite copy)
+    # 1. Rsync MinIO data → pi1 (offsite copy)
     # 2. Wipe MinIO data on kubeadm + destroy schnappy namespace
     # 3. Rsync back from pi1 → kubeadm
     # 4. Restart MinIO, Velero restore
     # 5. Verify data integrity
     # ================================================================
 
-    # ── Setup SSH from kubeadm → vault-pi ──
+    # ── Setup SSH from kubeadm → pi1 ──
 
     - name: "OFFSITE: Install rsync"
       ansible.builtin.apt:
@@ -1255,14 +1255,14 @@
       register: offsite_pubkey
       changed_when: false
 
-    - name: "OFFSITE: Install pubkey on vault-pi via delegate"
+    - name: "OFFSITE: Install pubkey on pi1 via delegate"
       ansible.builtin.authorized_key:
         user: "{{ offsite_user }}"
         key: "{{ offsite_pubkey.stdout }}"
         state: present
-      delegate_to: vault_pi
+      delegate_to: pi1
 
-    - name: "OFFSITE: Test SSH to vault-pi"
+    - name: "OFFSITE: Test SSH to pi1"
       ansible.builtin.shell: |
         ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
           -i /root/.ssh/offsite_key \
@@ -1273,11 +1273,11 @@
     - name: "OFFSITE: SSH connectivity verified"
       ansible.builtin.assert:
         that: ssh_test.stdout == "OK"
-        success_msg: "PASS: SSH kubeadm → vault-pi working"
+        success_msg: "PASS: SSH kubeadm → pi1 working"
 
-    # ── Step 1: Rsync MinIO data to vault-pi ──
+    # ── Step 1: Rsync MinIO data to pi1 ──
 
-    - name: "OFFSITE: Rsync MinIO data to vault-pi"
+    - name: "OFFSITE: Rsync MinIO data to pi1"
       ansible.builtin.shell: |
         rsync -az --delete \
           -e "ssh -o StrictHostKeyChecking=no -i /root/.ssh/offsite_key" \
@@ -1285,7 +1285,7 @@
           {{ offsite_user }}@{{ offsite_host }}:{{ offsite_path }}/
       register: rsync_to_pi
 
-    - name: "OFFSITE: Verify data on vault-pi"
+    - name: "OFFSITE: Verify data on pi1"
       ansible.builtin.shell: |
         ssh -o StrictHostKeyChecking=no -i /root/.ssh/offsite_key \
           {{ offsite_user }}@{{ offsite_host }} \
@@ -1293,7 +1293,7 @@
       register: offsite_verify
       changed_when: false
 
-    - name: "OFFSITE: Data replicated to vault-pi"
+    - name: "OFFSITE: Data replicated to pi1"
       ansible.builtin.debug:
         msg: "Offsite data: {{ offsite_verify.stdout }}"
 
@@ -1326,9 +1326,9 @@
       register: ns_check_offsite
       failed_when: (ns_check_offsite.resources | default([]) | length) > 0
 
-    # ── Step 3: Restore MinIO data from vault-pi ──
+    # ── Step 3: Restore MinIO data from pi1 ──
 
-    - name: "OFFSITE: Rsync data back from vault-pi"
+    - name: "OFFSITE: Rsync data back from pi1"
       ansible.builtin.shell: |
         rsync -az \
           -e "ssh -o StrictHostKeyChecking=no -i /root/.ssh/offsite_key" \
@@ -1344,7 +1344,7 @@
     - name: "OFFSITE: Assert MinIO data restored"
       ansible.builtin.assert:
         that: restored_file_count.stdout | int > 0
-        fail_msg: "No files restored from vault-pi!"
+        fail_msg: "No files restored from pi1!"
         success_msg: "PASS: {{ restored_file_count.stdout }} files restored from offsite"
 
     # ── Step 4: Restart MinIO and wait for Velero ──
@@ -1618,12 +1618,12 @@
         - /root/.ssh/offsite_key
         - /root/.ssh/offsite_key.pub
 
-    - name: "OFFSITE: Remove pubkey from vault-pi"
+    - name: "OFFSITE: Remove pubkey from pi1"
       ansible.builtin.authorized_key:
         user: "{{ offsite_user }}"
         key: "{{ offsite_pubkey.stdout }}"
         state: absent
-      delegate_to: vault_pi
+      delegate_to: pi1
 
     - name: "=== Suite 3 Complete ==="
       ansible.builtin.debug:
@@ -1700,9 +1700,9 @@
               - Data integrity after restore: PASS
               - App functional after restore: PASS
             Suite 3 - Offsite Restore (3rd copy):
-              - Rsync to vault-pi: PASS
+              - Rsync to pi1: PASS
               - Primary backup wipe + namespace destroy: PASS
-              - Rsync back from vault-pi: PASS
+              - Rsync back from pi1: PASS
               - Velero restore from recovered backup: PASS
               - Data integrity after offsite restore: PASS
               - App functional after offsite restore: PASS
