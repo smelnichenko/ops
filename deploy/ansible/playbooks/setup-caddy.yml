@@ -1,7 +1,13 @@
 ---
-# Setup Caddy reverse proxy with automatic TLS on both Pis
+# Setup Caddy reverse proxy on both Pis.
 #
-# Provides HTTPS termination for Pi-hosted services via DNS-01 (Porkbun).
+# Provides HTTPS termination for Pi-hosted services using the cluster's
+# *.pmon.dev wildcard cert (issued + auto-renewed by cert-manager via the
+# Porkbun webhook), installed here from the pmon-dev-wildcard-tls secret.
+# Caddy serves the file cert directly and does NOT obtain per-host certs via
+# ACME — the caddy-dns/porkbun plugin mis-detects the zone as "dev" on .dev
+# domains, so its DNS-01 renewal is permanently broken. Re-run this after the
+# wildcard renews (~30d before expiry) to refresh the on-Pi copy.
 # Caddy runs on both Pis — only the VIP holder serves traffic.
 #
 # Proxied services:
@@ -82,8 +88,47 @@
         mode: '0755'
       loop:
         - /etc/caddy
+        - /etc/caddy/certs
         - /var/lib/caddy
         - /var/log/caddy
+
+    - name: Read the *.pmon.dev wildcard cert from the cluster (controller)
+      ansible.builtin.command:
+        cmd: kubectl get secret pmon-dev-wildcard-tls -n schnappy-infra -o jsonpath={.data.tls\.crt}
+      delegate_to: localhost
+      run_once: true
+      become: false
+      register: _wildcard_crt
+      changed_when: false
+
+    - name: Read the *.pmon.dev wildcard key from the cluster (controller)
+      ansible.builtin.command:
+        cmd: kubectl get secret pmon-dev-wildcard-tls -n schnappy-infra -o jsonpath={.data.tls\.key}
+      delegate_to: localhost
+      run_once: true
+      become: false
+      register: _wildcard_key
+      changed_when: false
+      no_log: true
+
+    - name: Install wildcard cert on the Pi
+      ansible.builtin.copy:
+        dest: /etc/caddy/certs/wildcard.crt
+        content: "{{ _wildcard_crt.stdout | b64decode }}"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload Caddy
+
+    - name: Install wildcard key on the Pi
+      ansible.builtin.copy:
+        dest: /etc/caddy/certs/wildcard.key
+        content: "{{ _wildcard_key.stdout | b64decode }}"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      notify: Reload Caddy
 
     - name: Write Caddyfile
       ansible.builtin.copy:
@@ -94,25 +139,29 @@
         content: |
           {
             email admin@pmon.dev
-            acme_dns porkbun {
-              api_key {{ porkbun_api_key }}
-              api_secret_key {{ porkbun_secret_key }}
-            }
+          }
+
+          (wildcard_tls) {
+            tls /etc/caddy/certs/wildcard.crt /etc/caddy/certs/wildcard.key
           }
 
           git.pmon.dev {
+            import wildcard_tls
             reverse_proxy localhost:3000
           }
 
           nexus.pmon.dev {
+            import wildcard_tls
             reverse_proxy localhost:8081
           }
 
           nexus-docker.pmon.dev {
+            import wildcard_tls
             reverse_proxy localhost:8082
           }
 
           auth.pmon.dev {
+            import wildcard_tls
             reverse_proxy localhost:8080
           }
       notify: Reload Caddy
