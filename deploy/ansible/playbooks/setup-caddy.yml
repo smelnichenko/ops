@@ -92,24 +92,44 @@
         - /var/lib/caddy
         - /var/log/caddy
 
+    # argv form (not cmd:) so ansible does NOT shlex-split and eat the jsonpath
+    # backslash — kubectl needs {.data.tls\.crt} (escaped dot, literal key name).
     - name: Read the *.pmon.dev wildcard cert from the cluster (controller)
       ansible.builtin.command:
-        cmd: kubectl get secret pmon-dev-wildcard-tls -n schnappy-infra -o jsonpath={.data.tls\.crt}
+        argv:
+          - kubectl
+          - get
+          - secret
+          - pmon-dev-wildcard-tls
+          - -n
+          - schnappy-infra
+          - -o
+          - 'jsonpath={.data.tls\.crt}'
       delegate_to: localhost
       run_once: true
       become: false
       register: _wildcard_crt
       changed_when: false
+      failed_when: _wildcard_crt.stdout | length == 0
 
     - name: Read the *.pmon.dev wildcard key from the cluster (controller)
       ansible.builtin.command:
-        cmd: kubectl get secret pmon-dev-wildcard-tls -n schnappy-infra -o jsonpath={.data.tls\.key}
+        argv:
+          - kubectl
+          - get
+          - secret
+          - pmon-dev-wildcard-tls
+          - -n
+          - schnappy-infra
+          - -o
+          - 'jsonpath={.data.tls\.key}'
       delegate_to: localhost
       run_once: true
       become: false
       register: _wildcard_key
       changed_when: false
       no_log: true
+      failed_when: _wildcard_key.stdout | length == 0
 
     - name: Install wildcard cert on the Pi
       ansible.builtin.copy:
@@ -118,7 +138,7 @@
         owner: root
         group: root
         mode: '0644'
-      notify: Reload Caddy
+      notify: Restart Caddy
 
     - name: Install wildcard key on the Pi
       ansible.builtin.copy:
@@ -128,7 +148,7 @@
         group: root
         mode: '0600'
       no_log: true
-      notify: Reload Caddy
+      notify: Restart Caddy
 
     - name: Write Caddyfile
       ansible.builtin.copy:
@@ -164,7 +184,7 @@
             import wildcard_tls
             reverse_proxy localhost:8080
           }
-      notify: Reload Caddy
+      notify: Restart Caddy
 
     - name: Create Caddy systemd service
       ansible.builtin.copy:
@@ -201,10 +221,13 @@
         daemon_reload: true
 
   handlers:
-    - name: Reload Caddy
+    # Restart (not reload): switching from ACME-managed certs to a file cert
+    # leaves orphaned managed certs in certmagic's cache whose maintenance loop
+    # then panics; a restart clears the cache and applies the file cert cleanly.
+    - name: Restart Caddy
       ansible.builtin.systemd_service:
         name: caddy
-        state: reloaded
+        state: restarted
 
     - name: Reload systemd
       ansible.builtin.systemd_service:
