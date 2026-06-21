@@ -304,14 +304,28 @@
         timeout: 300s
         kubeconfig: /etc/kubernetes/admin.conf
 
-    - name: Attach HTTPRoute schnappy-app → vagrant-gateway
+    # /api -> monitor (backend), / -> site (frontend SPA). The retired Spring
+    # Cloud gateway used to do this fan-out; with it gone, the Istio HTTPRoutes
+    # must split paths the way prod's gateway does.
+    - name: Attach HTTPRoute schnappy-app /api → monitor
       ansible.builtin.include_tasks: tasks/create-httproute.yml
       vars:
-        route_name: schnappy-app
+        route_name: schnappy-app-api
         route_ns: "{{ ns }}"
         route_host: "{{ app_hostname }}"
         route_service: schnappy-monitor
         route_port: 8080
+        route_path: /api
+
+    - name: Attach HTTPRoute schnappy-app / → site (frontend SPA)
+      ansible.builtin.include_tasks: tasks/create-httproute.yml
+      vars:
+        route_name: schnappy-app-site
+        route_ns: "{{ ns }}"
+        route_host: "{{ app_hostname }}"
+        route_service: schnappy-site
+        route_port: 8080
+        route_path: /
 
     - name: Wait for app to be ready
       ansible.builtin.shell: |

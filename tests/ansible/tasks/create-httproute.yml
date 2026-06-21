@@ -30,7 +30,14 @@
         hostnames:
           - "{{ route_host }}"
         rules:
-          - backendRefs:
+          # route_path is an optional PathPrefix (default "/" = all paths), so
+          # one host can fan out to several backends (e.g. /api -> monitor,
+          # / -> site) across multiple HTTPRoutes merged by path specificity.
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: "{{ route_path | default('/') }}"
+            backendRefs:
               - name: "{{ route_service }}"
                 port: "{{ route_port }}"
 
