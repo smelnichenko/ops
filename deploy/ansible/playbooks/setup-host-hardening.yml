@@ -470,6 +470,9 @@
           [Install]
           WantedBy=multi-user.target
       register: _smartctl_unit
+      # No SMART-capable drives (e.g. a Vagrant virtio disk exposes none) →
+      # the exporter has nothing to serve; skip it. Production hosts have NVMe.
+      when: _smartctl_devices.stdout_lines | length > 0
 
     - name: Enable + start smartctl_exporter
       ansible.builtin.systemd:
@@ -477,6 +480,7 @@
         enabled: true
         state: "{{ 'restarted' if (_smartctl_bin.changed or _smartctl_unit.changed) else 'started' }}"
         daemon_reload: true
+      when: _smartctl_devices.stdout_lines | length > 0
 
     - name: Verify smartctl_exporter is serving metrics
       ansible.builtin.uri:
@@ -486,12 +490,14 @@
       retries: 5
       delay: 2
       until: _smartctl_check.status == 200
+      when: _smartctl_devices.stdout_lines | length > 0
 
     - name: Show first SMART metric line (proof scrape works)
       ansible.builtin.debug:
         msg: "{{ _smartctl_check.content.split('\n')
               | select('match', '^smartctl_device') | first
               | default('no smartctl_ metrics yet') }}"
+      when: _smartctl_devices.stdout_lines | length > 0
 
   handlers:
     - name: Re-exec systemd
