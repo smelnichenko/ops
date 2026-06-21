@@ -158,6 +158,10 @@
             # not resolvable from inside the pod). iss still validates against
             # the hostname-derived issuer.
             jwksUri: "http://schnappy-keycloak:8080/realms/schnappy/protocol/openid-connect/certs"
+            # KC issues an http://localhost issuer in the test; the monitor's
+            # default issuer-uri is https://localhost → mismatch. Validate the
+            # signature only (the token is genuinely KC-signed).
+            issuerUri: "none"
             mail:
               from: "test@example.com"
             clients:
@@ -392,6 +396,28 @@
           enabled: true
         status_code: [200, 201, 400]
       register: create_monitor
+      ignore_errors: true
+
+    - name: "SEED-DIAG: dump monitor auth rejection (only on failure)"
+      when: create_monitor is failed
+      ansible.builtin.shell: |
+        echo "=== token iss ==="
+        echo '{{ auth_token | default("") }}' | cut -d. -f2 | python3 -c "import base64,json,sys; t=sys.stdin.read().strip(); print(json.loads(base64.urlsafe_b64decode(t+'='*(-len(t)%4))).get('iss','?'))" 2>/dev/null || echo "(decode failed)"
+        echo "=== monitor auth logs ==="
+        kubectl logs -n {{ ns }} -l app.kubernetes.io/component=monitor --tail=80 2>/dev/null | grep -iE 'jwt|jwk|issuer|token|401|Unauthor|GatewayAuthFilter|Bearer' || echo "(no auth-related logs)"
+        echo "=== monitor rendered jwt config ==="
+        kubectl get cm -n {{ ns }} -o yaml 2>/dev/null | grep -iE 'issuer-uri|jwk-set-uri' || true
+      register: _seed_diag
+      changed_when: false
+
+    - ansible.builtin.debug:
+        var: _seed_diag.stdout_lines
+      when: create_monitor is failed
+
+    - name: "SEED: Fail if monitor creation rejected"
+      ansible.builtin.fail:
+        msg: "SEED monitor creation failed (HTTP {{ create_monitor.status | default('?') }}) — see DIAG above"
+      when: create_monitor is failed
 
     - name: "SEED: Trigger manual check"
       ansible.builtin.uri:
