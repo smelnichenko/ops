@@ -18,8 +18,10 @@ green run (2026-03-05). The revival:
   padded readiness timeouts) and gated `smartctl_exporter` to hosts with real
   SMART drives (a Vagrant virtio disk has none).
 
-Provisioning (`setup-kubeadm`) and host-hardening pass cleanly; the full
-restore-suite validation run is the final gate.
+**All four suites pass** (`target ok=253, failed=0`) as of 2026-06-21 — pod
+recovery (incl. CNPG postgres), full Velero + CNPG-barman restore, and offsite
+3rd-copy restore, with data integrity verified after both restores (the seeded
+monitor survives each). Suite 4 (k6 smoke) skips when no k6 CronJob is present.
 
 ## Scope
 
