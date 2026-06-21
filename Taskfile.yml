@@ -525,6 +525,32 @@ tasks:
       - task: _vagrant:k8s-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
+  dr:drill:
+    desc: Run the full DR drill (test:dr) and, only on a passing run, record restore_verify_success to the prod pushgateway (resets the RestoreVerificationFailing alert)
+    cmds:
+      - cmd: |
+          # test:dr's exit code is masked by its `defer: vagrant halt`, so the
+          # push decision comes from the playbook's own success marker, not $?.
+          task test:dr 2>&1 | tee /tmp/dr-drill.log || true
+          if grep -q 'ALL DR TESTS PASSED' /tmp/dr-drill.log && ! grep -qE 'failed=[1-9]' /tmp/dr-drill.log; then
+            echo ">> DR drill PASSED — recording restore_verify_success to the prod pushgateway"
+            PROD_CTX="${DR_PROD_CONTEXT:-kubernetes-admin@kubernetes}"
+            CUR_CTX="$(kubectl config current-context)"
+            if [ "$CUR_CTX" != "$PROD_CTX" ]; then
+              echo ">> Refusing to push: kube context '$CUR_CTX' != prod '$PROD_CTX' (override with DR_PROD_CONTEXT)." >&2
+              exit 1
+            fi
+            kubectl --context "$PROD_CTX" port-forward -n schnappy-infra svc/schnappy-pushgateway 19091:9091 >/dev/null 2>&1 &
+            PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT
+            printf 'restore_verify_success 1\n' | \
+              curl -sf --retry 30 --retry-connrefused --retry-delay 1 \
+                --data-binary @- http://127.0.0.1:19091/metrics/job/dr-drill
+            echo ">> Recorded restore_verify_success=1 (job=dr-drill); RestoreVerificationFailing reset."
+          else
+            echo ">> DR drill did NOT pass — restore_verify_success NOT recorded." >&2
+            exit 1
+          fi
+
   test:failure-modes:
     desc: Test failure modes under load in Vagrant (pod kill, pool exhaustion, Kafka outage, memory pressure, rate limiting)
     deps: [deploy:install]
