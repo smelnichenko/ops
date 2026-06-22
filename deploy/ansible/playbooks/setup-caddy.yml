@@ -6,8 +6,11 @@
 # Porkbun webhook), installed here from the pmon-dev-wildcard-tls secret.
 # Caddy serves the file cert directly and does NOT obtain per-host certs via
 # ACME — the caddy-dns/porkbun plugin mis-detects the zone as "dev" on .dev
-# domains, so its DNS-01 renewal is permanently broken. Re-run this after the
-# wildcard renews (~30d before expiry) to refresh the on-Pi copy.
+# domains, so its DNS-01 renewal is permanently broken. A per-Pi systemd timer
+# (caddy-wildcard-sync) re-pulls the wildcard from the cluster daily and restarts
+# Caddy if it changed, so the on-Pi copy tracks cert-manager renewals on its own
+# (re-running this playbook also refreshes it immediately). It pulls with a
+# least-privilege SA token that can GET only the wildcard Secret.
 # Caddy runs on both Pis — only the VIP holder serves traffic.
 #
 # Proxied services:
@@ -216,6 +219,182 @@
     - name: Enable and start Caddy
       ansible.builtin.systemd_service:
         name: caddy
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # ── Auto-refresh: pull the renewed wildcard from the cluster on a timer ──
+    # cert-manager renews the wildcard in-cluster; without this the on-Pi copy
+    # goes stale and HTTPS breaks (it did once). A least-privilege SA that can
+    # GET only this one Secret backs a daily per-Pi systemd timer.
+    - name: "Cert-sync RBAC — SA + get-only Role + token (controller)"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          - apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: caddy-cert-reader
+              namespace: schnappy-infra
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: Role
+            metadata:
+              name: caddy-cert-reader
+              namespace: schnappy-infra
+            rules:
+              - apiGroups: [""]
+                resources: [secrets]
+                resourceNames: [pmon-dev-wildcard-tls]
+                verbs: [get]
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: RoleBinding
+            metadata:
+              name: caddy-cert-reader
+              namespace: schnappy-infra
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: Role
+              name: caddy-cert-reader
+            subjects:
+              - kind: ServiceAccount
+                name: caddy-cert-reader
+                namespace: schnappy-infra
+          # Legacy (non-expiring) SA token: an off-cluster Pi can't refresh a
+          # bound/projected token, and this SA can GET only the one public cert
+          # Secret, so the on-disk token's blast radius is that public cert.
+          - apiVersion: v1
+            kind: Secret
+            metadata:
+              name: caddy-cert-reader-token
+              namespace: schnappy-infra
+              annotations:
+                kubernetes.io/service-account.name: caddy-cert-reader
+            type: kubernetes.io/service-account-token
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+    - name: Wait for the cert-reader token to be populated (controller)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: caddy-cert-reader-token
+        namespace: schnappy-infra
+      delegate_to: localhost
+      run_once: true
+      become: false
+      register: _cert_reader_token
+      until: (_cert_reader_token.resources[0].data.token | default('')) | length > 0
+      retries: 15
+      delay: 2
+
+    - name: Read the cluster API endpoint for the Pi client (controller)
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - config
+          - view
+          - --minify
+          - -o
+          - 'jsonpath={.clusters[0].cluster.server}'
+      delegate_to: localhost
+      run_once: true
+      become: false
+      register: _cluster_api
+      changed_when: false
+
+    - name: Install cluster CA for the cert-sync client
+      ansible.builtin.copy:
+        dest: /etc/caddy/cluster-ca.crt
+        content: "{{ _cert_reader_token.resources[0].data['ca.crt'] | b64decode }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install cluster token for the cert-sync client
+      ansible.builtin.copy:
+        dest: /etc/caddy/cluster-token
+        content: "{{ _cert_reader_token.resources[0].data.token | b64decode }}"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Install the wildcard cert-sync script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/caddy-wildcard-sync.sh
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/usr/bin/env bash
+          # Pull the *.pmon.dev wildcard cert from the cluster and restart Caddy
+          # if it changed. cert-manager auto-renews the wildcard in-cluster; this
+          # keeps the on-Pi file copy fresh without re-running the deploy by hand.
+          # The apiserver endpoint is captured at deploy time — a control-plane
+          # re-IP needs re-running this playbook. A stalled sync is caught by the
+          # CaddyWildcardSyncStalled alert (issued-vs-served cert mismatch).
+          set -euo pipefail
+          api="{{ _cluster_api.stdout }}"
+          ca=/etc/caddy/cluster-ca.crt
+          dest=/etc/caddy/certs
+          tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          curl -sf --cacert "$ca" \
+            -H "Authorization: Bearer $(cat /etc/caddy/cluster-token)" \
+            "$api/api/v1/namespaces/schnappy-infra/secrets/pmon-dev-wildcard-tls" \
+            -o "$tmp/secret.json"
+          python3 - "$tmp" <<'PY'
+          import base64, json, sys
+          t = sys.argv[1]
+          d = json.load(open(t + "/secret.json"))["data"]
+          assert "tls.crt" in d and "tls.key" in d, "secret missing tls.crt/tls.key"
+          open(t + "/tls.crt", "wb").write(base64.b64decode(d["tls.crt"]))
+          open(t + "/tls.key", "wb").write(base64.b64decode(d["tls.key"]))
+          PY
+          # restart if EITHER half changed (a re-key may leave the leaf equal)
+          if ! cmp -s "$tmp/tls.crt" "$dest/wildcard.crt" \
+             || ! cmp -s "$tmp/tls.key" "$dest/wildcard.key"; then
+            install -o root -g root -m 0644 "$tmp/tls.crt" "$dest/wildcard.crt"
+            install -o root -g root -m 0600 "$tmp/tls.key" "$dest/wildcard.key"
+            systemctl restart caddy
+            logger -t caddy-wildcard-sync "wildcard cert refreshed from cluster; caddy restarted"
+          fi
+
+    - name: Install the cert-sync systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/caddy-wildcard-sync.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Sync *.pmon.dev wildcard cert from the cluster to Caddy
+          After=network-online.target caddy.service
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/caddy-wildcard-sync.sh
+      notify: Reload systemd
+
+    - name: Install the cert-sync systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/caddy-wildcard-sync.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Daily *.pmon.dev wildcard cert sync for Caddy
+
+          [Timer]
+          OnCalendar=daily
+          RandomizedDelaySec=1h
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Enable the cert-sync timer
+      ansible.builtin.systemd_service:
+        name: caddy-wildcard-sync.timer
         enabled: true
         state: started
         daemon_reload: true
