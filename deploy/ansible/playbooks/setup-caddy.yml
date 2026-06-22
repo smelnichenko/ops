@@ -226,67 +226,105 @@
     # ── Auto-refresh: pull the renewed wildcard from the cluster on a timer ──
     # cert-manager renews the wildcard in-cluster; without this the on-Pi copy
     # goes stale and HTTPS breaks (it did once). A least-privilege SA that can
-    # GET only this one Secret backs a daily per-Pi systemd timer.
-    - name: "Cert-sync RBAC — SA + get-only Role + token (controller)"
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          - apiVersion: v1
-            kind: ServiceAccount
-            metadata:
-              name: caddy-cert-reader
-              namespace: schnappy-infra
-          - apiVersion: rbac.authorization.k8s.io/v1
+    # GET only this one Secret backs a daily per-Pi systemd timer. Applied with
+    # kubectl (like the cert reads above) to avoid a python-kubernetes venv dep.
+    # The SA token is legacy/non-expiring: an off-cluster Pi can't refresh a
+    # bound token, and the SA can GET only the one public cert Secret.
+    - name: Render the cert-sync RBAC manifest (controller)
+      ansible.builtin.copy:
+        dest: /tmp/caddy-cert-reader-rbac.yml
+        mode: '0600'
+        content: |
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: caddy-cert-reader
+            namespace: schnappy-infra
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: caddy-cert-reader
+            namespace: schnappy-infra
+          rules:
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [pmon-dev-wildcard-tls]
+              verbs: [get]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: caddy-cert-reader
+            namespace: schnappy-infra
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
             kind: Role
-            metadata:
+            name: caddy-cert-reader
+          subjects:
+            - kind: ServiceAccount
               name: caddy-cert-reader
               namespace: schnappy-infra
-            rules:
-              - apiGroups: [""]
-                resources: [secrets]
-                resourceNames: [pmon-dev-wildcard-tls]
-                verbs: [get]
-          - apiVersion: rbac.authorization.k8s.io/v1
-            kind: RoleBinding
-            metadata:
-              name: caddy-cert-reader
-              namespace: schnappy-infra
-            roleRef:
-              apiGroup: rbac.authorization.k8s.io
-              kind: Role
-              name: caddy-cert-reader
-            subjects:
-              - kind: ServiceAccount
-                name: caddy-cert-reader
-                namespace: schnappy-infra
-          # Legacy (non-expiring) SA token: an off-cluster Pi can't refresh a
-          # bound/projected token, and this SA can GET only the one public cert
-          # Secret, so the on-disk token's blast radius is that public cert.
-          - apiVersion: v1
-            kind: Secret
-            metadata:
-              name: caddy-cert-reader-token
-              namespace: schnappy-infra
-              annotations:
-                kubernetes.io/service-account.name: caddy-cert-reader
-            type: kubernetes.io/service-account-token
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: caddy-cert-reader-token
+            namespace: schnappy-infra
+            annotations:
+              kubernetes.io/service-account.name: caddy-cert-reader
+          type: kubernetes.io/service-account-token
       delegate_to: localhost
       run_once: true
       become: false
 
-    - name: Wait for the cert-reader token to be populated (controller)
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        name: caddy-cert-reader-token
-        namespace: schnappy-infra
+    - name: Apply the cert-sync RBAC (controller)
+      ansible.builtin.command:
+        argv: [kubectl, apply, -f, /tmp/caddy-cert-reader-rbac.yml]
+      delegate_to: localhost
+      run_once: true
+      become: false
+      register: _rbac
+      changed_when: "'created' in _rbac.stdout or 'configured' in _rbac.stdout"
+
+    # argv form preserves the jsonpath backslash (see the cert reads above).
+    - name: Wait for + read the cert-reader token (controller)
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - secret
+          - caddy-cert-reader-token
+          - -n
+          - schnappy-infra
+          - -o
+          - 'jsonpath={.data.token}'
       delegate_to: localhost
       run_once: true
       become: false
       register: _cert_reader_token
-      until: (_cert_reader_token.resources[0].data.token | default('')) | length > 0
+      changed_when: false
+      until: _cert_reader_token.stdout | length > 0
       retries: 15
       delay: 2
+      no_log: true
+
+    - name: Read the cert-reader CA (controller)
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - secret
+          - caddy-cert-reader-token
+          - -n
+          - schnappy-infra
+          - -o
+          - 'jsonpath={.data.ca\.crt}'
+      delegate_to: localhost
+      run_once: true
+      become: false
+      register: _cert_reader_ca
+      changed_when: false
 
     - name: Read the cluster API endpoint for the Pi client (controller)
       ansible.builtin.command:
@@ -306,7 +344,7 @@
     - name: Install cluster CA for the cert-sync client
       ansible.builtin.copy:
         dest: /etc/caddy/cluster-ca.crt
-        content: "{{ _cert_reader_token.resources[0].data['ca.crt'] | b64decode }}"
+        content: "{{ _cert_reader_ca.stdout | b64decode }}"
         owner: root
         group: root
         mode: '0644'
@@ -314,7 +352,7 @@
     - name: Install cluster token for the cert-sync client
       ansible.builtin.copy:
         dest: /etc/caddy/cluster-token
-        content: "{{ _cert_reader_token.resources[0].data.token | b64decode }}"
+        content: "{{ _cert_reader_token.stdout | b64decode }}"
         owner: root
         group: root
         mode: '0600'
