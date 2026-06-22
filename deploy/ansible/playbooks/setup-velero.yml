@@ -417,8 +417,9 @@
 
     # ================================================================
     # Phase 5: Git mirror replication to Pi
-    # Velero now writes directly to Pi MinIO — no rsync needed.
-    # Git mirror still pushes to Pi for offsite code backup.
+    # Velero's BackupStorageLocation is the in-cluster minio-backup
+    # (bucket: velero); offsite protection is this separate rsync.
+    # Git mirror pushes to Pi for offsite code backup.
     # ================================================================
 
     - name: Install git
@@ -464,8 +465,9 @@
         group: root
         content: |
           #!/bin/bash
-          # Push git mirror to Pi for offsite code backup
-          # Velero writes directly to Pi MinIO — no rsync needed.
+          # Push git mirror to Pi for offsite code backup.
+          # Velero backs up to the in-cluster minio-backup; this rsync
+          # is the separate offsite copy.
           set -euo pipefail
 
           MIRROR="{{ git_mirror_local_path }}"
@@ -525,8 +527,8 @@
         msg: |
           Velero deployed successfully!
 
-          Backup storage: Pi MinIO (192.168.11.5:9000), bucket: velero
-          Data replicated via GlusterFS across both Pis.
+          Backup storage: in-cluster minio-backup (bucket: velero).
+          Offsite copy: separate rsync / git mirror to Pi (192.168.11.5).
 
           Scheduled backups:
             - schnappy-daily: 2 AM UTC, schnappy namespace, 7-day retention

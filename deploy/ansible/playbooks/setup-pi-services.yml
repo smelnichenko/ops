@@ -619,6 +619,25 @@
             group: minio
             mode: '0644'
 
+    # Self-heal: ensure the backup buckets exist on the live MinIO (the VIP
+    # holder) on every run, so a wiped/missing bucket is recreated without
+    # needing a fresh-volume bootstrap. Idempotent (--ignore-existing).
+    - name: Ensure MinIO backup buckets exist (idempotent, vs the live VIP)
+      ansible.builtin.shell: |
+        set -a; . /etc/minio/env; set +a
+        HOME=/tmp mc alias set vip http://192.168.11.5:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+        for b in velero pg-dump postgres-backups scylla-backups; do
+          HOME=/tmp mc mb vip/$b --ignore-existing
+        done
+      changed_when: false
+      no_log: true
+      run_once: true
+      delegate_to: "{{ groups['pis'] | first }}"
+      register: _bucket_ensure
+      until: _bucket_ensure.rc == 0
+      retries: 12
+      delay: 5
+
     # ================================================================
     # Phase 5: Keycloak
     # ================================================================
