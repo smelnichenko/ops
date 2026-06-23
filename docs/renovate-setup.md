@@ -5,20 +5,30 @@ Renovate runs as a Woodpecker **cron** pipeline against the self-hosted Forgejo
 policy lives in each repo's `renovate.json`; the runner lives in
 `.woodpecker/renovate.yaml`. Rolled out to **monitor** first, then fanned out.
 
-## One-time setup (manual — needs Forgejo admin + Woodpecker access)
+## Setup
 
-1. **Bot account** — create a Forgejo user `renovate-bot` (set full name + a
-   real email, e.g. `renovate-bot@pmon.dev`). Give it **write** access to
-   `schnappy/monitor` to start.
-2. **Bot PAT** — as `renovate-bot`, mint a Personal Access Token scoped to
-   `repository` (read+write) and `read:organization`. Add it to the existing
-   `woodpecker-ci-secrets` secret under a **new** key `renovate_token` (do NOT
-   overload `infra_pat` — Renovate must author commits/PRs as the bot, not as
-   the infra account).
-3. **GitHub read token** — mint a github.com **read-only**, no-scope PAT and add
-   it under key `renovate_github_token`. Renovate uses it only for changelog /
-   release-note lookups and to avoid github.com rate-limiting; it grants no
-   write access.
+The bot's PAT reaches CI the same way `infra_repo_token` does — its value lives in
+the localhost `.env`, `seed-vault-secrets.yml` writes it to Vault
+(`secret/schnappy/woodpecker-ci`), and the `woodpecker-ci-secrets-es`
+ExternalSecret (`infra/clusters/production/cluster-config/`) surfaces it into the
+`woodpecker-ci-secrets` k8s Secret that the pipeline reads. The Secret is
+**ESO-managed**, so writing keys directly with `kubectl`/Ansible is futile —
+always go through Vault + the ExternalSecret.
+
+1. **Bot account (one-time, manual via forgejo_admin)** — create a `renovate-bot`
+   Forgejo user (email `renovate-bot@pmon.dev`, `RENOVATE_BOT_PASSWORD` from the
+   localhost `.env`) and grant it **write** on `schnappy/monitor`. As the bot,
+   mint a PAT scoped `write:repository` + `read:organization` and put its value in
+   `.env` as `RENOVATE_TOKEN` (never `infra_pat` — Renovate authors as the bot,
+   not the infra account). *Done: the user exists and the token is in `.env`.*
+2. **GitHub read token (optional)** — set `RENOVATE_GITHUB_TOKEN` in `.env` to a
+   github.com **read-only, no-scope** PAT for changelog/release-note lookups and
+   to dodge github.com rate-limiting (no write). Safe to leave empty for the first
+   run (Renovate just runs without it).
+3. **Seed + surface** — `seed-vault-secrets.yml` carries `renovate_token` +
+   `renovate_github_token` into Vault and the ExternalSecret maps both into
+   `woodpecker-ci-secrets`. Apply with `task deploy:seed-secrets` (Vault write) +
+   ArgoCD sync of `cluster-config`; ESO then refreshes the Secret.
 4. **Cron** — in the Woodpecker UI/API, add a cron named `renovate` on the
    `monitor` repo, schedule `0 4 * * 1` (Mon 04:00), branch `main` — exactly how
    `depcheck-nightly` was created.
