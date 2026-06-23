@@ -558,9 +558,9 @@
                       cidr: "{{ nexus_host | default('192.168.11.5') }}/32"
                 ports:
                   - protocol: TCP
-                    port: "{{ nexus_port | default('8081') }}"
+                    port: "{{ nexus_port | default('8081') | int }}"
                   - protocol: TCP
-                    port: "{{ nexus_docker_port | default('8082') }}"
+                    port: "{{ nexus_docker_port | default('8082') | int }}"
               # External HTTPS (Maven Central, npm, Docker Hub for Kaniko)
               - to:
                   - ipBlock:
