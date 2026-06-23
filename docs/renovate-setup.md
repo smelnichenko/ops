@@ -18,7 +18,9 @@ always go through Vault + the ExternalSecret.
 1. **Bot account (one-time, manual via forgejo_admin)** — create a `renovate-bot`
    Forgejo user (email `renovate-bot@pmon.dev`, `RENOVATE_BOT_PASSWORD` from the
    localhost `.env`) and grant it **write** on `schnappy/monitor`. As the bot,
-   mint a PAT scoped `write:repository` + `read:organization` and put its value in
+   mint a PAT scoped `read:user` + `write:repository` + `write:issue` +
+   `read:organization` (Renovate calls `/user` at init, opens PRs + the
+   dependency-dashboard issue, and autodiscovers the org) and put its value in
    `.env` as `RENOVATE_TOKEN` (never `infra_pat` — Renovate authors as the bot,
    not the infra account). *Done: the user exists and the token is in `.env`.*
 2. **GitHub read token (optional)** — set `RENOVATE_GITHUB_TOKEN` in `.env` to a
