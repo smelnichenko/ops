@@ -2,8 +2,13 @@
 
 ## Status (2026-06-23)
 
-**PROPOSED — not started.** Research done against kagent v0.9.9 (CNCF Sandbox).
-Needs sign-off on the open decisions in *Design → Decisions* before implementation.
+**APPROVED + build started — gated on a read-only RBAC override (see Chart
+reconnaissance).** Decisions signed off: **read-only** RBAC, Anthropic egress
+accepted, build Phase 1. Deep chart recon (v0.9.9) is done and surfaced a blocker:
+the chart hardcodes **cluster-admin** for its tools server with no read-only toggle,
+so the read-only requirement needs a manifest patch (designed below) before any
+deploy. GitOps manifests not yet authored. The deploy is a security-sensitive prod
+change and must be done as a careful, unhurried step — not rushed.
 
 ## TL;DR
 
@@ -149,6 +154,69 @@ The agents can *touch the whole cluster*. Least privilege:
 3. **Agent set** — the Phase-1 list above vs a minimal k8s-only start.
 4. **Data egress** — confirm it's acceptable that prompts/cluster snippets go to the
    Anthropic API (same trust as our existing Claude usage, but now agent-driven).
+
+## Chart reconnaissance (v0.9.9 — 2026-06-23)
+
+`helm show values` + `helm template` of `oci://ghcr.io/kagent-dev/kagent/helm/kagent`
+v0.9.9 corrected several assumptions in the original Design:
+
+**Footprint is ~7 base pods + one pod per Agent**, not 3. Rendered Deployments:
+`kagent-controller`, `kagent-ui`, `kagent-tools` (the MCP tool executor),
+`kagent-grafana-mcp`, `kagent-kmcp-controller-manager`, `kagent-querydoc`, and a
+**bundled `kagent-postgresql`** (pgvector; hardcoded `kagent`/`kagent` creds — the
+chart itself says "switch to an external database for production"). Plus a pod per
+enabled Agent. On the CPU-request-over-committed single node this needs sizing +
+trimming optional components (`grafana-mcp`, `querydoc`, `kmcp` when unused) and
+likely pointing the DB at our CNPG instead of the bundled one.
+
+**SECURITY — the tools server is cluster-admin by default, with no toggle.** The
+`kagent-tools` subchart renders `kagent-tools-cluster-admin-role`
+(`apiGroups:["*"] resources:["*"] verbs:["*"]`) bound to the `kagent-tools` SA. The
+MCP tool server runs the actual `kubectl`/k8s calls under that SA, so out of the box
+agents can do **anything** — read every Secret, delete workloads. The `kagent-tools`
+values block exposes no rbac flag. The signed-off **read-only** requirement is
+therefore NOT a values change; it needs one of:
+- **(recommended)** an Argo `kustomize` patch source that replaces the
+  `kagent-tools-cluster-admin-role` rules with read-only verbs (`get/list/watch`) and
+  **excludes `secrets`** + other sensitive resources; Argo reconciles and self-heals
+  the restricted role.
+- or fork the `kagent-tools` subchart with a restricted role.
+
+  **Until this override is in place, kagent must NOT be deployed** — a cluster-admin
+  agent contradicts the read-only decision and the platform's least-privilege posture.
+
+**Default agents include write-capable ones.** All enabled by default: `k8s-agent`,
+`istio-agent`, `promql-agent`, `observability-agent`, `helm-agent`,
+`cilium-policy-agent`, `cilium-debug-agent` (read-leaning) **plus the mutating**
+`argo-rollouts-agent`, `cilium-manager-agent`, `kgateway-agent`. Phase-1 disables the
+mutating three via `--set <agent>.enabled=false`.
+
+**SSO is an in-chart oauth2-proxy, not native UI auth.** `controller.auth.mode`
+defaults to `unsecure` (trusts an `X-User-Id` header / falls back to
+`admin@kagent.dev`). The chart bundles an `oauth2-proxy` subchart (`enabled:false`)
+and a `trusted-proxy` mode: set `oauth2-proxy.enabled=true`,
+`controller.auth.mode=trusted-proxy`, point oauth2-proxy at Keycloak
+(`OIDC_ISSUER_URL=https://auth.pmon.dev/realms/schnappy`,
+`OIDC_REDIRECT_URL=https://kagent.pmon.dev/oauth2/callback`,
+`UPSTREAM_URL=http://kagent-ui:8080`), and route the gateway at the oauth2-proxy
+service. Requires a **new Keycloak client** (`kagent-ui`, confidential, redirect
+`https://kagent.pmon.dev/oauth2/callback`) whose client-id/secret + a cookie-secret
+land in a Secret via ESO/Vault. Until that's wired, access via `kubectl port-forward`
+only — never publish the UI unauthenticated.
+
+**Confirmed wiring (conventions sweep):**
+- Anthropic key already in Vault `secret/data/schnappy/ai` property `api_key` (seeded
+  by `seed-vault-secrets.yml`) → ESO → `kagent-anthropic` key `ANTHROPIC_API_KEY`.
+- ClusterSecretStore `vault-backend`. Argo apps auto-discovered from
+  `clusters/production/argocd/apps/`; multi-source `$values` pattern; syncPolicy
+  `automated{selfHeal,prune}` + `CreateNamespace=true` + `ServerSideApply=true`;
+  sync-wave for CRDs-first.
+- Ingress: gateway `schnappy-infra-gateway` in `schnappy-infra`, section `https`, TLS
+  `pmon-dev-wildcard-tls`; Gateway-API `HTTPRoute` placed in the `kagent` ns (attaches
+  cross-ns since the gateway allows routes `from: All`).
+- Namespace label `istio.io/rev: default` for sidecar injection; `PeerAuthentication`
+  STRICT per the platform pattern; egress NetworkPolicy must allow `0.0.0.0/0` minus
+  RFC1918 on :443 for the Anthropic API (mirrors the monitor app's external-HTTPS rule).
 
 ## Implementation steps
 
