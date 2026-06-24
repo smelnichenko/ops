@@ -173,17 +173,30 @@ likely pointing the DB at our CNPG instead of the bundled one.
 `kagent-tools` subchart renders `kagent-tools-cluster-admin-role`
 (`apiGroups:["*"] resources:["*"] verbs:["*"]`) bound to the `kagent-tools` SA. The
 MCP tool server runs the actual `kubectl`/k8s calls under that SA, so out of the box
-agents can do **anything** — read every Secret, delete workloads. The `kagent-tools`
-values block exposes no rbac flag. The signed-off **read-only** requirement is
-therefore NOT a values change; it needs one of:
-- **(recommended)** an Argo `kustomize` patch source that replaces the
-  `kagent-tools-cluster-admin-role` rules with read-only verbs (`get/list/watch`) and
-  **excludes `secrets`** + other sensitive resources; Argo reconciles and self-heals
-  the restricted role.
-- or fork the `kagent-tools` subchart with a restricted role.
-
-  **Until this override is in place, kagent must NOT be deployed** — a cluster-admin
-  agent contradicts the read-only decision and the platform's least-privilege posture.
+agents can do **anything** — read every Secret, delete workloads. **CORRECTION (2026-06-24, full-review):** v0.9.9's `kagent-tools` subchart DOES
+expose a native read-only toggle — the earlier "no rbac flag" claim was wrong for the
+pinned version. `charts/kagent-tools/values.yaml` has `rbac.readOnly` ("deploys a
+read-only ClusterRole (get,list,watch) instead of cluster-admin"; the role is renamed
+`-read-role`), `rbac.allowSecrets` (default false → Secrets excluded), and
+`rbac.additionalRules`. So read-only is a **3-line values change, not a manifest
+patch**:
+```yaml
+kagent-tools:
+  rbac:
+    readOnly: true        # get/list/watch ClusterRole, no cluster-admin
+    allowSecrets: false   # Secrets excluded
+    additionalRules:      # the CRD reads the agents need
+      - apiGroups: [networking.istio.io, security.istio.io, cilium.io,
+                    gateway.networking.k8s.io, argoproj.io, monitoring.coreos.com,
+                    postgresql.cnpg.io, kafka.strimzi.io, velero.io]
+        resources: ["*"]
+        verbs: [get, list, watch]
+```
+This means the deploy should use the **platform-native multi-source Helm** Argo app
+(like `apps/cert-manager.yaml`/`apps/prometheus.yaml`) — NOT the kustomize-with-helm
+overlay — dropping the ~350-line patch AND the cluster-wide `--enable-helm` repo-server
+change entirely. The first-authored manifests used the patch approach; switching to
+the native toggle is the top follow-up (see the build status below).
 
 **Default agents include write-capable ones.** All enabled by default: `k8s-agent`,
 `istio-agent`, `promql-agent`, `observability-agent`, `helm-agent`,
