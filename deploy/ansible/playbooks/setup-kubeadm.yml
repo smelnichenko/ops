@@ -78,6 +78,12 @@
         state: directory
         mode: '0755'
 
+    - name: Stat containerd config before regen (change detection for the restart)
+      ansible.builtin.stat:
+        path: /etc/containerd/config.toml
+        checksum_algorithm: sha1
+      register: _ctd_before
+
     - name: Generate default containerd config
       ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
       changed_when: true
@@ -107,11 +113,20 @@
         state: directory
         mode: '0755'
 
-    - name: Restart containerd
+    - name: Stat containerd config after regen
+      ansible.builtin.stat:
+        path: /etc/containerd/config.toml
+        checksum_algorithm: sha1
+      register: _ctd_after
+
+    - name: Restart containerd (only when the config actually changed)
+      # Avoids restarting containerd — and thus every container on the node — on a
+      # re-run where the regenerated config is byte-identical to the live one.
       ansible.builtin.systemd_service:
         name: containerd
         state: restarted
         enabled: true
+      when: (not _ctd_before.stat.exists) or (_ctd_before.stat.checksum != _ctd_after.stat.checksum)
 
     # Pre-pull the heaviest CNI/mesh/storage images into containerd's k8s.io
     # namespace, with ansible-native retries, BEFORE their deadline-gated Helm
@@ -241,7 +256,15 @@
     # Phase 4: Initialize cluster
     # ================================================================
 
+    - name: Check whether the cluster is already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: _admin_conf
+
     - name: Initialize kubeadm cluster
+      # Guarded so this one-shot bootstrap is re-runnable: a re-run on an already
+      # initialized cluster would otherwise fail at preflight (Port 6443 in use,
+      # manifests/etcd dir exist) and abort the whole play.
       ansible.builtin.shell: |
         kubeadm init \
           --pod-network-cidr={{ pod_cidr }} \
@@ -250,6 +273,7 @@
           --skip-phases=addon/kube-proxy
       register: kubeadm_init
       changed_when: true
+      when: not _admin_conf.stat.exists
 
     - name: Create .kube directory
       ansible.builtin.file:
@@ -331,13 +355,17 @@
       changed_when: "'patched' in _gc_patch.stdout"
 
     # ================================================================
-    # Phase 5: Install kube-proxy with nftables
+    # Phase 5: kube-proxy (OFF by default — Cilium runs kubeProxyReplacement)
     # ================================================================
+    # Cilium installs with kubeProxyReplacement: true (eBPF), so kube-proxy is
+    # redundant and NOT installed — prod runs with none and routes fine. Set
+    # install_kube_proxy=true only for an environment that genuinely needs it.
 
     - name: Install kube-proxy via kubeadm
       ansible.builtin.shell: |
         kubeadm init phase addon kube-proxy --apiserver-advertise-address={{ node_ip }}
       changed_when: true
+      when: install_kube_proxy | default(false) | bool
 
     - name: Set kube-proxy to nftables mode  # noqa: risky-shell-pipe
       ansible.builtin.shell: |
@@ -353,6 +381,7 @@
       args:
         executable: /bin/bash
       changed_when: true
+      when: install_kube_proxy | default(false) | bool
 
     # ================================================================
     # Phase 5b: Install Helm
