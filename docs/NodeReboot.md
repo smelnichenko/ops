@@ -100,10 +100,12 @@ any pre-reboot live hotfix will get reverted, by design).
   on-host path during a planned snapshot). Restore is a host op: copy the `.db` to
   `ten`, `etcdutl snapshot restore`, repoint the etcd static-pod data-dir, restart
   kubelet. See `DR-PROCEDURE.md`.
-- **Kubelet shutdown grace:** raised to `shutdownGracePeriod=180s` /
-  `shutdownGracePeriodCriticalPods=30s` in `setup-kubeadm.yml` (→ 150s for normal
-  pods, enough for the 120s-grace stores). **Applies on the next `task deploy:kubeadm`**
-  (restarts kubelet only; pods keep running). Until then the live cap is the older
-  60s/15s → 45s for normal pods, so do the §2.3 flushes for a fully clean reboot.
+- **Kubelet shutdown grace:** set to `shutdownGracePeriod=180s` /
+  `shutdownGracePeriodCriticalPods=30s` (→ 150s for normal pods, enough for the
+  120s-grace stores). Apply to a live node with **`task deploy:node-config`**
+  (idempotent; touches only the kubelet config and restarts kubelet — pods keep
+  running). NOT via `task deploy:kubeadm`: that one-shot bootstrap is not re-runnable
+  (it fails at `kubeadm init` preflight). Until applied, the live cap is 60s/15s →
+  45s for normal pods, so do the §2.3 flushes for a fully clean reboot.
 - **No node-reboot automation** (no kured, no reboot timer): reboots are deliberate
   and manual.
