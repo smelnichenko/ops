@@ -1,0 +1,33 @@
+---
+# Re-runnable node/host tuning for the kubeadm control-plane node.
+#
+# Included by setup-kubeadm.yml on a fresh install AND runnable standalone via
+# configure-node.yml (`task deploy:node-config`) to re-apply on a LIVE node — without
+# re-running the one-shot cluster bootstrap (setup-kubeadm.yml is not idempotent: its
+# `kubeadm init` task has no guard, so a re-run fails at preflight).
+#
+# Idempotent: kubelet is restarted only when the config actually changes, so a re-run
+# on an already-configured node is a clean no-op.
+
+- name: Enable kubelet graceful node shutdown
+  # 180s total - 30s critical = 150s for normal pods, enough for the stateful stores
+  # (Kafka/ClickHouse/Postgres, 120s grace) to flush cleanly on a node reboot. The
+  # regexp matches any prior value so a re-apply bumps an already-set node.
+  ansible.builtin.replace:
+    path: /var/lib/kubelet/config.yaml
+    regexp: 'shutdownGracePeriod: [0-9]+s'
+    replace: 'shutdownGracePeriod: 180s'
+  register: _kubelet_grace
+
+- name: Set critical pods shutdown grace period
+  ansible.builtin.replace:
+    path: /var/lib/kubelet/config.yaml
+    regexp: 'shutdownGracePeriodCriticalPods: [0-9]+s'
+    replace: 'shutdownGracePeriodCriticalPods: 30s'
+  register: _kubelet_grace_critical
+
+- name: Restart kubelet to apply shutdown grace (only when changed)
+  ansible.builtin.systemd_service:
+    name: kubelet
+    state: restarted
+  when: _kubelet_grace is changed or _kubelet_grace_critical is changed

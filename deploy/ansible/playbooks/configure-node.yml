@@ -1,0 +1,16 @@
+---
+# Apply node/host tuning (kubelet graceful-shutdown grace, etc.) to a LIVE kubeadm
+# node without re-running the one-shot setup-kubeadm.yml bootstrap (which is not
+# idempotent — `kubeadm init` has no guard, so a re-run fails at preflight).
+#
+#   task deploy:node-config
+#
+# The same task list is included by setup-kubeadm.yml on a fresh install, so there is
+# a single source of truth (tasks/node-config.yml).
+- name: Configure node tuning
+  hosts: target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply node config
+      ansible.builtin.include_tasks: tasks/node-config.yml

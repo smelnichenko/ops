@@ -615,6 +615,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
 
+  deploy:node-config:
+    desc: Apply node/kubelet tuning to the live node (idempotent; safe to re-run, no bootstrap)
+    dir: deploy/ansible
+    deps: [deploy:install]
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/configure-node.yml
+
   deploy:host-hardening:
     desc: Host kernel hardening on ten (efi_pstore + systemd hardware watchdog)
     dir: deploy/ansible
