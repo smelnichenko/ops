@@ -56,6 +56,14 @@
     - { path: "{{ vgw_sidecar_dir }}", mode: '0750' }
     - { path: /var/lib/versitygw/iam, mode: '0700' }
 
+- name: Create /etc/versitygw (parent dir for the env file)
+  ansible.builtin.file:
+    path: /etc/versitygw
+    state: directory
+    owner: minio
+    group: minio
+    mode: '0750'
+
 - name: Write versitygw environment file (root S3 key, 0400 minio:minio)
   ansible.builtin.copy:
     dest: /etc/versitygw/env
