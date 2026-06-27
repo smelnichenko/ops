@@ -1,6 +1,6 @@
 # Plan 074: Replace Pi MinIO — Vagrant bake-off (versitygw-over-Gluster vs Garage)
 
-## Status: DRAFT (2026-06-27)
+## Status: CUTOVER DONE (2026-06-27) — versitygw live on the Pis, MinIO retired; playbook cleanup (step 5) remains
 
 > Supersedes the original "two independent Pi MinIOs" framing of this plan.
 > The decision narrowed to *replacing MinIO entirely*; this plan decides the
@@ -226,23 +226,24 @@ down" / (Garage) "layout/replication unhealthy" alerts.
   removes `minio` from the `SERVICES` table and adds a versitygw health check so
   the VIP follows a live gateway (both gateways always run). Default renders the
   current config byte-for-byte; verified via the `bool` filter.
-- **REMAINING — the operational cutover (live Pis, scheduled window):**
-  1. **Coexist deploy** — `task deploy:pi-services` with `-e vgw_enabled=true
-     -e vgw_port=9001` → versitygw on `:9001` on both Pis, alongside MinIO on
-     `:9000`. MinIO untouched.
-  2. **Migrate** — on a Pi, `rclone`/`mc mirror` each bucket MinIO(`:9000`) →
-     versitygw(`:9001`); object keys/bytes preserved so kopia/barman/scylla
-     repos keep working. ~250 GB.
-  3. **Restore-verify** — a Velero restore + a CNPG barman PITR against versitygw
-     before trusting it. Confirm the Scylla agent `provider` works (plain S3;
-     test `Minio` vs `Other`).
-  4. **Cutover** — stop MinIO; redeploy with `-e vgw_enabled=true -e
-     vgw_port=9000 -e vgw_cutover=true` (versitygw takes `:9000`; keepalived
-     drops `minio` + health-checks the gateway); `systemctl disable --now minio`
-     on both Pis. Consumers keep `.5:9000` unchanged.
-  5. **Cleanup** (follow-up commit) — remove the MinIO Phase 4 tasks + the consul
-     lock from the playbooks; retire `MinioDualActive`, add a "gateway down"
-     alert; clear the stale consul-lock comments in keepalived.
+- **DONE — operational cutover executed on prod (2026-06-27):**
+  1. ✅ Coexist deploy (`task deploy:versitygw -- -e vgw_port=9001`) — versitygw
+     on `:9001` both Pis. Actual data was **17 G** (kopia-deduped), not 250 GB;
+     1.6 T free, so capacity was a non-issue.
+  2. ✅ Migrate — `mc mirror` MinIO→versitygw, all buckets MATCH on size+count
+     (velero 14606, postgres 7765, etcd 28, scylla 1406, pg-dump 0).
+  3. ✅ Restore-verify — sample objects byte-identical (SHA-MATCH) across velero/
+     postgres/etcd; velero BSL `Available`; a real etcd-backup write succeeded
+     through the VIP.
+  4. ✅ Cutover — `deploy:keepalived -e vgw_cutover=true` (no flap, VIP stayed
+     pi1), stop+disable MinIO, `deploy:versitygw -e vgw_port=9000 -e
+     vgw_cutover=true`. VIP `.5:9000`→versitygw, health 200 both Pis. Durable:
+     `vgw_enabled`/`vgw_cutover=true` pinned in the pis group vars, Enable-MinIO
+     task gated. Commits ops `b74ecee`→`c1df274`.
+  5. **Cleanup (remaining follow-up)** — remove the MinIO Phase 4 tasks + the
+     consul lock from the playbooks; retire `MinioDualActive`, add a "gateway
+     down" alert; clear the stale consul-lock comments in keepalived. (Consul
+     itself stays — it's still Vault's storage backend + Patroni's DCS.)
 - **If Garage wins:** stand up the 3-node cluster, migrate, decommission the
   `backup-minio` Gluster volume + brick + arbiter, and retire the MinIO/keepalived
   /Consul-lock machinery for backups entirely.
