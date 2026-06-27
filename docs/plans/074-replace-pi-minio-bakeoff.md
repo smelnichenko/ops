@@ -143,6 +143,48 @@ order: (1) fewest manual steps under failure, (2) smallest production blast
 radius / migration risk, (3) operational simplicity + monitoring, (4) project
 governance. Document the result as a short decision record appended here.
 
+### Decision record — versitygw track (live Vagrant run, 2026-06-27)
+
+versitygw v1.6.0 on a throwaway 3-VM libvirt rig (n1+n2 data, arb arbiter)
+running a stateless gateway per data node over a GlusterFS replica-3-arbiter
+volume, **`--sidecar` metadata on Gluster**, **no consul lock**. Measured:
+
+| Gate | Result | Evidence |
+|---|---|---|
+| T1 S3 multipart | **PASS** | 64 MB multipart PUT via gw1, GET via gw2, sha256 identical |
+| T5 sidecar/etag | **PASS** | identical multipart ETag `…-4` on both gateways (shared sidecar) |
+| T3 partition | **PASS** | iptables-isolated n1: majority (gw2) stayed read+write; minority refused (`Transport endpoint is not connected`, no split-brain); self-healed on reconnect, same ETag, no data loss |
+| T2 node loss | **PASS** | hard-halt n1: gw2 read the 64 MB object (sha match) + wrote a new object; survivor read+write, zero intervention |
+| T4 rejoin/no-corruption | **PASS** | n1 rebooted+remounted: Gluster heal drained to 0 entries; gw1 then served the written-while-down object + 64 MB object intact |
+
+**versitygw-over-Gluster clears every hard gate, including T3 — the exact
+2026-06-27 failure — staying up on the majority side with no manual step.**
+
+### Decision record — Garage track (live Vagrant run, 2026-06-27)
+
+Garage v2.3.0, same 3 VMs as 3 EQUAL nodes (z1/z2/z3), `replication_factor=3`,
+**`db_engine=lmdb`** + `metadata_auto_snapshot_interval`, consistent mode.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| T1 S3 multipart | **PASS** | 64 MB multipart PUT g1→GET g2, sha match; identical ETag `…-4` across all 3 nodes |
+| T3 partition | **PASS** | isolated n1: majority (g2) read+write; minority refused (no quorum); re-synced on heal |
+| T2 node loss | **PASS** | hard power-off n1: cluster read+write via g3 (quorum n2+arb) |
+| T4 LMDB power-loss | **PASS (beat expectations)** | abrupt power-cut mid-write → n1 rebooted with **zero LMDB corruption/panic in logs**, rejoined HEALTHY, re-synced big.bin + 80 burst objects intact |
+| T5 wipe-and-rebuild | **method snag, not a defect** | wiping the data dir removed Garage's `garage-marker`; Garage then **refuses to start** (deliberate mount-safety guard, validated against a UUID in metadata). rf=3 data stayed safe on peers; an in-place rebuild needs the documented marker-restore / node-replace procedure, more involved than Gluster's transparent self-heal |
+
+### Final verdict (both tracks measured live)
+
+Both pass the hard reliability gates (T1–T4). **Garage's T4 cleanly survived the
+power cut**, de-risking the evaluation's main worry about it; and its
+marker-guard is a genuine safety plus (the prod MinIO setup hand-codes around
+exactly that "ran on an unmounted dir" failure). The split is operational, not
+reliability: **versitygw-over-Gluster** = smallest change, no 250 GB migration,
+**transparent self-heal** of a lost node (proven, drained to 0); **Garage** =
+cleaner architecture but a bigger migration, `ten` in the backup quorum, and a
+**more hands-on node-replacement** flow. **Recommendation stands: versitygw-over-
+Gluster** — equal reliability, lower blast radius, simpler recovery.
+
 ## What to build for the bake-off (throwaway-OK Ansible spikes)
 
 - **versitygw spike:** a role that installs versitygw on each Pi, points its
@@ -169,6 +211,26 @@ down" / (Garage) "layout/replication unhealthy" alerts.
 - **If versitygw wins:** revert the Plan 072 `consul lock` from the MinIO unit,
   pull MinIO from the keepalived `SERVICES` table, run two gateways, keep
   Gluster. D1: keep `.5` as a health-checked router to a live gateway.
+
+### Productionization status (versitygw — the winner)
+
+- **DONE** — `playbooks/tasks/versitygw.yml`: stateless gateway, no consul lock,
+  `--sidecar` on Gluster, runs on both Pis, bucket bootstrap. ansible-lint clean
+  (production profile). Wired into `setup-pi-services.yml` as a **gated** include
+  (`vgw_enabled`, default false — current MinIO deploy untouched).
+- **NEXT** (in order):
+  1. **Vagrant-test the real playbook** — `-e vgw_enabled=true vgw_port=9001`
+     against the pi harness; rerun the T1–T5 gates on the *real* role.
+  2. **keepalived edit** (`setup-keepalived.yml`) — remove `minio` from the
+     `SERVICES` table; add a versitygw health check so the VIP follows a healthy
+     gateway (both gateways always run; no start/stop on failover).
+  3. **Migrate** — `rclone`/`mc mirror` each bucket from MinIO `:9000` to
+     versitygw `:9001` (object keys/bytes preserved); restore-verify CNPG +
+     Velero. Confirm the Scylla agent `provider` value works against versitygw
+     (it speaks plain S3; test `Minio` vs `Other`).
+  4. **Cutover** — flip versitygw to `:9000`, retire the MinIO unit (drops the
+     consul lock), drop `minio` from keepalived. Consumers keep using `.5:9000`
+     unchanged. Retire `MinioDualActive`, add a "gateway down" alert.
 - **If Garage wins:** stand up the 3-node cluster, migrate, decommission the
   `backup-minio` Gluster volume + brick + arbiter, and retire the MinIO/keepalived
   /Consul-lock machinery for backups entirely.

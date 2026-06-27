@@ -638,6 +638,17 @@
       retries: 12
       delay: 5
 
+    # versitygw — stateless S3 gateway that replaces MinIO. Object=file on the
+    # Gluster backend means two gateways share the volume safely with no consul
+    # lock, so it runs on both Pis at once (keepalived just routes the VIP).
+    # Runs ALONGSIDE MinIO during cutover (its own port + dirs); see
+    # tasks/versitygw.yml for the S3-mirror migration run-book. Gated off by
+    # default — enable per-run with `-e vgw_enabled=true` for Vagrant
+    # validation and the migration; it does not touch MinIO.
+    - name: Deploy versitygw S3 gateway (MinIO replacement, gated)
+      ansible.builtin.include_tasks: tasks/versitygw.yml
+      when: vgw_enabled | default(false) | bool
+
     # ================================================================
     # Phase 5: Keycloak
     # ================================================================

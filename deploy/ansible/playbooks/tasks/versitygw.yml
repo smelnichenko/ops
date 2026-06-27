@@ -1,0 +1,132 @@
+---
+# versitygw — stateless S3 gateway over the shared Gluster backup volume.
+#
+# Replaces the MinIO xl-single + consul-lock arrangement. Each object is a plain
+# file on the POSIX (Gluster) backend, so there is NO cluster-state DB and TWO
+# gateways can serve the same volume concurrently without the dual-writer hazard
+# that forced MinIO's consul lock. Therefore: no consul lock, and versitygw runs
+# on BOTH Pis at once — keepalived only routes the VIP to a healthy gateway (the
+# minio entry must be removed from the keepalived SERVICES table; see
+# setup-keepalived.yml). Object metadata uses a --sidecar directory of regular
+# files on Gluster, avoiding the user.* xattr path that GlusterFS-over-FUSE
+# handles poorly.
+#
+# Cutover (operational, not enforced here): MinIO's xl-single on-disk format is
+# NOT readable by versitygw, so migration is an S3-level mirror, not a format
+# swap. Run versitygw on vgw_port=9001 alongside MinIO, `rclone sync` each bucket
+# MinIO->versitygw (object keys/bytes are preserved, so kopia/barman/scylla
+# repositories keep working), restore-verify CNPG + Velero, then set
+# vgw_port=9000, retire the MinIO unit, and drop minio from keepalived SERVICES.
+#
+# Expects: the minio user (uid 9000, owns the Gluster mount), minio_root_user /
+# minio_root_password, forgejo_arch, mc on PATH, and the Gluster backup volume
+# mounted at vgw_gluster_mount.
+
+- name: Set versitygw default vars
+  ansible.builtin.set_fact:
+    vgw_version: "{{ vgw_version | default('1.6.0') }}"
+    vgw_port: "{{ vgw_port | default('9000') }}"
+    vgw_gluster_mount: "{{ vgw_gluster_mount | default('/var/lib/minio/data') }}"
+    vgw_backend_dir: "{{ vgw_backend_dir | default('/var/lib/minio/data/buckets') }}"
+    vgw_sidecar_dir: "{{ vgw_sidecar_dir | default('/var/lib/minio/data/.sidecar') }}"
+
+- name: Check installed versitygw version
+  ansible.builtin.command: versitygw --version
+  register: _vgw_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install versitygw {{ vgw_version }}
+  ansible.builtin.apt:
+    deb: "https://github.com/versity/versitygw/releases/download/v{{ vgw_version }}/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
+  when: vgw_version not in (_vgw_installed.stdout | default(''))
+
+# Backend (buckets) and sidecar (metadata) live on the Gluster volume so both
+# gateways share them; iam-dir is local because the root key comes from the env
+# file (no shared IAM state to coordinate).
+- name: Create versitygw backend, sidecar (on Gluster) and local iam dirs
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: minio
+    group: minio
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ vgw_backend_dir }}", mode: '0750' }
+    - { path: "{{ vgw_sidecar_dir }}", mode: '0750' }
+    - { path: /var/lib/versitygw/iam, mode: '0700' }
+
+- name: Write versitygw environment file (root S3 key, 0400 minio:minio)
+  ansible.builtin.copy:
+    dest: /etc/versitygw/env
+    owner: minio
+    group: minio
+    mode: '0400'
+    content: |
+      ROOT_ACCESS_KEY={{ minio_root_user }}
+      ROOT_SECRET_KEY={{ minio_root_password }}
+  no_log: true
+  register: _vgw_env
+
+- name: Install versitygw systemd unit (stateless, runs on every Pi, no consul lock)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/versitygw.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=versitygw S3 gateway (stateless, over Gluster)
+      After=network-online.target
+      Wants=network-online.target
+      # Delegate the mount dependency to systemd so versitygw never serves an
+      # empty pre-mount directory on boot.
+      RequiresMountsFor={{ vgw_gluster_mount }}
+      [Service]
+      Type=simple
+      User=minio
+      Group=minio
+      EnvironmentFile=/etc/versitygw/env
+      # No consul lock: object=file on a POSIX (Gluster) backend is safe across
+      # concurrent gateways, unlike MinIO xl-single's cluster state. --sidecar
+      # keeps metadata as regular files on Gluster (no user.* xattr dependency).
+      ExecStart=/usr/bin/versitygw --port :{{ vgw_port }} --health /health \
+        --iam-dir /var/lib/versitygw/iam \
+        posix --sidecar {{ vgw_sidecar_dir }} {{ vgw_backend_dir }}
+      Restart=on-failure
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+  register: _vgw_unit
+
+- name: Enable + start versitygw (active on both Pis — no active-passive gating)
+  ansible.builtin.systemd:
+    name: versitygw
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Restart versitygw if unit or env changed
+  ansible.builtin.systemd:
+    name: versitygw
+    state: restarted
+  when: _vgw_unit is changed or _vgw_env is changed
+
+- name: Wait for versitygw health
+  ansible.builtin.uri:
+    url: "http://localhost:{{ vgw_port }}/health"
+    status_code: 200
+  retries: 20
+  delay: 3
+
+# Buckets are top-level dirs, but create them via the S3 API so versitygw also
+# records the bucket in its sidecar metadata (idempotent).
+- name: Ensure backup buckets exist (idempotent, via the gateway)
+  ansible.builtin.shell: |
+    set -a; . /etc/versitygw/env; set +a
+    HOME=/tmp mc alias set vgw http://localhost:{{ vgw_port }} "$ROOT_ACCESS_KEY" "$ROOT_SECRET_KEY" --api S3v4 --path on
+    for b in velero pg-dump postgres-backups scylla-backups etcd-backups; do
+      HOME=/tmp mc mb vgw/$b --ignore-existing
+    done
+  changed_when: false
+  no_log: true
+  run_once: true
+  delegate_to: "{{ groups['pis'] | first }}"
