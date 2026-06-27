@@ -23,20 +23,6 @@
       Authorization: "Bearer {{ kc_token.json.access_token }}"
   register: kc_roles
 
-- name: "Build role mappings for {{ client_config.client_id }}"
-  ansible.builtin.set_fact:
-    role_mappings: >-
-      {{
-        kc_roles.json
-        | selectattr('name', 'in', client_config.roles)
-        | map(attribute='id')
-        | zip(client_config.roles)
-        | map('reverse')
-        | map('list')
-        | map('community.general.dict_kv', ['name', 'id'])
-        | list
-      }}
-
 - name: "Assign roles to service account"  # {{ client_config.client_id }}
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
