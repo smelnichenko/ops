@@ -1,5 +1,5 @@
 ---
-# Setup Pi Services (Forgejo, MinIO, Keycloak, Postgres)
+# Setup Pi Services (Forgejo, versitygw, Keycloak, Postgres)
 #
 # Installs the shared service stack on a Pi. Run on pi1 or pi2.
 # Vault and Nexus are set up separately (existing playbooks).
@@ -62,7 +62,7 @@
         - { port: "22", name: "SSH" }
         - { port: "3000", name: "Forgejo" }
         - { port: "8080", name: "Keycloak" }
-        - { port: "9000", name: "MinIO" }
+        - { port: "9000", name: "versitygw (S3)" }
         - { port: "5432", name: "Postgres" }
         - { port: "8200", name: "Vault" }
 
@@ -419,53 +419,22 @@
       changed_when: true
 
     # ================================================================
-    # Phase 4: MinIO
+    # Phase 4: Backup object store — versitygw (MinIO retired 2026-06-27)
     # ================================================================
 
-    - name: Download MinIO
-      ansible.builtin.get_url:
-        url: "https://dl.min.io/server/minio/release/linux-{{ forgejo_arch }}/minio"
-        dest: /usr/local/bin/minio
-        mode: '0755'
-
-    - name: Download MinIO client
+    - name: Download mc (S3 client; used by the versitygw bucket bootstrap)
       ansible.builtin.get_url:
         url: "https://dl.min.io/client/mc/release/linux-{{ forgejo_arch }}/mc"
         dest: /usr/local/bin/mc
         mode: '0755'
 
-    # Check if minio user exists with non-9000 UID (replay from older
-    # provisioning). usermod refuses to change UID while the process is
-    # running, so stop minio first — it'll be restarted after the user
-    # and data-drive setup finishes.
-    - name: Check existing minio UID
-      ansible.builtin.getent:
-        database: passwd
-        key: minio
-        fail_key: false
-      register: _minio_passwd
-
-    - name: Stop MinIO if current UID isn't 9000 (replay-only, idempotent)
-      ansible.builtin.systemd:
-        name: minio
-        state: stopped
-      when:
-        - _minio_passwd.ansible_facts.getent_passwd.minio is defined
-        - _minio_passwd.ansible_facts.getent_passwd.minio[1] is defined
-        - _minio_passwd.ansible_facts.getent_passwd.minio[1] != '9000'
-      register: _minio_stop
-      # Tolerate "unit not loaded" on first install — UID-fix is a no-op then.
-      failed_when: >-
-        _minio_stop is failed
-        and 'Could not find the requested service' not in (_minio_stop.msg | default(''))
-
-    - name: Create MinIO group (fixed GID for Gluster-neutral ownership)
+    - name: Create storage group (fixed GID for Gluster-neutral ownership)
       ansible.builtin.group:
         name: minio
         gid: 9000
         system: true
 
-    - name: Create MinIO user (fixed UID)
+    - name: Create storage user (fixed UID; versitygw runs as this user)
       ansible.builtin.user:
         name: minio
         uid: 9000
@@ -475,179 +444,39 @@
         home: /var/lib/minio
         create_home: true
 
-    - name: Create /etc/minio (parent dir for env file)
-      ansible.builtin.file:
-        path: /etc/minio
-        state: directory
-        owner: minio
-        group: minio
-        mode: '0750'
-
-    - name: Write MinIO environment file (credentials, 0400 minio:minio)
-      ansible.builtin.copy:
-        dest: /etc/minio/env
-        owner: minio
-        group: minio
-        mode: '0400'
-        content: |
-          MINIO_ROOT_USER={{ minio_root_user }}
-          MINIO_ROOT_PASSWORD={{ minio_root_password }}
-          MINIO_CI_CD=on
-      notify: Restart MinIO
-      no_log: true
-
-    # MinIO runs in single-server (xl-single) mode against the
-    # Gluster-backed /var/lib/minio/data. Active-passive across the Pis,
-    # arbitrated by keepalived's notify_master / notify_backup scripts
-    # (see setup-keepalived.yml) — same pattern as Nexus.
-    #
-    # Why xl-single instead of distributed: with 2 Pis each holding 1
-    # NVMe under a Gluster replica-3-arbiter volume, MinIO's own
-    # erasure coding adds nothing — every "drive" subdirectory shares a
-    # fault domain (NVMe), and Gluster already gives cross-Pi durability.
-    # Distributed-on-Gluster meant double-replication for every write.
-    #
-    # Why active-passive: xl-single's cluster state in .minio.sys/
-    # doesn't tolerate concurrent writers. H2 in Nexus has the same
-    # constraint, so we reuse Nexus's keepalived notify-script pattern.
-    - name: Install MinIO systemd service
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/minio.service
-        mode: '0644'
-        content: |
-          [Unit]
-          Description=MinIO Object Storage
-          # consul lock needs the local Consul agent reachable; order after
-          # it but don't Requires= (a consul restart shouldn't bounce MinIO —
-          # consul lock handles runtime unavailability by releasing/killing).
-          After=network-online.target consul.service
-          Wants=network-online.target consul.service
-          # RequiresMountsFor delegates the mount-dep chain to systemd's
-          # generated mount unit. Without this, MinIO can race the
-          # Gluster mount on boot, write its UUID to the pre-mount dir,
-          # and then think it's a brand-new install once the mount
-          # comes up over it.
-          RequiresMountsFor=/var/lib/minio/data
-          # Cap restart loop on the non-VIP Pi if something accidentally
-          # starts MinIO there. Note the periodic keepalived-converge timer
-          # resets a start-limited unit, so a node that hit the cap during a
-          # partition re-arms once quorum returns.
-          StartLimitIntervalSec=600
-          StartLimitBurst=3
-          [Service]
-          Type=simple
-          User=minio
-          Group=minio
-          EnvironmentFile=/etc/minio/env
-          # Fence against dual-active on the SHARED Gluster data dir: MinIO is
-          # xl-single with no cross-host lock, and flock(2) doesn't propagate
-          # across GlusterFS clients. consul lock block-acquires a
-          # quorum-enforced lock (Consul 3-node incl. ten; ACLs disabled) and
-          # execs MinIO as its child — so only the lock holder runs MinIO, and
-          # a minority-partition node loses the lock and has its MinIO killed.
-          # The new holder's block-acquire (no -try) waits until the old
-          # holder's MinIO has exited and released, closing the stop/start
-          # race. -monitor-retry rides out transient Consul blips;
-          # -child-exit-code propagates a real MinIO crash so Restart fires.
-          ExecStart=/usr/local/bin/consul lock -name=minio-active -monitor-retry=3 -child-exit-code \
-            minio/active \
-            /usr/local/bin/minio server /var/lib/minio/data --address :9000
-          Restart=on-failure
-          RestartSec=10
-          [Install]
-          WantedBy=multi-user.target
-      notify: Restart MinIO
-
-    # Enabled but stopped — keepalived's notify_master starts it on
-    # whichever Pi holds the VIP. (Same as Nexus.)
-    - name: Enable MinIO service (keep stopped — Keepalived drives state)
-      ansible.builtin.systemd:
-        name: minio
-        enabled: true
-        daemon_reload: true
-      # Post-cutover the backup store is versitygw; do not re-enable MinIO.
-      when: not (vgw_cutover | default(false) | bool)
-
-    # Bucket create runs only when the volume is fresh (no .minio.sys
-    # at the data root). On a recovered xl-single mount, the original
-    # buckets (velero, pg-dump, postgres-backups, scylla-backups) come
-    # back automatically with their data; this step skips. Conditional
-    # uses the bootstrap sentinel pattern Nexus uses.
-    - name: Check MinIO bootstrap sentinel
-      ansible.builtin.stat:
-        path: /var/lib/minio/data/.bootstrap-done
-      register: _minio_bootstrap_sentinel
-      run_once: true
-      delegate_to: "{{ groups['pis'] | first }}"
-
-    - name: Bootstrap MinIO (one-shot start + bucket create + stop) — fresh volumes only
-      when: not _minio_bootstrap_sentinel.stat.exists
-      run_once: true
-      delegate_to: "{{ groups['pis'] | first }}"
+    # Retire the MinIO service + binary — versitygw is the backup store now.
+    # Tagged so `task deploy:versitygw` applies the full backup-store state.
+    - name: Retire MinIO leftovers
+      tags: [versitygw]
       block:
-        - name: Start MinIO temporarily for bootstrap
-          ansible.builtin.systemd:
-            name: minio
-            state: started
+        - name: Check whether the retired MinIO unit is present
+          ansible.builtin.stat:
+            path: /etc/systemd/system/minio.service
+          register: _minio_unit
 
-        - name: Wait for MinIO health
-          ansible.builtin.uri:
-            url: http://localhost:9000/minio/health/cluster
-            status_code: 200
-          retries: 30
-          delay: 5
-
-        - name: Create MinIO buckets
-          ansible.builtin.shell: |
-            set -a; . /etc/minio/env; set +a
-            HOME=/tmp mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-            HOME=/tmp mc mb local/velero --ignore-existing
-            HOME=/tmp mc mb local/pg-dump --ignore-existing
-            HOME=/tmp mc mb local/postgres-backups --ignore-existing
-            HOME=/tmp mc mb local/scylla-backups --ignore-existing
-          changed_when: true
-          no_log: true
-
-        - name: Stop MinIO (Keepalived will start it on whichever Pi holds the VIP)
+        - name: Stop + disable retired MinIO service
           ansible.builtin.systemd:
             name: minio
             state: stopped
+            enabled: false
+          when: _minio_unit.stat.exists
 
-        - name: Write bootstrap sentinel (shared volume — visible to both Pis)
+        - name: Remove retired MinIO artifacts (unit, binary, env dir)
           ansible.builtin.file:
-            path: /var/lib/minio/data/.bootstrap-done
-            state: touch
-            owner: minio
-            group: minio
-            mode: '0644'
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/systemd/system/minio.service
+            - /usr/local/bin/minio
+            - /etc/minio
+          notify: Reload systemd daemon
 
-    # Self-heal: ensure the backup buckets exist on the live MinIO (the VIP
-    # holder) on every run, so a wiped/missing bucket is recreated without
-    # needing a fresh-volume bootstrap. Idempotent (--ignore-existing).
-    - name: Ensure MinIO backup buckets exist (idempotent, vs the live VIP)
-      ansible.builtin.shell: |
-        set -a; . /etc/minio/env; set +a
-        HOME=/tmp mc alias set vip http://192.168.11.5:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-        for b in velero pg-dump postgres-backups scylla-backups; do
-          HOME=/tmp mc mb vip/$b --ignore-existing
-        done
-      changed_when: false
-      no_log: true
-      run_once: true
-      delegate_to: "{{ groups['pis'] | first }}"
-      register: _bucket_ensure
-      until: _bucket_ensure.rc == 0
-      retries: 12
-      delay: 5
-
-    # versitygw — stateless S3 gateway that replaces MinIO. Object=file on the
-    # Gluster backend means two gateways share the volume safely with no consul
-    # lock, so it runs on both Pis at once (keepalived just routes the VIP).
-    # Runs ALONGSIDE MinIO during cutover (its own port + dirs); see
-    # tasks/versitygw.yml for the S3-mirror migration run-book. Gated off by
-    # default — enable per-run with `-e vgw_enabled=true` for Vagrant
-    # validation and the migration; it does not touch MinIO.
-    - name: Deploy versitygw S3 gateway (MinIO replacement, gated)
+    # versitygw — stateless S3 gateway, the Pi backup store (replaced MinIO
+    # 2026-06-27). Object=file on the Gluster backend means both Pis run a
+    # gateway with no dual-writer hazard, so there is no consul lock; keepalived
+    # just routes the VIP. vgw_enabled/vgw_cutover are pinned true in the pis
+    # group_vars; see tasks/versitygw.yml.
+    - name: Deploy versitygw S3 gateway (Pi backup store)
       ansible.builtin.include_tasks:
         file: tasks/versitygw.yml
         apply:
@@ -755,12 +584,16 @@
       ansible.builtin.debug:
         msg: |
           {{ inventory_hostname }} setup complete:
-            Forgejo:  http://{{ pi_ip }}:3000/
-            MinIO:    http://{{ pi_ip }}:9000/
-            Keycloak: http://{{ pi_ip }}:8080/
+            Forgejo:   http://{{ pi_ip }}:3000/
+            versitygw: http://{{ pi_ip }}:9000/
+            Keycloak:  http://{{ pi_ip }}:8080/
             Postgres: {{ pi_ip }}:5432
 
   handlers:
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
     - name: Restart Postgres
       ansible.builtin.systemd:
         name: postgresql
@@ -770,12 +603,6 @@
       ansible.builtin.systemd:
         name: forgejo
         state: restarted
-
-    - name: Restart MinIO
-      ansible.builtin.systemd:
-        name: minio
-        state: restarted
-        daemon_reload: true
 
     - name: Restart Keycloak
       ansible.builtin.systemd:

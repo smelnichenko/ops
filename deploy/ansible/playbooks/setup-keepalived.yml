@@ -65,11 +65,11 @@
         content: |
           #!/bin/bash
           # Check critical services — if any fails, reduce priority to trigger failover.
-          # Nexus (and pre-cutover MinIO) are intentionally excluded: they're
-          # active-passive, controlled by notify_master / notify_backup below, so
-          # probing them on the BACKUP Pi would always fail and pin the VIP.
-          # versitygw is the opposite — it runs on BOTH Pis, so it IS checked
-          # (post-cutover) to make the VIP follow a live gateway.
+          # Nexus is intentionally excluded: it's active-passive, controlled by
+          # notify_master / notify_backup below, so probing it on the BACKUP Pi
+          # would always fail and pin the VIP. versitygw is the opposite — it
+          # runs on BOTH Pis, so it IS checked to make the VIP follow a live
+          # gateway. (MinIO, formerly active-passive here, was retired 2026-06-27.)
 
           # Forgejo
           curl -sf -o /dev/null -m 3 http://localhost:3000/api/v1/version || exit 1
