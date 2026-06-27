@@ -222,17 +222,27 @@ down" / (Garage) "layout/replication unhealthy" alerts.
   against a fresh VM (bind-mount standing in for Gluster): caught + fixed a
   missing `/etc/versitygw` dir bug, then applied clean (ok=17, failed=0) —
   versitygw active, 5 buckets, S3 put/get verified.
-- **NEXT** (in order):
-  1. **keepalived edit** (`setup-keepalived.yml`) — remove `minio` from the
-     `SERVICES` table; add a versitygw health check so the VIP follows a healthy
-     gateway (both gateways always run; no start/stop on failover).
-  3. **Migrate** — `rclone`/`mc mirror` each bucket from MinIO `:9000` to
-     versitygw `:9001` (object keys/bytes preserved); restore-verify CNPG +
-     Velero. Confirm the Scylla agent `provider` value works against versitygw
-     (it speaks plain S3; test `Minio` vs `Other`).
-  4. **Cutover** — flip versitygw to `:9000`, retire the MinIO unit (drops the
-     consul lock), drop `minio` from keepalived. Consumers keep using `.5:9000`
-     unchanged. Retire `MinioDualActive`, add a "gateway down" alert.
+- **DONE** — keepalived cutover gating (`setup-keepalived.yml`, `vgw_cutover`):
+  removes `minio` from the `SERVICES` table and adds a versitygw health check so
+  the VIP follows a live gateway (both gateways always run). Default renders the
+  current config byte-for-byte; verified via the `bool` filter.
+- **REMAINING — the operational cutover (live Pis, scheduled window):**
+  1. **Coexist deploy** — `task deploy:pi-services` with `-e vgw_enabled=true
+     -e vgw_port=9001` → versitygw on `:9001` on both Pis, alongside MinIO on
+     `:9000`. MinIO untouched.
+  2. **Migrate** — on a Pi, `rclone`/`mc mirror` each bucket MinIO(`:9000`) →
+     versitygw(`:9001`); object keys/bytes preserved so kopia/barman/scylla
+     repos keep working. ~250 GB.
+  3. **Restore-verify** — a Velero restore + a CNPG barman PITR against versitygw
+     before trusting it. Confirm the Scylla agent `provider` works (plain S3;
+     test `Minio` vs `Other`).
+  4. **Cutover** — stop MinIO; redeploy with `-e vgw_enabled=true -e
+     vgw_port=9000 -e vgw_cutover=true` (versitygw takes `:9000`; keepalived
+     drops `minio` + health-checks the gateway); `systemctl disable --now minio`
+     on both Pis. Consumers keep `.5:9000` unchanged.
+  5. **Cleanup** (follow-up commit) — remove the MinIO Phase 4 tasks + the consul
+     lock from the playbooks; retire `MinioDualActive`, add a "gateway down"
+     alert; clear the stale consul-lock comments in keepalived.
 - **If Garage wins:** stand up the 3-node cluster, migrate, decommission the
   `backup-minio` Gluster volume + brick + arbiter, and retire the MinIO/keepalived
   /Consul-lock machinery for backups entirely.
