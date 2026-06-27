@@ -250,7 +250,7 @@ tasks:
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keepalived.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keepalived.yml {{.CLI_ARGS}}
 
   promote:prod:
     desc: 'Promote test image tags -> prod. DRY-RUN by default; CONFIRM=1 commits+pushes. SERVICES="site monitor" limits scope (default all 6).'

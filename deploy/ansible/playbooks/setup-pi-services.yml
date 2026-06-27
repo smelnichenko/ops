@@ -565,6 +565,8 @@
         name: minio
         enabled: true
         daemon_reload: true
+      # Post-cutover the backup store is versitygw; do not re-enable MinIO.
+      when: not (vgw_cutover | default(false) | bool)
 
     # Bucket create runs only when the volume is fresh (no .minio.sys
     # at the data root). On a recovered xl-single mount, the original
