@@ -1,6 +1,6 @@
 # Plan 074: Replace Pi MinIO — Vagrant bake-off (versitygw-over-Gluster vs Garage)
 
-## Status: CUTOVER DONE (2026-06-27) — versitygw live on the Pis, MinIO retired; playbook cleanup (step 5) remains
+## Status: COMPLETE (2026-06-27) — versitygw live on the Pis; MinIO fully retired (service, playbooks, alerts, live artifacts)
 
 > Supersedes the original "two independent Pi MinIOs" framing of this plan.
 > The decision narrowed to *replacing MinIO entirely*; this plan decides the
@@ -240,10 +240,15 @@ down" / (Garage) "layout/replication unhealthy" alerts.
      vgw_cutover=true`. VIP `.5:9000`→versitygw, health 200 both Pis. Durable:
      `vgw_enabled`/`vgw_cutover=true` pinned in the pis group vars, Enable-MinIO
      task gated. Commits ops `b74ecee`→`c1df274`.
-  5. **Cleanup (remaining follow-up)** — remove the MinIO Phase 4 tasks + the
-     consul lock from the playbooks; retire `MinioDualActive`, add a "gateway
-     down" alert; clear the stale consul-lock comments in keepalived. (Consul
-     itself stays — it's still Vault's storage backend + Patroni's DCS.)
+  5. ✅ **Cleanup (done 2026-06-27)** — removed the MinIO Phase 4 tasks + the
+     consul-lock unit from `setup-pi-services.yml` (−218 lines; kept the uid-9000
+     storage user + mc that versitygw reuses), and a versitygw-tagged block now
+     stops/disables/removes the leftover minio.service + binary + /etc/minio
+     (applied to both prod Pis — gone, versitygw still serving). Retired
+     `MinioDualActive` → `VersitygwGatewayDown` (per-Pi `:9000/health` probe,
+     warning), renamed the blackbox module + runbook. ops `2fcf8fe`, platform
+     `1609a70`. (Consul stays — still Vault's storage backend + Patroni's DCS;
+     the gated `minio` SERVICES line is left for rollback, not a live leftover.)
 - **If Garage wins:** stand up the 3-node cluster, migrate, decommission the
   `backup-minio` Gluster volume + brick + arbiter, and retire the MinIO/keepalived
   /Consul-lock machinery for backups entirely.
