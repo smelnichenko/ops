@@ -34,8 +34,12 @@
     vault_addr: "https://{{ hostvars['pi1']['ansible_host'] }}:8200"
     realm: schnappy
     clients_roles:
+      # Must match the realm roles the smoke test exercises: CHAT (channels),
+      # EMAIL (inbox), PLAY (chess), METRICS. (Was [PLAY, VIEW, CHAT] — VIEW is not a
+      # real realm role so it was silently dropped, and EMAIL was missing, so the
+      # smoke test 403'd on /api/inbox/emails and /api/chess/games.)
       - client_id: k6-smoke
-        roles: [PLAY, VIEW, CHAT]
+        roles: [PLAY, CHAT, EMAIL, METRICS]
 
   tasks:
     - name: Get Keycloak admin password from Pi Vault
