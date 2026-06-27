@@ -26,6 +26,9 @@
   ansible.builtin.set_fact:
     vgw_version: "{{ vgw_version | default('1.6.0') }}"
     vgw_port: "{{ vgw_port | default('9000') }}"
+    # self-sufficient so a targeted `--tags versitygw` run (which skips the MinIO
+    # phase that normally sets forgejo_arch) still resolves the package arch.
+    forgejo_arch: "{{ forgejo_arch | default('arm64' if ansible_architecture == 'aarch64' else 'amd64') }}"
     vgw_gluster_mount: "{{ vgw_gluster_mount | default('/var/lib/minio/data') }}"
     vgw_backend_dir: "{{ vgw_backend_dir | default('/var/lib/minio/data/buckets') }}"
     vgw_sidecar_dir: "{{ vgw_sidecar_dir | default('/var/lib/minio/data/.sidecar') }}"

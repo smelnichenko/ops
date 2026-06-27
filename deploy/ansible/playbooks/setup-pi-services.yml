@@ -646,7 +646,11 @@
     # default — enable per-run with `-e vgw_enabled=true` for Vagrant
     # validation and the migration; it does not touch MinIO.
     - name: Deploy versitygw S3 gateway (MinIO replacement, gated)
-      ansible.builtin.include_tasks: tasks/versitygw.yml
+      ansible.builtin.include_tasks:
+        file: tasks/versitygw.yml
+        apply:
+          tags: [versitygw]
+      tags: [versitygw]
       when: vgw_enabled | default(false) | bool
 
     # ================================================================
