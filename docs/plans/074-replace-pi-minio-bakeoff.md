@@ -218,10 +218,12 @@ down" / (Garage) "layout/replication unhealthy" alerts.
   `--sidecar` on Gluster, runs on both Pis, bucket bootstrap. ansible-lint clean
   (production profile). Wired into `setup-pi-services.yml` as a **gated** include
   (`vgw_enabled`, default false — current MinIO deploy untouched).
+- **DONE** — Vagrant-tested the real `tasks/versitygw.yml` via ansible-playbook
+  against a fresh VM (bind-mount standing in for Gluster): caught + fixed a
+  missing `/etc/versitygw` dir bug, then applied clean (ok=17, failed=0) —
+  versitygw active, 5 buckets, S3 put/get verified.
 - **NEXT** (in order):
-  1. **Vagrant-test the real playbook** — `-e vgw_enabled=true vgw_port=9001`
-     against the pi harness; rerun the T1–T5 gates on the *real* role.
-  2. **keepalived edit** (`setup-keepalived.yml`) — remove `minio` from the
+  1. **keepalived edit** (`setup-keepalived.yml`) — remove `minio` from the
      `SERVICES` table; add a versitygw health check so the VIP follows a healthy
      gateway (both gateways always run; no start/stop on failover).
   3. **Migrate** — `rclone`/`mc mirror` each bucket from MinIO `:9000` to
