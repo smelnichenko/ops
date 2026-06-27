@@ -64,9 +64,17 @@ until the bake-off picks a winner.**
 - Apache-2.0; single-vendor (Versity) but no feature-stripping history.
 - **Blast radius: small** — keep storage, drop MinIO + the Consul fence. No
   data migration to a new storage system, no new quorum.
-- **Risk to validate:** versitygw stores etag/object metadata in `user.*`
-  **xattrs**, and GlusterFS-over-FUSE has documented xattr quirks — must prove
-  etag/multipart integrity holds across both gateways on the Gluster mount.
+- Deployment shape (verified from docs): `versitygw --port :9000 posix
+  --sidecar <metadir> <backend-path>`, root creds via `ROOT_ACCESS_KEY` /
+  `ROOT_SECRET_KEY`, a bucket = a top-level subdir under the backend path,
+  ARM64 binaries published. One stateless instance per Pi, **no consul lock**.
+- **Risk — and its mitigation:** versitygw *defaults* to storing etag/object
+  metadata in `user.*` **xattrs**, which GlusterFS-over-FUSE handles poorly.
+  But versitygw has a **`--sidecar <dir>`** mode that stores metadata as
+  **regular files** instead. Put the sidecar **on the Gluster volume** →
+  metadata is shared across both gateways as plain files with no xattr
+  dependency. This likely removes the gating risk; T5 must confirm (comparing
+  xattr-default vs sidecar). There is also `--nometa` for read-only datasets.
 
 ### B. Garage rf=3 (eliminate Gluster + keepalived + Consul)
 
@@ -106,11 +114,13 @@ Files to repoint (both paths): `infra .../velero/values.yaml` (s3Url),
 ## Bake-off — the test matrix (this is the decision)
 
 Harness: `ops/Vagrantfile` (pi1 .56.20, pi2 .56.21, kubeadm .56.10, VIP
-.56.50). **Known harness blocker** (Plan 072): Forgejo crashes on a queues LOCK
-perm and HAProxy:5000 is down — the stashed fix needs DB passwords in vagrant
-vars; resolve or work around first, since the consumer-smoke test needs a
-working cluster. For Garage, add `ten`/kubeadm as a 3rd storage node in the
-inventory.
+.56.50). **Use a minimal subset** — the object-store bake-off needs only the
+object store on pi1/pi2 (+ `ten`/kubeadm for Garage) and the kubeadm cluster VM
+for T1; it does **not** need the Forgejo/Keycloak/Patroni/Nexus stack. That
+sidesteps the Plan-072 Forgejo-queues-LOCK / HAProxy:5000 harness blocker
+entirely (recon 2026-06-27: no stash remains and `inventory/vagrant.yml`
+already carries all the DB passwords, so that blocker looks resolved anyway).
+For Garage, add `ten`/kubeadm as a 3rd storage node in the inventory.
 
 Each finalist runs the **same** experiments; every one has an explicit pass bar:
 
@@ -120,7 +130,7 @@ Each finalist runs the **same** experiments; every one has an explicit pass bar:
 | T2 | **Single-node loss** — kill one Pi (Garage: also kill `ten`) | survives a node death unattended | store stays **read+write**; a velero backup succeeds during the outage; **no manual step** |
 | T3 | **pi↔pi partition** — `iptables`-isolate the Pis | the 2026-06-27 failure mode | majority side read+write; minority refuses cleanly; on heal, reconciles with **no data loss/divergence** |
 | T4 | **Unclean power loss** — hard-reset a node mid-write | the per-candidate corruption risk | node rejoins and self-heals; **no corruption** (Garage: LMDB snapshot+rebuild; versitygw: Gluster-FUSE consistency) |
-| T5 | **Candidate-specific probe** | the named risk | versitygw: etag/multipart integrity via `user.*` xattrs across both gateways. Garage: wipe a node's data dir, confirm rf=3 rebuild |
+| T5 | **Candidate-specific probe** | the named risk | versitygw: etag/multipart integrity across both gateways with **`--sidecar` on Gluster** (regular-file metadata), and a control run with default xattrs to confirm sidecar is the safer mode. Garage: wipe a node's data dir, confirm rf=3 rebuild |
 | T6 | **Resource + ops** | fits Pi-class, operable | RAM/CPU on Pi-sized VMs acceptable; document the ops steps + monitoring hook |
 
 Record RPO/RTO per failure and the manual-step count (target: zero for T2/T3).
