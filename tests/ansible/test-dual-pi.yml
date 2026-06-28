@@ -19,8 +19,8 @@
   gather_facts: false
 
   tasks:
-    # MinIO (and Nexus) are active-passive — running only on the VIP holder,
-    # asserted separately below. Everything here runs on BOTH Pis.
+    # Nexus is active-passive (VIP-holder-only), asserted separately below.
+    # versitygw is stateless and runs on BOTH Pis. Everything here runs on both.
     - name: Check systemd units are active
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -53,65 +53,30 @@
         url: "http://localhost:8080/realms/master"
         status_code: 200
 
-# ─── MinIO active-passive + dual-active fence ────────────────────────────────
-# MinIO is xl-single on a SHARED Gluster volume — it must run on EXACTLY the
-# VIP holder. A fresh deploy elects pi1 (priority 150), so pi1 holds the VIP
-# and runs MinIO; pi2 must NOT. The consul-lock fence (MinIO's ExecStart is
-# wrapped in `consul lock minio/active`) is what enforces this: a second
-# acquirer is denied while the holder runs.
-- name: MinIO runs only on the VIP holder (pi1)
-  hosts: pi1
+# ─── versitygw runs on BOTH Pis (stateless, no fence) ────────────────────────
+# Unlike the old MinIO xl-single, versitygw is a stateless S3 gateway
+# (object=file) over the shared Gluster volume — two gateways serving the same
+# volume are not a dual-writer hazard, so it runs on BOTH Pis with no consul
+# lock and no active-passive fence. keepalived's VIP simply routes :9000 to a
+# healthy gateway.
+- name: versitygw active + serving on both Pis
+  hosts: pis
   become: true
   gather_facts: false
 
   tasks:
-    - name: MinIO active on the holder
-      ansible.builtin.command: systemctl is-active minio
-      register: _minio_h
+    - name: versitygw unit active
+      ansible.builtin.command: systemctl is-active versitygw
+      register: _vgw
       changed_when: false
-      failed_when: _minio_h.stdout != "active"
+      failed_when: _vgw.stdout != "active"
 
-    - name: versitygw serving on the holder
+    - name: versitygw serving on :9000/health
       ansible.builtin.uri:
         url: "http://localhost:9000/health"
         status_code: 200
       retries: 12
       delay: 5
-
-    - name: Consul minio/active lock is held
-      ansible.builtin.shell: |
-        set -o pipefail
-        consul kv get -detailed minio/active/.lock | awk '/^Session/{print $2}'
-      register: _lock
-      changed_when: false
-      failed_when: _lock.stdout | trim | length == 0
-
-- name: MinIO is fenced off the non-holder (pi2)
-  hosts: pi2
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: MinIO not serving on the non-holder
-      ansible.builtin.uri:
-        url: "http://localhost:9000/health"
-        status_code: 200
-      register: _minio_nh
-      failed_when: _minio_nh.status == 200
-      ignore_errors: true
-
-    - name: Assert non-holder MinIO is down
-      ansible.builtin.assert:
-        that: _minio_nh.status != 200
-        fail_msg: "MinIO is serving on the non-holder pi2 — dual-active!"
-
-    # The fence itself: a second acquirer of minio/active must be DENIED while
-    # pi1's MinIO holds it. This is the cross-host mutual exclusion proof.
-    - name: consul lock minio/active is denied on the non-holder
-      ansible.builtin.command: consul lock -try=3s minio/active /usr/bin/true
-      register: _lock_try
-      changed_when: false
-      failed_when: _lock_try.rc == 0
 
 # ─── Consul cluster ──────────────────────────────────────────────────────────
 - name: Consul cluster has ≥ 2 alive members
@@ -264,7 +229,7 @@
       loop:
         - forgejo
         - keycloak
-        - minio
+        - versitygw
         - keepalived
         - patroni
 
@@ -299,23 +264,14 @@
       retries: 12
       delay: 5
 
-    # MinIO must follow the VIP: pi1's stop released the consul lock, so pi2's
-    # notify_master now holds it and serves. Proves the fence releases and
-    # re-acquires cleanly across a failover (not just at steady state).
-    - name: MinIO active + serving on pi2 after failover
+    # versitygw on pi2 was already running (stateless, no fence); once the VIP
+    # moves here it serves the backup store as the new holder — verify it answers.
+    - name: versitygw still serving on pi2 (new VIP holder) after failover
       ansible.builtin.uri:
         url: "http://localhost:9000/health"
         status_code: 200
       retries: 18
       delay: 5
-
-    - name: Consul minio/active lock now held by pi2
-      ansible.builtin.shell: |
-        set -o pipefail
-        consul kv get -detailed minio/active/.lock | awk '/^Session/{print $2}'
-      register: _lock2
-      changed_when: false
-      failed_when: _lock2.stdout | trim | length == 0
 
     - name: Write while pi1 is down
       ansible.builtin.shell: |
@@ -329,9 +285,9 @@
   gather_facts: false
 
   tasks:
-    # MinIO is NOT started here — pi1 comes back as BACKUP (nopreempt keeps
-    # the VIP on pi2), so MinIO must stay fenced off pi1. keepalived's
-    # notify_backup / the converge timer keep it stopped.
+    # pi1 comes back as BACKUP (nopreempt keeps the VIP on pi2), but versitygw is
+    # stateless and runs on BOTH Pis — restart it with the rest; it serves
+    # locally again even though pi2 holds the VIP.
     - name: systemctl start
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -341,6 +297,7 @@
         - keepalived
         - forgejo
         - keycloak
+        - versitygw
 
     - name: Patroni rejoins cluster
       ansible.builtin.uri:
@@ -349,20 +306,14 @@
       retries: 30
       delay: 5
 
-    # Fence must hold through recovery: pi2 still owns the VIP + lock, so a
-    # recovered pi1 must not bring up a second MinIO on the shared dir.
-    - name: MinIO stays fenced off the recovered non-holder pi1
+    # No fence to hold — versitygw is not a dual-writer hazard, so a recovered
+    # pi1 brings it back up, serving locally even though pi2 holds the VIP.
+    - name: versitygw back up + serving on recovered pi1
       ansible.builtin.uri:
         url: "http://localhost:9000/health"
         status_code: 200
-      register: _minio_rec
-      failed_when: _minio_rec.status == 200
-      ignore_errors: true
-
-    - name: Assert recovered pi1 MinIO is still down
-      ansible.builtin.assert:
-        that: _minio_rec.status != 200
-        fail_msg: "MinIO came up on recovered pi1 while pi2 holds the VIP — dual-active!"
+      retries: 18
+      delay: 5
 
     - name: pi1 caught up on failover writes
       ansible.builtin.shell: |
@@ -419,9 +370,8 @@
           ✓ Patroni replication (leader → follower)
           ✓ GlusterFS replication
           ✓ Keepalived VIP + Forgejo-via-VIP
-          ✓ MinIO active-passive: serving on holder, fenced off non-holder
-          ✓ consul lock minio/active denies a second acquirer (no dual-active)
+          ✓ versitygw stateless: serving on BOTH Pis (no consul lock, no fence)
           ✓ Vault unsealed on both
-          ✓ Pi-1 failure + Pi-2 takeover (MinIO + lock follow the VIP)
-          ✓ Pi-1 recovery + data catch-up (MinIO stays fenced off pi1)
+          ✓ Pi-1 failure + Pi-2 takeover (VIP routes to pi2's versitygw)
+          ✓ Pi-1 recovery (versitygw back up on pi1) + data catch-up
           ============================================
