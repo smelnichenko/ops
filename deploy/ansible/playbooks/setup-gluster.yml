@@ -363,17 +363,19 @@
         brick: /var/lib/gluster/backup-minio-brick
         arbiter_brick: /var/lib/gluster/backup-minio-arbiter-brick
         mount: /var/lib/minio/data
-        minio_data: true
+        # versitygw owns its mount via RequiresMountsFor; never stop it for a
+        # fresh-install brick migration (would stop it on both active-active Pis).
+        stop_service: ''
       - name: backup-git-mirror
         brick: /var/lib/gluster/backup-git-mirror-brick
         arbiter_brick: /var/lib/gluster/backup-git-mirror-arbiter-brick
         mount: /mnt/backups/git-mirror
-        minio_data: false
+        stop_service: ''
       - name: nexus-data
         brick: /var/lib/gluster/nexus-brick
         arbiter_brick: /var/lib/gluster/nexus-arbiter-brick
         mount: /mnt/data/nexus
-        minio_data: false
+        stop_service: ''
       # Forgejo APP_DATA_PATH (packages, attachments, avatars,
       # actions_artifacts, etc.). Without this, only the git repo dir
       # is replicated — a VIP failover to whichever Pi doesn't have
@@ -385,7 +387,7 @@
         brick: /var/lib/gluster/forgejo-data-brick
         arbiter_brick: /var/lib/gluster/forgejo-data-arbiter-brick
         mount: /var/lib/forgejo/data
-        minio_data: false
+        stop_service: ''
 
   tasks:
     - name: Create data brick directories on pi1 + pi2
