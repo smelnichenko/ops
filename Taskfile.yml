@@ -594,7 +594,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
 
   deploy:pi-services:
-    desc: Install/update shared Pi services (Forgejo, Keycloak, MinIO, HAProxy)
+    desc: Install/update shared Pi services (Forgejo, Keycloak, versitygw, HAProxy)
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']

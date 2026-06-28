@@ -37,6 +37,9 @@
   ansible.builtin.command: versitygw --version
   register: _vgw_installed
   changed_when: false
+  # Binary is absent on first run (rc != 0); rc/stdout drives the install
+  # 'when' below. apt(deb:) is itself idempotent, so even a missed version
+  # string only causes a redundant re-fetch, never a bad install.
   failed_when: false
 
 - name: Install versitygw {{ vgw_version }}
