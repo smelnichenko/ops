@@ -6,7 +6,7 @@
 #   - /mnt/backups mounted (backup partition)
 #
 # Environment variables required:
-#   VELERO_MINIO_ACCESS_KEY, VELERO_MINIO_SECRET_KEY
+#   BACKUP_ACCESS_KEY, BACKUP_SECRET_KEY
 #
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
@@ -22,8 +22,8 @@
     velero_backup_path: "/mnt/backups/minio"
     velero_minio_storage_size: "100Gi"
     # MinIO + Forgejo credentials come from inventory.
-    velero_minio_access_key: "{{ minio_root_user }}"
-    velero_minio_secret_key: "{{ minio_root_password }}"
+    velero_minio_access_key: "{{ backup_root_user }}"
+    velero_minio_secret_key: "{{ backup_root_password }}"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
     # Git mirror: push repo to Pi as additional backup
     git_mirror_enabled: true

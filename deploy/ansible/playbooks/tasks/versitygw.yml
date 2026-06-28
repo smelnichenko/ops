@@ -14,8 +14,8 @@
 # keys/bytes preserved, so kopia/barman/scylla repositories kept working), not a
 # format swap. MinIO is fully retired; versitygw owns :9000 on both Pis.
 #
-# Expects: the minio user (uid 9000, owns the Gluster mount), minio_root_user /
-# minio_root_password, forgejo_arch, mc on PATH, and the Gluster backup volume
+# Expects: the minio user (uid 9000, owns the Gluster mount), backup_root_user /
+# backup_root_password, forgejo_arch, mc on PATH, and the Gluster backup volume
 # mounted at vgw_gluster_mount.
 
 - name: Set versitygw default vars
@@ -73,8 +73,8 @@
     group: minio
     mode: '0400'
     content: |
-      ROOT_ACCESS_KEY={{ minio_root_user }}
-      ROOT_SECRET_KEY={{ minio_root_password }}
+      ROOT_ACCESS_KEY={{ backup_root_user }}
+      ROOT_SECRET_KEY={{ backup_root_password }}
   no_log: true
   register: _vgw_env
 
