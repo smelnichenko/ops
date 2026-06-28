@@ -5,18 +5,14 @@
 # file on the POSIX (Gluster) backend, so there is NO cluster-state DB and TWO
 # gateways can serve the same volume concurrently without the dual-writer hazard
 # that forced MinIO's consul lock. Therefore: no consul lock, and versitygw runs
-# on BOTH Pis at once — keepalived only routes the VIP to a healthy gateway (the
-# minio entry must be removed from the keepalived SERVICES table; see
-# setup-keepalived.yml). Object metadata uses a --sidecar directory of regular
-# files on Gluster, avoiding the user.* xattr path that GlusterFS-over-FUSE
-# handles poorly.
+# on BOTH Pis at once — keepalived only routes the VIP to a healthy gateway.
+# Object metadata uses a --sidecar directory of regular files on Gluster,
+# avoiding the user.* xattr path that GlusterFS-over-FUSE handles poorly.
 #
-# Cutover (operational, not enforced here): MinIO's xl-single on-disk format is
-# NOT readable by versitygw, so migration is an S3-level mirror, not a format
-# swap. Run versitygw on vgw_port=9001 alongside MinIO, `rclone sync` each bucket
-# MinIO->versitygw (object keys/bytes are preserved, so kopia/barman/scylla
-# repositories keep working), restore-verify CNPG + Velero, then set
-# vgw_port=9000, retire the MinIO unit, and drop minio from keepalived SERVICES.
+# Migration history: MinIO's xl-single on-disk format is NOT readable by
+# versitygw, so the 2026-06-27 cutover was an S3-level `mc mirror` (object
+# keys/bytes preserved, so kopia/barman/scylla repositories kept working), not a
+# format swap. MinIO is fully retired; versitygw owns :9000 on both Pis.
 #
 # Expects: the minio user (uid 9000, owns the Gluster mount), minio_root_user /
 # minio_root_password, forgejo_arch, mc on PATH, and the Gluster backup volume

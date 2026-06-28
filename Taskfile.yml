@@ -602,12 +602,12 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
 
   deploy:versitygw:
-    desc: "Deploy only the versitygw gateway on the Pis (targeted, skips other services). Flags after --, e.g. `-- -e vgw_port=9001` (coexist) or `-- -e vgw_port=9000 -e vgw_cutover=true`"
+    desc: "Deploy only the versitygw gateway on the Pis (targeted, skips other services). Flags after --, e.g. `-- -e vgw_port=9001`"
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml --tags versitygw -e vgw_enabled=true {{.CLI_ARGS}}
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml --tags versitygw {{.CLI_ARGS}}
 
   deploy:woodpecker:
     desc: Deploy Woodpecker CI

@@ -79,10 +79,8 @@
 
           # Patroni
           curl -sf -o /dev/null -m 3 http://localhost:8008/health || exit 1
-          {% if vgw_cutover | default(false) | bool %}
           # versitygw runs on both Pis; gate the VIP onto a Pi with a live gateway.
           curl -sf -o /dev/null -m 3 http://localhost:9000/health || exit 1
-          {% endif %}
 
           exit 0
 
@@ -129,9 +127,6 @@
           # <unit> <data-dir (sentinel home)> <health-url> <timeout-s> <probe-interval-s>
           SERVICES="
           nexus /mnt/data/nexus http://localhost:8081/service/rest/v1/status 180 10
-          {% if not (vgw_cutover | default(false) | bool) %}
-          minio /var/lib/minio/data http://localhost:9000/minio/health/cluster 90 5
-          {% endif %}
           "
 
           # Run "$1 <svc args>" for every service in parallel; nonzero if any failed.

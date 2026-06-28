@@ -64,9 +64,3 @@ all:
       hosts:
         pi1:
         pi2:
-      vars:
-        # Pi backup object store migrated from MinIO to versitygw (stateless S3
-        # gateway over Gluster, no consul lock). Keep MinIO retired so deploys
-        # maintain versitygw on :9000 rather than re-enabling MinIO.
-        vgw_enabled: true
-        vgw_cutover: true

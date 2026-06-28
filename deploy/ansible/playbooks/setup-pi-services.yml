@@ -422,17 +422,22 @@
     # Phase 4: Backup object store — versitygw (MinIO retired 2026-06-27)
     # ================================================================
 
+    # mc + the storage user/group are tagged versitygw so a targeted
+    # `task deploy:versitygw` is self-contained on a fresh Pi (it skips Phase 3
+    # which would otherwise set forgejo_arch — so resolve it inline here too).
     - name: Download mc (S3 client; used by the versitygw bucket bootstrap)
       ansible.builtin.get_url:
-        url: "https://dl.min.io/client/mc/release/linux-{{ forgejo_arch }}/mc"
+        url: "https://dl.min.io/client/mc/release/linux-{{ forgejo_arch | default('arm64' if ansible_architecture == 'aarch64' else 'amd64') }}/mc"
         dest: /usr/local/bin/mc
         mode: '0755'
+      tags: [versitygw]
 
     - name: Create storage group (fixed GID for Gluster-neutral ownership)
       ansible.builtin.group:
         name: minio
         gid: 9000
         system: true
+      tags: [versitygw]
 
     - name: Create storage user (fixed UID; versitygw runs as this user)
       ansible.builtin.user:
@@ -443,6 +448,7 @@
         shell: /usr/sbin/nologin
         home: /var/lib/minio
         create_home: true
+      tags: [versitygw]
 
     # Retire the MinIO service + binary — versitygw is the backup store now.
     # Tagged so `task deploy:versitygw` applies the full backup-store state.
@@ -474,15 +480,13 @@
     # versitygw — stateless S3 gateway, the Pi backup store (replaced MinIO
     # 2026-06-27). Object=file on the Gluster backend means both Pis run a
     # gateway with no dual-writer hazard, so there is no consul lock; keepalived
-    # just routes the VIP. vgw_enabled/vgw_cutover are pinned true in the pis
-    # group_vars; see tasks/versitygw.yml.
+    # just routes the VIP. See tasks/versitygw.yml.
     - name: Deploy versitygw S3 gateway (Pi backup store)
       ansible.builtin.include_tasks:
         file: tasks/versitygw.yml
         apply:
           tags: [versitygw]
       tags: [versitygw]
-      when: vgw_enabled | default(false) | bool
 
     # ================================================================
     # Phase 5: Keycloak
