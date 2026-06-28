@@ -205,14 +205,14 @@
 
 - name: "DR: Create velero + postgres-backups buckets"
   ansible.builtin.shell: |
-    kubectl run minio-setup --rm -i --restart=Never \
+    kubectl run bucket-setup --rm -i --restart=Never \
       -n {{ velero_ns }} \
       --image=quay.io/minio/mc:latest \
       --overrides='{
         "spec": {
           "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
           "containers": [{
-            "name": "minio-setup",
+            "name": "bucket-setup",
             "image": "quay.io/minio/mc:latest",
             "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://versitygw-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero && mc mb --ignore-existing test/postgres-backups"],
             "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
