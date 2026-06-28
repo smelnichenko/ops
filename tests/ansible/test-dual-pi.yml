@@ -71,9 +71,9 @@
       changed_when: false
       failed_when: _minio_h.stdout != "active"
 
-    - name: MinIO serving on the holder
+    - name: versitygw serving on the holder
       ansible.builtin.uri:
-        url: "http://localhost:9000/minio/health/live"
+        url: "http://localhost:9000/health"
         status_code: 200
       retries: 12
       delay: 5
@@ -94,7 +94,7 @@
   tasks:
     - name: MinIO not serving on the non-holder
       ansible.builtin.uri:
-        url: "http://localhost:9000/minio/health/live"
+        url: "http://localhost:9000/health"
         status_code: 200
       register: _minio_nh
       failed_when: _minio_nh.status == 200
@@ -304,7 +304,7 @@
     # re-acquires cleanly across a failover (not just at steady state).
     - name: MinIO active + serving on pi2 after failover
       ansible.builtin.uri:
-        url: "http://localhost:9000/minio/health/live"
+        url: "http://localhost:9000/health"
         status_code: 200
       retries: 18
       delay: 5
@@ -353,7 +353,7 @@
     # recovered pi1 must not bring up a second MinIO on the shared dir.
     - name: MinIO stays fenced off the recovered non-holder pi1
       ansible.builtin.uri:
-        url: "http://localhost:9000/minio/health/live"
+        url: "http://localhost:9000/health"
         status_code: 200
       register: _minio_rec
       failed_when: _minio_rec.status == 200
