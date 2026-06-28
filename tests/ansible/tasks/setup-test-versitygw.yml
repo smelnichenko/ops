@@ -115,6 +115,19 @@
               fsGroup: 1000
               seccompProfile:
                 type: RuntimeDefault
+            initContainers:
+              # versitygw does not create its backend / IAM dirs — pre-create them
+              # (separate so the IAM store isn't exposed as an S3 bucket).
+              - name: init-dirs
+                image: busybox:1.37
+                command: ["sh", "-c", "mkdir -p /data/buckets /data/iam"]
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+                volumeMounts:
+                  - name: data
+                    mountPath: /data
             containers:
               - name: versitygw
                 image: "{{ versitygw_image }}"
@@ -125,9 +138,9 @@
                   - name: VGW_BACKEND
                     value: posix
                   - name: VGW_BACKEND_ARGS
-                    value: /data
+                    value: /data/buckets
                   - name: VGW_IAM_DIR
-                    value: /data/.iam
+                    value: /data/iam
                 envFrom:
                   - secretRef:
                       name: versitygw-test-secret
