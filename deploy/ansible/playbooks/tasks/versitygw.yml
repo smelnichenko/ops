@@ -136,6 +136,12 @@
     for b in velero pg-dump postgres-backups scylla-backups etcd-backups; do
       HOME=/tmp mc mb vgw/$b --ignore-existing
     done
+  register: _vgw_buckets
+  # /health can answer 200 before the S3 API is ready to serve bucket ops, so
+  # let the create itself be the readiness gate — retry until it's accepted.
+  until: _vgw_buckets.rc == 0
+  retries: 12
+  delay: 5
   changed_when: false
   no_log: true
   run_once: true

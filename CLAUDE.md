@@ -139,7 +139,7 @@ task test:argocd      # Vagrant: Argo CD GitOps integration
 # Deploy to target
 task deploy:argocd       # Install/update Argo CD (GitOps controller)
 task deploy:nexus        # Deploy Nexus repository manager on Pi
-task deploy:pi-services  # Forgejo, Keycloak, MinIO, HAProxy on Pis
+task deploy:pi-services  # Forgejo, Keycloak, versitygw, HAProxy on Pis
 task deploy:woodpecker   # Deploy Woodpecker CI
 task deploy:velero       # Deploy Velero + Backup MinIO
 task deploy:full         # Fresh kubeadm + pi-services + argocd + app
@@ -203,8 +203,8 @@ Nexus Repository Manager (Pi, systemd) ← caching proxy for artifacts + Docker
 apt-cacher-ng (namespace: schnappy)     ← caching proxy for apt in Docker builds
   └─ :3142 → Debian/Ubuntu mirrors (used by Kaniko via http_proxy build-arg)
 
-Pi MinIO (192.168.11.5:9000)     ← S3 storage, distributed across pi1+pi2 (4 drives)
-Velero (namespace: velero)       ← k8s backup orchestrator → Pi MinIO
+Pi backup store (192.168.11.5:9000)  ← versitygw S3 gateway on pi1+pi2 over Gluster (VIP)
+Velero (namespace: velero)       ← k8s backup orchestrator → Pi backup store
   ├─ schnappy-daily (2 AM)        ← schnappy namespace, 7-day retention
   └─ full-weekly (Sun 3 AM)      ← all namespaces, 30-day retention
 ```
@@ -244,7 +244,7 @@ Istio classic sidecar mode v1.25 provides per-pod mTLS and L7 routing. Only `sch
 - **Gateway:** Istio Gateway API in schnappy namespace with `externalIPs: [192.168.11.2]`
 - **Routing:** HTTPRoutes (Gateway API) for pmon.dev, ci, cd, grafana, logs, reports, sonar (auth + git on Pi Caddy)
 - **TLS:** Wildcard cert `*.pmon.dev` via cert-manager DNS-01 (Porkbun webhook), terminated at Istio gateway
-- **mTLS:** STRICT PeerAuthentication namespace-wide; per-service AuthorizationPolicies with SPIFFE identity; port-level PERMISSIVE for MinIO (9000) and Mimir (9009)
+- **mTLS:** STRICT PeerAuthentication namespace-wide; per-service AuthorizationPolicies with SPIFFE identity; port-level PERMISSIVE for versitygw (9000) and Mimir (9009)
 - **Cross-namespace routing:** ReferenceGrants for argocd and woodpecker namespaces
 - **Helm chart:** `schnappy-mesh` — Gateway, HTTPRoutes, ServiceAccounts, PeerAuthentication, AuthorizationPolicies, Certificates, ReferenceGrants
 - **Jobs:** All Job templates include `curl -X POST localhost:15020/quitquitquit` to terminate sidecar after completion
@@ -532,8 +532,8 @@ TARGET_SSH_KEY=/home/sm/.ssh/id_ed25519
 FORGEJO_ADMIN_USER=admin            # Seeded to Vault → ESO → forgejo-admin secret
 FORGEJO_ADMIN_PASSWORD=<secure>
 FORGEJO_ADMIN_EMAIL=admin@pmon.dev
-VELERO_MINIO_ACCESS_KEY=velero-admin  # Backup MinIO
-VELERO_MINIO_SECRET_KEY=<secure>
+BACKUP_ACCESS_KEY=velero-admin        # Pi backup store (versitygw) root creds
+BACKUP_SECRET_KEY=<secure>
 PORKBUN_API_KEY=pk1_...              # DNS-01 cert validation
 PORKBUN_SECRET_KEY=sk1_...
 
@@ -543,7 +543,7 @@ PORKBUN_SECRET_KEY=sk1_...
 # Deploy
 task deploy:argocd       # Install/update Argo CD (GitOps controller)
 task deploy:full         # Fresh kubeadm + pi-services + argocd + app
-task deploy:pi-services  # Forgejo, Keycloak, MinIO, HAProxy on Pis
+task deploy:pi-services  # Forgejo, Keycloak, versitygw, HAProxy on Pis
 task deploy:woodpecker   # Deploy Woodpecker CI
 task deploy:velero       # Deploy Velero + backups
 task deploy:status       # Check status
@@ -791,14 +791,15 @@ Caching proxy for Debian/Ubuntu apt packages, used by Kaniko during Docker image
 - **Storage:** 10Gi PVC (production), 5Gi (default)
 - **Helm:** `aptCache.enabled: true` (default)
 
-## Backups (Velero → Pi MinIO)
+## Backups (Velero → Pi backup store)
 
-Automated k8s cluster backups using Velero with the distributed MinIO
-cluster running on the Pis (4 drives across pi1 + pi2).
+Automated k8s cluster backups using Velero, stored on the **versitygw** S3
+gateway on the Pis (a stateless object=file gateway over the shared GlusterFS
+backup volume; replaced MinIO 2026-06-27, Plans 074/076).
 
 - **Namespace:** `velero`
-- **Backup storage:** Pi MinIO at `192.168.11.5:9000` (distributed mode, 4 drives across pi1+pi2 — credentials in `/etc/minio/env` on each Pi)
-- **MinIO image:** `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` (pinned)
+- **Backup storage:** Pi backup store (versitygw) at `192.168.11.5:9000` (keepalived VIP; versitygw runs on **both** pi1+pi2 over Gluster — root creds in `/etc/versitygw/env`, sourced from `BACKUP_ACCESS_KEY`/`BACKUP_SECRET_KEY`)
+- **versitygw:** Apache-2.0 S3 gateway, deb install via `task deploy:versitygw`; stateless so no consul lock (not a dual-writer hazard)
 - **Velero chart:** `vmware-tanzu/velero` (v11.4.0) with `velero-plugin-for-aws`
 - **Node agent:** Enabled for PVC filesystem backups (`defaultVolumesToFsBackup: true`)
 - **Snapshots:** Disabled (no snapshot support on local-path-provisioner)
@@ -806,7 +807,7 @@ cluster running on the Pis (4 drives across pi1 + pi2).
 - **Scheduled backups:**
   - `schnappy-daily`: 2 AM UTC, `schnappy` namespace, 7-day retention
   - `full-weekly`: Sunday 3 AM UTC, all namespaces, 30-day retention
-- **Vault Raft snapshots:** CronJob every 6h, uploaded to MinIO `vault-backups` bucket, 30 retained
+- **Vault snapshots:** CronJob every 6h, uploaded to the backup store `vault-backups` bucket, 30 retained
 - **Key files:** `deploy/ansible/playbooks/setup-velero.yml` (ops repo), Helm templates in platform repo
 
 The previous setup ran a local MinIO instance on ten's SATA SSD at

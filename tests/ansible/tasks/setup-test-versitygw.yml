@@ -1,17 +1,15 @@
 ---
-# Stand up an in-cluster test MinIO that backs both the Velero
-# BackupStorageLocation (`velero` bucket) and the CNPG barman object
-# store (`postgres-backups` bucket).
-#
-# Moved out of test-dr.yml so the CNPG cluster (which now writes barman
-# backups here) can depend on MinIO being up first.
+# Stand up an in-cluster test versitygw (S3 gateway) that backs both the Velero
+# BackupStorageLocation (`velero` bucket) and the CNPG barman object store
+# (`postgres-backups` bucket) — mirrors the production Pi backup store (Plan
+# 074/076) so the DR tests exercise the same S3 implementation prod runs.
 #
 # Required vars:
-#   velero_ns:    namespace for the test MinIO + Velero
-#   minio_image:  MinIO container image
+#   velero_ns:        namespace for the test gateway + Velero
+#   versitygw_image:  versitygw container image (ghcr.io/versity/versitygw:<ver>)
 #
 # Usage:
-#   - ansible.builtin.import_tasks: tasks/setup-test-minio.yml
+#   - ansible.builtin.import_tasks: tasks/setup-test-versitygw.yml
 
 - name: "DR: Create velero namespace"
   kubernetes.core.k8s:
@@ -34,16 +32,16 @@
     group: "1000"
     mode: '0755'
 
-- name: "DR: Deploy test MinIO — PersistentVolume"
+- name: "DR: Deploy test versitygw — PersistentVolume"
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: PersistentVolume
       metadata:
-        name: minio-test-pv
+        name: versitygw-test-pv
         labels:
-          app: minio-test
+          app: versitygw-test
       spec:
         capacity:
           storage: 5Gi
@@ -55,14 +53,14 @@
           type: DirectoryOrCreate
         persistentVolumeReclaimPolicy: Delete
 
-- name: "DR: Deploy test MinIO — PersistentVolumeClaim"
+- name: "DR: Deploy test versitygw — PersistentVolumeClaim"
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: PersistentVolumeClaim
       metadata:
-        name: minio-test-pvc
+        name: versitygw-test-pvc
         namespace: "{{ velero_ns }}"
       spec:
         accessModes:
@@ -73,30 +71,30 @@
             storage: 5Gi
         selector:
           matchLabels:
-            app: minio-test
+            app: versitygw-test
 
-- name: "DR: Deploy test MinIO — Secret"
+- name: "DR: Deploy test versitygw — Secret"
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: Secret
       metadata:
-        name: minio-test-secret
+        name: versitygw-test-secret
         namespace: "{{ velero_ns }}"
       type: Opaque
       stringData:
-        MINIO_ROOT_USER: "minioadmin"
-        MINIO_ROOT_PASSWORD: "minioadmin"
+        ROOT_ACCESS_KEY: "minioadmin"
+        ROOT_SECRET_KEY: "minioadmin"
 
-- name: "DR: Deploy test MinIO — Deployment"
+- name: "DR: Deploy test versitygw — Deployment"
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: minio-test
+        name: versitygw-test
         namespace: "{{ velero_ns }}"
       spec:
         replicas: 1
@@ -104,11 +102,11 @@
           type: Recreate
         selector:
           matchLabels:
-            app: minio-test
+            app: versitygw-test
         template:
           metadata:
             labels:
-              app: minio-test
+              app: versitygw-test
           spec:
             securityContext:
               runAsNonRoot: true
@@ -117,16 +115,37 @@
               fsGroup: 1000
               seccompProfile:
                 type: RuntimeDefault
+            initContainers:
+              # versitygw does not create its backend / IAM dirs — pre-create them
+              # (separate so the IAM store isn't exposed as an S3 bucket).
+              - name: init-dirs
+                image: busybox:1.37
+                command: ["sh", "-c", "mkdir -p /data/buckets /data/iam"]
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+                volumeMounts:
+                  - name: data
+                    mountPath: /data
             containers:
-              - name: minio
-                image: "{{ minio_image }}"
-                command: ["minio", "server", "/data", "--console-address", ":9001"]
+              - name: versitygw
+                image: "{{ versitygw_image }}"
+                # object=file POSIX backend on the PVC; same gateway prod runs.
+                env:
+                  - name: VGW_PORT
+                    value: ":9000"
+                  - name: VGW_BACKEND
+                    value: posix
+                  - name: VGW_BACKEND_ARGS
+                    value: /data/buckets
+                  - name: VGW_IAM_DIR
+                    value: /data/iam
                 envFrom:
                   - secretRef:
-                      name: minio-test-secret
+                      name: versitygw-test-secret
                 ports:
                   - containerPort: 9000
-                  - containerPort: 9001
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:
@@ -142,61 +161,60 @@
                   - name: data
                     mountPath: /data
                 readinessProbe:
-                  httpGet:
-                    path: /minio/health/ready
+                  tcpSocket:
                     port: 9000
                   initialDelaySeconds: 5
                   periodSeconds: 10
             volumes:
               - name: data
                 persistentVolumeClaim:
-                  claimName: minio-test-pvc
+                  claimName: versitygw-test-pvc
 
-- name: "DR: Deploy test MinIO — Service"
+- name: "DR: Deploy test versitygw — Service"
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: v1
       kind: Service
       metadata:
-        name: minio-test
+        name: versitygw-test
         namespace: "{{ velero_ns }}"
       spec:
         selector:
-          app: minio-test
+          app: versitygw-test
         ports:
           - name: api
             port: 9000
             targetPort: 9000
 
-- name: "DR: Wait for test MinIO"
+- name: "DR: Wait for test versitygw"
   kubernetes.core.k8s_info:
     api_version: apps/v1
     kind: Deployment
-    name: minio-test
+    name: versitygw-test
     namespace: "{{ velero_ns }}"
-  register: _rollout_minio
+  register: _rollout_versitygw
   retries: 60
   delay: 2
   until: >-
-    (_rollout_minio.resources | default([]) | length > 0) and
-    (_rollout_minio.resources[0].status.readyReplicas | default(0)) ==
-    (_rollout_minio.resources[0].status.replicas | default(-1)) and
-    (_rollout_minio.resources[0].status.updatedReplicas | default(0)) ==
-    (_rollout_minio.resources[0].status.replicas | default(-1))
+    (_rollout_versitygw.resources | default([]) | length > 0) and
+    (_rollout_versitygw.resources[0].status.readyReplicas | default(0)) ==
+    (_rollout_versitygw.resources[0].status.replicas | default(-1)) and
+    (_rollout_versitygw.resources[0].status.updatedReplicas | default(0)) ==
+    (_rollout_versitygw.resources[0].status.replicas | default(-1))
 
-- name: "DR: Create velero bucket"
+- name: "DR: Create velero + postgres-backups buckets"
   ansible.builtin.shell: |
-    kubectl run minio-setup --rm -i --restart=Never \
+    kubectl run bucket-setup --rm -i --restart=Never \
       -n {{ velero_ns }} \
       --image=quay.io/minio/mc:latest \
       --overrides='{
         "spec": {
           "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
           "containers": [{
-            "name": "minio-setup",
+            "name": "bucket-setup",
             "image": "quay.io/minio/mc:latest",
-            "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://minio-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero && mc mb --ignore-existing test/postgres-backups"],
+            "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://versitygw-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero && mc mb --ignore-existing test/postgres-backups"],
             "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
           }]
         }

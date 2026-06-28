@@ -125,7 +125,7 @@
         backup:
           barmanObjectStore:
             destinationPath: s3://postgres-backups/
-            endpointURL: http://minio-test.velero.svc:9000
+            endpointURL: http://versitygw-test.velero.svc:9000
             s3Credentials:
               accessKeyId:
                 name: schnappy-postgres-minio-backup

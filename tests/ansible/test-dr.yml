@@ -69,7 +69,7 @@
     kc_admin_password: "{{ keycloak_admin_password }}"
     velero_ns: velero
     velero_chart_version: "11.4.0"
-    minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+    versitygw_image: "ghcr.io/versity/versitygw:v1.6.0"
     offsite_host: 192.168.56.20
     offsite_user: vagrant
     offsite_path: /mnt/backups/velero
@@ -236,9 +236,9 @@
     - name: Deploy schnappy-mesh (ServiceAccounts)
       ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
 
-    # Test MinIO must be up before the CNPG cluster: the cluster's barman
+    # Test versitygw must be up before the CNPG cluster: the cluster's barman
     # object store writes backups here, and the bucket must already exist.
-    - ansible.builtin.import_tasks: tasks/setup-test-minio.yml
+    - ansible.builtin.import_tasks: tasks/setup-test-versitygw.yml
 
     - name: CNPG barman backup credentials Secret (schnappy-postgres-minio-backup)
       kubernetes.core.k8s:
@@ -744,7 +744,7 @@
     # Suite 2: Full Disaster Recovery (Velero Backup/Restore)
     # ================================================================
 
-    # ── Step 1: Deploy Velero (test MinIO already up from setup-test-minio) ──
+    # ── Step 1: Deploy Velero (test versitygw already up from setup-test-versitygw) ──
 
     - name: "DR: Add vmware-tanzu Helm repo"
       kubernetes.core.helm_repository:
@@ -814,7 +814,7 @@
                 config:
                   region: us-east-1
                   s3ForcePathStyle: "true"
-                  s3Url: "http://minio-test.{{ velero_ns }}.svc:9000"
+                  s3Url: "http://versitygw-test.{{ velero_ns }}.svc:9000"
             volumeSnapshotLocation: []
             defaultVolumesToFsBackup: true
             features: ""
@@ -1095,7 +1095,7 @@
               - name: backup-source
                 barmanObjectStore:
                   destinationPath: s3://postgres-backups/
-                  endpointURL: http://minio-test.velero.svc:9000
+                  endpointURL: http://versitygw-test.velero.svc:9000
                   serverName: schnappy-postgres
                   s3Credentials:
                     accessKeyId:
@@ -1355,7 +1355,7 @@
         kind: Pod
         namespace: "{{ velero_ns }}"
         label_selectors:
-          - "app=minio-test"
+          - "app=versitygw-test"
         state: absent
         wait: false
 
@@ -1363,7 +1363,7 @@
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: Deployment
-        name: minio-test
+        name: versitygw-test
         namespace: "{{ velero_ns }}"
       register: _rollout_minio_offsite
       retries: 60
@@ -1489,7 +1489,7 @@
               - name: backup-source
                 barmanObjectStore:
                   destinationPath: s3://postgres-backups/
-                  endpointURL: http://minio-test.velero.svc:9000
+                  endpointURL: http://versitygw-test.velero.svc:9000
                   serverName: schnappy-postgres
                   s3Credentials:
                     accessKeyId:
