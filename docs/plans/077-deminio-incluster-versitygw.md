@@ -80,14 +80,13 @@ Order: **test → production (app-data) → infra (Mimir/Tempo/Hyperfoil) → pr
 3. **PR-3 (infra, test):** `s3gw.mirror: true`. The mirror Job copies `email-attachments` MinIO→versitygw and asserts equal counts. Verify the Job succeeded.
 4. **PR-4 (infra, test):** flip `minio.endpointOverride` → `{fullname}-s3gw:9000`; roll the monitor app. **Verify:** upload a test inbound email with an attachment (Resend webhook) and fetch it back from the inbox — round-trips through versitygw. Re-run the mirror once more to catch any write between steps 3–4.
 5. **Soak** (a day of normal use). Reversible: flip `endpointOverride` back to MinIO (the original data is intact).
-6. **PR-5 (infra, test) — decommission (point of no return):** `minio.enabled: false`. Argo removes the MinIO Deployment + PVC. versitygw is now the only store.
+6. **PR-5 (infra, test) — decommission (point of no return):** only after §6's gates pass **and a fresh Velero backup of the MinIO PVC is confirmed**, set `minio.enabled: false`. Argo removes the MinIO Deployment + PVC; versitygw is the only store. (Velero can still restore the old MinIO PVC if ever needed.)
 7. Repeat 2–6 for `schnappy-production`.
 
 ### Tier B — infra observability (`schnappy-infra`)
 
-Same shape, but the buckets are `mimir-blocks` / `tempo-traces` / `hyperfoil-reports`, and **history retention is a decision** (§7):
-- If preserving history: mirror all three buckets (mimir-blocks can be sizeable → ensure the s3gw PVC is large enough; this is the transient second PVC).
-- If dropping history (acceptable for short-retention metrics/traces): skip the mirror, flip `mimir.minioEndpoint` / `tempo.minioEndpoint` to versitygw, let Mimir/Tempo write fresh blocks; the store-gateway/compactor rebuild the bucket-index. Hyperfoil reports are ephemeral → never mirror.
+Same shape, but the buckets are `mimir-blocks` / `tempo-traces` / `hyperfoil-reports`. **Per the "save existing data" directive, all history is preserved** — Mimir blocks and Tempo traces are mirrored, never dropped:
+- Mirror all three buckets (`mimir-blocks` can be sizeable → size the s3gw PVC for it; this is the transient second PVC). `hyperfoil-reports` is regenerable but mirrored too, for uniformity.
 - **Verify:** after cutover, `cortex_bucket_store_blocks_loaded > 0`, `thanos_objstore_bucket_operation_failures_total == 0`, a Grafana metrics query and a Tempo trace search both return data; `tempodb_blocklist_length > 0`. Soak before decommission.
 
 ### Tier C — preview shared store
@@ -97,7 +96,8 @@ Decoupled — no chart change. Stand up a shared versitygw (or reuse the product
 ## 6. Verification gates (every tier, before decommission)
 
 - versitygw pod Ready; `mc ls` shows all expected buckets.
-- Mirror Job asserts **equal object counts** source vs dest (where mirrored).
+- Mirror Job is green — `mc mirror` + `mc diff` show **zero** difference for every bucket (a non-empty diff fails the Job and blocks the cutover).
+- **A fresh Velero backup of the MinIO PVC is confirmed** before deletion — the `backup.velero.io/backup-volumes: data` annotation already snapshots it to the Pi backup store; trigger an on-demand backup and confirm it completed. This is the safety net for "save existing data".
 - A real consumer round-trip: attachment upload+download (app) / metrics+trace read-back (infra).
 - For infra: `thanos_objstore_bucket_operation_failures_total == 0` and `cortex_bucket_store_blocks_loaded` matches the bucket block count (the discovery proof from the soak, now in-cluster).
 - mesh: the consumer can reach `{fullname}-s3gw:9000` through the PERMISSIVE PeerAuth (no `RBAC: access denied` in the istio-proxy logs).
@@ -107,7 +107,7 @@ Decoupled — no chart change. Stand up a shared versitygw (or reuse the product
 | Item | Note |
 |---|---|
 | **Transient second PVC** | Required because xl-single isn't versitygw-readable. For `mimir-blocks` this may be large; ensure node disk headroom. Freed when MinIO is decommissioned. |
-| **History retention (infra)** | Decision: mirror Mimir/Tempo history (preserve, larger/slower) vs. start fresh (drop, simplest). Recommend **mirror production-relevant metrics, drop traces** unless trace history matters. |
+| **History retention (infra)** | **Resolved: preserve everything** (save-existing-data directive). Mimir blocks + Tempo traces are mirrored, never dropped; cost is the larger transient s3gw PVC + a longer `mimir-blocks` mirror. |
 | **Write delta during mirror→flip** | New writes to MinIO between the mirror and the endpoint flip aren't on versitygw yet → re-run the incremental `mc mirror` immediately before flipping reads. For email-attachments this matters; for Mimir/Tempo the ingester re-ships recent blocks. |
 | **End-state naming** | After decommission the workload is named `{fullname}-s3gw`. Collapsing `s3gw`→`minio` (Service/label/secret-key names) is cosmetic and carries the same zero-gain/breakage-risk as Plan 076's declined Tier-2 — **defer as a separate decision**; the `MINIO_*` env contract is internally consistent and functional as-is. |
 | **`readOnlyRootFilesystem`** | versitygw writes only under `/data` (PVC) and needs `/tmp`; the existing `tmp` emptyDir + RO-root carries over. Confirm versitygw has no other write path. |
@@ -123,6 +123,6 @@ Decoupled — no chart change. Stand up a shared versitygw (or reuse the product
 
 - [ ] Tier A — test
 - [ ] Tier A — production
-- [ ] Tier B — infra (history-retention decision first)
+- [ ] Tier B — infra (mirror all history — preserve)
 - [ ] Tier C — preview
 - [ ] (deferred) cosmetic `s3gw`→`minio` naming collapse
