@@ -121,8 +121,23 @@ Decoupled — no chart change. Stand up a shared versitygw (or reuse the product
 
 ## 9. Status
 
-- [ ] Tier A — test
-- [ ] Tier A — production
-- [ ] Tier B — infra (mirror all history — preserve)
-- [ ] Tier C — preview
-- [ ] (deferred) cosmetic `s3gw`→`minio` naming collapse
+- [x] **Tier B — infra: DONE + VERIFIED** (the real target). Mimir/Tempo/reports on versitygw; minio decommissioned (18G freed).
+- [~] Tier A — app-data: **mostly MOOT**. `email-attachments` unused (neither test nor prod monitor wires `MINIO_ENDPOINT`; buckets empty) → no flip. Test app-data minio + the s3gw rehearsal scaffold removed. **Prod app-data minio KEPT** — `hyperfoil-reports` (2.3M) is a live consumer there.
+- [ ] Tier C — preview: not done.
+- [ ] (deferred) cosmetic `s3gw`→`minio` naming collapse.
+
+## 10. Execution outcome (2026-06-29)
+
+**The app tier was the wrong target.** Live inspection (which should have come first — see [[feedback_inspect_live_state_first]]) showed `email-attachments` is unused: the monitor app never enables minio in either apps release, buckets empty. **The real consumer is the infra tier**: Mimir (18G `mimir-blocks`), Tempo (1.3G `tempo-traces`), reports (`hyperfoil-reports`).
+
+**Infra migration executed + verified:** s3gw gateway up; quiesced Mimir/Tempo; mirrored ~20G minio→versitygw (all source objects present, size-matched); flipped mimir/tempo/reports endpoints; Mimir 0 objstore-failures / 0 block-load-failures / full history, Tempo serving traces. minio decommissioned (workload + 18G PVC deleted; shared S3 secret kept for s3gw).
+
+**Hard-won gotchas (memory [[project_incluster_minio_versitygw]]):**
+- Quiesce must be **GitOps** — `schnappy-observability` is ApplicationSet-managed → it reverts a manual `selfHeal:false` patch + rescales. (The flip applying early made minio static, which salvaged it.)
+- `mc mirror` **OOMs** on big data → **`rclone copy`** (bounded `--transfers`); **`copy` not `sync`** (sync deletes the consumer's newer blocks); verify `rclone check --one-way --size-only`.
+- Mimir caches block-load failures → `rollout restart` to clear after a mirror.
+- **velero cannot fs-backup a local-path PVC** (tries to snapshot → skipped) → the observability data has **no point-in-time backup** (pre-existing; minio was never backed up either). An S3-level backup to the Pi store is the proper fix.
+
+**Mechanism chart change (`schnappy-data`):** parallel `s3gw` workload (gated `s3gw.enabled`/`s3gw.mirror`); **no L7 authz** on minio/s3gw :9000 (sidecar-less S3 clients have no principal → NetworkPolicy gates by pod label); `s3gw.storage.size` required (no masking default); shared S3 ExternalSecret gated on `minio.enabled OR s3gw.enabled`.
+
+**Open follow-ups:** prod app-data minio (hyperfoil-reports — its own assessment/migration); observability S3-level backup to the Pi store; Tier C preview.
