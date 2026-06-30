@@ -33,10 +33,10 @@
     test_minio_password: vagrant-minio-secret
 
   tasks:
-    - name: Seed minio secret
+    - name: Seed s3gw secret
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
-        secret_path: schnappy/minio
+        secret_path: schnappy/s3gw
         secret_data:
           access_key: "{{ test_minio_user }}"
           secret_key: "{{ test_minio_password }}"
