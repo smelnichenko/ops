@@ -46,8 +46,8 @@ flush first:
 | Store | Pre-reboot action |
 |---|---|
 | `schnappy-production-scylla` | `kubectl exec -n schnappy-production schnappy-production-scylla-datacenter1-rack1-0 -- nodetool drain` |
-| `schnappy-production-minio` (email-attachments, only copy) | `mc mirror <alias>/email-attachments <pi>/email-attachments-backup` |
-| `schnappy-infra-minio` (Mimir+Tempo S3 backend) | mirror buckets, or accept loss of the most-recent un-shipped Mimir head block |
+| `schnappy-production-s3gw` (versitygw, email-attachments, only copy) | `mc mirror <alias>/email-attachments <pi>/email-attachments-backup` |
+| `schnappy-infra-s3gw` (versitygw, Mimir+Tempo S3 backend) | mirror buckets, or accept loss of the most-recent un-shipped Mimir head block |
 | `schnappy-sonarqube-postgres` (no backup) | optional `pg_dump` if SQ history matters |
 
 **2.4 Pre-flight:**

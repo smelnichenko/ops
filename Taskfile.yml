@@ -116,9 +116,9 @@ tasks:
   # ============== HYPERFOIL (production load/stress tests) ==============
   # k6 is no longer used for load testing — only post-sync smoke tests
   # (see schnappy-test/templates/k6-smoke-*). All load/stress/spike/soak
-  # work runs through Hyperfoil, which reports to MinIO + reports.pmon.dev.
+  # work runs through Hyperfoil, which reports to s3gw + reports.pmon.dev.
   test:hyperfoil:load:
-    desc: Run Hyperfoil load test in production (5min, reports to MinIO)
+    desc: Run Hyperfoil load test in production (5min, reports to s3gw)
     cmds:
       - ssh ten 'kubectl delete job hf-load -n schnappy-production 2>/dev/null; kubectl create job hf-load --from=cronjob/schnappy-production-hyperfoil-load -n schnappy-production'
       - echo "Waiting for completion (~5min)..."

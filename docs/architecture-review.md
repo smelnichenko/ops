@@ -83,7 +83,7 @@ schnappy is a hub-and-spoke topology: a single Kubernetes node hosts all applica
 |                |        GlusterFS replica-3-arbiter: pi1 + pi2 data, ten arbiter
 | schnappy-      |
 |  production    |   Apps: monitor admin chat chess site game-scp
-| schnappy-test  |   Data: CNPG(1) Strimzi-Kafka(1) ScyllaDB(1) Valkey MinIO(1)
+| schnappy-test  |   Data: CNPG(1) Strimzi-Kafka(1) ScyllaDB(1) Valkey s3gw(1)
 | schnappy-infra |   Obs:  Prometheus Mimir Tempo Grafana ClickHouse Alertmanager
 +-------+--------+
         |
@@ -141,7 +141,7 @@ This is clean, idiomatic event-driven design. The honest caveats are inherent to
 This domain carried the most stale survey material, now reconciled against live config (`schnappy-production-data/values.yaml`):
 
 - **Application databases run on in-cluster CloudNativePG**, not Pi Patroni. `cnpg.enabled: true` (line 144) with an operator-managed `Cluster` at **`instances: 1`** (`cnpg-cluster.yaml:10`) hosting four isolated databases/users — `monitor`, `admin`, `chat`, `chess` — each with Vault-sourced credentials and Liquibase-managed schemas. A `cnpg-init-users` Job bootstraps the per-service roles.
-- **The chart's raw `postgres:`/`minio` legacy blocks are dead** (`enabled: false`); Kafka is Strimzi (`strimzi.enabled: true`, KRaft mode), ScyllaDB is operator-managed (`scyllaOperator.enabled: true`), Valkey replaces Redis (wire-compatible cache), and MinIO is a single in-cluster pod.
+- **The chart's raw `postgres:`/`minio` legacy blocks are dead** (`enabled: false`); Kafka is Strimzi (`strimzi.enabled: true`, KRaft mode), ScyllaDB is operator-managed (`scyllaOperator.enabled: true`), Valkey replaces Redis (wire-compatible cache), and the in-cluster object store is a single s3gw (versitygw) pod.
 - **Pi Patroni serves only Forgejo and Keycloak** — a separate system from the app data tier.
 
 The per-service isolation is good practice: separate databases, users, and credentials prevent one service's compromise or schema migration from affecting another, and Liquibase gives idempotent, version-tracked DDL. ScyllaDB's chat schema (`messages_by_channel`, `messages_by_user_v2`, `message_edits`, `reactions_by_message`, `chain_heads`) is thoughtfully partitioned for the access patterns, with an E2E hash chain (`hash`/`prev_hash`) and key-version columns.
@@ -174,7 +174,7 @@ The mesh is comprehensive defense-in-depth: Istio 1.25.2 sidecars with STRICT `P
 
 Two survey claims were corrected here. The ingress gateway is **not** a single-pod SPOF — `schnappy-infra-mesh/values.yaml:14` sets `replicas: 2`; the real SPOF is that both replicas bind one node's IP (`.2`), so node loss (not pod loss) is the exposure. And edge JWT validation is enabled in `schnappy-infra` (`jwt.enabled: true` with a per-vhost passthrough allowlist for git/sonar/ci/auth/cd/grafana/logs/etc.) but disabled in `schnappy-production` — the security consequence detailed above.
 
-The cost of STRICT mTLS on a heterogeneous stack is **carve-out sprawl**: roughly seven-plus port-level PERMISSIVE exceptions and sidecar-disable annotations are needed so non-mesh scrape targets, S3 Signature-V4 clients (MinIO/Tempo break under Envoy header rewriting), Fluent-bit (DaemonSet, no sidecar control plane), and setup Jobs can coexist. The decision to run **Prometheus without a sidecar** is a deliberate, documented trade-off (one PeerAuth exception vs. 7+ DestinationRules and ~50% overhead) — but it directly caused the 2026-04-20 "silent alerts for weeks" incident (fixed in commit `bf77e2e`), a useful reminder that each carve-out is latent risk. The Cilium eBPF DNAT interaction with NetworkPolicy `ipBlock` is a known sharp edge: Woodpecker egress rules are deliberately over-broad ("allow 443 broadly, restrict 3000 to Pi VIP") because eBPF DNAT mangles externalIP `ipBlock` matching. Both layers (K8s NetworkPolicy + CiliumNetworkPolicy for host-level egress like the smartctl probe) are used appropriately.
+The cost of STRICT mTLS on a heterogeneous stack is **carve-out sprawl**: roughly seven-plus port-level PERMISSIVE exceptions and sidecar-disable annotations are needed so non-mesh scrape targets, S3 Signature-V4 clients (s3gw/Tempo break under Envoy header rewriting), Fluent-bit (DaemonSet, no sidecar control plane), and setup Jobs can coexist. The decision to run **Prometheus without a sidecar** is a deliberate, documented trade-off (one PeerAuth exception vs. 7+ DestinationRules and ~50% overhead) — but it directly caused the 2026-04-20 "silent alerts for weeks" incident (fixed in commit `bf77e2e`), a useful reminder that each carve-out is latent risk. The Cilium eBPF DNAT interaction with NetworkPolicy `ipBlock` is a known sharp edge: Woodpecker egress rules are deliberately over-broad ("allow 443 broadly, restrict 3000 to Pi VIP") because eBPF DNAT mangles externalIP `ipBlock` matching. Both layers (K8s NetworkPolicy + CiliumNetworkPolicy for host-level egress like the smartctl probe) are used appropriately.
 
 ---
 
@@ -203,8 +203,8 @@ Two corrections and two real gaps. **Correction:** the stateful `schnappy-data-e
 
 Observability is the platform's standout strength and resembles a deliberate SRE setup rather than "Grafana and call it done." The three pillars are correlated, not siloed:
 
-- **Metrics:** Prometheus Operator (kube-prometheus-stack) with CRD-based discovery, no sidecar (scraping merged app+Envoy metrics on `:15020`), `remote_write` to **Mimir** (single-replica all-in-one, MinIO S3 backend, 90-day retention), with **exemplar storage enabled** for trace-to-metric linking.
-- **Tracing:** **Tempo** (OTLP gRPC/HTTP + Zipkin, MinIO S3, 14-day retention) with a metrics-generator producing service-graph and span-metrics that remote-write back to Mimir with exemplars. Spring Boot 4 apps export via OpenTelemetry HTTP/4318 at 10% sampling (tracing off by default, enabled per environment).
+- **Metrics:** Prometheus Operator (kube-prometheus-stack) with CRD-based discovery, no sidecar (scraping merged app+Envoy metrics on `:15020`), `remote_write` to **Mimir** (single-replica all-in-one, s3gw (versitygw) S3 backend, 90-day retention), with **exemplar storage enabled** for trace-to-metric linking.
+- **Tracing:** **Tempo** (OTLP gRPC/HTTP + Zipkin, s3gw (versitygw) S3, 14-day retention) with a metrics-generator producing service-graph and span-metrics that remote-write back to Mimir with exemplars. Spring Boot 4 apps export via OpenTelemetry HTTP/4318 at 10% sampling (tracing off by default, enabled per environment).
 - **Logging:** **Fluent-bit** DaemonSet → **ClickHouse** (`logs.podlogs`, MergeTree, date-partitioned, bloom indexes on message/pod/trace_id, configurable TTL), with a Lua heuristic level extractor. Grafana ties it together: ClickHouse-Logs derived fields jump from a `trace_id` to the Tempo trace, and Tempo's `tracesToLogsV2` reverses the flow.
 
 Alerting is mature: 26 alert groups across infra/CI categories (Vault sealed, MinIO dual-active, ESO/Argo CD/Velero health, PVC usage, cert expiry, public-URL probes, and notably **smartctl disk-failure alerts**), a Watchdog dead-man's-switch, inhibition rules, and **43+ `runbook_url` annotations** pointing to an auth-free runbooks site (`runbooks.pmon.dev`). Blackbox probes cover Pi Vault, per-Pi MinIO (dual-active detection), and public endpoints.
