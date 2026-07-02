@@ -41,6 +41,12 @@ Aircraft motion is bounded by physics you can derive, not guess:
   accept baro only as fallback. Baro-derived vertical rate is lagged and noisy.
 - **Units are imperial by treaty**: kt, ft, fpm, NM, flight levels = ft/100. Convert once at the
   boundary (kt→m/s ×0.514444; fpm→m/s ×0.00508; ft→m ×0.3048) and verify numerically.
+- **Three altitude datums, one geoid between them**: pressure altitude (baro, flight levels),
+  orthometric/MSL (maps, airports, humans), and WGS-84 ellipsoidal HAE (GNSS, geodetic math).
+  ADS-B geometric altitude is HAE; a config-entered site altitude is usually MSL. The geoid
+  undulation N = HAE − MSL varies −100…+85 m globally (≈ +18 m in Estonia) — mixing an MSL
+  observer with HAE targets tilts every elevation by N/range (~0.2° at 5 km). Reconcile ONCE at
+  the boundary and say which datum each stored altitude uses.
 - **Quantization = your measurement noise floor**: baro alt 25 ft (Q-bit) else 100 ft; TC19
   velocity components 1 kt LSB; vertical rate 64 fpm LSB; CPR position ~5 m. Channel noise
   models below these values claim more than the encoding carries.

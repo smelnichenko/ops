@@ -92,7 +92,17 @@ steady commands, rate-limit re-commands, and stop immediately only for safety.
 - Cap extrapolation: dead-reckoning an aging track must not run unbounded (stale-data
   cutoffs at the consumer).
 
-## 10. Workflow
+## 10. Experiments and sweeps
+
+A single seeded run is an anecdote. Comparative claims (A/B, tuning) need: multiple seeds with
+dispersion reported (max/mean/p90 per seed, not one blended number); identical policies in both
+arms — measuring arm A under a feeding/gating policy production never runs produced flattering
+headline numbers here once; more than one operating point (two measurement cadences beat one);
+and plateau-seeking over point-optima (a constant chosen off a one-seed peak is noise — prefer
+the flat region; 0.3 was chosen from a 0.0-0.45 plateau, not a spike). When an "improvement"
+scores worse, suspect a coupled constant or a plant-model gap before suspecting the math (§7).
+
+## 11. Workflow
 
 Assumptions → hand derivation → dimension/sign checks → implement → property tests
 (convergence, invariants, exact known cases) → sweep/A-B on the realistic sim (fixed
