@@ -1,12 +1,12 @@
 ---
 name: full-review
-description: Unified review for schnappy repos — runs the built-in code-review and security-review skills, the code-architecture-reviewer agent, and a SonarQube server-state check over one scope, then merges everything into a single deduplicated report and auto-fixes every actionable issue it found, in-diff and pre-existing alike (the rest are listed as Remaining). Runs end-to-end without confirmation prompts. Use when the user asks for a full/complete/thorough review of changes, a PR, or a plan doc.
+description: Unified review for schnappy repos — runs the built-in code-review and security-review skills, the code-architecture-reviewer agent, a SonarQube server-state check, and (when the scope touches control/estimation/geometry/DSP/tuning code) a math-verification pass over one scope, then merges everything into a single deduplicated report and auto-fixes every actionable issue it found, in-diff and pre-existing alike (the rest are listed as Remaining). Runs end-to-end without confirmation prompts. Use when the user asks for a full/complete/thorough review of changes, a PR, or a plan doc.
 argument-hint: "[low|medium|high|xhigh|max|ultra] [PR# | commit | files... | plan-doc] [--no-simplify]"
 ---
 
 # Full review
 
-Run up to four independent passes over one scope, merge them into a single report, then apply the automatic follow-ups (steps 4–5) without pausing for confirmation — no AskUserQuestion, no "should I proceed?". The only thing that still requires the user's own keystroke is `ultra` (billed cloud review). Step 4 defines what gets fixed automatically and what lands under **Remaining**.
+Run up to five independent passes over one scope, merge them into a single report, then apply the automatic follow-ups (steps 4–5) without pausing for confirmation — no AskUserQuestion, no "should I proceed?". The only thing that still requires the user's own keystroke is `ultra` (billed cloud review). Step 4 defines what gets fixed automatically and what lands under **Remaining**.
 
 ## 1. Establish scope
 
@@ -18,12 +18,13 @@ Parse `$ARGUMENTS`:
 
 ## 2. Run the passes
 
-Run these as parallel tool calls in one message where possible; all four get the same scope description.
+Run these as parallel tool calls in one message where possible; all passes get the same scope description.
 
 1. **Correctness & quality** — invoke the built-in `code-review` skill (Skill tool) with the effort level and target (PR number, commit, or files).
 2. **Security** — invoke the built-in `security-review` skill. It only works on pending changes on the current branch; when the scope is a PR, an already-pushed commit, or a plan doc, skip it and say so in the report rather than running it against the wrong diff.
 3. **Architecture & house rules** — spawn the `code-architecture-reviewer` agent (Agent tool) with the scope. Tell it generic correctness and security are covered by other passes, so it should weight its architecture/infra dimensions, environment fit, and house-rules checklist. Its profile lives in `ops/.claude/agents/code-architecture-reviewer.md`.
 4. **SonarQube (server state)** — run the bundled helper from the repo root: `bash <this skill's base directory>/sonar.sh [projectKey]`. It resolves the project key from `sonar-project.properties` (falling back to `schnappy-<repo dir>`), reads `SONARQUBE_TOKEN` from `/home/sm/src/ops/.env`, and prints the quality-gate status and unresolved issues as JSON (capped at 500 issues, the API max — check `paging.total` and say so when it exceeds the page). Filter issues to the scoped files. Do not run a local scanner, and do not query the API with ad-hoc curl — the helper is permission-allowlisted so it runs without prompting. SQ reflects the last CI-analyzed commit: when reviewing unpushed changes, say so and treat line numbers as approximate; a failing quality gate is always worth reporting regardless of scope.
+5. **Math (conditional)** — run only when the scoped diff touches mathematical machinery: control loops/servos/PID, state estimation or filters (Kalman etc.), geometry/geodesy/angle arithmetic, coordinate or unit conversions, signal processing/demodulation, coding theory (CRC and friends), probability/statistics, or numerically tuned constants (gains, leads, noise parameters, thresholds). If none of that is in scope, skip it and say so in the report. When it applies, spawn an agent (Agent tool) that first reads the `math` skill (`ops/.claude/skills/math/SKILL.md`, symlinked at `~/.claude/skills/math/`) and then applies it adversarially to the diff: re-derive each equation independently rather than approving it (state the model, check the algebra, e.g. Kalman gain/covariance updates keep P symmetric and PSD); check every unit conversion and sign/frame convention numerically (run one-line checks with the repo's venv python — known angles, known speeds); check time-consistency (predictions anchored to *now*, measurement age handled, no stale-anchor sawtooth); flag constants whose tuning may have absorbed a bug the diff fixes (they need a re-sweep) and extrapolations without a staleness cap. Findings come back in the same file:line + failure-scenario format as the other passes; a claim it verified numerically outranks one it only read.
 
 When the user asked to review a PR (the built-in `/review` use case), give the PR reference to passes 1 and 3; pass 3 can fetch the diff with git.
 
