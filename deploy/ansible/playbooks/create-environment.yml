@@ -106,7 +106,7 @@
           password="{{ gen_valkey_password }}"
         {{ vault_env }} vault kv put secret/{{ env_ns }}/auth \
           jwt_secret="{{ gen_jwt_secret }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/minio \
+        {{ vault_env }} vault kv put secret/{{ env_ns }}/s3gw \
           access_key=admin secret_key="{{ gen_minio_password }}"
         {{ vault_env }} vault kv put secret/{{ env_ns }}/kafka \
           cluster_id="{{ gen_kafka_cluster_id }}"

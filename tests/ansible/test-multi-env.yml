@@ -50,10 +50,10 @@
       vars:
         secret_path: schnappy/valkey
         secret_data: { password: "{{ prod_valkey_password }}" }
-    - name: Seed prod minio
+    - name: Seed prod s3gw
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
-        secret_path: schnappy/minio
+        secret_path: schnappy/s3gw
         secret_data: { access_key: minioadmin, secret_key: minioadmin }
     - name: Seed prod mail
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
@@ -71,10 +71,10 @@
       vars:
         secret_path: schnappy-test/valkey
         secret_data: { password: "{{ test_valkey_password }}" }
-    - name: Seed test minio
+    - name: Seed test s3gw
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
       vars:
-        secret_path: schnappy-test/minio
+        secret_path: schnappy-test/s3gw
         secret_data: { access_key: testadmin, secret_key: testadmin }
     - name: Seed test mail
       ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
