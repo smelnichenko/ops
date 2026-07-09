@@ -25,8 +25,10 @@ import com.fasterxml.jackson.annotation.JsonProperty;  // still 2.x — annotati
 ```
 
 `com.fasterxml.jackson.databind.ObjectMapper` is the wrong artifact on this line, and
-`tools.jackson.annotation.JsonProperty` **does not exist**. Also: Jackson 3's `JacksonException` is
-*unchecked*, so a `catch` that used to be required now reads as dead code to a compiler.
+`tools.jackson.annotation.JsonProperty` **does not exist** (the annotations jar contains only the
+`com/fasterxml` tree). Also: Jackson 3's `JacksonException` extends `RuntimeException`, so it is
+*unchecked* — a leftover `catch (IOException e)` around a Jackson-3 call is now a **compile error**
+("exception IOException is never thrown in body of corresponding try statement").
 
 One deliberate exception: admin's `SubTokenSigner` uses the Jackson-2 `ObjectMapper` on purpose for
 hand-rolled HS256 minting. Don't "unify" it.
@@ -56,8 +58,10 @@ lazy-loading. It is confined to DTOs here. The idiom differs by repo:
 - **chat / admin**: `@Getter @Setter @NoArgsConstructor`.
 
 Services and configs are `@RequiredArgsConstructor` over `private final` fields, `@Slf4j` for logging.
-There is no field `@Autowired` anywhere — keep it that way. `@RequiredArgsConstructor` cannot be used on
-a class whose constructor takes `@Value` parameters.
+There is no field `@Autowired` anywhere — keep it that way. `@RequiredArgsConstructor` cannot carry a
+constructor that takes `@Value` parameters: Lombok would have to copy the annotation onto the generated
+parameter, and no `lombok.config` (hence no `copyableAnnotations`) exists in any of these repos. Write
+that constructor by hand.
 
 ## 4. One Testcontainer for the whole suite, started in a static block
 
@@ -131,8 +135,8 @@ PITest (`features = ['-FSPRING']`, excluding `**Config`/`**Dto`/`**Properties`/`
 OWASP dependency-check, and Sonar with `qualitygate.wait=true`. **plane-tracker runs none of them.** Don't
 write code to satisfy a gate that isn't there, and don't be blindsided by one that is.
 
-All four exclude `opentelemetry-exporter-sender-okhttp` and add `-sender-jdk`: the OkHttp sender ignores
-`otlp.timeout` and silently caps every export at OkHttp's 10 s defaults.
+Those same three (not plane-tracker) exclude `opentelemetry-exporter-sender-okhttp` and add `-sender-jdk`:
+the OkHttp sender ignores `otlp.timeout` and silently caps every export at OkHttp's 10 s defaults.
 
 CD pipelines run `./gradlew clean check` (a stale-workspace guard); jars are built inside the Kaniko image
 build, not as a pipeline step.
@@ -143,7 +147,7 @@ No checkstyle, spotless, `.editorconfig`, or line-length property exists in any 
 (The `ruff = 100` rule is Python-only.) Match the surrounding file's wrapping; don't reflow code to a
 column that nothing enforces.
 
-Java 25 idioms in use: unnamed binders `catch (X _)` and `_ ->` for unused parameters (30+ sites), records
+Java 25 idioms in use: unnamed binders `catch (X _)` and `_ ->` for unused parameters (~30 sites), records
 for value types, pattern matching. A single-line text block `"""{...}"""` is a **compile error** — the
 opening delimiter needs a newline after it.
 
@@ -166,6 +170,11 @@ test. Removing it reintroduces the exact bug that paid for it:
 When porting from Python, parity is the default and every divergence is a decision that belongs in the
 commit message. `Thread.interrupt()` does **not** unblock a native pipe `InputStream.read` — to stop a
 subprocess reader you must close the stream.
+
+The *reasoning* behind several of these lives in a sibling skill — `math` owns floor-modulo and
+banker's rounding, `concurrency` owns silent-death of background loops and cancellation, and
+`platform-reliability` owns the negative-caching question. They are listed here only so you recognise
+the marker and don't refactor it away; go there for the derivation.
 
 ## 11. Tests: a passing test is not a test
 

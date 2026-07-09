@@ -13,8 +13,8 @@ Working rules for this org's web front-ends. Two surfaces, with **opposite** con
   tested with Vitest + Testing Library, realtime via Centrifugo.
 
 Rules **1, 3, 4, 5, 6, 8, 9, 10** are universal — they are CSS and browser facts, not framework facts.
-Rules **2, 7, 11, 13** describe a *global* stylesheet and a *no-build* pipeline; §14 says exactly how each
-changes under a compiler. Read §14 before applying them to `site/`.
+Rules **2, 7, 11, 12, 13** describe a *global* stylesheet and a *no-build* pipeline; §14 says exactly how
+each changes under a compiler. Read §14 before applying them to `site/`.
 
 Every rule below was paid for on a real UI; skip one and you ship a layout bug you "verified" by reading
 the source.
@@ -144,6 +144,7 @@ omission.
   or in `localStorage` — decide which, and restore it before the first render.
 
 ## 12. Test the served UI in a real browser, and isolate its writes
+*(the real-browser half is universal; the isolate-CWD-writes half is no-build only — see §14.)*
 
 - Drive a **real** app subprocess with a real browser (Playwright) so you exercise real HTTP + the
   socket, not a mock DOM. Assert through the rendered DOM and the app's own state endpoint.
