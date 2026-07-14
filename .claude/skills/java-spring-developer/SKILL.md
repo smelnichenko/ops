@@ -11,8 +11,8 @@ deliberately differ. Generic Java and Spring advice is out of scope — assume i
 repo's `build.gradle` before trusting any version stated here.
 
 **The repos are not uniform.** `monitor`, `chat`, `admin` are Liquibase-backed services with the full
-static-analysis gate. `plane-tracker/backend` is a live port of a Python app, reads a schema Python
-owns, and has no analysis gate. Read the repo you are in.
+static-analysis gate. `plane-tracker/backend` is a completed port of a retired Python app; since the
+cutover it owns and applies its own schema (Liquibase) and has no analysis gate. Read the repo you are in.
 
 ## 1. Jackson is split: databind 3, annotations 2
 
@@ -37,14 +37,16 @@ hand-rolled HS256 minting. Don't "unify" it.
 
 | repo | `ddl-auto` | schema owner |
 |---|---|---|
-| plane-tracker | `validate` | the **Python** app (`src/plane_tracker/schema.sql`) |
+| plane-tracker | `validate` | Liquibase (`backend/src/main/resources/db/schema.sql` via the `runOnChange` baseline changeset) |
 | chat | `validate` | Liquibase |
 | monitor, admin | `none` | Liquibase (monitor also generates jOOQ from the changelog) |
 
-Consequences in plane-tracker specifically: never add or alter a mapping without matching `schema.sql`;
-do **not** add `@GeneratedValue` (Postgres `gen_random_uuid()` fills the id on the Python insert); and a
-table read only through a native subquery must carry **no `@Entity`**, or `validate` walks it and boot
-fails. `validate` failing at startup is the feature — it catches mapping drift before a query does.
+Consequences in plane-tracker specifically: never add or alter a mapping without matching `schema.sql`
+(NEW tables ride the `runOnChange` baseline as additive `CREATE ... IF NOT EXISTS`; an in-place
+ALTER/DROP needs its own new changeset); ids come from column DEFAULTs (`gen_random_uuid()`) or IDENTITY,
+not `@GeneratedValue`; and a table read only through jdbc/native SQL must carry **no `@Entity`**, or
+`validate` walks it and boot fails. `validate` failing at startup is the feature — it catches mapping
+drift before a query does.
 
 ## 3. Never `@Data` on a JPA entity; match the repo's entity idiom
 
@@ -79,8 +81,9 @@ abstract class AbstractPostgresIntegrationTest {
 }
 ```
 
-Seed the **real production schema** into the container (plane-tracker mounts Python's `schema.sql`) so
-`validate` checks mappings against production rather than a hand-maintained copy that drifts.
+Seed the **real production schema** into the container (plane-tracker's Liquibase applies its own
+`db/schema.sql` at context start) so `validate` checks mappings against production rather than a
+hand-maintained copy that drifts.
 
 monitor takes the other road — `@TestConfiguration(proxyBeanMethods = false)` + `@ServiceConnection`
 beans, gated `@Profile("!ci")`. Follow whichever the repo already uses; don't mix them.
@@ -113,7 +116,7 @@ A `-D` system property does **not** reach the forked test JVM — use the enviro
 the test *skip* in CI and when the device is absent or busy; a failing assertion there would redden the
 build for a missing telescope. Run form: `SMOKE_MOUNT=1 ./gradlew -p backend test --tests '*MountReadSmokeTest'`.
 
-Devices are exclusive: the RSP1A is single-tuner, so a live SDR smoke requires the Python tracker stopped.
+Devices are exclusive: the RSP1A is single-tuner, so a live SDR smoke requires the live tracker stopped.
 
 ## 7. Spring wiring: conditionals, lifecycle, and fail-fast
 
