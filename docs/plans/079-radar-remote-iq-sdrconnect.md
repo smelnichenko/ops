@@ -1,4 +1,67 @@
-# 079 — Radar remote IQ: consume the pi4 SDRconnect server over its WebSocket API
+# 079 — Radar remote IQ from the pi4 receiver box (SDRconnect WS → rsp_tcp)
+
+## AMENDMENT (2026-08-13): transport pivots to rsp_tcp / rtl_tcp
+
+The 2026-08-13 spike (below) proved the SDRconnect WebSocket API works end-to-end **and**
+found its capability ceiling: only RF gain (`lna_state`) is controllable — no IF-gain property
+exists, IF AGC cannot be disabled, and there is no notch control. That collides with radar
+doctrine (per-band IFGR table + AGC-off verification exist because of the #534 AGC lesson;
+the <30 MHz auto-notch policy needs notch commands). **Decision (user, 2026-08-13): the
+transport is SDRplay's RSPTCPServer (`rsp_tcp`) in extended mode**, whose command set has full
+parity (SET_IF_GAIN_R, SET_AGC + setpoint, SET_NOTCH, SET_ANTENNA, SET_BIAST, SET_LNASTATE,
+16-bit samples) — and whose client doubles as a plain `rtl_tcp` client, so any RTL-dongle box
+also becomes a radar source. WebSDR/OpenWebRX were evaluated and rejected: they are human
+*listening* servers (audio/waterfall consumers of a receiver), not machine IQ sources.
+
+### Spike v1 results (SDRconnect headless WS, pi4 RSPdxR2 24051B0570, 2026-08-13)
+
+Kept as the record of why WS lost despite working, and as transport-agnostic link evidence:
+- Exact-rate delivery: 2 MSPS → 64.01 Mbps sustained over the pi4 WiFi link; decimated rates
+  honored (250 k → 8 Mbps, 62.5 k → 2 Mbps); **96 k silently refused** (read-back caught it —
+  rate acceptance is power-of-2-from-2M only).
+- Format proven: int16 LE interleaved; +100 kHz retune moved the dominant FM peak by exactly
+  −100 kHz (same absolute station, ~100.6996 MHz).
+- `lna_state` orientation proven: 0→6 dropped band power −5.9 → −21.6 dBFS (SDRplay RFGR
+  convention, 0 = max gain; dxR2 range 0–26).
+- Stall test: 30 s consumer stall → TCP backpressure, ~3 s bounded server buffer then drop,
+  no disconnect, server RSS +116 kB only (evidence against the buffering-leak wedge theory).
+- Two-client: NO first-client lock on the WS API — a second client can retune mid-stream
+  (`can_control` just means "device started"). Cooperative control, no protection.
+- Unknown properties never answer (get_property needs a client timeout); no IF-gain/notch/
+  AGC-off surface (agc_enable is the *audio* AGC).
+- 60-min 2 MSPS soak: link-level result recorded in the closing notes when complete.
+
+### What the pivot changes
+
+- **Client protocol** (transcribed from RSPTCPServer source, pinned clone at
+  `/home/sm/src/RSPTCPServer`, HEAD 61b8c91): connect → read 12-byte `RTL0` header (tuner
+  type/gain count, uint32 BE) → in extended mode read the 45-byte packed `RSP0` capabilities
+  struct (version, capability bitmap, hardware_version, sample_format, antenna count + third
+  antenna name/freq limit, tuner_count, **ifgr_min/ifgr_max** — all uint32 BE) → raw int16
+  native-order interleaved IQ stream; commands are 5 bytes (1-byte id + uint32 BE arg):
+  standard rtl_tcp 0x01–0x0e + extended 0x1f–0x26. **No read-backs** — the delivered-rate
+  diagnostic and the capabilities struct are the verification surface; a plain-rtl_tcp server
+  (no `RSP0` block) degrades to 8-bit/RTL semantics behind the same client.
+- **Rates**: arbitrary in [31.25 k, 10 M] honored exactly (`fs = rate × decimation`, ≤64,
+  IF bandwidth auto-selected ≤ rate) — better than the WS API's power-of-2 set.
+- **Selector grammar** becomes `rsptcp://host[:port]` (extended, RSP) and `rtltcp://host[:port]`
+  (plain rtl_tcp, RTL dongles); `sdrconnect://` is dropped.
+- **Server lifecycle on pi4**: the ansible receiver profile moves EARLY (it is now the enable
+  path): installs the standalone SDRplay API (pinned 3.15.2, per rsp.yml pattern), builds
+  RSPTCPServer (pinned ref), ships `rsp_tcp.service` (`-E -a 0.0.0.0 -p 1234 -d <serial>`),
+  with `Conflicts=SDRconnect.service` so the box toggles between "radar source" and the
+  user's GUI browsing server with one systemctl command. rsp_tcp is **single-client**.
+- **Wedge investigation reframed (logged as a deliberate change)**: SDRconnect leaves pi4's
+  runtime; the A/B becomes "does the wedge follow sustained streaming load or the SDRconnect
+  binary" — netwatch + persistent journald instrumentation stays, restart/stop timestamps
+  continue to be recorded in the investigation memory.
+- Steps 3–4 (client transport + integration PRs) and the runtime source-directory/UI steps
+  are unchanged in shape; only the protocol class inside PR 1 changes (simpler: no WebSocket
+  framing, no JSON). The conditional "post-spike gaps" step disappears (IFGR/AGC/notch are
+  first-class commands now).
+
+The original decision record and architecture below are retained for history; where they
+conflict with this amendment, the amendment wins.
 
 ## Decision
 
