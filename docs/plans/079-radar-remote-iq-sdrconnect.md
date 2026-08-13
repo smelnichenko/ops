@@ -60,6 +60,44 @@ Kept as the record of why WS lost despite working, and as transport-agnostic lin
   framing, no JSON). The conditional "post-spike gaps" step disappears (IFGR/AGC/notch are
   first-class commands now).
 
+### Spike v2 results (rsp_tcp -E -b 16 on pi4, 2026-08-13 — ALL GATES GREEN)
+
+- **Handshake**: RTL0 (tuner=5 R820T-faked, 28 gains) + RSP0 v1: hw=7 (RSPdx-R2), caps=0x9d
+  (biasT, refIn, BC notch, DAB notch, AGC), format=INT16, antennas=3 (third "Antenna C",
+  200 MHz limit), tuners=1, **ifgr=[20..59] carried in the handshake** (feeds client gain
+  clamping). GOTCHA: `-E` alone leaves the stream 8-bit — `-b 16` is required (now in the
+  unit); `third_antenna_freq_limit` is host-order (LE) while other u32s are network-order.
+- **Rates honored EXACTLY, arbitrary values** (steady-state, measured): 62.5 k, 96 k (the rate
+  SDRconnect refused), 250 k, 768 k, 2 M → delivered within ±0.3 %. 2 MSPS CS16 = 63.95 Mbps
+  over the pi4 WiFi (same load spike v1 soaked for an hour at 99.999 %). Server streams at its
+  2.048 M default from connect until commands land — clients must set rate/freq first and
+  measure delivery only after settling.
+- **Retune proof (16-bit)**: +100 kHz tune moved the FM peak −100 kHz (same absolute station);
+  int16 LE interleaved confirmed.
+- **Gain doctrine restored remotely**: AGC off + IFGR 20→59 = 28.7 dB measured drop (shortfall
+  vs 39 dB commanded = front-end compression on the strong FM band at max gain — direction and
+  scale prove the command path); LNA 0→6 on a notched floor = **18.7 dB clean** (SDRplay
+  convention, higher = more reduction); **broadcast notch = ~30 dB FM kill** and un-clips the
+  ADC (at IFGR 40 / LNA 0 the FM band SATURATES the dxR2 on pi4's antenna — per-band gain
+  policy genuinely matters on the remote radio; DC spike appears at max IFGR as usual).
+- **Ops**: two idempotent re-provisions proven; convergence check (key-based two-sample assert)
+  proven against a healthy unit; ufw rule active; sequential client sessions all accepted
+  (single-client at a time, accept-loop survives disconnects).
+- Client-PR notes: no acks in the protocol — verification = capabilities struct + delivered-
+  rate diagnostic; discard/tolerate the pre-command 2.048 M ramp; commands are 5-byte
+  cmd+u32-BE; extended set 0x1f–0x26.
+
+### Incident record (2026-08-13, first apply)
+
+The first receiver-profile apply crash-looped rsp_tcp (upstream never checks
+`sdrplay_api_ApiVersion`'s return; racing the restarting API daemon yields garbage + exit(1));
+the unbounded restart loop hammered the daemon's shm channel for hours and coincided with —
+and plausibly load-sensitized — the pi4 WiFi wedge, whose mechanism the instrumented recurrence
+finally revealed (daily hostapd GTK rekey hits a hung wpa_supplicant; D-Bus reply exhaustion
+makes it permanent; see the pi4 investigation memory). Fixes shipped: StartLimit + readiness
+gate + RestartSec=10, ufw allow, deterministic convergence assert, reset-failed on re-run
+(radar #596, #597).
+
 The original decision record and architecture below are retained for history; where they
 conflict with this amendment, the amendment wins.
 
