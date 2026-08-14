@@ -1,5 +1,83 @@
 # 079 — Radar remote IQ from the pi4 receiver box (SDRconnect WS → rsp_tcp)
 
+## CLOSE-OUT (2026-08-14): arc delivered, acceptance green
+
+Everything the amendment planned is live, plus two operator decisions that superseded parts of
+the plan text below (which is kept as written for the record):
+
+- **The 2 MSPS "link budget" is gone.** iperf3 (2026-08-14, WiFi as deployed): **557 Mbps
+  up / 393 Mbps down**, 0 retransmits. The remote rate cap is now the rsp_tcp/RSPdx-R2
+  **hardware limit, 10 MSPS** (≈320 Mbps CS16 — fits with headroom). The hour-long soak ran at
+  64 Mbps; sustained loss-free delivery far above 2 MSPS is unproven until a soak at rate —
+  the delivered-rate diagnostic is the standing tripwire.
+- **Nothing stays local-only** (user, 2026-08-14). The plan's "observation pinned local" is
+  superseded: the observation (base 1090/162) radio is a third runtime slot like overlay/AIS,
+  ADS-B opens through the IqStreams dispatch (a remote RSP runs the full 6 MSPS), and
+  `BandArbiter.rebindBase()` bounces the running base session when the slot or its source URL
+  changes — a healthy base session never otherwise ends. Full-time (non-arbiter) mode still
+  reads its device at boot; the live deployment is arbiter mode.
+
+**PR ledger (radar)**: #595-#597 receiver-box ansible (rsp_tcp unit, SDRplay API stack,
+SDRconnect toggle); #598 transport (`RspTcpIq`/selector/protocol + fake server); #599
+`IqStreams` dispatch + rate gates + live smoke; #600 `RadioSources` registry + `/api/radio/…`;
+#601 Settings UI (source CRUD + handshake test + slot chips); #602 dual-radio receiver panel
+(group-scoped exclusivity); #603 WiFi watchdog (capture-then-recover); #604 10 MSPS cap +
+remote-capable observation slot; #605 rsp_tcp `TimeoutStopSec=10`; #606 CLAUDE.md; #607
+receiver `tcp_retries2=8`. Ops: #22 spike results.
+
+**Acceptance**: FT8-20 via the remote RSP decoded real signals (LZ1ZF KN22 −13.9/−18.5 dB,
+SV2HTW −8.1 dB) **while** 1090/162 ran on the local radio — up to 4 vessels concurrently
+tracked; both rows ON is the normal state. NAVTEX: the remote MF retune + per-band
+gain + slot-hop are proven (`freq=515000/487000 rate=250000 IFGR=30,RFGR=5/6 (remote)`), but
+NO message decoded — ~3 h of 518 kHz home-listening plus the full Tallinn 490 kHz slot
+(19:10-19:20 EEST, stream verified healthy throughout) produced zero messages. The same
+decoder has real decodes on the LOCAL antenna, so this is pi4's short whip at 600 m
+wavelength, not the transport: an MF antenna for the receiver box is the follow-on.
+
+**Negative runs (all live, 2026-08-14)**:
+- *(a) unreachable host*: overlay slot pointed at a ghost box — every window failed with one
+  clean `No route to host` warn, scheduler kept ticking, base untouched; a **restart** with the
+  ghost slot persisted booted green and restored it; flipping back recovered on the very next
+  window (9 s later). The test source deleted afterwards.
+- *(b) server stop mid-stream*: `systemctl stop rsp_tcp` exposed that **rsp_tcp ignores
+  SIGTERM while streaming** (sdrplay API teardown hang) — systemd waited its default 90 s and
+  SIGKILLed. Radar rode it out: TERM-time socket reset → one in-window glitch-retry
+  (reconnected into the dying server), SIGKILL reset ended the window quietly, next 13-min hop
+  reopened unaided. Fix: #605 bounds the stop at 10 s (same SIGKILL, 80 s sooner) — deployed
+  and observed working (stop-to-kill exactly 10 s on the next deploy's restart).
+- *(c) established-stream blackhole* (the wedge signature; `iptables -I INPUT 1 … -j DROP` on
+  pi4 — note ufw port rules can NOT produce this, its conntrack ESTABLISHED accept outranks
+  them): idle SO_TIMEOUT EOF fired at **+10 s** (`remote wedged or link dead`), the glitch-
+  retry hung on the dropped SYN and timed out at **+5 s**, the rx thread exited cleanly (zero
+  stuck threads), and the first hop after rule removal reopened unaided.
+- *(d) the REAL wedge* rode through during this very acceptance run: the daily ~18:06 GTK
+  rekey wedged pi4's WiFi mid-stream (mechanism now PROVEN by the watchdog's first forensic
+  bundle: mt7921u TX stall under streaming load freezes wpa_supplicant in its EAPOL sendto —
+  driver bug, not userspace SAE; details in the pi4 connectivity investigation). Radar: idle
+  EOF at +10 s, window warns during the ~3 min outage, watchdog tier-1 recovered pi4 in 8 s at
+  fails=3, and the next hop reopened unaided. Exactly the ride-through the plan demanded.
+  ONE follow-on found and fixed: the wedge kills the client without a FIN, and single-client
+  rsp_tcp keeps retransmitting into the dead ESTAB (~200 KB Send-Q observed) while fresh
+  clients sit unserved in CLOSE-WAIT for the kernel-default ~15-25 min — and it DOMINOES:
+  each timed-out fresh attempt leaves the next corpse the server then blocks on, so a
+  periodic reconnector (the 13-min NAVTEX hops) keeps the box wedged indefinitely (observed
+  18:20 -> 18:33 -> 18:46, all read-timeouts; radar's side stays clean warns throughout —
+  correct client behaviour against a mute server). #607 sets `net.ipv4.tcp_retries2=8` on
+  the receiver profile so a corpse dies in ~100 s, faster than the reconnect period — the
+  domino cannot sustain. Until deployed, an rsp_tcp restart clears the pile instantly.
+
+**Receiver-box facts that postdate the plan text**: the unit is `rsp_tcp -E -b 16` (extended
+mode alone stays 8-bit — spike-proven), StartLimit 5/300 s + shm readiness gate defend the
+API-daemon race, `TimeoutStopSec=10`, and `systemctl start SDRconnect` remains the manual GUI
+toggle with reboot restoring rsp_tcp mode. The WiFi wedge mechanism was identified during this
+arc (daily GTK rekey hangs wpa_supplicant 2.10 under load; dbus reply-quota poisoning is
+permanent) — WPA3 kept per user, powersave off, watchdog #603 deployed as survival+forensics;
+that thread continues in the pi4 connectivity investigation, not here.
+
+**Still open beyond this plan**: sustained soak before any band RELIES on rates far above
+2 MSPS; per-device gain/notch/opens split (device-global singletons apply to both radios);
+remote antenna re-baselining per band (pi4's whip ≠ the calibrated local antenna).
+
 ## AMENDMENT (2026-08-13): transport pivots to rsp_tcp / rtl_tcp
 
 The 2026-08-13 spike (below) proved the SDRconnect WebSocket API works end-to-end **and**
