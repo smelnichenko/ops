@@ -113,7 +113,7 @@ Known structural deltas vs GCP (directionally certain, numbers pending):
 
 ## AWS target — [PENDING]
 
-Blocked on a usage-limit reset (2026-08-18 16:10); auto-resume armed. To be filled in:
+Analysis re-running as of 2026-08-18 midday (the 2026-08-17 usage-limit block has passed). To be filled in:
 
 - Compute mapping: instance types/counts, Graviton-vs-x86 recommendation with rebuild effort,
   CNI recommendation, pod-density check (94 pods on 2 nodes), Karpenter verdict
