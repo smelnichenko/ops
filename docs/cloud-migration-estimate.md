@@ -1,6 +1,6 @@
 # Cloud migration estimate — schnappy cluster
 
-Written 2026-08-17. Live artifact version (same content, richer tables):
+Written 2026-08-18. Live artifact version (same content, richer tables):
 https://claude.ai/code/artifact/cc76ab63-19b8-4ace-a31d-3c4881314a02
 
 **Status: target is AWS (eu-north-1, Stockholm).** The estimate was first produced for GCP
@@ -9,7 +9,7 @@ is kept below as the verified comparator. The AWS-specific sections are marked *
 where the analysis is still running — this doc gets updated when it lands, per the
 always-update-docs rule.
 
-Everything here is grounded in live measurements of the cluster taken 2026-08-17, and all GCP
+Everything here is grounded in live measurements of the cluster taken 2026-08-18, and all GCP
 prices were researched from official pricing pages the same day, then adversarially recomputed
 (verdict: minor errors; corrected figures are what's quoted). Prices are point-in-time —
 re-verify before committing spend.
@@ -113,7 +113,7 @@ Known structural deltas vs GCP (directionally certain, numbers pending):
 
 ## AWS target — [PENDING]
 
-Blocked on a usage-limit reset (2026-08-17 16:10); auto-resume armed. To be filled in:
+Blocked on a usage-limit reset (2026-08-18 16:10); auto-resume armed. To be filled in:
 
 - Compute mapping: instance types/counts, Graviton-vs-x86 recommendation with rebuild effort,
   CNI recommendation, pod-density check (94 pods on 2 nodes), Karpenter verdict
