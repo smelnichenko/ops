@@ -90,3 +90,40 @@ Add FT4 receive alongside FT8: same in-JVM decode lineage (the ft8_lib port in
   on the dev box before enabling live.
 - Remote-path duty: FT4 windows ride the same rsptcp overlay slot as FT8 —
   slot-every=2 keeps the radio share identical, so no new arbiter pressure.
+
+## Results (2026-08-19)
+
+- **PR1 #623 (merged)**: decode core, oracle-proven against `decode_ft8 -ft4` on committed
+  `gen_ft8 -ft4` WAVs. Upstream finding: ft8_lib's demo decoder searches a symbol range
+  calibrated for FT8's early TX and misses its own slot-centered FT4 — fixtures are trimmed so
+  TX sits at ~0.55 s, and the Java search is specified in seconds.
+- **PR2 #624 (merged)**: slot machinery + persistence. Review caught two criticals before merge:
+  (C1) the band-era two-column `CREATE UNIQUE INDEX` line above the new mode migration made
+  schema.sql non-convergent — the next runOnChange re-run would have rebuilt it over mixed-mode
+  rows and failed the boot (fixed by deleting the superseded line; every statement now converges
+  from every historical state); (C2) 7.5 mod 1 = 0.5 means a 1 s ticker opens HALF of all FT4
+  slots ≥0.5 s late at every phase, and with the demod's 0.25 s warm-up discard that put on-time
+  stations (TX at +0.5 s) beyond the decoder's 0.5 s early search — fixed with a 500 ms
+  grid-commensurate ticker (`tickMillis`) plus `EARLY_START_SEC` 0.5 → 1.5 s, missed head
+  symbols decoding as erasures (pinned by a 0.95 s-decodes / 1.95 s-empty fixture pair).
+  `Cadence` also lost its vestigial `slotEvery`. Measured budgets: capture 6.5 s, min-decodable
+  4.8 s (truncation ladder: 5.2 s decodes, 3.5 s cannot).
+- **PR3 #625 (merged)**: UI. The panel auto-adopts backend-registered FT8-*/FT4-* rows (cards,
+  vitals, titles derived — a config-added band needs no frontend edit); the shared log carries
+  `mode` and every filter treats a mode-less row as FT8, so FT4 never bleeds into FT8 cards,
+  vitals, or map popups.
+- **Follow-up #626 (merged)**: `Ft8Decoder` shared the −0.48 s search floor — on FT8's integer
+  grid the loss is per-boot-constant (ticker phase drawn once) instead of alternating. Same fix,
+  same fixture-pair pinning; the reviewer proved empirically that the positive test fails on the
+  old floor.
+- **Live migration verified**: the mode column + (callsign, band, mode) index swap applied
+  cleanly on the real band-era DB (first boot attempt, 37 ms; convergent no-ops after).
+- **Acceptance PENDING hardware**: the local RSP1A dropped off the USB bus before the deploy
+  restart (2026-08-19 morning); boot-time auto-detect resolves `ais=off` on the empty bus and the
+  `radar.ais.rebroadcast.enabled=true` fail-fast then refuses every boot — the systemd loop
+  retries ~20 s and will come up unaided on replug (observed hazard worth its own thought: the
+  fail-fast turns a transient device absence into full outage even though the panel-selected
+  remote rsptcp source needs no local radio). `radar.ft4.enabled: true` is staged in the live
+  config; FT4-20 day / FT4-40 evening acceptance runs on the next successful boot.
+- **Fallout**: the oracle-fixture discipline audit for every other decoder ("music unit tests
+  for all bands") is drafted as plan 082.
