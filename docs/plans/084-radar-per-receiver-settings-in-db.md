@@ -40,15 +40,22 @@ reader did not). Four separate JSON files, four hand-rolled readers, four chance
   **Reset to defaults deletes the rows** — it must not write the current defaults as values.
 - **Resolution order** for gain and notch, both per receiver: explicit receiver override →
   frequency-band default (`sdr-ifgr-bands`, `SdrNotchPolicy`'s below-30 MHz rule) → global default.
-- **Migration, one way, on boot.** The existing `state-dir/*.json` files are imported into the
-  table when the table is empty, then left alone (not deleted — they are the rollback). An
-  operator's live calibration must survive the change without being re-entered.
+- **No migration — CORRECTED 2026-08-21, during PR 1.** The plan originally called for importing
+  `state-dir/*.json` into the table on boot. That is wrong, and building it made the reason plain:
+  `gains.json` is keyed by frequency BAND and `notches.json` is GLOBAL, so expanding either into
+  per-receiver rows hands EVERY receiver an explicit override — the precise opposite of what this
+  table is for. It would also freeze today's values, so a later re-baseline of a band would move
+  nothing. The band table stays the band-default layer, the global notch stays the global layer,
+  and the per-receiver layer starts EMPTY: every receiver resolves exactly as it does today until
+  an operator overrides one, and the operator's live calibration survives untouched because it was
+  never per-receiver in the first place.
 
 ## Migration strategy
 
-1. **PR 1 — the table and the store.** Liquibase changeset; a `ReceiverSettingStore` with the
-   resolution order above and the JSON import. Nothing reads it yet. Round-trip tests, hostile-row
-   tests, and the import tested against a REAL copy of this station's four state files.
+1. **PR 1 — the table and the store.** DONE, radar #638. `receiver_setting(receiver, key, value)`
+   on the runOnChange baseline; a `ReceiverSettingStore` where absence IS the inheritance and reset
+   DELETES rows. No JSON import, for the reason above. Nine integration tests against a real
+   Postgres, four mechanisms reverted and each caught.
 2. **PR 2 — gain per receiver.** `SdrGainPolicy` gains a per-receiver layer over the band table;
    the open path passes the receiver name. Band defaults keep working untouched.
 3. **PR 3 — notch per receiver.** Same shape. `SdrNotchPolicy`'s auto rule becomes the band
