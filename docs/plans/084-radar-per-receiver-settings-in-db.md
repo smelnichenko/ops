@@ -52,35 +52,38 @@ reader did not). Four separate JSON files, four hand-rolled readers, four chance
 
 ## Migration strategy
 
-1. **PR 1 — the table and the store.** DONE, radar #638. `receiver_setting(receiver, key, value)`
-   on the runOnChange baseline; a `ReceiverSettingStore` where absence IS the inheritance and reset
-   DELETES rows. No JSON import, for the reason above. Nine integration tests against a real
-   Postgres, four mechanisms reverted and each caught.
-2. **PR 2 — gain per receiver.** `SdrGainPolicy` gains a per-receiver layer over the band table;
-   the open path passes the receiver name. Band defaults keep working untouched.
-3. **PR 3 — notch per receiver.** Same shape. `SdrNotchPolicy`'s auto rule becomes the band
-   default rather than the only answer.
-4. **PR 4 — the Receivers page.** Each row shows and edits radio, gain, notch, with a reset that
-   deletes overrides. View tests (jsdom + Testing Library), and the reset asserted to DELETE
-   rather than write current values.
-5. **PR 5 — retire the JSON.** Only once the table has been authoritative on the live station for
-   a while, and only for the files fully migrated.
+1. **PR 1 — the table and the store.** DONE, radar #638. `receiver_setting` on the runOnChange
+   baseline; a `ReceiverSettingStore` where absence IS the inheritance and reset DELETES rows. No
+   JSON import, for the reason above. Nine integration tests against a real Postgres.
+2. **PR 2 — gain per receiver.** DONE, split in two because the first half was inert on its own:
+   **#639** added the resolution layer (receiver → band → global), **#641** carried the receiver's
+   identity all the way to the hardware. The split matters: a setting that does not reach the radio
+   is cosmetic, and #639 alone was exactly that. Resolved AT THE OPEN, not where the gain string is
+   built — a rotating receiver retunes without rebuilding its gain, so a value baked in at build
+   time is the wrong band's the moment it moves.
+3. **PR 3 — notch per receiver.** DONE, radar #642. `auto` is still not `on` (NAVTEX at 518 kHz
+   sits INSIDE the MW stopband), and an explicit `on` still beats the 30 MHz ceiling. Asserted on
+   the BITMASK the box was sent.
+4. **PR 4 — the Receivers page.** DONE across **#643** (endpoints, `inherited_*` vs the row's own
+   vs `overridden`), **#651** (a collapsed `<details>` per row — 24 rows × 5 controls was a wall),
+   **#652** (inline beside the radio picker, opening as a popover so a row does not shift the rows
+   below it) and **#653** (rotating receivers report a live dial, so VOR/RTTY/WFAX/HFDL stopped
+   silently having no controls at all).
+5. **PR 5 — per-band settings.** NOT IN THE ORIGINAL PLAN, added from the operator 2026-08-21:
+   *"several freq ranges means several collections of settings for rotating band (consumer)"*.
+   DONE, radar #656: the key became `(receiver, band, key)`. RTTY runs DDH47 on 147.3 kHz LW and
+   three HF outlets, and the right gain at 147 kHz is not the right gain at 7.6 MHz — one override
+   per receiver was a single answer to two different questions. Reset is band-scoped; a setting
+   with no band is refused rather than stored under `""`.
+6. **Retiring `gains.json` / `notches.json` — OPEN, and its premise changed.** The plan assumed the
+   table would make them redundant. It does not: they are the BAND-DEFAULT layer, which the
+   per-receiver layer sits *over*. Retiring them now would mean moving band defaults into the
+   database too — a separate decision with its own migration, not a tidy-up. Left alone
+   deliberately.
 
-## Risks
+## Outcome
 
-- **Ordering at boot.** Gains are read by the first radio open. Today's log shows ADS-B opening at
-  15:02:16 with the seed and AIS at 15:02:18 with the restored value — the store must be
-  authoritative BEFORE any open, or the first session of every boot uses the wrong gain.
-- **The DB is not always up.** The app must start and receive with Postgres unavailable; settings
-  degrade to config defaults rather than the app failing to boot. Radar is a station, not a CRUD app.
-- **Per-receiver notch multiplies opens.** Two receivers on one radio with different notches
-  cannot run simultaneously — that is arbitration's problem (083) and must be stated, not
-  discovered.
-- **083 must land first.** It owns the per-receiver radio assignment this builds on.
-
-## Verification
-
-Per PR: `./gradlew clean check`, the `test-engineer` pass (revert each mechanism, record which
-test failed), and `task test:mutation` on the touched classes. Arc close: the live station's
-current calibration survives the migration byte-for-byte, and a reset returns a receiver to the
-band default rather than to the bare global one.
+Every receiver on the panel carries its own radio, gain and notch, per band, stored in Postgres,
+with a reset that deletes rather than freezes. Two plan steps were wrong and were corrected in
+flight — the JSON import (would have destroyed the inheritance it was meant to preserve) and the
+assumption that one setting per receiver was enough (wrong for anything that rotates).
