@@ -75,15 +75,29 @@ reader did not). Four separate JSON files, four hand-rolled readers, four chance
    three HF outlets, and the right gain at 147 kHz is not the right gain at 7.6 MHz — one override
    per receiver was a single answer to two different questions. Reset is band-scoped; a setting
    with no band is refused rather than stored under `""`.
-6. **Retiring `gains.json` / `notches.json` — OPEN, and its premise changed.** The plan assumed the
-   table would make them redundant. It does not: they are the BAND-DEFAULT layer, which the
-   per-receiver layer sits *over*. Retiring them now would mean moving band defaults into the
-   database too — a separate decision with its own migration, not a tidy-up. Left alone
-   deliberately.
+6. **Retiring `gains.json` / `notches.json` — DONE, radar #663.** Band defaults moved into
+   `band_setting(scope, key, value)`: a band name for gain, `""` for the notch pair, which is one
+   setting for the station rather than per band. The three layers are now a receiver's own choice
+   on its band → that band's default → the YAML seed.
+
+   This import IS correct where the per-receiver one was not: band gain to band scope, the notch
+   pair to global scope — same-shaped data one level sideways, preserving the layer it came from.
+   Guarded on the table being empty, so a later change is never re-imported over.
+
+   The JSON files stay on disk, frozen at the import, as the rollback; `save()` is retired rather
+   than the files deleted, because writing to them again would hand a downgrade a HALF-updated
+   calibration — worse than a stale one, because it looks current.
+
+   Verified on the live station: 12 settings imported (matching gains.json exactly, including the
+   measured L-band ADS-B numbers), a change through the API reaches the database while gains.json
+   stays byte-identical, and it survives a restart.
 
 ## Outcome
 
 Every receiver on the panel carries its own radio, gain and notch, per band, stored in Postgres,
-with a reset that deletes rather than freezes. Two plan steps were wrong and were corrected in
+with a reset that deletes rather than freezes — and the band defaults beneath them are in Postgres
+too, so no station setting reads from a JSON file any more. Receivers that rotate to hunt
+propagation (WFAX/RTTY/HFDL) can also be pinned to one outlet; VOR cannot, because its rotation
+gathers a radial from each station and pinning would discard data. Two plan steps were wrong and were corrected in
 flight — the JSON import (would have destroyed the inheritance it was meant to preserve) and the
 assumption that one setting per receiver was enough (wrong for anything that rotates).
