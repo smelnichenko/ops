@@ -4,16 +4,17 @@
 # Tests pod recovery (individual + all-at-once), full namespace
 # restore from Velero backup, and offsite restore from 3rd copy.
 #
-# Prerequisites:
-#   - vagrant up (kubeadm + pi1 + pi2 VMs)
-#   - App accessible at http://localhost (Traefik)
+# The app is reached through the Istio vagrant-gateway NodePort
+# (http://schnappy-app.vagrant.test:30080).
 #
-# Usage:
-#   ansible-playbook -i inventory/vagrant.yml playbooks/test-dr.yml
+# Usage (both destroy + recreate the kubeadm/pi1/pi2 VMs first):
+#   task test:dr     # the drill
+#   task dr:drill    # the drill + record restore_verify_success on success
 #
 # Suite 1: Pod recovery (kill individual/all pods, verify data)
 # Suite 2: Velero backup + namespace destroy + restore
 # Suite 3: Offsite restore (rsync to pi1, wipe primary, rsync back, restore)
+# Suite 4: Post-restore k6 smoke (the schnappy-test CronJob, restored by Velero)
 
 # ─── Play 0: Prepare pi1 (offsite backup target) + fetch Pi Vault token ────
 - name: Prepare pi1 for offsite backup tests + fetch Vault token
@@ -122,6 +123,14 @@
             secretsEnabled: true
           networkPolicies:
             enabled: false
+          # The drill deploys monitor + site only. Pinned here (not left to
+          # chart defaults) because the k6 skipGroups list below depends on it.
+          admin:
+            enabled: false
+          chatService:
+            enabled: false
+          chessService:
+            enabled: false
           site:
             dnsResolver: "10.43.0.10"
             enabled: true
@@ -174,6 +183,10 @@
               grafana:
                 enabled: false
                 redirectUri: ""
+              # k6-smoke service-account client: the post-restore smoke (Suite 4)
+              # exercises the authenticated endpoints with it.
+              k6Smoke:
+                enabled: true
             resources:
               requests: { cpu: 200m, memory: 512Mi }
               limits: { cpu: 1000m, memory: 1Gi }
@@ -203,7 +216,8 @@
             enabled: false
           # Chart defaults smokeTest on; rendered as a one-shot Job it runs
           # immediately, fails on the empty DR baseUrl, and its failing pods
-          # get swept into the Velero backup. Keep the DR run clean.
+          # get swept into the Velero backup. The smoke CronJob Suite 4 needs
+          # comes from the separate schnappy-test chart (deployed below, suspended).
           smokeTest:
             enabled: false
           loadTest:
@@ -232,6 +246,15 @@
           db_password: vagrant-test-kc-db
           forgejo_client_secret: not-used
 
+    # Read by the schnappy-auth realm import (K6_SMOKE_CLIENT_SECRET_PLACEHOLDER)
+    # and by the schnappy-test chart's ExternalSecret → K6_CLIENT_SECRET.
+    - name: Seed k6-smoke client secret
+      ansible.builtin.include_tasks: tasks/seed-pi-vault-secret.yml
+      vars:
+        secret_path: schnappy/k6-smoke
+        secret_data:
+          client_id: k6-smoke
+          client_secret: vagrant-k6-smoke-secret
 
     - name: Deploy schnappy-mesh (ServiceAccounts)
       ansible.builtin.import_tasks: tasks/deploy-schnappy-mesh.yml
@@ -326,6 +349,32 @@
         route_service: schnappy-site
         route_port: 8080
         route_path: /
+
+    # The k6 smoke CronJob (schnappy-test chart). Deployed BEFORE the backup so
+    # Velero carries it through the destroy/restore and Suite 4 runs the
+    # restored CronJob, not a freshly installed one. Suspended: only Suite 4's
+    # `kubectl create job --from=cronjob` runs it. Reaches the app the way the
+    # playbook does (gateway NodePort; create-httproute.yml taught CoreDNS the
+    # hostname), Keycloak via its in-cluster Service. No Mimir here, so the
+    # remote-write output is off; the admin/chat/chess services are not
+    # deployed in the drill, so their groups are skipped.
+    - name: Deploy schnappy-test (k6 smoke CronJob) for DR test
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy-test
+        chart_ref: /vagrant-platform/helm/schnappy-test
+        release_namespace: "{{ ns }}"
+        values:
+          vault:
+            secretsEnabled: true
+          smokeTest:
+            enabled: true
+            suspend: true
+            baseUrl: "{{ app_url }}"
+            keycloakUrl: "http://schnappy-keycloak:8080"
+            clientSecretName: schnappy-k6-smoke
+            prometheusRwUrl: ""
+            skipGroups: [approval-mode, permissions, chat, chess]
 
     - name: Wait for app to be ready
       ansible.builtin.shell: |
@@ -1630,6 +1679,92 @@
         msg: "All offsite restore tests passed"
 
     # ================================================================
+    # Suite 4: Post-restore k6 smoke test
+    # ================================================================
+
+    - name: "SUITE 4: Post-restore k6 smoke test"
+      ansible.builtin.debug:
+        msg: "Running the restored k6 smoke CronJob against the restored endpoints"
+
+    # Velero restores the ExternalSecret without its .status (and strips owner
+    # refs), so the restored object has no Ready condition until ESO's first
+    # reconcile adopts the Secret and re-syncs it from Vault. Gate on that
+    # fresh condition, not on the pre-backup sync; the `get secret` behind it
+    # catches ESO's Ready=True-with-nothing-written case (empty Vault path).
+    - name: "K6: Wait for the restored ExternalSecret to be Ready"
+      ansible.builtin.shell: |
+        kubectl wait externalsecret/schnappy-k6-smoke -n {{ ns }} \
+          --for=condition=Ready --timeout=300s
+        kubectl get secret schnappy-k6-smoke -n {{ ns }} -o name
+      changed_when: false
+
+    # A missing CronJob is a restore defect, not a reason to skip.
+    - name: "K6: Run smoke test after restore"
+      ansible.builtin.shell: |
+        kubectl delete job k6-dr-verify -n {{ ns }} --ignore-not-found --wait=true
+        kubectl create job k6-dr-verify --from=cronjob/schnappy-k6-smoke -n {{ ns }} \
+          || { echo "FAIL: CronJob schnappy-k6-smoke missing after restore"; exit 1; }
+      changed_when: true
+
+    # Budget must exceed the job's own wait-for-ready init container (600 s)
+    # plus image pull + run, or a slow-but-fine restore reads as a timeout.
+    - name: "K6: Wait for the job to finish"
+      kubernetes.core.k8s_info:
+        api_version: batch/v1
+        kind: Job
+        name: k6-dr-verify
+        namespace: "{{ ns }}"
+      register: k6_dr_job
+      retries: 140
+      delay: 5
+      until: >-
+        (k6_dr_job.resources | default([]) | length > 0) and
+        ((k6_dr_job.resources[0].status.conditions | default([]))
+          | selectattr('status', 'equalto', 'True')
+          | map(attribute='type') | list
+          | intersect(['Complete', 'Failed']) | length > 0)
+
+    # Fetched before the assert so a failure shows the k6 output and the pod
+    # state (ImagePullBackOff, CreateContainerConfigError, init timeout) —
+    # not just "assertion failed". Never fails by itself for that reason.
+    - name: "K6: Get results"
+      ansible.builtin.shell: |
+        echo "=== pods ==="
+        kubectl get pods -n {{ ns }} -l job-name=k6-dr-verify -o wide
+        echo "=== wait-for-ready ==="
+        kubectl logs job/k6-dr-verify -c wait-for-ready -n {{ ns }} --tail=5
+        echo "=== k6 ==="
+        kubectl logs job/k6-dr-verify -c k6 -n {{ ns }}
+      register: k6_dr_logs
+      changed_when: false
+      failed_when: false
+
+    - name: "K6: Display results"
+      ansible.builtin.debug:
+        msg: "{{ k6_dr_logs.stdout }}"
+
+    # Assertions read k6's default (>=1.0) summary: `checks_succeeded...:` and
+    # per-check ✓/✗ lines — do not switch the image to --summary-mode=legacy.
+    # Properties, not a check count: the job completed (k6's rate==1.0
+    # threshold already fails it on any ✗), every check passed, the
+    # authenticated data endpoints really ran against the restored DB (a
+    # token response without access_token would otherwise skip them
+    # silently), and no remote-write output was left on (level=error).
+    - name: "K6: Assert the smoke test passed"
+      ansible.builtin.assert:
+        that:
+          - "'Complete' in (k6_dr_job.resources[0].status.conditions | selectattr('status', 'equalto', 'True') | map(attribute='type') | list)"
+          - "k6_dr_logs.stdout is regex('checks_succeeded[.]*: 100[.]00%')"
+          - "'✓ token obtained' in k6_dr_logs.stdout"
+          - "'✓ pages 200' in k6_dr_logs.stdout"
+          - "'✓ feeds 200' in k6_dr_logs.stdout"
+          - "'✓ inbox 200' in k6_dr_logs.stdout"
+          - "'✗' not in k6_dr_logs.stdout"
+          - "'level=error' not in k6_dr_logs.stdout"
+        fail_msg: "k6 smoke test FAILED after restore — see results above"
+        success_msg: "PASS: k6 smoke test after restore"
+
+    # ================================================================
     # Summary
     # ================================================================
 
@@ -1637,52 +1772,6 @@
       ansible.builtin.file:
         path: /tmp/schnappy-dr-test-values.yml
         state: absent
-
-    # ================================================================
-    # Suite 4: Post-restore k6 smoke test
-    # ================================================================
-
-    - name: "SUITE 4: Post-restore k6 smoke test"
-      ansible.builtin.debug:
-        msg: "Running k6 smoke test to validate restored endpoints"
-
-    - name: "K6: Check if k6-smoke CronJob exists"
-      kubernetes.core.k8s_info:
-        api_version: batch/v1
-        kind: CronJob
-        name: schnappy-k6-smoke
-        namespace: "{{ ns }}"
-      register: k6_cronjob_check
-      failed_when: false
-
-    - name: "K6: Set fact for whether k6 CronJob exists"
-      ansible.builtin.set_fact:
-        k6_cronjob_exists: "{{ (k6_cronjob_check.resources | default([]) | length) > 0 }}"
-
-    - name: "K6: Run smoke test after restore"
-      ansible.builtin.shell: |
-        kubectl delete job k6-dr-verify -n {{ ns }} 2>/dev/null || true
-        kubectl create job k6-dr-verify --from=cronjob/schnappy-k6-smoke -n {{ ns }}
-        kubectl wait --for=condition=complete job/k6-dr-verify -n {{ ns }} --timeout=120s
-      when: k6_cronjob_exists
-      register: k6_dr_result
-      changed_when: false
-
-    - name: "K6: Get results"
-      ansible.builtin.shell: kubectl logs job/k6-dr-verify -n {{ ns }} 2>/dev/null | grep -E '✓|✗|checks'
-      register: k6_dr_logs
-      when: k6_cronjob_exists
-      changed_when: false
-
-    - name: "K6: Display results"
-      ansible.builtin.debug:
-        msg: "{{ k6_dr_logs.stdout }}"
-      when: k6_cronjob_exists
-
-    - name: "K6: Smoke test skipped (no CronJob)"
-      ansible.builtin.debug:
-        msg: "k6 smoke test skipped — CronJob not deployed in this environment"
-      when: not k6_cronjob_exists
 
     - name: "=== ALL DR TESTS PASSED ==="
       ansible.builtin.debug:
@@ -1707,4 +1796,4 @@
               - Data integrity after offsite restore: PASS
               - App functional after offsite restore: PASS
             Suite 4 - Post-restore smoke test:
-              - k6 endpoint validation: {{ 'PASS' if k6_cronjob_exists else 'SKIPPED' }}
+              - k6 endpoint validation: PASS

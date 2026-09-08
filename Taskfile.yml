@@ -114,8 +114,9 @@ tasks:
       - npx playwright test --ui
 
   # ============== HYPERFOIL (production load/stress tests) ==============
-  # k6 is no longer used for load testing — only post-sync smoke tests
-  # (see schnappy-test/templates/k6-smoke-*). All load/stress/spike/soak
+  # k6 is no longer used for load testing — only the smoke test (the Argo
+  # PostSync hook in platform helm/schnappy; the schnappy-test chart carries
+  # the CronJob variant the DR drill runs). All load/stress/spike/soak
   # work runs through Hyperfoil, which reports to s3gw + reports.pmon.dev.
   test:hyperfoil:load:
     desc: Run Hyperfoil load test in production (5min, reports to s3gw)
@@ -534,29 +535,26 @@ tasks:
 
   dr:drill:
     desc: Run the full DR drill (test:dr) and, only on a passing run, record restore_verify_success to the prod pushgateway (resets the RestoreVerificationFailing alert)
+    vars:
+      # Repo-local, not /tmp: a generic /tmp name invites another process to
+      # tee over a live drill's log (it happened).
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default (printf "%s/.dr/dr-drill.log" .ROOT_DIR)}}'
     cmds:
-      - cmd: |
-          # test:dr's exit code is masked by its `defer: vagrant halt`, so the
-          # push decision comes from the playbook's own success marker, not $?.
-          task test:dr 2>&1 | tee /tmp/dr-drill.log || true
-          if grep -q 'ALL DR TESTS PASSED' /tmp/dr-drill.log && ! grep -qE 'failed=[1-9]' /tmp/dr-drill.log; then
-            echo ">> DR drill PASSED — recording restore_verify_success to the prod pushgateway"
-            PROD_CTX="${DR_PROD_CONTEXT:-kubernetes-admin@kubernetes}"
-            CUR_CTX="$(kubectl config current-context)"
-            if [ "$CUR_CTX" != "$PROD_CTX" ]; then
-              echo ">> Refusing to push: kube context '$CUR_CTX' != prod '$PROD_CTX' (override with DR_PROD_CONTEXT)." >&2
-              exit 1
-            fi
-            kubectl --context "$PROD_CTX" port-forward -n schnappy-infra svc/schnappy-pushgateway 19091:9091 >/dev/null 2>&1 &
-            PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT
-            printf 'restore_verify_success 1\n' | \
-              curl -sf --retry 30 --retry-connrefused --retry-delay 1 \
-                --data-binary @- http://127.0.0.1:19091/metrics/job/dr-drill
-            echo ">> Recorded restore_verify_success=1 (job=dr-drill); RestoreVerificationFailing reset."
-          else
-            echo ">> DR drill did NOT pass — restore_verify_success NOT recorded." >&2
-            exit 1
-          fi
+      # pipefail keeps test:dr's own status (a failing playbook stops here,
+      # before dr:record); dr:record re-checks the log's success marker so it
+      # is also safe to re-run alone after a green drill.
+      - cmd: mkdir -p "$(dirname "{{.DR_DRILL_LOG}}")"; set -o pipefail; task test:dr 2>&1 | tee "{{.DR_DRILL_LOG}}"
+      - task: dr:record
+        vars: { DR_DRILL_LOG: '{{.DR_DRILL_LOG}}' }
+
+  dr:record:
+    desc: Record the last drill's result — pushes restore_verify_success only if the drill log (DR_DRILL_LOG, default .dr/dr-drill.log) shows a fresh passing run
+    vars:
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default (printf "%s/.dr/dr-drill.log" .ROOT_DIR)}}'
+    env:
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG}}'
+    cmds:
+      - cmd: scripts/dr-record.sh
 
   test:failure-modes:
     desc: Test failure modes under load in Vagrant (pod kill, pool exhaustion, Kafka outage, memory pressure, rate limiting)
