@@ -664,15 +664,21 @@ Located in the `schnappy/platform` repo under `helm/`. Split into 5 charts by li
 **Smoke tests** (k6): Go through Envoy Gateway, validate full request path.
 **Load/stress tests** (Hyperfoil): Bypass Envoy, hit backend services directly (monitor, chat, chess). Vert.x/Netty async engine avoids coordinated omission.
 
+The k6 smoke runs as the Argo PostSync hook Job (`schnappy-production-k6-smoke`,
+`schnappy-test-k6-smoke`) after every sync of the app charts; there is no scheduled
+CronJob in prod (the `schnappy-test` chart that carries it is disabled there). The
+Vagrant DR drill (`task dr:drill`, Suite 4) runs that CronJob against a restored
+namespace.
+
 ```bash
-# k6 smoke test (via Envoy Gateway — validates full path)
-kubectl create job k6-smoke-manual --from=cronjob/schnappy-k6-smoke -n schnappy
+# k6 smoke: re-run the last PostSync hook's logs / re-trigger via an Argo sync
+kubectl logs job/schnappy-production-k6-smoke -n schnappy-production -c k6
 
 # Hyperfoil load test (direct to backends, daily at 3 AM)
-kubectl create job hf-load --from=cronjob/schnappy-hyperfoil-load -n schnappy
+task test:hyperfoil:load
 
-# Hyperfoil stress test (direct to backends, manual trigger)
-kubectl create job hf-stress --from=cronjob/schnappy-hyperfoil-stress -n schnappy
+# Hyperfoil stress / spike / soak (manual)
+task test:hyperfoil:stress
 ```
 
 - **Hyperfoil image:** `quay.io/hyperfoil/hyperfoil:0.28.0` (standalone mode, `/deployment/bin/run.sh`)
