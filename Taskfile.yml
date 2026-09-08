@@ -536,19 +536,21 @@ tasks:
   dr:drill:
     desc: Run the full DR drill (test:dr) and, only on a passing run, record restore_verify_success to the prod pushgateway (resets the RestoreVerificationFailing alert)
     vars:
-      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default "/tmp/dr-drill.log"}}'
+      # Repo-local, not /tmp: a generic /tmp name invites another process to
+      # tee over a live drill's log (it happened).
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default (printf "%s/.dr/dr-drill.log" .ROOT_DIR)}}'
     cmds:
       # pipefail keeps test:dr's own status (a failing playbook stops here,
       # before dr:record); dr:record re-checks the log's success marker so it
       # is also safe to re-run alone after a green drill.
-      - cmd: set -o pipefail; task test:dr 2>&1 | tee "{{.DR_DRILL_LOG}}"
+      - cmd: mkdir -p "$(dirname "{{.DR_DRILL_LOG}}")"; set -o pipefail; task test:dr 2>&1 | tee "{{.DR_DRILL_LOG}}"
       - task: dr:record
         vars: { DR_DRILL_LOG: '{{.DR_DRILL_LOG}}' }
 
   dr:record:
-    desc: Record the last drill's result — pushes restore_verify_success only if the drill log (DR_DRILL_LOG, default /tmp/dr-drill.log) shows a fresh passing run
+    desc: Record the last drill's result — pushes restore_verify_success only if the drill log (DR_DRILL_LOG, default .dr/dr-drill.log) shows a fresh passing run
     vars:
-      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default "/tmp/dr-drill.log"}}'
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default (printf "%s/.dr/dr-drill.log" .ROOT_DIR)}}'
     env:
       DR_DRILL_LOG: '{{.DR_DRILL_LOG}}'
     cmds:

@@ -7,12 +7,16 @@
 # task's built-in shell (no kill/$!) and the next push hit a stale tunnel.
 set -euo pipefail
 
-LOG="${DR_DRILL_LOG:-/tmp/dr-drill.log}"
+LOG="${DR_DRILL_LOG:-$(cd "$(dirname "$0")/.." && pwd)/.dr/dr-drill.log}"
 PROD_CTX="${DR_PROD_CONTEXT:-kubernetes-admin@kubernetes}"
 MAX_AGE_MIN="${DR_LOG_MAX_AGE_MIN:-360}"
 
-if [ ! -r "$LOG" ]; then
+if [ ! -e "$LOG" ]; then
   echo ">> No drill log at $LOG — run \`task dr:drill\` first." >&2
+  exit 1
+fi
+if [ ! -r "$LOG" ]; then
+  echo ">> Drill log $LOG is not readable." >&2
   exit 1
 fi
 # A stale green log must not silence the alert without a drill having run.
@@ -20,7 +24,7 @@ if [ -n "$(find "$LOG" -mmin +"$MAX_AGE_MIN" 2>/dev/null)" ]; then
   echo ">> Drill log $LOG is older than ${MAX_AGE_MIN} min — refusing to record it." >&2
   exit 1
 fi
-if ! grep -q 'ALL DR TESTS PASSED' "$LOG" || grep -qE 'failed=[1-9]' "$LOG"; then
+if ! grep -q 'ALL DR TESTS PASSED' "$LOG" || grep -qE '(failed|unreachable)=[1-9]' "$LOG"; then
   echo ">> DR drill did NOT pass — restore_verify_success NOT recorded." >&2
   exit 1
 fi

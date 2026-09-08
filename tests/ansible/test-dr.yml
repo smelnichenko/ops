@@ -1686,9 +1686,11 @@
       ansible.builtin.debug:
         msg: "Running the restored k6 smoke CronJob against the restored endpoints"
 
-    # Velero brings the ExternalSecret back but its Secret is re-created by ESO
-    # (the restored copy carries a stale ownerReference and is collected), so
-    # gate on the RESTORED ExternalSecret, not on the pre-backup sync.
+    # Velero restores the ExternalSecret without its .status (and strips owner
+    # refs), so the restored object has no Ready condition until ESO's first
+    # reconcile adopts the Secret and re-syncs it from Vault. Gate on that
+    # fresh condition, not on the pre-backup sync; the `get secret` behind it
+    # catches ESO's Ready=True-with-nothing-written case (empty Vault path).
     - name: "K6: Wait for the restored ExternalSecret to be Ready"
       ansible.builtin.shell: |
         kubectl wait externalsecret/schnappy-k6-smoke -n {{ ns }} \
@@ -1741,17 +1743,22 @@
       ansible.builtin.debug:
         msg: "{{ k6_dr_logs.stdout }}"
 
+    # Assertions read k6's default (>=1.0) summary: `checks_succeeded...:` and
+    # per-check ✓/✗ lines — do not switch the image to --summary-mode=legacy.
     # Properties, not a check count: the job completed (k6's rate==1.0
     # threshold already fails it on any ✗), every check passed, the
-    # authenticated path really ran ('token obtained' is a check the script
-    # emits only when a client secret is configured), and no remote-write
-    # output was left on (level=error).
+    # authenticated data endpoints really ran against the restored DB (a
+    # token response without access_token would otherwise skip them
+    # silently), and no remote-write output was left on (level=error).
     - name: "K6: Assert the smoke test passed"
       ansible.builtin.assert:
         that:
           - "'Complete' in (k6_dr_job.resources[0].status.conditions | selectattr('status', 'equalto', 'True') | map(attribute='type') | list)"
           - "k6_dr_logs.stdout is regex('checks_succeeded[.]*: 100[.]00%')"
           - "'✓ token obtained' in k6_dr_logs.stdout"
+          - "'✓ pages 200' in k6_dr_logs.stdout"
+          - "'✓ feeds 200' in k6_dr_logs.stdout"
+          - "'✓ inbox 200' in k6_dr_logs.stdout"
           - "'✗' not in k6_dr_logs.stdout"
           - "'level=error' not in k6_dr_logs.stdout"
         fail_msg: "k6 smoke test FAILED after restore — see results above"
