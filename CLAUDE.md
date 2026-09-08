@@ -661,8 +661,8 @@ Located in the `schnappy/platform` repo under `helm/`. Split into 5 charts by li
 
 ## Load Testing
 
-**Smoke tests** (k6): Go through Envoy Gateway, validate full request path.
-**Load/stress tests** (Hyperfoil): Bypass Envoy, hit backend services directly (monitor, chat, chess). Vert.x/Netty async engine avoids coordinated omission.
+**Smoke tests** (k6): Go through the Istio ingress gateway, validate the full request path.
+**Load/stress tests** (Hyperfoil): Bypass the gateway, hit backend services directly (monitor, chat, chess). Vert.x/Netty async engine avoids coordinated omission.
 
 The k6 smoke runs as the Argo PostSync hook Job (`schnappy-production-k6-smoke`,
 `schnappy-test-k6-smoke`) after every sync of the app charts; there is no scheduled
@@ -671,7 +671,8 @@ Vagrant DR drill (`task dr:drill`, Suite 4) runs that CronJob against a restored
 namespace.
 
 ```bash
-# k6 smoke: re-run the last PostSync hook's logs / re-trigger via an Argo sync
+# k6 smoke: the last PostSync hook's output (the Job lives 24 h; older runs are
+# in ClickHouse logs.podlogs, container='k6'); re-trigger via an Argo sync
 kubectl logs job/schnappy-production-k6-smoke -n schnappy-production -c k6
 
 # Hyperfoil load test (direct to backends, daily at 3 AM)
@@ -685,7 +686,7 @@ task test:hyperfoil:stress
 - **Multi-host:** monitor:8080, chat:8080, chess:8080 — `authority` header selects target per request
 - **Load profile:** open-model, ramp 5→50 users/s (1m) + sustained 50 users/s (3m) = 5min
 - **Stress profile:** closed-model (`always` phase), 200→500→1000→2000 concurrent users, 90s each = 6min
-- **Auth:** Service account `k6-smoke` (client_credentials grant), JWT decoded in shell for X-User-UUID/X-User-Email headers (Hyperfoil sends these to bypass Envoy's claimToHeaders)
+- **Auth:** Service account `k6-smoke` (client_credentials grant), JWT decoded in shell for X-User-UUID/X-User-Email headers (Hyperfoil sends these itself because it bypasses the gateway's JWT-to-header mapping)
 - **JVM:** `-Xmx256m -XX:+UseZGC` (load), `-Xmx512m -XX:+UseZGC` (stress) via JAVA_OPTS env var
 - **Reports:** HTML report generated to `/tmp/report/` inside the pod
 - **Network policies:** Hyperfoil pods have egress to backend services + Keycloak; backend NPs (app, admin, chat, chess) + Keycloak NP allow ingress from hyperfoil-load/stress pods

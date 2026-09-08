@@ -114,8 +114,9 @@ tasks:
       - npx playwright test --ui
 
   # ============== HYPERFOIL (production load/stress tests) ==============
-  # k6 is no longer used for load testing — only post-sync smoke tests
-  # (see schnappy-test/templates/k6-smoke-*). All load/stress/spike/soak
+  # k6 is no longer used for load testing — only the smoke test (the Argo
+  # PostSync hook in platform helm/schnappy; the schnappy-test chart carries
+  # the CronJob variant the DR drill runs). All load/stress/spike/soak
   # work runs through Hyperfoil, which reports to s3gw + reports.pmon.dev.
   test:hyperfoil:load:
     desc: Run Hyperfoil load test in production (5min, reports to s3gw)
@@ -534,17 +535,23 @@ tasks:
 
   dr:drill:
     desc: Run the full DR drill (test:dr) and, only on a passing run, record restore_verify_success to the prod pushgateway (resets the RestoreVerificationFailing alert)
+    vars:
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default "/tmp/dr-drill.log"}}'
     cmds:
-      # test:dr's exit code is masked by its `defer: vagrant halt`, so the
-      # push decision comes from the playbook's own success marker, not $?.
-      - cmd: task test:dr 2>&1 | tee /tmp/dr-drill.log || true
+      # pipefail keeps test:dr's own status (a failing playbook stops here,
+      # before dr:record); dr:record re-checks the log's success marker so it
+      # is also safe to re-run alone after a green drill.
+      - cmd: set -o pipefail; task test:dr 2>&1 | tee "{{.DR_DRILL_LOG}}"
       - task: dr:record
+        vars: { DR_DRILL_LOG: '{{.DR_DRILL_LOG}}' }
 
   dr:record:
-    desc: Record the last drill's result — pushes restore_verify_success only if /tmp/dr-drill.log shows a passing run (re-run alone when the push failed after a green drill)
+    desc: Record the last drill's result — pushes restore_verify_success only if the drill log (DR_DRILL_LOG, default /tmp/dr-drill.log) shows a fresh passing run
+    vars:
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG | default "/tmp/dr-drill.log"}}'
+    env:
+      DR_DRILL_LOG: '{{.DR_DRILL_LOG}}'
     cmds:
-      # A real bash script: task's built-in shell cannot kill a backgrounded
-      # port-forward, so it leaked and broke the next push (see the script).
       - cmd: scripts/dr-record.sh
 
   test:failure-modes:

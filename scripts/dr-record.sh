@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 # Record the last DR drill's result: push restore_verify_success to the prod
-# pushgateway, but only if /tmp/dr-drill.log shows a genuinely passing run.
-# Runs as a real bash script (not a Taskfile cmd) because task's built-in
-# shell has no working `kill`/`$!`, so a backgrounded port-forward could
-# never be cleaned up and leaked into the next run (bind failure → curl 56).
+# pushgateway, but only if the drill log shows a fresh, genuinely passing run.
+#
+# The push runs INSIDE the pushgateway pod (kubectl exec + busybox wget), so
+# there is no local tunnel: the previous port-forward version leaked under
+# task's built-in shell (no kill/$!) and the next push hit a stale tunnel.
 set -euo pipefail
 
 LOG="${DR_DRILL_LOG:-/tmp/dr-drill.log}"
 PROD_CTX="${DR_PROD_CONTEXT:-kubernetes-admin@kubernetes}"
-LOCAL_PORT="${DR_PUSH_PORT:-19091}"
+MAX_AGE_MIN="${DR_LOG_MAX_AGE_MIN:-360}"
 
+if [ ! -r "$LOG" ]; then
+  echo ">> No drill log at $LOG — run \`task dr:drill\` first." >&2
+  exit 1
+fi
+# A stale green log must not silence the alert without a drill having run.
+if [ -n "$(find "$LOG" -mmin +"$MAX_AGE_MIN" 2>/dev/null)" ]; then
+  echo ">> Drill log $LOG is older than ${MAX_AGE_MIN} min — refusing to record it." >&2
+  exit 1
+fi
 if ! grep -q 'ALL DR TESTS PASSED' "$LOG" || grep -qE 'failed=[1-9]' "$LOG"; then
   echo ">> DR drill did NOT pass — restore_verify_success NOT recorded." >&2
   exit 1
@@ -22,26 +32,14 @@ if [ "$CUR_CTX" != "$PROD_CTX" ]; then
   exit 1
 fi
 
-PF_LOG="$(mktemp)"
-kubectl --context "$PROD_CTX" port-forward -n schnappy-infra \
-  svc/schnappy-pushgateway "${LOCAL_PORT}:9091" >"$PF_LOG" 2>&1 &
-PF=$!
-trap 'kill "$PF" 2>/dev/null || true; rm -f "$PF_LOG"' EXIT
-
-# The local port opens before the tunnel is usable; a curl landing in that
-# window gets a reset (curl 56), which --retry-connrefused does not cover.
-# Wait for kubectl's ready line, then retry every error.
-for _ in $(seq 1 30); do
-  grep -q 'Forwarding from' "$PF_LOG" && break
-  if ! kill -0 "$PF" 2>/dev/null; then
-    echo ">> port-forward died:" >&2
-    cat "$PF_LOG" >&2
-    exit 1
-  fi
-  sleep 1
-done
-
-printf 'restore_verify_success 1\n' | \
-  curl -sf --retry 30 --retry-all-errors --retry-delay 1 \
-    --data-binary @- "http://127.0.0.1:${LOCAL_PORT}/metrics/job/dr-drill"
+# Pushgateway needs the trailing newline; busybox wget exits non-zero on a
+# non-2xx response (-S shows the status line in the output).
+if ! out="$(kubectl --context "$PROD_CTX" -n schnappy-infra exec deploy/schnappy-pushgateway -c pushgateway -- \
+      wget -q -S -O /dev/null --post-data=$'restore_verify_success 1\n' \
+        http://127.0.0.1:9091/metrics/job/dr-drill 2>&1)"; then
+  echo ">> Push to the pushgateway FAILED:" >&2
+  echo "$out" >&2
+  exit 1
+fi
+echo "$out" | grep -m1 'HTTP/' || true
 echo ">> Recorded restore_verify_success=1 (job=dr-drill); RestoreVerificationFailing reset."
