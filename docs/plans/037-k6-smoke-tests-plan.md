@@ -1,13 +1,27 @@
 # k6 Smoke Tests with Prometheus Metrics and Grafana Dashboard
 
-## Status: IMPLEMENTED (2026-03-26)
+## Status: IMPLEMENTED (2026-03-26), amended 2026-09-09
 
-Deployed to production. PostSync hook runs after every Argo CD sync (10/10 checks passing). Daily CronJob at 6 AM UTC. Prometheus remote write working (7 metric series). Grafana dashboard with pass rate, duration bars, error rate, check history.
+Deployed to production. PostSync hook runs after every Argo CD sync. The daily
+CronJob lives in the separate `schnappy-test` chart and is disabled in prod; the
+Vagrant DR drill (`task dr:drill`, Suite 4) runs it against a restored namespace.
+Remote write goes to Mimir (not Prometheus) since the observability split; it was
+silently dropped by the namespace default-deny until 2026-09-08 (k6 exits 0 when
+the push fails) — the `K6SmokeTestFailing` rule also queried a metric name k6 never
+emits until the same day. Grafana dashboard with pass rate, duration bars, error
+rate, check history.
+
+**Retired 2026-09-09:** `task test:k6-smoke` / `tests/ansible/test-k6-smoke.yml`.
+It never passed: it needed prebuilt app images (the "skipped" item above), and
+within days of its creation the Prometheus Deployment left the observability
+chart (2026-03-29) and the CronJob moved to `schnappy-test` (2026-03-31), so it
+failed before reaching k6. The DR drill's Suite 4 is the Vagrant k6 test now
+(see plan 002). It runs with remote-write OFF: "k6 metrics reach Mimir" has no
+Vagrant test and is verified only in prod (`k6_checks_rate{namespace=…}` in
+Mimir after a sync; the `K6SmokeMetricsMissing` rule warns when that stops).
 
 **Remaining:**
-- Seed k6-smoke Keycloak client secret into Vault for authenticated endpoint tests
-- Vagrant integration test needs app image builds (skipped — validated in production)
-- Post-restore validation playbook (`task deploy:restore:verify`)
+- Post-restore validation playbook (`task deploy:restore:verify`) for prod
 
 ## Motivation
 
@@ -365,9 +379,9 @@ smokeTest:
 | `schnappy/templates/k6-smoke-external-secret.yaml` | schnappy | New — ExternalSecret for k6-smoke client secret |
 | `infra/clusters/production/schnappy/values.yaml` | infra | Enable smokeTest |
 
-## Vagrant Integration Test
+## Vagrant Integration Test (retired 2026-09-09 — see Status)
 
-`task test:k6-smoke` — deploys the app stack in Vagrant and validates the full k6 → Prometheus → Grafana pipeline.
+`task test:k6-smoke` — deployed the app stack in Vagrant and validated the k6 → Prometheus pipeline. Superseded by the DR drill's Suite 4.
 
 **Test playbook:** `tests/ansible/test-k6-smoke.yml`
 
