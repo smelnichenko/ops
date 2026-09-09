@@ -312,7 +312,7 @@
           # timestamps on both Pis.
           LEVEL = Info
           MODE = console, file
-          logger.router.MODE = console, file
+          LOGGER_ROUTER_MODE = console, file
 
           [security]
           INSTALL_LOCK = true
