@@ -23,7 +23,7 @@
     woodpecker_namespace: "{{ woodpecker_ns | default('woodpecker') }}"
     woodpecker_host: "{{ woodpecker_domain | default('ci.pmon.dev') }}"
     woodpecker_chart: "oci://ghcr.io/woodpecker-ci/helm/woodpecker"
-    woodpecker_chart_version: "{{ woodpecker_version | default('3.5.1') }}"
+    woodpecker_chart_version: "{{ woodpecker_version | default('3.7.3') }}"
     woodpecker_admin: "{{ forgejo_admin_user | default('forgejo_admin') }}"
     woodpecker_agent_secret: "{{ lookup('env', 'WOODPECKER_AGENT_SECRET') | default(lookup('password', '/dev/null chars=hexdigits length=64'), true) }}"
     woodpecker_tls_issuer: "{{ woodpecker_cluster_issuer | default('letsencrypt-dns') }}"
