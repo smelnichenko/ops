@@ -305,7 +305,14 @@
 
           [log]
           ROOT_PATH = /var/lib/forgejo/log
-          LEVEL = Warn
+          # Info, to console (journald) and a rotating file: at Warn nothing was
+          # written at all, and the 2026-09-09 main-ref rewind on infra (a
+          # merged PR undone one second later by an internal push) left no
+          # trace. Router log included so API merges and hook calls have
+          # timestamps on both Pis.
+          LEVEL = Info
+          MODE = console, file
+          logger.router.MODE = console, file
 
           [security]
           INSTALL_LOCK = true
