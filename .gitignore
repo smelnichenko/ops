@@ -7,3 +7,4 @@ deploy/ansible/vars/vault-recovery/
 deploy/ansible/venv/
 # DR drill run logs (task dr:drill)
 .dr/
+__pycache__/
