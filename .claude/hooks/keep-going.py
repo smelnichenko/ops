@@ -21,11 +21,19 @@ not, attempted, TODO) is treated as OPEN. And a "- [x]" with no evidence is trea
 the work is genuinely blocked, that is what "- [!]" is for, and it stays visible forever.
 
 Safety, because a hook that always blocks is a runaway:
-  * stop_hook_active is honoured — if we are already continuing from a block, allow the stop.
   * MAX_BLOCKS blocks WITHOUT PROGRESS, then it gives up and lets the turn end. Closing an item
     resets that count, so a session that is getting work done is never throttled — only one that
     is going round in circles.
   * any error in here allows the stop. Never wedge the session on a broken hook.
+
+2026-09-15: stop_hook_active used to allow the stop unconditionally, documented as a safety. It
+was the escape hatch that made the whole hook a one-shot. The real pattern it permitted:
+
+    block once -> do some work -> write a closing summary -> stop, allowed.
+
+Which is the exact failure the queue exists to prevent, and it is the one the user has now had to
+name five times. MAX_BLOCKS is the runaway guard, it is progress-aware in a way stop_hook_active
+can never be, and it terminates on its own — so the flag is recorded and no longer obeyed.
 """
 import json
 import os
@@ -39,6 +47,17 @@ STATE = pathlib.Path.home() / ".claude" / "queue" / ".block-counts.json"
 
 def allow():
     sys.exit(0)
+
+
+def should_block(blocks_without_progress, max_blocks=None):
+    """Block this stop?
+
+    Deliberately NOT a function of stop_hook_active. Honouring that flag turned the hook into a
+    one-shot: the first stop was refused and the very next one — the summary written after a
+    little more work — went through. The progress-aware counter is the guard, and it lets the
+    turn end after MAX_BLOCKS stops that closed nothing.
+    """
+    return blocks_without_progress <= (MAX_BLOCKS if max_blocks is None else max_blocks)
 
 
 # Words that mean "I did not actually do this". A checked item saying any of them is not done.
@@ -97,10 +116,6 @@ def main():
     raw = sys.stdin.read()
     data = json.loads(raw) if raw.strip() else {}
 
-    # Already looping back from a previous block: let this one through, or we never stop at all.
-    if data.get("stop_hook_active"):
-        allow()
-
     cwd = pathlib.Path(data.get("cwd") or os.getcwd())
     candidates = [cwd / "TODO.keepgoing"]
     slug = str(cwd).strip("/").replace("/", "-")
@@ -134,10 +149,22 @@ def main():
     state[session] = {"n": n, "open": len(open_items)}
     STATE.write_text(json.dumps(state))
 
-    if n > MAX_BLOCKS:
+    if not should_block(n):
         print(f"keep-going: {MAX_BLOCKS} blocks with no item closed; letting the turn end.",
               file=sys.stderr)
         allow()
+
+    # Say the specific thing on a repeat. The generic message reads as boilerplate by the second
+    # time, and the failure it is catching has a recognisable shape worth naming.
+    repeat = ""
+    if n >= 2:
+        repeat = (
+            f"\nThis is block {n} of this session with nothing closed. The shape to watch for: "
+            "reaching a point where the work SUMMARISES well and treating that as a place to "
+            "stop. A reporting point is not a stopping point. If you can name the next task — "
+            "and the list below names it — that naming is the instruction to start it, not the "
+            "sign-off.\n"
+        )
 
     listed = "\n".join(f"  - {item}" for item in open_items[:10])
     more = "" if len(open_items) <= 10 else f"\n  ... and {len(open_items) - 10} more"
@@ -146,7 +173,8 @@ def main():
         "reason": (
             f"The work queue ({queue}) still has {len(open_items)} open item(s). Do not end the "
             f"turn and do not summarise. Pick the FIRST one and start it now with a tool call.\n"
-            f"{listed}{more}\n\n"
+            f"{listed}{more}\n"
+            f"{repeat}\n"
             "Closing an item needs EVIDENCE: mark it '- [x]' and cite a PR (#123), a commit sha, "
             "or 'VERIFIED: <how>'. A '- [x]' whose note admits it is not done, or that cites "
             "nothing, is counted as STILL OPEN and you will be stopped here again.\n"
