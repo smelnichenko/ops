@@ -226,8 +226,9 @@ asserting exact `RawListing`/`RawCompany` values plus the negatives (broken sele
 seed changeset → `CollectorRegistryTest` agrees → enable in the UI → check `source_run` and
 Grafana → the env-gated live smoke for the source asserts ≥ N listings, every URL under
 `base_url`, ≥ 1 `posted_at` within 7 days, and the same non-null field set as the fixture test
-(a field that goes null live but not in the fixture is drift); otsintood.ee is the cross-check
-oracle for cv.ee (title overlap ratio).
+(a field that goes null live but not in the fixture is drift). otsintood.ee is an Alma Career
+sibling of cv.ee, so it is a coverage cross-check, not an independent oracle; cvkeskus.ee
+(Ringier) is the independent one.
 
 Source tiers from the seed inventory, to be confirmed by the survey:
 
@@ -237,7 +238,7 @@ Source tiers from the seed inventory, to be confirmed by the survey:
 | T1 | cvkeskus.ee | per-category sitemap (~600 URLs, lastmod) + RSS for freshness + detail HTML via jsoup |
 | T1 | tootukassa.ee | sitemap `/web/joboffers/sitemap.xml` (Crawl-delay 10) + detail HTML; the browser harvests the GraphQL responses once to learn the schema, then a deterministic collector replays it; open data when the portal is reachable |
 | T1 | ATS feeds | `AtsCollector` per company row (`ats:<company>`): SmartRecruiters (Wise, `?country=ee`), Greenhouse (Twilio, Veriff), Lever (Pipedrive) |
-| T2 browser | MeetFrank (WAF; the survey decides), Bolt careers (13 JS pages), Nortal, Microsoft/Ericsson SPAs, otsintood.ee, TeamDash pages if jsoup fails |
+| T2 browser | MeetFrank (WAF; the survey decides), Bolt careers (13 JS pages), Nortal, Microsoft/Ericsson SPAs, otsintood.ee (Alma Career sibling of cv.ee — coverage check only), TeamDash pages if jsoup fails |
 | T2 | Teamtailor (Swedbank `jobs.json`), BambooHR (Ridango), TeamDash (Helmes, Cybernetica, LHV), devjobsscanner |
 | never | LinkedIn, Glassdoor, Facebook (ToS), Indeed (no EE site), hh.ee (dead) |
 | companies | e-Business Register general-data dump (daily, JSON/Parquet, EMTAK 62/63, active only, streamed weekly), ITL members (HTML), Tehnopol portfolio (HTML), employer names from the boards (stub + enrich), Dealroom manual only |
@@ -283,13 +284,19 @@ Consequences: the **master is an evidence bank** — per role `company{name, dom
 size_band, users_or_revenue}`, `team{size, role_in_team}`, `scope`, `autonomy`, `tech[]`,
 `achievements[{statement, metric, problem, keywords[]}]`, plus a `positioning` block; it holds
 far more achievements than any one CV shows and the tuner picks the 3–5 per role that answer
-the posting. `CvMasterService.completeness()` shows per-role gaps in the editor and on the
-dashboard until 100 %. `TuningPrompt.RULES` (the cached block) demands results-first bullets with
+the posting. `CvMasterService.completeness()` scores per-role gaps and an empty `positioning`
+block, shown in the editor and on the dashboard until 100 %. `cv-schema.json` has no photo,
+birth-date, marital-status or ID-code fields and rejects unknown properties, which is where
+the no-personal-data rule is enforced. `TuningPrompt.RULES` (the cached block) demands results-first bullets with
 metrics kept verbatim, a company-context line per role, a 3–4 line fit summary naming the role
 and company, the posting's terms where supported, irrelevant roles collapsed to one line, and
 never a fact absent from the master. A deterministic **`CvLint`** flags duty verbs without a
 metric, roles without context, summaries that do not name the role, unused posting keywords
-present in the master, over-long bullets; warnings above a threshold trigger one retry. A
+present in the master, over-long bullets, a keyword-density rule against stuffing (a term
+repeated more than N times or a skills list longer than the master's top-K for the posting),
+an LLM-boilerplate stop-list (spearheaded, leveraged, passionate, results-driven, proven track
+record), tense/voice drift; warnings above a threshold trigger one retry. The company-context
+line is rendered from master fields, never from model prose. A
 **posting analysis** (`EXTRACT`, Haiku) is stored once per job in `requirements_json`.
 
 ### Tuning pipeline
@@ -307,7 +314,12 @@ present in the master, over-long bullets; warnings above a threshold trigger one
    HIGH, no thinking parameter. `refusal` → `FAILED` with the category; `max_tokens` → one retry
    with a shorter description.
 3. `ClaimsChecker` — deterministic fabrication guard: experience entries match the master by
-   (company, title, start, end), none added; skills ⊆ master; education, certifications and
+   (company, title, start, end), none added **and none removed** (a collapsed role keeps
+   company, title and dates); skills ⊆ master; a selected achievement's master `metric`
+   appears verbatim in its bullet; autonomy verbs never outrank the matched master bullet
+   (participated < contributed < proposed < owned/led < decided — token overlap is blind to a
+   single verb swap, the seniority-inflation failure); output language equals the master's
+   language; the posting's title never becomes the current title; skills ⊆ master; education, certifications and
    languages are copied from the master by the renderer, never from the model; each bullet shares
    ≥ 0.5 Jaccard with a master bullet of the same role or uses only that role's tokens; every
    number, year and percentage in the CV appears in the master (posting numbers such as "5 years
@@ -317,7 +329,7 @@ present in the master, over-long bullets; warnings above a threshold trigger one
    with the report in the UI. Clean → `CvLint` → `PdfRenderer` → artifacts → `PREPARED`.
 4. `AnthropicGateway` is the single choke point: exponential backoff with jitter on 429/529/5xx,
    never on 400 or refusal; **reserve-then-settle** budgeting (below); an `llm_call` row before
-   and after each call; logs token counts, never bodies.
+   and after each call; logs token counts, never bodies (a log-capture test proves it).
 
 ### Cost monitoring
 
@@ -548,16 +560,19 @@ Revert checks that must each turn a named test red:
 | Browser guard | fixture page with `<img src="http://169.254.169.254/…">` and `fetch('http://10.0.0.1/x')` → both aborts in the run's warnings, list still harvested | `context.route` handler removed |
 | Browser isolation | endpoint down → source `SKIPPED_BROWSER`, `consecutive_failures` unchanged, sibling deterministic source runs | connect failure counted as failure |
 | Registry agreement | seeded keys == bean keys, package part == package name | a seed row added without a bean (and vice versa) |
-| Fabrication guard | one row per rule: added employer, shifted date, skill not in master, bullet Jaccard < 0.5, number absent from master, posting number claimed as the candidate's, letter not naming the company, salary figure, model-supplied certification absent from the PDF text; a rephrased bullet passes | `ClaimsChecker` returns empty; Jaccard threshold set to 0 must also go red |
-| Quality lint | duty-only bullet flagged; results-first bullet with a metric passes | `CvLint` returns empty |
-| Master completeness | role without a metric-bearing achievement lowers the score and names the role | `completeness()` returns 100 |
+| Fabrication guard | one row per rule: added employer, removed role, shifted date, skill not in master, bullet Jaccard < 0.5, number absent from master, posting number claimed as the candidate's, master metric dropped from a selected bullet, "led" for "participated" (verb ladder), Estonian output for an English master, posting title as current title, letter not naming the company or the role, letter over 250 words, salary figure, model-supplied certification absent from the PDF text; a rephrased bullet with the same verb rank passes | `ClaimsChecker` returns empty; Jaccard threshold set to 0, the verb list emptied, and the removal check dropped must each go red |
+| Quality lint | duty-only bullet flagged; results-first bullet with a metric passes; a term repeated 6× flagged; a stop-list word flagged | `CvLint` returns empty |
+| No bodies in logs | one gateway call under a captured appender; the output contains no substring of the master YAML | request body logged |
+| Master completeness | role without a metric-bearing achievement lowers the score and names the role; an empty `positioning` block lowers it | `completeness()` returns 100 |
+| PII fields | a master YAML with `photo` or `birth_date` is rejected by the schema | `additionalProperties` allowed |
 | Package idempotency | two concurrent `POST /jobs/{id}/packages` released by a latch → exactly one row | unique `(job_id, cv_version_id)` dropped |
 | Budget | ledger seeded to the cap → the fake transport saw zero requests and the outcome is `SKIPPED_BUDGET`; extraction at its share → tuning still permitted; two concurrent calls under one remaining slot → one request | budget transaction skipped |
 | Gateway request shape | `AnthropicGatewayTest` points the SDK at `TestHttpServer` via `baseUrl`; the server captures request bodies and replays **recorded** responses from one real call per shape (`end_turn` with cache-creation tokens, second call with cache-read tokens, `refusal`, `max_tokens`, 429 with `retry-after`, 529, 400); asserts exactly two `cache_control` blocks at the rules and CV positions, `output_config` and effort present, no `thinking`, the CV block byte-equal to the stored YAML, 429/529 retried, 400 and refusal not, a ledger row written even when the call fails | any of those |
 | Recovery | a `PREPARING` package older than 15 min returns to `NEW`; a run without `finished_at` becomes `INTERRUPTED`; a `PENDING` call becomes `LOST` and still counts | sweeper disabled |
 | User scoping | a second `JOBS` user gets 404 on the first user's package and artifact | scope filter removed |
 | Permission coverage | ArchUnit: every controller handler except health carries `@RequirePermission` | annotation removed from one method |
-| Font bundling / PDF | PDFBox text extraction contains the sample name and an Estonian diacritic in order, single column, ≤ 2 pages, and the OFL font name is among the embedded fonts | font resource deleted |
+| Font bundling / PDF | PDFBox extraction with `setSortByPosition(true)` equals extraction in stream order (both must agree, or the layout is not single-column) and contains the sample name and an Estonian diacritic in order; ≤ 2 pages, gated per package at render time; the OFL font name is among the embedded fonts | font resource deleted; a two-column test template must also go red |
+| Tuning quality (judged) | an eval set of N fictitious postings × the sample CV with hand-written expected must-have mappings, plus adversarial `TunedCvOutput` fixtures each carrying exactly one fabrication; precision reported per release | not a revert check — a judge without a labelled set is an opinion |
 | Reports | rows at Monday 00:30 and Sunday 23:30 Europe/Tallinn and a week spanning 2026-10-25 (DST) → exact weekly counts; stats at T1 equal stats at T2 after more ticks | period boundary shifted by an hour; a stat computed from `last_seen_at` |
 | Review flow | `POST /packages` → tick → `PREPARED` with artifacts → `REVIEWED` → `APPLIED` (`applied_at`, gone from the `PREPARED` list) → regenerate 409; blacklisted company → no package; `tuning.auto=false` → nothing created; new CV version → only jobs first seen after activation | any transition guard removed |
 | Route in both files | `helm template \| yq` finds `-masi-route` with `PathPrefix /api/masi` in both rendered route files | one file's route removed |
@@ -589,7 +604,8 @@ today" equals `sum(llm_call.cost_usd)`.
 - **Cost blind spots**: a wrong pricing table makes the ledger wrong; the model-id mismatch
   counter and the optional Admin-API reconciliation catch it; alerts fire on rate, not only totals.
 - **PII**: the CV lives only in the DB and its backups; fixtures are scrubbed; the gateway logs
-  token counts only; the sample CV is fictitious; recruiter contact persons are never stored.
+  token counts only; the sample CV is fictitious; recruiter contact persons are never stored
+  as fields, enriched or displayed — a name or email inside `description_raw` stays there.
 - **Register dump size**: stream the zip, keep only EMTAK 62/63 active rows, run weekly.
 - **Single replica**: the scheduler map and the per-source locks are in-memory; `replicas: 1`
   and `maxSurge: 0` are constraints until a DB lease replaces them.
