@@ -153,7 +153,8 @@ Frontend (React) → HAProxy (TCP 443) → Istio Gateway (TLS + routing)
                                         ├─ Admin service (monitor_admin DB) ← auth, users, groups, permissions
                                         ├─ Core app (monitor DB)            ← monitors, RSS, inbox, webhooks, game
                                         ├─ Chat service (monitor_chat DB)   ← channels, messages
-                                        └─ Chess service (monitor_chess DB)  ← chess games
+                                        ├─ Chess service (monitor_chess DB)  ← chess games
+                                        └─ Masi service (masi DB, /api/masi) ← IT job registry, CV tuning (+ masi-browser pod)
                            ↓
                      PostgreSQL (shared instance, separate databases)
                            ↓
@@ -567,7 +568,7 @@ task deploy:undeploy  # Remove (keeps data)
 
 **JVM:**
 - Virtual threads enabled (`spring.threads.virtual.enabled: true`)
-- Heap: `-Xmx2g -XX:+UseZGC` (monitor), `-Xmx1g` (admin/chat/chess) via `JAVA_OPTS` env var in Helm deployment (configurable via `app.javaOpts`)
+- Heap: `-Xmx2g -XX:+UseZGC` (monitor), `-Xmx1g` (admin/chat/chess), `-Xmx512m` test / `-Xmx768m` prod (masi) via `JAVA_OPTS` env var in Helm deployment (configurable via `app.javaOpts`)
 - Entrypoint: `sh -c "exec java $JAVA_OPTS -jar app.jar"`
 
 **HikariCP:** `maximum-pool-size: 20`, `minimum-idle: 5` (configurable via `app.hikari.*`)
@@ -940,7 +941,7 @@ Self-hosted SonarQube CE 26.3.0 at `https://sonar.pmon.dev/` for static analysis
 
 - **Namespace:** `schnappy` (shared with the app)
 - **Feature-flagged:** `sonarqube.enabled` in Helm (disabled by default)
-- **Seven projects:** `schnappy-monitor`, `schnappy-admin`, `schnappy-chat`, `schnappy-chess`, `schnappy-gateway`, `schnappy-site`, `schnappy-infrastructure`
+- **Eight projects:** `schnappy-monitor`, `schnappy-admin`, `schnappy-chat`, `schnappy-chess`, `schnappy-masi`, `schnappy-gateway`, `schnappy-site`, `schnappy-infrastructure`
 - **Coverage:**
   - Backend services: JaCoCo → XML report, excludes jOOQ generated code and config/dto/entity from coverage
   - Frontend: `@vitest/coverage-v8` → LCOV report
@@ -956,7 +957,7 @@ Self-hosted SonarQube CE 26.3.0 at `https://sonar.pmon.dev/` for static analysis
   curl -X POST -u admin:<pw> "http://localhost:9000/api/user_tokens/generate" \
     -d "name=ci&type=GLOBAL_ANALYSIS_TOKEN"
   # 3. Create projects
-  for key in schnappy-monitor schnappy-admin schnappy-chat schnappy-chess schnappy-gateway schnappy-site schnappy-infrastructure; do
+  for key in schnappy-monitor schnappy-admin schnappy-chat schnappy-chess schnappy-masi schnappy-gateway schnappy-site schnappy-infrastructure; do
     curl -X POST -u admin:<pw> "http://localhost:9000/api/projects/create" -d "project=$key&name=$key"
   done
   # 4. Create quality gates (copy from Sonar way, rename, set coverage thresholds)

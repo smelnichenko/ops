@@ -254,13 +254,13 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-keepalived.yml {{.CLI_ARGS}}
 
   promote:prod:
-    desc: 'Promote test image tags -> prod. DRY-RUN by default; CONFIRM=1 commits+pushes. SERVICES="site monitor" limits scope (default all 6).'
+    desc: 'Promote test image tags -> prod. DRY-RUN by default; CONFIRM=1 commits+pushes. SERVICES="site monitor" limits scope (default all 7).'
     cmds:
       - |
         cd {{.SRC_DIR}}/infra
         TEST=clusters/production/schnappy-test-apps/values.yaml
         PROD=clusters/production/schnappy-production-apps/values.yaml
-        SERVICES="${SERVICES:-monitor admin chat chess site game-scp}"
+        SERVICES="${SERVICES:-monitor admin chat chess masi site game-scp}"
         PLAN=""; SVCS=""
         for svc in $SERVICES; do
           TAG=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "$TEST" | grep -oP 'tag: "\K[^"]+' | head -1)
