@@ -1,7 +1,9 @@
 # CI: Lint and analyze on push
 
+# ONE run per change: the pull request's. With `push` listed too, every push to a branch that has an
+# open PR fired BOTH pipelines - two identical runs of the same sha, racing for the same agent.
+# Nothing lands here without a PR, so the PR run is the gate; deployment stays on cd.yaml's push.
 when:
-  - event: push
   - event: pull_request
 
 clone:
