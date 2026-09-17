@@ -294,53 +294,15 @@ tasks:
       - ONBOARD_USER='{{.USER}}' ONBOARD_EMAIL='{{.EMAIL}}' ONBOARD_NAME='{{.NAME}}' python3 scripts/onboard-dev.py
 
   deploy:seed-test-secrets:
-    desc: Seed test environment secrets into Vault (overrides from .env.test)
+    # Same .env as production (test shares the external keys). The playbook reads
+    # every env-sourced value with lookup('env'); nothing is passed as an extra var
+    # except the prefix. Precedence: a variable exported in the shell outranks .env.
+    desc: Seed test-environment Vault secrets from .env (prefix schnappy-test)
     dir: deploy/ansible
     deps: [deploy:install]
-    dotenv: ['../../.env', '../../.env.test']
+    dotenv: ['../../.env']
     cmds:
-      - >-
-        venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
-        -e vault_prefix=schnappy-test
-        -e "MONITOR_DB_PASSWORD=$MONITOR_DB_PASSWORD"
-        -e "VALKEY_PASSWORD=$VALKEY_PASSWORD"
-        -e "JWT_SECRET=$JWT_SECRET"
-        -e "MAIL_PASSWORD=${MAIL_PASSWORD:-unused}"
-        -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-unused}"
-        -e "RESEND_WEBHOOK_SECRET=${RESEND_WEBHOOK_SECRET:-unused}"
-        -e "RESEND_API_KEY=${RESEND_API_KEY:-unused}"
-        -e "MINIO_ROOT_USER=$MINIO_ROOT_USER"
-        -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD"
-        -e "ELASTICSEARCH_PASSWORD=$ELASTICSEARCH_PASSWORD"
-        -e "KIBANA_PASSWORD=$KIBANA_PASSWORD"
-        -e "GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-unused}"
-        -e "KAFKA_CLUSTER_ID=$KAFKA_CLUSTER_ID"
-        -e "FORGEJO_ADMIN_USER=${FORGEJO_ADMIN_USER:-forgejo_admin}"
-        -e "FORGEJO_ADMIN_PASSWORD=${FORGEJO_ADMIN_PASSWORD:-unused}"
-        -e "FORGEJO_ADMIN_EMAIL=${FORGEJO_ADMIN_EMAIL:-admin@pmon.dev}"
-        -e "KEYCLOAK_FORGEJO_CLIENT_SECRET=${KEYCLOAK_FORGEJO_CLIENT_SECRET:-unused}"
-        -e "SONARQUBE_ADMIN_PASSWORD=${SONARQUBE_ADMIN_PASSWORD:-unused}"
-        -e "SONARQUBE_POSTGRES_PASSWORD=${SONARQUBE_POSTGRES_PASSWORD:-unused}"
-        -e "SONARQUBE_TOKEN=${SONARQUBE_TOKEN:-unused}"
-        -e "BACKUP_ACCESS_KEY=${BACKUP_ACCESS_KEY:-unused}"
-        -e "BACKUP_SECRET_KEY=${BACKUP_SECRET_KEY:-unused}"
-        -e "WOODPECKER_FORGEJO_CLIENT=${WOODPECKER_FORGEJO_CLIENT:-unused}"
-        -e "WOODPECKER_FORGEJO_SECRET=${WOODPECKER_FORGEJO_SECRET:-unused}"
-        -e "WOODPECKER_CLONE_TOKEN=${WOODPECKER_CLONE_TOKEN:-unused}"
-        -e "WOODPECKER_INFRA_REPO_TOKEN=${WOODPECKER_INFRA_REPO_TOKEN:-unused}"
-        -e "KEYCLOAK_ARGOCD_CLIENT_SECRET=${KEYCLOAK_ARGOCD_CLIENT_SECRET:-unused}"
-        -e "KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET=${KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET:-unused}"
-        -e "KEYCLOAK_K6_SMOKE_CLIENT_SECRET=${KEYCLOAK_K6_SMOKE_CLIENT_SECRET:-unused}"
-        -e "K6_SMOKE_CLIENT_SECRET=${KEYCLOAK_K6_SMOKE_CLIENT_SECRET:-unused}"
-        -e "KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-unused}"
-        -e "KEYCLOAK_DB_PASSWORD=${KEYCLOAK_DB_PASSWORD:-unused}"
-        -e "GRAFANA_OAUTH_CLIENT_ID=${GRAFANA_OAUTH_CLIENT_ID:-unused}"
-        -e "GRAFANA_OAUTH_CLIENT_SECRET=${GRAFANA_OAUTH_CLIENT_SECRET:-unused}"
-        -e "PORKBUN_API_KEY=${PORKBUN_API_KEY:-unused}"
-        -e "PORKBUN_SECRET_KEY=${PORKBUN_SECRET_KEY:-unused}"
-        -e "ALERTMANAGER_WEBHOOK_SECRET=${ALERTMANAGER_WEBHOOK_SECRET:-unused}"
-        -e "NVD_API_KEY=${NVD_API_KEY:-unused}"
-        -e "PROMETHEUS_AUTH_TOKEN=${PROMETHEUS_AUTH_TOKEN:-unused}"
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e vault_prefix=schnappy-test
 
   # ============== VAGRANT DEPLOY HELPERS (internal) ==============
   # Shared deploy chain used by every k8s-cluster Vagrant test. Assumes
@@ -626,51 +588,15 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-host-hardening.yml
 
   deploy:seed-secrets:
+    # The playbook reads every env-sourced value with lookup('env') from the
+    # dotenv-loaded environment; nothing is passed as an extra var. Precedence:
+    # a variable exported in the shell outranks .env.
     desc: Seed Vault secrets from .env
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']
     cmds:
-      - >-
-        venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
-        -e "MONITOR_DB_PASSWORD=$MONITOR_DB_PASSWORD"
-        -e "VALKEY_PASSWORD=$VALKEY_PASSWORD"
-        -e "JWT_SECRET=$JWT_SECRET"
-        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
-        -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
-        -e "RESEND_WEBHOOK_SECRET=$RESEND_WEBHOOK_SECRET"
-        -e "RESEND_API_KEY=$RESEND_API_KEY"
-        -e "MINIO_ROOT_USER=$MINIO_ROOT_USER"
-        -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD"
-        -e "CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD"
-        -e "CENTRIFUGO_ADMIN_PASSWORD=$CENTRIFUGO_ADMIN_PASSWORD"
-        -e "CENTRIFUGO_ADMIN_SECRET=$CENTRIFUGO_ADMIN_SECRET"
-        -e "CENTRIFUGO_API_KEY=$CENTRIFUGO_API_KEY"
-        -e "GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD"
-        -e "KAFKA_CLUSTER_ID=$KAFKA_CLUSTER_ID"
-        -e "FORGEJO_ADMIN_USER=$FORGEJO_ADMIN_USER"
-        -e "FORGEJO_ADMIN_PASSWORD=$FORGEJO_ADMIN_PASSWORD"
-        -e "FORGEJO_ADMIN_EMAIL=$FORGEJO_ADMIN_EMAIL"
-        -e "KEYCLOAK_FORGEJO_CLIENT_SECRET=$KEYCLOAK_FORGEJO_CLIENT_SECRET"
-        -e "SONARQUBE_ADMIN_PASSWORD=$SONARQUBE_ADMIN_PASSWORD"
-        -e "SONARQUBE_POSTGRES_PASSWORD=$SONARQUBE_POSTGRES_PASSWORD"
-        -e "SONARQUBE_TOKEN=$SONARQUBE_TOKEN"
-        -e "BACKUP_ACCESS_KEY=$BACKUP_ACCESS_KEY"
-        -e "BACKUP_SECRET_KEY=$BACKUP_SECRET_KEY"
-        -e "WOODPECKER_FORGEJO_CLIENT=$WOODPECKER_FORGEJO_CLIENT"
-        -e "WOODPECKER_FORGEJO_SECRET=$WOODPECKER_FORGEJO_SECRET"
-        -e "WOODPECKER_CLONE_TOKEN=$WOODPECKER_CLONE_TOKEN"
-        -e "WOODPECKER_INFRA_REPO_TOKEN=$WOODPECKER_INFRA_REPO_TOKEN"
-        -e "KEYCLOAK_ARGOCD_CLIENT_SECRET=$KEYCLOAK_ARGOCD_CLIENT_SECRET"
-        -e "KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET=$KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET"
-        -e "KEYCLOAK_K6_SMOKE_CLIENT_SECRET=$KEYCLOAK_K6_SMOKE_CLIENT_SECRET"
-        -e "K6_SMOKE_CLIENT_SECRET=$KEYCLOAK_K6_SMOKE_CLIENT_SECRET"
-        -e "KEYCLOAK_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD"
-        -e "KEYCLOAK_DB_PASSWORD=$KEYCLOAK_DB_PASSWORD"
-        -e "GRAFANA_OAUTH_CLIENT_ID=$GRAFANA_OAUTH_CLIENT_ID"
-        -e "PORKBUN_API_KEY=$PORKBUN_API_KEY"
-        -e "PORKBUN_SECRET_KEY=$PORKBUN_SECRET_KEY"
-        -e "FORGEJO_READONLY_TOKEN=$FORGEJO_READONLY_TOKEN"
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml
 
   deploy:delete-environment:
     desc: 'Purge a Vault prefix (e.g. CLI_ARGS="-e vault_prefix=schnappy-pr-42")'
@@ -705,7 +631,7 @@ tasks:
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml -e vault_root_token=$VAULT_ROOT_TOKEN
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
     dotenv: ['.env']
 
 
@@ -759,10 +685,6 @@ tasks:
       - >-
         venv/bin/ansible-playbook -i inventory/production.yml playbooks/create-environment.yml
         -e "env_name={{.ENV_NAME}}"
-        -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
-        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
-        -e "RESEND_WEBHOOK_SECRET=$RESEND_WEBHOOK_SECRET"
-        -e "RESEND_API_KEY=$RESEND_API_KEY"
 
   env:destroy:
     desc: "Destroy a schnappy environment (usage: task env:destroy ENV_NAME=staging)"
@@ -870,53 +792,6 @@ tasks:
       - echo "=== All Vagrant tests complete ==="
 
   # ============== DEPLOY ==============
-  deploy:promote:
-    desc: "Promote image tags from test to production (SERVICE=monitor|admin|chat|chess|site|game-scp|all)"
-    vars:
-      INFRA_DIR: '{{.SRC_DIR}}/infra'
-      TEST_VALUES: '{{.INFRA_DIR}}/clusters/production/schnappy-test-apps/values.yaml'
-      PROD_VALUES: '{{.INFRA_DIR}}/clusters/production/schnappy-production-apps/values.yaml'
-      SERVICE: '{{.SERVICE | default "all"}}'
-    cmds:
-      - |
-        cd "{{.INFRA_DIR}}" && git pull --rebase
-
-        SERVICES="{{.SERVICE}}"
-        if [ "$SERVICES" = "all" ]; then
-          SERVICES="monitor admin chat chess site game-scp"
-        fi
-
-        PROMOTED=""
-        for svc in $SERVICES; do
-          test_tag=$(grep "# $svc" "{{.TEST_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
-          prod_tag=$(grep "# $svc" "{{.PROD_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
-
-          if [ -z "$test_tag" ]; then
-            echo "SKIP $svc: no tag in test values"
-            continue
-          fi
-          if [ "$test_tag" = "$prod_tag" ]; then
-            echo "SKIP $svc: already at $test_tag"
-            continue
-          fi
-
-          echo "PROMOTE $svc: $prod_tag -> $test_tag"
-          sed -i "s|tag: \".*\"  # $svc|tag: \"$test_tag\"  # $svc|" "{{.PROD_VALUES}}"
-          PROMOTED="$PROMOTED $svc=$test_tag"
-        done
-
-        if [ -z "$PROMOTED" ]; then
-          echo "Nothing to promote"
-          exit 0
-        fi
-
-        cd "{{.INFRA_DIR}}"
-        git add clusters/production/schnappy-production-apps/values.yaml
-        git commit -m "deploy(prod):$PROMOTED"
-        git push
-        echo "Promoted:$PROMOTED"
-
-  # ============== VAGRANT ==============
   vagrant:up:
     desc: Start Vagrant VMs
     cmds:

@@ -61,43 +61,32 @@ ssh ten 'sudo kubectl get pods -n woodpecker'
 ssh ten 'sudo kubectl logs woodpecker-server-0 -n woodpecker --tail=50'
 ```
 
-**Woodpecker API** (via kubectl exec or API token):
+**Woodpecker API and repo management** (the upstream server image is `FROM scratch`: no
+`woodpecker-cli`, not even `ls`, inside the pod; no `woodpecker-api-token` secret exists — no tracked
+manifest ever created one):
 ```bash
-# API token stored as k8s secret in woodpecker namespace
-ssh ten 'TOKEN=$(sudo kubectl get secret woodpecker-api-token -n woodpecker -o jsonpath="{.data.token}" | base64 -d) && echo $TOKEN'
+# Personal access token: ci.pmon.dev → user menu → "CLI & API" (route /user/cli-and-api)
+export WOODPECKER_TOKEN=...
+curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" https://ci.pmon.dev/api/repos | jq '.[] | {id, full_name, active}'
+curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" https://ci.pmon.dev/api/repos/17/pipelines | jq '.[0]'   # 17 = schnappy/masi
+curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" -X POST https://ci.pmon.dev/api/repos/17/pipelines/2   # restart pipeline 2
 
-# List repos (via kubectl exec into server pod)
-ssh ten 'TOKEN=$(sudo kubectl get secret woodpecker-api-token -n woodpecker -o jsonpath="{.data.token}" | base64 -d) && sudo kubectl exec woodpecker-server-0 -n woodpecker -- /bin/woodpecker-cli --server http://localhost:8000 --token "$TOKEN" repo ls'
-
-# List recent pipelines for a repo
-ssh ten 'TOKEN=$(sudo kubectl get secret woodpecker-api-token -n woodpecker -o jsonpath="{.data.token}" | base64 -d) && sudo kubectl exec woodpecker-server-0 -n woodpecker -- /bin/woodpecker-cli --server http://localhost:8000 --token "$TOKEN" pipeline ls schnappy/admin'
-
-# View pipeline logs (repo, pipeline number, step name)
-ssh ten 'TOKEN=$(sudo kubectl get secret woodpecker-api-token -n woodpecker -o jsonpath="{.data.token}" | base64 -d) && sudo kubectl exec woodpecker-server-0 -n woodpecker -- /bin/woodpecker-cli --server http://localhost:8000 --token "$TOKEN" log show schnappy/admin 4 test'
-
-# Sync repos from Forgejo (after adding new repos)
-ssh ten 'TOKEN=$(sudo kubectl get secret woodpecker-api-token -n woodpecker -o jsonpath="{.data.token}" | base64 -d) && sudo kubectl exec woodpecker-server-0 -n woodpecker -- /bin/woodpecker-cli --server http://localhost:8000 --token "$TOKEN" repo sync'
-
-# Activate a repo in Woodpecker
-ssh ten 'TOKEN=$(sudo kubectl get secret woodpecker-api-token -n woodpecker -o jsonpath="{.data.token}" | base64 -d) && sudo kubectl exec woodpecker-server-0 -n woodpecker -- /bin/woodpecker-cli --server http://localhost:8000 --token "$TOKEN" repo add schnappy/admin'
-
-# Woodpecker SQLite DB (direct access, server must be scaled down first)
-# PVC path on ten: /opt/local-path-provisioner/pvc-a65c80b9-0579-4ae7-a9cd-d3eed872a673_woodpecker_data-woodpecker-server-0/woodpecker.sqlite
-ssh ten 'sudo sqlite3 /opt/local-path-provisioner/pvc-a65c80b9-0579-4ae7-a9cd-d3eed872a673_woodpecker_data-woodpecker-server-0/woodpecker.sqlite "SELECT id, full_name, active, forge_remote_id FROM repos;"'
+# Activate a new repo / add crons: ci.pmon.dev UI → Add repository (after Forgejo repo creation), Settings → Crons
+# Commit status is mirrored to Forgejo (private repos need a token):
+curl -sS -H "Authorization: token $FORGEJO_READONLY_TOKEN" https://git.pmon.dev/api/v1/repos/schnappy/<repo>/commits/<sha>/status
 ```
 
-**Pipeline logs via ELK** (Woodpecker pipeline steps run as k8s pods — logs captured by Fluent-bit):
+**Pipeline step logs** (Woodpecker steps run as `wp-<id>` pods, service containers as
+`wp-svc-<id>-<name>`, in the `woodpecker` namespace; Fluent-bit ships them to ClickHouse — the old
+Elasticsearch `podlogs-*` path is dead):
 ```bash
-# Search pipeline logs in Elasticsearch (all pipeline pods in woodpecker namespace)
-ssh ten 'PW=$(sudo kubectl get secret schnappy-elasticsearch -n schnappy -o jsonpath="{.data.ELASTICSEARCH_PASSWORD}" | base64 -d) && sudo kubectl exec schnappy-elasticsearch-0 -n schnappy -- curl -sf -u "elastic:${PW}" "http://localhost:9200/podlogs-*/_search" -H "Content-Type: application/json" -d "{\"size\":50,\"sort\":[{\"@timestamp\":\"desc\"}],\"query\":{\"bool\":{\"must\":[{\"match\":{\"kubernetes.namespace_name\":\"woodpecker\"}},{\"match_phrase\":{\"log\":\"ERROR\"}}]}}}"' 2>/dev/null | jq '.hits.hits[]._source | {timestamp: .["@timestamp"], pod: .kubernetes.pod_name, log}'
-
-# Search logs for a specific pipeline step (e.g., "push-image" step of admin repo)
-ssh ten 'PW=$(sudo kubectl get secret schnappy-elasticsearch -n schnappy -o jsonpath="{.data.ELASTICSEARCH_PASSWORD}" | base64 -d) && sudo kubectl exec schnappy-elasticsearch-0 -n schnappy -- curl -sf -u "elastic:${PW}" "http://localhost:9200/podlogs-*/_search" -H "Content-Type: application/json" -d "{\"size\":100,\"sort\":[{\"@timestamp\":\"desc\"}],\"query\":{\"bool\":{\"must\":[{\"match\":{\"kubernetes.namespace_name\":\"woodpecker\"}},{\"wildcard\":{\"kubernetes.pod_name\":\"*admin*push-image*\"}}]}}}"' 2>/dev/null | jq '.hits.hits[]._source.log'
-
-# Search by time range (last 1 hour) — useful for recent pipeline failures
-ssh ten 'PW=$(sudo kubectl get secret schnappy-elasticsearch -n schnappy -o jsonpath="{.data.ELASTICSEARCH_PASSWORD}" | base64 -d) && sudo kubectl exec schnappy-elasticsearch-0 -n schnappy -- curl -sf -u "elastic:${PW}" "http://localhost:9200/podlogs-*/_search" -H "Content-Type: application/json" -d "{\"size\":200,\"sort\":[{\"@timestamp\":\"desc\"}],\"query\":{\"bool\":{\"must\":[{\"match\":{\"kubernetes.namespace_name\":\"woodpecker\"}},{\"range\":{\"@timestamp\":{\"gte\":\"now-1h\"}}}]}}}"' 2>/dev/null | jq '.hits.hits[]._source | {timestamp: .["@timestamp"], pod: .kubernetes.pod_name, log}'
-
-# Kibana UI: https://logs.pmon.dev/ — filter by kubernetes.namespace_name: "woodpecker"
+# step pods of the last 15 minutes, then the tail of one step
+kubectl -n schnappy-infra exec schnappy-clickhouse-0 -c clickhouse -- clickhouse-client -q \
+  "SELECT pod, min(timestamp), count() FROM logs.podlogs WHERE namespace='woodpecker' AND pod LIKE 'wp-%' AND timestamp > now() - INTERVAL 15 MINUTE GROUP BY pod ORDER BY 2 FORMAT PrettyCompactNoEscapes"
+kubectl -n schnappy-infra exec schnappy-clickhouse-0 -c clickhouse -- clickhouse-client -q \
+  "SELECT message FROM logs.podlogs WHERE namespace='woodpecker' AND pod='wp-<id>' ORDER BY timestamp FORMAT TSVRaw" | tail -40
+# A red pipeline whose ONLY step is the clone with "could not read Username" is the queued-pipeline
+# credential loss — restart it, it is not the diff.
 ```
 
 **SonarQube API** — use the maintained helper (token from `ops/.env`, queries
@@ -128,7 +117,7 @@ task test:hyperfoil:stress  # Hyperfoil stress test in prod (~6min)
 task test:dual-pi-clean  # Vagrant: full dual-Pi HA from fresh destroy
 task test:dual-pi        # Vagrant: dual-Pi HA without destroy (fast iteration)
 task test:vault-unseal   # Vagrant: Vault auto-unseal after cold start
-task test:elk         # Vagrant: ELK stack integration
+task test:logs        # Vagrant: ClickHouse + Fluent-bit log pipeline
 task test:grafana     # Vagrant: Grafana + Prometheus integration
 task test:kafka-scylla        # Vagrant: Kafka + ScyllaDB integration
 task test:dr          # Vagrant: disaster recovery
@@ -173,10 +162,9 @@ Frontend (React) → HAProxy (TCP 443) → Istio Gateway (TLS + routing)
 Admin → Kafka (user.events) → Core app UserEventConsumer → syncs users table
                              → Chat service UserEventConsumer → syncs chat_users table
 
-ELK Stack (namespace: schnappy)
-  ├─ Elasticsearch (StatefulSet)  ← log storage + search
-  ├─ Fluent-bit (DaemonSet)       ← ships pod logs to ES (podlogs-* index)
-  └─ Kibana (Deployment)          ← log visualization at logs.pmon.dev
+Logging (namespace: schnappy-infra)
+  ├─ ClickHouse (StatefulSet)     ← log storage + search (logs.podlogs)
+  └─ Fluent-bit (DaemonSet)       ← ships pod logs to ClickHouse; viewed in Grafana
 
 Chat (namespace: schnappy)
   ├─ Kafka (StatefulSet, KRaft)    ← message bus for chat + user events
@@ -188,7 +176,7 @@ Forgejo (namespace: forgejo)       ← git hosting (source code + webhooks)
 Woodpecker CI (namespace: woodpecker) ← CI/CD pipeline execution
   ├─ Server (StatefulSet)          ← orchestrates pipelines, UI at ci.pmon.dev
   ├─ Agent (StatefulSet, 2 replicas) ← creates pipeline pods via k8s API
-  └─ Pipeline pods (transient)     ← build/test/update-infra steps, logs in podlogs-*
+  └─ Pipeline pods (transient)     ← build/test/update-infra steps, logs in ClickHouse logs.podlogs
 
 Argo CD (namespace: argocd)        ← GitOps controller
   ├─ argocd-server                 ← UI at cd.pmon.dev, API, Keycloak SSO
@@ -209,7 +197,7 @@ Velero (namespace: velero)       ← k8s backup orchestrator → Pi backup store
   └─ full-weekly (Sun 3 AM)      ← all namespaces, 30-day retention
 ```
 
-**Stack:** Java 25, Spring Boot 4.0, Istio sidecar mesh 1.25, React 18, TypeScript, Vite 5, PostgreSQL 17, Kafka 4.2 (KRaft), ScyllaDB 6.2, Recharts, Bucket4j, Rome (RSS), Anthropic SDK, Elasticsearch 8, Fluent-bit, Kibana, kubeadm 1.34, Cilium CNI (kube-proxy replacement), Helm, Ansible, Forgejo, Woodpecker CI, Velero, SpringDoc OpenAPI
+**Stack:** Java 25, Spring Boot 4.0, Istio sidecar mesh 1.25, React 18, TypeScript, Vite 5, PostgreSQL 17, Kafka 4.2 (KRaft), ScyllaDB 6.2, Recharts, Bucket4j, Rome (RSS), Anthropic SDK, ClickHouse 24.8, Fluent-bit, kubeadm 1.34, Cilium CNI (kube-proxy replacement), Helm, Ansible, Forgejo, Woodpecker CI, Velero, SpringDoc OpenAPI
 
 ## Authentication & Authorization
 
@@ -608,8 +596,7 @@ task deploy:undeploy  # Remove (keeps data)
 | Valkey | 100m / 1000m | 64Mi / 512Mi |
 | Kafka | 250m / 2000m | 1536Mi / 2Gi |
 | ScyllaDB | 200m / 4000m | 2Gi / 4Gi |
-| Elasticsearch | 250m / 4000m | 2Gi / 4Gi |
-| Kibana | 100m / 1000m | 1Gi / 2Gi |
+| ClickHouse | 100m / 2000m | 512Mi / 8Gi |
 | Fluent-bit | 100m / 1000m | 128Mi / 512Mi |
 | VictoriaMetrics | 100m / 2000m | 256Mi / 2Gi |
 | Keycloak | 200m / 2000m | 1Gi / 2Gi |
@@ -650,7 +637,7 @@ Located in the `schnappy/platform` repo under `helm/`. Split into 5 charts by li
 | `schnappy` | `helm/schnappy` | `schnappy` | Code pushes (daily) — app, admin, chat, chess, envoy gateway, site, game |
 | `schnappy-data` | `helm/schnappy-data` | `schnappy-data` | Version bumps (monthly) — postgres, valkey, kafka, scylla, s3gw (versitygw), apt-cache |
 | `schnappy-auth` | `helm/schnappy-auth` | — | **TEST-ONLY** (Vagrant E2E). Production Keycloak is bare-metal on Pis via setup-pi-services.yml. |
-| `schnappy-observability` | `helm/schnappy-observability` | `schnappy-observability` | Dashboard/config (weekly) — ELK, prometheus, grafana, alertmanager, kube-state-metrics |
+| `schnappy-observability` | `helm/schnappy-observability` | `schnappy-observability` | Dashboard/config (weekly) — ClickHouse+Fluent-bit logging, prometheus, grafana, alertmanager, kube-state-metrics |
 | `schnappy-sonarqube` | `helm/schnappy-sonarqube` | `schnappy-sonarqube` | QG/rule changes (rare) — sonarqube + sonarqube-postgres |
 
 **Cross-chart design:** All pods have `app.kubernetes.io/part-of: schnappy` label. Network policies use `nameOverride`-derived selector labels for cross-chart pod references. Default-deny NP is a raw manifest in `cluster-config/` (namespace-wide `podSelector: {}`).
@@ -759,16 +746,16 @@ CI/CD pipeline execution via Woodpecker CI with Kubernetes backend. Pipelines tr
 - **Pipeline cancellation:** Disabled (`WOODPECKER_PIPELINE_CANCEL_RUNNING=false`) — new pushes queue instead of cancelling
 - **Agent config:** `CONNECT_RETRY_COUNT=30`, `MAX_WORKFLOWS=1` per agent
 - **Key files:** `.woodpecker/ci.yaml`, `.woodpecker/cd.yaml`, `deploy/ansible/playbooks/setup-woodpecker.yml` (platform repo)
-- **API token:** Stored as k8s secret `woodpecker-api-token` in `woodpecker` namespace
-- **CLI:** `/bin/woodpecker-cli` inside the `woodpecker-server-0` pod (exec into it)
-- **SQLite DB:** PVC at `/opt/local-path-provisioner/pvc-a65c80b9-0579-4ae7-a9cd-d3eed872a673_woodpecker_data-woodpecker-server-0/woodpecker.sqlite` on ten
+- **API:** personal access token from the UI (user menu → "CLI & API"); there is no in-cluster token secret and no CLI in the `FROM scratch` server image
+- **SQLite DB:** on ten under the PVC's local path — derive it, the id changes: `kubectl get pv $(kubectl get pvc data-woodpecker-server-0 -n woodpecker -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.local.path}'` (then `woodpecker.sqlite` inside)
 - **Repo management caveats:**
-  - `repo rm` does soft-delete only (sets `active=0`, keeps DB row). UNIQUE constraint on `full_name` blocks re-adding
+  - Deleting a repo in the UI/API is a soft-delete (sets `active=0`, keeps the DB row); the UNIQUE constraint on `full_name` blocks re-adding
   - To fully remove: scale down server → delete row from SQLite → scale back up
   - To re-activate with new Forgejo repo ID: update `forge_remote_id` + `active=1` in SQLite
-  - Always use `repo sync` + `repo add` (not DB manipulation) for proper webhook token generation
-- **Pipeline logs:** Captured by Fluent-bit into `podlogs-*` ES index (pods run in `woodpecker` namespace). Query via ELK or Kibana at `logs.pmon.dev`
-- **Registered repos:** schnappy/monitor (id=1), schnappy/admin (id=2), schnappy/chat (id=3), schnappy/chess (id=4), schnappy/site (id=6), schnappy/game-scp (id=7), schnappy/keycloak-theme (id=10). api-gateway (id=5) archived/deactivated
+  - Always activate through the UI (Add repository), not DB manipulation, for proper webhook token generation
+- **Pipeline logs:** Fluent-bit → ClickHouse `logs.podlogs` (namespace `woodpecker`, pods `wp-<id>` / `wp-svc-<id>-<name>`); see the query recipe above
+- **Local lint parity:** CI lints with `git.pmon.dev/schnappy/ansible-lint:latest`; a differently versioned local ansible-lint disagrees on rules — lint the way CI does. The image's collections live under `/root/.ansible`, so run as root (a `-u`/`HOME` override loses them) and remove the root-owned cache the linter drops into the checkout in the same container: `docker run --rm -v "$PWD:/w" -w /w git.pmon.dev/schnappy/ansible-lint:latest bash -c 'ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/; rc=$?; rm -rf /w/.ansible; exit $rc'`. The Ansible unit harness runs the same way: `... bash -c 'bash tests/ansible/unit/run.sh; rc=$?; rm -rf /w/.ansible; exit $rc'`
+- **Registered repos (ids from the live `repos` table, 2026-09-17):** 1 admin, 2 chat, 3 chess, 4 game-scp, 5 infra, 6 keycloak-theme, 7 monitor, 8 ops, 9 platform, 10 site, 11 hyperfoil, 12 sonar-scanner, 13 ansible-lint, 16 radar, 17 masi (all active; no api-gateway row). Always re-check with `GET /api/repos` before acting on an id
 
 ## Nexus Repository Manager (Pi)
 
@@ -865,37 +852,27 @@ task deploy:seed-secrets
 
 **DR test:** `task test:dr` — automated Vagrant test covering pod recovery, Velero backup/restore, and offsite restore.
 
-## ELK Stack (Centralized Logging)
+## Centralized Logging (ClickHouse)
 
-Elasticsearch + Fluent-bit + Kibana for centralized log aggregation and search across all pods (including Woodpecker CI pipeline pods).
+Fluent-bit → ClickHouse, queried through Grafana's ClickHouse datasource or `clickhouse-client`.
+The former ELK stack (Elasticsearch, Kibana, `logs.pmon.dev`, `podlogs-*` indices) is gone: no
+manifests, no pods; any recipe that queries Elasticsearch for logs is obsolete.
 
-- **Namespace:** `schnappy` (shared with the app)
-- **Elasticsearch:** Single-node StatefulSet, 8.19.8, xpack security enabled (password auth)
-- **Fluent-bit:** DaemonSet, ships pod logs from `/var/log/containers` (tail input) to Elasticsearch
-- **Kibana:** Deployment at `https://logs.pmon.dev/`, uses `kibana_system` user (password set via init container)
-- **Secrets:** `schnappy-elasticsearch` in Vault KV (`secret/schnappy/elasticsearch`) with `password` + `kibana_password` keys
-- **ILM:** Managed by `elasticsearch-ilm-job.yaml` — creates retention policies and index templates on deploy
-- **Pod logs:** `podlogs-*` index, 30-day retention (`logs-30d-retention` ILM policy)
-- **CI logs:** Woodpecker pipeline pods run in k8s, so their logs are captured automatically in `podlogs-*` by the tail input
-- **PodSecurity:** Schnappy namespace uses `privileged` enforce (required for Fluent-bit's hostPath + DAC_READ_SEARCH)
-- **vm.max_map_count:** Already ≥262144 on host (no sysctl init container needed)
+- **Namespace:** `schnappy-infra` (StatefulSet `schnappy-clickhouse`, DaemonSet `schnappy-fluentbit`)
+- **ClickHouse:** `clickhouse/clickhouse-server:24.8-alpine`, HTTP :8123, user `schnappy`, db `logs`,
+  table `logs.podlogs` (columns: timestamp, level, namespace, pod, container, node, app, component,
+  stream, message, trace_id, span_id, labels, fields); pod-log TTL `clickhouse.retention.days`
+  (default 30) applied by `clickhouse-init-job.yaml`; the events table (`clickhouse.events.enabled`,
+  TTL `retentionDays` 180) is chart-only and off in production
+- **Fluent-bit:** tails `/var/log/containers`, lifts traceId/spanId to columns and extracts the level
+  in Lua (`fluentbit-configmap.yaml`); CI step pods (`wp-*` in `woodpecker`) are captured like any pod
+- **Query:** `kubectl -n schnappy-infra exec schnappy-clickhouse-0 -c clickhouse -- clickhouse-client -q "SELECT ... FROM logs.podlogs WHERE namespace='...' ORDER BY timestamp FORMAT TSVRaw"`
 
-**Resource usage (production):**
+**Key files** (platform repo, `helm/schnappy-observability/templates/`): `clickhouse-statefulset.yaml`,
+`clickhouse-configmap.yaml`, `clickhouse-init-job.yaml`, `clickhouse-secret.yaml`,
+`clickhouse-service.yaml`, `fluentbit-daemonset.yaml`, `fluentbit-configmap.yaml`, `fluentbit-rbac.yaml`.
 
-| Pod | CPU req/limit | Memory req/limit | Typical usage |
-|-----|---------------|------------------|---------------|
-| Elasticsearch | 250m / 4000m | 2Gi / 4Gi | ~2.7Gi (2GB JVM heap + Lucene) |
-| Kibana | 100m / 1000m | 1Gi / 2Gi | ~550Mi (Node.js) |
-| Fluent-bit | 100m / 1000m | 128Mi / 512Mi | ~80Mi idle, ~800m CPU under stress |
-
-**Key files** (in platform repo):
-- Templates: `helm/templates/elasticsearch-*.yaml`, `kibana-*.yaml`, `fluentbit-*.yaml`
-- Config: `elasticsearch-configmap.yaml`, `kibana-configmap.yaml`, `fluentbit-configmap.yaml`
-- Secrets: `elasticsearch-secret.yaml` (skipped when `existingSecret` set)
-- ILM: `elasticsearch-ilm-job.yaml` (Helm hook Job that creates ILM policies + index templates)
-- Test: `tests/ansible/test-elk.yml` — Vagrant integration test (`task test:elk`)
-
-**Vagrant test:** `task test:elk` — deploys ELK in Vagrant, verifies ES auth, Fluent-bit log shipping, Kibana health, ExternalSecret sync.
+**Vagrant test:** `task test:logs` — deploys ClickHouse + Fluent-bit in Vagrant and verifies log shipping.
 
 ## Security Notes
 
@@ -909,7 +886,7 @@ Elasticsearch + Fluent-bit + Kibana for centralized log aggregation and search a
 - **Actuator:** Only `health` and `prometheus` endpoints exposed; `show-details: never` on public health endpoint
 - **SSRF protection:** URL validator blocks internal IPs, validates DNS at request time (prevents rebinding), checks every redirect hop
 - **ReDoS protection:** Nested quantifier detection, 500-char pattern limit, 5-second regex timeout, 512KB body limit
-- **Containers:** Run as non-root, drop all capabilities, `readOnlyRootFilesystem` on all containers (app/frontend/valkey/postgres/s3gw/elasticsearch/kibana/grafana/prometheus); ES and Kibana use init containers to copy default config files to writable emptyDir volumes
+- **Containers:** Run as non-root, drop all capabilities, `readOnlyRootFilesystem` on the app/frontend/valkey/postgres/s3gw/grafana/prometheus containers (the ClickHouse server container is writable; only its init container and init Job are read-only)
 - **Secrets:** All secrets in Vault KV v2 (`secret/schnappy/*`), synced to k8s Secrets via ESO ExternalSecrets; Helm `existingSecret` pattern skips inline secret creation; Forgejo + Woodpecker secrets also via Vault + ESO (ExternalSecrets in `clusters/production/cluster-config/`); containerd registry config populated via Ansible (`setup-kubeadm.yml`); `.env` only for initial Vault seeding; `.env` in `.gitignore`
 - **Network policies:** Default-deny ingress+egress for all pods; DNS (port 53) allowed for all; explicit ingress+egress rules per pod (app→postgres/valkey/s3gw/ES/external HTTPS, frontend→app, grafana→prometheus, etc.); app external egress blocks RFC1918 ranges; also applied to forgejo and velero namespaces
 - **Docker images:** `postgres:17-alpine` and `valkey/valkey:8.1-alpine` pinned (no mutable `:latest` tags)

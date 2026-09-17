@@ -21,6 +21,13 @@
     vault_addr: "https://127.0.0.1:8200"
     keycloak_url: "http://localhost:8080"
     infra_git_url: "{{ infra_git_url_override | default('') }}"
+    # Same prelude as create-environment.yml: the root token is read on the target and
+    # never crosses the controller.
+    vault_cli_env: |
+      export VAULT_ADDR="{{ vault_addr }}" VAULT_SKIP_VERIFY=1
+      VAULT_TOKEN="$(cat /etc/vault-unseal/root-token)" || { echo "vault_cli_env: cannot read /etc/vault-unseal/root-token (needs become)" >&2; exit 1; }
+      [ -n "$VAULT_TOKEN" ] || { echo "vault_cli_env: root-token file is empty" >&2; exit 1; }
+      export VAULT_TOKEN
 
   pre_tasks:
     - name: Validate env_name
@@ -43,29 +50,6 @@
         msg: "Environment {{ env_ns }} not found"
       when: not env_exists.stat.exists
 
-    - name: Read Vault root token (production path)
-      ansible.builtin.slurp:
-        src: /etc/vault-unseal/root-token
-      register: vault_token_prod
-      failed_when: false
-
-    - name: Read Vault root token (vagrant path)
-      ansible.builtin.shell: |
-        jq -r .root_token /tmp/vault-init.json
-      register: vault_token_vagrant
-      changed_when: false
-      failed_when: false
-      when: vault_token_prod.content is not defined
-
-    - name: Set vault env
-      ansible.builtin.set_fact:
-        vault_env: >-
-          VAULT_ADDR={{ vault_addr }} VAULT_SKIP_VERIFY=1 VAULT_TOKEN={{
-          (vault_token_prod.content | b64decode | trim)
-          if vault_token_prod.content is defined
-          else vault_token_vagrant.stdout | trim
-          }}
-
   tasks:
     # ================================================================
     # Phase 1: Remove Keycloak redirect URI
@@ -81,9 +65,11 @@
 
     - name: Get Keycloak admin password
       ansible.builtin.shell: |
-        {{ vault_env }} vault kv get -field=admin_password secret/schnappy/keycloak
+        {{ vault_cli_env }}
+        vault kv get -field=admin_password secret/schnappy/keycloak
       register: kc_password
       changed_when: false
+      no_log: true   # stdout IS the admin password
       when: kc_realm_check.status == 200
 
     - name: Get Keycloak admin token
@@ -98,6 +84,7 @@
           grant_type: password
         validate_certs: false
       register: kc_token
+      no_log: true   # the request body carries the admin password, the result the token
       when: kc_realm_check.status == 200
 
     - name: Get app client config

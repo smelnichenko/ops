@@ -7,8 +7,8 @@
 #   - cert-manager installed
 #   - DNS: ci.pmon.dev -> 192.168.11.2
 #
-# Environment variables required (production):
-#   WOODPECKER_AGENT_SECRET (openssl rand -hex 32)
+# The agent secret is a generatable Vault secret (seed-vault-secrets.yml, path
+# woodpecker/agent-secret) consumed through ESO; nothing here generates one.
 #
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml \
@@ -25,7 +25,6 @@
     woodpecker_chart: "oci://ghcr.io/woodpecker-ci/helm/woodpecker"
     woodpecker_chart_version: "{{ woodpecker_version | default('3.7.3') }}"
     woodpecker_admin: "{{ forgejo_admin_user | default('forgejo_admin') }}"
-    woodpecker_agent_secret: "{{ lookup('env', 'WOODPECKER_AGENT_SECRET') | default(lookup('password', '/dev/null chars=hexdigits length=64'), true) }}"
     woodpecker_tls_issuer: "{{ woodpecker_cluster_issuer | default('letsencrypt-dns') }}"
     forgejo_namespace: "{{ forgejo_ns | default('forgejo') }}"
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"

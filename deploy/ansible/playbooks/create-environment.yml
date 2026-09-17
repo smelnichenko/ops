@@ -27,6 +27,15 @@
     forgejo_url: "http://localhost:3000"
     keycloak_url: "http://localhost:8080"
     infra_git_url: "{{ infra_git_url_override | default('') }}"
+    # Prelude for every `vault` shell task. It runs on the target as root and reads the
+    # root token where it already lives (setup-vault-pi.yml writes it there, on the
+    # Vagrant pi1 too), so the token never crosses the controller: not in argv, not in
+    # a fact, not in the `-vvv` EXEC line that prints a task's `environment:`.
+    vault_cli_env: |
+      export VAULT_ADDR="{{ vault_addr }}" VAULT_SKIP_VERIFY=1
+      VAULT_TOKEN="$(cat /etc/vault-unseal/root-token)" || { echo "vault_cli_env: cannot read /etc/vault-unseal/root-token (needs become)" >&2; exit 1; }
+      [ -n "$VAULT_TOKEN" ] || { echo "vault_cli_env: root-token file is empty" >&2; exit 1; }
+      export VAULT_TOKEN
 
   pre_tasks:
     - name: Validate env_name
@@ -50,35 +59,11 @@
         msg: "Environment {{ env_ns }} already exists"
       when: env_exists.stat.exists
 
-    - name: Read Vault root token (production path)
-      ansible.builtin.slurp:
-        src: /etc/vault-unseal/root-token
-      register: vault_token_prod
-      failed_when: false
-
-    - name: Read Vault root token (vagrant path)
-      ansible.builtin.shell: |
-        jq -r .root_token /tmp/vault-init.json
-      register: vault_token_vagrant
-      changed_when: false
-      failed_when: false
-      when: vault_token_prod.content is not defined
-
-    - name: Set vault env
-      ansible.builtin.set_fact:
-        vault_env: >-
-          VAULT_ADDR={{ vault_addr }} VAULT_SKIP_VERIFY=1 VAULT_TOKEN={{
-          (vault_token_prod.content | b64decode | trim)
-          if vault_token_prod.content is defined
-          else vault_token_vagrant.stdout | trim
-          }}
-
     - name: Generate passwords
       ansible.builtin.set_fact:
         gen_db_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
         gen_valkey_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
         gen_minio_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        gen_jwt_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
         gen_kafka_cluster_id: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=22') }}"
       delegate_to: localhost
       become: false
@@ -91,32 +76,61 @@
     - name: Ensure KV secrets engine is mounted
       ansible.builtin.shell: |
         set -o pipefail
-        {{ vault_env }} vault secrets list -format=json | grep -q '"secret/"' || \
-        {{ vault_env }} vault secrets enable -path=secret kv-v2
+        {{ vault_cli_env }}
+        vault secrets list -format=json | grep -q '"secret/"' || \
+        vault secrets enable -path=secret kv-v2
       args:
         executable: /bin/bash
       changed_when: false
       failed_when: false
 
+    # The generated values and the external keys (from .env via lookup('env'), like
+    # seed-vault-secrets.yml) reach the script through the task environment and go
+    # to Vault as JSON on stdin — no secret on the command line, no K=V parsing
+    # (a value starting with `@` or `-` would be read as a file or stdin by the CLI),
+    # no shell re-parsing of quotes or `$`. An absent key is skipped visibly, never
+    # written as a placeholder. Caveat: at -vvv Ansible prints a task's environment
+    # in the EXEC line, so never run this at that verbosity on a shared terminal.
     - name: Seed Vault secrets for {{ env_ns }}
       ansible.builtin.shell: |
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/postgres \
-          database=monitor username=monitor password="{{ gen_db_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/valkey \
-          password="{{ gen_valkey_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/auth \
-          jwt_secret="{{ gen_jwt_secret }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/s3gw \
-          access_key=admin secret_key="{{ gen_minio_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/kafka \
-          cluster_id="{{ gen_kafka_cluster_id }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/ai \
-          api_key="{{ ANTHROPIC_API_KEY | default('placeholder') }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/mail \
-          password="{{ MAIL_PASSWORD | default('placeholder') }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/webhook \
-          signing_secret="{{ RESEND_WEBHOOK_SECRET | default('') }}" \
-          api_key="{{ RESEND_API_KEY | default('') }}"
+        set -eo pipefail
+        {{ vault_cli_env }}
+        jq -n --arg database monitor --arg username monitor --arg password "$GEN_DB_PASSWORD" \
+          '{database: $database, username: $username, password: $password}' | vault kv put secret/{{ env_ns }}/postgres -
+        jq -n --arg password "$GEN_VALKEY_PASSWORD" '{password: $password}' | vault kv put secret/{{ env_ns }}/valkey -
+        jq -n --arg access_key admin --arg secret_key "$GEN_MINIO_PASSWORD" \
+          '{access_key: $access_key, secret_key: $secret_key}' | vault kv put secret/{{ env_ns }}/s3gw -
+        jq -n --arg cluster_id "$GEN_KAFKA_CLUSTER_ID" '{cluster_id: $cluster_id}' | vault kv put secret/{{ env_ns }}/kafka -
+        if [ -n "$ANTHROPIC_API_KEY" ]; then
+          jq -n --arg api_key "$ANTHROPIC_API_KEY" '{api_key: $api_key}' | vault kv put secret/{{ env_ns }}/ai -
+        else
+          echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not in .env (no placeholder written)"
+        fi
+        if [ -n "$MAIL_PASSWORD" ]; then
+          jq -n --arg password "$MAIL_PASSWORD" '{password: $password}' | vault kv put secret/{{ env_ns }}/mail -
+        else
+          echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not in .env (no placeholder written)"
+        fi
+        if [ -n "$RESEND_WEBHOOK_SECRET" ] && [ -n "$RESEND_API_KEY" ]; then
+          jq -n --arg signing_secret "$RESEND_WEBHOOK_SECRET" --arg api_key "$RESEND_API_KEY" \
+            '{signing_secret: $signing_secret, api_key: $api_key}' | vault kv put secret/{{ env_ns }}/webhook -
+        else
+          missing=""
+          [ -n "$RESEND_WEBHOOK_SECRET" ] || missing="$missing RESEND_WEBHOOK_SECRET"
+          [ -n "$RESEND_API_KEY" ] || missing="$missing RESEND_API_KEY"
+          echo "SKIPPED secret/{{ env_ns }}/webhook: missing in .env:$missing (needs both; no placeholder written)"
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        GEN_DB_PASSWORD: "{{ gen_db_password }}"
+        GEN_VALKEY_PASSWORD: "{{ gen_valkey_password }}"
+        GEN_MINIO_PASSWORD: "{{ gen_minio_password }}"
+        GEN_KAFKA_CLUSTER_ID: "{{ gen_kafka_cluster_id }}"
+        ANTHROPIC_API_KEY: "{{ lookup('env', 'ANTHROPIC_API_KEY') | trim }}"
+        MAIL_PASSWORD: "{{ lookup('env', 'MAIL_PASSWORD') | trim }}"
+        RESEND_WEBHOOK_SECRET: "{{ lookup('env', 'RESEND_WEBHOOK_SECRET') | trim }}"
+        RESEND_API_KEY: "{{ lookup('env', 'RESEND_API_KEY') | trim }}"
       changed_when: true
 
     - name: "PHASE 1: Vault secrets seeded"
@@ -137,9 +151,11 @@
 
     - name: Get Keycloak admin password
       ansible.builtin.shell: |
-        {{ vault_env }} vault kv get -field=admin_password secret/schnappy/keycloak
+        {{ vault_cli_env }}
+        vault kv get -field=admin_password secret/schnappy/keycloak
       register: kc_password
       changed_when: false
+      no_log: true   # stdout IS the admin password
       when: kc_realm_check.status == 200
 
     - name: Get Keycloak admin token
@@ -154,6 +170,7 @@
           grant_type: password
         validate_certs: false
       register: kc_token
+      no_log: true   # the request body carries the admin password, the result the token
       when: kc_realm_check.status == 200
 
     - name: Get app client config
@@ -313,12 +330,6 @@
 
           games: []
 
-          auth:
-            existingSecret: {{ env_ns }}-auth
-            registrationEnabled: true
-            secureCookies: true
-            tokenExpiration: 1h
-
           captcha:
             enabled: false
 
@@ -450,7 +461,12 @@
             name: {{ env_ns }}
             labels:
               istio.io/rev: default
-              environment: {{ env_name }}
+              # The schnappy-infra default-deny admits gateway/Prometheus egress only to
+              # namespaces labelled environment=production|test; the env's own name goes
+              # on a separate label. (A non-admitted value = an unreachable environment
+              # that Argo still reports Synced/Healthy.)
+              environment: production
+              schnappy.io/env: {{ env_name }}
       delegate_to: localhost
       become: false
 
