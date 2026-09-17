@@ -676,6 +676,9 @@ IN PROGRESS — approved 2026-09-16; PR0, PR1 (masi #1), PR2a (ops #43) and PR2b
 infra #28/main d2d10f4), PR2c + PR2d (platform main ab958bd, c3df16f; production PostSync
 green with the masi smoke group skipped) and PR2e (infra main 30691cc, verified in test incl.
 the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g done 2026-09-18
-(JOBS role live, Admins group carries it in test); PR3 source survey in progress.
+(JOBS role live, Admins group carries it in test); PR3 source survey DONE 2026-09-18
+(`094-masi-source-survey.md`: five operator decisions D1–D5, twelve seed corrections — notably
+Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/request clause —
+config shapes, fixture procedure, three verbatim survey reports); next PR4.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
