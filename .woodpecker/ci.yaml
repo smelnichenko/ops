@@ -26,7 +26,6 @@ steps:
     image: git.pmon.dev/schnappy/ansible-lint:latest
     commands:
       - bash tests/ansible/unit/run.sh
-    depends_on: [ansible-lint]
     backend_options:
       kubernetes:
         resources:
