@@ -155,7 +155,6 @@ dump("resolve.yml", {
     ],
 })
 print("resolve: failed_when =", json.dumps(read_failed_when))
-print("write:   cas =", json.dumps(cas_expr) if 'cas_expr' in dir() else "n/a")
 
 # ---- rescue.yml -----------------------------------------------------------------
 # The exact rescue messages of the read and write blocks, rendered against a mixed
@@ -203,6 +202,7 @@ write_task = [t for t in write_block[0]["block"] if "community.hashi_vault.vault
 cas_expr = write_task["community.hashi_vault.vault_kv2_write"].get("cas")
 if cas_expr is None:
     sys.exit("HARNESS: the generatable write has no cas expression (fresh entries must be create-only)")
+print("write:   cas =", json.dumps(cas_expr))
 dump("write.yml", {
     "name": "write harness: cas is omitted for existing entries and 0 for fresh ones",
     "hosts": "localhost", "connection": "local", "gather_facts": False,
