@@ -115,7 +115,10 @@
           jq -n --arg signing_secret "$RESEND_WEBHOOK_SECRET" --arg api_key "$RESEND_API_KEY" \
             '{signing_secret: $signing_secret, api_key: $api_key}' | vault kv put secret/{{ env_ns }}/webhook -
         else
-          echo "SKIPPED secret/{{ env_ns }}/webhook: needs both RESEND_WEBHOOK_SECRET and RESEND_API_KEY in .env (missing:$([ -z "$RESEND_WEBHOOK_SECRET" ] && printf ' RESEND_WEBHOOK_SECRET')$([ -z "$RESEND_API_KEY" ] && printf ' RESEND_API_KEY')); no placeholder written"
+          missing=""
+          [ -n "$RESEND_WEBHOOK_SECRET" ] || missing="$missing RESEND_WEBHOOK_SECRET"
+          [ -n "$RESEND_API_KEY" ] || missing="$missing RESEND_API_KEY"
+          echo "SKIPPED secret/{{ env_ns }}/webhook: missing in .env:$missing (needs both; no placeholder written)"
         fi
       args:
         executable: /bin/bash
