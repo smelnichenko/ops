@@ -16,8 +16,8 @@ export ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_NOCOLOR=1
 unset ANSIBLE_CONFIG
 python3 "$H/gen.py" "$PB" "$WORK/render.yml" "$WORK/out" || exit 2
 mkdir -p "$WORK/out"
-"$AP" -i localhost, "$WORK/render.yml" > "$WORK/log.txt" 2>&1; rc=$?
-grep -oE '"stdout": "[^"]*"|parsed [0-9]+ templates' "$WORK/log.txt" | tail -1
+"$AP" -v -i localhost, "$WORK/render.yml" > "$WORK/log.txt" 2>&1; rc=$?
+grep -oE '"stdout": "[^"]*"' "$WORK/log.txt" | sed 's/"stdout": //' | tr '\n' ' '; echo
 if [ $rc -ne 0 ]; then grep -vE '^(PLAY|TASK|ok:|changed:|$)' "$WORK/log.txt" | head -15 | sed 's/^/      | /'; fi
 echo "create-environment-values: $([ $rc -eq 0 ] && echo ALL-PASS || echo SOME-FAILED)"
 exit $rc

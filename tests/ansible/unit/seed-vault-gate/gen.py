@@ -173,6 +173,7 @@ mixed = {"results": [
     {"failed": True},                      # a synthesized failure may carry no msg
     {"failed": False, "secret": {"password": "x"}},
 ]}
+single = {"failed": True, "msg": "loop expression blew up (no .results)"}   # a non-loop failure has no results list
 dump("rescue.yml", {
     "name": "rescue harness: the abort messages render and name every failure",
     "hosts": "localhost", "connection": "local", "gather_facts": False,
@@ -180,14 +181,18 @@ dump("rescue.yml", {
     "tasks": [
         {"name": "Render the read rescue message", "ansible.builtin.set_fact": {"read_msg": rescue_msg("existing generatable secrets, read")}},
         {"name": "Render the write rescue message", "ansible.builtin.set_fact": {"write_msg": rescue_msg("generatable secrets, written")}},
+        {"name": "Render the read rescue message for a non-loop failure",
+         "ansible.builtin.set_fact": {"read_msg_single": rescue_msg("existing generatable secrets, read")},
+         "vars": {"_existing_secrets": single}},
         {"name": "Verdict on rescue", "ansible.builtin.assert": {
             "that": [
                 "'Permission Denied' in read_msg and '(no message)' in read_msg",
                 "'Permission Denied' in write_msg and '(no message)' in write_msg",
                 "'x' not in (read_msg | regex_replace('.*\\[', '[')) ",
+                "'loop expression blew up' in read_msg_single",
             ],
-            "fail_msg": "read={{ read_msg }} write={{ write_msg }}",
-            "success_msg": "rescue: both abort messages list the failed items, tolerate a missing msg, and skip passed ones",
+            "fail_msg": "read={{ read_msg }} write={{ write_msg }} single={{ read_msg_single | default('?') }}",
+            "success_msg": "rescue: abort messages list the failed items, tolerate a missing msg, skip passed ones, and survive a non-loop failure",
         }},
     ],
 })

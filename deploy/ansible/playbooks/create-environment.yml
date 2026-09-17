@@ -28,12 +28,13 @@
     keycloak_url: "http://localhost:8080"
     infra_git_url: "{{ infra_git_url_override | default('') }}"
     # Prelude for every `vault` shell task. It runs on the target as root and reads the
-    # root token where it already lives (production unseal file, Vagrant init JSON), so
-    # the token never crosses the controller: not in argv, not in a fact, not in the
-    # `-vvv` EXEC line that prints a task's `environment:`.
+    # root token where it already lives (setup-vault-pi.yml writes it there, on the
+    # Vagrant pi1 too), so the token never crosses the controller: not in argv, not in
+    # a fact, not in the `-vvv` EXEC line that prints a task's `environment:`.
     vault_cli_env: |
       export VAULT_ADDR="{{ vault_addr }}" VAULT_SKIP_VERIFY=1
-      VAULT_TOKEN="$(cat /etc/vault-unseal/root-token 2>/dev/null || jq -r .root_token /tmp/vault-init.json)"
+      VAULT_TOKEN="$(cat /etc/vault-unseal/root-token)" || { echo "vault_cli_env: cannot read /etc/vault-unseal/root-token (needs become)" >&2; exit 1; }
+      [ -n "$VAULT_TOKEN" ] || { echo "vault_cli_env: root-token file is empty" >&2; exit 1; }
       export VAULT_TOKEN
 
   pre_tasks:
@@ -110,11 +111,11 @@
         else
           echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not in .env (no placeholder written)"
         fi
-        if [ -n "$RESEND_WEBHOOK_SECRET" ] || [ -n "$RESEND_API_KEY" ]; then
+        if [ -n "$RESEND_WEBHOOK_SECRET" ] && [ -n "$RESEND_API_KEY" ]; then
           jq -n --arg signing_secret "$RESEND_WEBHOOK_SECRET" --arg api_key "$RESEND_API_KEY" \
             '{signing_secret: $signing_secret, api_key: $api_key}' | vault kv put secret/{{ env_ns }}/webhook -
         else
-          echo "SKIPPED secret/{{ env_ns }}/webhook: RESEND_WEBHOOK_SECRET/RESEND_API_KEY not in .env (no placeholder written)"
+          echo "SKIPPED secret/{{ env_ns }}/webhook: needs both RESEND_WEBHOOK_SECRET and RESEND_API_KEY in .env (missing:$([ -z "$RESEND_WEBHOOK_SECRET" ] && printf ' RESEND_WEBHOOK_SECRET')$([ -z "$RESEND_API_KEY" ] && printf ' RESEND_API_KEY')); no placeholder written"
         fi
       args:
         executable: /bin/bash
@@ -166,6 +167,7 @@
           grant_type: password
         validate_certs: false
       register: kc_token
+      no_log: true   # the request body carries the admin password, the result the token
       when: kc_realm_check.status == 200
 
     - name: Get app client config
@@ -456,7 +458,12 @@
             name: {{ env_ns }}
             labels:
               istio.io/rev: default
-              environment: {{ env_name }}
+              # The schnappy-infra default-deny admits gateway/Prometheus egress only to
+              # namespaces labelled environment=production|test; the env's own name goes
+              # on a separate label. (A non-admitted value = an unreachable environment
+              # that Argo still reports Synced/Healthy.)
+              environment: production
+              schnappy.io/env: {{ env_name }}
       delegate_to: localhost
       become: false
 
