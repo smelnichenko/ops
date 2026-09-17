@@ -685,8 +685,6 @@ tasks:
       - >-
         venv/bin/ansible-playbook -i inventory/production.yml playbooks/create-environment.yml
         -e "env_name={{.ENV_NAME}}"
-        -e "$(jq -n --arg a "$ANTHROPIC_API_KEY" --arg m "$MAIL_PASSWORD" --arg s "$RESEND_WEBHOOK_SECRET" --arg k "$RESEND_API_KEY"
-             '{ANTHROPIC_API_KEY: $a, MAIL_PASSWORD: $m, RESEND_WEBHOOK_SECRET: $s, RESEND_API_KEY: $k}')"
 
   env:destroy:
     desc: "Destroy a schnappy environment (usage: task env:destroy ENV_NAME=staging)"

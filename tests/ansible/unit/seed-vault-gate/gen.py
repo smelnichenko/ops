@@ -155,6 +155,72 @@ dump("resolve.yml", {
     ],
 })
 print("resolve: failed_when =", json.dumps(read_failed_when))
+print("write:   cas =", json.dumps(cas_expr) if 'cas_expr' in dir() else "n/a")
+
+# ---- rescue.yml -----------------------------------------------------------------
+# The exact rescue messages of the read and write blocks, rendered against a mixed
+# result set: failed items with a msg, a failed item WITHOUT one, a passed item.
+def rescue_msg(block_sub):
+    blk = [t for t in play_src["tasks"] if block_sub in (t.get("name") or "").lower()]
+    if len(blk) != 1 or not blk[0].get("rescue"):
+        sys.exit(f"HARNESS: expected one block matching {block_sub!r} with a rescue, found {len(blk)}")
+    fails = [t for t in blk[0]["rescue"] if "ansible.builtin.fail" in t]
+    if len(fails) != 1:
+        sys.exit(f"HARNESS: expected one fail task in the rescue of {block_sub!r}")
+    return fails[0]["ansible.builtin.fail"]["msg"]
+
+mixed = {"results": [
+    {"failed": True, "msg": "Forbidden: Permission Denied to path ['schnappy/a']."},
+    {"failed": True},                      # a synthesized failure may carry no msg
+    {"failed": False, "secret": {"password": "x"}},
+]}
+dump("rescue.yml", {
+    "name": "rescue harness: the abort messages render and name every failure",
+    "hosts": "localhost", "connection": "local", "gather_facts": False,
+    "vars": {"_existing_secrets": mixed, "_written_secrets": mixed},
+    "tasks": [
+        {"name": "Render the read rescue message", "ansible.builtin.set_fact": {"read_msg": rescue_msg("existing generatable secrets, read")}},
+        {"name": "Render the write rescue message", "ansible.builtin.set_fact": {"write_msg": rescue_msg("generatable secrets, written")}},
+        {"name": "Verdict on rescue", "ansible.builtin.assert": {
+            "that": [
+                "'Permission Denied' in read_msg and '(no message)' in read_msg",
+                "'Permission Denied' in write_msg and '(no message)' in write_msg",
+                "'x' not in (read_msg | regex_replace('.*\\[', '[')) ",
+            ],
+            "fail_msg": "read={{ read_msg }} write={{ write_msg }}",
+            "success_msg": "rescue: both abort messages list the failed items, tolerate a missing msg, and skip passed ones",
+        }},
+    ],
+})
+
+# ---- write.yml -------------------------------------------------------------------
+# The exact `cas` expression of the write task through a stand-in: absent for an
+# existing entry, 0 for a fresh one.
+write_block = [t for t in play_src["tasks"] if "generatable secrets, written" in (t.get("name") or "").lower()]
+if len(write_block) != 1:
+    sys.exit("HARNESS: expected one write block")
+write_task = [t for t in write_block[0]["block"] if "community.hashi_vault.vault_kv2_write" in t][0]
+cas_expr = write_task["community.hashi_vault.vault_kv2_write"].get("cas")
+if cas_expr is None:
+    sys.exit("HARNESS: the generatable write has no cas expression (fresh entries must be create-only)")
+dump("write.yml", {
+    "name": "write harness: cas is omitted for existing entries and 0 for fresh ones",
+    "hosts": "localhost", "connection": "local", "gather_facts": False,
+    "vars": {"generatable_secrets": [{"path": "keep"}, {"path": "fresh"}],
+             "_existing_secrets": {"results": [{"failed": False, "secret": {"password": "x"}}, {"failed": True, "msg": "Invalid or missing path"}]}},
+    "tasks": [
+        # One fact per entry: an OMITTED module argument leaves the fact undefined,
+        # which is exactly what omit does to the module's `cas` parameter.
+        # (a second, constant pair keeps set_fact valid when cas is the omitted argument)
+        {"name": "Render cas per entry", "ansible.builtin.set_fact": {"cas_probe_{{ idx }}": cas_expr, "cas_probe_marker_{{ idx }}": "seen"},
+         "loop": write_task["loop"], "loop_control": {"index_var": "idx", "label": "{{ item.0.path }}"}},
+        {"name": "Verdict on write", "ansible.builtin.assert": {
+            "that": ["cas_probe_0 is not defined", "cas_probe_1 is defined and (cas_probe_1 | int) == 0"],
+            "fail_msg": "cas: existing={{ cas_probe_0 | default('OMITTED') }} fresh={{ cas_probe_1 | default('OMITTED') }}",
+            "success_msg": "write: existing entry omits cas, fresh entry writes with cas=0 (create-only)",
+        }},
+    ],
+})
 
 # ---- oracle.yml ------------------------------------------------------------------
 def real_read(url, paths):

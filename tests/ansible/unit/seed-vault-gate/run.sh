@@ -4,6 +4,8 @@
 #               SET / PADDED -> write runs with the trimmed key, notice skipped, summary says seeded
 #   resolve.yml the read tolerance evaluated against the module's real messages; the index + resolve
 #               steps reuse existing fields and generate distinct fresh ones
+#   rescue.yml  the read and write abort messages list every failed item and survive a missing msg
+#   write.yml   the write's cas expression: omitted for an existing entry, 0 (create-only) for a fresh one
 #   oracle.yml  the shipped read task through the REAL module against fakevault.py (needs hvac —
 #               present in the CI image; skipped visibly when the local ansible venv lacks it)
 # Exit 1 if any verdict fails.
@@ -39,6 +41,8 @@ run gate.yml WHITESPACE false ''           "MASI_ANTHROPIC_API_KEY= "
 run gate.yml SET        true  sk-ant-dummy MASI_ANTHROPIC_API_KEY=sk-ant-dummy
 run gate.yml PADDED     true  sk-ant-dummy "MASI_ANTHROPIC_API_KEY= sk-ant-dummy "
 run resolve.yml RESOLVE false ''           -u MASI_ANTHROPIC_API_KEY
+run rescue.yml  RESCUE  false ''           -u MASI_ANTHROPIC_API_KEY
+run write.yml   WRITE   false ''           -u MASI_ANTHROPIC_API_KEY
 if "$PY" -c 'import hvac' 2>/dev/null; then
   python3 "$H/fakevault.py" "$VAULT_PORT" & VAULT_PID=$!
   sleep 0.5

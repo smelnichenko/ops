@@ -66,6 +66,10 @@
 
     - name: Set vault env
       ansible.builtin.set_fact:
+        vault_root_token: >-
+          {{ (vault_token_prod.content | b64decode | trim)
+             if vault_token_prod.content is defined
+             else vault_token_vagrant.stdout | trim }}
         vault_env: >-
           VAULT_ADDR={{ vault_addr }} VAULT_SKIP_VERIFY=1 VAULT_TOKEN={{
           (vault_token_prod.content | b64decode | trim)
@@ -78,7 +82,6 @@
         gen_db_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
         gen_valkey_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
         gen_minio_password: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=32') }}"
-        gen_jwt_secret: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=64') }}"
         gen_kafka_cluster_id: "{{ lookup('password', '/dev/null chars=ascii_letters,digits length=22') }}"
       delegate_to: localhost
       become: false
@@ -98,37 +101,43 @@
       changed_when: false
       failed_when: false
 
+    # Secrets reach the script through the task environment, never the command
+    # line: a failed `vault kv put` can then be shown in full (no no_log) and a
+    # value containing quotes or `$` cannot break or inject shell. The external
+    # keys come from .env via lookup('env'), like seed-vault-secrets.yml; an
+    # absent key is skipped visibly, never written as a placeholder.
     - name: Seed Vault secrets for {{ env_ns }}
       ansible.builtin.shell: |
         set -e
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/postgres \
-          database=monitor username=monitor password="{{ gen_db_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/valkey \
-          password="{{ gen_valkey_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/auth \
-          jwt_secret="{{ gen_jwt_secret }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/s3gw \
-          access_key=admin secret_key="{{ gen_minio_password }}"
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/kafka \
-          cluster_id="{{ gen_kafka_cluster_id }}"
-        {% if ANTHROPIC_API_KEY | default('') | trim | length > 0 %}
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/ai \
-          api_key={{ ANTHROPIC_API_KEY | trim | quote }}
-        {% else %}
-        echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not provided (no placeholder written)"
-        {% endif %}
-        {% if MAIL_PASSWORD | default('') | trim | length > 0 %}
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/mail \
-          password={{ MAIL_PASSWORD | trim | quote }}
-        {% else %}
-        echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not provided (no placeholder written)"
-        {% endif %}
-        {{ vault_env }} vault kv put secret/{{ env_ns }}/webhook \
-          signing_secret="{{ RESEND_WEBHOOK_SECRET | default('') }}" \
-          api_key="{{ RESEND_API_KEY | default('') }}"
+        vault kv put secret/{{ env_ns }}/postgres database=monitor username=monitor password="$GEN_DB_PASSWORD"
+        vault kv put secret/{{ env_ns }}/valkey password="$GEN_VALKEY_PASSWORD"
+        vault kv put secret/{{ env_ns }}/s3gw access_key=admin secret_key="$GEN_MINIO_PASSWORD"
+        vault kv put secret/{{ env_ns }}/kafka cluster_id="$GEN_KAFKA_CLUSTER_ID"
+        if [ -n "$ANTHROPIC_API_KEY" ]; then
+          vault kv put secret/{{ env_ns }}/ai api_key="$ANTHROPIC_API_KEY"
+        else
+          echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not in .env (no placeholder written)"
+        fi
+        if [ -n "$MAIL_PASSWORD" ]; then
+          vault kv put secret/{{ env_ns }}/mail password="$MAIL_PASSWORD"
+        else
+          echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not in .env (no placeholder written)"
+        fi
+        vault kv put secret/{{ env_ns }}/webhook signing_secret="$RESEND_WEBHOOK_SECRET" api_key="$RESEND_API_KEY"
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_SKIP_VERIFY: "1"
+        VAULT_TOKEN: "{{ vault_root_token }}"
+        GEN_DB_PASSWORD: "{{ gen_db_password }}"
+        GEN_VALKEY_PASSWORD: "{{ gen_valkey_password }}"
+        GEN_MINIO_PASSWORD: "{{ gen_minio_password }}"
+        GEN_KAFKA_CLUSTER_ID: "{{ gen_kafka_cluster_id }}"
+        ANTHROPIC_API_KEY: "{{ lookup('env', 'ANTHROPIC_API_KEY') | trim }}"
+        MAIL_PASSWORD: "{{ lookup('env', 'MAIL_PASSWORD') | trim }}"
+        RESEND_WEBHOOK_SECRET: "{{ lookup('env', 'RESEND_WEBHOOK_SECRET') | trim }}"
+        RESEND_API_KEY: "{{ lookup('env', 'RESEND_API_KEY') | trim }}"
       changed_when: true
 
-      no_log: true
     - name: "PHASE 1: Vault secrets seeded"
       ansible.builtin.debug:
         msg: "Seeded secrets at secret/{{ env_ns }}/*"
@@ -323,8 +332,6 @@
 
           games: []
 
-          auth:
-            existingSecret: {{ env_ns }}-auth
             registrationEnabled: true
             secureCookies: true
             tokenExpiration: 1h
