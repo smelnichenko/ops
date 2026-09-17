@@ -1,59 +1,59 @@
 ---
-# Configure Keycloak service account roles
+# Keycloak realm roles and client service-account roles
 #
-# Assigns required realm roles to service accounts of Keycloak clients.
-# Runs after Keycloak is deployed and clients are created.
+# 1. Ensures every app realm role exists (idempotent). The realm-import ConfigMap in the
+#    auth chart only applies to a FRESH realm import; a live realm gets new roles from here.
+# 2. Adds every app role to the "Admins" composite.
+# 3. Assigns realm roles to client service accounts (k6-smoke).
+# 4. FAILS when a listed role is absent afterwards. The old assignment task selected the
+#    roles it found and silently dropped the rest — "VIEW" was never a realm role and the
+#    smoke test 403'd for weeks.
+#
+# Runs ON pi1: the Vault root token is read there, under the same prelude the environment
+# playbooks use, and never crosses the controller.
 #
 # Usage:
 #   task deploy:keycloak-clients
 
-- name: Read Pi Vault root token (from pi1)
+- name: Configure Keycloak realm roles and client service accounts
   hosts: pi1
-  become: true
-  gather_facts: false
-
-  tasks:
-    - name: Slurp root token
-      ansible.builtin.slurp:
-        src: /etc/vault-unseal/root-token
-      register: _root_token_b64
-      no_log: true
-
-    - name: Publish as group fact
-      ansible.builtin.set_fact:
-        vault_root_token: "{{ _root_token_b64.content | b64decode | trim }}"
-      no_log: true
-
-- name: Configure Keycloak client service account roles
-  hosts: target
   become: true
   gather_facts: false
 
   vars:
     keycloak_url: https://auth.pmon.dev
-    vault_addr: "https://{{ hostvars['pi1']['ansible_host'] }}:8200"
     realm: schnappy
+    vault_addr: https://127.0.0.1:8200
+    vault_cli_env: |
+      export VAULT_ADDR="{{ vault_addr }}" VAULT_SKIP_VERIFY=1
+      VAULT_TOKEN="$(cat /etc/vault-unseal/root-token)" || { echo "vault_cli_env: cannot read /etc/vault-unseal/root-token (needs become)" >&2; exit 1; }
+      [ -n "$VAULT_TOKEN" ] || { echo "vault_cli_env: root-token file is empty" >&2; exit 1; }
+      export VAULT_TOKEN
+    # Must match admin's Permission enum and the auth chart's realm import.
+    realm_roles:
+      - { name: PLAY, description: Play games }
+      - { name: CHAT, description: Chat messaging }
+      - { name: EMAIL, description: Email inbox }
+      - { name: METRICS, description: View monitors and metrics }
+      - { name: MANAGE_USERS, description: User administration }
+      - { name: JOBS, description: "masi: job registry, CV tuning, sources, reports (never in Users)" }
+    admins_composite: [PLAY, CHAT, EMAIL, METRICS, MANAGE_USERS, JOBS]
     clients_roles:
-      # Must match the realm roles the smoke test exercises: CHAT (channels),
-      # EMAIL (inbox), PLAY (chess), METRICS. (Was [PLAY, VIEW, CHAT] — VIEW is not a
-      # real realm role so it was silently dropped, and EMAIL was missing, so the
-      # smoke test 403'd on /api/inbox/emails and /api/chess/games.)
+      # Must match the realm roles the smoke test exercises: CHAT (channels), EMAIL (inbox),
+      # PLAY (chess), METRICS, JOBS (/api/masi/jobs).
       - client_id: k6-smoke
-        roles: [PLAY, CHAT, EMAIL, METRICS]
+        roles: [PLAY, CHAT, EMAIL, METRICS, JOBS]
 
   tasks:
-    - name: Get Keycloak admin password from Pi Vault
-      ansible.builtin.uri:
-        url: "{{ vault_addr }}/v1/secret/data/schnappy/keycloak"
-        headers:
-          X-Vault-Token: "{{ hostvars['pi1']['vault_root_token'] }}"
-        validate_certs: false
+    - name: Read the Keycloak admin password from Vault on pi1
+      ansible.builtin.shell: |
+        set -eo pipefail
+        {{ vault_cli_env }}
+        vault kv get -field=admin_password secret/schnappy/keycloak
+      args:
+        executable: /bin/bash
       register: _kc_pw
-      no_log: true
-
-    - name: Extract admin_password
-      ansible.builtin.set_fact:
-        kc_password: "{{ _kc_pw.json.data.data.admin_password }}"
+      changed_when: false
       no_log: true
 
     - name: Get Keycloak admin token
@@ -64,11 +64,70 @@
         body:
           client_id: admin-cli
           username: admin
-          password: "{{ kc_password }}"
+          password: "{{ _kc_pw.stdout | trim }}"
           grant_type: password
         validate_certs: true
       register: kc_token
       no_log: true
+
+    - name: Look up each app realm role
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/{{ item.name }}"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+        status_code: [200, 404]
+      loop: "{{ realm_roles }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _role_lookup
+
+    - name: Create the missing app realm roles
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+        body_format: json
+        body: { name: "{{ item.item.name }}", description: "{{ item.item.description }}" }
+        status_code: [201]
+      loop: "{{ _role_lookup.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      when: item.status == 404
+      changed_when: true
+
+    - name: Read the realm roles
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+      register: kc_roles
+
+    - name: Every app role must exist now
+      ansible.builtin.assert:
+        that: (realm_roles | map(attribute='name') | difference(kc_roles.json | map(attribute='name'))) | length == 0
+        fail_msg: "realm roles missing after creation: {{ realm_roles | map(attribute='name') | difference(kc_roles.json | map(attribute='name')) }}"
+
+    - name: Read the Admins composite
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/Admins/composites"
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+      register: _admins_composite
+
+    - name: Add the app roles the Admins composite lacks
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/Admins/composites"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token.json.access_token }}"
+        body_format: json
+        body: "{{ kc_roles.json | selectattr('name', 'in', _missing_in_admins) | list }}"
+        status_code: [204]
+      vars:
+        _missing_in_admins: "{{ admins_composite | difference(_admins_composite.json | map(attribute='name')) }}"
+      when: _missing_in_admins | length > 0
+      changed_when: true
 
     - name: Assign roles to client service accounts
       ansible.builtin.include_tasks: tasks/keycloak-assign-sa-roles.yml

@@ -67,7 +67,7 @@
 
 - name: "AUTH: Assign realm roles to test user"
   ansible.builtin.shell: |
-    for role in PLAY CHAT EMAIL METRICS MANAGE_USERS; do
+    for role in PLAY CHAT EMAIL METRICS MANAGE_USERS JOBS; do
       kubectl exec deploy/schnappy-keycloak -n {{ ns }} -- \
         /opt/keycloak/bin/kcadm.sh add-roles -r schnappy \
           --uusername "{{ test_email }}" --rolename "$role" \

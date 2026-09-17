@@ -223,7 +223,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/backup-vault-keys.yml
 
   deploy:keycloak-clients:
-    desc: Configure Keycloak service account roles (k6-smoke PLAY role)
+    desc: Ensure app realm roles exist (incl. JOBS), the Admins composite, and k6-smoke SA roles — fails on a missing role
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']

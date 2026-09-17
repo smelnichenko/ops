@@ -1,5 +1,5 @@
 ---
-# Assigns realm roles to a Keycloak client's service account
+# Assigns realm roles to a Keycloak client's service account and PROVES it.
 # Expects: client_config.client_id, client_config.roles, kc_token, keycloak_url, realm
 
 - name: "Get client UUID for {{ client_config.client_id }}"
@@ -23,6 +23,11 @@
       Authorization: "Bearer {{ kc_token.json.access_token }}"
   register: kc_roles
 
+- name: "Realm roles must include every role listed for {{ client_config.client_id }}"
+  ansible.builtin.assert:
+    that: (client_config.roles | difference(kc_roles.json | map(attribute='name'))) | length == 0
+    fail_msg: "not realm roles (would have been silently dropped): {{ client_config.roles | difference(kc_roles.json | map(attribute='name')) }}"
+
 - name: "Assign roles to service account"  # {{ client_config.client_id }}
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
@@ -35,6 +40,18 @@
     status_code: [204]
   changed_when: true
 
+- name: "Read the service account's realm role mappings"
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
+    headers:
+      Authorization: "Bearer {{ kc_token.json.access_token }}"
+  register: kc_sa_mappings
+
+- name: "Mapped roles must include every role listed for {{ client_config.client_id }}"
+  ansible.builtin.assert:
+    that: (client_config.roles | difference(kc_sa_mappings.json | map(attribute='name'))) | length == 0
+    fail_msg: "roles not mapped after assignment: {{ client_config.roles | difference(kc_sa_mappings.json | map(attribute='name')) }}"
+
 - name: "Roles assigned to {{ client_config.client_id }}"
   ansible.builtin.debug:
-    msg: "{{ client_config.roles }} → {{ client_config.client_id }} service account"
+    msg: "{{ client_config.roles }} → {{ client_config.client_id }} service account (verified)"
