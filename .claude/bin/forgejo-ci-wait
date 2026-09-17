@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Block until a Forgejo commit's combined CI status is final, then exit with it.
+#
+# WHY: an agent that checks CI once and ends its turn "waiting" is never woken - CI is external
+# state the harness cannot see, so nothing fires when the pipeline finishes. Run this with the
+# Bash tool's run_in_background: its EXIT is the notification. Never chain sleeps instead.
+#
+#   forgejo-ci-wait <owner/repo> <pr-number|commit-sha> [timeout-seconds]
+#
+# Exit: 0 success, 1 failure/error, 2 timeout, 3 bad usage/unreachable token.
+# Prints one line per state change and a final "CI <state> <sha> <url>" line. Never prints the token.
+set -uo pipefail
+
+repo=${1:-}; ref=${2:-}; timeout=${3:-3600}
+[[ -n $repo && -n $ref ]] || { echo "usage: forgejo-ci-wait <owner/repo> <pr|sha> [timeout-s]" >&2; exit 3; }
+api=https://git.pmon.dev/api/v1
+token=$(sed -n 's#.*sm:\([^@]*\)@git\.pmon\.dev.*#\1#p' ~/.git-credentials 2>/dev/null | head -1)
+[[ -n $token ]] || { echo "no git.pmon.dev credential in ~/.git-credentials" >&2; exit 3; }
+
+get() { curl -sf --max-time 20 -H "Authorization: token $token" "$api/$1"; }
+
+deadline=$(( $(date +%s) + timeout ))
+last=""
+while :; do
+    sha=$ref
+    if [[ $ref =~ ^[0-9]{1,6}$ ]]; then
+        # a PR number: follow its CURRENT head, so a push while waiting is waited on too
+        sha=$(get "repos/$repo/pulls/$ref" | python3 -c 'import sys,json; print(json.load(sys.stdin)["head"]["sha"])' 2>/dev/null) || sha=""
+    fi
+    line=""
+    if [[ -n $sha ]]; then
+        line=$(get "repos/$repo/commits/$sha/status" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+st = d.get("state") or "none"
+url = next((s.get("target_url", "") for s in d.get("statuses", [])), "")
+print(st, url)' 2>/dev/null) || line=""
+    fi
+    state=${line%% *}
+    url=${line#* }
+    if [[ -n $state && "$state|$sha" != "$last" ]]; then
+        echo "$(date +%H:%M:%S) $state ${sha:0:10}"
+        last="$state|$sha"
+    fi
+    case $state in
+        success) echo "CI success $sha $url"; exit 0 ;;
+        failure|error) echo "CI $state $sha $url"; exit 1 ;;
+    esac
+    # "none" right after a push means the pipeline has not registered yet: keep waiting
+    if (( $(date +%s) >= deadline )); then
+        echo "CI timeout ${state:-unknown} $sha after ${timeout}s"; exit 2
+    fi
+    sleep 30
+done
