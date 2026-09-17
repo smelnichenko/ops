@@ -498,6 +498,17 @@ for Java and `npm run test` green for site.
      preview ApplicationSet runs the repo's image in the monitor slot with monitor's config, so
      a masi preview would be non-functional; PR envs for masi need the preview arc (own image
      override + `/api/masi` preview route + a CI preview image step), tracked separately.
+     **2e done 2026-09-17** (infra main 30691cc; platform fixes 0984c60, 51b6f33): masi and
+     masi-browser run in schnappy-test (image 8b0a5cf, AI off, browser on); production block
+     present but disabled. Verified: `/api/masi/actuator/health` 200 and `/api/masi/jobs` 401
+     through the test gateway; `user.events` consumed in group `masi-user`; the browser refuses
+     loopback requests without the token (401) and serves with it; from INSIDE the browser pod
+     Mimir :9009, Tempo :4318, the Vault VIP :8200, Keycloak VIP :443, the API server, argocd,
+     an in-namespace pod and 169.254.169.254 all fail while example.com on 80 and 443 and DNS
+     work. Two Cilium lessons (Hubble "denylist" both times): the egress deny must exempt
+     istiod (`k8s:app=istiod`, sidecar xDS/CA on 15012) and the ingress deny must not include
+     the `host` entity (kubelet probes the sidecar's :15021). Both are render-check assertions.
+     PR5 contract: a 429 on browser connect means "retry shortly", never a source failure.
    - 2f `ops`+`monitor`: Taskfile `SERVICES` += masi at both occurrences; `depcheck.yaml` loop
      += masi; `ops/CLAUDE.md` services, permissions (three lists), DB, registered-repos tables.
    - 2g `admin`+`ops`+`platform`+`site`: `Permission` += `JOBS`, changeset adding `JOBS` to the
@@ -654,7 +665,8 @@ format; cv.ee ToS; TeamDash/Teamtailor/BambooHR feed conventions.
 
 IN PROGRESS — approved 2026-09-16; PR0, PR1 (masi #1), PR2a (ops #43) and PR2b (platform #31–#33,
 infra #28/main d2d10f4), PR2c + PR2d (platform main ab958bd, c3df16f; production PostSync
-green with the masi smoke group skipped) done on 2026-09-17; next PR2e (infra values with
-`tag: … # masi`, browser + ai-masi secrets named, test first) and PR2f/2g.
+green with the masi smoke group skipped) and PR2e (infra main 30691cc, verified in test incl.
+the browser's SSRF bound from inside the pod) done on 2026-09-17; next PR2f (Taskfile SERVICES,
+depcheck loop, CLAUDE.md) and PR2g (JOBS permission), then PR3.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
