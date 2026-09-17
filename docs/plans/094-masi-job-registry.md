@@ -420,8 +420,11 @@ for Java and `npm run test` green for site.
    the `pitest-nightly` and `renovate` crons, the "Registered repos" list in `ops/CLAUDE.md`
    (pipelines read the shared `woodpecker-ci-secrets`; there are no per-repo secrets).
 3. **PR2 — infra onboarding**, ordered sub-PRs; each states its rollback:
-   - 2a `ops`: `seed-vault-secrets.yml` += `postgres-masi` and `ai-masi` (`api_key` from `.env`);
-     seed test and prod. Rollback: paths stay (harmless).
+   - 2a `ops`: `seed-vault-secrets.yml` += `postgres-masi` (generatable) and `ai-masi`
+     (`api_key` from `MASI_ANTHROPIC_API_KEY`, one key for prod and test, skipped visibly while
+     unset); seed test and prod. Rollback on abandonment: remove both entries, add the paths to
+     the "Delete retired vault path" loop for one release, and revoke the key in the Anthropic
+     console — a leftover `ai-masi` is a live third-party credential, not harmless.
    - 2b `platform`+`infra`: **convert `cnpg-init-users.yaml` to a Sync hook Job**
      (`argocd.argoproj.io/hook: Sync`, `hook-delete-policy: BeforeHookCreation`, keep
      `sync-wave: 10` — the s3gw-buckets pattern) in the same platform PR, because the plain Job
