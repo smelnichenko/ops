@@ -437,6 +437,17 @@ for Java and `npm run test` green for site.
      Confirm in test that the CNPG webhook accepts the `postInitSQL` edit on an initialised
      cluster before prod. Rollback: revert the values commit; role and DB stay by design (the
      data app never prunes); a failed Job is deleted and re-synced — the Job is idempotent.
+     **Done 2026-09-17** (platform #31–#33, infra #28 + main d2d10f4), with three corrections
+     the plan did not foresee: (1) a hook that keeps the legacy plain Job's name collides with
+     it on the first sync — Argo's prune task and hook task share one result key, so
+     BeforeHookCreation deletes the old Job and the hook is never created (silently "Synced");
+     production therefore deleted the two legacy Jobs before landing the values, test needed a
+     second sync; (2) psql does not interpolate `:'var'` inside `-c` — the SQL goes through
+     stdin with `ON_ERROR_STOP`; (3) kubelet reduces `$$` in container args to `$`, so the DO
+     block is dollar-quoted `$do$` and platform CI extracts the rendered script, applies the
+     kubelet rewrite and runs it against a real Postgres. `masi` is in the per-environment infra
+     values only (the chart default also feeds `schnappy-infra-data`). `sync-options:
+     Delete=true` was merely Argo's default, not an unknown option.
    - 2c `platform` chart: `masi-deployment.yaml` + `masi-service.yaml` from `chess-*.yaml` with
      the `ai-masi` ExternalSecret env block, budgets, `MASI_AI_*` model envs and
      `MASI_BROWSER_ENDPOINT`; `masi-browser-deployment.yaml` + service with the hardening above,
@@ -624,5 +635,7 @@ format; cv.ee ToS; TeamDash/Teamtailor/BambooHR feed conventions.
 
 ## Status
 
-DRAFT 2026-09-16 — approved by the operator in session; review findings of ops PR #40 folded in;
-PR1 not started.
+IN PROGRESS — approved 2026-09-16; PR0, PR1 (masi #1), PR2a (ops #43) and PR2b (platform #31–#33,
+infra #28/main d2d10f4) done and verified in test and production on 2026-09-17; next PR2c.
+Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
+repos keep PRs with PR-only CI.
