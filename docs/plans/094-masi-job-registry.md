@@ -464,6 +464,20 @@ for Java and `npm run test` green for site.
      selector. `files/smoke-test.js` gains a `masi` group in `AUTH_GROUPS` with the chart's
      auto-skip when `masiService.enabled` is false. Rollback: revert; apps prune the masi
      Deployment/Service/policies (`prune: true`).
+     **2c done 2026-09-17** (platform main ab958bd). Review corrections: (1) NetworkPolicies
+     only ADD to the namespace default-deny, which already allows every pod, any :443, the Pi
+     VIP, argocd, woodpecker, Tempo and Mimir — the browser's real bound is a
+     `CiliumNetworkPolicy` DENY (host, remote-node, kube-apiserver, every pod but kube-dns,
+     private/link-local/CGNAT CIDRs; inbound only masi + a scraper), to be probed from inside
+     the pod in test before production enablement; (2) browserless without a `TOKEN` hands a
+     CDP session to any page it renders over loopback (Envoy admin :15000 is one request away)
+     — the token is REQUIRED (`masiService.browser.existingSecret`, Vault `<prefix>/masi-browser`
+     property `token`, seeded by ops), the chart refuses to render the browser without it, and
+     masi sends it on every connect; (3) `/active` is not a saturation signal (204 while full) —
+     probes use `/pressure` via exec with the token, a saturated browser stays in the Service
+     and masi must treat a 429 on connect as "retry shortly", never a source failure (PR5
+     contract); (4) uid 999, emptyDirs at `/tmp`, `/home/blessuser`, `/dev/shm` (verified with
+     docker diff), `TZ=Europe/Tallinn`, DNS egress scoped to kube-dns, `QUEUED=0`.
    - 2d `platform` mesh: service accounts `masi`, `masi-browser`; authorization policies
      (postgres/kafka principals, `$httpCallers` admin += masi, the dedicated masi-browser ALLOW
      policy); destination rules; `-masi-route` `PathPrefix /api/masi` in **both**
@@ -472,6 +486,9 @@ for Java and `npm run test` green for site.
      file; a `helm template | yq` artifact test in platform CI asserts the route in both);
      `kafka-users.yaml` `schnappy-masi` entry (consume `user.events`, group `masi-user`) so
      enabling SCRAM later does not cut masi off.
+     **2d done 2026-09-17** (platform main c3df16f, same push as 2c so no Deployment can
+     reference a missing service account — a render check asserts it). `masi-browser-http`
+     admits exactly masi's principal on 3000; `masi-http` has no in-mesh callers.
    - 2e `infra`: `masiService:` blocks with `tag: "<sha>"  # masi` in test (enabled,
      `tuning.auto=false`, daily budget 1 USD — the test namespace would otherwise spend real
      money from day one) and production (disabled until PR9); masi's `cd.yaml` sed pattern
@@ -636,6 +653,8 @@ format; cv.ee ToS; TeamDash/Teamtailor/BambooHR feed conventions.
 ## Status
 
 IN PROGRESS — approved 2026-09-16; PR0, PR1 (masi #1), PR2a (ops #43) and PR2b (platform #31–#33,
-infra #28/main d2d10f4) done and verified in test and production on 2026-09-17; next PR2c.
+infra #28/main d2d10f4), PR2c + PR2d (platform main ab958bd, c3df16f; production PostSync
+green with the masi smoke group skipped) done on 2026-09-17; next PR2e (infra values with
+`tag: … # masi`, browser + ai-masi secrets named, test first) and PR2f/2g.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
