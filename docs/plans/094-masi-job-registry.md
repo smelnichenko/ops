@@ -518,6 +518,15 @@ for Java and `npm run test` green for site.
      role assignment silently drops unknown roles today — the recorded VIEW incident); `JOBS`
      added to the realm ConfigMap JSON in `schnappy-auth` (roles, Admins composite, seed user)
      so a fresh import matches, to the Vagrant auth task, and to `Admin.tsx` `ALL_PERMISSIONS`.
+     **2f done 2026-09-17** (ops main 3d57d3f: `promote:prod` SERVICES += masi, CLAUDE.md;
+     monitor #10: depcheck loop += masi). **2g done 2026-09-18**: admin #4 (`Permission.JOBS`,
+     changeset 010 → Admins group only, `GroupPermissionsMigrationTest` on a real Postgres —
+     verified in schnappy-test: Admins = CHAT,EMAIL,JOBS,MANAGE_USERS,METRICS,PLAY; Users =
+     CHAT,METRICS), site #7 (`ALL_PERMISSIONS`), platform eb7bfbf (realm import), ops main
+     8bb48de (`setup-keycloak-clients.yml` now runs on pi1, creates every app realm role, fills
+     the Admins composite, assigns and PROVES k6-smoke's roles incl. JOBS, fails on a missing
+     role; run: JOBS created in the live realm). Production admin gets 010 with the next
+     `promote:prod`.
    Invariant (k6 smoke, the only thing that sees the route, the policy, the role and the image
    together): unauthenticated `GET /api/masi/jobs` → 401; with the `k6-smoke` token → 200 and a
    body containing masi's seed source keys (a body only masi can produce); Istio
@@ -666,7 +675,7 @@ format; cv.ee ToS; TeamDash/Teamtailor/BambooHR feed conventions.
 IN PROGRESS — approved 2026-09-16; PR0, PR1 (masi #1), PR2a (ops #43) and PR2b (platform #31–#33,
 infra #28/main d2d10f4), PR2c + PR2d (platform main ab958bd, c3df16f; production PostSync
 green with the masi smoke group skipped) and PR2e (infra main 30691cc, verified in test incl.
-the browser's SSRF bound from inside the pod) done on 2026-09-17; next PR2f (Taskfile SERVICES,
-depcheck loop, CLAUDE.md) and PR2g (JOBS permission), then PR3.
+the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g done 2026-09-18
+(JOBS role live, Admins group carries it in test); PR3 source survey in progress.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
