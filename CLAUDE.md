@@ -61,16 +61,19 @@ ssh ten 'sudo kubectl get pods -n woodpecker'
 ssh ten 'sudo kubectl logs woodpecker-server-0 -n woodpecker --tail=50'
 ```
 
-**Woodpecker API and repo management** (v3.18+: the server image is distroless — there is no
-`woodpecker-cli` in the pod and no `woodpecker-api-token` secret in the namespace):
+**Woodpecker API and repo management** (the upstream server image is `FROM scratch`: no
+`woodpecker-cli`, not even `ls`, inside the pod; no `woodpecker-api-token` secret exists — no tracked
+manifest ever created one):
 ```bash
-# Personal API token: ci.pmon.dev → user menu → API tokens (OAuth login via Forgejo)
+# Personal access token: ci.pmon.dev → user menu → "CLI & API" (route /user/cli-and-api)
 export WOODPECKER_TOKEN=...
+curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" https://ci.pmon.dev/api/repos | jq '.[] | {id, full_name, active}'
 curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" https://ci.pmon.dev/api/repos/17/pipelines | jq '.[0]'   # 17 = schnappy/masi
 curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" -X POST https://ci.pmon.dev/api/repos/17/pipelines/2   # restart pipeline 2
 
 # Activate a new repo / add crons: ci.pmon.dev UI → Add repository (after Forgejo repo creation), Settings → Crons
-# Commit status per repo is also mirrored to Forgejo: GET /api/v1/repos/schnappy/<repo>/commits/<sha>/status
+# Commit status is mirrored to Forgejo (private repos need a token):
+curl -sS -H "Authorization: token $FORGEJO_READONLY_TOKEN" https://git.pmon.dev/api/v1/repos/schnappy/<repo>/commits/<sha>/status
 ```
 
 **Pipeline step logs** (Woodpecker steps run as `wp-<id>` pods, service containers as
@@ -743,16 +746,16 @@ CI/CD pipeline execution via Woodpecker CI with Kubernetes backend. Pipelines tr
 - **Pipeline cancellation:** Disabled (`WOODPECKER_PIPELINE_CANCEL_RUNNING=false`) — new pushes queue instead of cancelling
 - **Agent config:** `CONNECT_RETRY_COUNT=30`, `MAX_WORKFLOWS=1` per agent
 - **Key files:** `.woodpecker/ci.yaml`, `.woodpecker/cd.yaml`, `deploy/ansible/playbooks/setup-woodpecker.yml` (platform repo)
-- **API:** personal token from the UI (user menu → API tokens); no in-cluster token secret and no CLI in the distroless server image (both gone since v3.18)
-- **SQLite DB:** PVC at `/opt/local-path-provisioner/pvc-a65c80b9-0579-4ae7-a9cd-d3eed872a673_woodpecker_data-woodpecker-server-0/woodpecker.sqlite` on ten
+- **API:** personal access token from the UI (user menu → "CLI & API"); there is no in-cluster token secret and no CLI in the `FROM scratch` server image
+- **SQLite DB:** on ten under the PVC's local path — derive it, the id changes: `kubectl get pv $(kubectl get pvc data-woodpecker-server-0 -n woodpecker -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.local.path}'` (then `woodpecker.sqlite` inside)
 - **Repo management caveats:**
-  - `repo rm` does soft-delete only (sets `active=0`, keeps DB row). UNIQUE constraint on `full_name` blocks re-adding
+  - Deleting a repo in the UI/API is a soft-delete (sets `active=0`, keeps the DB row); the UNIQUE constraint on `full_name` blocks re-adding
   - To fully remove: scale down server → delete row from SQLite → scale back up
   - To re-activate with new Forgejo repo ID: update `forge_remote_id` + `active=1` in SQLite
   - Always activate through the UI (Add repository), not DB manipulation, for proper webhook token generation
 - **Pipeline logs:** Fluent-bit → ClickHouse `logs.podlogs` (namespace `woodpecker`, pods `wp-<id>` / `wp-svc-<id>-<name>`); see the query recipe above
-- **Local lint parity:** CI lints with `git.pmon.dev/schnappy/ansible-lint:latest`; a differently versioned local ansible-lint disagrees on rules — lint the way CI does: `docker run --rm -v "$PWD:/w" -w /w git.pmon.dev/schnappy/ansible-lint:latest ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/`
-- **Registered repos:** schnappy/monitor (id=1), schnappy/admin (id=2), schnappy/chat (id=3), schnappy/chess (id=4), schnappy/site (id=6), schnappy/game-scp (id=7), schnappy/keycloak-theme (id=10), schnappy/masi (id=17). api-gateway (id=5) archived/deactivated
+- **Local lint parity:** CI lints with `git.pmon.dev/schnappy/ansible-lint:latest`; a differently versioned local ansible-lint disagrees on rules — lint the way CI does. The image's collections live under `/root/.ansible`, so run as root (a `-u`/`HOME` override loses them) and remove the root-owned cache the linter drops into the checkout in the same container: `docker run --rm -v "$PWD:/w" -w /w git.pmon.dev/schnappy/ansible-lint:latest bash -c 'ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/; rc=$?; rm -rf /w/.ansible; exit $rc'`. The Ansible unit harness runs the same way: `... bash -c 'bash tests/ansible/unit/run.sh; rc=$?; rm -rf /w/.ansible; exit $rc'`
+- **Registered repos (ids from the live `repos` table, 2026-09-17):** 1 admin, 2 chat, 3 chess, 4 game-scp, 5 infra, 6 keycloak-theme, 7 monitor, 8 ops, 9 platform, 10 site, 11 hyperfoil, 12 sonar-scanner, 13 ansible-lint, 16 radar, 17 masi (all active; no api-gateway row). Always re-check with `GET /api/repos` before acting on an id
 
 ## Nexus Repository Manager (Pi)
 
@@ -859,8 +862,8 @@ manifests, no pods; any recipe that queries Elasticsearch for logs is obsolete.
 - **ClickHouse:** `clickhouse/clickhouse-server:24.8-alpine`, HTTP :8123, user `schnappy`, db `logs`,
   table `logs.podlogs` (columns: timestamp, level, namespace, pod, container, node, app, component,
   stream, message, trace_id, span_id, labels, fields); pod-log TTL `clickhouse.retention.days`
-  (default 30), events TTL `clickhouse.events.retentionDays` (default 180) — applied by
-  `clickhouse-init-job.yaml`
+  (default 30) applied by `clickhouse-init-job.yaml`; the events table (`clickhouse.events.enabled`,
+  TTL `retentionDays` 180) is chart-only and off in production
 - **Fluent-bit:** tails `/var/log/containers`, lifts traceId/spanId to columns and extracts the level
   in Lua (`fluentbit-configmap.yaml`); CI step pods (`wp-*` in `woodpecker`) are captured like any pod
 - **Query:** `kubectl -n schnappy-infra exec schnappy-clickhouse-0 -c clickhouse -- clickhouse-client -q "SELECT ... FROM logs.podlogs WHERE namespace='...' ORDER BY timestamp FORMAT TSVRaw"`
@@ -883,7 +886,7 @@ manifests, no pods; any recipe that queries Elasticsearch for logs is obsolete.
 - **Actuator:** Only `health` and `prometheus` endpoints exposed; `show-details: never` on public health endpoint
 - **SSRF protection:** URL validator blocks internal IPs, validates DNS at request time (prevents rebinding), checks every redirect hop
 - **ReDoS protection:** Nested quantifier detection, 500-char pattern limit, 5-second regex timeout, 512KB body limit
-- **Containers:** Run as non-root, drop all capabilities, `readOnlyRootFilesystem` on all containers (app/frontend/valkey/postgres/s3gw/clickhouse/grafana/prometheus)
+- **Containers:** Run as non-root, drop all capabilities, `readOnlyRootFilesystem` on the app/frontend/valkey/postgres/s3gw/grafana/prometheus containers (the ClickHouse server container is writable; only its init container and init Job are read-only)
 - **Secrets:** All secrets in Vault KV v2 (`secret/schnappy/*`), synced to k8s Secrets via ESO ExternalSecrets; Helm `existingSecret` pattern skips inline secret creation; Forgejo + Woodpecker secrets also via Vault + ESO (ExternalSecrets in `clusters/production/cluster-config/`); containerd registry config populated via Ansible (`setup-kubeadm.yml`); `.env` only for initial Vault seeding; `.env` in `.gitignore`
 - **Network policies:** Default-deny ingress+egress for all pods; DNS (port 53) allowed for all; explicit ingress+egress rules per pod (app→postgres/valkey/s3gw/ES/external HTTPS, frontend→app, grafana→prometheus, etc.); app external egress blocks RFC1918 ranges; also applied to forgejo and velero namespaces
 - **Docker images:** `postgres:17-alpine` and `valkey/valkey:8.1-alpine` pinned (no mutable `:latest` tags)

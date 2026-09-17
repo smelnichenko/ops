@@ -294,14 +294,13 @@ tasks:
       - ONBOARD_USER='{{.USER}}' ONBOARD_EMAIL='{{.EMAIL}}' ONBOARD_NAME='{{.NAME}}' python3 scripts/onboard-dev.py
 
   deploy:seed-test-secrets:
-    # go-task dotenv: the FIRST file wins for a key present in both, so
-    # .env.test only supplies keys ABSENT from .env (verified with task 3.48).
-    # The playbook reads every env-sourced value with lookup('env'); nothing
-    # is passed as an extra var except the prefix.
-    desc: Seed test-environment Vault secrets (values from .env; .env.test fills only keys absent from .env)
+    # Same .env as production (test shares the external keys). The playbook reads
+    # every env-sourced value with lookup('env'); nothing is passed as an extra var
+    # except the prefix. Precedence: a variable exported in the shell outranks .env.
+    desc: Seed test-environment Vault secrets from .env (prefix schnappy-test)
     dir: deploy/ansible
     deps: [deploy:install]
-    dotenv: ['../../.env', '../../.env.test']
+    dotenv: ['../../.env']
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e vault_prefix=schnappy-test
 
@@ -590,7 +589,8 @@ tasks:
 
   deploy:seed-secrets:
     # The playbook reads every env-sourced value with lookup('env') from the
-    # dotenv-loaded environment; nothing is passed as an extra var.
+    # dotenv-loaded environment; nothing is passed as an extra var. Precedence:
+    # a variable exported in the shell outranks .env.
     desc: Seed Vault secrets from .env
     dir: deploy/ansible
     deps: [deploy:install]
@@ -685,10 +685,8 @@ tasks:
       - >-
         venv/bin/ansible-playbook -i inventory/production.yml playbooks/create-environment.yml
         -e "env_name={{.ENV_NAME}}"
-        -e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
-        -e "MAIL_PASSWORD=$MAIL_PASSWORD"
-        -e "RESEND_WEBHOOK_SECRET=$RESEND_WEBHOOK_SECRET"
-        -e "RESEND_API_KEY=$RESEND_API_KEY"
+        -e "$(jq -n --arg a "$ANTHROPIC_API_KEY" --arg m "$MAIL_PASSWORD" --arg s "$RESEND_WEBHOOK_SECRET" --arg k "$RESEND_API_KEY"
+             '{ANTHROPIC_API_KEY: $a, MAIL_PASSWORD: $m, RESEND_WEBHOOK_SECRET: $s, RESEND_API_KEY: $k}')"
 
   env:destroy:
     desc: "Destroy a schnappy environment (usage: task env:destroy ENV_NAME=staging)"
@@ -796,54 +794,6 @@ tasks:
       - echo "=== All Vagrant tests complete ==="
 
   # ============== DEPLOY ==============
-  deploy:promote:
-    desc: "Promote image tags from test to production (SERVICE=monitor|admin|chat|chess|site|game-scp|all)"
-    vars:
-      INFRA_DIR: '{{.SRC_DIR}}/infra'
-      TEST_VALUES: '{{.INFRA_DIR}}/clusters/production/schnappy-test-apps/values.yaml'
-      PROD_VALUES: '{{.INFRA_DIR}}/clusters/production/schnappy-production-apps/values.yaml'
-      SERVICE: '{{.SERVICE | default "all"}}'
-    cmds:
-      - |
-        cd "{{.INFRA_DIR}}" && git pull --rebase
-
-        SERVICES="{{.SERVICE}}"
-        if [ "$SERVICES" = "all" ]; then
-          SERVICES="monitor admin chat chess site game-scp"
-        fi
-
-        PROMOTED=""
-        for svc in $SERVICES; do
-          # Anchored on the marker's end: "# masi" must never match "# masi-browser"
-          test_tag=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "{{.TEST_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
-          prod_tag=$(grep -E "#[[:space:]]*${svc}[[:space:]]*$" "{{.PROD_VALUES}}" | grep -o 'tag: "[^"]*"' | head -1 | cut -d'"' -f2)
-
-          if [ -z "$test_tag" ]; then
-            echo "SKIP $svc: no tag in test values"
-            continue
-          fi
-          if [ "$test_tag" = "$prod_tag" ]; then
-            echo "SKIP $svc: already at $test_tag"
-            continue
-          fi
-
-          echo "PROMOTE $svc: $prod_tag -> $test_tag"
-          sed -i -E "s|(tag: \")[^\"]*(\"[[:space:]]*#[[:space:]]*${svc}[[:space:]]*)$|\1${test_tag}\2|" "{{.PROD_VALUES}}"
-          PROMOTED="$PROMOTED $svc=$test_tag"
-        done
-
-        if [ -z "$PROMOTED" ]; then
-          echo "Nothing to promote"
-          exit 0
-        fi
-
-        cd "{{.INFRA_DIR}}"
-        git add clusters/production/schnappy-production-apps/values.yaml
-        git commit -m "deploy(prod):$PROMOTED"
-        git push
-        echo "Promoted:$PROMOTED"
-
-  # ============== VAGRANT ==============
   vagrant:up:
     desc: Start Vagrant VMs
     cmds:

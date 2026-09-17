@@ -20,7 +20,18 @@ import yaml
 
 src, out_dir, vault_port = sys.argv[1], sys.argv[2], sys.argv[3]
 play_src = yaml.safe_load(open(src))[0]
-tasks = play_src["tasks"]
+
+
+def flatten(items):
+    """Tasks in document order, descending into block/rescue/always."""
+    for t in items:
+        yield t
+        for key in ("block", "rescue", "always"):
+            if isinstance(t.get(key), list):
+                yield from flatten(t[key])
+
+
+tasks = list(flatten(play_src["tasks"]))
 
 
 def find(sub):

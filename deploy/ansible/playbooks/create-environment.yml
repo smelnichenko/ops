@@ -100,6 +100,7 @@
 
     - name: Seed Vault secrets for {{ env_ns }}
       ansible.builtin.shell: |
+        set -e
         {{ vault_env }} vault kv put secret/{{ env_ns }}/postgres \
           database=monitor username=monitor password="{{ gen_db_password }}"
         {{ vault_env }} vault kv put secret/{{ env_ns }}/valkey \
@@ -112,13 +113,13 @@
           cluster_id="{{ gen_kafka_cluster_id }}"
         {% if ANTHROPIC_API_KEY | default('') | trim | length > 0 %}
         {{ vault_env }} vault kv put secret/{{ env_ns }}/ai \
-          api_key="{{ ANTHROPIC_API_KEY | trim }}"
+          api_key={{ ANTHROPIC_API_KEY | trim | quote }}
         {% else %}
         echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not provided (no placeholder written)"
         {% endif %}
         {% if MAIL_PASSWORD | default('') | trim | length > 0 %}
         {{ vault_env }} vault kv put secret/{{ env_ns }}/mail \
-          password="{{ MAIL_PASSWORD | trim }}"
+          password={{ MAIL_PASSWORD | trim | quote }}
         {% else %}
         echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not provided (no placeholder written)"
         {% endif %}
@@ -127,6 +128,7 @@
           api_key="{{ RESEND_API_KEY | default('') }}"
       changed_when: true
 
+      no_log: true
     - name: "PHASE 1: Vault secrets seeded"
       ansible.builtin.debug:
         msg: "Seeded secrets at secret/{{ env_ns }}/*"
