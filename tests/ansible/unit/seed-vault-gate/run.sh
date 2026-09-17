@@ -1,8 +1,9 @@
 #!/bin/bash
-# Drives the masi-key gate of seed-vault-secrets.yml through four env states on
-# localhost (no Vault, ~2 s). Exit 1 if any verdict fails.
-#   UNSET / EMPTY / WHITESPACE -> the write must be skipped and the notice must run
-#   SET                        -> the write must run with a non-empty key, the notice skipped
+# Localhost harnesses for seed-vault-secrets.yml (no Vault, a few seconds):
+#   gate.yml    UNSET / EMPTY / WHITESPACE -> masi write skipped, notice runs; SET -> write runs, notice skipped
+#   resolve.yml the existing-secret read tolerates ONLY a missing path, and the resolve step
+#               reuses an existing password / generates a fresh 32-char one
+# Exit 1 if any verdict fails.
 set -u
 H=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$H/../../../.." && pwd)
@@ -16,19 +17,20 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 export ANSIBLE_STDOUT_CALLBACK=default ANSIBLE_DISPLAY_SKIPPED_HOSTS=true ANSIBLE_NOCOLOR=1
 unset ANSIBLE_CONFIG
-python3 "$H/gen.py" "$PB" "$WORK/harness.yml" || exit 2
+python3 "$H/gen.py" "$PB" "$WORK" || exit 2
 rc_all=0
-run() {  # $1=label $2=expect_write $3..=args for env(1)
-  local label=$1 expect=$2; shift 2
+run() {  # $1=play $2=label $3=expect_write $4..=args for env(1)
+  local play=$1 label=$2 expect=$3; shift 3
   local out="$WORK/out-$label.txt"
-  env "$@" "$AP" -i localhost, "$WORK/harness.yml" -e "expect_write=$expect" > "$out" 2>&1; local rc=$?
+  env "$@" "$AP" -i localhost, "$WORK/$play" -e "expect_write=$expect" > "$out" 2>&1; local rc=$?
   local verdict; verdict=$(grep -oE '"msg": "[^"]*"' "$out" | tail -1)
-  printf '%-11s expect_write=%-5s exit=%s  %s\n' "$label" "$expect" "$rc" "$verdict"
+  printf '%-11s exit=%s  %s\n' "$label" "$rc" "$verdict"
   if [ $rc -ne 0 ]; then rc_all=1; grep -vE '^(PLAY|TASK|ok:|skipping:|$)' "$out" | head -12 | sed 's/^/      | /'; fi
 }
-run UNSET      false -u MASI_ANTHROPIC_API_KEY
-run EMPTY      false MASI_ANTHROPIC_API_KEY=
-run WHITESPACE false "MASI_ANTHROPIC_API_KEY= "
-run SET        true  MASI_ANTHROPIC_API_KEY=sk-ant-dummy
+run gate.yml UNSET      false -u MASI_ANTHROPIC_API_KEY
+run gate.yml EMPTY      false MASI_ANTHROPIC_API_KEY=
+run gate.yml WHITESPACE false "MASI_ANTHROPIC_API_KEY= "
+run gate.yml SET        true  MASI_ANTHROPIC_API_KEY=sk-ant-dummy
+run resolve.yml RESOLVE false -u MASI_ANTHROPIC_API_KEY
 echo "seed-vault-gate: $([ $rc_all -eq 0 ] && echo ALL-PASS || echo SOME-FAILED)"
 exit $rc_all

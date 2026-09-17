@@ -110,10 +110,18 @@
           access_key=admin secret_key="{{ gen_minio_password }}"
         {{ vault_env }} vault kv put secret/{{ env_ns }}/kafka \
           cluster_id="{{ gen_kafka_cluster_id }}"
+        {% if ANTHROPIC_API_KEY | default('') | trim | length > 0 %}
         {{ vault_env }} vault kv put secret/{{ env_ns }}/ai \
-          api_key="{{ ANTHROPIC_API_KEY | default('placeholder') }}"
+          api_key="{{ ANTHROPIC_API_KEY | trim }}"
+        {% else %}
+        echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not provided (no placeholder written)"
+        {% endif %}
+        {% if MAIL_PASSWORD | default('') | trim | length > 0 %}
         {{ vault_env }} vault kv put secret/{{ env_ns }}/mail \
-          password="{{ MAIL_PASSWORD | default('placeholder') }}"
+          password="{{ MAIL_PASSWORD | trim }}"
+        {% else %}
+        echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not provided (no placeholder written)"
+        {% endif %}
         {{ vault_env }} vault kv put secret/{{ env_ns }}/webhook \
           signing_secret="{{ RESEND_WEBHOOK_SECRET | default('') }}" \
           api_key="{{ RESEND_API_KEY | default('') }}"
