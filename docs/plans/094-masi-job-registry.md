@@ -654,6 +654,15 @@ for Java and `npm run test` green for site.
    are JSON pointers (`/person`, `$` for the root). The site page is `/masi/cv` with the
    nav link "Jobs"; the site's `prettier --check .` had been walking the Sonar step's
    `.scannerwork` (green or red depending on which step finished first) — ignored for good.
+   The merge pipeline of masi #9 then failed in the scheduler tests: disabling a source by
+   load-and-save while a run every second bumps the row version loses the optimistic lock, and
+   `PATCH /sources/{id}` had the same race (a 500 for the operator) — masi #10 added
+   `SourceAdminService` (three attempts on a fresh copy, then 409).
+   **PR7 done 2026-09-18** (masi main 43740ba, 268 tests; site main e72cef6, 378 tests).
+   Proven live in schnappy-test with the fictitious sample: `POST /cv/versions` → version 1
+   inactive, a `photo` field → 400 with its path, activate → active v1, completeness 100,
+   `preview.pdf` → 26 962 bytes of real text (name, context line, bullets) from the bundled
+   font; nothing of the CV in the pod log; the served site bundle carries `/masi/cv`.
 8. **PR7 — CV master + renderer** (`masi`+`site`): changeset 006, `cv-schema.json`
    (evidence-bank shape), `CvSchemaValidator`, `CvMasterService` with `completeness()`,
    `PdfRenderer` + templates + bundled font, Cv controller, `MasiCv.tsx`, route and nav,
