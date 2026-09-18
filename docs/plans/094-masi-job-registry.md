@@ -675,6 +675,38 @@ for Java and `npm run test` green for site.
    PrometheusRule entries with runbook URLs and their `promtool` unit files. Invariant: no
    package reaches `PREPARED` without a clean claims report; no HTTP request leaves the gateway
    once a cap is reached; a second `JOBS` user cannot read the first user's packages.
+   **PR8a delta (masi #11, platform main aaede0d, 2026-09-18):** the gateway and the ledger
+   shipped first, the pipeline second (8b), so the alerts landed with the metrics they read.
+   Changeset is `015` (`llm_call`, statuses `PENDING/OK/ERROR/LOST`). `AnthropicGateway` is
+   the only class importing `com.anthropic` (ArchUnit): SDK `maxRetries(0)` and
+   `logLevel(OFF)` (its body logger bypasses SLF4J, so `ANTHROPIC_LOG=debug` in a pod env would
+   otherwise print the CV), retries only on 429/529/5xx with 1 s-doubling jitter capped at 30 s
+   after the jitter, a 400 costs nothing, a wire failure or an unreadable 200 keeps the
+   estimate (billing unknown), one `deadlineMillis` bounds the permit wait, every attempt and
+   every backoff; a call inside a transaction is refused (`LlmTransactionContextException`).
+   Reserve-then-settle under `pg_advisory_xact_lock(hashtext('masi-budget'))` in `REQUIRES_NEW`:
+   day, month, purpose share (EXTRACT 0.30, ENRICH 0.20), per-run 0.25 USD and per-package
+   1.50 USD caps, all against `coalesce(cost, estimate)`; the estimate assumes the full
+   `max_tokens` out, so the in-flight semaphore (2) and the ledger together admit exactly one
+   call into one remaining slot (forced in the test with a gated fixture). The budget gauges
+   `masi_llm_budget_used_ratio{period}` read the ledger on scrape. A PENDING row older than
+   every attempt at the full timeout plus the backoffs plus two minutes is marked LOST by the
+   sweeper unless this process owns it (`liveCalls()` is process-local: replicas 1); a LOST
+   row that then settles becomes OK/ERROR with `masi_llm_ledger_failures_total{what=
+   lost_then_settled}`. A missing cache price falls back to the documented multiplier
+   (read 0.1×, 1 h write 2×, 5 m write 1.25× input), never to free; an unpriced model refuses
+   at startup. Platform: group `{{ $ns }}-masi` with MasiBudgetDay/Month, MasiBudgetGaugeAbsent,
+   MasiCostRate, MasiLedgerFailures, MasiModelMismatch, MasiSourceDisabledAuto, MasiSourceStale
+   (`time() - masi_source_last_success_timestamp_seconds > on(source,job,namespace)
+   (3 * masi_source_interval_seconds)` — the two gauges are 8b's), MasiBrowserUnreachable,
+   MasiBrowserSaturated; `promtool test rules` unit files run in platform CI (helm template →
+   awk → `build/rules/`, chmod for the `nobody` uid of the prometheus image). Lessons: any
+   `assertThat(list).hasSize(n)` over recorded requests prints the CV into the report on
+   failure — assert on `.size()`; the SDK's required fields are read lazily and throw its own
+   types, so usage/model/stop are read inside one guard; `absent()` alerts carry the equality
+   matchers as labels in the unit expectation.
+   **PR8a done 2026-09-18** (masi main adf5265, 286 tests; live in schnappy-test: health UP,
+   `masi_llm_budget_used_ratio{day,month}` = 0, AI disabled — no key in the test namespace).
 10. **PR9 — UI** (`site`+`infra`): Dashboard (with cost tile), Jobs, JobDetail, Companies,
     CompanyDetail (with contacts), Contacts, Sources with vitest tests; then production `masiService.enabled: true` via
     `task promote:prod`. Invariant: a vitest render at `/masi/jobs` with `JOBS` shows the page
@@ -788,6 +820,7 @@ the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g 
 2026-09-18 (247 open jobs in schnappy-test after the first cv.ee + Bolt runs); PR3 survey
 (`094-masi-source-survey.md`: five operator decisions D1–D5, twelve seed corrections — notably
 Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/request clause —
-config shapes, fixture procedure, three verbatim survey reports); next PR4.
+config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
+ledger, alerts) done 2026-09-18; next PR8b (tuning pipeline, masi #12).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
