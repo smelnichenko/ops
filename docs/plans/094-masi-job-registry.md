@@ -775,6 +775,12 @@ for Java and `npm run test` green for site.
     scope: the cost tile's per-purpose and per-package figures. Production enablement
     (`masiService.enabled: true`) is NOT done: masi in production would run without an Anthropic
     key and with every source disabled; it is the operator's call once the key is seeded.
+    **PR9 done 2026-09-18** (masi main facc87b, site main 482037a). Live in schnappy-test: the
+    served bundle carries `/masi`, `/masi/jobs|packages|companies|contacts|sources|cv` and the
+    lazy page chunks (the dashboard chunk answers 200 with its cost tile); `GET /dashboard` with a
+    JOBS token → 254 open jobs, 86 companies hiring, CV v1 at 100 %, 27 sources, AI disabled;
+    `GET /jobs?q=java&packageStatus=NONE&sort=title,asc` → 3 rows in title order;
+    `since=yesterday` → 400.
 11. **PR10 — stats, reports and cost dashboards** (`masi`+`site`+`platform`): changeset 009,
     `StatsService`, `ReportService`, `ReportScheduler`, Dashboard/Stats/Reports controllers,
     `MasiReports.tsx`, cost section in the monthly report, Grafana panels. Invariant: every
