@@ -752,6 +752,29 @@ for Java and `npm run test` green for site.
     `task promote:prod`. Invariant: a vitest render at `/masi/jobs` with `JOBS` shows the page
     and without it redirects; the nav link is absent without `JOBS`; the JobDetail PDF link
     carries the artifact URL and responds `application/pdf` in the test namespace.
+    **PR9 delta (masi #14, site #9 + #10, 2026-09-18):** the UI needed three backend additions
+    (masi #14): `GET /jobs` takes `q` (a literal: `%` and `_` escaped), `company`, `source` (a
+    listing's source key), `remote`, `since`, `packageStatus` (NONE for jobs without one) and
+    `sort` (`firstSeenAt|lastSeenAt|title|closedAt,asc|desc`); every row and the detail carry the
+    caller's NEWEST package on the job, and the filter and the dashboard funnel mean the same
+    newest package (a re-tuned job sits in one state); `GET /packages?job=` (with `status`) lists a
+    job's packages with their artifacts; `GET /dashboard` is the overview in one call (open/new/
+    closed over a rolling 7 × 24 h — not a calendar week, a reopened job is not "closed" —,
+    companies hiring, the caller's funnel, LLM spend vs the UTC day/month budgets and the AI
+    switch, CV completeness, sources with health, the tuning pause); APPLIED from APPLIED updates
+    the notes and the employer's response instead of a 409 (the panel's "Save response"); the
+    run-now 409 carries an error message; `TuningScheduler.pause(Instant)`. The site pages live
+    under `src/pages/masi/` (MasiCv moved in) behind a shared tab bar; the review queue offers the
+    backlog re-tune only behind `GET /packages/retune`'s estimate; the job page polls a queued
+    package (10 s, then 60 s, an hour at most) and shows "Prepare package" only when no package
+    exists for the active CV version; files open through a download link (no popup); the panel
+    hides every transition the backend would refuse. Site #10 makes SonarJS's rule set part of
+    `npm run lint` — the gate (0 new issues) had failed three pushes on rules eslint never ran —
+    and fixes the sixteen findings in older code, two of them real: message handlers that never
+    checked the sender's origin, and two super-linear regexes. Deferred to PR10 by the plan's own
+    scope: the cost tile's per-purpose and per-package figures. Production enablement
+    (`masiService.enabled: true`) is NOT done: masi in production would run without an Anthropic
+    key and with every source disabled; it is the operator's call once the key is seeded.
 11. **PR10 — stats, reports and cost dashboards** (`masi`+`site`+`platform`): changeset 009,
     `StatsService`, `ReportService`, `ReportScheduler`, Dashboard/Stats/Reports controllers,
     `MasiReports.tsx`, cost section in the monthly report, Grafana panels. Invariant: every
@@ -861,7 +884,8 @@ the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g 
 (`094-masi-source-survey.md`: five operator decisions D1–D5, twelve seed corrections — notably
 Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/request clause —
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
-ledger, alerts) and PR8b (tuning pipeline, masi #12, three review rounds + test audit) done
-2026-09-18 and proven live; next PR9 UI.
+ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
+2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
+is seeded; next PR10 (stats, reports, cost dashboards).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
