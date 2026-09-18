@@ -219,16 +219,25 @@
                 return hs
               resource.customizations.health.batch_Job: |
                 hs = {}
+                hs.status = "Progressing"
+                hs.message = "no pods have finished yet"
                 if obj.status ~= nil then
                   if obj.status.succeeded ~= nil and obj.status.succeeded > 0 then
                     hs.status = "Healthy"
+                    hs.message = obj.status.succeeded .. " pod(s) succeeded"
                   elseif obj.status.failed ~= nil and obj.status.failed > 0 then
                     hs.status = "Degraded"
-                  else
-                    hs.status = "Progressing"
+                    hs.message = obj.status.failed .. " pod(s) failed: read the pod log, then the Job is deleted and re-synced"
+                    if obj.status.conditions ~= nil then
+                      for _, c in ipairs(obj.status.conditions) do
+                        if c.type == "Failed" and c.message ~= nil then
+                          hs.message = hs.message .. " (" .. c.message .. ")"
+                        end
+                      end
+                    end
+                  elseif obj.status.active ~= nil and obj.status.active > 0 then
+                    hs.message = obj.status.active .. " pod(s) running"
                   end
-                else
-                  hs.status = "Progressing"
                 end
                 return hs
               oidc.config: |

@@ -1,6 +1,6 @@
 ---
 # Stand up an ephemeral CNPG `Cluster` named `schnappy-postgres` with
-# all per-service databases (monitor, admin, chat, chess) created at
+# all per-service databases (monitor, admin, chat, chess, masi) created at
 # bootstrap, plus the `schnappy-postgres-<svc>` Secrets that the
 # chart wires into pod env vars.
 #
@@ -68,6 +68,16 @@
           DB_NAME: chess
           DB_USERNAME: chess
           DB_PASSWORD: vagrant
+      - apiVersion: v1
+        kind: Secret
+        metadata: { name: schnappy-postgres-masi, namespace: "{{ ns }}" }
+        type: kubernetes.io/basic-auth
+        stringData:
+          username: masi
+          password: vagrant
+          DB_NAME: masi
+          DB_USERNAME: masi
+          DB_PASSWORD: vagrant
 
 - name: Ephemeral CNPG Cluster `schnappy-postgres`
   kubernetes.core.k8s:
@@ -112,6 +122,8 @@
               - CREATE DATABASE chat OWNER chat
               - CREATE USER chess WITH PASSWORD 'vagrant'
               - CREATE DATABASE chess OWNER chess
+              - CREATE USER masi WITH PASSWORD 'vagrant'
+              - CREATE DATABASE masi OWNER masi
               # Keycloak (schnappy-auth chart) connects as the postgres
               # superuser to its own database; the DR test deploys KC against
               # this same CNPG cluster.
