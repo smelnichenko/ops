@@ -586,7 +586,16 @@ for Java and `npm run test` green for site.
    `DynamicPropertyRegistry` (the browser tests are plain unit tests, no Spring context);
    MeetFrank is held — its WAF answers the headless browser with a CloudFront error page too —
    and Bolt and Töötukassa turned out deterministic in PR4, so no XHR-harvest source is seeded
-   yet (the harvest path is covered by the JS-only fixture test).
+   yet (the harvest path is covered by the JS-only fixture test). Review rounds added: the probe
+   uses its own HTTP client with the token as a bearer header (the collectors' SSRF fetcher
+   refuses the ClusterIP; a URL with the token must never reach a log); a watchdog kills the
+   driver after the deadline (Playwright's pump clears the interrupt and its close calls have no
+   timeout); Playwright routes never see redirect hops, so hops into refused hosts are observed
+   and recorded and the pod policy drops them; the browserless TIMEOUT outlasts the run deadline
+   by 60 s (platform 4b354ed); the merge pipeline needed the same browserless service (masi #7).
+   Proven live 2026-09-18 in schnappy-test: run-now of `teamdashlanding:lhv` → OK, 1 browser page
+   + 7 job pages, 7 new LHV jobs; the guard aborted a Google Tag Manager request the cluster
+   resolver sinkholes to an internal address (a warning on the run, not a failure).
 6. **PR5 — headless browser collectors** (`masi`): Playwright client, `BrowserCollector`,
    `browser.*` properties, the browserless image as a Woodpecker `services:` sidecar in
    `ci.yaml` (same digest as the chart value, recorded beside both) and as the `!ci`
