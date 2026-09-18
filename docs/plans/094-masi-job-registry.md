@@ -637,6 +637,23 @@ for Java and `npm run test` green for site.
    listings, `ariregister/` streamed dump import, `itl/`, `tehnopol/`, ATS rows auto-created,
    Companies controller. Invariant: one employer across boards resolves to one company; the
    register import is idempotent.
+   **PR7 delta (masi #9, site #8, 2026-09-18):** the changeset is `014` (006–009 were never
+   created; a number is immutable once it has run). `json-schema-validator` 3.0.7 is built on
+   Jackson 3, so the validator shares the Boot mapper line after all; the openhtmltopdf group is
+   `io.github.openhtmltopdf` with packages still `com.openhtmltopdf`. The schema is the
+   no-personal-data rule (`additionalProperties: false` on every object, tested on every
+   nesting level), with three fields the tuner will need beyond the plan: per-achievement
+   `autonomy` (the verb-ladder gate compares bullet for bullet), `person.availability` (the
+   letter's one line), `experience[].collapsed` (a one-line role: full completeness share, no
+   bullets). Limits: 256 000 characters, `maxItems` on every array, YAML aliases refused by
+   the parser itself (Jackson YAML does not expand them), two renders at once with a 30 s queue
+   and a 503. The renderer refuses every external resource; a revert check with a real PNG on
+   a `file:` URL proves it. Bundled font: Liberation Sans (OFL), bold face asserted embedded;
+   PDFBox's font cache is pointed at the tmp emptyDir. Versions are numbered under a per-user
+   advisory lock; activation clears the persistence context after the bulk deactivate. Errors
+   are JSON pointers (`/person`, `$` for the root). The site page is `/masi/cv` with the
+   nav link "Jobs"; the site's `prettier --check .` had been walking the Sonar step's
+   `.scannerwork` (green or red depending on which step finished first) — ignored for good.
 8. **PR7 — CV master + renderer** (`masi`+`site`): changeset 006, `cv-schema.json`
    (evidence-bank shape), `CvSchemaValidator`, `CvMasterService` with `completeness()`,
    `PdfRenderer` + templates + bundled font, Cv controller, `MasiCv.tsx`, route and nav,
