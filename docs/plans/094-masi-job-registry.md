@@ -707,6 +707,41 @@ for Java and `npm run test` green for site.
    matchers as labels in the unit expectation.
    **PR8a done 2026-09-18** (masi main adf5265, 286 tests; live in schnappy-test: health UP,
    `masi_llm_budget_used_ratio{day,month}` = 0, AI disabled — no key in the test namespace).
+   **PR8b delta (masi #12, 2026-09-18):** changeset `016` (`application_package` with a
+   `row_version`, `package_artifact`). The state machine is as planned plus `SKIPPED` for a job
+   that closed while the package waited (no call) and `FAILED` for the per-package cap (a
+   terminal state, not an endless deferral). The claim NEW→PREPARING is one conditional update
+   stamped with `preparing_since`; every terminal write re-checks the stamp inside its
+   transaction and drops its result when another process took the row (counter
+   `masi_tuning_ownership_lost_total`); the interrupt flag is parked around those writes, since
+   an interrupted JDBC read on a virtual thread fails at once. Recovery is two conditional bulk
+   updates after `preparingLimit()` = 4 × the request timeout + the analysis deadline + 5 min
+   (about 47 min at the defaults), not 15 min. The lane is a single fair permit on virtual
+   threads, a `SmartLifecycle` that stops first, admits nothing once draining, waits
+   `tuning.drain` (25 s; the pod's grace is 60 s) and then interrupts — an interrupted call
+   defers the package with its attempt given back. A spent day pauses the lane to the next UTC
+   day, a spent month to the next month; a disabled gateway makes the tick a no-op; a spent
+   EXTRACT share skips the analysis and tunes anyway. The pipeline: analysis (Haiku, stored on
+   the job with a targeted update — `Job` is `@DynamicUpdate` because the ingest writes the same
+   row), tune (Opus, rules + stored YAML cached, posting volatile, the named contact as
+   addressee unless `do_not_contact`), `ClaimsChecker`, and only then lint, render, the two-page
+   gate (a violation like any other), artifacts. One retry with the violations; a clean output
+   with more than four actionable lint warnings buys one retry too, and the clean output stands
+   if the retry is worse or fails. `ClaimsChecker` beyond the plan: compound metrics part by
+   part, the letter's numbers (master or posting, never a posting figure in a first-person
+   sentence), the autonomy ladder ranks the highest ownership word anywhere in the bullet
+   except words the achievement itself carries, a collapsed role may carry no bullets, dates,
+   tech, skills, certification years, availability and language levels count as master
+   figures, the letter names the company by its first word and the role by the content words
+   of either half of a bilingual title. `GET /packages/retune` is the dry run behind "Re-tune N
+   jobs (~$X)"; `POST /packages/retune` takes no body (the active version). The two source
+   gauges the platform alert reads: the enabling time stands in for the last success until the
+   first one (a run no longer moves `updated_at`), FAILING sources carry none, the interval is
+   the shortest gap over the next eight fires. `Json` moved to `io.schnappy.masi.support`.
+   Revert table corrections: "shifted date" is not a row (dates are never in the output; the
+   renderer copies them), "posting title as current title" is tested as the target line and as
+   a role title, and a roman-numeral "I" in a title reads as the first person to the letter's
+   numbers gate (one retry, never a false pass).
 10. **PR9 — UI** (`site`+`infra`): Dashboard (with cost tile), Jobs, JobDetail, Companies,
     CompanyDetail (with contacts), Contacts, Sources with vitest tests; then production `masiService.enabled: true` via
     `task promote:prod`. Invariant: a vitest render at `/masi/jobs` with `JOBS` shows the page
@@ -821,6 +856,7 @@ the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g 
 (`094-masi-source-survey.md`: five operator decisions D1–D5, twelve seed corrections — notably
 Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/request clause —
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
-ledger, alerts) done 2026-09-18; next PR8b (tuning pipeline, masi #12).
+ledger, alerts) done 2026-09-18; PR8b (tuning pipeline) is masi #12, three review rounds and
+the test audit folded in, merging on green.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
