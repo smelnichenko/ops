@@ -28,10 +28,16 @@ are the survey agents' reports verbatim; this front part is what the ladder acts
 5. **Bolt is T1 deterministic** (assets sitemap with lastmod + SSR list/detail), no browser.
 6. **Microsoft/Ericsson (Eightfold)**: JSON API refuses (403); sitemap + ld+json JobPosting.
 7. **MeetFrank**: WAF is UA-based on the web host only; `api.meetfrank.com/public` (GraphQL)
-   answers plain clients — one browser harvest of the `searchOpenings` document, then replay.
+   answers plain clients. The planned browser harvest of the `searchOpenings` document is not
+   possible: the MeetFrank WAF answers the headless browser with a CloudFront error page too
+   (verified 2026-09-18 with the chart's browserless image). **Held** until the selection set is
+   read from the page bundle by hand; not seeded.
 8. **New T2 board: cvpro.ee** (RSS with full text, re-lists Töötukassa — dedupe).
-9. **TeamDash is bigger than seeded** (LHV, Helmes, Cybernetica, Bigbank, TEHIK, Tele2) and fully
-   jsoup-able (employer-page anchors or `window.landing` JSON); no browser.
+9. **TeamDash is bigger than seeded** (LHV, Helmes, Cybernetica, Bigbank, TEHIK, Tele2). The
+   employer pages are jsoup-able; the **LHV landing is not** — corrected 2026-09-18 while
+   building it: `window.landing` carries no jobs, the careers block loads client-side from a
+   TeamDash feed with no public endpoint, so LHV is a BROWSER source (`teamdashlanding:lhv`,
+   rendered anchors `a[href*='/p/job/']`, job pages over HTTP as the other TeamDash sites).
 10. **Swedbank/Luminor/Fractory/Starship/Pactum/Comodule/Milrem/Datel/Thorgate are Teamtailor**
     JSON Feed (`/jobs.json`, filter `_jobposting.jobLocation[].address.addressCountry == "EE"`).
 11. **Skeleton and Xolo are Workable** (widget API by numeric account id); Ridango BambooHR list
@@ -83,11 +89,11 @@ are the survey agents' reports verbatim; this front part is what the ladder acts
 { "sitemap": "https://assets.careers-v3.bolt.eu/sitemap.xml", "include": "/positions/", "detail": { "title": "h1", "location": "[data-testid=location], .location", "ldJson": true } }
 // JsoupListCollector (TeamDash employer pages)
 { "url": "https://www.helmes.com/career/", "links": "a[href*='.teamdash.com/p/job/']", "detail": { "title": "meta[property=og:title]", "description": "main" } }
-{ "url": "https://lhv.teamdash.com/p/job/jp2Ve0dp/tule-meile", "script": "window.landing", "items": "$.jobs[*]" }
+// TeamDashLandingCollector (BROWSER, LHV): the careers block renders client-side; job pages over HTTP
+{ "landingUrl": "https://lhv.teamdash.com/p/job/jp2Ve0dp/tule-meile", "company": "LHV", "maxDetailFetches": 20 }
 // RssCollector
 { "url": "https://cvpro.ee/et/rss.xml" }
-// BrowserCollector (MeetFrank harvest)
-{ "url": "https://meetfrank.com/jobs-in-estonia", "waitFor": "a[href^='/jobs/']", "harvestUrlPattern": "api.meetfrank.com/public", "maxPages": 3 }
+// MeetFrank harvest — HELD: the WAF blocks the headless browser too (CloudFront error page, 2026-09-18)
 ```
 
 ## Fixture capture procedure (per collector PR)
@@ -374,6 +380,7 @@ Method: every feed URL below was fetched with curl (UA `masi-survey/0.1`) unless
 - Microsoft/Ericsson: no SPA-browser needed — sitemap + ld+json.
 - Skeleton is Workable (widget id 128656), not Greenhouse/Teamtailor; Xolo likewise Workable.
 - TeamDash coverage is larger than seeded (Bigbank, TEHIK, Tele2 in addition to LHV/Helmes/Cybernetica) and is fully jsoup-able.
+  (Corrected 2026-09-18: the LHV landing is not — see correction 9 at the top.)
 
 ## Appendix C — company discovery (survey agent report, verbatim)
 

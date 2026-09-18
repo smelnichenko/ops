@@ -570,6 +570,23 @@ for Java and `npm run test` green for site.
    another, and an owner-bound lock leaked on every run-now (masi #5); cvkeskus is not seeded (D1); the LHV row is not seeded
    (its careers block loads a TeamDash feed client-side — the survey's `window.landing` claim
    was wrong); Bolt is deterministic (list pages), no sitemap.
+   **PR5 done 2026-09-18** (masi #6): `BrowserClient` (Playwright `connectOverCDP` with the
+   token, `Semaphore(maxParallel)`, connect failure or saturation → `BrowserUnavailableException`
+   → SKIPPED_BROWSER; `masi_browser_reachable` probed every minute via `/pressure`,
+   `masi_browser_sessions_active`, `masi_browser_pages_total{source}`), `BrowserSession` (one
+   context per run, `context.route("**/*")` re-validates every request through `UrlValidator`
+   and aborts private/loopback/link-local/`*.internal` with the reason in the run's warnings,
+   every call bounded by the run deadline, rendered DOM + XHR bodies matching
+   `harvestUrlPattern`), `TeamDashLandingCollector` (`teamdashlanding:lhv`, seeded disabled).
+   Deltas: the fixture pages reach the local browserless through Testcontainers'
+   `exposeHostPorts` sshd forward addressed by IP (the validator refuses every `*.internal`
+   name, test flags included, and this host's firewall drops bridge-to-host traffic); CI runs
+   browserless as a `services:` sidecar and passes the step's IP as
+   `MASI_TEST_ALLOWED_HOSTS`; `masi.browser.endpoint` comes from the environment, not
+   `DynamicPropertyRegistry` (the browser tests are plain unit tests, no Spring context);
+   MeetFrank is held — its WAF answers the headless browser with a CloudFront error page too —
+   and Bolt and Töötukassa turned out deterministic in PR4, so no XHR-harvest source is seeded
+   yet (the harvest path is covered by the JS-only fixture test).
 6. **PR5 — headless browser collectors** (`masi`): Playwright client, `BrowserCollector`,
    `browser.*` properties, the browserless image as a Woodpecker `services:` sidecar in
    `ci.yaml` (same digest as the chart value, recorded beside both) and as the `!ci`
