@@ -553,7 +553,7 @@ for Java and `npm run test` green for site.
    SmartRecruiters, Lever, Ashby) / TeamDash collectors with fixture tests (cvkeskus held, D1),
    changeset 010 + `ContactService` + Contacts controller, Jobs and Sources controllers. Invariant: a tick over fixtures produces the expected job
    rows; disabling a source cancels its future within 60 s; an overlapping "Run now" is skipped.
-   **PR4 done 2026-09-18** (masi #3 merged, main 0183e52; three review rounds — concurrency,
+   **PR4 done 2026-09-18** (masi #3, #4, #5 merged, main 3b783ea; three review rounds — concurrency,
    architecture, test-quality with 45 revert checks — folded in; 198 tests). Live in
    schnappy-test the same day: cv.ee run OK/complete — 185 parsed, 181 new jobs, 85 companies,
    27 contacts from 40 detail pages; Bolt run OK/complete — 74 Estonian positions, 66 new jobs;
@@ -564,7 +564,10 @@ for Java and `npm run test` green for site.
    pacing budget; the runner's lock is released only after the run and health rows are written;
    `Source` carries `@Version`; `job_listing.detail_fetched_at` (changeset 011) marks which
    listings still need their detail page, so a per-run detail cap spreads over runs instead of
-   leaving the rest undetailed for ever; cvkeskus is not seeded (D1); the LHV row is not seeded
+   leaving the rest undetailed for ever (proven live: 40 → 80 → 120 of 185 cv.ee listings
+   detailed over three runs, contacts 27 → 81); the per-source run lock is a one-permit
+   Semaphore, not a ReentrantLock — run-now begins on the request thread and executes on
+   another, and an owner-bound lock leaked on every run-now (masi #5); cvkeskus is not seeded (D1); the LHV row is not seeded
    (its careers block loads a TeamDash feed client-side — the survey's `window.landing` claim
    was wrong); Bolt is deterministic (list pages), no sitemap.
 6. **PR5 — headless browser collectors** (`masi`): Playwright client, `BrowserCollector`,
