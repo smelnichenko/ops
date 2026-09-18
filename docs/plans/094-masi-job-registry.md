@@ -7,7 +7,8 @@ A new Spring Boot service `schnappy/masi` (`/api/masi`, CNPG database `masi`, Ke
 
 1. runs **one dedicated collector agent per source** on its own cron and feeds a deduplicated
    registry of Estonian IT positions, with a **headless browser** as a first-class collector kind;
-2. maintains a **registry of Estonian IT companies** with its own discovery sources;
+2. maintains a **registry of Estonian IT companies** with its own discovery sources, and a
+   **registry of contacts** (the recruiters and hiring managers the postings name, per company);
 3. for each open position asks Claude for a **tuned CV and cover letter**, hard-checked against a
    versioned CV master so nothing can be fabricated, renders a PDF and parks the package in a
    review queue — **masi never sends anything**; the operator applies by hand and marks the job
@@ -138,6 +139,7 @@ from a changeset without a superuser step.
 | 007 packages | `application_package`: job_id, cv_version_id, **unique (job_id, cv_version_id)**, status (`NEW`→`PREPARING`→`PREPARED`→`REVIEWED`→`APPLIED`\|`SKIPPED`, `FAILED_GUARD`, `FAILED`), preparing_since, attempts, tuned_cv_json, cover_letter, claims_report_json, lint_json, model, cost_usd, error, user_notes, applied_at, response (`NONE`/`REPLIED`/`INTERVIEW`/`OFFER`/`REJECTED`). `package_artifact`: package_id, kind (`CV_PDF`/`LETTER_TXT`), **unique (package_id, kind)** (regenerate overwrites), content_type, bytes, sha256, size |
 | 008 llm calls | `llm_call`: purpose (`EXTRACT`/`TUNE`/`LETTER`/`SCORE`/`ENRICH`), model, source_id, package_id, status (`PENDING`/`OK`/`ERROR`/`LOST`), estimated_cost_usd, input/cache_read/cache_write/output tokens, cost_usd, stop_reason, latency_ms, error, created_at |
 | 009 reports | `report`: kind (`WEEKLY`/`MONTHLY`), period_start, period_end (unique with kind), payload_json, generated_at |
+| 010 contacts | `contact`: company_id (nullable), kind (`PERSON`/`GENERIC`), name, title, email, phone, origin (`FROM_LISTING`/`FROM_REGISTER`/`MANUAL`), source_id, first_listing_id, first_seen_at, last_seen_at, do_not_contact, user_note; unique (company_id, lower(email)) where email is not null, else (company_id, name_norm). Operator decision 2026-09-18: "build requires contacts registry as well as a company registry" — supersedes the earlier rule that recruiter contacts are never stored. Basis: the operator's own job search (GDPR legitimate interest, data the employer published for that purpose); stored minimally, never enriched from third parties, deletable per row, never in fixtures (synthetic replacements). Ships in PR4 (table, capture, API), UI page in PR9, letter addressed to the named contact in PR8. |
 
 Retention: a nightly job nulls `package_artifact.bytes` (keeping sha256 and size) for
 `SKIPPED` packages and for packages of jobs closed more than 90 days ago.
@@ -249,8 +251,14 @@ Source tiers from the seed inventory, to be confirmed by the survey:
 `domain_norm`, then aliases; a listing naming an unknown company creates a `FROM_LISTING` stub.
 Enrichment (`ENRICH`, Haiku, budgeted) finds the careers URL and ATS vendor; a detected ATS gets
 its own `source` row `ats:<company>` so the company's feed becomes its own collector agent.
-Company detail shows open/closed listings history and hiring velocity. Blacklisted companies
-never get packages.
+Company detail shows open/closed listings history, hiring velocity and its **contacts**.
+`ContactService.record(rawContact, company, listing)` upserts by (company, email) or (company,
+name) and stamps `last_seen_at`; sources that publish a contact person feed it: cv.ee
+(`contacts{firstName,lastName,email,phone}`), Töötukassa (`avalikKontaktisik`), Teamtailor
+(`_jobposting.hiringOrganization`/recruiter block where present), TeamDash job pages (contact
+block), the register's `EMAIL` as `GENERIC` (often a personal Gmail — flagged, never mailed
+automatically). Blacklisted companies never get packages; `do_not_contact` contacts never appear
+in a letter.
 
 ### Dedupe and lifecycle
 
@@ -387,6 +395,7 @@ notification is a later PR.
 | `GET /jobs` (status, source, company, q, remote, since, packageStatus, paging, sort), `GET /jobs/{id}`, `PATCH /jobs/{id}`, `POST /jobs/manual` | registry |
 | `POST /jobs/{id}/packages` (202), `GET /packages?status`, `GET /packages/{id}`, `GET /packages/{id}/artifacts/{kind}`, `POST /packages/{id}/review` {REVIEWED/APPLIED/SKIPPED, notes, response}, `POST /packages/{id}/regenerate` (202), `POST /packages/retune` {cvVersion} (202, explicit backlog re-tune with a cost estimate) | review queue; transitions validated (APPLIED from NEW → 409, regenerate on APPLIED → 409) |
 | `GET /companies` (q, hiring, status, paging), `GET /companies/{id}`, `PATCH /companies/{id}`, `POST /companies` | company registry |
+| `GET /contacts` (q, company, paging), `GET /companies/{id}/contacts`, `POST /contacts`, `PATCH /contacts/{id}` {title, email, phone, doNotContact, userNote}, `DELETE /contacts/{id}` | contacts registry (a real delete: personal data) |
 | `GET /sources`, `PATCH /sources/{id}` {cron, enabled, configJson}, `POST /sources/{id}/run` (202; 409 while running), `GET /sources/{id}/runs` | sources admin |
 | `GET /cv`, `GET /cv/versions`, `POST /cv/versions`, `POST /cv/versions/{v}/activate`, `POST /cv/validate`, `GET /cv/versions/{v}/preview.pdf`, `GET /cv/completeness` | CV master |
 | `GET /dashboard`, `GET /stats?from&to`, `GET /reports?kind`, `GET /reports/{id}`, `POST /reports/generate` (202) | overview and reports |
@@ -540,8 +549,9 @@ for Java and `npm run test` green for site.
    (2 MB cap, manual redirects re-validated through `UrlValidator` — monitor's fetcher follows
    redirects blindly, so this is new code), `HtmlText`, `Fingerprint`, `RegistryService`,
    `CollectorRegistry`, `CollectorRunner`, `RecoverySweeper`, `SourceScheduler`, support bases,
-   `TestHttpServer` `/fixtures/**`, cv.ee / cvkeskus / tootukassa / ATS collectors with fixture
-   tests, Jobs and Sources controllers. Invariant: a tick over fixtures produces the expected job
+   `TestHttpServer` `/fixtures/**`, cv.ee / tootukassa / Bolt / ATS (Teamtailor, Greenhouse,
+   SmartRecruiters, Lever, Ashby) / TeamDash collectors with fixture tests (cvkeskus held, D1),
+   changeset 010 + `ContactService` + Contacts controller, Jobs and Sources controllers. Invariant: a tick over fixtures produces the expected job
    rows; disabling a source cancels its future within 60 s; an overlapping "Run now" is skipped.
 6. **PR5 — headless browser collectors** (`masi`): Playwright client, `BrowserCollector`,
    `browser.*` properties, the browserless image as a Woodpecker `services:` sidecar in
@@ -570,7 +580,7 @@ for Java and `npm run test` green for site.
    package reaches `PREPARED` without a clean claims report; no HTTP request leaves the gateway
    once a cap is reached; a second `JOBS` user cannot read the first user's packages.
 10. **PR9 — UI** (`site`+`infra`): Dashboard (with cost tile), Jobs, JobDetail, Companies,
-    CompanyDetail, Sources with vitest tests; then production `masiService.enabled: true` via
+    CompanyDetail (with contacts), Contacts, Sources with vitest tests; then production `masiService.enabled: true` via
     `task promote:prod`. Invariant: a vitest render at `/masi/jobs` with `JOBS` shows the page
     and without it redirects; the nav link is absent without `JOBS`; the JobDetail PDF link
     carries the artifact URL and responds `application/pdf` in the test namespace.
@@ -654,9 +664,11 @@ today" equals `sum(llm_call.cost_usd)`.
   version, no backlog auto-tune on CV activation, `tuning.auto=false` as the off switch.
 - **Cost blind spots**: a wrong pricing table makes the ledger wrong; the model-id mismatch
   counter and the optional Admin-API reconciliation catch it; alerts fire on rate, not only totals.
-- **PII**: the CV lives only in the DB and its backups; fixtures are scrubbed; the gateway logs
-  token counts only; the sample CV is fictitious; recruiter contact persons are never stored
-  as fields, enriched or displayed — a name or email inside `description_raw` stays there.
+- **PII**: the CV lives only in the DB and its backups; fixtures are scrubbed (contact persons
+  replaced by synthetic ones); the gateway logs token counts only; the sample CV is fictitious.
+  Recruiter contacts ARE stored (operator decision 2026-09-18) — only what the posting or the
+  public register publishes, no enrichment, per-row delete, `do_not_contact` honoured by every
+  letter, and the register's e-mails flagged `GENERIC` because most are personal addresses.
 - **Register dump size**: stream the zip, keep only EMTAK 62/63 active rows, run weekly.
 - **Single replica**: the scheduler map and the per-source locks are in-memory; `replicas: 1`
   and `maxSurge: 0` are constraints until a DB lease replaces them.
