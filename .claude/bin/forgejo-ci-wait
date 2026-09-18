@@ -12,7 +12,9 @@
 set -uo pipefail
 
 repo=${1:-}; ref=${2:-}; timeout=${3:-3600}
-[[ -n $repo && -n $ref ]] || { echo "usage: forgejo-ci-wait <owner/repo> <pr|sha> [timeout-s]" >&2; exit 3; }
+[[ -n $repo && -n $ref ]] || { echo "usage: forgejo-ci-wait <[owner/]repo> <pr|sha> [timeout-s]" >&2; exit 3; }
+# a bare repo name means the schnappy org: "site 10" waited an hour on a 404 and reported "unknown"
+[[ $repo == */* ]] || repo="schnappy/$repo"
 api=https://git.pmon.dev/api/v1
 token=$(sed -n 's#.*sm:\([^@]*\)@git\.pmon\.dev.*#\1#p' ~/.git-credentials 2>/dev/null | head -1)
 [[ -n $token ]] || { echo "no git.pmon.dev credential in ~/.git-credentials" >&2; exit 3; }
@@ -21,12 +23,19 @@ get() { curl -sf --max-time 20 -H "Authorization: token $token" "$api/$1"; }
 
 deadline=$(( $(date +%s) + timeout ))
 last=""
+misses=0
 while :; do
     sha=$ref
     if [[ $ref =~ ^[0-9]{1,6}$ ]]; then
         # a PR number: follow its CURRENT head, so a push while waiting is waited on too
         sha=$(get "repos/$repo/pulls/$ref" | python3 -c 'import sys,json; print(json.load(sys.stdin)["head"]["sha"])' 2>/dev/null) || sha=""
     fi
+    if [[ -z $sha ]]; then
+        # three misses in a row is a wrong repo/PR or a dead token, not a blip
+        if (( ++misses >= 3 )); then echo "cannot resolve $repo $ref (bad repo/PR or token)" >&2; exit 3; fi
+        sleep 10; continue
+    fi
+    misses=0
     line=""
     if [[ -n $sha ]]; then
         line=$(get "repos/$repo/commits/$sha/status" | python3 -c '
