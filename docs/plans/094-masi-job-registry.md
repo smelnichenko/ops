@@ -625,6 +625,14 @@ for Java and `npm run test` green for site.
    operator rules landed in the same PR and are enforced from now on: no generic exceptions
    (`CollectException`, `SourceConfigException`, `InvalidUrlException`, `BadRequestException`,
    …) and braces on every `if`/`else`/`for`/`while` body (`CodeStyleTest`).
+   **PR6 done 2026-09-18** (masi #8 merged, main 2d2596f, 244 tests; three review rounds and
+   the revert-check audit). Proven live in schnappy-test by run-now: `itl` OK (114 new of 128),
+   `tehnopol` OK (252 new), `ariregister` OK and complete — the 230 MB dump streamed and parsed
+   in about two minutes against the 840 s deadline, 27,583 new companies, registry 458 →
+   28,035 rows. Cross-source identity: Nortal AS, an ITL row without a code, gained registry
+   code 10391131, EMTAK 62101, size band 250+ and Tallinn from the register by name while
+   keeping ITL's website and tags; Pipedrive OÜ 11958539 sits at 250+. No company went
+   dormant on the first import, as designed (dormancy needs two consecutive absences).
 7. **PR6 — company registry** (`masi`): `CompanyService` + `CompanyMatcher`, stubs from
    listings, `ariregister/` streamed dump import, `itl/`, `tehnopol/`, ATS rows auto-created,
    Companies controller. Invariant: one employer across boards resolves to one company; the
