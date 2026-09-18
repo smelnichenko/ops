@@ -553,6 +553,20 @@ for Java and `npm run test` green for site.
    SmartRecruiters, Lever, Ashby) / TeamDash collectors with fixture tests (cvkeskus held, D1),
    changeset 010 + `ContactService` + Contacts controller, Jobs and Sources controllers. Invariant: a tick over fixtures produces the expected job
    rows; disabling a source cancels its future within 60 s; an overlapping "Run now" is skipped.
+   **PR4 done 2026-09-18** (masi #3 merged, main 0183e52; three review rounds — concurrency,
+   architecture, test-quality with 45 revert checks — folded in; 198 tests). Live in
+   schnappy-test the same day: cv.ee run OK/complete — 185 parsed, 181 new jobs, 85 companies,
+   27 contacts from 40 detail pages; Bolt run OK/complete — 74 Estonian positions, 66 new jobs;
+   the two ran concurrently. Deltas from this plan, all recorded in the code: a contacts
+   registry (changeset 010) per the operator's decision; ingest is one listing per
+   transaction (a bad row is a warning on the run); a retitled posting at the same URL moves
+   its listing and closes the orphaned job; paced sources get a deadline floored by their
+   pacing budget; the runner's lock is released only after the run and health rows are written;
+   `Source` carries `@Version`; `job_listing.detail_fetched_at` (changeset 011) marks which
+   listings still need their detail page, so a per-run detail cap spreads over runs instead of
+   leaving the rest undetailed for ever; cvkeskus is not seeded (D1); the LHV row is not seeded
+   (its careers block loads a TeamDash feed client-side — the survey's `window.landing` claim
+   was wrong); Bolt is deterministic (list pages), no sitemap.
 6. **PR5 — headless browser collectors** (`masi`): Playwright client, `BrowserCollector`,
    `browser.*` properties, the browserless image as a Woodpecker `services:` sidecar in
    `ci.yaml` (same digest as the chart value, recorded beside both) and as the `!ci`
@@ -688,7 +702,8 @@ IN PROGRESS — approved 2026-09-16; PR0, PR1 (masi #1), PR2a (ops #43) and PR2b
 infra #28/main d2d10f4), PR2c + PR2d (platform main ab958bd, c3df16f; production PostSync
 green with the masi smoke group skipped) and PR2e (infra main 30691cc, verified in test incl.
 the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g done 2026-09-18
-(JOBS role live, Admins group carries it in test); PR3 source survey DONE 2026-09-18
+(JOBS role live, Admins group carries it in test); PR3 source survey and PR4 registry core DONE
+2026-09-18 (247 open jobs in schnappy-test after the first cv.ee + Bolt runs); PR3 survey
 (`094-masi-source-survey.md`: five operator decisions D1–D5, twelve seed corrections — notably
 Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/request clause —
 config shapes, fixture procedure, three verbatim survey reports); next PR4.
