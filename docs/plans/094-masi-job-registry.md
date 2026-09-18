@@ -606,6 +606,25 @@ for Java and `npm run test` green for site.
    image/protocol mismatch and the driver-extraction path); MeetFrank / Bolt / Töötukassa GraphQL
    capture. Invariant: a JS-only fixture yields listings and the harvested XHR JSON; the masi
    image contains no browser.
+   **PR6 delta (masi #8, 2026-09-18):** three COMPANIES-scope collectors seeded disabled —
+   `ariregister` (the `yldandmed.json.zip` streamed through the zip and the JSON array under a
+   512 MB byte budget via `HttpFetcher.stream`; registered companies with a current EMTAK 62/63
+   activity; name, code, WWW, main code, city, size band from the newest three reports; EMAIL,
+   MOB and TEL dropped; `complete` only when the array closed and ≥ `minRows` were kept), `itl`
+   and `tehnopol` (jsoup; Tehnopol modal text never read). `CompanyMatcher` did not become a
+   class: the matching order lives in `CompanyService.resolve` (code → name → domain → alias;
+   a raw with a code never merges into a row with another code). The register is the one
+   source that renames a row (old name → alias; a rename onto a code-less board stub merges
+   the stub in — jobs, contacts, aliases move; a name another registered company holds gives
+   the row a code-suffixed key). `register_seen_at` (changeset 013) drives dormancy: absent
+   from two consecutive complete register imports → DORMANT, and only the register revives.
+   `AtsDetector` turns an apply/careers URL on greenhouse, lever, smartrecruiters, teamtailor
+   or ashby into a disabled `ats:<slug>` source row (a conflict-free native insert) and records
+   the vendor for teamdash/workable/bamboohr. Companies API: `q`, `status`, `hiring`, `POST`
+   for manual entries (shape-only URL check, DNS at fetch time), `careersUrl` on PATCH. Two
+   operator rules landed in the same PR and are enforced from now on: no generic exceptions
+   (`CollectException`, `SourceConfigException`, `InvalidUrlException`, `BadRequestException`,
+   …) and braces on every `if`/`else`/`for`/`while` body (`CodeStyleTest`).
 7. **PR6 — company registry** (`masi`): `CompanyService` + `CompanyMatcher`, stubs from
    listings, `ariregister/` streamed dump import, `itl/`, `tehnopol/`, ATS rows auto-created,
    Companies controller. Invariant: one employer across boards resolves to one company; the
