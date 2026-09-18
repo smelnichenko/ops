@@ -355,8 +355,14 @@
           # whitelisted explicitly. List domains, not CIDRs, so a new
           # service on this LAN doesn't accidentally inherit access.
           ALLOWED_HOST_LIST = ci.pmon.dev,cd.pmon.dev,git.pmon.dev,external
-          {% if forgejo_jwt_secret | default('') %}
           [oauth2]
+          # Woodpecker builds a pipeline's clone credential from the repo
+          # owner's OAuth access token when the webhook arrives and only then
+          # queues the pipeline; with the 1 h default a queued pipeline could
+          # outlive its token and die in the clone step ("could not read
+          # Username", chat and admin CD on 2026-09-18, infra/radar before).
+          ACCESS_TOKEN_EXPIRATION_TIME = 86400
+          {% if forgejo_jwt_secret | default('') %}
           # Pinned (inventory) — signs OAuth2 access tokens; must be identical
           # on both Pis or tokens issued by one are rejected after a failover.
           JWT_SECRET = {{ forgejo_jwt_secret }}
