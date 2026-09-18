@@ -742,6 +742,11 @@ for Java and `npm run test` green for site.
    renderer copies them), "posting title as current title" is tested as the target line and as
    a role title, and a roman-numeral "I" in a title reads as the first person to the letter's
    numbers gate (one retry, never a false pass).
+   **PR8b done 2026-09-18** (masi #12 merged as 6479f9e, 347 tests; deps bumped in #13). Live in
+   schnappy-test: changeset 016 applied, health UP, `GET /packages` → 200 `[]`,
+   `GET /packages/retune` → 254 open jobs at a 105 USD reservation estimate, a foreign id → 404,
+   `POST /jobs/{id}/packages` → 409 "AI is disabled" (no key in the test namespace), no token →
+   401; the staleness gauges are absent because every source in test is disabled (by design).
 10. **PR9 — UI** (`site`+`infra`): Dashboard (with cost tile), Jobs, JobDetail, Companies,
     CompanyDetail (with contacts), Contacts, Sources with vitest tests; then production `masiService.enabled: true` via
     `task promote:prod`. Invariant: a vitest render at `/masi/jobs` with `JOBS` shows the page
@@ -856,7 +861,7 @@ the browser's SSRF bound from inside the pod) done on 2026-09-17; PR2f and PR2g 
 (`094-masi-source-survey.md`: five operator decisions D1–D5, twelve seed corrections — notably
 Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/request clause —
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
-ledger, alerts) done 2026-09-18; PR8b (tuning pipeline) is masi #12, three review rounds and
-the test audit folded in, merging on green.
+ledger, alerts) and PR8b (tuning pipeline, masi #12, three review rounds + test audit) done
+2026-09-18 and proven live; next PR9 UI.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
