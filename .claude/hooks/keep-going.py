@@ -5,7 +5,8 @@ Memory could not fix this. Memory is advice, and it loses to the judgement it is
 at the exact moment that judgement says "this looks finished". A Stop hook does not ask.
 
 The queue is the definition of done, and it lives OUTSIDE the assistant's judgement:
-  ~/.claude/queue/<project>.md, or a TODO.keepgoing in the working directory.
+  TODO.keepgoing at the root of the repository the working directory is in. ONE per project —
+  for radar that is /home/sm/src/radar/TODO.keepgoing, and there is no second place to look.
 
   - [ ] open
   - [x] DONE, and it must carry EVIDENCE: a PR reference (#123), a commit sha, or "VERIFIED:".
@@ -142,13 +143,12 @@ def main():
             break
         if d == home:
             break
-    base = root or cwd
-    candidates = [base / "TODO.keepgoing"]
-    slug = str(base).strip("/").replace("/", "-")
-    candidates.append(home / ".claude" / "queue" / f"{slug}.md")
-
-    queue = next((p for p in candidates if p.exists()), None)
-    if queue is None:
+    # ONE FILE. Not a list of candidates — the repo's TODO.keepgoing and nothing else. There used
+    # to be a ~/.claude/queue/<slug>.md fallback beside it, which meant a project could have two
+    # queues and the hook would silently pick whichever existed. For radar that is
+    # /home/sm/src/radar/TODO.keepgoing, reachable from every directory in the repo.
+    queue = (root or cwd) / "TODO.keepgoing"
+    if not queue.exists():
         allow()
 
     open_items, blocked = parse_queue(queue.read_text())
