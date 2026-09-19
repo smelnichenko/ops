@@ -9,7 +9,11 @@ The queue is the definition of done, and it lives OUTSIDE the assistant's judgem
 
   - [ ] open
   - [x] DONE, and it must carry EVIDENCE: a PR reference (#123), a commit sha, or "VERIFIED:".
-  - [!] genuinely blocked. Still reported every time, never silently gone.
+
+There is no "blocked" mark. 2026-09-19: the radar queue held twelve items, every one of them
+"- [!]", and the hook therefore blocked nothing at all while reporting them politely for weeks.
+A state that exempts an item from the queue is a way of keeping work in the queue without doing
+it. Blocked work is OPEN work with a reason written in it.
 
 Closing an item is the one move the assistant can make unilaterally, so it is the one that needs a
 check. 2026-09-14: an item was marked "- [x]" with a note whose own first words were "NOT DONE —
@@ -18,7 +22,7 @@ database the whole time. The hook accepted it because it only counted "- [ ]" li
 
 So: a "- [x]" whose text admits it is not done (NOT DONE, still, waiting on, blocked on, could
 not, attempted, TODO) is treated as OPEN. And a "- [x]" with no evidence is treated as OPEN. If
-the work is genuinely blocked, that is what "- [!]" is for, and it stays visible forever.
+the work is genuinely blocked, it stays "- [ ]" and the reason goes in its body.
 
 Safety, because a hook that always blocks is a runaway:
   * MAX_BLOCKS blocks WITHOUT PROGRESS, then it gives up and lets the turn end. Closing an item
@@ -83,7 +87,7 @@ def _heading(line):
 
 
 def parse_queue(text):
-    """Return (open items, blocked items). An item runs until the next item or a heading."""
+    """Return the open items. An item runs until the next item or a heading."""
     items = []
     for line in text.splitlines():
         t = line.strip()
@@ -96,19 +100,18 @@ def parse_queue(text):
             items.append(None)               # a heading ends the current item
     items = [i for i in items if i]
 
-    opened, blocked = [], []
+    opened = []
     for mark, body in items:
         head = body.split(".")[0][:90]
-        if mark == "!":
-            blocked.append(head)
-        elif mark == " ":
-            opened.append(head)
-        elif mark.lower() == "x":
+        if mark.lower() == "x":
             if _EXCUSES.search(body):
                 opened.append(head + "   <-- marked done but the note says it is NOT")
             elif not _EVIDENCE.search(body):
                 opened.append(head + "   <-- marked done with no evidence (PR, sha or VERIFIED:)")
-    return opened, blocked
+        else:
+            # Anything that is not a closed item is OPEN. There is no third state to hide in.
+            opened.append(head)
+    return opened
 
 
 def main():
@@ -125,11 +128,8 @@ def main():
     if not queue.exists():
         allow()
 
-    open_items, blocked = parse_queue(queue.read_text())
+    open_items = parse_queue(queue.read_text())
     if not open_items:
-        if blocked:
-            print("keep-going: nothing open. Still blocked: " + "; ".join(blocked[:5]),
-                  file=sys.stderr)
         allow()
 
     # The give-up counter measures being STUCK, not being busy. It resets whenever the number of
@@ -178,10 +178,10 @@ def main():
             "Closing an item needs EVIDENCE: mark it '- [x]' and cite a PR (#123), a commit sha, "
             "or 'VERIFIED: <how>'. A '- [x]' whose note admits it is not done, or that cites "
             "nothing, is counted as STILL OPEN and you will be stopped here again.\n"
-            "If the work is genuinely blocked on hardware, the operator, or a dead external "
-            "service, mark it '- [!]' and say which. That is reported every time rather than "
-            "disappearing — before using it, check whether the data you need already exists "
-            "somewhere you have not looked."
+            "There is no 'blocked' mark. Work that is waiting on hardware, the operator or "
+            "traffic stays OPEN with the reason written in its body — before deciding it is "
+            "waiting, check whether the data you need already exists somewhere you have not "
+            "looked."
         ),
     }))
     sys.exit(0)
