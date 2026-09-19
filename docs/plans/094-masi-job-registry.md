@@ -383,7 +383,7 @@ listings per source and company, top hiring companies, title/seniority/tech-tag 
 salary ranges where posted, remote share, median listing lifetime, funnel (prepared → reviewed →
 applied → responses), source health and runs, LLM spend. `ReportScheduler` writes a `report`
 snapshot weekly (Monday 06:00 Europe/Tallinn) and monthly (1st) so past reports stay
-byte-stable; `POST /reports/generate` (202) backfills. The dashboard endpoint returns open jobs,
+byte-stable; `POST /reports/generate` backfills (201 written, 200 already stored). The dashboard endpoint returns open jobs,
 new/closed this week, companies hiring now, packages awaiting review, applied/skipped, per-source
 health and last run, LLM cost today/month, CV completeness. Weekly-report delivery as a
 notification is a later PR.
@@ -398,7 +398,7 @@ notification is a later PR.
 | `GET /contacts` (q, company, paging), `GET /companies/{id}/contacts`, `POST /contacts`, `PATCH /contacts/{id}` {title, email, phone, doNotContact, userNote}, `DELETE /contacts/{id}` | contacts registry (a real delete: personal data) |
 | `GET /sources`, `PATCH /sources/{id}` {cron, enabled, configJson}, `POST /sources/{id}/run` (202; 409 while running), `GET /sources/{id}/runs` | sources admin |
 | `GET /cv`, `GET /cv/versions`, `POST /cv/versions`, `POST /cv/versions/{v}/activate`, `POST /cv/validate`, `GET /cv/versions/{v}/preview.pdf`, `GET /cv/completeness` | CV master |
-| `GET /dashboard`, `GET /stats?from&to`, `GET /reports?kind`, `GET /reports/{id}`, `POST /reports/generate` (202) | overview and reports |
+| `GET /dashboard`, `GET /stats?from&to`, `GET /reports?kind`, `GET /reports/{id}`, `POST /reports/generate` | overview and reports |
 
 ### site/ pages
 
@@ -781,11 +781,28 @@ for Java and `npm run test` green for site.
     JOBS token → 254 open jobs, 86 companies hiring, CV v1 at 100 %, 27 sources, AI disabled;
     `GET /jobs?q=java&packageStatus=NONE&sort=title,asc` → 3 rows in title order;
     `since=yesterday` → 400.
-11. **PR10 — stats, reports and cost dashboards** (`masi`+`site`+`platform`): changeset 009,
-    `StatsService`, `ReportService`, `ReportScheduler`, Dashboard/Stats/Reports controllers,
+11. **PR10 — stats, reports and cost dashboards** (`masi`+`site`+`platform`): changesets 017–018,
+    `StatsService`, `ReportService`, `ReportScheduler`, Stats/Reports controllers,
     `MasiReports.tsx`, cost section in the monthly report, Grafana panels. Invariant: every
-    number on the Reports page is reproducible from `first_seen_at`/`closed_at`/`applied_at`
+    number on the Reports page is reproducible from `first_seen_at`/`applied_at`, `lifecycle_event`
     and `llm_call`, and stats for a closed period are identical when recomputed after more ticks.
+
+    **PR10 delta (masi #16, site #12, platform, 2026-09-19):** the plan said "never from
+    `last_seen_at`", which was not enough — three existing writers rewrite what a period reads.
+    A reopen clears `closed_at` on the job and the listing (so "closed this week" shrank on
+    recompute), a regenerate rewrites `application_package.cost_usd` (so the per-package average
+    moved), and the nightly sweeper deletes `source_run` rows (so an old window lost its runs).
+    Changeset 018 adds an append-only `lifecycle_event` (CLOSED/REOPENED per job and listing,
+    written where the close happens) and every close count and listing lifetime is read from it;
+    the per-package cost comes from `llm_call.package_id`, and the run retention is the property
+    `masi.lifecycle.run-retention` (90 d) that `/stats` is documented against. `source_run.
+    llm_cost_usd` had no writer at all, so per-source spend now comes from `llm_call.source_id`;
+    `job.seniority` and `job.tech_tags` had no writer either, so `storeRequirements` fills them
+    from the posting analysis in the same update. `GET /reports/generate` returns 201 for a
+    period it wrote and 200 for one already stored (the plan's 202 predates the synchronous,
+    idempotent generator). `ReportScheduler` catches up every period between the newest stored
+    report and the last complete one, on startup and on each cron, because a pod that is down at
+    Monday 06:00 would otherwise lose that week for good.
 12. **PR11 — dedupe hardening + lifecycle** (`masi`): `pg_trgm` near-duplicate hint (never
     auto-merged), detail 404/expired → close, `expires_at`, auto-disable re-enable, manual import
     UX, artifact retention job. Invariant: a listing vanishing from one board closes its job
