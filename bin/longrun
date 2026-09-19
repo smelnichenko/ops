@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Run one long command and print ONE line saying what happened.
+#
+# Built 2026-09-19 because the assistant kept waiting for its own builds with
+# `for i in $(seq 1 115); do pgrep -f GradleWorkerMain >/dev/null || break; sleep 5; done`.
+# A 16-minute `clean check` behind that loop hits the 600 s foreground timeout, gets moved to the
+# background anyway, and then gets re-run — three waiters and two timeouts for one build, all of it
+# noise the operator had to watch. Operator: "fix your waiting immediately".
+#
+# The contract: invoke this ONCE with run_in_background, never poll it. The full log is kept so the
+# detail is one `grep` away when the verdict says FAIL.
+#
+#   longrun <label> <command...>
+#
+# Prints, on exit:  <label>: PASS in 16m03s   (log: /path)
+#              or:  <label>: FAIL in 2m11s — 3 failing: A.b; C.d; E.f   (log: /path)
+set -uo pipefail
+
+label="${1:?usage: longrun <label> <command...>}"
+shift
+# NOT /tmp — it is a tmpfs on this host and a 16-minute build's log has no business in RAM.
+logdir="${LONGRUN_LOG_DIR:-$HOME/scratch/longrun}"
+mkdir -p "$logdir"
+log="$logdir/$(date +%Y%m%d-%H%M%S)-${label//[^A-Za-z0-9_-]/_}.log"
+start=$SECONDS
+
+"$@" >"$log" 2>&1
+rc=$?
+
+el=$((SECONDS - start))
+dur="$((el / 60))m$(printf '%02d' $((el % 60)))s"
+
+# Gradle and vitest both name their failures; surface them instead of a bare exit code, because
+# "FAIL" with no name is another round trip.
+fails=$(grep -oE "[A-Za-z0-9_]+Test > [A-Za-z0-9_]+\(\) FAILED" "$log" 2>/dev/null \
+        | sed 's/Test > /./; s/() FAILED//' | sort -u | tr '\n' ';' | sed 's/;$//')
+[ -z "$fails" ] && fails=$(grep -oE "^ *FAIL +.*" "$log" 2>/dev/null | head -3 | tr '\n' ';')
+
+if [ $rc -eq 0 ]; then
+    echo "$label: PASS in $dur   (log: $log)"
+else
+    n=$(echo "$fails" | tr ';' '\n' | grep -c . || true)
+    if [ -n "$fails" ]; then
+        echo "$label: FAIL in $dur — $n failing: $fails   (log: $log)"
+    else
+        echo "$label: FAIL in $dur — exit $rc, no named test failures   (log: $log)"
+    fi
+fi
+exit $rc
