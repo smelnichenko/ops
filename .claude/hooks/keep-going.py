@@ -5,8 +5,7 @@ Memory could not fix this. Memory is advice, and it loses to the judgement it is
 at the exact moment that judgement says "this looks finished". A Stop hook does not ask.
 
 The queue is the definition of done, and it lives OUTSIDE the assistant's judgement:
-  TODO.keepgoing at the root of the repository the working directory is in. ONE per project —
-  for radar that is /home/sm/src/radar/TODO.keepgoing, and there is no second place to look.
+  /home/sm/src/radar/TODO.keepgoing — one file, one path, read wherever the session is standing.
 
   - [ ] open
   - [x] DONE, and it must carry EVIDENCE: a PR reference (#123), a commit sha, or "VERIFIED:".
@@ -129,25 +128,17 @@ def main():
     # subdirectory, so the hook only worked when the working directory happened to be exactly
     # right. A guard that silently does nothing is worse than no guard: it is trusted.
     #
-    # ONE QUEUE PER PROJECT: the repository's TODO.keepgoing. Not a candidate list, not a
-    # fallback, not a second location. The repo root is found by walking up for .git, bounded at
-    # $HOME. No .git above cwd means no project, which means no queue — never "try cwd anyway",
-    # because that is how a directory without a repo started answering for one that had.
+    # THE QUEUE IS ONE FILE AT ONE PATH. Not discovered, not derived from the working directory,
+    # not a candidate list, not a fallback.
     #
-    # For radar the queue is /home/sm/src/radar/TODO.keepgoing, reachable from every directory in
-    # the repo and from nowhere else.
-    home = pathlib.Path.home()
-    root = None
-    for d in [cwd, *cwd.parents]:
-        if (d / ".git").exists():
-            root = d
-            break
-        if d == home:
-            break
-    if root is None:
-        allow()
-
-    queue = root / "TODO.keepgoing"
+    # Three rewrites were spent making the lookup cleverer — exact cwd, then walk up for the repo
+    # root, then drop the slug fallback — and every one of them kept the same defect: the queue a
+    # session was held to depended on where it happened to be standing. This session's cwd is
+    # /home/sm/src/monitor while all of its work is radar, so the discovery version found nothing
+    # and allowed every stop. That is the original failure, rebuilt three times.
+    #
+    # The operator, twice: "ONE QUEUE PER radar, here: src/radar".
+    queue = pathlib.Path("/home/sm/src/radar/TODO.keepgoing")
     if not queue.exists():
         allow()
 
