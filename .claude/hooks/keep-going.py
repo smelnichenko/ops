@@ -128,14 +128,23 @@ def main():
     # subdirectory, so the hook only worked when the working directory happened to be exactly
     # right. A guard that silently does nothing is worse than no guard: it is trusted.
     #
+    # ONE QUEUE PER PROJECT. The key is the REPOSITORY, never the working directory: cwd-keyed
+    # lookup gave radar three different queues — one for the repo root, one for backend/, one for
+    # frontend/ — so which list of work existed depended on where the last `cd` landed. A project
+    # has one definition of done.
+    #
     # Bounded at the home directory so a stray file higher up cannot start governing every repo.
     home = pathlib.Path.home()
-    candidates = []
+    root = None
     for d in [cwd, *cwd.parents]:
-        candidates.append(d / "TODO.keepgoing")
+        if (d / ".git").exists():
+            root = d
+            break
         if d == home:
             break
-    slug = str(cwd).strip("/").replace("/", "-")
+    base = root or cwd
+    candidates = [base / "TODO.keepgoing"]
+    slug = str(base).strip("/").replace("/", "-")
     candidates.append(home / ".claude" / "queue" / f"{slug}.md")
 
     queue = next((p for p in candidates if p.exists()), None)
