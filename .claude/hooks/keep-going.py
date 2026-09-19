@@ -36,7 +36,6 @@ name five times. MAX_BLOCKS is the runaway guard, it is progress-aware in a way 
 can never be, and it terminates on its own — so the flag is recorded and no longer obeyed.
 """
 import json
-import os
 import pathlib
 import re
 import sys
@@ -116,28 +115,12 @@ def main():
     raw = sys.stdin.read()
     data = json.loads(raw) if raw.strip() else {}
 
-    cwd = pathlib.Path(data.get("cwd") or os.getcwd())
-
-    # WALK UP to find the queue, do not demand it sit in the exact working directory.
+    # THE QUEUE IS ONE FILE AT ONE PATH: /home/sm/src/radar/TODO.keepgoing.
     #
-    # 2026-09-19: the hook went silent for most of a session and nobody noticed until the user
-    # asked why. It had been reading a TODO.keepgoing inside a git worktree; the worktree was
-    # deleted during ordinary branch cleanup, the file went with it, and from then on every stop
-    # was allowed without a word. That was the visible half. The half that mattered more is that
-    # `cd backend` was ALWAYS enough to disable it — a queue at a repo root was invisible from any
-    # subdirectory, so the hook only worked when the working directory happened to be exactly
-    # right. A guard that silently does nothing is worse than no guard: it is trusted.
-    #
-    # THE QUEUE IS ONE FILE AT ONE PATH. Not discovered, not derived from the working directory,
-    # not a candidate list, not a fallback.
-    #
-    # Three rewrites were spent making the lookup cleverer — exact cwd, then walk up for the repo
-    # root, then drop the slug fallback — and every one of them kept the same defect: the queue a
-    # session was held to depended on where it happened to be standing. This session's cwd is
-    # /home/sm/src/monitor while all of its work is radar, so the discovery version found nothing
-    # and allowed every stop. That is the original failure, rebuilt three times.
-    #
-    # The operator, twice: "ONE QUEUE PER radar, here: src/radar".
+    # Not discovered, not derived from the working directory, not a candidate list, not a
+    # fallback, not conditional on anything. Four rewrites were spent making the lookup cleverer
+    # and every one kept the same defect: which queue governed a session depended on where it
+    # happened to be standing. There is no lookup.
     queue = pathlib.Path("/home/sm/src/radar/TODO.keepgoing")
     if not queue.exists():
         allow()
