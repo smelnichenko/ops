@@ -42,9 +42,11 @@ _SLEEP_TOTAL_SECONDS = 5   # ...and so is a handful of short ones
 # from firing on a command that merely mentions the words -- such as one editing this file.
 _LOOP = re.compile(r"\b(until|while|for)\b.{0,400}?\bdo\b.{0,400}?\bdone\b", re.S)
 
-# What a loop is spinning ON. '[' belongs here as much as 'test': omitting it is the hole that let
-# `until [ -f x ]; do sleep 2; done` through, and that loop hung the session.
-_SPUN_ON = re.compile(r"(pgrep|pidof|\bps\s|\btest\s+-|\[\s+-|grep|curl|\bsleep\b)")
+# What makes a loop a POLL rather than ordinary iteration: it either SLEEPS, or it asks about a
+# PROCESS. The first cut also listed grep/curl/test/[ here, and that blocked real work the same day
+# it shipped — a bounded walk over a fixed list that greps each entry is not waiting for anything.
+# It also made this file uneditable from a shell, because the edit text carries the pattern.
+_SPUN_ON = re.compile(r"(\bsleep\b|pgrep|pidof|\bps\s)")
 
 # `watch` is a spin loop with a shorter spelling.
 _WATCH = re.compile(r"(^|[;&|]\s*)watch\b")
