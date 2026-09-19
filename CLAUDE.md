@@ -759,6 +759,11 @@ CI/CD pipeline execution via Woodpecker CI with Kubernetes backend. Pipelines tr
 - **Local lint parity:** CI lints with `git.pmon.dev/schnappy/ansible-lint:latest`; a differently versioned local ansible-lint disagrees on rules — lint the way CI does. The image's collections live under `/root/.ansible`, so run as root (a `-u`/`HOME` override loses them) and remove the root-owned cache the linter drops into the checkout in the same container: `docker run --rm -v "$PWD:/w" -w /w git.pmon.dev/schnappy/ansible-lint:latest bash -c 'ansible-lint deploy/ansible/playbooks/*.yml --exclude deploy/ansible/roles/; rc=$?; rm -rf /w/.ansible; exit $rc'`. The Ansible unit harness runs the same way: `... bash -c 'bash tests/ansible/unit/run.sh; rc=$?; rm -rf /w/.ansible; exit $rc'`
 - **Registered repos (ids from the live `repos` table, 2026-09-17):** 1 admin, 2 chat, 3 chess, 4 game-scp, 5 infra, 6 keycloak-theme, 7 monitor, 8 ops, 9 platform, 10 site, 11 hyperfoil, 12 sonar-scanner, 13 ansible-lint, 16 radar, 17 masi (all active; no api-gateway row). Always re-check with `GET /api/repos` before acting on an id
 
+### SonarQube gate enforcement per repo
+
+- **site, monitor:** the CI `sonar` step runs on every pipeline and `sonar.qualitygate.wait=true`, so a red gate fails the pull request (site caught a single MINOR new violation this way on 2026-09-19).
+- **masi:** the CI `sonar` step is restricted to `event: push` (a guard against the one-time project-creation race, which is now moot) and the CD step passes `-Dsonar.qualitygate.wait=false`, so **nothing enforces masi's gate**. It has been ERROR since 2026-09-18 with 273 new-code issues (156 main, 117 test; 66 CRITICAL) — every project's new-code period is the global `PREVIOUS_VERSION`, and masi has no previous version, so its whole codebase counts as new. Check with `api/qualitygates/project_status?projectKey=schnappy-masi`.
+
 ## Nexus Repository Manager (Pi)
 
 Caching proxy for Maven, npm, PyPI, and Docker on the Pi (192.168.11.4). Replaces the 3 separate `distribution/distribution` registry mirrors.
