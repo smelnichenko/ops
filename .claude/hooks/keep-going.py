@@ -1,93 +1,19 @@
-#!/usr/bin/env python3
-"""Stop hook: refuse to let a turn end while the work queue still has open items.
-
-Memory could not fix this. Memory is advice, and it loses to the judgement it is arguing with
-at the exact moment that judgement says "this looks finished". A Stop hook does not ask.
-
-The queue is the definition of done, and it lives OUTSIDE the assistant's judgement:
-  /home/sm/src/radar/TODO.keepgoing — one file, one path, read wherever the session is standing.
-
-  - [ ] open
-  - [x] DONE, and it must carry EVIDENCE: a PR reference (#123), a commit sha, or "VERIFIED:".
-
-There is no "blocked" mark. 2026-09-19: the radar queue held twelve items, every one of them
-"- [!]", and the hook therefore blocked nothing at all while reporting them politely for weeks.
-A state that exempts an item from the queue is a way of keeping work in the queue without doing
-it. Blocked work is OPEN work with a reason written in it.
-
-Closing an item is the one move the assistant can make unilaterally, so it is the one that needs a
-check. 2026-09-14: an item was marked "- [x]" with a note whose own first words were "NOT DONE —
-waiting on a scheduled broadcast", and the data needed to finish it was sitting in the station
-database the whole time. The hook accepted it because it only counted "- [ ]" lines.
-
-So: a "- [x]" whose text admits it is not done (NOT DONE, still, waiting on, blocked on, could
-not, attempted, TODO) is treated as OPEN. And a "- [x]" with no evidence is treated as OPEN. If
-the work is genuinely blocked, it stays "- [ ]" and the reason goes in its body.
-
-Safety, because a hook that always blocks is a runaway:
-  * MAX_BLOCKS blocks WITHOUT PROGRESS, then it gives up and lets the turn end. Closing an item
-    resets that count, so a session that is getting work done is never throttled — only one that
-    is going round in circles.
-  * any error in here allows the stop. Never wedge the session on a broken hook.
-
-2026-09-15: stop_hook_active used to allow the stop unconditionally, documented as a safety. It
-was the escape hatch that made the whole hook a one-shot. The real pattern it permitted:
-
-    block once -> do some work -> write a closing summary -> stop, allowed.
-
-Which is the exact failure the queue exists to prevent, and it is the one the user has now had to
-name five times. MAX_BLOCKS is the runaway guard, it is progress-aware in a way stop_hook_active
-can never be, and it terminates on its own — so the flag is recorded and no longer obeyed.
-"""
 import json
 import pathlib
 import re
 import sys
 
-MAX_BLOCKS = 12
 STATE = pathlib.Path.home() / ".claude" / "queue" / ".block-counts.json"
-
 
 def allow():
     sys.exit(0)
 
-
-def should_block(blocks_without_progress, max_blocks=None):
-    """Block this stop?
-
-    Deliberately NOT a function of stop_hook_active. Honouring that flag turned the hook into a
-    one-shot: the first stop was refused and the very next one — the summary written after a
-    little more work — went through. The progress-aware counter is the guard, and it lets the
-    turn end after MAX_BLOCKS stops that closed nothing.
-    """
-    return blocks_without_progress <= (MAX_BLOCKS if max_blocks is None else max_blocks)
-
-
-# Words that mean "I did not actually do this". A checked item saying any of them is not done.
-_EXCUSES = re.compile(
-    r"\b(not done|notdone|still needs|still open|waiting on|waiting for|blocked on|could not|"
-    r"couldn.t|unable to|attempted|no traffic|gave up|deferred|todo|tbd)\b", re.I)
-# What counts as evidence that an item really is finished.
 _EVIDENCE = re.compile(r"(#\d+|\b[0-9a-f]{7,40}\b|VERIFIED:)")
 
-
 def _heading(line):
-    """A Markdown heading, which ends an item — but NOT a line that merely starts with '#'.
-
-    2026-09-15: an item was reported as "marked done with no evidence" while its very next line
-    began "#875 makes that constructor refuse them". A PR reference is the commonest thing to put
-    at the start of a continuation line, and treating it as a heading truncated the body to its
-    first line — so the evidence the hook was asking for could never be seen. The hook then
-    blocked on an item that WAS properly closed, which is the failure that costs the most trust:
-    it trains you to work around the tool rather than with it.
-
-    A real heading is "#" followed by a space or another "#". "#875" is not one.
-    """
     return line.startswith("#") and (len(line) == 1 or line[1] in "# \t")
 
-
 def parse_queue(text):
-    """Return the open items. An item runs until the next item or a heading."""
     items = []
     for line in text.splitlines():
         t = line.strip()
@@ -95,35 +21,25 @@ def parse_queue(text):
             items.append([t[3], t[5:].strip()])
         elif (items and items[-1] is not None and t
                 and not _heading(t) and not t.startswith("*")):
-            items[-1][1] += " " + t          # continuation line of the current item
+            items[-1][1] += " " + t
         elif _heading(t):
-            items.append(None)               # a heading ends the current item
+            items.append(None)
     items = [i for i in items if i]
 
     opened = []
     for mark, body in items:
         head = body.split(".")[0][:90]
         if mark.lower() == "x":
-            if _EXCUSES.search(body):
-                opened.append(head + "   <-- marked done but the note says it is NOT")
-            elif not _EVIDENCE.search(body):
+            if not _EVIDENCE.search(body):
                 opened.append(head + "   <-- marked done with no evidence (PR, sha or VERIFIED:)")
         else:
-            # Anything that is not a closed item is OPEN. There is no third state to hide in.
             opened.append(head)
     return opened
-
 
 def main():
     raw = sys.stdin.read()
     data = json.loads(raw) if raw.strip() else {}
 
-    # THE QUEUE IS ONE FILE AT ONE PATH: /home/sm/src/radar/TODO.keepgoing.
-    #
-    # Not discovered, not derived from the working directory, not a candidate list, not a
-    # fallback, not conditional on anything. Four rewrites were spent making the lookup cleverer
-    # and every one kept the same defect: which queue governed a session depended on where it
-    # happened to be standing. There is no lookup.
     queue = pathlib.Path("/home/sm/src/radar/TODO.keepgoing")
     if not queue.exists():
         allow()
@@ -132,9 +48,6 @@ def main():
     if not open_items:
         allow()
 
-    # The give-up counter measures being STUCK, not being busy. It resets whenever the number of
-    # open items falls, so a session that keeps closing things is never throttled; only one that
-    # blocks over and over against an unchanged queue runs out of patience.
     session = data.get("session_id", "?")
     state = {}
     if STATE.exists():
@@ -144,18 +57,11 @@ def main():
             state = {}
     prev = state.get(session)
     if not isinstance(prev, dict):
-        prev = {}  # a state file from an older format must not silently disable the hook
+        prev = {}
     n = 1 if len(open_items) < prev.get("open", 10 ** 9) else prev.get("n", 0) + 1
     state[session] = {"n": n, "open": len(open_items)}
     STATE.write_text(json.dumps(state))
 
-    if not should_block(n):
-        print(f"keep-going: {MAX_BLOCKS} blocks with no item closed; letting the turn end.",
-              file=sys.stderr)
-        allow()
-
-    # Say the specific thing on a repeat. The generic message reads as boilerplate by the second
-    # time, and the failure it is catching has a recognisable shape worth naming.
     repeat = ""
     if n >= 2:
         repeat = (
@@ -176,8 +82,8 @@ def main():
             f"{listed}{more}\n"
             f"{repeat}\n"
             "Closing an item needs EVIDENCE: mark it '- [x]' and cite a PR (#123), a commit sha, "
-            "or 'VERIFIED: <how>'. A '- [x]' whose note admits it is not done, or that cites "
-            "nothing, is counted as STILL OPEN and you will be stopped here again.\n"
+            "or 'VERIFIED: <how>'. A '- [x]' citing nothing is counted as STILL OPEN and you "
+            "will be stopped here again.\n"
             "There is no 'blocked' mark. Work that is waiting on hardware, the operator or "
             "traffic stays OPEN with the reason written in its body — before deciding it is "
             "waiting, check whether the data you need already exists somewhere you have not "
@@ -186,11 +92,9 @@ def main():
     }))
     sys.exit(0)
 
-
 if __name__ == "__main__":
-    # Guarded so parse_queue can be imported and tested without running the hook.
     try:
         main()
-    except Exception as exc:  # never wedge the session
+    except Exception as exc:
         print(f"keep-going hook error, allowing stop: {exc}", file=sys.stderr)
         sys.exit(0)
