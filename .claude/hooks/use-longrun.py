@@ -6,37 +6,48 @@ tool and use it, once and forever?"). It runs the long thing in the background a
 completion with PASS/FAIL, elapsed time and the names of failing tests. Nothing needs to poll it.
 
 It was then ignored anyway. On 2026-09-19 the same session launched builds with longrun and
-immediately polled their results with `sleep`, `cat` loops and `until ! pgrep ...` — and two of
-those waiters never exited at all, because `pgrep -f` matches the waiting shell's OWN command line,
-which contains the pattern. They spun until killed while the build had long since finished. The
-operator: "well, you are ignoring the waiting tool you wrote", and then "how can I make you use
-it?" — a memory had already been written about this and had not worked. This hook is the answer:
-a rule that is enforced rather than remembered.
+immediately polled their results with sleeps and spin loops -- and two of those waiters never
+exited at all, because `pgrep -f` matches the waiting shell's OWN command line, which contains the
+pattern. They spun until killed while the build had long since finished. The operator: "well, you
+are ignoring the waiting tool you wrote", then "how can I make you use it?" -- a memory about this
+already existed and had not worked. This hook is the answer: a rule enforced rather than remembered.
 
-Refuses, with the reason, any Bash command that:
-  - sleeps as a way of waiting (`sleep 30`, and chains of short sleeps), or
-  - spins on a process or a file (`until ...`, `while ...` around pgrep/grep/test), or
-  - polls the same task output repeatedly.
+Its first cut was poor, and the operator said so ("your waiting hook test was crap"). What that
+version got wrong, all found by testing it properly afterwards:
 
-Allows: sleeps INSIDE a poll loop of a genuinely external thing that longrun cannot run
-(a CI run, a remote queue) — those name their subject, so the escape hatch is explicit and has to
-be typed on purpose: put `# external-poll: <what>` in the command.
+  * A loop written with `[ -f x ]` slipped straight through, because the condition alternatives
+    listed `test -` but not `[`. The session then hung on exactly such a loop.
+  * `for i in $(seq 60); do ...; sleep 20; done` was not a loop as far as the rule was concerned,
+    which is absurd -- that shape is what prompted the hook.
+  * `sleep 3; sleep 3; sleep 3` passed, while the denial message it would have printed says in so
+    many words "do not chain shorter sleeps".
+  * It matched any command CONTAINING the words, so editing this very file was refused.
+
+Run the tests beside it: `python3 use-longrun-test.py`.
 """
 import json
 import re
 import sys
 
 ALLOW_MARK = "# external-poll:"
-
-# A bare sleep used as a wait. Not `sleep 0.2` inside a tight retry of something local.
-_SLEEP = re.compile(r"(^|[;&|]\s*|\bdo\s+)sleep\s+(\d+(?:\.\d+)?)", re.M)
-_SLEEP_MIN_SECONDS = 5
-
-# Spinning on a condition.
-_SPIN = re.compile(r"\b(until|while)\b[^\n;]{0,200}?\b(pgrep|pidof|ps\s|test\s+-|grep)\b", re.S)
-
-# longrun exists and is the answer.
 _LONGRUN = "/home/sm/src/ops/bin/longrun"
+
+# Every sleep in the command, wherever it sits. Deliberately not anchored: the first cut anchored
+# on start-of-line, ';' or 'do ', and so missed `x && sleep 30` and `(sleep 30)`.
+_SLEEP = re.compile(r"\bsleep\s+(\d+(?:\.\d+)?)")
+_SLEEP_MIN_SECONDS = 5     # one sleep this long is waiting by hand
+_SLEEP_TOTAL_SECONDS = 5   # ...and so is a handful of short ones
+
+# A REAL shell loop: the keyword, then a matching do...done. Requiring do/done is what keeps this
+# from firing on a command that merely mentions the words -- such as one editing this file.
+_LOOP = re.compile(r"\b(until|while|for)\b.{0,400}?\bdo\b.{0,400}?\bdone\b", re.S)
+
+# What a loop is spinning ON. '[' belongs here as much as 'test': omitting it is the hole that let
+# `until [ -f x ]; do sleep 2; done` through, and that loop hung the session.
+_SPUN_ON = re.compile(r"(pgrep|pidof|\bps\s|\btest\s+-|\[\s+-|grep|curl|\bsleep\b)")
+
+# `watch` is a spin loop with a shorter spelling.
+_WATCH = re.compile(r"(^|[;&|]\s*)watch\b")
 
 
 def deny(reason):
@@ -50,26 +61,15 @@ def deny(reason):
     sys.exit(0)
 
 
-def main():
-    try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        sys.exit(0)  # never block on a payload we cannot read
-
-    if payload.get("tool_name") != "Bash":
-        sys.exit(0)
-
-    command = payload.get("tool_input", {}).get("command", "")
+def verdict(command):
+    """None when the command is fine, else the reason to refuse it."""
     if not command or ALLOW_MARK in command:
-        sys.exit(0)
+        return None
 
-    # Launching longrun is exactly what this hook wants to see.
-    if _LONGRUN in command and not _SPIN.search(command):
-        sys.exit(0)
-
-    spin = _SPIN.search(command)
-    if spin:
-        deny(
+    loop = _LOOP.search(command)
+    spins = bool(loop and _SPUN_ON.search(loop.group(0)))
+    if spins or _WATCH.search(command):
+        return (
             "Hand-rolled wait loop. Use the waiting tool instead:\n"
             f"  {_LONGRUN} <label> <cmd...>   with run_in_background: true\n"
             "It notifies on completion with PASS/FAIL, elapsed time and failing test names, so "
@@ -79,16 +79,40 @@ def main():
             f"say so on purpose by putting `{ALLOW_MARK} <what>` in the command."
         )
 
-    for _, seconds in _SLEEP.findall(command):
-        if float(seconds) >= _SLEEP_MIN_SECONDS:
-            deny(
-                f"`sleep {seconds}` is waiting by hand. Use the waiting tool instead:\n"
-                f"  {_LONGRUN} <label> <cmd...>   with run_in_background: true\n"
-                "Then WAIT for its notification — do not sleep, re-cat the output file, or chain "
-                "shorter sleeps to get under this rule.\n"
-                f"For something genuinely external, put `{ALLOW_MARK} <what>` in the command."
-            )
+    # A longrun launch is exactly what this hook wants to see, and it may legitimately carry a
+    # short sleep of its own.
+    if _LONGRUN in command:
+        return None
 
+    sleeps = [float(x) for x in _SLEEP.findall(command)]
+    if not sleeps:
+        return None
+    longest, total = max(sleeps), sum(sleeps)
+    if longest < _SLEEP_MIN_SECONDS and total < _SLEEP_TOTAL_SECONDS:
+        return None
+    how = (f"`sleep {longest:g}`" if longest >= _SLEEP_MIN_SECONDS
+           else f"{total:g} s of sleep across {len(sleeps)} calls")
+    return (
+        f"{how} is waiting by hand. Use the waiting tool instead:\n"
+        f"  {_LONGRUN} <label> <cmd...>   with run_in_background: true\n"
+        "Then WAIT for its notification -- do not sleep, re-read the output file, or chain "
+        "shorter sleeps to get under this rule.\n"
+        f"For something genuinely external, put `{ALLOW_MARK} <what>` in the command."
+    )
+
+
+def main():
+    try:
+        payload = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        sys.exit(0)  # never block on a payload we cannot read
+
+    if payload.get("tool_name") != "Bash":
+        sys.exit(0)
+
+    reason = verdict(payload.get("tool_input", {}).get("command", ""))
+    if reason:
+        deny(reason)
     sys.exit(0)
 
 
