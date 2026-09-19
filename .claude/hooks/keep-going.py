@@ -129,12 +129,13 @@ def main():
     # subdirectory, so the hook only worked when the working directory happened to be exactly
     # right. A guard that silently does nothing is worse than no guard: it is trusted.
     #
-    # ONE QUEUE PER PROJECT. The key is the REPOSITORY, never the working directory: cwd-keyed
-    # lookup gave radar three different queues — one for the repo root, one for backend/, one for
-    # frontend/ — so which list of work existed depended on where the last `cd` landed. A project
-    # has one definition of done.
+    # ONE QUEUE PER PROJECT: the repository's TODO.keepgoing. Not a candidate list, not a
+    # fallback, not a second location. The repo root is found by walking up for .git, bounded at
+    # $HOME. No .git above cwd means no project, which means no queue — never "try cwd anyway",
+    # because that is how a directory without a repo started answering for one that had.
     #
-    # Bounded at the home directory so a stray file higher up cannot start governing every repo.
+    # For radar the queue is /home/sm/src/radar/TODO.keepgoing, reachable from every directory in
+    # the repo and from nowhere else.
     home = pathlib.Path.home()
     root = None
     for d in [cwd, *cwd.parents]:
@@ -143,11 +144,10 @@ def main():
             break
         if d == home:
             break
-    # ONE FILE. Not a list of candidates — the repo's TODO.keepgoing and nothing else. There used
-    # to be a ~/.claude/queue/<slug>.md fallback beside it, which meant a project could have two
-    # queues and the hook would silently pick whichever existed. For radar that is
-    # /home/sm/src/radar/TODO.keepgoing, reachable from every directory in the repo.
-    queue = (root or cwd) / "TODO.keepgoing"
+    if root is None:
+        allow()
+
+    queue = root / "TODO.keepgoing"
     if not queue.exists():
         allow()
 
