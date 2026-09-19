@@ -117,9 +117,26 @@ def main():
     data = json.loads(raw) if raw.strip() else {}
 
     cwd = pathlib.Path(data.get("cwd") or os.getcwd())
-    candidates = [cwd / "TODO.keepgoing"]
+
+    # WALK UP to find the queue, do not demand it sit in the exact working directory.
+    #
+    # 2026-09-19: the hook went silent for most of a session and nobody noticed until the user
+    # asked why. It had been reading a TODO.keepgoing inside a git worktree; the worktree was
+    # deleted during ordinary branch cleanup, the file went with it, and from then on every stop
+    # was allowed without a word. That was the visible half. The half that mattered more is that
+    # `cd backend` was ALWAYS enough to disable it — a queue at a repo root was invisible from any
+    # subdirectory, so the hook only worked when the working directory happened to be exactly
+    # right. A guard that silently does nothing is worse than no guard: it is trusted.
+    #
+    # Bounded at the home directory so a stray file higher up cannot start governing every repo.
+    home = pathlib.Path.home()
+    candidates = []
+    for d in [cwd, *cwd.parents]:
+        candidates.append(d / "TODO.keepgoing")
+        if d == home:
+            break
     slug = str(cwd).strip("/").replace("/", "-")
-    candidates.append(pathlib.Path.home() / ".claude" / "queue" / f"{slug}.md")
+    candidates.append(home / ".claude" / "queue" / f"{slug}.md")
 
     queue = next((p for p in candidates if p.exists()), None)
     if queue is None:
