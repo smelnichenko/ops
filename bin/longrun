@@ -32,8 +32,9 @@ dur="$((el / 60))m$(printf '%02d' $((el % 60)))s"
 
 # Gradle and vitest both name their failures; surface them instead of a bare exit code, because
 # "FAIL" with no name is another round trip.
-fails=$(grep -oE "[A-Za-z0-9_]+Test > [A-Za-z0-9_]+\(\) FAILED" "$log" 2>/dev/null \
-        | sed 's/Test > /./; s/() FAILED//' | sort -u | tr '\n' ';' | sed 's/;$//')
+# A parameterised test reads "XTest > method(String) > [2] value FAILED": the method is named once, not once per row.
+fails=$(grep -oE "[A-Za-z0-9_]+Test > [A-Za-z0-9_]+\([^)]*\)( > .*)? FAILED" "$log" 2>/dev/null \
+        | sed -E 's/Test > /./; s/\(.*$//' | sort -u | tr '\n' ';' | sed 's/;$//')
 [ -z "$fails" ] && fails=$(grep -oE "^ *FAIL +.*" "$log" 2>/dev/null | head -3 | tr '\n' ';')
 
 if [ $rc -eq 0 ]; then
