@@ -876,6 +876,32 @@ for Java and `npm run test` green for site.
     auto-merged), detail 404/expired → close, `expires_at`, auto-disable re-enable, manual import
     UX, artifact retention job. Invariant: a listing vanishing from one board closes its job
     only when every other listing is gone too.
+    **PR11a done 2026-09-21 (masi #19, main 4ff748d; platform 7d22707).** Of the list above, auto-disable re-enable
+    already existed. Done here: `expires_at` is acted on — a listing past its own deadline plus `lifecycle.expiry-grace`
+    (24 h: a board states a date, not an instant) closes in a sweep, its job when nothing else shows it; and artifact
+    retention — the rendered FILES of a package skipped over 7 days ago, or of a job closed over 90 days, lose their
+    content (kind, size, sha256 stay; the download answers 404, the package says `available=false`). The package row
+    keeps the letter and tuned CV as text, the record of what was sent: this frees blobs, it is not an erasure.
+    What three reviews changed: (1) an expired card never reaches the job — it may refresh a listing that is still
+    OPEN and nothing else; the first version let a dead card with an EDITED TITLE move a closed listing onto a
+    brand-new OPEN job that nothing would ever close, and a posting that arrived already over was an OPEN job for
+    auto-tuning to pay for until the next sweep. (2) The sweep was the first writer of listing/job state outside the
+    ingest sequence, and Postgres does not order the two (READ COMMITTED, no version column, full-row listing
+    updates): two closes of a job's last two listings, each blind to the other, leave it OPEN for ever. So `IngestLock`
+    is a bean of its own, taken outside the transaction by `RegistryService.ingest` and by the sweep (bounded try — a
+    busy ingest skips the sweep, counted in `masi_sweep_skipped_total`, alert `MasiSweepStarved`), and `ingestOne`,
+    `countMisses` and `closeExpired` REFUSE to run without it; both closes are conditional statements and the event is
+    written only when a row changed, so a close cannot enter the append-only log twice; the sweep reconciles any OPEN
+    job with listings and none open. (3) A test of mine compared a timestamp truncated to microseconds with one
+    Postgres ROUNDS — red half the time, and it was CI that said so. Assertions on a swept table are on the test's own
+    rows; the periodic sweeps never fire by themselves in the test JVM.
+    **Decided against: closing a board listing on a detail-page 404/410.** `CvEeCollectorTest` has every detail page
+    404 while the list still advertises all six postings: a detail-URL change would close a whole source, and detail
+    pages are only fetched for cards not yet known, so one HTTP status would bypass the three-complete-runs debounce.
+    The rule belongs to manual imports (PR11b), which have no list run and would otherwise never close.
+    Live in schnappy-test: the first sweep closed the 4 listings already past their deadline and their 4 jobs
+    (254 → 250 open), reconciled 0, no errors. **PR11b next:** the pg_trgm near-duplicate hint (never auto-merged),
+    manual import by URL with its UI and its periodic "is the URL still there" check.
 
 Later: match scoring (`SCORE`), company enrichment (`ENRICH`), weekly-report notification
 (Kafka → chat/email), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
@@ -978,6 +1004,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; next PR11.
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19, lifecycle) merged and live 2026-09-21; next PR11b.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
