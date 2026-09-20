@@ -803,6 +803,23 @@ for Java and `npm run test` green for site.
     idempotent generator). `ReportScheduler` catches up every period between the newest stored
     report and the last complete one, on startup and on each cron, because a pod that is down at
     Monday 06:00 would otherwise lose that week for good.
+
+    **PR10 done 2026-09-20** (masi #16 main f02ae7c, site #12/#13 main 8889330, platform fe83b34).
+    Two review rounds and a test audit with revert checks changed the design more than the plan
+    did: a job already CLOSED was being closed a second time when its last listing moved away
+    (a double count on an append-only log; the close is now guarded on the job's own state); a
+    restart minutes after midnight froze the week before the night's runs — the catch-up now
+    waits the six hours the 06:00 crons encode and runs on the scheduler, not on the startup
+    thread; changeset 019 seeds `lifecycle_event` from the closes still on the rows and backfills
+    `seniority`/`tech_tags`; per-source LLM cost was dropped because nothing attributes a call to
+    a source yet (it returns with the first collector that spends). Live in schnappy-test:
+    changesets 017–019 EXECUTED, the restart catch-up wrote the weekly report for 7–13 Sep and the
+    monthly for August by itself, `GET /stats?from=2026-09-07&to=2026-09-20` → 254 new jobs, 266
+    new listings, Bolt 80 / Kühne + Nagel 9 on top, six sources with runs; a second
+    `POST /reports/generate` → 200 with the same id, an open period → 400, no token → 401; the
+    dashboard carries `monthByPurpose` and `averagePackageCostMonth`; Grafana dashboard uid
+    `masi` loaded; `MasiReportsStale` rule rendered with its promtool test. Left open by design:
+    masi's Sonar gate (red since 2026-09-18, 273 issues, enforced by nothing) is the next PR.
 12. **PR11 — dedupe hardening + lifecycle** (`masi`): `pg_trgm` near-duplicate hint (never
     auto-merged), detail 404/expired → close, `expires_at`, auto-disable re-enable, manual import
     UX, artifact retention job. Invariant: a listing vanishing from one board closes its job
