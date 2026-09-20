@@ -900,8 +900,28 @@ for Java and `npm run test` green for site.
     pages are only fetched for cards not yet known, so one HTTP status would bypass the three-complete-runs debounce.
     The rule belongs to manual imports (PR11b), which have no list run and would otherwise never close.
     Live in schnappy-test: the first sweep closed the 4 listings already past their deadline and their 4 jobs
-    (254 → 250 open), reconciled 0, no errors. **PR11b next:** the pg_trgm near-duplicate hint (never auto-merged),
-    manual import by URL with its UI and its periodic "is the URL still there" check.
+    (254 → 250 open), reconciled 0, no errors.
+    **PR11b done 2026-09-21 (masi #20, main a8e8c99; site #14, main 59d0310).** Manual import: `POST /jobs/manual` and the
+    site's `/masi/jobs/add` — a posting from a board masi must never contact is pasted in; its URL is stored and NEVER
+    fetched; it goes through `RegistryService` as a one-listing INCOMPLETE run of the new `manual` source (seeded disabled,
+    not enablable, not runnable: 409), so it is deduplicated against the boards and written under the `IngestLock`. The
+    "periodic check of the pasted URL" pencilled in after PR11a was dropped: it would be exactly the fetch the allow-list
+    and the boards' terms forbid. Nothing will ever see a pasted posting disappear, so it closes by its deadline — the
+    operator's, or `lifecycle.manual-listing-lifetime` (30 d), never more than a year — through PR11a's sweep. A paste
+    waits for a running ingest only `scheduler.ingest-wait` and then answers 503 + Retry-After; what the database refuses
+    is a 500 without database text; a re-paste corrects the description of a job known ONLY by paste.
+    Near-duplicate hint: `GET /jobs/{id}/similar`, pg_trgm on `title_norm`, same company, OPEN, top 5 — a hint, nothing is
+    merged. The threshold was MEASURED, not guessed: against "senior backend engineer" its spellings score .83–.89 and
+    "staff …" .62, but "senior FRONTEND engineer" .58 and "senior DATA engineer" .55 — other jobs — so it is 0.6, pinned
+    from both sides. No trigram index: `similarity(a, b) >= x` is not an indexable operator.
+    The test audit flipped `complete(false)` to true and everything stayed green while four more pastes closed the first
+    pasted listing; it is pinned now in the service and through the runner. The UI review (rendered DOM, three widths)
+    found what jsdom could not: a refusal below the fold after Enter, "   " passing `required`, the hint arriving late and
+    moving the buttons 2–10 lines, textareas in forms still in browser default, `.muted` used on fourteen pages and
+    defined nowhere. PR #20 was the first pull request the newly enforced Sonar gate stopped (a literal used three times).
+    Live in schnappy-test: 021 EXECUTED, `pg_trgm` 1.6 created by the app's own role (CNPG: trusted extension, masi owns
+    its database), a paste → 201 OPEN under `manual`, its look-alike hinted at .889, a legal-form company and a private
+    address → 400, no token → 401, running `manual` → 409. **Plan ladder PR0–PR11 complete.**
 
 Later: match scoring (`SCORE`), company enrichment (`ENRICH`), weekly-report notification
 (Kafka → chat/email), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
@@ -1004,6 +1024,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19, lifecycle) merged and live 2026-09-21; next PR11b.
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; what remains is the Later list, production enablement (blocked on the Anthropic key) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
