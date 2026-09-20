@@ -820,6 +820,37 @@ for Java and `npm run test` green for site.
     dashboard carries `monthByPurpose` and `averagePackageCostMonth`; Grafana dashboard uid
     `masi` loaded; `MasiReportsStale` rule rendered with its promtool test. Left open by design:
     masi's Sonar gate (red since 2026-09-18, 273 issues, enforced by nothing) is the next PR.
+    **Between PR10 and PR11 — the strict host allow-list and Sonar part 1 (masi #17, main 93b8725,
+    platform 8b4b210/e10ff16/e670d1d, 2026-09-20).** Operator rule, verbatim: "if host is not on allow
+    list - it cannot be contacted. period", "empty list - no hosts can be contacted".
+    `masi.http.allowed-hosts` (env `MASI_HTTP_ALLOWED_HOSTS`, chart `masiService.http.allowedHosts`,
+    25 names) is exact-name, no wildcard, empty = nobody, checked FIRST (before DNS and the SSRF check)
+    in the fetcher on every hop and in the browser's route guard and redirect observer; the test
+    profile lists only the local fixture server and tests of the guard use `.invalid` names, so no
+    test or local run can reach a job board. The reviews found the same defect four times over — a
+    partial read reported as complete, so unseen listings collected misses: Bolt (deadline), TeamDash
+    (dropped cards), Töötukassa (no boolean `hasNextPage`), SmartRecruiters (one page of 100; then a
+    full page without `totalFound`; then id-less postings collapsing into one) — and its twin on the
+    ingest side: a run that could not STORE a listing it saw no longer counts misses. Because such a
+    source succeeds for ever and closes nothing, `source_run.misses_counted` (changeset 020) records
+    it, `masi_source_last_misses_counted_timestamp_seconds` publishes the newest such run and
+    `MasiSourceNotClosing` alerts (suppressed while `MasiSourceStale` owns the source).
+    `masi_source_refused_hosts` counts the distinct hosts a source's LAST RUN tried and was refused —
+    a first version read the row's URLs and was blind to collector defaults and list-page links (the
+    seeded Helmes row read 0 with every job page refused); alert `MasiSourceHostNotAllowed`. Every
+    masi alert now has its runbook page (none of the twelve existed; CI `runbooks-exist.sh`).
+    `validateHostAtRequestTime` is gone: `validate()` is a proven superset and the two ran back to
+    back on one DNS cache entry. Live in schnappy-test: image 93b8725, 020 EXECUTED with 9 runs
+    backfilled, 25 hosts in the pod's env, `/jobs` 254, no token 401. NOT proven live: the two new
+    gauges — they exist only for enabled sources, none is enabled in test, and a run for the sake of
+    a gauge is a request to a real board. Decided against: a Cilium `toFQDNs` egress policy for
+    masi-browser generated from the same list — Cilium deny rules take no FQDNs and the namespace
+    default already allows any address on :443, so an FQDN allow would bound nothing; the in-app
+    list plus the private-range deny policy stay the controls until the namespace default is redesigned.
+    Deliberately unlisted: the TeamDash tenant hosts of cybernetica, bigbank and tehik job pages — they
+    surface through `masi_source_refused_hosts` once those sources run; listing them is the operator's call.
+    Still open from this PR: Sonar part 2 (13 methods over the complexity limit, S1192, S2925, S5961,
+    the 4 hotspots) and running Sonar on masi PRs so the gate can fail one.
 12. **PR11 — dedupe hardening + lifecycle** (`masi`): `pg_trgm` near-duplicate hint (never
     auto-merged), detail 404/expired → close, `expires_at`, auto-disable re-enable, manual import
     UX, artifact retention job. Invariant: a listing vanishing from one board closes its job
@@ -926,6 +957,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; next PR10 (stats, reports, cost dashboards).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; next Sonar part 2, then PR11.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
