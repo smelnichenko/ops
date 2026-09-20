@@ -851,6 +851,27 @@ for Java and `npm run test` green for site.
     surface through `masi_source_refused_hosts` once those sources run; listing them is the operator's call.
     Still open from this PR: Sonar part 2 (13 methods over the complexity limit, S1192, S2925, S5961,
     the 4 hotspots) and running Sonar on masi PRs so the gate can fail one.
+    **Sonar part 2 (masi #18, main 7331d2e, infra 2b2fb14, 2026-09-21): the gate is OK and enforced.** 138 open issues → 0,
+    coverage 86 %, hotspots 100 % reviewed. 24 of them were the analyzer's own: it reads SOURCES and could not resolve
+    `RawListing.RawListingBuilder`, a type that exists only after Lombok runs, so every method naming it lost its semantics
+    ("useless assignment" on variables used on the next line); the builder class is now declared in source and Lombok fills
+    it in. Eighteen over-complex methods became named steps (`TuningService.run` 58 → brief / attempts / judge / lint retry /
+    refused / prepared), verified line by line against main by the architecture review; `JobCards` holds the card-to-listing
+    rule the two TeamDash collectors repeated. One refactor was NOT identical and was kept on purpose: legal forms are a
+    word list now, because `\b` in java.util.regex is ASCII-only and the old regex cut "as"/"co" out of the MIDDLE of a
+    name after ø, ł or ß ("Løse AS" → "lø"). All 28 301 stored company and listing names normalise the same under both
+    (production holds no data), so no key moved; 34 forms, both phrases and six gender tags are pinned where five forms and
+    one tag were. The test audit ran 46 revert checks: 35 bit, 11 were blind and each got a test that was then shown to bite —
+    a job's known facts are never overwritten, a board cannot replace a register fact, a contact seen by name gains its email,
+    a wrapped interrupt is INTERRUPTED and not the source's failure, the better of two clean outputs keeps ITS pdf. The review
+    caught one regression of the refactor itself: the CV was validated after the paid analysis call instead of before.
+    A real fix came out of a hotspot: the register dump was capped in compressed bytes only; what it expands to is bounded now.
+    CI: the sonar step had been `when: event: push` inside a pipeline that only runs on pull_request — it never ran. It runs
+    now, fails without its token instead of skipping green, and analyses pull requests into `schnappy-masi-pr` (CE has no
+    branch analysis; two open PRs made `schnappy-masi` flip between branches), so `schnappy-masi` is written by main alone.
+    A new Sonar project's first analysis blames every file back to the root commit, and masi's root is an EMPTY commit:
+    jgit wants the empty tree as a stored object (`git hash-object -t tree -w /dev/null` in a full clone); CI's depth-100
+    clone never reaches it.
 12. **PR11 — dedupe hardening + lifecycle** (`masi`): `pg_trgm` near-duplicate hint (never
     auto-merged), detail 404/expired → close, `expires_at`, auto-disable re-enable, manual import
     UX, artifact retention job. Invariant: a listing vanishing from one board closes its job
@@ -957,6 +978,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; next Sonar part 2, then PR11.
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; next PR11.
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
