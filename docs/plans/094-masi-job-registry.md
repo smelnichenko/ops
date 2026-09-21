@@ -984,6 +984,17 @@ for Java and `npm run test` green for site.
     #24: `TuningServiceTest.theLaneRunsOneAtATime…` raced the lane (an id leaves the queue when its run starts, by design)
     and failed CD on main once; the deterministic half of the test stays.
 
+    **No unattended mail; "mail me this report" (masi #26, main 90fd880; site #16, main 54db45e; platform 8b71293; infra
+    cda7b8b) — operator, 2026-09-21: "automated email sending should be disabled".** `masi.mail.weekly-auto` (default
+    FALSE) gates the scheduled pass: off, it sends nothing and takes no attempt. A digest leaves when somebody asks:
+    `POST /reports/{id}/digest` (202; 409 with the reason when mail is off, the report is not weekly, no address is known or
+    the mail did not leave), nothing recorded, no CV master needed; the site has the button on weekly reports.
+    `masi.mail.deliver-all-to` is a non-production environment's mail SINK — its user table follows the identity provider,
+    and the first live digest had gone to `k6-smoke@pmon.dev`, the only holder of an active (fictitious) master in test. With
+    the sink set every digest goes there, none to a reader's own address, and the mail's first line says whose it is. Test:
+    sink = the operator's address, weekly-auto off; proven 2026-09-21 20:25 Tallinn (202, counter `requested` = 1, the
+    monthly report refused with 409, no notification row written).
+
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
 (done, above: by mail), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
 
