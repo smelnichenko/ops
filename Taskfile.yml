@@ -258,6 +258,10 @@ tasks:
     cmds:
       - |
         cd {{.SRC_DIR}}/infra
+        # CD writes a tag commit to this repo on every merge: read the tags from what is on the remote NOW, not from a
+        # checkout that may be hours old (a stale one promotes yesterday's image)
+        [ -z "$(git status --porcelain)" ] || { echo "infra has uncommitted changes: commit or discard them first"; exit 1; }
+        git pull -q --rebase
         TEST=clusters/production/schnappy-test-apps/values.yaml
         PROD=clusters/production/schnappy-production-apps/values.yaml
         SERVICES="${SERVICES:-monitor admin chat chess masi site game-scp}"
@@ -284,6 +288,9 @@ tasks:
         done
         git add "$PROD"
         git commit -m "promote(prod):${SVCS} from test"
+        # a CD run may have pushed in the seconds since the pull above: the commit is made, so rebase it and push
+        # (2026-09-21: the push was rejected and the promotion sat unpushed until somebody noticed)
+        git pull -q --rebase
         git push
         echo "Promoted:${SVCS}. Argo will sync prod."
 
