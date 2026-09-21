@@ -923,7 +923,33 @@ for Java and `npm run test` green for site.
     its database), a paste → 201 OPEN under `manual`, its look-alike hinted at .889, a legal-form company and a private
     address → 400, no token → 401, running `manual` → 409. **Plan ladder PR0–PR11 complete.**
 
-Later: match scoring (`SCORE`), company enrichment (`ENRICH`), weekly-report notification
+    **Match score done 2026-09-21 (masi #21, main c3668a7; platform fbda0d4).** First item of the Later list. `MatchScorer` is
+    deterministic and free: it reads the posting analysis that exists anyway (must-have 0.60, keywords 0.25, nice-to-have 0.15;
+    a category's full weight takes three phrases; unstated categories are not held against the job) and says which must-haves
+    the master does not show. It has its own words — every length, without the sentence's full stop or the dots inside a name —
+    and a name of two characters or fewer (Go, C#, CI) counts only where the master LISTS things (skills, a role's tech, an
+    achievement's tags). A job that cannot be scored has a NULL score and a reason (`NOTHING_STATED`, `OTHER_LANGUAGE`,
+    `UNREADABLE`), never a zero. Rows live in `job_match(job_id, cv_version_id, score, scorer_version, detail_json)` (changeset
+    022), one per master version, and are scored again when `MatchScorer.VERSION` changes. `AnalysisScheduler` is the lane that
+    buys the analyses ahead of any request: off unless `masi.analysis.auto`, newest first, `per-tick` 10, `max-attempts` 3,
+    under its OWN purpose share (`SCORE` 0.20). An attempt is a call the posting had its chance in: a call that was never sent
+    (a spent budget, a refused account, a ledger that cannot be written, a shutdown) is given back and the lane pauses — the
+    audit showed the first version abandoning every healthy job during one spent day. One posting is analysed by one caller at a
+    time (striped lock + re-read), and a shutdown drains the tick before it interrupts it. `JobDto` carries `matchScore` and,
+    on the detail, `match`. Not in the site yet.
+    **A refused ACCOUNT is not a refused request (same PR).** The API answers an empty credit balance as a plain
+    `400 invalid_request_error`; masi stored only the type, so the live test looked like a request-shape bug. The gateway now
+    raises `LlmAccountException` (`NO_CREDIT`, `KEY_REFUSED`, `NOT_PERMITTED`) in its own words — the API's text is never
+    stored, a 400 can quote the CV — both lanes give the attempt back and pause `masi.ai.account-pause` (1 h), the counter
+    `masi_llm_account_refusals_total{reason}` feeds the critical alert `MasiLlmAccountRefused` (rule test + runbook).
+    **Live state 2026-09-21:** AI is enabled in schnappy-test on the shared key (`MASI_ANTHROPIC_API_KEY` = `ANTHROPIC_API_KEY`
+    in ops/.env, Vault `test/ai-masi` seeded), and EVERY call is refused: the account has no credit. Nothing can be analysed,
+    scored or tuned until it is topped up; no redeploy is needed afterwards. Production `ai-masi` is not seeded.
+    **CI:** every distinct `@SpringBootTest` configuration is a cached context with a Hikari pool; at 10 connections held for
+    ever the newest context could not connect to CI's one Postgres ("too many clients already"). The test profile now holds
+    nothing while idle (`minimum-idle 0`, `idle-timeout 10s`, `maximum-pool-size 8`).
+
+Later: ~~match scoring (`SCORE`)~~ (done, above; its site column is open), company enrichment (`ENRICH`), weekly-report notification
 (Kafka → chat/email), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
 
 ### Verification
@@ -1024,6 +1050,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; what remains is the Later list, production enablement (blocked on the Anthropic key) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; what remains is the rest of the Later list, the score in the site, production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
