@@ -1011,6 +1011,22 @@ for Java and `npm run test` green for site.
     admin (`084e762` → `dcc864c`, infra 4742cb8); its reconcile granted the role two minutes after start.
     `promote:prod` now pulls before reading tags and rebases before pushing (ops cc195f9).
 
+    **The first REAL run, 2026-09-21 (the operator added 4 EUR of API credit).** Two packages prepared end to end in
+    schnappy-test for **0.105 USD**: analysis (Haiku) 0.0027 each, tune (Opus 5) 0.065 then 0.034 — the plan's cache proof
+    (`cache_creation_input_tokens` 2842 on the first tune, `cache_read_input_tokens` 2842 on the second) and its cost proof
+    (dashboard "today" = the ledger's sum, 0.104733). Both `PREPARED` on the first attempt with ZERO claims violations,
+    metrics verbatim, one page. An average package costs 0.035-0.07 USD, a sixth of what is reserved for it.
+    What only a real run could show, fixed in masi #27 (main 7d391ad): the match score gave a Java/Spring/Kafka master
+    **7 and 16** against two Java/Spring jobs — the model states a must-have as a SENTENCE, the scorer wanted most of its
+    words, and my fixtures were short phrases (fixture and code wrong together). Now a thing the master LISTS supports the
+    sentence that names it WHOLE ("Spring Boot", never "boot" alone), person-requirements are set aside, achievement tags
+    carry no sentence alone; the two real analyses are fixtures and are pinned at exactly 53 and 54 (a different figure =
+    raise `MatchScorer.VERSION`). Stored scores recomputed by themselves after the deploy, for nothing. Also: the lint
+    wanted the literal title in the summary, and `ClaimsChecker.tokens` kept a sentence's full stop on its last word —
+    which would have failed a CORRECT cover letter as "does not name the role".
+    Everything in test now belongs to the operator's account (they are the only user; the smoke-test account is no
+    longer used for anything but the chart's k6 test).
+
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
 (done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation, PR preview envs for masi.
 
