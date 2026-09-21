@@ -949,7 +949,23 @@ for Java and `npm run test` green for site.
     ever the newest context could not connect to CI's one Postgres ("too many clients already"). The test profile now holds
     nothing while idle (`minimum-idle 0`, `idle-timeout 10s`, `maximum-pool-size 8`).
 
-Later: ~~match scoring (`SCORE`)~~ (done, above; its site column is open), company enrichment (`ENRICH`), weekly-report notification
+    **The score in the list and on the job, done 2026-09-21 (masi #22, main 7efa43c; site #15, main 0143f5f).**
+    `GET /jobs?sort=match,desc|asc` orders the registry by the caller's score against their ACTIVE master: an ORDER BY on a
+    scalar subquery over `job_match`, set from a Specification (the Pageable is unsorted on that path; the unique index
+    `(job_id, cv_version_id)` serves it). A job without a number comes LAST in either direction, a zero sorts with the
+    numbers, ties are newest first then by id (a total order: paging is stable), a caller without a master gets newest
+    first, and nobody is ordered by another holder's scores. `sort=,` was a 500 (`",".split(",")` is an EMPTY array) and is
+    a 400. Spring Data clears every order on the count query itself, so no guard is needed — the test that watches it asks
+    for a FULL FIRST page, the only request whose total comes from the count query.
+    Site: a Match column and a "best match first" order on Jobs (in the URL like the filters; an order the page does not
+    offer is not passed on), and "Match with your CV" on the job — the score, the must-haves the CV shows and does not
+    show, the ones not compared, or why there is no number. Measuring the rendered page (320/390/1280 px) found, and the
+    PR fixed: every masi table pushed the PAGE sideways on a phone (`MasiTable`: a scroller that is a named, focusable
+    section only WHILE it overflows); masi's word badges sat in the monitor page's round 2.5em icon badge; 19 px filter
+    controls; a flex `<td>` that broke its row's separator; action rows that pushed the job page sideways at 320 px; and a
+    visually hidden text that widened the page from inside the scroller until the scroller was positioned.
+
+Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), weekly-report notification
 (Kafka → chat/email), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
 
 ### Verification
@@ -1050,6 +1066,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; what remains is the rest of the Later list, the score in the site, production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; what remains is the rest of the Later list, production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
