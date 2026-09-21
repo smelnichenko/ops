@@ -995,8 +995,24 @@ for Java and `npm run test` green for site.
     sink = the operator's address, weekly-auto off; proven 2026-09-21 20:25 Tallinn (202, counter `requested` = 1, the
     monthly report refused with 409, no notification row written).
 
+    **T2 employer feeds (masi #25, main 3a6eb47).** Workable (Skeleton, widget account 128656), Personio (Salv, XML),
+    BambooHR (Ridango, list + per-opening detail) — each a package-private class beside `AtsCollector`, seeded DISABLED by
+    changeset 024 (`ats:skeleton`, `ats:salv`, `ats:ridango`); their hosts are not on `masi.http.allowed-hosts` yet, so
+    nothing is contacted until the operator lists the host and enables the row. The review's critical finding applied to
+    EVERY vendor: a 200 with valid JSON and no board in it (`{"jobs":null}`, an error object) was read as "no openings" — a
+    complete run that saw nothing, and three of those close every listing of the source. `AtsCollector.board()` now refuses
+    it for all eight vendors; a board that is there and empty stays complete. Fixtures: one request per feed with masi's
+    own UA (`CAPTURE.md`). NOT built, with reasons: cvpro.ee (one IT posting in 27 days, a Töötukassa re-list), Recruitee
+    (both known boards empty: no fixture, no collector), MeetFrank (its site blocks non-browser clients; getting its API's
+    query document means driving a browser against that block — an operator decision, not taken).
+    **`JOBS` never reached a human (found 2026-09-21).** Keycloak is shared by test and production and the operator's
+    realm roles are written by PRODUCTION's admin, which was still on the image from before `JOBS` existed: every masi
+    link redirected to `/`. The role had only ever been checked with the k6-smoke service account. Fixed by promoting
+    admin (`084e762` → `dcc864c`, infra 4742cb8); its reconcile granted the role two minutes after start.
+    `promote:prod` now pulls before reading tags and rebases before pushing (ops cc195f9).
+
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
-(done, above: by mail), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
+(done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation, PR preview envs for masi.
 
 ### Verification
 
