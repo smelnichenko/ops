@@ -965,8 +965,27 @@ for Java and `npm run test` green for site.
     controls; a flex `<td>` that broke its row's separator; action rows that pushed the job page sideways at 320 px; and a
     visually hidden text that widened the page from inside the scroller until the scroller was positioned.
 
-Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), weekly-report notification
-(Kafka → chat/email), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
+    **Weekly digest by mail, done 2026-09-21 (masi #23 + #24, main b53a58a; platform a38c96a/f2f5aed; infra 7a32b01).**
+    Mail, not an in-site toast: the Centrifugo `notifications` rail (topic `events.notifications`, built and unused)
+    reaches only a connected client, and a Monday digest is for the day the site is not open. Monday 06:00 writes the week
+    and then tells every READER — an enabled user with an active CV master — once: `WeeklyDigest` is plain text built from
+    the stored report alone (figures, the five companies hiring most, what waits for THIS reader, sources that need a look,
+    spend, the link); nothing of a CV, and of the per-operator maps only the reader's own entry. `report_notification`
+    (changeset 023, cascades with its report) is what makes it once: the first attempt is the INSERT under a unique key, a
+    later one a conditional UPDATE on the attempt count the pass read, the attempt is on record BEFORE the send, passes run
+    one at a time on a virtual thread, retries double from 1 h (seven span `notify-within` 3 d, after which a week is
+    history — the first deploy does not mail thirteen caught-up weeks). No address is stored or logged; a failure is its
+    exception TYPE. Off unless `masi.mail.enabled` AND `SPRING_MAIL_HOST`: `application.yml` has no `spring.mail.host` line
+    because Boot 4.1 makes a sender when the key EXISTS, even empty. Chart: `masiService.mail.{enabled,siteUrl}` brings the
+    env, pulls in the `<prefix>/mail` secret on its own, and opens ONE separate egress rule to the SMTP port; alert
+    `MasiDigestGivenUp`. Because the pod gained that port, `UrlValidator.validate` now refuses any fetched URL whose port
+    is not 80/443 (it never looked at ports). Live in test: report 3 (14–20 Sep) left for the one reader at 18:49 Tallinn,
+    `masi_report_notifications_total{outcome="sent"}` = 1. Production: set `masiService.mail` with masi's enablement.
+    #24: `TuningServiceTest.theLaneRunsOneAtATime…` raced the lane (an id leaves the queue when its run starts, by design)
+    and failed CD on main once; the deterministic half of the test stays.
+
+Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
+(done, above: by mail), T2 collectors, Admin-API cost reconciliation, PR preview envs for masi.
 
 ### Verification
 
@@ -1066,6 +1085,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; what remains is the rest of the Later list, production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
