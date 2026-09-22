@@ -42,7 +42,9 @@ weak and need research."*
 | Analysis `agencyRelay` (Haiku reads "on behalf of our client") | the posting is an agency's, employer hidden | a model's reading, 2 of 74 so far | yes | **use as a hint** on the job and the poster's company: an agency |
 | Company names (Stafferty, Stafflow, EduTalent, e-staff, ESTIT HR, guavaHR, Global Talent Advantage, …) | who is an agency | name pattern + the register's EMTAK 78.10/78.20/78.30 (employment activities) | yes (register) | **use**: `company.agency` from EMTAK, name pattern as fallback |
 | MeetFrank, Bolt, ATS feeds | no recruiter fields (checked: Greenhouse, Lever, SmartRecruiters, Teamtailor, Workable, Personio, BambooHR carry none) | — | — | nothing to take |
-| LinkedIn, Glassdoor | recruiter profiles, "people at" | rich | **no** (ToS-forbidden; 094) | never polled; the operator pastes a person by hand |
+| LinkedIn (crawling, "people at") | recruiter profiles | rich | **no**: the User Agreement forbids scrapers and bots; the API gives connections to approved partners only | never polled; a profile URL is pasted by hand and never fetched |
+| LinkedIn **data export** (the operator's own `Connections.csv` from "Get a copy of your data": name, company, position, connected on, e-mail where the contact allowed it) | the operator's first-degree network | the operator's own record | **yes**: their data, uploaded by them | **use** (PR3): an upload → persons with `WORKS_AT` ties (evidence `LINKEDIN_EXPORT`, the connected-on date as `since`) matched to companies by name; re-uploads update, never duplicate |
+| Glassdoor | — | — | no (ToS) | never |
 | Company websites ("team", "careers contact") | HR contacts | good | **no**: hosts not on the allow-list — the same wall as enrichment | not without a per-host listing |
 | masi's own inbox | every reply a recruiter sends: sender, company (by domain), thread | the conversation itself | yes: monitor already receives inbound mail through a Resend webhook (`WebhookController`, `ResendWebhookService`); masi gets its own address (`masi@…`) the operator puts in the CV's contact line | **use** (PR4): a received message → `RECEIVED_MESSAGE` activity, the sender matched to a person by e-mail, a new person otherwise; sent mail stays the operator's to log (or a BCC address, PR4b) |
 | The operator | "talked to X at Y" | first-hand | yes | **use**: a person and a tie in three fields on the person page |
@@ -134,6 +136,7 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
 | Event outcome → activity | INTERVIEW event marked DONE → one INTERVIEW activity with the event's job | the write removed |
 | Person identity | the same e-mail on two companies' listings → one person, two POSTED_FOR ties | identity by name |
 | Register ties | a dump record with two board members → two persons, REPRESENTS, evidence = the code | persons dropped |
+| LinkedIn export | a 3-row CSV: one company known (tie WORKS_AT, since = connected on), one unknown (person without a tie, listed as unmatched), one re-upload → no duplicate | identity by name+company dropped |
 | Agency by EMTAK | 78.10 → agency true; 62.01 → false | the code list emptied |
 | Domain mismatch | contact `anna@stafferty.ee` on a Bolt listing → the person's company is Stafferty, tie POSTED_FOR Bolt | the rule removed |
 | Inbox | a signed webhook payload from a known e-mail → RECEIVED_MESSAGE on that person; a bad signature → 401, no row | signature check removed |
