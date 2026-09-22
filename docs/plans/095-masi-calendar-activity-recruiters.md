@@ -174,9 +174,21 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   rather than inside `GET /calendar`; kinds shipped only with their writers (COLLECTED, PREPARED, APPLIED,
   the operator's seven) — SCHEDULED comes with PR2, a mail origin with PR4; a plain reply on a package is no row (a
   message received has one source: the operator, later the inbox); reposts stay in `lifecycle_event` (the job's
-  history) and are not doubled into the log; a merged job's package and operator rows follow the survivor.
+  history) and are not doubled into the log; a merged job's package and operator rows follow the survivor. The
+  test-quality audit (27 revert checks red) found one defect: a **company** merge deleted the stub and the FK set
+  the log's `company_id` to null — `ActivityRepository.repointCompany` now runs in `CompanyService.merge` before
+  the delete, as jobs, contacts and aliases already did. Merged 2026-09-22 (masi #37, site #20).
+- **PR1b as built (masi #39), 2026-09-22.** As planned, with these choices: the partner is told apart by the token's
+  `azp` (no custom `partner` claim, so onboarding is a plain Keycloak client + the `MASI_PARTNER` realm role); the
+  `@RequirePermission` aspect gained `or = {…}` so `MASI_PARTNER` or `JOBS` suffices; persons land in `contact`
+  (PR3 migrates them to `person` with `PARTNER` evidence); no `format=ndjson` — paging at 500 a page covers bulk; no
+  2 MB body cap — 500 items × clipped fields bounds a call; no per-partner `dailyRequestCap` yet — 60 a minute in the
+  process is the guard, a daily cap comes with the first partner whose volume warrants it; the changes feed merges
+  first-seen, `lifecycle_event` (JOB) and `merged_at` in memory, `next` = the last instant returned (two changes at one
+  instant across a page boundary re-ask from a minute earlier). Swagger: bearer scheme + groups *Partner API* /
+  *Operator API*, only where `MASI_API_DOCS_ENABLED` (test).
 
 ## Status
 
-DRAFT 2026-09-22 — written on the operator's request; queued after enrichment (094 Later) and the analysis
-batching; PR1 not started.
+IN PROGRESS 2026-09-22 — PR1 merged (masi #37, site #20); PR1b open (masi #39); PR2 calendar next, then PR3
+persons and ties, PR4 inbox. Enrichment and analysis batching (094 Later) queued behind them.
