@@ -200,7 +200,32 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   `GET /partner/persons`, so both privacy filters it promises could have been deleted with the suite green — they are
   pinned now. **Merged 2026-09-22 (masi #39).**
 
+- **PR2 as built (masi #40, site #21), 2026-09-23.** `calendar_event` is changeset **031** (029/030 went to PR1b); the
+  view answers a range at once — the day numbers, the bookings touching it, the postings closing in it (read live from
+  the open listings, never copied) — and **states which kinds each number counted**, so the page links a number to
+  exactly those rows and keeps no copy of a list that lives in masi. A booking says so as `SCHEDULED`; one marked held
+  writes its own kind at the hour it was booked for, once per booking however the kind is later corrected; a call-off
+  writes nothing and a delete leaves what happened. An all-day booking IS its day in the operator's zone, and the length
+  limit is that day's own length — 2026-10-25 in Tallinn is 25 hours. Bookings follow a job merge and a company merge,
+  as the log's rows do. The weekly digest names the week the reader is about to have. `GET /activity` now takes several
+  kinds at once. The page is month/week/day with lanes for events that share an hour, spans drawn on every day they
+  cover, and the phone's month reduced to dated bars; `GET /calendar/job/{id}` has no caller yet — the job page's card
+  comes with PR3.
+- **What the three passes over PR2 cost and bought.** Architecture: bookings orphaned by both merges, an all-day flag
+  that meant nothing, a meeting counted twice when its kind was corrected, day numbers linking to the wrong rows.
+  Rendered UI (measured in Chromium, not read): the event form pushed the page 280 px sideways at 390 and left the title
+  field 26 px; two events at one hour were drawn exactly on top of each other; a three-day booking showed on one day and
+  one running past midnight became a 10 px sliver. Test audit (52 revert checks): the job-merge test did the repointing
+  itself and passed with the production call deleted; the site test mocked the very list that can drift; the deadlines
+  query, the multi-kind filter, the digest's week-ahead block and the long-text cut were all unprotected; nothing
+  rendered the calendar through the app's routes. **All fixed in the PRs.**
+- **Open, and honest about it:** `src/index.css` is invisible to vitest — an empty stylesheet passes all 478 tests — so
+  every layout defect this arc found would ship green. The headless harness catches them but runs nothing in CI.
+  Promoting it (`npm run test:layout` in Chromium, asserting no overlap, no sideways scroll, aligned columns, no tap
+  target under 20 px) is its own change, and belongs before the next page this size.
+
 ## Status
 
-IN PROGRESS 2026-09-22 — PR1 merged (masi #37, site #20); PR1b open (masi #39); PR2 calendar next, then PR3
-persons and ties, PR4 inbox. Enrichment and analysis batching (094 Later) queued behind them.
+IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39) and PR2 (masi #40, site #21) all MERGED; PR3
+persons and ties next, then PR4 inbox. The CSS layout test and the job page's bookings card are carried with PR3.
+Enrichment and analysis batching (094 Later) queued behind them.
