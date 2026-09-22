@@ -1079,6 +1079,20 @@ for Java and `npm run test` green for site.
     spent analysis attempts surviving a rewrite, two losers of one sweep reordering between reads — all fixed, with
     tests red on revert. No time window on the closed twin: the exact-fingerprint path never had one and the registry
     is a day old; revisit when a twin closed months earlier gets reposted.
+    **Every source enabled and verified one by one, 2026-09-22 (operator: "enable sources 1 by 1 and verify each").**
+    All 33 seeded sources run once each, watched per run (status, complete, fetched/parsed/new, error, a sample of what
+    came in). Found and fixed the same day: Töötukassa took an assembly worker and an electrician and gave postings a
+    sentence for a title — `\b` in java.util.regex is ASCII-only, so "it" was a word inside "Montaažitööline"; `(?U)` on
+    every `\b` regex in the tree, the free-text refinement counts only when short, automaatik/robootika out (masi #33);
+    Twilio's Greenhouse board with content is over the 2 MB cap → content per new job; Milrem's placeless posting (masi
+    #34 — it turned out to be in the Netherlands, correctly out); the TeamDash job pages of Cybernetica, Bigbank and
+    TEHIK sit on their own teamdash.com hosts (platform ffbbd1f) and the collector now names a refused host instead of
+    "markup changed"; Wise read 68 postings and the text of 20 → the operator's "pagination should not stop from making
+    complete list before reaching AI": no per-run page or detail cap unless the source's config sets one, changeset 027
+    strips the seeds' caps, and the runner waits one in-flight call past the deadline (the audit found a collector
+    stopping at its deadline was always cancelled mid-call — masi #35). Three auto-detected feeds answer 404 (IBKR,
+    Breakwater, Sisu Tech: disabled); Bondora's EU board works through the central API. `docs/sources.md` carries every
+    first run (masi #36). The daily AI budget is 2 EUR (2.30 USD) since 17:16.
 
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
 (done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation (needs an Anthropic ADMIN key), PR preview envs for masi (see above: a plan of its own).
@@ -1181,6 +1195,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) and reposts + history (masi #32, site #19) merged and live 2026-09-22; what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) and reposts + history (masi #32, site #19) merged and live 2026-09-22; every source enabled and verified 2026-09-22 (masi #33–#36); what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
