@@ -219,6 +219,10 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   itself and passed with the production call deleted; the site test mocked the very list that can drift; the deadlines
   query, the multi-kind filter, the digest's week-ahead block and the long-text cut were all unprotected; nothing
   rendered the calendar through the app's routes. **All fixed in the PRs.**
+- **Measured live, the hour it shipped (masi #41).** Six weeks of the test registry hold **205** closing postings —
+  against a `MAX_DEADLINES` of 200. The operator's first month view would have dropped five with nothing said, and the
+  cell's "+N more" would have undercounted with them. The cap is there to bound a pathological range, so it now sits far
+  above a month's worth. The number looked generous in the abstract and was wrong against one query of the real data.
 - **Open, and honest about it:** `src/index.css` is invisible to vitest — an empty stylesheet passes all 478 tests — so
   every layout defect this arc found would ship green. The headless harness catches them but runs nothing in CI.
   Promoting it (`npm run test:layout` in Chromium, asserting no overlap, no sideways scroll, aligned columns, no tap
