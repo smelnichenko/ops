@@ -37,6 +37,9 @@
       - { name: METRICS, description: View monitors and metrics }
       - { name: MANAGE_USERS, description: User administration }
       - { name: JOBS, description: "masi: job registry, CV tuning, sources, reports (never in Users)" }
+      # A third party's client-credentials client gets this and nothing else: masi's /partner group only.
+      # Never in Users or Admins — the operator's JOBS already opens the partner group.
+      - { name: MASI_PARTNER, description: "masi: the partner API (/api/masi/partner) for a third party's client" }
     admins_composite: [PLAY, CHAT, EMAIL, METRICS, MANAGE_USERS, JOBS]
     clients_roles:
       # Must match the realm roles the smoke test exercises: CHAT (channels), EMAIL (inbox),
