@@ -136,6 +136,14 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    with the day counts, the three views, event create/edit/outcome, deadline markers from `expires_at`; the
    weekly digest lists the coming week's events. Invariant: the day cell's three numbers equal the day's log
    filtered by kind; an event's outcome writes the activity; DST week (2026-10-25) renders 25 hours right.
+**What measuring the live registry before PR3 found (2026-09-23), and what it changes:**
+
+| measured | consequence |
+|---|---|
+| All 10 Töötukassa contacts held a **ROT13-rotated e-mail** (`neab@rssrg.rr` = `arno@effet.ee`); all 118 cv.ee ones plain | identity is matched on e-mail, so PR3 was blocked on unusable addresses — fixed first in masi #42 (collector turns it back only where the arriving TLD is not real and the turned one is; changeset 032 for the rows already stored) |
+| **96 of 128** contacts belong to companies with **no website recorded** | the domain-mismatch rule for spotting an agency recruiter applies to a quarter of them at best. Company enrichment (careers URL, website) is a **prerequisite** of that signal, not an optional extra — PR3 ships the rule but reports its own coverage, and the plan's "agency share" question cannot be answered until enrichment runs |
+| **No e-mail and no name appears at two companies** in the 128 | the cross-company edges the graph exists for are not in the collected data at all. They come from the register dump (board members, `REPRESENTS`) and later the inbox — so PR3's value rests on the register import, and a person page will look thin until it lands |
+
 3. **PR3 — persons and ties** (`masi` + `site`): changesets 030 (`person`, `person_company`, `contact.person_id`),
    the migration of contacts into persons (identity by e-mail, else name + company), `ariregister` keeping the
    persons' rows (`REPRESENTS` ties), agency detection (EMTAK 78.x, name pattern), the domain-mismatch rule on
