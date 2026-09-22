@@ -1066,6 +1066,19 @@ for Java and `npm run test` green for site.
     Tallinn (masi main 3157fb9, site main 1c842ab): the first run derived all 385 title keys and merged exactly the
     seven pairs (Bolt, LHV ×3, SEB ×2, Playtech); jobs listed by two boards 3 → 10. Period stats and the dashboard
     still count a merged loser as a new job of its week (first_seen_at, byte-stable reports) — accepted.
+    **Reposts and the position's history, 2026-09-22 (masi #32, site #19).** Only an exact fingerprint hit reopened a
+    closed job; a repost under another board's spelling or a decorated title became a new job. Now a fingerprint miss
+    with no OPEN twin anywhere finds the CLOSED twin closed last (title key + agreeing company) and reopens it as a
+    repost — the fingerprint aliased (`REPOSTED`), the reopen event carrying the board that brought it back, a
+    rewritten text replacing the old one with the analysis and its attempts dropped so the lane reads it again — and
+    never beside an open twin the same board shows (two cards are two postings). `GET /jobs/{id}/history` is one
+    timeline of what the registry never rewrites: listed on / gone from each board (the board's own title where it
+    differs), closed, reposted on X, merged in (the absorbed job's own chapters named by job) / merged into; the job
+    page shows it (folded past eight entries), the list reads "reposted ×N", the week's stats and the digest count
+    reposts (`registry.repostedJobs`). Reviews and the audit: a false repost beside an open same-board twin, S3776,
+    spent analysis attempts surviving a rewrite, two losers of one sweep reordering between reads — all fixed, with
+    tests red on revert. No time window on the closed twin: the exact-fingerprint path never had one and the registry
+    is a day old; revisit when a twin closed months earlier gets reposted.
 
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
 (done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation (needs an Anthropic ADMIN key), PR preview envs for masi (see above: a plan of its own).
@@ -1168,6 +1181,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) merged and live 2026-09-22; what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) and reposts + history (masi #32, site #19) merged and live 2026-09-22; what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
