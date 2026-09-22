@@ -144,6 +144,17 @@ the OkHttp sender ignores `otlp.timeout` and silently caps every export at OkHtt
 CD pipelines run `./gradlew clean check` (a stale-workspace guard); jars are built inside the Kaniko image
 build, not as a pipeline step.
 
+**The Sonar gate reads your tests as new code too** (masi's PR project enforces `new_violations = 0`). A PR can be
+green locally and red in CI on nothing but test style: `assertThat(map).containsEntry(k, v)` over
+`assertThat(map.get(k)).isEqualTo(v)` (S5838), one throwing call per `assertThatThrownBy` lambda — build the
+argument first (S5778), no `Math.random()` for a test's unique values (S2140), `int` arithmetic assigned to a
+`long` (S2184), `Math.clamp` over nested min/max (S6885), three occurrences of a literal (S1192).
+
+**Overriding a Spring 7 method puts `@Nullable` where the base puts it.** Spring's packages are `@NullMarked`
+and JSpecify's `@Nullable` is type-use: the base reads `protected @Nullable ResponseEntity<Object> handleX(…)`.
+Writing the annotation on its own line above `protected` — the old declaration position — is a different thing
+and Sonar S2638 fails the gate for it. Copy the base's signature, annotation position included.
+
 ## 9. There is no Java line-length limit — don't invent one
 
 No checkstyle, spotless, `.editorconfig`, or line-length property exists in any of the four Java repos.
