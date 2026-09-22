@@ -167,6 +167,15 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
 | Inbox | a signed webhook payload from a known e-mail → RECEIVED_MESSAGE on that person; a bad signature → 401, no row | signature check removed |
 | Scoping | a second JOBS user sees no activity, event or person note of the first | the filter removed |
 
+## Log
+
+- **PR1 as built (masi #37, site #20), 2026-09-22.** `activity` carries `contact_id` until PR3 brings persons (PR3
+  migrates it to `person_id`); the day counts live at `GET /activity/days` (counted in the database per Tallinn day)
+  rather than inside `GET /calendar`; kinds shipped only with their writers (COLLECTED, PREPARED, APPLIED,
+  the operator's seven) — SCHEDULED comes with PR2, a mail origin with PR4; a plain reply on a package is no row (a
+  message received has one source: the operator, later the inbox); reposts stay in `lifecycle_event` (the job's
+  history) and are not doubled into the log; a merged job's package and operator rows follow the survivor.
+
 ## Status
 
 DRAFT 2026-09-22 — written on the operator's request; queued after enrichment (094 Later) and the analysis
