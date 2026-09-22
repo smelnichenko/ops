@@ -105,6 +105,33 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    from `application_package.applied_at` (a one-time changeset, so the log reaches back to day one).
    Invariant: every new job writes exactly one COLLECTED row in the same transaction; a review to APPLIED
    writes one APPLIED row; the log for a day equals the rows whose `at` falls in that Tallinn day.
+1b. **PR1b — the integration API** (`masi` + `admin`/`platform` for the partner role). Operator, 2026-09-22: *"we need
+   an API for import/export/reading/updating of data regarding companies, jobs, hrs which allow 3rd parties to
+   provide us with connections, updates, etc. use swagger so I can test/view it."* Swagger UI is already served
+   (`/api/masi/swagger-ui/index.html`, `/api/masi/api-docs`); it gains a bearer security scheme so Authorize works,
+   and a `partner` OpenAPI group with examples. The API:
+   - **Identity.** A partner is a Keycloak client (client-credentials) whose token carries the realm role
+     `MASI_PARTNER` and a `partner` claim (its key); masi maps it to a `source` row `partner:<key>` (kind
+     `DETERMINISTIC`, never scheduled). Every write is that source's: a partner's jobs are its listings, its
+     companies its discoveries, its persons its ties — the same dedupe, history and evidence rules as a board, and
+     "who told us" on every row. `@RequirePermission(MASI_PARTNER)` on the group; the operator's `JOBS` token may
+     call it too (that is how it is tested in Swagger).
+   - **Import** (`POST`, JSON arrays, 1–500 items, all-or-nothing per item, a per-item result): `/partner/jobs`
+     (the `RawListing` shape: url, title, company, location, description, postedAt, expiresAt, salary, applyUrl,
+     contacts) → `RegistryService.tryIngest` under the partner's source; `/partner/companies` (`RawCompany`);
+     `/partner/persons` (name, e-mail, phone, title, company reference by registry code or name, role, since) →
+     persons and `person_company` ties with evidence `PARTNER` and the partner's key as `evidence_ref`.
+   - **Export / read** (`GET`, paged, `since` on the row's own timestamps, JSON; `format=ndjson` for bulk):
+     `/partner/jobs`, `/partner/companies`, `/partner/persons` (persons and their ties), `/partner/changes?since`
+     (a feed of job opens/closes/reposts and merges from the lifecycle log, so a partner can follow the registry).
+   - **Update** (`PATCH`, fields a partner may state): a company's website, careers URL, ATS, size, city; a job's
+     closed-by-partner (a listing close on the partner's own listing only); a person's title, e-mail, phone —
+     never the operator's notes, never another source's rows.
+   - **Rate and size**: 60 requests a minute per partner, 500 items a call, bodies ≤ 2 MB; an import over the
+     partner's daily request cap (`dailyRequestCap` on its source row, like MeetFrank's) is refused with 429.
+   Invariant: a partner's import of a job a board already shows adds a listing, never a job; a partner cannot
+   read another user's activities or packages (the group exposes none); every imported row's `source` is the
+   partner's; Swagger's "Try it out" with the operator's token round-trips an import and an export.
 2. **PR2 — calendar** (`masi` + `site`): changeset 029 (`calendar_event`), `CalendarService`, `GET /calendar`
    with the day counts, the three views, event create/edit/outcome, deadline markers from `expires_at`; the
    weekly digest lists the coming week's events. Invariant: the day cell's three numbers equal the day's log
