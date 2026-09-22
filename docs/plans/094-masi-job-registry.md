@@ -1059,7 +1059,13 @@ for Java and `npm run test` green for site.
     (listings, packages and scores the survivor lacks, what it knew) and leaves the loser `MERGED` with
     `merged_into_id` — never closed (no lifecycle event: the reports count no merge as a close), never reopened. Every
     job row and the detail carry the sources with an open listing of it; a merged job reads "(merged)" with a link.
-    The trigram "similar" hint stays a hint. Changeset 026.
+    The trigram "similar" hint stays a hint. Changeset 026. Reviews (architecture, concurrency, web-ui, test audit)
+    turned the first cut's `merge()` — which saved detached entities over the analysis lane's columns — into
+    conditional statements, one transaction per pair, never two cards of one board, never two registered entities;
+    the audit added seven tests for mechanisms that were green when reverted. MERGED and live 2026-09-22 15:41
+    Tallinn (masi main 3157fb9, site main 1c842ab): the first run derived all 385 title keys and merged exactly the
+    seven pairs (Bolt, LHV ×3, SEB ×2, Playtech); jobs listed by two boards 3 → 10. Period stats and the dashboard
+    still count a merged loser as a new job of its week (first_seen_at, byte-stable reports) — accepted.
 
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
 (done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation (needs an Anthropic ADMIN key), PR preview envs for masi (see above: a plan of its own).
@@ -1162,6 +1168,6 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) merged and live 2026-09-22; what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
