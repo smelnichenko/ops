@@ -265,7 +265,9 @@ in a letter.
 - `Fingerprint.of(companyRaw, titleRaw)` = SHA-256 of `norm(company)|norm(title)`; `norm` folds
   diacritics, lowercases, strips legal suffixes (`oü`, `as`, `ltd`, `ou`, `llc`, `gmbh`, `inc`),
   gender tags, punctuation. Location excluded (boards disagree, and the same posting in Tallinn
-  and Tartu is one job for this operator); seniority words kept.
+  and Tartu is one job for this operator); seniority words kept. Since 2026-09-22 a job is also
+  known by alias fingerprints (`job_fingerprint`) and joined on a fingerprint miss by title key +
+  company agreement; duplicates already stored merge into the older job (`MERGED`, see the log).
 - Ingest: upsert `job_listing` by `(source_id, url)`; find or create `job` by fingerprint;
   `last_seen_at = now`, `miss_count = 0`. A fingerprint hit on a `CLOSED` job **reopens** it
   (`status=OPEN`, `closed_at` cleared, `reopened_count++`; the listings keep their own
@@ -1036,6 +1038,28 @@ for Java and `npm run test` green for site.
     `pr-<n>-<sha>` image, and `previewMode` reaches only a route and a cleanup job in the chart. A masi preview therefore
     is not "an entry for masi" but the whole arc (preview image step in CI, a preview route per service, ephemeral data,
     masi's own image slot) for every repo — a plan of its own, not a Later item of this one.
+    **MeetFrank enabled, 2026-09-22.** The operator's budget is 100 requests a day: `dailyRequestCap` in the source's
+    config (editable as "Requests/day" on the Sources page), enforced by `RequestBudget` = cap − requests fetched since
+    UTC midnight over every run of the source; a non-integral cap is a `SourceConfigException`, never a cap of none. The
+    first run at 14:47 fetched 11 pages, parsed 132 postings, 129 new jobs (registry 231 → 360 open, 217 with a
+    description); cron `0 47 */6 * * *`. `docs/sources.md` in the masi repo is the maintained list of every site the
+    registry may read (`SourcesDocTest`: documented keys == seeded keys); the chart allow-list carries the four T2 hosts.
+    Match score v3 (masi #30): the posting's language is what the analysis says (et/ru → OTHER_LANGUAGE, en/mixed
+    scored); a seniority word alone names no skill.
+    **Smart dedupe, 2026-09-22 (masi #31, site #18).** The registry held seven open duplicates the fingerprint could not
+    see: it hashed the RAW company name and the whole title, so "LHV Pank AS" (cv.ee) and "LHV" (TeamDash), "SEB" and
+    "SEB EE" (MeetFrank), "Playtech Estonia OÜ" and "PlayTech" split identical titles, and "Senior Product Analyst | EE"
+    was another job than "Senior Product Analyst". Descriptions never cross a job boundary (every board rewrites the
+    text), so title + employer is the signal. Now: `job.title_key` = the title without a board's trailing `| …`
+    segment (the job's own words stay — "Senior X" ≠ "X", "X, Rides" ≠ "X"); two companies agree when they are one row,
+    one normalised name, or one name is a whole-word prefix of the other (`lhv` / `lhv pank`), one SQL fragment for the
+    ingest lookup and the sweep; a fingerprint miss joins the OPEN job of the same key at an agreeing company and the
+    listing's fingerprint becomes an alias of it (`job_fingerprint`, looked up before the job's own, so a merged job's
+    fingerprint lands on its survivor); a sweep after every ingest merges duplicates already there into the older job
+    (listings, packages and scores the survivor lacks, what it knew) and leaves the loser `MERGED` with
+    `merged_into_id` — never closed (no lifecycle event: the reports count no merge as a close), never reopened. Every
+    job row and the detail carry the sources with an open listing of it; a merged job reads "(merged)" with a link.
+    The trigram "similar" hint stays a hint. Changeset 026.
 
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
 (done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation (needs an Anthropic ADMIN key), PR preview envs for masi (see above: a plan of its own).
