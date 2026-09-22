@@ -1027,8 +1027,18 @@ for Java and `npm run test` green for site.
     Everything in test now belongs to the operator's account (they are the only user; the smoke-test account is no
     longer used for anything but the chart's k6 test).
 
+    **The digest and the lane, 2026-09-22.** The operator confirmed the weekly digest arrived in their Gmail — the last
+    proof only they could give. `analysis.auto` is ON in test (infra d90f4e5): the lane reads 10 open postings every five
+    minutes; measured over its first 20 calls the average is **0.0017 USD** a posting (0.001–0.0036; most postings are
+    shorter than the two Swedbank ones the 0.003 estimate came from), so the 231-job backlog costs about 0.40 USD.
+    **PR preview environments — looked at, not started.** The `schnappy-pr-envs` ApplicationSet exists (branches
+    `^preview/` in monitor/chat/admin/chess/site) but has NEVER produced an environment: no pipeline in any repo builds a
+    `pr-<n>-<sha>` image, and `previewMode` reaches only a route and a cleanup job in the chart. A masi preview therefore
+    is not "an entry for masi" but the whole arc (preview image step in CI, a preview route per service, ephemeral data,
+    masi's own image slot) for every repo — a plan of its own, not a Later item of this one.
+
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
-(done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation, PR preview envs for masi.
+(done, above: by mail), ~~T2 collectors~~ (the verified three, above), Admin-API cost reconciliation (needs an Anthropic ADMIN key), PR preview envs for masi (see above: a plan of its own).
 
 ### Verification
 
