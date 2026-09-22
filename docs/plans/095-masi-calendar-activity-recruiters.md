@@ -186,7 +186,13 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   process is the guard, a daily cap comes with the first partner whose volume warrants it; the changes feed merges
   first-seen, `lifecycle_event` (JOB) and `merged_at` in memory, `next` = the last instant returned (two changes at one
   instant across a page boundary re-ask from a minute earlier). Swagger: bearer scheme + groups *Partner API* /
-  *Operator API*, only where `MASI_API_DOCS_ENABLED` (test).
+  *Operator API*, only where `MASI_API_DOCS_ENABLED` (test). The reviews then changed four things: the **changes feed
+  is one table** — `lifecycle_event` gained OPENED and MERGED (changeset 030 backfills them) and the ingest writes each
+  listing's rows with its own commit instant, so the feed pages by `(at, id)` and a follower cannot lose what a
+  ten-minute run committed after its poll; a withdrawal closes **every** listing the caller has on the job and follows a
+  merge to the survivor; a partner corrects **only blanks** on a company and **only its own** contacts; the client id is
+  carried verbatim (no slugging, so two clients cannot become one source), reads and writes share one minute budget, a
+  **2 MB body cap** (413) is applied before parsing, and an import skips the duplicate sweep (the collector runs do it).
 
 ## Status
 
