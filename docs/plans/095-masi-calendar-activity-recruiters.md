@@ -132,7 +132,7 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    Invariant: a partner's import of a job a board already shows adds a listing, never a job; a partner cannot
    read another user's activities or packages (the group exposes none); every imported row's `source` is the
    partner's; Swagger's "Try it out" with the operator's token round-trips an import and an export.
-2. **PR2 — calendar** (`masi` + `site`): changeset 029 (`calendar_event`), `CalendarService`, `GET /calendar`
+2. **PR2 — calendar** (`masi` #40 + `site`): changeset 031 (`calendar_event`; 029 and 030 went to PR1b), `CalendarService`, `GET /calendar`
    with the day counts, the three views, event create/edit/outcome, deadline markers from `expires_at`; the
    weekly digest lists the coming week's events. Invariant: the day cell's three numbers equal the day's log
    filtered by kind; an event's outcome writes the activity; DST week (2026-10-25) renders 25 hours right.
@@ -193,6 +193,12 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   merge to the survivor; a partner corrects **only blanks** on a company and **only its own** contacts; the client id is
   carried verbatim (no slugging, so two clients cannot become one source), reads and writes share one minute budget, a
   **2 MB body cap** (413) is applied before parsing, and an import skips the duplicate sweep (the collector runs do it).
+  The test audit (65 revert checks, 12 of which bit nothing) then found three more: a body with no declared length was a
+  400, not a 413 — the cap now READS the body itself and refuses one byte past it, so nothing oversized is parsed and no
+  override of Spring's handler is needed; a partner correcting a person's e-mail onto a colleague's was a 500, now a 400;
+  a masked rival's listing still carried the link that named them, so a masked listing has no link. Nothing had ever read
+  `GET /partner/persons`, so both privacy filters it promises could have been deleted with the suite green — they are
+  pinned now. **Merged 2026-09-22 (masi #39).**
 
 ## Status
 
