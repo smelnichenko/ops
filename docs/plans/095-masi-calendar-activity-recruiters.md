@@ -279,6 +279,14 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
     there was no caller to harm. Three things nothing could write were **deleted rather than tested**:
     `person_company.until` had no writer, `TieEvidence.MAIL` no producer until PR4, and the LIKE escaping on the name
     branch was unreachable because `Normalizer.person` folds every non-letter to a space first.
+  - **Live in schnappy-test 2026-09-23 15:05 (12:05 UTC), and every predicted number came out.** The shape was taken
+    from the database *before* the deploy and checked after: **128 people** (114 recognised by address, 14 shared
+    desks by name with a null `email_norm`), **0** contacts left unlinked, **0** never put through the rule, **128**
+    ties all `POSTED_FOR`/`LISTING` with the listing that showed them, **0** people at two companies — today's
+    registry has no cross-company edge, exactly as the pre-flight said. Changeset 033 ran four changesets clean
+    (`Update has been successful`, 0 restarts), and the log shows `Started Application in 42.687 seconds` at 12:05:13
+    with the pass logging at 12:05:18 on thread `task-1`: after readiness, off the main thread, which is the fix the
+    architecture review asked for, visible in production. `/api/masi/persons` answers 401 through the gateway.
   - **Thirty-one revert checks red in all.** Five tests on this branch passed for the wrong reason and were rewritten:
     one did the production call itself; one went through a column the normaliser folds, so the wildcard could never
     show; one "refused" contact was never refused; one derived its loop from the very allow-list it was checking, so
@@ -293,6 +301,8 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
 
 ## Status
 
-IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39) and PR2 (masi #40, site #21) all MERGED; PR3
-persons and ties next, then PR4 inbox. The CSS layout test and the job page's bookings card are carried with PR3.
-Enrichment and analysis batching (094 Later) queued behind them.
+IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21) and **PR3a (masi #44)**
+all MERGED and live in schnappy-test. Next: **PR3b** — the register's board members as `REPRESENTS` ties, and EMTAK
+78.x rows kept for companies masi already knows, which is what will make `company.agency` mean something beyond the
+operator's own mark. Then PR3c (person and company pages) and PR4 (inbox). The CSS layout test and the job page's
+bookings card are carried into PR3c. Enrichment and analysis batching (094 Later) queued behind them.
