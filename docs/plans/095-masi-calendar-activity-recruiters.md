@@ -255,6 +255,35 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
     (`doNotContact` was not carried onto the person, and a later sighting must not undo it); and the operator's
     `PATCH /contacts/{id}` onto a colleague's address at the same company answered 500 where the partner API already
     refuses it with 400 — the same guard now stands on both.
+  - **What the architecture review found (ten defects).** Three would have reached production: `CompanyService.merge`
+    repointed jobs, contacts, aliases, activities and bookings but **not `person_company`**, and `fk_tie_company`
+    cascades — so the automatic register dedupe would have deleted every proof about whoever posted for the stub;
+    the backfill ran inside the `ApplicationReadyEvent` listener, where a throw ends `SpringApplication.run` and the
+    same rows are waiting at the next boot, so one bad row meant an app that would not start; and `DELETE /contacts`
+    still claimed to erase personal data that now also sat on the person row, which nothing could reach. The rest: a
+    racy read-before-write deciding a tie (the index arbitrates now, which also removed a full tie scan per capture);
+    the evidence→role rule living in one controller while creating a contact by hand made the tie that controller
+    refuses; a register row claiming a posting it never published; an unvalidated note running past `varchar(200)`
+    into a 500; a 201 for a tie that was not created; an `agency` filter that could only ever return nothing because
+    nothing writes the column (the **operator** sets it now — the register import keeps EMTAK 62/63, so no collector
+    ever can); two narrowings materialising unbounded id sets into `IN (...)`, now `EXISTS` subqueries; a patch that
+    could orphan a person; and a search for `a_b` that silently wildcarded.
+  - **What the test audit found.** **Six mechanisms could be deleted at once with the whole suite green.** The worst
+    was a fixture doing two jobs badly: the merge test pinned its person to one company, so the survivor could never
+    already hold the same proof and the repoint could never collide — which is what `dropProofsTheSurvivorHolds` is
+    for. Every contact captured without a listing id has a null `evidence_ref` and `uq_tie_proof` is
+    `NULLS NOT DISTINCT`, so that collision **rolls the whole ingest back** and leaves two rows for one employer for
+    good — the ordinary register and partner path. Two tests could not see what they were named for: the cursor test
+    asserted only that the pass ends, but `seen` rises whether the cursor moves or not, so a cursor stuck at zero ends
+    too after grinding one page 20 000 times; and "the second caller is not harmed" opened its own transaction, so
+    there was no caller to harm. Three things nothing could write were **deleted rather than tested**:
+    `person_company.until` had no writer, `TieEvidence.MAIL` no producer until PR4, and the LIKE escaping on the name
+    branch was unreachable because `Normalizer.person` folds every non-letter to a space first.
+  - **Thirty-one revert checks red in all.** Five tests on this branch passed for the wrong reason and were rewritten:
+    one did the production call itself; one went through a column the normaliser folds, so the wildcard could never
+    show; one "refused" contact was never refused; one derived its loop from the very allow-list it was checking, so
+    narrowing the list narrowed the loop; and one asserted that both people **survive** a merge, the opposite of the
+    forgetting it was named for.
   - **Eight revert checks red**, each naming its test: `fill` overwriting what the row already says; the name asked
     before the address; one desk deleted from the list; the subdomain arm of `domainOf` (the hiring-platform case,
     where a company whose site *is* its ATS would read every outside recruiter as its own staff); the `agency=false`
