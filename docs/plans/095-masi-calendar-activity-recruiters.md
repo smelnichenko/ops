@@ -236,6 +236,32 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   Promoting it (`npm run test:layout` in Chromium, asserting no overlap, no sideways scroll, aligned columns, no tap
   target under 20 px) is its own change, and belongs before the next page this size.
 
+- **PR3a as built (masi #44), 2026-09-23.** `person`, `person_company` and `contact.person_id` (changeset 033), with
+  the address as the identity — one address is one person wherever they appear — and a name recognising someone only
+  among the people already tied to that company. Every tie carries the proof that made it (`TieEvidence` LISTING,
+  REGISTER, MAIL, PARTNER, OPERATOR) and a role is only claimed by evidence that can say it: `POST /persons/{id}/ties`
+  refuses `POSTED_FOR` and `REPRESENTS`, which are a listing's and the register's to say. `ContactOrigin.evidence()`
+  owns the mapping, so a contact a partner sent makes a `PARTNER` tie and a register row a `REGISTER` one.
+  - **The backfill was written twice, and the two disagreed.** The first version was a SQL changeset that restated the
+    recognising rules. Review against a throwaway PG 17 found three faults my tests had not: grouping by e-mail *and*
+    name violated `uq_person_email` (a boot failure), a missing `company_id is not null` guard was a second, and a
+    name-link without a company fabricated a cross-company tie. The rewrite was audited and still ignored the
+    shared-mailbox list and `contact.kind`, so one agency desk on two employers' listings would have become one
+    person tied to both. **The SQL is gone.** `PersonBackfill` walks the unlinked contacts by id cursor at
+    `ApplicationReadyEvent` and puts each through `PersonService.adopt` — the same rule a newly collected contact goes
+    through — in a transaction of its own, so a row that cannot be placed costs one row and not the pass. A migration
+    that restates a rule the code already owns is two rules; this is the lesson from 032 in a second form.
+  - **Two defects the new tests found.** A contact who asked not to be written to became a person who could be
+    (`doNotContact` was not carried onto the person, and a later sighting must not undo it); and the operator's
+    `PATCH /contacts/{id}` onto a colleague's address at the same company answered 500 where the partner API already
+    refuses it with 400 — the same guard now stands on both.
+  - **Eight revert checks red**, each naming its test: `fill` overwriting what the row already says; the name asked
+    before the address; one desk deleted from the list; the subdomain arm of `domainOf` (the hiring-platform case,
+    where a company whose site *is* its ATS would read every outside recruiter as its own staff); the `agency=false`
+    removal turned into a no-op; the page ceiling; the contact address guard; `doNotContact`. The list is pinned by
+    name as well as looped over — deriving the loop from the constant proves each entry works but lets an entry be
+    deleted with its own assertion.
+
 ## Status
 
 IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39) and PR2 (masi #40, site #21) all MERGED; PR3
