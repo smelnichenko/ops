@@ -341,6 +341,11 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
     key's holder first) — deleted rather than tested.
   - From the live registry, a PR3a defect: `recognised_at` was set only by the backfill, so every contact recognised
     at capture — the first new contact after the deploy among them — claimed nobody had looked. Fixed here.
+  - **Merged (masi #45) and deployed 2026-09-23 21:23 (18:23 UTC).** All five 034 changesets ran clean, 0 restarts;
+    every object present; the source seeded **disabled** at `0 30 21 ? * SUN`. Nothing about real people changed —
+    0 suppressions, 130 people, 0 unlinked. The `recognised_at` fix is not yet seen on a live row: contacts 130 and 131
+    arrived before the deploy under the old code, and none has arrived since; the next capture is the first proof.
+    **Not yet done: the first enabled run** — the real 1 GB dump against the 41 companies masi has met.
 
 - **THE GAP THAT CAPS PR3b, AND THE NEXT PR (measured 2026-09-23).** Of the 156 engaged companies only **41 have a
   registry code**. The other 115 include **every one of masi's biggest employers**: Bolt (86 jobs), Wise (68), Luminor
@@ -358,8 +363,9 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
 
 ## Status
 
-IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21) and **PR3a (masi #44)**
-all MERGED and live in schnappy-test. Next: **PR3b** — the register's board members as `REPRESENTS` ties, and EMTAK
-78.x rows kept for companies masi already knows, which is what will make `company.agency` mean something beyond the
-operator's own mark. Then PR3c (person and company pages) and PR4 (inbox). The CSS layout test and the job page's
+IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)** and
+**PR3b (masi #45)** all MERGED and live in schnappy-test; PR3b's source is seeded off. Next: **the EMTAK gap** (see
+above) — it caps PR3b at 41 of 156 companies and is worth more than PR3c's pages. Then PR3c (person and company
+pages) and PR4 (inbox). EMTAK 78.x agency rows moved out of PR3b: no collector can reach them while the import keeps
+62/63, so the operator marks agencies for now. The CSS layout test and the job page's
 bookings card are carried into PR3c. Enrichment and analysis batching (094 Later) queued behind them.
