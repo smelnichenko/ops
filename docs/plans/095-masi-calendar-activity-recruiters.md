@@ -316,6 +316,32 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
     has engaged with **156**: posted a job, had someone captured, or an operator mark. The runner hands a
     companies-scope source only the engaged codes, so a national dump is read past rather than stored.
 
+  - **The architecture review, then the test audit — and the audit found my fix for the review's worst defect had
+    introduced two more.** The review's critical: a register key that *missed* fell through to a name match, so two
+    board members sharing a name at one company (a father and son on one board) fused into one person, the second
+    key discarded for good. My guard accepted a weaker match only from a row "not keyed as somebody else" — and
+    checked the null on one side only. Once the register keyed a listing's contact row, the next ordinary listing
+    capture (unkeyed) was refused its own row, inserted a duplicate, broke `uq_contact_company_email`, and from then
+    on **no listing of that source would ever close** (a run with problems counts no misses). One level down the same
+    check made one address stop being one person. The rule that is right: **a conflict is both sides keyed and the
+    keys differ; a key missing on either side is no key.** Both round trips are tests, written first and seen failing
+    with the constraint violations.
+  - The review's other two criticals: `fill` could write across companies an address another person held
+    (`uq_person_email` at flush — same run-poisoning), and there was **no retention story** — a delete lasted until
+    Sunday, and a `REPRESENTS` tie was a permanent claim the source had stopped making. Now: an erasure leaves a
+    key-only suppression record the register cannot undo (the operator's delete only — a company merge is
+    housekeeping and bans nobody); a card that stops naming someone **ends** the tie, a card naming them again
+    **reopens** it, and `until` reaches the page; a card masi could not fully place retires nobody (fail closed).
+  - Also from the audit: an empty `lopp_kpv` would have dropped every board member in the country, because it was read
+    `!= null` while the dump already writes its sibling as `""`; the stream-safety caps the zip-bomb review cited were
+    asserted by nothing; the shared-key test passed on `[null, null]`; the timing test timed a copy of the loop, not the
+    collector — now **378 385 cards in 2.9 s through the shipped class**; and nothing walked source row → runner →
+    collector → ties end to end. **Thirty revert checks on the audit's fixes**; the two that stayed green were a test
+    that ran the one harmless order, and a `keyIsFree` guard that **cannot fire** (the keyed lookup always reaches the
+    key's holder first) — deleted rather than tested.
+  - From the live registry, a PR3a defect: `recognised_at` was set only by the backfill, so every contact recognised
+    at capture — the first new contact after the deploy among them — claimed nobody had looked. Fixed here.
+
 - **THE GAP THAT CAPS PR3b, AND THE NEXT PR (measured 2026-09-23).** Of the 156 engaged companies only **41 have a
   registry code**. The other 115 include **every one of masi's biggest employers**: Bolt (86 jobs), Wise (68), Luminor
   (22), SEB, Kaitseressursside Amet, Playtech, Skeleton, Bondora, Bigbank, Swedbank, LHV, Inbank. They are not missing
