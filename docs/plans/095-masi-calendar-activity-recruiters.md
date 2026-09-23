@@ -299,6 +299,37 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
     name as well as looped over — deriving the loop from the constant proves each entry works but lets an entry be
     deleted with its own assertion.
 
+- **PR3b as built (masi #45), 2026-09-23.** The register's card of who may represent a company, read for the companies
+  masi has met, recorded as `REPRESENTS`/`REGISTER` ties dated by the appointment — which PR3a's rule already produces,
+  so this is mostly a collector. The register publishes `isikukood_hash`, a hash of the ID code rather than the code,
+  so a consumer can follow a person between companies without holding anyone's ID; it becomes `person.register_id`
+  (unique) and outranks an address, because a card never shows one. That is what gives masi its **first cross-company
+  connections**.
+  - **Measured from the real 1 GB dump, and four things changed because of it.** Role codes across the whole file:
+    `JUHL` 450 210, `KISIK` 14 640, `PROK` 1 973, and **no supervisory-board role at all** — the default had been
+    `JUHL,NOUK,PROK` and `NOUK` does not exist, so it would have shipped dead like the two things PR3a deleted.
+    **8 769 of 497 598** entries carry no hash (foreign members, whose unhashed national code masi will not store), so
+    they fall back to a name within one company. Of 3 196 cards read in full, **none** had an ended term: the dump
+    publishes current entries only. A legal person **never** holds `JUHL` or `PROK` (524 338 entries), so that guard
+    is reachable only through config — `KISIK` is 14 018 legal entities — and is tested the way config would reach it.
+  - **"Companies masi knows" had to be redefined.** masi holds **28 134** companies (the whole EMTAK 62/63 import) but
+    has engaged with **156**: posted a job, had someone captured, or an operator mark. The runner hands a
+    companies-scope source only the engaged codes, so a national dump is read past rather than stored.
+
+- **THE GAP THAT CAPS PR3b, AND THE NEXT PR (measured 2026-09-23).** Of the 156 engaged companies only **41 have a
+  registry code**. The other 115 include **every one of masi's biggest employers**: Bolt (86 jobs), Wise (68), Luminor
+  (22), SEB, Kaitseressursside Amet, Playtech, Skeleton, Bondora, Bigbank, Swedbank, LHV, Inbank. They are not missing
+  by accident — **the register import keeps EMTAK 62/63, and these companies are registered under finance (64),
+  transport (49/52) and gaming (92)**, so their register rows were never imported at all. What masi holds instead are
+  unrelated lookalikes: `Wise Estonia OÜ`, `WiseLabs OÜ`, `SWEDBANK SUPPORT OÜ`, `Sebcode OÜ`, `Sebi Tech OÜ`. Only 4
+  of the 115 even have a website, and 1 of those matches a register row by domain; a name-prefix rule matches 18, of
+  which 16 are unambiguous — and **matching "Wise" to "Wise Estonia OÜ" would attach the wrong registry code, the
+  wrong board and the wrong EMTAK to the company holding 68 jobs**, which is the fabricated connection this whole area
+  exists to avoid. Consequence: every register fact — EMTAK, size, city, board members, the agency flag — is invisible
+  for the companies that matter most, and no amount of name cleverness fixes it. The import filter is what has to
+  change, and the match has to be **confirmed rather than guessed**. This is worth more than PR3c's pages and should
+  come before them.
+
 ## Status
 
 IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21) and **PR3a (masi #44)**
