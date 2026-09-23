@@ -420,11 +420,22 @@ never employers and names a company masi already holds (choosing it merges).
 Why this beats PR3c now: PR3b's board members reach 41 companies; every match here adds one, weighted towards the
 employers that actually hire.
 
+**Merged (masi #46) and deployed 2026-09-24 01:30 (22:30 UTC).** The three 035 changesets ran clean in 167 ms, 0
+restarts; `register_company`, `register_placement`, `register_rejection` and `ix_register_company_name_norm` exist;
+health 200, the candidate and person routes 401 without a token. The index is empty until the next **complete**
+`ariregister` read (Sunday 20:00, or the operator's Run now) — the guard that keeps a job-board run from pruning it.
+Still to measure on that first run: its duration against the 840 s deadline (104–125 s expected), the WAL a weekly
+rewrite of ~369 000 rows costs (the database is 24 MB beside 666 MB of pgdata, mostly WAL — an upsert of changed rows
+only, with an anti-join prune, is the follow-up if it matters), and what the pass places and what it leaves as
+candidates.
+
 ## Status
 
-IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)** and
-**PR3b (masi #45)** all MERGED and live in schnappy-test; PR3b's source is seeded off. Next: **the EMTAK gap** (see
-above) — it caps PR3b at 41 of 156 companies and is worth more than PR3c's pages. Then PR3c (person and company
-pages) and PR4 (inbox). EMTAK 78.x agency rows moved out of PR3b: no collector can reach them while the import keeps
-62/63, so the operator marks agencies for now. The CSS layout test and the job page's
+IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
+**PR3b (masi #45)** and **PR3d (masi #46, the register covers every business)** all MERGED and live in
+schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next complete register read. Next: **PR3e — the
+register marks agencies**: EMTAK 78.x was moved out of PR3b because the 62/63 import could not reach it; since PR3d a
+placed company carries its register EMTAK, so an employment agency is now visible, and the operator's own mark must
+still win over it. Two comments claim the opposite today (`CompanyPatch`: "no collector can tell"; `PersonController`:
+"a company the register marks"). Then PR3c (person and company pages) and PR4 (inbox). The CSS layout test and the job page's
 bookings card are carried into PR3c. Enrichment and analysis batching (094 Later) queued behind them.
