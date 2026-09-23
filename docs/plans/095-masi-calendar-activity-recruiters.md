@@ -396,6 +396,27 @@ Operations OÜ`), whose longer legal name does not match the bare brand. An exac
 3. **The operator confirms** through `GET /companies/{id}/register-candidates` and `POST /companies/{id}/register-match`
    (the page comes with PR3c). A confirmed code flows through the existing register machinery: facts, board members.
 
+**As built (masi #46), and what the two reviews changed.** The index and the matcher as designed, plus: a placement
+**never merges on its own** (making two companies one deletes one — the operator's call); every placement is written to
+the activity log; a placement records what it replaced and can be **taken back**, restoring exactly that — the register's
+website brings a domain, and a domain is an identity key, so left behind it routed another company's listings in — and
+the operator's no is remembered so the weekly pass does not place it again. The candidate list marks forms that are
+never employers and names a company masi already holds (choosing it merges).
+- **The architecture review ran the rule over the real register** and found `Revolut Ltd` attached to `Revolut MTÜ`, a
+  non-profit, and `Nitor Oy`, a Finnish IT consultancy, to `Nitor OÜ`, a leasing intermediary with no staff: a foreign
+  legal form had been read as proof of the registered name. The rule is now a positive list read from the register's
+  own forms (counted over the country: OÜ 293 490, KÜ 25 664, FIE 24 630, MTÜ 23 048, UÜ 3 659, AS 2 039 …), failing
+  closed: the board's form must be Estonian, **equal** the registered form, and be an employer's (OÜ, AS, SA, FIL, SE);
+  public bodies by the register's form (KOVAS, TRAS, AVOIG); names equal once a form is taken off their start and end
+  only. It also found a merge losing the operator's blacklist, note and rating — pre-existing, but reached now.
+- **The test audit found the critical one:** deleting the runner's "only after a register read" guard left all 866 tests
+  green — and without it every job-board run would prune the index to nothing. Also: a placement taken back came back
+  the next Sunday; taking one back left the website and its domain behind; and the form reader gave different answers
+  on different JVM starts (`Map.ofEntries` order is randomised per start, and two same-length forms tied), so the same
+  employer was placed on one pod and not the next. **Forty-four revert checks across the two rounds**, every one red
+  against a build that compiled; the forms the rule names are checked against the real dump through the shipped
+  collector.
+
 Why this beats PR3c now: PR3b's board members reach 41 companies; every match here adds one, weighted towards the
 employers that actually hire.
 
