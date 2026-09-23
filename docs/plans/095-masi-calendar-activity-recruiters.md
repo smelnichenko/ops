@@ -361,6 +361,44 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
   change, and the match has to be **confirmed rather than guessed**. This is worth more than PR3c's pages and should
   come before them.
 
+### PR3d — the register covers every business, and a match is confirmed rather than guessed
+
+**Operator, 2026-09-23:** *"we cannot limit IT vacancies just to IT companies, it can be any business."* The unit of
+interest is the vacancy, not the employer's industry: a bank hiring a Java developer is as relevant as a consultancy.
+
+Checked first: **nothing filters or down-ranks a vacancy by its employer's EMTAK** — the code is only stored and passed
+through, so jobs from any business are already collected. The IT assumption bites in one place: the register import
+keeps EMTAK 62/63, so register facts, board members and the agency flag are missing for every employer outside IT.
+
+**Measured against the whole country's register (377 146 distinct names), with masi's own `Normalizer`:** of 156
+companies masi has met, 115 have no register row, and they hold **486 of 599 jobs (81%)**. Of those 115: **76 exact
+unique** name matches (263 jobs), **10** where the name is a prefix of exactly one company (44), **7 ambiguous**
+(`Wise` → 45 candidates, `SEB` → 7, `LHV` → 6), **22 with no match** (88 — foreign-registered like `Luminor Group`,
+`Yolo`, `Betsson`, or brands like `TEHIK`, `TalTech`).
+
+**And "exact and unique" is not "correct".** `Bolt` (88 jobs) matches exactly one register row — **`Bolt UÜ`**, an
+unrelated limited partnership. The employer is **`Bolt Technology OÜ`** (beside `Bolt Services EE OÜ` and `Bolt
+Operations OÜ`), whose longer legal name does not match the bare brand. An exact-name auto-match would have attached
+88 jobs, their register facts and — through PR3b — their board members to a stranger, with full confidence.
+
+**Design.**
+1. **A country-wide register index**, separate from `company`: a lean `register_company` row (code, legal name,
+   `name_norm`, legal form, status, EMTAK, city, size band, website) for every entered company, with **no activity
+   filter**. Reference data to resolve employers against — public business data, not people — so `company` stays
+   "the companies masi deals with" and does not become the population. Filled by the `ariregister` run it already
+   streams (one download, not two), through a sink the runner provides, in batches; the 62/63 discovery set it returns
+   today is unchanged.
+2. **Matching produces candidates, and attaches only what is strong.** Strong: an exact `name_norm` match to one
+   company **and** the listing published a legal form (the board gave the legal name: `Bigbank AS`, `LHV Pank AS`), or
+   an exact match to a public body (a code in the 7xxxxxxx range, whose names are unique institutional names). Never
+   auto-attached: a partnership or sole trader (`UÜ`, `TÜ`, `FIE`) — the `Bolt UÜ` shape. Everything else waits for the
+   operator.
+3. **The operator confirms** through `GET /companies/{id}/register-candidates` and `POST /companies/{id}/register-match`
+   (the page comes with PR3c). A confirmed code flows through the existing register machinery: facts, board members.
+
+Why this beats PR3c now: PR3b's board members reach 41 companies; every match here adds one, weighted towards the
+employers that actually hire.
+
 ## Status
 
 IN PROGRESS 2026-09-23 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)** and
