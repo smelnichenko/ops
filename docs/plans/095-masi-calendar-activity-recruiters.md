@@ -429,13 +429,46 @@ rewrite of ~369 000 rows costs (the database is 24 MB beside 666 MB of pgdata, m
 only, with an anti-join prune, is the follow-up if it matters), and what the pass places and what it leaves as
 candidates.
 
+### PR3e — the register marks employment agencies; the operator's word still wins
+
+PR3b moved EMTAK 78.x agencies out of scope because the 62/63 import could not reach them. PR3d removed that wall:
+a placed company carries the register's main line of business. **Measured on the dump (EMTAK 2025 / NACE Rev. 2.1):
+2 015 entered companies have a current main activity in division 78** — labour hire 1 358 (`78201`/`7820`),
+placement 394 (`78101`/`7810`), other provision of people 263 (`78209`/`78301`). Among the companies masi has met,
+Grafton Estonia OÜ, Barona Eesti OÜ and Brandem Baltic OÜ match exactly, and `M-Partner` is a candidate for
+`M-Partner HR OÜ`. None of the four is placed yet, so none is marked until a placement is made.
+
+**As built (masi #47).** `company.agency` is a stored generated column,
+`coalesce(agency_mark, registry_code is not null and emtak_code like '78%', false)`. EMTAK reaches a company by
+several paths, one of them a single SQL statement over every coded company, and a rule restated on each path would
+drift. The operator's word is in `agency_mark`: either way it overrules the register, and `PATCH
+{agencyFromRegister: true}` takes it back. The upgrade carried every earlier `agency = true` over as a mark (0 rows
+live). The name-pattern fallback in the source table above was **dropped**: a name is not the register's word, and
+the operator's mark covers the recruiter registered under a consultancy code. **Rollback order: the database first
+(`rollbackCount 2`), then the image** — the old image writes `agency`, and Postgres refuses a value for a generated
+column.
+- **The architecture review** found the two writers of a company's line of business disagreeing. The IT import
+  recorded the 62/63 activity that brought a company in, and the refresh then set its main activity. So labour hire
+  with a software sideline was not an agency from the import until the refresh, and for a whole week whenever the
+  refresh did not run. Both now record the main activity. It also found that a partner's EMTAK on a code-less
+  company would mark it for good, never refreshed; the rule now needs a placement. And a mark could not be taken back.
+- **The test audit** ran 30 reverts. Four left the suite green: a merge dropping the operator's no, the tie badge,
+  the division's neighbours (`7%`, `%78%`), and a take-back to a prior line of business. All four are guarded now.
+  My own first merge test passed without merging, because the brand's name normalised to the holder's. It was fixed
+  and proven by the revert it had missed. **19 revert checks of mine over two rounds**, every one red against a build
+  that ran; the changeset's rollback is tested too.
+- Left as is: an unverified race in which an edit loaded just before the refresh writes the old EMTAK back. The window
+  is one request, and the next refresh heals it.
+- **Merged (masi #47) and deployed 2026-09-24 03:00 (00:00 UTC).** Both 036 changesets ran clean in 167 ms, 0 restarts;
+  `agency` is `GENERATED ALWAYS` with the expression above; 28 134 companies, 0 agencies and 0 marks — every coded
+  company still carries the 62/63 code the old import wrote. The next complete register read writes the main activity
+  (and fills the index), and that is when the first agencies appear; count them then. The company page (PR3c) has to
+  show whose word the flag is (`agencyMark` null = the register's) and offer "let the register decide".
+
 ## Status
 
 IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
-**PR3b (masi #45)** and **PR3d (masi #46, the register covers every business)** all MERGED and live in
-schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next complete register read. Next: **PR3e — the
-register marks agencies**: EMTAK 78.x was moved out of PR3b because the 62/63 import could not reach it; since PR3d a
-placed company carries its register EMTAK, so an employment agency is now visible, and the operator's own mark must
-still win over it. Two comments claim the opposite today (`CompanyPatch`: "no collector can tell"; `PersonController`:
-"a company the register marks"). Then PR3c (person and company pages) and PR4 (inbox). The CSS layout test and the job page's
+**PR3b (masi #45)**, **PR3d (masi #46, the register covers every business)** all MERGED and live in
+schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next complete register read. **PR3e (masi #47, the
+register marks agencies)** merged and live. Next: PR3c (person and company pages) and PR4 (inbox). The CSS layout test and the job page's
 bookings card are carried into PR3c. Enrichment and analysis batching (094 Later) queued behind them.
