@@ -564,7 +564,7 @@ It also passes "ten years of Java in avionics" on Java alone.
   - The free word score is written at once and stays until the AI row replaces it. The word refresh never overwrites an AI row.
   - A new master version is scored by words at once and by AI through the lane.
 - **Lane and budget:**
-  - The analysis lane gains a matching step under a new purpose `MATCH`, switched by `masi.matching.auto`, with its own per-tick count and max attempts.
+  - The analysis lane gains a matching step under a new purpose `MATCH`, switched by `masi.analysis.match-auto` (`MASI_MATCH_AUTO`), with its own per-tick count and max attempts.
   - The budget share is `MATCH: 0.25`. At the test namespace's $2.30 a day that is ~$0.57, about 70 postings a day. The 519-posting backlog takes about 8 days and costs about $4 of the $10 monthly cap ($1.24 spent this month).
 - **Model:** Haiku 4.5 by default (`masi.ai.match-model`), about $0.008 per posting. Haiku caches only prompts of 4096 tokens or more; rules plus master are about 3k, so nothing caches. Sonnet 5 (caches from 1024 tokens) is the step up if the evaluation below asks for it.
 - **Evaluation before it ranks:**
@@ -589,6 +589,35 @@ Revert checks:
 - PARTLY weighed as MET;
 - NOT_A_CV_THING counted.
 
+**PR3f as built (masi #52, platform dcb976d, infra d76d434).**
+- **First live evaluation (Haiku 4.5, 26 real requirement lists, 187 hand labels):** 96% agreement, against 46% for the word scorer (0% on Estonian). The model left one keyword out of a long list, so the prompt now names every id again at the end: 0 refusals since.
+- **Architecture review: 13 warnings, all fixed.** The ones that mattered:
+  - **Years from the dates overturned the model's NOT_MET** on a subject it had shortened: "Java in avionics" became MET on ten years of Java. The dates now decide only when the subject carries every word of the requirement, and otherwise only cap. Years no role shows are at most PARTLY.
+  - **Role names were one bag of words:** "React" plus a keyword "native app" made "React Native". Now one item names a subject; a title never by two letters ("R&D" is not R).
+  - **NOT_A_CV_THING let a hard requirement out of the score.** It now holds only for kind OTHER.
+  - **Target roles (wishes) were citable.** They are out of the catalogue.
+  - **Language alternatives:** any of the languages asked for will do, and absence counts only when every master language was read.
+  - **Budget:** the MATCH share squeezed the tune. SCORE goes to 0.10, and the shares are checked at startup to leave 15%.
+  - **Busy call slots:** a slot wait cost the posting an attempt in every lane. It now has its own exception, and the attempt is given back.
+  - **Also:** the drain flag, masters taking turns, the verdict stored only on its own row, a rewritten repost dropping its scores, the match model price-checked.
+- **Test audit: 101 mutations, 60 green.** Serious gaps:
+  - another master's rows could be taken;
+  - the switch was untested;
+  - one assertion could not fail.
+
+  All closed. The catalogue's text is now written by hand in the test, and 038 is run on the live shape. The revert checks: 16 + 36 + 1, all red.
+- **The model's behaviour, tuned against the set:**
+  - traits (problem-solving, product mindset) must not be credited from achievements;
+  - English is asked for on every requirement (asked only for non-English ones, it was left out on a whole run);
+  - reasons speak to the candidate, never by id.
+
+  **Final evaluation:** 97% agreement, 98% MET precision, 0 must-haves MET against their label. These floors are asserted by the (env-gated) evaluation.
+- **Live in test 2026-09-24:**
+  - masi 2b864a1: 038 ran on 536 live rows, all WORDS with 0 attempts;
+  - platform dcb976d passes `MASI_MATCH_AUTO`, `MASI_MATCH_PER_TICK` and `MASI_AI_MATCH_MODEL`;
+  - infra d76d434 switches the match on.
+- **Next:** PR3f-2, the site's Match card. It is previewed from real results and waits for the operator's go.
+
 ## Status
 
 IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
@@ -597,5 +626,6 @@ schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next compl
 register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the people and company pages)** merged;
 **PR3c-2 (site #23, masi #51, site #24: the job page's bookings; a merged job sends everything to where its merges
 end)** live in test 2026-09-24 (masi dd50b2e: 7 merged jobs, 0 rows or bookings stranded on them; site 938215b).
-Next: **PR3f (AI matching, operator 2026-09-24)**, then the Estonian master version (the CV's language follows the
+**PR3f (AI matching: masi #52, platform dcb976d, infra d76d434)** live in test 2026-09-24. Next: PR3f-2 (the
+site's Match card, previewed), then the Estonian master version (the CV's language follows the
 posting; a reviewed, parity-checked Estonian master), then PR3c-3 (the CSS layout test in CI), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
