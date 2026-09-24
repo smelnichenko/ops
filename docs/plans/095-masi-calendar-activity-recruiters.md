@@ -515,11 +515,25 @@ removed; its desks and addresses listed apart), the agency line, the Register ca
   `register_index_read` empty until the next complete register read; site #22 at ~09:00 — the people pages, the
   company's People and addresses cards and the Register card served from the new bundle.
 
+**PR3c-2 as built (site #23, masi #51, site #24): the job page's bookings, and what a merged job sends on.**
+- **The card:** a Bookings card on the job page, the first caller of `GET /calendar/job/{id}`.
+  - It lists bookings oldest first. Each opens its day in the calendar (the day in Tallinn, `&job=` kept).
+  - "Book a call or an interview" opens the week with `?job=`.
+  - The bookings load with the job: arriving late, they had pushed the note and its Save button 278 px down at 390 px.
+- **The review found the merge hole.** A booking, log row or note for a merged job went where no page shows it. masi #51 closes it:
+  - A booking or log row follows `mergedIntoId` through any chain (`JobRepository.survivorOf`, bounded at 20 hops). It takes the survivor's company.
+  - The job is read under a share lock (`findForShare`), so a merge committing meanwhile is waited for and followed (a latch test on `pg_locks`).
+  - A note on a merged job is 409.
+  - `JobDto.becameId` names where the chain ends. `/activity?job=` and `/activity/days?job=` read a merged job as that job.
+- **Site #24:** a merged job's page has a read-only note (the note written before the merge stays), no Save, and every link going to `becameId`.
+- **Revert checks:** 7 + 7 on #23, 12 on #51, 12 on #24, all red.
+
 ## Status
 
 IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
 **PR3b (masi #45)**, **PR3d (masi #46, the register covers every business)** all MERGED and live in
 schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next complete register read. **PR3e (masi #47, the
-register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the people and company pages)** merged.
-Next: PR3c-2 (the job page's bookings card) and PR3c-3 (the CSS layout test in CI, now with the people pages' 390 px
-measurements to hold), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
+register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the people and company pages)** merged;
+**PR3c-2 (site #23, masi #51, site #24: the job page's bookings; a merged job sends everything to where its merges
+end)** live in test 2026-09-24 (masi dd50b2e: 7 merged jobs, 0 rows or bookings stranded on them; site 938215b).
+Next: PR3c-3 (the CSS layout test in CI, now with the people pages' 390 px measurements to hold), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
