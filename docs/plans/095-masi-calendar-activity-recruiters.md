@@ -718,4 +718,10 @@ end)** live in test 2026-09-24 (masi dd50b2e: 7 merged jobs, 0 rows or bookings 
 USD a posting). **PR3f-2 (site #25, the Match card)** live. **PR3g (the master in Estonian): PR3g-1 (masi #53,
 translation + parity + review) and PR3g-2 (masi #54, an Estonian posting tuned from the Estonian master; the guard reads
 Estonian) live in test 2026-09-24 (masi 4dde79d, changeset 040); PR3g-3 (site #26, the translation card and the package
-language) merged 2026-09-24.** Next: PR3c-3 (the CSS layout test in CI), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
+language) merged 2026-09-24.** **PR3c-3 (site #27): the masi pages' layout measured in Chromium in CI** — `npm run
+test:layout` (`layout/`: the real pages under the real stylesheet, API answered from fixtures typed against `api.ts`),
+asserting at 390/1366 px no sideways scroll, no text past its box (width and height, tables and grid included),
+WCAG 2.5.8 target size with its spacing exception, the masi select height, every page's stress data drawn, and the
+calendar's lanes, hour rows and booking times. An empty stylesheet fails all 18. Its first run found four defects (day
+counts and day number reaching into the next day's cell on a phone; claims/lint not wrapping a URL; a bare 19 px
+select), fixed there; its audit found eight ways the checks could be fooled, all closed. Next: PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
