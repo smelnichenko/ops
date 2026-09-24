@@ -207,14 +207,21 @@
   ansible.builtin.shell: |
     kubectl run bucket-setup --rm -i --restart=Never \
       -n {{ velero_ns }} \
-      --image=quay.io/minio/mc:latest \
+      --image=rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5 \
       --overrides='{
         "spec": {
           "securityContext": {"runAsNonRoot": true, "runAsUser": 1000, "seccompProfile": {"type": "RuntimeDefault"}},
           "containers": [{
             "name": "bucket-setup",
-            "image": "quay.io/minio/mc:latest",
-            "command": ["sh", "-c", "export MC_CONFIG_DIR=/tmp/mc && mc alias set test http://versitygw-test.{{ velero_ns }}.svc:9000 minioadmin minioadmin && mc mb --ignore-existing test/velero && mc mb --ignore-existing test/postgres-backups"],
+            "image": "rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5",
+            "command": ["sh", "-c", "rclone mkdir test:velero && rclone mkdir test:postgres-backups"],
+            "env": [
+              {"name": "HOME", "value": "/tmp"}, {"name": "RCLONE_CONFIG", "value": ""},
+              {"name": "RCLONE_CONFIG_TEST_TYPE", "value": "s3"}, {"name": "RCLONE_CONFIG_TEST_PROVIDER", "value": "Other"},
+              {"name": "RCLONE_CONFIG_TEST_ENDPOINT", "value": "http://versitygw-test.{{ velero_ns }}.svc:9000"},
+              {"name": "RCLONE_CONFIG_TEST_ACCESS_KEY_ID", "value": "minioadmin"},
+              {"name": "RCLONE_CONFIG_TEST_SECRET_ACCESS_KEY", "value": "minioadmin"}
+            ],
             "securityContext": {"allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}
           }]
         }

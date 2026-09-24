@@ -15,7 +15,7 @@
 # format swap. MinIO is fully retired; versitygw owns :9000 on both Pis.
 #
 # Expects: the minio user (uid 9000, owns the Gluster mount), backup_root_user /
-# backup_root_password, forgejo_arch, mc on PATH, and the Gluster backup volume
+# backup_root_password, forgejo_arch, rclone on PATH, and the Gluster backup volume
 # mounted at vgw_gluster_mount.
 
 - name: Set versitygw default vars
@@ -131,10 +131,13 @@
 # records the bucket in its sidecar metadata (idempotent).
 - name: Ensure backup buckets exist (idempotent, via the gateway)
   ansible.builtin.shell: |
-    set -a; . /etc/versitygw/env; set +a
-    HOME=/tmp mc alias set vgw http://localhost:{{ vgw_port }} "$ROOT_ACCESS_KEY" "$ROOT_SECRET_KEY" --api S3v4 --path on
+    set -ea; . /etc/versitygw/env; set +a
+    # the rclone remote vgw is configured by environment alone (no config file); mkdir of an existing bucket is a no-op
+    export HOME=/tmp RCLONE_CONFIG="" RCLONE_CONFIG_VGW_TYPE=s3 RCLONE_CONFIG_VGW_PROVIDER=Other \
+      RCLONE_CONFIG_VGW_ENDPOINT=http://localhost:{{ vgw_port }} \
+      RCLONE_CONFIG_VGW_ACCESS_KEY_ID="$ROOT_ACCESS_KEY" RCLONE_CONFIG_VGW_SECRET_ACCESS_KEY="$ROOT_SECRET_KEY"
     for b in velero pg-dump postgres-backups scylla-backups etcd-backups; do
-      HOME=/tmp mc mb vgw/$b --ignore-existing
+      rclone mkdir "vgw:$b"
     done
   register: _vgw_buckets
   # /health can answer 200 before the S3 API is ready to serve bucket ops, so

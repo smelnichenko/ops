@@ -435,24 +435,21 @@
     # Phase 4: Backup object store — versitygw (MinIO retired 2026-06-27)
     # ================================================================
 
-    # mc + the storage user/group are tagged versitygw so a targeted
-    # `task deploy:versitygw` is self-contained on a fresh Pi (it skips Phase 3
-    # which would otherwise set forgejo_arch — so resolve it inline here too).
-    # MinIO retired dl.min.io's unversioned client downloads (410 Gone since
-    # 2026-09); RELEASE.2025-08-13 is the last mc published, pinned here from
-    # GitHub with its checksum so an installed binary never needs the network.
-    - name: Download mc (S3 client; used by the versitygw bucket bootstrap)
-      ansible.builtin.get_url:
-        url: "https://github.com/minio/mc/releases/download/{{ mc_release }}/mc.linux-{{ _mc_arch }}.{{ mc_release }}"
-        checksum: "sha1:{{ mc_sha1[_mc_arch] }}"
-        dest: /usr/local/bin/mc
-        mode: '0755'
-      vars:
-        mc_release: RELEASE.2025-08-13T08-35-41Z
-        mc_sha1:
-          arm64: f2a12e87ac27c21449f5e46c87788708ec4eba69
-          amd64: f287887779ebb2b069bdd76cab11b56f5c605f6b
-        _mc_arch: "{{ forgejo_arch | default('arm64' if ansible_architecture == 'aarch64' else 'amd64') }}"
+    # rclone + the storage user/group are tagged versitygw so a targeted
+    # `task deploy:versitygw` is self-contained on a fresh Pi.
+    # rclone (Debian's package) replaced MinIO's mc on 2026-09-24: MinIO retired
+    # dl.min.io (410 Gone) and its mc images, and RELEASE.2025-08-13 was the last
+    # mc it published — an abandoned client for a store that is versitygw anyway.
+    - name: Install rclone (S3 client; used by the versitygw bucket bootstrap)
+      ansible.builtin.apt:
+        name: rclone
+        state: present
+      tags: [versitygw]
+
+    - name: Remove the retired mc binary
+      ansible.builtin.file:
+        path: /usr/local/bin/mc
+        state: absent
       tags: [versitygw]
 
     - name: Create storage group (fixed GID for Gluster-neutral ownership)
