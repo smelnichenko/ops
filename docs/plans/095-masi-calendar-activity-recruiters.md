@@ -528,6 +528,67 @@ removed; its desks and addresses listed apart), the agency line, the Register ca
 - **Site #24:** a merged job's page has a read-only note (the note written before the merge stays), no Save, and every link going to `becameId`.
 - **Revert checks:** 7 + 7 on #23, 12 on #51, 12 on #24, all red.
 
+### PR3f — AI matching: a verdict per requirement, each citing the master's evidence
+
+Operator, 2026-09-24: "we need AI matching!". The word scorer (`MatchScorer`) does not catch:
+- **synonyms:** "K8s" or "container orchestration" against Kubernetes;
+- **implied skills:** Spring Boot means Java;
+- **concepts:** "distributed systems" against a sharding achievement;
+- **years, seniority and language levels** a requirement states;
+- **any posting not in English:** 136 of 519 open postings are "another language, no score" live, because the analysis keeps the posting's own language.
+
+It also passes "ten years of Java in avionics" on Java alone.
+
+**Shape: the model judges, the code verifies and counts.**
+- **Input:**
+  - *Requirements:* the requirement list the analysis already stores. Must-haves, keywords and nice-to-haves are numbered `M1…`, `K1…`, `N1…`, so the set is fixed by the analysis, not by the call.
+  - *Master:* the master as an evidence catalogue rendered by code from `CvModel`, byte-stable per version, each item with an id derived from its order: skills `S1…`, roles `R1…`, achievements `R1.A1…`, education `E1…`, certifications `C1…`, languages `L1…`, positioning `P`.
+- **Output, structured, per requirement:**
+  - `id`;
+  - `verdict`: MET, PARTLY, NOT_MET, or NOT_A_CV_THING;
+  - `evidence` ids;
+  - `kind`: SKILL, YEARS, LANGUAGE, DEGREE, DOMAIN, SENIORITY or OTHER;
+  - for YEARS, `years` and `subject`; for LANGUAGE, `language` (ISO 639-1) and `level` (CEFR);
+  - `english`: the requirement in English, for a posting in another language;
+  - `reason`: one line.
+- **The code verifies, and fails closed:**
+  - Every requirement must be answered exactly once, with no unknown ids. Otherwise the whole answer is refused: the attempt counts and the word score stands.
+  - An evidence id not in the catalogue is dropped. A MET or PARTLY left without evidence becomes NOT_MET.
+  - YEARS is decided by the master's dates when the subject is found in roles (tech, title, achievement keywords). Overlapping roles count once. At least the required years is MET, at least half is PARTLY, below that NOT_MET; the evidence is those roles.
+  - LANGUAGE is decided by the master's languages list when the language is recognised. At or above the level is MET, one step below is PARTLY, anything lower or not listed is NOT_MET.
+  - The code only decides what it can compute. Everything else keeps the model's verdict, which must cite evidence.
+- **The score** uses the word scorer's formula and weights (must 0.60, keywords 0.25, nice 0.15, `FULL_LIST` 3): MET = 1, PARTLY = 0.5, NOT_A_CV_THING left out. The number can be re-derived from the stored verdicts.
+- **Storage:**
+  - `job_match` gains `method` (WORDS | AI) and `ai_attempts`.
+  - `detail_json` keeps the old fields, derived, and gains `requirements[]`: each verdict with its evidence resolved to labels ("Nortal · Senior Engineer 2019-03 – 2022-06: cut p99 …") and `decidedBy` (model | dates | languages).
+  - The free word score is written at once and stays until the AI row replaces it. The word refresh never overwrites an AI row.
+  - A new master version is scored by words at once and by AI through the lane.
+- **Lane and budget:**
+  - The analysis lane gains a matching step under a new purpose `MATCH`, switched by `masi.matching.auto`, with its own per-tick count and max attempts.
+  - The budget share is `MATCH: 0.25`. At the test namespace's $2.30 a day that is ~$0.57, about 70 postings a day. The 519-posting backlog takes about 8 days and costs about $4 of the $10 monthly cap ($1.24 spent this month).
+- **Model:** Haiku 4.5 by default (`masi.ai.match-model`), about $0.008 per posting. Haiku caches only prompts of 4096 tokens or more; rules plus master are about 3k, so nothing caches. Sonnet 5 (caches from 1024 tokens) is the step up if the evaluation below asks for it.
+- **Evaluation before it ranks:**
+  - A labelled set in the repo: requirement lists copied from real analyses (phrases only, never posting text), in English and Estonian, against the fictitious sample CV, each with hand-written verdicts.
+  - An env-gated evaluation runs both matchers on it. AI replaces the word score in the ranking only when it agrees with the labels more often.
+  - CI tests the verifier and the scoring on recorded answers.
+- **Site:** the Match card lists each requirement with its verdict, the evidence it cites, the reason, and who decided (your dates, your languages). A requirement in another language shows in English, with the original beside it. The card says whether the score is the AI match or the word match.
+
+PRs:
+- **PR3f-1** (masi): catalogue, call, verifier, scorer, storage, lane, evaluation harness.
+- **PR3f-2** (site): the card.
+- **PR3f-3** (infra): the `MATCH` share and `matching.auto` on in test, after the evaluation passes.
+
+Revert checks:
+- a citation no longer checked;
+- a MET without evidence kept;
+- YEARS from the model instead of the dates;
+- overlapping roles counted twice;
+- the language level not checked;
+- an incomplete answer accepted;
+- the word refresh overwriting an AI row;
+- PARTLY weighed as MET;
+- NOT_A_CV_THING counted.
+
 ## Status
 
 IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
@@ -536,4 +597,5 @@ schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next compl
 register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the people and company pages)** merged;
 **PR3c-2 (site #23, masi #51, site #24: the job page's bookings; a merged job sends everything to where its merges
 end)** live in test 2026-09-24 (masi dd50b2e: 7 merged jobs, 0 rows or bookings stranded on them; site 938215b).
-Next: PR3c-3 (the CSS layout test in CI, now with the people pages' 390 px measurements to hold), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
+Next: **PR3f (AI matching, operator 2026-09-24)**, then the Estonian master version (the CV's language follows the
+posting; a reviewed, parity-checked Estonian master), then PR3c-3 (the CSS layout test in CI), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
