@@ -654,6 +654,34 @@ Operator, 2026-09-24:
   - the PDF template's headings and "present" are English, and need the tuned CV's language;
   - the language gate should read the prose too, not only the `language` field.
 
+**As built (masi #54, PR3g-2):**
+- **Which version a package is tuned from:**
+  - The operator's choice (`application_package.language`) comes first. Otherwise the posting's analysed language decides.
+  - The master's **current** translation into that language is sent as the CV block. With no current translation, the master is sent.
+  - The package keeps its master (`cv_version_id`) as its key. Changeset 040 records `master_version_id`, the version it was tuned from.
+- **The operator's choice:**
+  - `POST /jobs/{id}/packages?language=` and `POST /packages/{id}/regenerate?language=`.
+  - 409 without a current translation, 400 for a language masi does not write, and `auto` hands the choice back to the posting.
+  - If an asked-for translation stops being current, the package ends FAILED before any tune call.
+- **The guard in Estonian:**
+  - The language gate reads every part (summary, letter, each bullet) with `LanguageGuess`, so Russian is refused too.
+  - A metric part is kept when its figures are there (with their units, in order) and so are its other words, in any case ending. "40 kliendi" has not kept "40 teenust".
+  - A comma between digits is a decimal or a thousands group ("1,5 korda"), never a split.
+  - Two words are one when they share a stem of at least 4 letters and what is left on each side is a real Estonian ending: a stem vowel or plural marker, then a case ending ("teenust", "teenusele"). So a compound's head is not an ending ("andmetorustiku" is not "andmeteaduse"), and neither is a lookalike: "Nortalix" is not Nortal, "kasutajad" (users) is not "kasutus" (use). Bullet overlap and the role-words check both use this.
+  - The letter may name the company and the role with such a case ending ("Nortalile", "Developeri").
+  - A posting's figure in a first-person Estonian sentence ("Mul on 5 aastat…", "Töötasin…") is refused, as in English.
+  - Short bullets are also judged together.
+  - English is unchanged.
+- **Asking for a language:** on an existing package it is taken while the package is NEW, and is 409 once the package is tuned ("regenerate it").
+  - Regenerate checks again that the language asked earlier still has a current translation.
+  - A Russian master may be asked for in Russian, its own language.
+- **Russian translations:** parity refuses a translation into a language masi cannot check, so a hand-made Russian translation is never current and never tuned from.
+- **Labels:** Russian labels exist too, and a test pins the labels to every language the schema allows.
+- **The written-in language:** it is stored with the package (`written_in`), so the queue never parses a CV.
+- **Budget estimate:** it counts the longest version a package may send.
+- **The page:** the PDF's headings, "present" and "native" follow the master's language (`CvLabels`), and the lint reads Estonian duties and boilerplate.
+- **Still English in an Estonian CV:** the company-context line (domain, type, size, users). It is copied, never written, so a translated "type" cannot gain an adjective.
+
 PRs:
 - **PR3g-1** (masi): changeset, translation call, parity check, review.
 - **PR3g-2** (masi): tuning picks the language, the per-package switch, the language gate for any language.
