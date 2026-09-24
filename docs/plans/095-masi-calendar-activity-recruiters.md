@@ -682,6 +682,15 @@ Operator, 2026-09-24:
 - **The page:** the PDF's headings, "present" and "native" follow the master's language (`CvLabels`), and the lint reads Estonian duties and boilerplate.
 - **Still English in an Estonian CV:** the company-context line (domain, type, size, users). It is copied, never written, so a translated "type" cannot gain an adjective.
 
+**As built (site #26, PR3g-3):**
+- **The CV page's Translations card:**
+  - translate the active master into the other language, following the model's status;
+  - each translation's standing and its parity problems, with the way past them said in words;
+  - approve;
+  - an edited translation is saved as a translation.
+- **The package panel** says what a package is written in and from which version. Prepare and Regenerate take a language: the posting's by default, or English or Estonian.
+- **Reviewed:** two rounds in the rendered DOM at 1366, 375 and 320 px, and a test audit whose 17 tests kill all 43 mutants (the requests to masi pinned in `api.test.ts`).
+
 PRs:
 - **PR3g-1** (masi): changeset, translation call, parity check, review.
 - **PR3g-2** (masi): tuning picks the language, the per-package switch, the language gate for any language.
@@ -706,5 +715,7 @@ register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the
 **PR3c-2 (site #23, masi #51, site #24: the job page's bookings; a merged job sends everything to where its merges
 end)** live in test 2026-09-24 (masi dd50b2e: 7 merged jobs, 0 rows or bookings stranded on them; site 938215b).
 **PR3f (AI matching: masi #52, platform dcb976d, infra d76d434)** live in test 2026-09-24 (first live matches: ~0.0095
-USD a posting). Next: PR3f-2 (the site's Match card, site #25 in review), then PR3g (the master in Estonian) (the CV's language follows the
-posting; a reviewed, parity-checked Estonian master), then PR3c-3 (the CSS layout test in CI), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
+USD a posting). **PR3f-2 (site #25, the Match card)** live. **PR3g (the master in Estonian): PR3g-1 (masi #53,
+translation + parity + review) and PR3g-2 (masi #54, an Estonian posting tuned from the Estonian master; the guard reads
+Estonian) live in test 2026-09-24 (masi 4dde79d, changeset 040); PR3g-3 (site #26, the translation card and the package
+language) merged 2026-09-24.** Next: PR3c-3 (the CSS layout test in CI), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
