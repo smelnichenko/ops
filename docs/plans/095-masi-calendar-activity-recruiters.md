@@ -626,24 +626,33 @@ Operator, 2026-09-24:
 
 **Why translate the master and not each CV:** the fabrication guard compares a tuned CV with the master it was tuned from, bullet by bullet and number by number. An Estonian CV cannot be checked against an English master, and translating after the guard would put unguarded text in front of a recruiter. So the master is translated once, checked, reviewed, and kept as a version of its own.
 
-- **A translation is a `cv_version` of its own.** Changeset 039 adds `translated_from_id` (the source version) and `reviewed_at`. Its YAML is a complete master with `language: et`. It is never "the active master"; it is **current** while its source is the active version and it has been reviewed. When the operator activates a new English version, the translation turns stale and tuning falls back to English until it is translated again.
-- **Translating:**
-  - `POST /cv/versions/{v}/translations {language}` makes one call to the tuning model, with the source master as structured output.
-  - The code builds the translation from the model's text fields only: summary, positioning, scope, statements, problems, team role and degree names. Companies, dates, titles, tech, skills, metrics, certifications and languages are copied from the source, never from the model. Titles stay as the source has them, the way Estonian IT CVs usually carry them; the operator may edit any field afterwards.
-- **Parity check, deterministic, run on every save of a translation and required before `reviewed_at`:**
-  - the same roles in the same order, with the same companies, dates and titles;
-  - the same number of achievements per role;
-  - skills, tech, certifications and languages identical;
-  - every number of each source field present in its translation;
-  - every metric verbatim;
-  - no achievement's autonomy verb ranked above the source's, on an Estonian verb ladder (osalesin < panustasin < tegin ettepaneku < vastutasin/juhtisin < otsustasin).
-- **Review:** the CV page shows the translation beside its source with any parity violations. The operator edits, then approves (`POST …/translations/{id}/review`), which is refused while a violation stands.
-- **Tuning picks the language:**
-  - Estonian when the posting's analysis says `et` and a current Estonian translation exists; otherwise the master's own language;
-  - the package page can switch it ("Prepare in English / in Estonian");
-  - the package records the version it was tuned from (`package.master_version_id`). Its `cv_version_id` stays the active source, so "one package per job and active master" still holds.
-- **The language gate** in `ClaimsChecker` compares the output with the language of the version it was tuned from, for any language: Estonian by its letters and stop words, English by its stop words, Russian by Cyrillic. It no longer counts four Estonian letters against an English master only, so a Russian output no longer passes.
-- **Cost:** about 0.30 USD per translation (one Opus call over the master) and nothing extra per package. A translation's call is its own purpose, `TRANSLATE`, capped by the daily budget like the rest.
+**As built (masi #53):**
+- **A translation is a `cv_version` of its own.**
+  - Changeset 039 adds `translated_from_id` and `reviewed_at`, with a database check that a translation is never active.
+  - It is **current** when it is the newest reviewed translation of the active master in its language that still passes parity. A new master version, or a newer reviewed sibling, takes that from it.
+- **What the model is sent — prose only** (`MasterText`):
+  - summary, value proposition and differentiators;
+  - a role's location, team role, scope, statements, metrics and problems;
+  - skill-group names, education fields, language names, availability, work permit.
+- **What is copied, never written:** employers and their context line (domain, type, size, users; the hr rule is "rendered from master fields, never model prose"), titles, degrees, target roles, dates, tech, skills and certifications.
+- **Translating:** `POST /cv/versions/{v}/translations {language}` runs one call to the tuning model (purpose `TRANSLATE`) with each field as JSON, carrying the schema's `maxLength`.
+  - The answer is written back into a copy of the source.
+  - It takes half a minute or more, longer than a request may wait at the gateway: **202**, then `GET /cv/translation` (RUNNING / DONE with the version / FAILED with why). One at a time per user.
+  - Only **English and Estonian**, both ways: the ladder that checks a translation reads those two, and Russian waits for a Russian ladder.
+- **Parity (`MasterParity` + `Figures`), run on every read and required before approval:**
+  - every non-prose field is the source's, and every list is as long;
+  - every figure is kept with its magnitude or unit in any of the three languages, in order within each unit ("2 M" is not "2 miljardit", 800 ms and 120 ms never swap);
+  - a metric counts as in its statement when its figures are, in a row (Estonian inflects it);
+  - no verb in a role's scope, statements or team role, or in the candidate's own voice, ranks above the source's. The Estonian ladder reads verbs and role nouns, never verbal nouns, adjectives, or a leader in the object;
+  - a blank field stays blank;
+  - no sentence of four words or more comes back unchanged;
+  - the translation says its own language.
+- **Review:** `POST /cv/versions/{v}/review` approves, refused with every violation (409). `POST /cv/versions {yaml, translatedFrom}` saves the operator's edit, checked the same way.
+- **Real model:** the env-gated `MasterTranslationLiveTest` translates the sample master and requires parity as it comes back.
+- **For PR3g-2:**
+  - the claims gate's "metric verbatim in the bullet" must become "the metric's figures in the bullet", or an Estonian bullet that inflects its metric fails;
+  - the PDF template's headings and "present" are English, and need the tuned CV's language;
+  - the language gate should read the prose too, not only the `language` field.
 
 PRs:
 - **PR3g-1** (masi): changeset, translation call, parity check, review.
