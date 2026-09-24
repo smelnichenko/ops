@@ -156,6 +156,10 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    as summary and the text as detail, attachments dropped. Invariant: a mail from a known recruiter lands on
    their person and the company's log; an unknown sender makes a person without a tie; a replayed webhook
    writes one row.
+   **Operator, 2026-09-24:** build masi's side only for now — the webhook, verified and tested offline on
+   recorded signed payloads; the Resend endpoint (and its `whsec_` secret) waits until masi runs in production. The
+   address is on a **dedicated subdomain** (its own MX to Resend: a Porkbun DNS change at go-live), so masi takes
+   the mail sent to its configured addresses and ignores the rest of what Resend delivers.
 
 Later: ICS subscription; sent mail via a BCC address; reminders (a mail before an interview); a person's
 "last contact" ageing on the company list.
