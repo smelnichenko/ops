@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Block until a condition holds, then exit - for state the harness cannot see and longrun cannot run.
+#
+# WHY: ending a turn "waiting" for something (another session's build, a pod rollout, a file) wakes
+# nobody - the work stalls until the operator types "continue". Run this with the Bash tool's
+# run_in_background: its EXIT is the notification that wakes the session. For a command of your
+# own use ops/bin/longrun instead; for CI use forgejo-ci-wait.
+#
+#   wait-until <label> <timeout-seconds> <condition...>
+#
+# The condition runs with bash -c every 15 s; it exits 0 when the condition succeeds.
+# Exit: 0 met, 2 timeout, 3 bad usage.
+#
+# Built-in conditions (never `pgrep -f <pattern>`: it matches this waiter's own command line):
+#   no-java-in <dir>   no build JVM (wrapper, worker, test JVM; an idle daemon aside) works under <dir>
+set -u
+label=${1:-}; timeout=${2:-}
+shift 2 2>/dev/null || true
+[[ -n $label && $timeout =~ ^[0-9]+$ && $# -gt 0 ]] || { echo "usage: wait-until <label> <timeout-s> <condition...>" >&2; exit 3; }
+
+no_java_in() {
+    # an idle Gradle daemon stays for hours after its build: only the wrapper, workers and test JVMs mean a build runs
+    local dir=$1 pid cwd
+    for pid in $(pgrep -x java); do
+        cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null) || continue
+        [[ $cwd == "$dir"* ]] || continue
+        tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q GradleDaemon && continue
+        return 1
+    done
+    return 0
+}
+
+check() {
+    if [[ $1 == no-java-in ]]; then
+        no_java_in "$2"
+    else
+        bash -c "$*" >/dev/null 2>&1
+    fi
+}
+
+start=$(date +%s); deadline=$(( start + timeout ))
+while :; do
+    if check "$@"; then
+        echo "$(date +%H:%M:%S) $label: met after $(( $(date +%s) - start )) s"
+        exit 0
+    fi
+    if (( $(date +%s) >= deadline )); then
+        echo "$(date +%H:%M:%S) $label: TIMEOUT after $timeout s - never held: $*" >&2
+        exit 2
+    fi
+    sleep 15
+done
