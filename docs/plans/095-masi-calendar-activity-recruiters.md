@@ -494,10 +494,32 @@ their contact there (400 when they are not a contact of it — a tie first); a r
 contact's company; `GET /companies/{id}/register-match` — the placement and what taking it back restores, 204 when none
 or when its code is no longer the company's.
 
+**PR3c as built (masi #49, #50; site #22).** The people list and person page, the company's People card (Contacts
+removed; its desks and addresses listed apart), the agency line, the Register card. Reviews found, across three rounds:
+- **"Do not contact" set on a person was never enforced** — the letter's addressee and the partner export read the
+  contact row. Copying the flag onto the rows (first fix) held only for rows present at the time. Final shape: the rule
+  is read, in one place (`ContactRepository.WRITABLE`: neither the row nor its person refused), by both readers; a
+  contact's PATCH of it is the person's word; a flag set on a desk moves to the person the desk turns out to be, and off
+  the row (changeset 037 for rows already there). `ContactDto.doNotContact` is the answer, not the column.
+- **A typed registry code was placed without confirmation** (a merge nothing takes back) — now looked up
+  (`?code=`) and confirmed like a candidate.
+- **"The register has no company by this name"** while the index was empty or its prefix list truncated — the
+  candidates answer `{indexed, truncated}`; `indexed` is a mark (`register_index_read`) the refresh sets only after a
+  whole read written in full. **Live: not indexed until the next complete `ariregister` read.**
+- The confirmation pushed the page 50 px sideways at 390 px (measured headless); "Do not contact" submitted the form;
+  the page did not reload after a placement; the log link was offered on ties without a contact; the typed person
+  fields could not be cleared; a blank name was accepted.
+- Test audits: ~50 green mutations found and pinned across the three PRs (the real API functions, the routes, a
+  stateful parent for the card, sort edge cases, the export's count query). **~110 revert checks**, all red.
+- **Live in test 2026-09-24:** masi #50 at 08:45 (05:45 UTC) — changesets 037 ×2 clean, 0 stranded row flags,
+  `register_index_read` empty until the next complete register read; site #22 at ~09:00 — the people pages, the
+  company's People and addresses cards and the Register card served from the new bundle.
+
 ## Status
 
 IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
 **PR3b (masi #45)**, **PR3d (masi #46, the register covers every business)** all MERGED and live in
 schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next complete register read. **PR3e (masi #47, the
-register marks agencies)** merged and live. Next: PR3c (person and company pages) and PR4 (inbox). The CSS layout test and the job page's
-bookings card are carried into PR3c. Enrichment and analysis batching (094 Later) queued behind them.
+register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the people and company pages)** merged.
+Next: PR3c-2 (the job page's bookings card) and PR3c-3 (the CSS layout test in CI, now with the people pages' 390 px
+measurements to hold), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
