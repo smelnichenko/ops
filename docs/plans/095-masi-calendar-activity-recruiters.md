@@ -65,8 +65,8 @@ company's postings (identity by e-mail vs name).
 |---|---|---|
 | `person` | id, name, name_norm, email, email_norm (unique, nullable), phone, title, agency (bool), first_seen_at, last_seen_at, do_not_contact, user_note | identity: e-mail first, else name + one company; `contact` rows migrate into persons (`contact.person_id`), the contact staying the listing-level capture |
 | `person_company` | person_id, company_id, role (`POSTED_FOR` / `REPRESENTS` / `WORKS_AT` / `RECRUITS_FOR` / `TALKED_TO`), evidence (`LISTING` / `REGISTER` / `MAIL` / `OPERATOR`), evidence_ref (listing id, register code, activity id), since, until, unique (person, company, role, evidence, evidence_ref) | the tie with its proof; a role is never inferred from another |
-| `activity` | id, user_uuid, at, kind (`COLLECTED`, `ANALYSED`, `PREPARED`, `APPLIED`, `SENT_MESSAGE`, `RECEIVED_MESSAGE`, `CALL`, `INTERVIEW`, `OFFER`, `REJECTED`, `NOTE`, `SCHEDULED`), origin (`SYSTEM` / `OPERATOR` / `MAIL`), job_id, company_id, person_id, package_id, event_id, summary (≤ 300), detail (text), created_at | append-only; `at` is when it happened (a call yesterday logged today keeps yesterday); SYSTEM rows are written where the thing happens (ingest: one `COLLECTED` per new job; review `APPLIED`; the tuner `PREPARED`) |
-| `calendar_event` | id, user_uuid, kind (`CALL`, `INTERVIEW`, `DEADLINE`, `FOLLOW_UP`, `OTHER`), starts_at, ends_at, all_day, title, job_id, company_id, person_id, location (a room, a link), notes, outcome (`NONE` / `DONE` / `CANCELLED` / `NO_SHOW`), remind_before, created_at, updated_at | the operator's own; a posting's `expires_at` is shown as a deadline marker without a row |
+| `activity` | id, user_uuid, at, kind (`COLLECTED`, `ANALYSED`, `PREPARED`, `APPLIED`, `SENT_MESSAGE`, `RECEIVED_MESSAGE`, `CALL`, `INTERVIEW`, `OFFER`, `REJECTED`, `NOTE`, `SCHEDULED`), origin (`SYSTEM` / `OPERATOR` / `MAIL`), job_id, company_id, contact_id (the person through `contact.person_id`, see PR3c), package_id, summary (≤ 300), detail (text), created_at | append-only; `at` is when it happened (a call yesterday logged today keeps yesterday); SYSTEM rows are written where the thing happens (ingest: one `COLLECTED` per new job; review `APPLIED`; the tuner `PREPARED`) |
+| `calendar_event` | id, user_uuid, kind (`CALL`, `INTERVIEW`, `DEADLINE`, `FOLLOW_UP`, `OTHER`), starts_at, ends_at, all_day, title, job_id, company_id, contact_id, location (a room, a link), notes, outcome (`NONE` / `DONE` / `CANCELLED` / `NO_SHOW`), remind_before, created_at, updated_at | the operator's own; a posting's `expires_at` is shown as a deadline marker without a row |
 
 The day's numbers are derived, never stored: `sent` = APPLIED + SENT_MESSAGE, `collected` = COLLECTED,
 `communicated` = SENT_MESSAGE + RECEIVED_MESSAGE + CALL + INTERVIEW — counted by `at` in Europe/Tallinn days
@@ -177,8 +177,8 @@ Later: ICS subscription; sent mail via a BCC address; reminders (a mail before a
 
 ## Log
 
-- **PR1 as built (masi #37, site #20), 2026-09-22.** `activity` carries `contact_id` until PR3 brings persons (PR3
-  migrates it to `person_id`); the day counts live at `GET /activity/days` (counted in the database per Tallinn day)
+- **PR1 as built (masi #37, site #20), 2026-09-22.** `activity` carries `contact_id` (PR3c decided to keep it: see the
+  PR3c entry below — the person follows from the contact); the day counts live at `GET /activity/days` (counted in the database per Tallinn day)
   rather than inside `GET /calendar`; kinds shipped only with their writers (COLLECTED, PREPARED, APPLIED,
   the operator's seven) — SCHEDULED comes with PR2, a mail origin with PR4; a plain reply on a package is no row (a
   message received has one source: the operator, later the inbox); reposts stay in `lifecycle_event` (the job's
@@ -464,6 +464,35 @@ column.
   company still carries the 62/63 code the old import wrote. The next complete register read writes the main activity
   (and fills the index), and that is when the first agencies appear; count them then. The company page (PR3c) has to
   show whose word the flag is (`agencyMark` null = the register's) and offer "let the register decide".
+
+### Found while previewing PR3c: a no-reply address is nobody (masi #48)
+
+The preview of the person pages, built from the live rows, showed Bolt's only "person" as `noreply@cv.ee`: cv.ee's own
+mailbox, sent for every employer whose recruiter it hides. The shared-mailbox rule knew `info@`, `jobs@`, `hr@` and not
+the no-reply family, so the second employer listed that way would have been filed under Bolt's person, with a tie between
+two companies that never met (the failing test: both captures returned person 36). Fixed: `Normalizer.noReply` in the
+identity rule itself; capture keeps no such address; the operator's and the partner's edits refuse one with a 400;
+a partner item that was only one is refused in its report line (it had made the import 500); the rows stored before
+lose it at start through the same Java rule, one targeted update per row, contacts and people each on their own, a row
+that without its address duplicates its twin folded into it. **Two reviews, 24 revert checks.** Live 2026-09-24 06:28
+(03:28 UTC): "2 no-reply address(es) forgotten" — contact 123 and person 122 kept, linked, no address; 0 left.
+
+### PR3c — the people and company pages (masi #49 + site)
+
+**Operator, 2026-09-24:** People replaces Contacts on the company page ("ok to replace contacts") — two lists of the same
+people drift; `/masi/contacts` redirects to `/masi/persons`.
+
+**`activity.contact_id` stays; the person follows from it.** The migration to `person_id` the PR1 entry promised is not
+done, deliberately: the contact is the more specific record (this person at this company), a contact re-recognised as
+someone else takes its history with it, and `GET /activity?person=` is a subquery on `contact.person_id`. The cost is that
+deleting a contact would drop its rows (`SET NULL`), so every delete of a contact as another's duplicate — a company merge,
+the no-reply fold — hands its log rows and bookings to the one that stays; a register take-back's board contacts keep
+`SET NULL` (placed by mistake). A person merge, when one exists, repoints `contact.person_id`.
+
+masi #49: `GET /activity?person=` and `personId` on every row; `POST /activity` with a person and a company writes to
+their contact there (400 when they are not a contact of it — a tie first); a row with only a contact is about the
+contact's company; `GET /companies/{id}/register-match` — the placement and what taking it back restores, 204 when none
+or when its code is no longer the company's.
 
 ## Status
 
