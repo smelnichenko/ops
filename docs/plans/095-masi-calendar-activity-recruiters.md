@@ -160,6 +160,34 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    recorded signed payloads; the Resend endpoint (and its `whsec_` secret) waits until masi runs in production. The
    address is on a **dedicated subdomain** (its own MX to Resend: a Porkbun DNS change at go-live), so masi takes
    the mail sent to its configured addresses and ignores the rest of what Resend delivers.
+   **Operator, 2026-09-24: "be careful not to send anything anywhere".** The inbox only receives: it never
+   sends, replies or forwards, and nothing it stores is handed to a partner or put in a prompt.
+   **As built (masi #55):** `POST /api/masi/webhooks/resend` (the only `@PublicEndpoint`, allow-listed in
+   ArchitectureTest), off by default (404) and refusing to start when on without a signing secret; Svix
+   signature → 401 otherwise; bodies over 256 KB → 413. A delivery is ours when any To/Cc/Bcc recipient is a
+   configured address with an owner; the Resend email id is claimed first (unique), so a replay, or two deliveries
+   at once, write one row. **A mail makes no tie** — a From header anybody can write proves no employer: the sender
+   becomes a contact of no company (`FROM_MAIL`), a shared mailbox or a machine (no-reply, alerts, bounces) a nameless
+   desk, and a known person is never renamed by a header. The company goes on the activity only, when exactly one
+   company holds the sender's domain and it is no free-mail domain. `FROM_MAIL` contacts are never exported to
+   partners nor offered as addressees. The mail row keeps only the id, time, address, owner and activity. The body
+   is fetched from Resend only when `bodies.fetch` is on (off by default), with no redirects and a timeout.
+   Metric `masi_inbox_deliveries_total{outcome}`. `TieEvidence.MAIL` stays without a producer.
+   **Go-live checklist** (when masi runs in production), in order:
+   1. DNS: the subdomain's MX to Resend's inbound host (Porkbun), SPF/DMARC as Resend asks; nothing on the apex.
+   2. Resend: the inbound domain, a webhook for `email.received` only to `https://pmon.dev/api/masi/webhooks/resend`;
+      its `whsec_` secret to Vault `secret/<env>/masi` (`inbox_signing_secret`) through the ExternalSecret.
+   3. Bodies: keep `MASI_INBOX_FETCH_BODIES=false` unless Resend offers a receive-only key — the full-access key
+      that reads received mail can also SEND, which the operator's rule forbids masi to hold. Without it the
+      activity carries the subject and sender only.
+   4. Gateway: nothing to change today — the mesh's `RequestAuthentication` rejects an invalid token but lets a
+      request without one through, and masi's own `SecurityConfig` admits only `POST /webhooks/resend` without
+      one. If the gateway ever *requires* a JWT (an `AuthorizationPolicy` on `requestPrincipals`), this one path
+      must be exempted there, or Resend's deliveries stop at 403; step 6's smoke is what notices.
+   5. Chart env: `MASI_INBOX_ENABLED`, `MASI_INBOX_SIGNING_SECRET`, the address list
+      (`masi.inbox.addresses[0].address` / `.user`); egress to `api.resend.com` only if step 3 turns bodies on.
+   6. Smoke: a signed `email.delivered` event (no mail) posted to the live endpoint answers `NOT_A_MAIL`; an
+      unsigned one 401. Then one real mail from the operator's own address to the masi address.
 
 Later: ICS subscription; sent mail via a BCC address; reminders (a mail before an interview); a person's
 "last contact" ageing on the company list.
@@ -728,4 +756,7 @@ asserting at 390/1366 px no sideways scroll, no text past its box (width and hei
 WCAG 2.5.8 target size with its spacing exception, the masi select height, every page's stress data drawn, and the
 calendar's lanes, hour rows and booking times. An empty stylesheet fails all 18. Its first run found four defects (day
 counts and day number reaching into the next day's cell on a phone; claims/lint not wrapping a URL; a bare 19 px
-select), fixed there; its audit found eight ways the checks could be fooled, all closed. Next: PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
+select), fixed there; its audit found eight ways the checks could be fooled, all closed. **PR4 (masi #55, the inbox, receive-only)**
+merged 2026-09-25 (masi 2ad4370, changeset 041) and deployed to test with the inbox OFF: masi's side is built and
+proven offline (31 tests, 35 revert checks); the Resend endpoint, secret, MX and env wait for production (the go-live
+checklist under PR4). Next: enrichment and analysis batching (094 Later).
