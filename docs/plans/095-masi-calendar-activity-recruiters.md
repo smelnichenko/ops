@@ -618,6 +618,48 @@ Revert checks:
   - infra d76d434 switches the match on.
 - **Next:** PR3f-2, the site's Match card. It is previewed from real results and waits for the operator's go.
 
+### PR3g — the master in Estonian: an Estonian posting gets an Estonian CV
+
+Operator, 2026-09-24:
+- Match to an Estonian posting with a CV in its language, "translated and kept", rather than the "language mismatch" masi showed.
+- **The language a CV is written in is not a claim of level.** The level lives in the Languages section, which is copied from the master. So nothing is gated on the stated level (the hr skill is corrected to match).
+
+**Why translate the master and not each CV:** the fabrication guard compares a tuned CV with the master it was tuned from, bullet by bullet and number by number. An Estonian CV cannot be checked against an English master, and translating after the guard would put unguarded text in front of a recruiter. So the master is translated once, checked, reviewed, and kept as a version of its own.
+
+- **A translation is a `cv_version` of its own.** Changeset 039 adds `translated_from_id` (the source version) and `reviewed_at`. Its YAML is a complete master with `language: et`. It is never "the active master"; it is **current** while its source is the active version and it has been reviewed. When the operator activates a new English version, the translation turns stale and tuning falls back to English until it is translated again.
+- **Translating:**
+  - `POST /cv/versions/{v}/translations {language}` makes one call to the tuning model, with the source master as structured output.
+  - The code builds the translation from the model's text fields only: summary, positioning, scope, statements, problems, team role and degree names. Companies, dates, titles, tech, skills, metrics, certifications and languages are copied from the source, never from the model. Titles stay as the source has them, the way Estonian IT CVs usually carry them; the operator may edit any field afterwards.
+- **Parity check, deterministic, run on every save of a translation and required before `reviewed_at`:**
+  - the same roles in the same order, with the same companies, dates and titles;
+  - the same number of achievements per role;
+  - skills, tech, certifications and languages identical;
+  - every number of each source field present in its translation;
+  - every metric verbatim;
+  - no achievement's autonomy verb ranked above the source's, on an Estonian verb ladder (osalesin < panustasin < tegin ettepaneku < vastutasin/juhtisin < otsustasin).
+- **Review:** the CV page shows the translation beside its source with any parity violations. The operator edits, then approves (`POST …/translations/{id}/review`), which is refused while a violation stands.
+- **Tuning picks the language:**
+  - Estonian when the posting's analysis says `et` and a current Estonian translation exists; otherwise the master's own language;
+  - the package page can switch it ("Prepare in English / in Estonian");
+  - the package records the version it was tuned from (`package.master_version_id`). Its `cv_version_id` stays the active source, so "one package per job and active master" still holds.
+- **The language gate** in `ClaimsChecker` compares the output with the language of the version it was tuned from, for any language: Estonian by its letters and stop words, English by its stop words, Russian by Cyrillic. It no longer counts four Estonian letters against an English master only, so a Russian output no longer passes.
+- **Cost:** about 0.30 USD per translation (one Opus call over the master) and nothing extra per package. A translation's call is its own purpose, `TRANSLATE`, capped by the daily budget like the rest.
+
+PRs:
+- **PR3g-1** (masi): changeset, translation call, parity check, review.
+- **PR3g-2** (masi): tuning picks the language, the per-package switch, the language gate for any language.
+- **PR3g-3** (site): the CV page's translation card and the package page's switch.
+
+Revert checks:
+- a model-written number kept;
+- a title taken from the model;
+- a dropped achievement accepted;
+- a raised autonomy verb accepted;
+- review allowed while a violation stands;
+- a stale translation used;
+- an Estonian posting tuned in English while a current translation exists;
+- a Russian output passing against an English master.
+
 ## Status
 
 IN PROGRESS 2026-09-24 — PR1 (masi #37, site #20), PR1b (masi #39), PR2 (masi #40, site #21), **PR3a (masi #44)**,
@@ -626,6 +668,6 @@ schnappy-test; PR3b's source is seeded off, PR3d's index fills on the next compl
 register marks agencies)** merged and live; **PR3c (masi #49, #50, site #22: the people and company pages)** merged;
 **PR3c-2 (site #23, masi #51, site #24: the job page's bookings; a merged job sends everything to where its merges
 end)** live in test 2026-09-24 (masi dd50b2e: 7 merged jobs, 0 rows or bookings stranded on them; site 938215b).
-**PR3f (AI matching: masi #52, platform dcb976d, infra d76d434)** live in test 2026-09-24. Next: PR3f-2 (the
-site's Match card, previewed), then the Estonian master version (the CV's language follows the
+**PR3f (AI matching: masi #52, platform dcb976d, infra d76d434)** live in test 2026-09-24 (first live matches: ~0.0095
+USD a posting). Next: PR3f-2 (the site's Match card, site #25 in review), then PR3g (the master in Estonian) (the CV's language follows the
 posting; a reviewed, parity-checked Estonian master), then PR3c-3 (the CSS layout test in CI), then PR4 (inbox). Enrichment and analysis batching (094 Later) queued behind them.
