@@ -99,7 +99,8 @@ hand with the register's own page.
   PR2 adds the annual series to the same card.
 - **PR2 (RIK key indicators) — MERGED masi #64 (e061dc4), LIVE in test 2026-09-25 22:07 Tallinn**: changeset 046 ran,
   `ariregisteraruanded` seeded OFF (weekly, Mondays 07:20). Joined on report_id AND the second id; own figures only.
-- **PR3b (site: the annual series on the card)** — branch `masi/company-figures-years`: a chart by financial year
+- **PR3b (site: the annual series on the card) — MERGED site #31, LIVE in test 2026-09-26 00:21 Tallinn** (with #32,
+  the unit tests' timeout raised for a loaded CI node — main's pipeline for #31 timed out a 0.3 s test after ten's restart): a chart by financial year
   (named by when each year ends), the annual headcount a dashed step held across its year's quarters on the employees
   chart, latest year's revenue and profit; reviewed (web-ui + test audit), fixtures from the real files (HORTICOM
   years to July, ARTISTON an 18-month transition year, 10002603 years only).
