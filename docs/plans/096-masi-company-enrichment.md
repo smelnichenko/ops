@@ -299,6 +299,20 @@ the proof too loose, and the rules change to:
   evidence and URLs cut to their columns; ISP mail (elion.ee, estpak.ee, starman.ee) is free mail; ATS and more
   aggregators (eestiinfo.ee, 1182.ee) are platforms; `INDEX_NOT_READY` does not end a visit.
 
+**Reworked 2026-09-25** on main after 097 PR2 (changeset 045 beside 046), as those rules, plus what building them
+showed:
+- `placeBySite` catches what adopting the code throws (`RegistryCodeConflictException` → placed meanwhile,
+  `CompanyNotFoundException` → merged meanwhile) rather than re-reading first, which would leave the catches
+  unreachable; the code the employer already holds reads as placed, not as another company's. A company merged away
+  mid-visit gets no row (the insert's foreign key), and no failure.
+- A company's own site (the board's website) that proves no code is still `KNOWN_SITE` and its careers page read,
+  **unless it prints another employer's code**; the old shortcut that took a coded company's own site unread is
+  gone, since a board's website may be the agency's. A site that redirected elsewhere is never known or matched by
+  where it came from.
+- Contact and careers words are whole words; a stem (`kontakt*`, `karjäär*`) takes Estonian endings.
+- The matcher counts no platform's mailer among a company's people (an ATS's no-reply no longer outvotes them).
+- 51 service tests, each on its own fixture domain (the certificate now names firma1–40.ee, firma1–20.com).
+
 **Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
 companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
 by name** (PR3d's rule, first run with a filled index) and **7 by domain** (PR2): Fontes PMP, Ida-Tallinna
