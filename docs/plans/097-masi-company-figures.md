@@ -50,11 +50,14 @@ indicators file carries the money.
 
 - **Reference tables keyed by registry code**, like `register_company`: `company_figure_year` (registry_code, year,
   period_end, revenue, total_revenue, operating_profit, profit, employee_expense, avg_employees, assets, equity, source
-  file date) and `company_figure_quarter` (registry_code, year, quarter, turnover, employees, state_taxes, labour_taxes).
-  Kept for the registry codes masi holds (companies with a code) — not the whole country: a company placed later gets its
-  figures on the next read. Idempotent upserts; a re-read replaces a row (corrections happen).
+  file date) and `company_figure_quarter` (registry_code, year, quarter, turnover, employees, state_taxes, labour_taxes,
+  published = the file's `Data date`). Kept for the companies masi has **met** (`findEngaged`: a job, a contact, a note, a
+  rating — the same rule the board-members source uses), not every coded row and not the whole country: a company met
+  later gets its figures on the next read. Idempotent upserts; a re-read replaces a quarter (corrections happen) unless
+  the quarter held came from a later publication.
 - **Collectors**: `ariregisteraruanded` (the key-indicator files, monthly, one zip per year streamed like the register
-  dump, only rows whose code masi holds) and `emtamaksud` (the quarterly CSV, the latest quarters, same filter). Each has
+  dump, only rows whose code masi has met) and `emta` (the two quarterly CSVs, older first, on the 12th of January,
+  April, July and October; only legal persons' taxpayer types — an unknown type is skipped and named on the run). Each has
   its seeded, disabled-by-default `source` row, a fixture cut from a real file, a byte budget, and the strict allow-list
   (`emta.ee`'s download host added to the chart's `masiService.http.allowedHosts`).
 - **API**: `GET /companies/{id}/figures` → `{ years: [...], quarters: [...] }`, empty for a company without a code.
@@ -81,6 +84,17 @@ source. Live: after the first reads in test, the figures of a few known employer
 hand with the register's own page.
 
 ## Status
+
+- **PR1 (EMTA quarterly) — MERGED masi #62 (03f90a5), LIVE in test 2026-09-25 18:40 Tallinn (15:40 UTC)**: changeset 044
+  ran, `emta` seeded OFF (COMPANIES, `0 40 6 12 1,4,7,10 *`), `company_figure_quarter` empty until the first run;
+  platform efbc6c0 put `ncfailid.emta.ee` on the allow-list (in the pod's env). Architecture review + test audit
+  findings all fixed (a failed second file or a timeout keeps what was read, an older publication never wins,
+  legal-person allow-list, parsed = quarters written); 55 revert checks, all red. The audit ran both real files
+  (1.08 M rows) through the collector against an independent oracle: identical.
+- **PR3 (site Figures card)** — built ahead of PR2 (the masi tree is lent to 096 PR4b-1): quarterly charts only;
+  PR2 adds the annual series to the same card.
+- **PR2 (RIK key indicators)** — waits for the masi tree; changeset 046. Both files measured: current 62 MB / 442 909 rows
+  (2025–2026), previous 93 MB / 642 228 rows (2022–2024), same header, published 10.07.2026.
 
 DRAFT 2026-09-25 — sources verified from real downloads and coverage measured; PR1 starts after masi #61 (the address)
 merges (site #29 is merged and live).
