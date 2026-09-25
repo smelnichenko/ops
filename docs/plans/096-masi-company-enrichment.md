@@ -263,3 +263,13 @@ no connection is reused, no JVM proxy. 24 revert checks. The client is HTTP/1.1 
 h2): collector run statuses compared with the day before, 2 h after the deploy. `BrowserSession` still validates with
 `UrlValidator.validate` (Chromium resolves again) — its egress policy is the control there; the fetcher PR4 builds on
 `PinnedResolver`.
+**PR4a (masi #60) merged 2026-09-25** (masi 3e5c0ad): `enrich/OpenWebFetcher` + `Visit` + `RobotsRules`, used by nothing
+yet — HTTPS on 443 only (http read over https), no address as the host (a numeric last label included), IDN in ASCII,
+GET only, no cookies/compression/proxy/reuse, a deadline per request that also covers a dripping body, responses not
+read to their end aborted; a visit: 10 requests (robots and hops counted, an unresolvable name costs none), robots per
+host and per hop (a linear wildcard walk — a regex let a hostile pattern pin the thread —, product-token groups,
+percent-encoded, BOM; 4xx allows, 429/5xx/unreadable disallows), 2 s per host, HTML only, 1 MB. Its review (3
+critical: ReDoS, unknown charset and malformed Location throwing) and audit (18 untested mechanisms) folded in —
+partly by a resumed peer session (monitor-40), merged; 33 revert checks. Tests run against an HTTPS fixture server
+with a test-only certificate; nothing leaves the test. Next: PR4b — the enrichment service (candidates, proof,
+placement, careers page, ATS), `company_enrichment` (043), the scheduler, `CompanyPatch.website`.
