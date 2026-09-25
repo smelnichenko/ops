@@ -25,8 +25,26 @@ Operator, 2026-09-25: *"also would be nice to have number of employees and turno
 | Tax and Customs Board (EMTA) "tasutud maksud, käive ja töötajate arv" | **state taxes**, **labour taxes**, **turnover**, **employees** | per company per quarter (since 2017) | quarterly, 10th of the month after | open data (reuse, commercial too) | CSV per quarter from `emta.ee` — the exact file URLs and column names are confirmed in PR1 before any code |
 
 The register's general data dump (read weekly already) carries only the employee count per annual report; the key
-indicators file carries the money. The exact column names of both files are read from a real download in PR1 and
-recorded here; the fixtures are cut from those downloads.
+indicators file carries the money.
+
+**Measured 2026-09-25 from real downloads** (scratch `/home/sm/scratch/figures`):
+- **EMTA** `tasutud_maksud_kaesolev_aasta_eng.csv` (current + previous year, 62 MB, 442 910 rows) and
+  `…_varasemad_aastad_eng.csv` (2022–2024): comma CSV, one row per company per year — `Data date, Registry code, Name,
+  Type, County, Activity, Year`, then `State taxes I–IV qtr`, `Labour taxes and payments I–IV qtr`, `Turnover I–IV qtr`,
+  `Number of employees I–IV qtr` (a future quarter is empty). Served from `ncfailid.emta.ee` (a Nextcloud share: the
+  `/s/<token>/download/…` link answers 303 to `/public.php/dav/files/<token>` on the same host — the token URLs are
+  configuration, not code). **Covers every taxpayer**: Nortal AS 2026 Q1 367 employees, turnover 64.9 M; Swedbank AS
+  has taxes and employees but **no turnover** (banks report no VAT turnover — a gap, never zero).
+- **RIK key indicators** `4.<year>_aruannete_elemendid_kuni_<date>.zip` (2024: 24 MB zip, 319 MB CSV, 3.87 M rows):
+  long form `report_id;tabel;elemendi_label;elemendi_nimetus;vaartus` (semicolon, quoted); elements used: `Revenue`,
+  `TotalProfitLoss` (operating), `TotalAnnualPeriodProfitLoss` (net), `AverageNumberOfEmployeesInFullTimeEquivalentUnits`,
+  `LaborExpense`/`EmployeeExpense` (two report schemes), `Assets`, `Equity`. Joined to companies through
+  `1.aruannete_yldandmed_…zip` (255 MB CSV: `report_id, registrikood, aruandeaasta, kas konsolideeritud?, period_start,
+  period_end, esitatud_kpv, …`). The 2024 file holds 257 252 reports, 822 consolidated.
+- **Coverage of the 97 hiring companies with a code (test, 2026-09-25):** 75 filed a 2024 report; **58 have revenue in the
+  key indicators**. Missing are exactly the large employers — banks (Swedbank, Inbank, Holm Bank), insurers (ERGO, If),
+  IFRS / group filers (Nortal, Admirals, Tallinn Airport, Elenger), foundations. **EMTA covers them all**, so it comes
+  first.
 
 ## Architecture
 
@@ -48,10 +66,11 @@ recorded here; the fixtures are cut from those downloads.
 
 ## PRs
 
-1. **masi — the register's key indicators**: confirm the file layout from a real download; fixture; collector,
-   `company_figure_year`, API. Allow-list unchanged (same host).
-2. **platform/infra + masi — EMTA quarterly**: allow-list the download host; fixture; collector,
-   `company_figure_quarter`; API.
+1. **platform/infra + masi — EMTA quarterly** (first: it covers the large employers): allow-list `ncfailid.emta.ee`;
+   fixture cut from the real file; collector (streamed, only held codes), `company_figure_quarter`; API.
+2. **masi — the register's key indicators** (revenue and profit for the companies that file them): the two RIK files,
+   streamed and joined on `report_id`; `company_figure_year`; the company's own (non-consolidated) report, else the
+   consolidated one; API. Allow-list unchanged (same host).
 3. **site — the Figures card**: charts, tests, layout spec.
 
 ## Verification
@@ -63,4 +82,5 @@ hand with the register's own page.
 
 ## Status
 
-DRAFT 2026-09-25 — sources verified; PR1 starts after masi #61 and site #29 (the address) merge.
+DRAFT 2026-09-25 — sources verified from real downloads and coverage measured; PR1 starts after masi #61 (the address)
+merges (site #29 is merged and live).
