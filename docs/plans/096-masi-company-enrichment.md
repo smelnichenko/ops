@@ -240,3 +240,15 @@ IN PROGRESS 2026-09-25 — first draft reviewed (3 critical, 11 warnings, 8 sugg
 `website_domain`/`email_domain`; its review found malformed hosts (`lhv..ee` → `.ee`), two forms of Estonian-letter
 domains, platform sites keyed to the platform, and the register's free-text fields read wrongly — all fixed; 25
 revert checks. The columns fill on the next register read (Sunday 20:00 UTC, or "Run now" — the operator's click).
+**PR2 (masi #57) merged and live in test 2026-09-25** (masi 7069f65): placement by the employer's domain — the board's
+site, else a domain at least half its people write from — to exactly one registered company that is it by name (same
+name core, or a registered name beginning with it as whole words, only while the brand is no company of its own and
+the name is no common start), employer form, the board's form; never a held or rejected code; no domain another company
+holds; platform pages give no website domain. Its review found brand→subsidiary fusion (alias pull), stray contacts,
+and a domain written into a second company — all fixed; 31 revert checks. Measured once the register read fills the
+index. The site's `DOMAIN` label is a follow-up.
+**Operator, 2026-09-25: "never use eesti.ee for emails", "cleanup from eesti.ee" → masi #58** (merged): one rule,
+`Normalizer.refusal`, refuses a no-reply mailbox or a resident's state inbox (`@eesti.ee`, read as the registrable
+domain) on every path that stores, derives or mails an address — capture, identity, the operator's and the partner's
+edits (400), the inbox (no contact), the digest (never mailed), the mail and inbox settings (no start); the startup
+repair forgets any stored before. None was stored in test or production.
