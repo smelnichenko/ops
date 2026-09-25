@@ -272,4 +272,12 @@ percent-encoded, BOM; 4xx allows, 429/5xx/unreadable disallows), 2 s per host, H
 critical: ReDoS, unknown charset and malformed Location throwing) and audit (18 untested mechanisms) folded in —
 partly by a resumed peer session (monitor-40), merged; 33 revert checks. Tests run against an HTTPS fixture server
 with a test-only certificate; nothing leaves the test. Next: PR4b — the enrichment service (candidates, proof,
-placement, careers page, ATS), `company_enrichment` (043), the scheduler, `CompanyPatch.website`.
+placement, careers page, ATS), `company_enrichment` (044 — 043 goes to the address feature), the scheduler,
+`CompanyPatch.website`.
+**Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
+companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
+by name** (PR3d's rule, first run with a filled index) and **7 by domain** (PR2): Fontes PMP, Ida-Tallinna
+Keskhaigla, Inbank, Kühne + Nagel, M-Partner HR, Omniva, Swedbank — each checked by hand, all right. Hiring companies
+without a registry code: **47 of 144** (≈ 99 in the morning); without a website: 96 (the register's WWW is often empty,
+or the domain is another company's). PR3 (#59) on live collectors, 2 h after its deploy: every source OK but one cv.ee
+detail page answering 500 (the board's).
