@@ -313,6 +313,22 @@ showed:
 - The matcher counts no platform's mailer among a company's people (an ATS's no-reply no longer outvotes them).
 - 51 service tests, each on its own fixture domain (the certificate now names firma1–40.ee, firma1–20.com).
 
+**Second review round (same day), stricter than the rules above where they differ:**
+- a site whose **registrable domain another company holds, under any host** (careers.firma.ee holds firma.ee), is not
+  judged at all — no `KNOWN_SITE`, no placement, no careers page or ATS; a board may give two clients one agency site;
+- a **guess is never a tie**, not even with the register giving the domain: for a company without a code the guess
+  and the register's name are one signal, the name ("Helix" → the one Helix OÜ, a flower shop). The register's
+  e-mail domain for a known code is a `REGISTER` candidate instead;
+- a **redirect carries no tie**: where it went ties only when the register gives that domain (a lapsed domain
+  forwarding to another company's site must not place);
+- a printed code the register does not know counts as another company's (guards fail closed);
+- the register busy is `REGISTER_BUSY`, not stamped (visited again); `INDEX_NOT_READY` wins over an earlier
+  unconfirmed site; a failed save rethrows unless the company is gone;
+- `pri.ee` and `fie.ee` are a person's zones, like free mail; a platform's own company keeps its domain
+  (teamdash.com is Teamdash's);
+- for PR4b-2: `enrich()` lets a database failure propagate (writes are fill-only, a repeated visit finds the same) —
+  the scheduler catches per company and does not stamp; it revisits `INDEX_NOT_READY` and `REGISTER_BUSY` soon.
+
 **Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
 companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
 by name** (PR3d's rule, first run with a filled index) and **7 by domain** (PR2): Fontes PMP, Ida-Tallinna
