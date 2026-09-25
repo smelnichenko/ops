@@ -252,3 +252,14 @@ index. The site's `DOMAIN` label is a follow-up.
 domain) on every path that stores, derives or mails an address — capture, identity, the operator's and the partner's
 edits (400), the inbox (no contact), the digest (never mailed), the mail and inbox settings (no start); the startup
 repair forgets any stored before. None was stored in test or production.
+**Site #28** (merged, live): the register card says how each candidate was found (same name / starts with it / its
+people write from its domain / the code you typed) — a typed code had also read "starts with it".
+**PR3 (masi #59) merged and live in test 2026-09-25** (masi 3170eb4): the collectors' `HttpFetcher` on HttpClient 5
+with `validation/PinnedResolver` — a name resolved once per connection, one internal address refuses the whole answer,
+the port judged with the addresses, the connection uses exactly the judged addresses; `UrlValidator.validateShape`
+without DNS. Its review found that closing an HttpClient 5 response reads the rest of its body (a page over the cap
+would have been downloaded all the same) — responses not read to their end are aborted; the pool is 20 per host / 100,
+no connection is reused, no JVM proxy. 24 revert checks. The client is HTTP/1.1 only (the JDK client could negotiate
+h2): collector run statuses compared with the day before, 2 h after the deploy. `BrowserSession` still validates with
+`UrlValidator.validate` (Chromium resolves again) — its egress policy is the control there; the fetcher PR4 builds on
+`PinnedResolver`.
