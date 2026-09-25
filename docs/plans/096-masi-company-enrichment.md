@@ -174,7 +174,13 @@ candidates.
 2. **masi — placement by domain (step 1)**, candidates found this way offered as `DOMAIN`; measured in test after
    a register read: how many of the 99. The site labels `DOMAIN` candidates (site PR with item 5).
 3. **masi — the collectors on the pinned resolver** (the rebinding gap).
-4. **masi — the open fetcher and step 2**, `company_enrichment`, the scheduler, metrics; off by default.
+4. **masi — the open fetcher and step 2**, in three: **4a** the fetcher (#60, merged); **4b-1** the
+   `EnrichmentService` — candidates, proof (`PROVED`/`MATCHED`/`FOREIGN`/`UNCONFIRMED`/…), placement through
+   `RegisterMatcher`'s guards, careers page, single-vendor ATS through `attachAts`, conditional fills —
+   `company_enrichment` (the next free changeset after the figures work's), `CompanyService.merge()` repointing it,
+   driven only by tests; **4b-2** the `EnrichmentScheduler` (off by default, hiring companies, the revisit rules,
+   stamp only a finished visit, 180-day retention), metrics, `CompanyPatch.website` (Accept) and the company DTO's
+   latest enrichment row; **infra** enables it in test.
 5. **site** — the company card: evidence, Accept, held code, foreign candidates.
 6. **infra** — `masi.enrich.enabled` in test; after a day, coverage by outcome recorded here.
 
