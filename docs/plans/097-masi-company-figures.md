@@ -97,7 +97,16 @@ hand with the register's own page.
   (1.08 M rows) through the collector against an independent oracle: identical.
 - **PR3 (site Figures card)** — built ahead of PR2 (the masi tree is lent to 096 PR4b-1): quarterly charts only;
   PR2 adds the annual series to the same card.
-- **PR2 (RIK key indicators)** — waits for the masi tree; changeset 046. Both files measured: current 62 MB / 442 909 rows
+- **PR2 (RIK key indicators) — MERGED masi #64 (e061dc4), LIVE in test 2026-09-25 22:07 Tallinn**: changeset 046 ran,
+  `ariregisteraruanded` seeded OFF (weekly, Mondays 07:20). Joined on report_id AND the second id; own figures only.
+- **PR3b (site: the annual series on the card)** — branch `masi/company-figures-years`: a chart by financial year
+  (named by when each year ends), the annual headcount a dashed step held across its year's quarters on the employees
+  chart, latest year's revenue and profit; reviewed (web-ui + test audit), fixtures from the real files (HORTICOM
+  years to July, ARTISTON an 18-month transition year, 10002603 years only).
+- **Follow-up (masi, after monitor-a3's PR #63 frees the tree): send `periodStart`** — `period_start` from the general
+  data into `company_figure_year` (changeset 047) and the DTO. The site already holds a year from it when present; until
+  then it holds the four quarters before a year's end and never over an earlier year (3 261 companies have short or
+  overlapping years touching 2022+, e.g. 10015764). Both files measured: current 62 MB / 442 909 rows
   (2025–2026), previous 93 MB / 642 228 rows (2022–2024), same header, published 10.07.2026.
 
 DRAFT 2026-09-25 — sources verified from real downloads and coverage measured; PR1 starts after masi #61 (the address)
