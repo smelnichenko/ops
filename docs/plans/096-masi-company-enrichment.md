@@ -61,9 +61,12 @@ Changeset 042 adds `register_company.website_domain` and `email_domain` (registr
 not free mail; indexed); the register import fills both for every indexed company (the EMAIL value itself is
 still never stored). A stub is placed when:
 
-- a domain tied to the stub — **a contact of this company writes from it**, or a posting of this company names
-  it — equals the `website_domain` or `email_domain` of **exactly one** register row, and
-- that row's name fits the stub: `RegisterMatcher`'s strong rule (normalised name or `nameCore` equal, legal
+- a domain tied to the stub — **a contact of this company writes from it**, or the board gave it as the company's
+  website (`domain_norm`) — is the `website_domain` or `email_domain` of register rows (a domain more than 25 rows
+  give names none: a host's, a franchise's), and **exactly one** of all those rows fits the stub (a holding that
+  lists its subsidiary's site does not stop the subsidiary; two fitting rows — a bank and its group — place
+  nothing):
+- the fit: `RegisterMatcher`'s strong rule (normalised name or `nameCore` equal, legal
   form consistent), or the register name starts with the stub's name as whole words when the prefix query is not
   truncated (the domain is the second signal, so the weaker name rule is enough here, and only here).
 
@@ -158,7 +161,7 @@ enrichment tick itself. Metrics `masi_enrich_companies_total{outcome}`, `masi_en
 
 ### Operator actions
 
-`CompanyPatch` gains `website` (the "Accept"): `validateSyntax`, `domain_norm` set, refused (409, named) when
+`CompanyPatch` gains `website` (the "Accept", with the fetcher PR that produces candidates to accept): `validateSyntax`, `domain_norm` set, refused (409, named) when
 another company holds the domain. The company page shows the latest enrichment row with its evidence, the
 unconfirmed candidate with Accept, a held code with the register-match action, and a foreign company's prefix
 candidates.
@@ -168,7 +171,8 @@ candidates.
 1. **masi — the register's domains**: `Domains` + `FreeMail`, changeset 042 (`website_domain`,
    `email_domain`), the import fills them; merged, then the register read is run once in test ("Run now") so the
    index fills now rather than on Sunday.
-2. **masi — placement by domain (step 1)** and `CompanyPatch.website`; measured in test: how many of the 99.
+2. **masi — placement by domain (step 1)**, candidates found this way offered as `DOMAIN`; measured in test after
+   a register read: how many of the 99. The site labels `DOMAIN` candidates (site PR with item 5).
 3. **masi — the collectors on the pinned resolver** (the rebinding gap).
 4. **masi — the open fetcher and step 2**, `company_enrichment`, the scheduler, metrics; off by default.
 5. **site** — the company card: evidence, Accept, held code, foreign candidates.
@@ -231,4 +235,8 @@ candidates.
 
 ## Status
 
-DRAFT 2026-09-25 — first draft reviewed (3 critical, 11 warnings, 8 suggestions), all folded in above.
+IN PROGRESS 2026-09-25 — first draft reviewed (3 critical, 11 warnings, 8 suggestions), all folded in above.
+**PR1 (masi #56) merged and live in test 2026-09-25** (masi 8c30cd0, changeset 042): the index keeps
+`website_domain`/`email_domain`; its review found malformed hosts (`lhv..ee` → `.ee`), two forms of Estonian-letter
+domains, platform sites keyed to the platform, and the register's free-text fields read wrongly — all fixed; 25
+revert checks. The columns fill on the next register read (Sunday 20:00 UTC, or "Run now" — the operator's click).
