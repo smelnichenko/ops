@@ -41,16 +41,17 @@ indicators file carries the money.
   `LaborExpense`/`EmployeeExpense` (two report schemes), `Assets`, `Equity`. Joined to companies through
   `1.aruannete_yldandmed_…zip` (255 MB CSV: `report_id, registrikood, aruandeaasta, kas konsolideeritud?, period_start,
   period_end, esitatud_kpv, …`). The 2024 file holds 257 252 reports, 822 consolidated.
-- **Coverage of the 97 hiring companies with a code (test, 2026-09-25):** 75 filed a 2024 report; **58 have revenue in the
-  key indicators**. Missing are exactly the large employers — banks (Swedbank, Inbank, Holm Bank), insurers (ERGO, If),
-  IFRS / group filers (Nortal, Admirals, Tallinn Airport, Elenger), foundations. **EMTA covers them all**, so it comes
-  first.
+- **Coverage of the 97 hiring companies with a code (test, 2026-09-25):** 75 filed a 2024 report; 58 have revenue
+  under the report's own id. **Correction (PR2 review):** the "missing" large employers are not missing — a report
+  filed with a second id (`taidetud_aruanne_report_id` in the general data; 492 reports in 2024, 75 of the 500 large
+  companies, Nortal and Swedbank among them) has its key indicators under that id: Nortal 2024 revenue 62.7 M, 345
+  people (its own; the group's 220 M and 1 546 beside them). EMTA still came first: it covers every taxpayer quarterly.
 
 ## Architecture
 
-- **Reference tables keyed by registry code**, like `register_company`: `company_figure_year` (registry_code, year,
-  period_end, revenue, total_revenue, operating_profit, profit, employee_expense, avg_employees, assets, equity, source
-  file date) and `company_figure_quarter` (registry_code, year, quarter, turnover, employees, state_taxes, labour_taxes,
+- **Reference tables keyed by registry code**, like `register_company`: `company_figure_year` (registry_code, year —
+  the register's label, placed at period_end —, period_end, revenue, operating_profit, profit, labour_expense,
+  avg_employees in FTE, assets, equity, submitted) and `company_figure_quarter` (registry_code, year, quarter, turnover, employees, state_taxes, labour_taxes,
   published = the file's `Data date`). Kept for the companies masi has **met** (`findEngaged`: a job, a contact, a note, a
   rating — the same rule the board-members source uses), not every coded row and not the whole country: a company met
   later gets its figures on the next read. Idempotent upserts; a re-read replaces a quarter (corrections happen) unless
@@ -71,9 +72,12 @@ indicators file carries the money.
 
 1. **platform/infra + masi — EMTA quarterly** (first: it covers the large employers): allow-list `ncfailid.emta.ee`;
    fixture cut from the real file; collector (streamed, only held codes), `company_figure_quarter`; API.
-2. **masi — the register's key indicators** (revenue and profit for the companies that file them): the two RIK files,
-   streamed and joined on `report_id`; `company_figure_year`; the company's own (non-consolidated) report, else the
-   consolidated one; API. Allow-list unchanged (same host).
+2. **masi — the register's key indicators**: the download page read for the current file names, the general data and
+   the latest four years streamed and joined on `report_id` **and** the second id a report is filed with;
+   `company_figure_year`; **only the company's own figures, never its group's** (a group's carry `…Consolidated` names);
+   a non-profit's own names (total income, surplus, net assets); an IFRS filer's own headcount and revenue from the PDF
+   table by label; the liquidation itself is no year, the trading before it is; API `years`. Weekly (the refresh day is
+   not published). Allow-list unchanged (same host).
 3. **site — the Figures card**: charts, tests, layout spec.
 
 ## Verification
