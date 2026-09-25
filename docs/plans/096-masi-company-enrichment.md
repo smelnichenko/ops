@@ -280,6 +280,25 @@ partly by a resumed peer session (monitor-40), merged; 33 revert checks. Tests r
 with a test-only certificate; nothing leaves the test. Next: PR4b — the enrichment service (candidates, proof,
 placement, careers page, ATS), `company_enrichment` (044 — 043 goes to the address feature), the scheduler,
 `CompanyPatch.website`.
+**PR4b-1 (masi #63) parked 2026-09-25 for rework** (the tree went to the figures work meanwhile). Its review found
+the proof too loose, and the rules change to:
+- a **contact domain is a tie only when it is a placing domain** (the board's own site, else one at least half the
+  company's people write from — `RegisterMatcher.placingDomains`, shared); a **posting host is no tie**; a **guessed
+  domain is no tie at all** — it can be `PROVED` only when the register itself gives that domain (WWW or e-mail) for
+  the code on the site, otherwise at most `UNCONFIRMED` (the operator's Accept): a squatter or an unrelated
+  same-named company on the name's domain must not win;
+- a stub is placed only when the fitting code is the **only employer-form code the site prints** (a customer list,
+  a group footer, a partner page print several), and by name `sameName` or `prefixMayPlace` — **never a brand on its
+  subsidiary's code** (PR2's bug, back through the service);
+- a company with a code is `PROVED` by a site printing its code only on the same terms (tied, the only employer code);
+- the **final registrable domain after redirects** is the one judged, tied and written (firma.ee → firma.com);
+- a site whose domain another company holds is not taken at all (no careers page, no ATS under the wrong company);
+  `fillWebsite` is one statement (no other company on the domain);
+- links: http(s) only (a `mailto:jobs@` is no careers page), careers words matched as words/path segments;
+- `placeBySite` re-reads the company under the lock (placed or merged meanwhile is an outcome, not an exception);
+  evidence and URLs cut to their columns; ISP mail (elion.ee, estpak.ee, starman.ee) is free mail; ATS and more
+  aggregators (eestiinfo.ee, 1182.ee) are platforms; `INDEX_NOT_READY` does not end a visit.
+
 **Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
 companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
 by name** (PR3d's rule, first run with a filled index) and **7 by domain** (PR2): Fontes PMP, Ida-Tallinna
