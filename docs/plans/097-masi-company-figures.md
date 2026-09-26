@@ -104,11 +104,17 @@ hand with the register's own page.
   (named by when each year ends), the annual headcount a dashed step held across its year's quarters on the employees
   chart, latest year's revenue and profit; reviewed (web-ui + test audit), fixtures from the real files (HORTICOM
   years to July, ARTISTON an 18-month transition year, 10002603 years only).
-- **Follow-up (masi, after monitor-a3's PR #63 frees the tree): send `periodStart`** — `period_start` from the general
-  data into `company_figure_year` (changeset 047) and the DTO. The site already holds a year from it when present; until
-  then it holds the four quarters before a year's end and never over an earlier year (3 261 companies have short or
-  overlapping years touching 2022+, e.g. 10015764). Both files measured: current 62 MB / 442 909 rows
-  (2025–2026), previous 93 MB / 642 228 rows (2022–2024), same header, published 10.07.2026.
+- **Follow-up: `periodStart` — MERGED masi #65 (2e39727) + #66 (c857a43), LIVE in test 2026-09-26 18:16 Tallinn**:
+  changeset 047 (`company_figure_year.period_start`, date) ran beside 096's 045; the DTO sends `periodStart`, so the site
+  places each year by its own period. A file without the start column still yields every year, placed by its end, and
+  the run says so. The same PR moved collectors to platform threads that stop when cancelled: the 09-25 run 774 was
+  INTERRUPTED because CPU-bound parsing on the one virtual-thread carrier starved the health endpoint and liveness killed
+  the pod (infra 16ce709 also gives masi's virtual threads two carriers). A collector that ignores its cancel is
+  abandoned after 5 s but keeps its source until its thread ends; a shutdown still records the run. Test audit: every
+  finding fixed, 30 revert checks all red. #66: failed tests print their message in the CI log; two load flakes fixed.
+  **Live proof**: `ariregisteraruanded` run 922 (one-off, 19:02 Tallinn) OK in 75 s: 6 files, 321 years for 88
+  companies (2022–2025), every row with a period_start, 38 not calendar years. Nortal AS (10391131) 2022–2025 equal
+  to the register's key indicators read independently (e.g. 2024: revenue 62 729 000, operating profit 5 649 000,
+  profit 36 532 000, 345 employees). The weekly cron `0 20 7 * * MON` is restored.
 
-DRAFT 2026-09-25 — sources verified from real downloads and coverage measured; PR1 starts after masi #61 (the address)
-merges (site #29 is merged and live).
+COMPLETE 2026-09-26 — every PR merged and live in test; both sources enabled on their seeded crons.
