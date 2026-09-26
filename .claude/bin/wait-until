@@ -8,8 +8,16 @@
 #
 #   wait-until <label> <timeout-seconds> <condition...>
 #
-# The condition runs with bash -c every 15 s; it exits 0 when the condition succeeds.
-# Exit: 0 met, 2 timeout, 3 bad usage.
+# The condition is polled every 15 s (WAIT_UNTIL_POLL); it is met when it exits 0. Given as ONE argument it is a shell
+# string (pipes, quotes, ;), run with bash -c. Given as SEVERAL it is a command and its arguments, run as they stand:
+# each argument stays one argument. (All arguments used to be joined into one bash -c string, so the quoting of
+# `ssh host 'a "b" | c'` was lost, the probe could never hold, and the waiter sat out its whole timeout - 2026-09-26.)
+#
+# A probe that cannot run at all - command not found (127) or not executable (126), also inside a shell string - is a
+# broken waiter, not a condition that has not held yet: it exits 3 at once. On a timeout the probe's last output is
+# printed, so a probe that could never hold is seen as one.
+#
+# Exit: 0 met, 2 timeout, 3 bad usage or a probe that cannot run.
 #
 # Built-in conditions (never `pgrep -f <pattern>`: it matches this waiter's own command line):
 #   no-java-in <dir>   no build JVM (wrapper, worker, test JVM; an idle daemon aside) works under <dir>
@@ -17,6 +25,7 @@ set -u
 label=${1:-}; timeout=${2:-}
 shift 2 2>/dev/null || true
 [[ -n $label && $timeout =~ ^[0-9]+$ && $# -gt 0 ]] || { echo "usage: wait-until <label> <timeout-s> <condition...>" >&2; exit 3; }
+poll=${WAIT_UNTIL_POLL:-15}
 
 no_java_in() {
     # an idle Gradle daemon stays for hours after its build: only the wrapper, workers and test JVMs mean a build runs
@@ -30,12 +39,25 @@ no_java_in() {
     return 0
 }
 
+last_output=""
 check() {
+    local rc
     if [[ $1 == no-java-in ]]; then
         no_java_in "$2"
-    else
-        bash -c "$*" >/dev/null 2>&1
+        return
     fi
+    if (( $# == 1 )); then
+        # no pipefail: `kubectl ... | grep -q x` would fail on the SIGPIPE grep's early exit sends; a missing tool
+        # inside a pipe is caught by bash's "command not found" on stderr, which is captured below
+        last_output=$(bash -c "$1" 2>&1); rc=$?
+    else
+        last_output=$("$@" 2>&1); rc=$?
+    fi
+    if (( rc == 126 || rc == 127 )) || [[ $last_output == *"command not found"* ]]; then
+        echo "$(date +%H:%M:%S) $label: the probe cannot run (exit $rc): ${last_output:0:500}" >&2
+        exit 3
+    fi
+    return $rc
 }
 
 start=$(date +%s); deadline=$(( start + timeout ))
@@ -46,7 +68,8 @@ while :; do
     fi
     if (( $(date +%s) >= deadline )); then
         echo "$(date +%H:%M:%S) $label: TIMEOUT after $timeout s - never held: $*" >&2
+        echo "  the probe last printed: ${last_output:0:1000}" >&2
         exit 2
     fi
-    sleep 15
+    sleep "$poll"
 done

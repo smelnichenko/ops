@@ -5,25 +5,67 @@
 # state the harness cannot see, so nothing fires when the pipeline finishes. Run this with the
 # Bash tool's run_in_background: its EXIT is the notification. Never chain sleeps instead.
 #
-#   forgejo-ci-wait <owner/repo> <pr-number|commit-sha> [timeout-seconds]
+#   forgejo-ci-wait [--fresh] <owner/repo> <pr-number|commit-sha> [timeout-seconds]
+#
+# --fresh   only a status posted AFTER this waiter started counts. Use it for a re-run of the same commit (a PR closed
+#           and reopened, a push redelivered): without it the previous run's verdict is still the commit's status and
+#           is reported at once (2026-09-26: a re-run's waiter reported the failure it was re-run to replace).
+#
+# The default timeout is 3 h: with two agents a pipeline can sit in the queue for over an hour before it starts.
+#
+# A pipeline Woodpecker cannot even create (its config fetch timed out, a broken YAML) posts NOTHING on the commit. So
+# when the commit still has no status after CI_WAIT_NONE_GRACE (300 s), the waiter asks Woodpecker for an errored
+# pipeline on that commit, and ends with its error instead of sitting out the timeout (2026-09-25: every masi pipeline
+# died that way for ten hours, and each waiter reported only "timeout unknown").
 #
 # Exit: 0 success, 1 failure/error, 2 timeout, 3 bad usage/unreachable token.
 # Prints one line per state change and a final "CI <state> <sha> <url>" line. Never prints the token.
+#
+# Overrides (tests): FORGEJO_API, CI_WAIT_POLL (30 s), CI_WAIT_NONE_GRACE (300 s), CI_WAIT_PIPELINE_ROWS (a command given
+# <owner/repo> <sha> <since-epoch> that prints the errored pipelines as sqlite -json rows; the parsing is always real).
 set -uo pipefail
 
-repo=${1:-}; ref=${2:-}; timeout=${3:-3600}
-[[ -n $repo && -n $ref ]] || { echo "usage: forgejo-ci-wait <[owner/]repo> <pr|sha> [timeout-s]" >&2; exit 3; }
+fresh=false
+if [[ ${1:-} == --fresh ]]; then
+    fresh=true; shift
+fi
+repo=${1:-}; ref=${2:-}; timeout=${3:-10800}
+[[ -n $repo && -n $ref && $timeout =~ ^[0-9]+$ ]] || { echo "usage: forgejo-ci-wait [--fresh] <[owner/]repo> <pr|sha> [timeout-s]" >&2; exit 3; }
 # a bare repo name means the schnappy org: "site 10" waited an hour on a 404 and reported "unknown"
 [[ $repo == */* ]] || repo="schnappy/$repo"
-api=https://git.pmon.dev/api/v1
+api=${FORGEJO_API:-https://git.pmon.dev/api/v1}
+poll=${CI_WAIT_POLL:-30}
+none_grace=${CI_WAIT_NONE_GRACE:-300}
 token=$(sed -n 's#.*sm:\([^@]*\)@git\.pmon\.dev.*#\1#p' ~/.git-credentials 2>/dev/null | head -1)
 [[ -n $token ]] || { echo "no git.pmon.dev credential in ~/.git-credentials" >&2; exit 3; }
 
 get() { curl -sf --max-time 20 -H "Authorization: token $token" "$api/$1"; }
 
-deadline=$(( $(date +%s) + timeout ))
+# The errored pipelines on a commit as JSON rows (number, errors), read-only from the Woodpecker server's database on
+# ten: no Woodpecker API token exists.
+pipeline_rows() {
+    local repo=$1 sha=$2 since=$3
+    ssh -o BatchMode=yes -o ConnectTimeout=10 sm@192.168.11.2 \
+        "pv=\$(kubectl get pv \$(kubectl -n woodpecker get pvc data-woodpecker-server-0 -o jsonpath='{.spec.volumeName}') -o jsonpath='{.spec.hostPath.path}'); sudo -n sqlite3 -json \"file:\$pv/woodpecker.sqlite?mode=ro\" \"select p.number, p.errors from pipelines p join repos r on r.id = p.repo_id where r.full_name = '$repo' and p.\\\`commit\\\` = '$sha' and p.status = 'error' and p.created >= $since order by p.number desc limit 1\"" 2>/dev/null
+}
+
+# "pipeline <n> error: <message>" for the latest errored pipeline on the commit, or nothing.
+pipeline_errors() {
+    ${CI_WAIT_PIPELINE_ROWS:-pipeline_rows} "$@" | python3 -c '
+import sys, json
+rows = json.loads(sys.stdin.read() or "[]")
+for r in rows:
+    errs = json.loads(r.get("errors") or "[]") or []
+    msg = "; ".join(e.get("message", "") for e in errs if not e.get("is_warning")) or "errored before any step"
+    number = r.get("number")
+    print(f"pipeline {number} error: {msg}")'
+}
+
+start=$(date +%s)
+deadline=$(( start + timeout ))
 last=""
 misses=0
+none_since=""
 while :; do
     sha=$ref
     if [[ $ref =~ ^[0-9]{1,6}$ ]]; then
@@ -36,28 +78,50 @@ while :; do
         sleep 10; continue
     fi
     misses=0
-    line=""
-    if [[ -n $sha ]]; then
-        line=$(get "repos/$repo/commits/$sha/status" | python3 -c '
-import sys, json
+    # the combined state, the first status's URL, and whether any status was posted since this waiter started
+    line=$(get "repos/$repo/commits/$sha/status" | START="$start" python3 -c '
+import os, sys, json
 d = json.load(sys.stdin)
-st = d.get("state") or "none"
-url = next((s.get("target_url", "") for s in d.get("statuses", [])), "")
-print(st, url)' 2>/dev/null) || line=""
+statuses = d.get("statuses") or []
+st = (d.get("state") or "none") if statuses else "none"
+url = next((s.get("target_url", "") for s in statuses), "") or "-"
+from datetime import datetime, timezone
+def when(s):
+    t = s.get("updated_at") or s.get("created_at") or ""
+    try:
+        return datetime.fromisoformat(t.replace("Z", "+00:00"))   # Forgejo may answer in its own zone (+03:00)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+since = datetime.fromtimestamp(int(os.environ["START"]), timezone.utc)
+fresh = any(when(s) >= since for s in statuses)
+print(st, "fresh" if fresh else "stale", url)' 2>/dev/null) || line=""
+    read -r state age url <<< "$line"
+    state=${state:-unknown}
+    if $fresh && [[ $age == stale && $state != none ]]; then
+        state="previous-$state"   # the last run's verdict: not this one's
     fi
-    state=${line%% *}
-    url=${line#* }
-    if [[ -n $state && "$state|$sha" != "$last" ]]; then
-        echo "$(date +%H:%M:%S) $state ${sha:0:10}"
+    if [[ "$state|$sha" != "$last" ]]; then
+        echo "$(date +%H:%M:%S) $state ${sha:0:10} (after $(( $(date +%s) - start )) s)"
         last="$state|$sha"
     fi
     case $state in
         success) echo "CI success $sha $url"; exit 0 ;;
         failure|error) echo "CI $state $sha $url"; exit 1 ;;
     esac
-    # "none" right after a push means the pipeline has not registered yet: keep waiting
-    if (( $(date +%s) >= deadline )); then
-        echo "CI timeout ${state:-unknown} $sha after ${timeout}s"; exit 2
+    if [[ $state == none || $state == previous-* ]]; then
+        none_since=${none_since:-$(date +%s)}
+        if (( $(date +%s) - none_since >= none_grace )); then
+            err=$(pipeline_errors "$repo" "$sha" "$($fresh && echo "$start" || echo 0)")
+            if [[ -n $err ]]; then
+                echo "CI error $sha - Woodpecker created no run: $err"
+                exit 1
+            fi
+        fi
+    else
+        none_since=""
     fi
-    sleep 30
+    if (( $(date +%s) >= deadline )); then
+        echo "CI timeout $state $sha after ${timeout}s"; exit 2
+    fi
+    sleep "$poll"
 done
