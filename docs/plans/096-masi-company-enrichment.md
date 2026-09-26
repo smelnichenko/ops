@@ -144,20 +144,28 @@ not documented: `HttpFetcher` moves onto the same `PinnedResolver` (its own PR, 
 
 ### Scheduling and recording
 
-`EnrichmentScheduler` (fixed delay `masi.enrich.tick`, 10 min; `masi.enrich.per-tick` 5; off unless
-`masi.enrich.enabled`, on in test) takes hiring, not-blacklisted companies not visited, or visited more than
-30 days ago, or `FETCH_FAILED` more than a day ago (at most 5 attempts), or visited before the latest complete
-register read (`register_index_read`) while still without a code — most open jobs first. The house lane pattern
-of `AnalysisScheduler`: one tick at a time on a virtual thread, drained on shutdown; **only a finished visit is
-stamped** (`last_enriched_at`) — a visit cut by shutdown stamps nothing. Fetching happens outside any
-transaction; the result is applied with conditional updates (`… where website is null`) so a blacklist, a note
-or a collector fill made during the visit survives.
+`EnrichmentScheduler` (in the `enrich` package; fixed delay `masi.enrich.tick`, 10 min; `masi.enrich.lane.per-tick`
+5; off unless `masi.enrich.lane.enabled` — env `MASI_ENRICH_ENABLED` — on in test) takes hiring (an OPEN job),
+not-blacklisted companies, most open jobs first, due by their **latest visit** (by run time, then id): none yet; older
+than 30 days; `REGISTER_BUSY` an hour ago; `INDEX_NOT_READY` once a complete register read exists; `UNCONFIRMED`
+without a code and a complete read since (`register_index_read.read_at` is stamped when a read is **complete**, not
+when it began); `FETCH_FAILED` or `VISIT_FAILED` a day ago while fewer than 5 failed in a row. The house lane of
+`AnalysisScheduler` — one tick at a time, drained on shutdown — but on a **platform thread** (a visit parses up to 1 MB;
+CPU work on a virtual thread starved the health endpoint on 2026-09-25). On a platform thread an interrupt ends no
+socket read and stops no JDBC call, so the shutdown also aborts the requests on the wire, and a visit **cut short**
+(the shutdown refused or aborted one of its requests) writes nothing more: it records nothing if it had changed nothing
+(the company is due at the next start), else its row is kept saying it was cut, unstamped. A **`VISIT_FAILED` marker**
+is written before each visit and removed when it returns: a visit that throws or dies with the process leaves it and is
+retried like a failed fetch, never at every tick. Fetching happens outside any transaction; the result is applied with
+conditional updates (`… where website is null`) so a blacklist, a note or a collector fill made during the visit
+survives.
 
-`company_enrichment` (changeset 043): `company_id`, `run_at`, `outcome` (`PLACED_BY_REGISTER`, `PROVED`,
-`MATCHED`, `FOREIGN`, `CODE_HELD`, `INDEX_NOT_READY`, `UNCONFIRMED`, `NO_CANDIDATE`, `ROBOTS_DENIED`,
-`FETCH_FAILED`), `candidate_url`, `evidence`, `adopted_code`, `careers_url`, `ats_vendor`, `requests`, `error`.
-`CompanyService.merge()` repoints it like the other company tables; rows older than 180 days are deleted by the
-enrichment tick itself. Metrics `masi_enrich_companies_total{outcome}`, `masi_enrich_requests_total{result}`.
+`company_enrichment` (changeset 045): `company_id`, `run_at`, `outcome` (`PROVED`, `MATCHED`, `KNOWN_SITE`,
+`CODE_HELD`, `INDEX_NOT_READY`, `REGISTER_BUSY`, `UNCONFIRMED`, `NO_CANDIDATE`, `ROBOTS_DENIED`, `FETCH_FAILED`,
+`VISIT_FAILED`), `candidate_url`, `evidence`, `adopted_code`, `careers_url`, `ats_vendor`, `requests`.
+`CompanyService.merge()` repoints it like the other company tables; rows older than 180 days are deleted by the tick,
+**except each company's latest** (what the company page shows). Metrics `masi_enrich_companies_total{outcome}` and
+`masi_enrich_request_results_total{result}` (every request's result and every refusal before one).
 
 ### Operator actions
 
