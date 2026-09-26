@@ -179,8 +179,9 @@ candidates.
    `RegisterMatcher`'s guards, careers page, single-vendor ATS through `attachAts`, conditional fills —
    `company_enrichment` (the next free changeset after the figures work's), `CompanyService.merge()` repointing it,
    driven only by tests; **4b-2** the `EnrichmentScheduler` (off by default, hiring companies, the revisit rules,
-   stamp only a finished visit, 180-day retention), metrics, `CompanyPatch.website` (Accept) and the company DTO's
-   latest enrichment row; **infra** enables it in test.
+   stamp only a finished visit, 180-day retention) and metrics; **4b-3** `CompanyPatch.website` (Accept) and the
+   company DTO's latest enrichment row (split from 4b-2 on 2026-09-27 to keep each reviewable); **infra** enables the
+   lane in test.
 5. **site** — the company card: evidence, Accept, held code, foreign candidates.
 6. **infra** — `masi.enrich.enabled` in test; after a day, coverage by outcome recorded here.
 
@@ -328,6 +329,13 @@ showed:
   (teamdash.com is Teamdash's);
 - for PR4b-2: `enrich()` lets a database failure propagate (writes are fill-only, a repeated visit finds the same) —
   the scheduler catches per company and does not stamp; it revisits `INDEX_NOT_READY` and `REGISTER_BUSY` soon.
+
+**PR4b-1 (masi #63) MERGED 2026-09-26 (1b06246), LIVE in test 18:16 Tallinn** with 097's #65/#66 (masi c857a43):
+changeset 045 (`company_enrichment`) ran. The service has no caller until 4b-2's lane; the CD run for the merge had
+died silently on Woodpecker's 5 s forge timeout (infra 4a40e82 raised it to 30 s).
+**PR4b-2 (the lane) in review 2026-09-27**: `EnrichmentScheduler` in the `enrich` package (ArchitectureTest: nothing
+outside it depends on `enrich`), due by each company's latest visit, a platform thread (a visit parses up to 1 MB); a
+visit cut by a shutdown records nothing (it used to save FETCH_FAILED and stamp).
 
 **Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
 companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
