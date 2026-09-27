@@ -341,9 +341,13 @@ showed:
 **PR4b-1 (masi #63) MERGED 2026-09-26 (1b06246), LIVE in test 18:16 Tallinn** with 097's #65/#66 (masi c857a43):
 changeset 045 (`company_enrichment`) ran. The service has no caller until 4b-2's lane; the CD run for the merge had
 died silently on Woodpecker's 5 s forge timeout (infra 4a40e82 raised it to 30 s).
-**PR4b-2 (the lane) in review 2026-09-27**: `EnrichmentScheduler` in the `enrich` package (ArchitectureTest: nothing
-outside it depends on `enrich`), due by each company's latest visit, a platform thread (a visit parses up to 1 MB); a
-visit cut by a shutdown records nothing (it used to save FETCH_FAILED and stamp).
+**PR4b-2 (the lane) MERGED masi #67 (0520ac4), LIVE in test 2026-09-27 04:37 Tallinn, lane OFF**: changeset 048
+(`company_enrichment.cut`) ran; the chart's switch is platform 79fd4ca (`masiService.enrich.{enabled,perTick}` →
+`MASI_ENRICH_ENABLED`/`MASI_ENRICH_PER_TICK`, off). Architecture + concurrency review and the test audit (81 reverts,
+21 caught nothing; two behaviour gaps — a cut visit not revisited for 30 days, a shutdown counted as a failure) all
+fixed; 23 revert checks of my own, all red. Untested for want of a seam: the tick/stop lifecycle lock, Visit's re-check
+after registering a request. Next: the operator's yes to switch the lane on in test (it starts outbound requests to
+companies' sites), then 4b-3 (Accept + the DTO's latest visit) and the site's card (item 5).
 
 **Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
 companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
