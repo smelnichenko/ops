@@ -167,6 +167,34 @@ survives.
 **except each company's latest** (what the company page shows). Metrics `masi_enrich_companies_total{outcome}` and
 `masi_enrich_request_results_total{result}` (every request's result and every refusal before one).
 
+### The identity key: one rule (4b-4)
+
+Mapped on main b27cbac: eight writers of `company.domain_norm` produce two forms — the collectors' `fillLinks`, a
+placement, a merge and the partner API write the **host** (`Normalizer.domain`: careers.firma.ee), with no platform,
+free-mail or holder check; the Accept and the enrichment write the **registrable domain** with all of them — and the
+readers compare exactly (`find`, `heldByAnother`, the inbox's `companyAt`, which passes the raw mail host) or by suffix.
+Live test data (2026-09-27): 2 655 keys; 35 with three or more labels (hosts such as ee.kuehne-nagel.com and real
+registrable domains under two-label suffixes such as auk.com.ee alike); platform keys (linkedin.com ×3); garbage
+(`https` ×4); keys already shared (wasp.ee ×4, eziil.com ×3, oixio.eu ×3, …).
+
+- **One function** `CompanyService.ownDomain(url, name)`: the registrable domain (`Domains.ofUrl`), a company's own
+  (`Domains.ownSiteOf` — a platform's own company keeps its domain), never free mail or a person's zone
+  (`FreeMail.is`); else null.
+- **Every writer** goes through it and through one guard: a website is stored with its key only when the key is not
+  null, no other company holds it under any host (`siteHeldByAnother`), and the operator has not taken it away —
+  `fillLinks`, a placement (`adoptRegistryCode`: exact host match today), a merge (nothing today), taking a placement
+  back (the prior value, checked again), the partner's fill (nothing today, and 1000 characters into a 500 column). A
+  platform's page or free mail is not stored as a website at all.
+- **Every reader** reduces what it holds to that key: `find` (a raw's website), the inbox (the mail host — a subdomain
+  sender finds the company), people (`PersonService.domainOf`), and matches **only when exactly one company holds it**
+  — a shared key says nothing (the inbox's rule already; `find` picked an arbitrary one).
+- **The stored keys repaired at startup** (`DomainKeyRepair`, idempotent, like the eesti.ee repair): every company's key
+  recomputed from its website; a platform's page, free mail or garbage loses its key (the website too); shared keys
+  stay as they are (nothing says whose) and are listed in the log; counts logged. Liquibase cannot compute a
+  registrable domain (the public suffix list is Java's), so it is not a changeset.
+- Tests that assert the host form change (PersonServiceTest's vaike.recruitee.com customer, InboundMailServiceTest's
+  exact mock); measured in test after the deploy: keys changed, nulled, shared.
+
 ### Operator actions
 
 `CompanyPatch` gains `website` (the "Accept"; `CompanyService.acceptWebsite`). The URL is validated and must be a
