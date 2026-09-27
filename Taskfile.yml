@@ -544,11 +544,11 @@ tasks:
       - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'kubectl rollout restart deployment/schnappy-apt-cache -n schnappy'
 
   deploy:nexus:
-    desc: Deploy Nexus repository manager on Pi
+    desc: 'Deploy Nexus repository manager on Pi (e.g. -- --start-at-task "Check VIP ownership": the converge play only)'
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml {{.CLI_ARGS}}
 
   deploy:pi-services:
     desc: Install/update shared Pi services (Forgejo, Keycloak, versitygw, HAProxy)

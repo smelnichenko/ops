@@ -790,6 +790,18 @@
       register: _vip_owner
       changed_when: false
 
+    # Neither (Keepalived down, a changed VIP) would otherwise skip both Pis and
+    # report success with nothing converged; both (split brain) would write twice.
+    - name: Exactly one Pi holds the VIP
+      ansible.builtin.assert:
+        that: _holders | length == 1
+        fail_msg: "{{ _holders | length }} Pis hold {{ vip }} ({{ _holders | join(', ') }}); expected exactly one"
+      vars:
+        _holders: >-
+          {{ ansible_play_hosts_all | zip(ansible_play_hosts_all | map('extract', hostvars, ['_vip_owner', 'stdout']))
+             | selectattr('1') | map(attribute='0') | list }}
+      run_once: true
+
     - name: Skip the Pi without the VIP (its Nexus is stopped)
       ansible.builtin.meta: end_host
       when: _vip_owner.stdout | length == 0
@@ -855,20 +867,22 @@
       changed_when: true
       when: "'pytorch-cpu' not in _pypi_public.json.group.memberNames"
 
-    - name: List the wheels already in pytorch-cpu
+    # one request per wheel at its package path (packages/<name>/<version>/<file>):
+    # no listing to page through, however many versions the repository gathers
+    - name: Look for each wheel in pytorch-cpu
       ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/assets?repository=pytorch-cpu"
-        url_username: admin
-        url_password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        return_content: true
-      register: _pytorch_assets
+        url: >-
+          http://localhost:{{ nexus_port }}/repository/pytorch-cpu/packages/{{ item.file.split('-')[0] }}/{{
+          item.file.split('-')[1] | urlencode }}/{{ item.file | urlencode }}
+        method: HEAD
+        status_code: [200, 404]
+      loop: "{{ pytorch_cpu_wheels }}"
+      loop_control: { label: "{{ item.file }}" }
+      register: _wheel_lookup
 
     - name: Work out which wheels are missing
       ansible.builtin.set_fact:
-        _missing_wheels: >-
-          {{ pytorch_cpu_wheels | rejectattr('file', 'in',
-             _pytorch_assets.json['items'] | map(attribute='path') | map('basename') | list) | list }}
+        _missing_wheels: "{{ _wheel_lookup.results | selectattr('status', 'eq', 404) | map(attribute='item') | list }}"
 
     - name: Download the missing wheels (checksummed)
       ansible.builtin.get_url:
