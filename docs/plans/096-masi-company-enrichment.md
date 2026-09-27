@@ -169,9 +169,22 @@ survives.
 
 ### Operator actions
 
-`CompanyPatch` gains `website` (the "Accept", with the fetcher PR that produces candidates to accept): `validateSyntax`, `domain_norm` set, refused (409, named) when
-another company holds the domain. The company page shows the latest enrichment row with its evidence, the
-unconfirmed candidate with Accept, a held code with the register-match action, and a foreign company's prefix
+`CompanyPatch` gains `website` (the "Accept"; `CompanyService.acceptWebsite`). The URL is validated and must be a
+company's **own site** — not a platform's page (facebook.com, a board's careers subdomain), free mail or an address;
+a platform's own company may have its own domain — not one **the register gives another registered company** (409:
+place this company on that code), and not one **another company holds under any host** (409: place it on the
+holder's code, or clear the holder's website first). The check and the write are one statement. `domain_norm` is the
+**registrable domain** (the identity key, as the enrichment writes it), `website_accepted_at` makes an older visit out of
+date (due again). An empty website takes it away **for good**: `company_site_rejection` (changeset 049) keeps its
+domain from coming back by a visit, a board's listing or the register until the operator gives it again; merges carry
+it. A replaced or cleared website is written to the log (`WEBSITE_SET`); the operator's value outlives taking a
+placement back. The whole edit is refused when the website is (nothing else of it written).
+
+`GET /companies/{id}/enrichment` — a sub-resource like `/figures`, not a field of every company in a list: `latest` (the
+newest visit that judged the site: what the operator acts on), `attempt` (a newer visit that did not: failed, the
+register busy, under way) and `visiting` (a start marker younger than the longest a visit can take). The company page
+shows the latest with its evidence, the unconfirmed candidate with Accept (and where a guess ended up — PlayTech's guess
+redirected to a domain-parking site), a held code with the register-match action, and a foreign company's prefix
 candidates.
 
 ## PRs
@@ -188,8 +201,11 @@ candidates.
    `company_enrichment` (the next free changeset after the figures work's), `CompanyService.merge()` repointing it,
    driven only by tests; **4b-2** the `EnrichmentScheduler` (off by default, hiring companies, the revisit rules,
    stamp only a finished visit, 180-day retention) and metrics; **4b-3** `CompanyPatch.website` (Accept) and the
-   company DTO's latest enrichment row (split from 4b-2 on 2026-09-27 to keep each reviewable); **infra** enables the
-   lane in test.
+   company's visits at `GET /companies/{id}/enrichment` (split from 4b-2 on 2026-09-27 to keep each reviewable);
+   **infra** enables the lane in test; **4b-4** the identity key made one rule for every writer and reader: `domain_norm`
+   is the registrable domain everywhere (the collectors' `fillLinks`, a placement, the partner API's fill still write the
+   host, and dedupe/inbox/people compare exactly), one `CompanyService` check (own site / platform / held) for every
+   writer — the partner's fill and `fillLinks` apply none today — and the stored rows migrated (found by 4b-3's review).
 5. **site** — the company card: evidence, Accept, held code, foreign candidates.
 6. **infra** — `masi.enrich.enabled` in test; after a day, coverage by outcome recorded here.
 
@@ -347,7 +363,13 @@ died silently on Woodpecker's 5 s forge timeout (infra 4a40e82 raised it to 30 s
 21 caught nothing; two behaviour gaps — a cut visit not revisited for 30 days, a shutdown counted as a failure) all
 fixed; 23 revert checks of my own, all red. Untested for want of a seam: the tick/stop lifecycle lock, Visit's re-check
 after registering a request. Next: the operator's yes to switch the lane on in test (it starts outbound requests to
-companies' sites), then 4b-3 (Accept + the DTO's latest visit) and the site's card (item 5).
+companies' sites), then 4b-3 (Accept + the company's visits), 4b-4 (one identity-key rule) and the site's card (item 5).
+
+**The lane ON in test 2026-09-27 08:57 Tallinn** (operator: "enable and continue"; infra 50064ed). The first tick
+(09:03): Cybernetica KNOWN_SITE — careers page found, its Teamdash board attached; Bolt UNCONFIRMED (bolt.eu is Bolt
+Services EE OÜ's row: a merge for the operator); Wise UNCONFIRMED (wise.com prints 16267372, a guess ties nothing);
+Luminor Group UNCONFIRMED (no code on luminor.ee); PlayTech UNCONFIRMED (the guess redirected to domainseller.site).
+Every start marker removed.
 
 **Measured in test 2026-09-25**, after the register read at 12:43 UTC (the first since PR3d): the index holds 369 127
 companies, 20 626 with a website domain and 114 084 with an e-mail domain. The weekly pass then placed **64 employers
