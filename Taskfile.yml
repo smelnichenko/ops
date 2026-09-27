@@ -544,7 +544,7 @@ tasks:
       - ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'kubectl rollout restart deployment/schnappy-apt-cache -n schnappy'
 
   deploy:nexus:
-    desc: 'Deploy Nexus repository manager on Pi (e.g. -- --start-at-task "Check VIP ownership": the converge play only)'
+    desc: 'Deploy Nexus repository manager on Pi (-- --tags converge: only the repositories added after the bootstrap)'
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:

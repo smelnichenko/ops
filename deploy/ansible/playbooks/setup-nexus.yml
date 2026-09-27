@@ -729,6 +729,9 @@
           criteria: { lastDownloaded: 30 }
         status_code: [200, 201, 400, 404]
 
+    - name: Converge the pytorch-cpu repository
+      ansible.builtin.include_tasks: tasks/nexus-pytorch-cpu.yml
+
     - name: Show repository status
       ansible.builtin.uri:
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
@@ -758,6 +761,10 @@
         group: nexus
         mode: "0644"
 
+    - name: Tell the converge play the bootstrap ran in this run
+      ansible.builtin.set_fact:
+        _nexus_bootstrapped_now: true
+
 # ─── Play 3: repositories added after the bootstrap, on the live Nexus ──────
 # The bootstrap play runs once (its sentinel ends it on every re-run), so a
 # repository added later is converged here instead, idempotently, through the
@@ -767,24 +774,19 @@
   hosts: pis
   become: true
   gather_facts: false
+  tags: [converge]  # task deploy:nexus -- --tags converge: this play alone
 
   vars:
     vip: "{{ keepalived_vip | default('192.168.11.5') }}"
     nexus_port: 8081
-    # PyTorch's CPU wheels are not on PyPI (its Linux torch is the CUDA build,
-    # ~3 GB with the nvidia wheels), and PyTorch's own index cannot be proxied:
-    # a Nexus PyPI proxy asks for <remote>/simple/<name>/, which
-    # download.pytorch.org answers with 403. So the wheels CI needs live in a
-    # hosted repository inside pypi-public, which merges both members' indexes.
-    # Keep this list in step with target-scorer's requirements/ci.txt.
-    pytorch_cpu_base_url: https://download-r2.pytorch.org/whl/cpu/
-    pytorch_cpu_wheels:
-      - file: torch-2.14.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl
-        sha256: 160e1bc46aeded3111d2801f8ae10dc9a1b946843a7e126b4dbf5e19c5706e95
-      - file: torchvision-0.29.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl
-        sha256: 6ff3b816ec955f3ef9f32d1e698e1856549e2e03637c358ee067c6f5f17f74fa
 
   tasks:
+    # A fresh install bootstraps before Keepalived exists: no Pi holds the VIP
+    # yet, and the bootstrap play has already converged these repositories.
+    - name: Skip when the bootstrap ran in this run (it converged them)
+      ansible.builtin.meta: end_play
+      when: hostvars['pi1']['_nexus_bootstrapped_now'] | default(false)
+
     - name: Check VIP ownership
       ansible.builtin.command: ip -o addr show to "{{ vip }}/32"
       register: _vip_owner
@@ -815,112 +817,8 @@
       retries: 30
       delay: 5
 
-    - name: List repositories
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
-        url_username: admin
-        url_password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        return_content: true
-      register: _repos
-
-    - name: Create pytorch-cpu hosted repository
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/hosted"
-        method: POST
-        url_username: admin
-        url_password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          name: pytorch-cpu
-          online: true
-          # ALLOW_ONCE: a wheel, once uploaded, is never replaced under the same name
-          storage: { blobStoreName: default, strictContentTypeValidation: true, writePolicy: ALLOW_ONCE }
-        status_code: [201]
-      changed_when: true
-      when: "'pytorch-cpu' not in (_repos.json | map(attribute='name') | list)"
-
-    - name: Read the pypi-public group
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group/pypi-public"
-        url_username: admin
-        url_password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        return_content: true
-      register: _pypi_public
-
-    - name: Add pytorch-cpu to the pypi-public group
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group/pypi-public"
-        method: PUT
-        url_username: admin
-        url_password: "{{ nexus_admin_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          name: pypi-public
-          online: "{{ _pypi_public.json.online }}"
-          storage: "{{ _pypi_public.json.storage }}"
-          group: { memberNames: "{{ _pypi_public.json.group.memberNames + ['pytorch-cpu'] }}" }
-        status_code: [204]
-      changed_when: true
-      when: "'pytorch-cpu' not in _pypi_public.json.group.memberNames"
-
-    # one request per wheel at its package path (packages/<name>/<version>/<file>):
-    # no listing to page through, however many versions the repository gathers
-    - name: Look for each wheel in pytorch-cpu
-      ansible.builtin.uri:
-        url: >-
-          http://localhost:{{ nexus_port }}/repository/pytorch-cpu/packages/{{ item.file.split('-')[0] }}/{{
-          item.file.split('-')[1] | urlencode }}/{{ item.file | urlencode }}
-        method: HEAD
-        status_code: [200, 404]
-      loop: "{{ pytorch_cpu_wheels }}"
-      loop_control: { label: "{{ item.file }}" }
-      register: _wheel_lookup
-
-    - name: Work out which wheels are missing
-      ansible.builtin.set_fact:
-        _missing_wheels: "{{ _wheel_lookup.results | selectattr('status', 'eq', 404) | map(attribute='item') | list }}"
-
-    - name: Download the missing wheels (checksummed)
-      ansible.builtin.get_url:
-        url: "{{ pytorch_cpu_base_url }}{{ item.file | urlencode }}"
-        dest: "/var/tmp/{{ item.file }}"
-        checksum: "sha256:{{ item.sha256 }}"
-        mode: "0644"
-        timeout: 600
-      loop: "{{ _missing_wheels }}"
-      loop_control: { label: "{{ item.file }}" }
-
-    # curl, not uri: uri's form-multipart cannot carry a binary file intact (its
-    # 7or8bit encoding rewrites line endings inside the wheel, and Nexus does not
-    # decode base64), so Nexus answers "Unable to extract PyPI metadata". The
-    # credentials go in on stdin as curl config, never on the command line.
-    - name: Upload the missing wheels to pytorch-cpu
-      ansible.builtin.command:
-        argv:
-          - curl
-          - --silent
-          - --show-error
-          - --fail-with-body
-          - --config
-          - "-"
-          - --form
-          - "pypi.asset=@/var/tmp/{{ item.file }}"
-          - "http://localhost:{{ nexus_port }}/service/rest/v1/components?repository=pytorch-cpu"
-        # curl config quoting: a backslash or double quote in the password is escaped
-        stdin: >-
-          user = "admin:{{ nexus_admin_password | replace('\\', '\\\\') | replace('"', '\\"') }}"
-      loop: "{{ _missing_wheels }}"
-      loop_control: { label: "{{ item.file }}" }
-      no_log: true
-      changed_when: true
-
-    - name: Remove the downloaded wheels
-      ansible.builtin.file:
-        path: "/var/tmp/{{ item.file }}"
-        state: absent
-      loop: "{{ _missing_wheels }}"
-      loop_control: { label: "{{ item.file }}" }
+    - name: Converge the pytorch-cpu repository
+      ansible.builtin.include_tasks:
+        file: tasks/nexus-pytorch-cpu.yml
+        apply:
+          tags: [converge]
