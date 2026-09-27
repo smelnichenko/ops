@@ -162,7 +162,12 @@ survives.
 
 `company_enrichment` (changeset 045): `company_id`, `run_at`, `outcome` (`PROVED`, `MATCHED`, `KNOWN_SITE`,
 `CODE_HELD`, `INDEX_NOT_READY`, `REGISTER_BUSY`, `UNCONFIRMED`, `NO_CANDIDATE`, `ROBOTS_DENIED`, `FETCH_FAILED`,
-`VISIT_FAILED`), `candidate_url`, `evidence`, `adopted_code`, `careers_url`, `ats_vendor`, `requests`.
+`VISIT_FAILED`), `candidate_url`, `evidence`, `adopted_code`, `careers_url`, `ats_vendor`, `requests`; `cut` (048);
+and (050) what the company page acts on: `found_by` (how the site judged was found: own, register, contact, posting,
+guess), `tried_url` (the address tried when it answered from another domain — PlayTech's guess at a domain seller's —
+or from no company's own site, when `candidate_url` is null), `named_code` (a code the site names that fits the company
+but that the visit did not place it on: held by another company, tied to it by nothing, the register busy — never one
+the operator rejected; the site that names one is the visit's answer over a plain one read before it).
 `CompanyService.merge()` repoints it like the other company tables; rows older than 180 days are deleted by the tick,
 **except each company's latest** (what the company page shows). Metrics `masi_enrich_companies_total{outcome}` and
 `masi_enrich_request_results_total{result}` (every request's result and every refusal before one).
@@ -213,7 +218,13 @@ newest visit that judged the site: what the operator acts on), `attempt` (a newe
 register busy, under way) and `visiting` (a start marker younger than the longest a visit can take). The company page
 shows the latest with its evidence, the unconfirmed candidate with Accept (and where a guess ended up — PlayTech's guess
 redirected to a domain-parking site), a held code with the register-match action, and a foreign company's prefix
-candidates.
+candidates. As built (site, with masi's changeset 050, which must be live first): an "Own site" card — what the last
+judgement came to and why, the site and how it was found, where a guess ended up (the address tried and the domain it
+answered from, or that no company's own site did), careers page and ATS, a visit under way; Accept for an unconfirmed
+site (naming the website it would replace); a code the site names that fits the company (held, untied, the register
+busy — never one the operator rejected) handed to the register card, which looks it up and asks before placing. There
+is no `FOREIGN` outcome: a foreign company's site is `MATCHED` or `UNCONFIRMED`, and its prefix candidates are the
+register card's, as for any company without a code.
 
 ## PRs
 
@@ -393,6 +404,13 @@ fixed; 23 revert checks of my own, all red. Untested for want of a seam: the tic
 after registering a request. Next: the operator's yes to switch the lane on in test (it starts outbound requests to
 companies' sites), then 4b-3 (Accept + the company's visits), 4b-4 (one identity-key rule) and the site's card (item 5).
 
+**Item 5 LIVE in test 2026-09-27**: masi #70 (75e4ed3, changeset 050: `found_by`, `tried_url`, `named_code`; the
+endpoint serves a named code only while it can be placed) live 22:24 Tallinn; site #33 (b3e9fff, the "Own site" card,
+the activity labels, red masi badges level with their row) live 22:40. Reviews: masi 4 warnings, site 4 warnings + 3
+minor presentation; test audits: masi 1 defect (a rejected code named on the held and busy paths) + 4 unpinned guards,
+site 14 unpinned mechanisms — all fixed; 21 masi and 46 site revert checks, each red. The first visits written with
+the new columns follow tonight's register read (every hiring company has a visit; an unconfirmed one is due again only
+after a complete read). Next: item 6 — coverage by outcome after a day of the lane.
 **PR4b-4 (masi #69, fdf8812) LIVE in test 2026-09-27 18:15 Tallinn**: the identity key's one rule. The startup
 repair on live data (before: 28 199 companies, 2 655 keys, 36 shared, 87 register rows keyed to a builder): **108 keys
 recomputed, 18 taken away with their website** (logged one by one: Facebook/LinkedIn/Linktree pages, inforegister.ee,
