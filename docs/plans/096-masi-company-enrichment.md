@@ -393,6 +393,10 @@ fixed; 23 revert checks of my own, all red. Untested for want of a seam: the tic
 after registering a request. Next: the operator's yes to switch the lane on in test (it starts outbound requests to
 companies' sites), then 4b-3 (Accept + the company's visits), 4b-4 (one identity-key rule) and the site's card (item 5).
 
+**PR4b-3 (masi #68, b27cbac) LIVE in test 2026-09-27 14:07 Tallinn**: changesets 049 (`company_site_rejection`,
+`company.website_accepted_at`) ran. Review (1 critical, 8 warnings, 7 suggestions) and test audit (59 reverts, 19
+uncaught, two defects — a site taken away back through a redirect or a merge) all fixed; 19 revert checks, all red.
+Next: 4b-4 (the identity key's one rule), then the site's card.
 **The lane ON in test 2026-09-27 08:57 Tallinn** (operator: "enable and continue"; infra 50064ed). The first tick
 (09:03): Cybernetica KNOWN_SITE — careers page found, its Teamdash board attached; Bolt UNCONFIRMED (bolt.eu is Bolt
 Services EE OÜ's row: a merge for the operator); Wise UNCONFIRMED (wise.com prints 16267372, a guess ties nothing);
