@@ -393,6 +393,16 @@ fixed; 23 revert checks of my own, all red. Untested for want of a seam: the tic
 after registering a request. Next: the operator's yes to switch the lane on in test (it starts outbound requests to
 companies' sites), then 4b-3 (Accept + the company's visits), 4b-4 (one identity-key rule) and the site's card (item 5).
 
+**PR4b-4 (masi #69, fdf8812) LIVE in test 2026-09-27 18:15 Tallinn**: the identity key's one rule. The startup
+repair on live data (before: 28 199 companies, 2 655 keys, 36 shared, 87 register rows keyed to a builder): **108 keys
+recomputed, 18 taken away with their website** (logged one by one: Facebook/LinkedIn/Linktree pages, inforegister.ee,
+a gmail address, register typos such as `https://Https://www.aktumdigital.ee` keyed `https`, and Voog's own companies
+Edicy OÜ / Ideevoog OÜ whose names are not the platform's), **0 operator's**, **33 keys shared** (named neither), the
+register's builder keys recomputed (0 left on weebly.com). The typo companies' register rows now hold clean sites
+(aktumdigital.ee, fototera.ee, …): the next register read (Sunday 20:00 UTC) gives them back by the rule. Review (2
+critical — builder customers fused, a group site's first holder trusted — 6 warnings, 8 suggestions) and test audit
+(64 reverts, 16 uncaught; a regression — a platform's own staff read as outsiders — and a leftover-data test) all
+fixed; 18 revert checks of my own, all red; the full suite in CI's shape (one Postgres) 1524/0.
 **PR4b-3 (masi #68, b27cbac) LIVE in test 2026-09-27 14:07 Tallinn**: changesets 049 (`company_site_rejection`,
 `company.website_accepted_at`) ran. Review (1 critical, 8 warnings, 7 suggestions) and test audit (59 reverts, 19
 uncaught, two defects — a site taken away back through a redirect or a merge) all fixed; 19 revert checks, all red.
