@@ -84,10 +84,11 @@ DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
 | 6 | DSC | HF real air (two calls) | a reference decoder's output; VHF physical layer still our own keyer |
 | 7 | RTTY / WFAX / VOR | RTTY real air vs DWD text; WFAX line rate only; VOR nothing | a WFAX reference image; any real VOR (above 30 MHz: station recorder) |
 | 8 | DCF77 / MSF / NDB | time signals decode real air against the broadcast time | an NDB ident decode; `OfflineCaptureSmokeTest` superseded, not fixed |
-| 9 | AIVDM | **still our retired Python's output** | an independent decoder over the corpus; a full type-5 field check |
+| 9 | AIVDM | **DONE radar #1056** — AIS-catcher's full reading of 34 sentences (real air + M.1371-crafted) | — |
 | 10 | DMR RF | FEC/LC against MMDVMHost and ETSI | the symbol↔dibit mapping awaits real 70 cm |
 | 11 | WSPR demod | real air, four stations | wsprd output committed |
-| — | APRS, CommB, Morse, AIS identity | own keyers / retired Python | not in the original list |
+| — | AIS identity | flags **DONE radar #1057** against the ITU's MID table (found Panama 374 missing); ship types against AIS-catcher's text for all 100 codes (PR next) | — |
+| — | APRS, CommB, Morse | own keyers | not in the original list |
 
 **Item 3 DONE (radar #1055, 2026-09-28):** readsb (run, never vendored; `tools/modes-xcheck`) reads the
 real-air vector (dump1090's modes1.bin, resampled exactly to 2.4 MS/s): 129 DF17 frames of 4d2023/AMC421
@@ -95,4 +96,13 @@ with every field, committed as truth, plus crafted frames for the signs and "no 
 vector never shows. The decoder matches readsb on every field; the demod finds 128 of 129 at 6 MS/s
 through the station's own pump (106 at 2 MS/s), with a cap on candidates offered. `modes-golden.frames`
 (frozen own output) deleted; the stale `LrptSatdumpOracleTest` reference struck. Found on the way: the pump
-lost every frame straddling two 256 KB IQ reads — fixed. Next worst: **9 AIVDM**.
+lost every frame straddling two 256 KB IQ reads — fixed.
+
+**Item 9 DONE (radar #1056):** AIS-catcher (run, never vendored; `tools/ais-xcheck`) reads a 34-sentence
+corpus — the old golden's cases, the station's five real-air sentences, and M.1371-crafted cases for what
+neither brought (southern/western hemispheres, types 2/3/19, msg 24B, every "not available", a coast
+station's MMSI, a runt, fill bits) — and `AivdmOracleTest` holds every field to it; 25 reverts bite; with
+`AIS_CATCHER` set the truth must regenerate byte for byte. **AIS identity, flags (radar #1057):** the
+ITU's own MID allocation table; exact names, the listed flags pinned, 000-999 swept; found Panama's 374
+missing and added the territory registers Madeira, Gibraltar, Greenland, Macao. Ship types next: AIS-
+catcher's text for every code, including the newer table's 1-19/38/39 that M.1371-5 left reserved.
