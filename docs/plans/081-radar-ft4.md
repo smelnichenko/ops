@@ -137,6 +137,13 @@ ft8_lib port. FT4-20 by day, 16:46–16:48 EEST (13:46–13:48 UTC), local RSP1A
 RA9LL MO27` −10 dB, `W4IMD PE1JAT R+01` −18 dB), DT p10/median/p90 −0.1/−0.1/+0.1 s, decode
 1.8 s a slot on average (max 2.6 s) of the 7.5 s budget, no warnings. The C2 fix holds on air: no
 slot opened late enough to lose its stations. FT4 was put back off afterwards (the station's radios
-are booked for RS41 and UVB-76). **FT4-40 by evening** (the "dead band or deaf antenna" lens) is the
-one check left.
+are booked for RS41 and UVB-76).
+
+**FT4-40 by evening, same day — the answer is the ANTENNA, not the band.** 19:45–20:40 EEST: 20 m kept
+decoding (261 decodes in 144 day-band slots); 40 m (7.0475 MHz) gave **0 decodes in 51 slots** — 20 probe
+slots before −12° sun, 31 night-band slots after it (20:31). At 20:36 a public KiwiSDR (Viestikallio,
+Finland) recorded the same dial for 45 s: the spectrogram is a dense FT4 stack every slot, and our own
+FtxReceiver decodes **46 unique messages in 5 slots** (6–13 a slot, −17 to +12 dB) from that audio. The
+decoder reads 40 m; the station's telescopic whip does not hear it. Acceptance closed: FT4-20 decodes on
+air; FT4-40 needs an HF antenna, as the Kiwi corpus already found for RTTY (−10.6 dB C/N on DDK9).
 
