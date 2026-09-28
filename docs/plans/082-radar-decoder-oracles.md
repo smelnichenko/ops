@@ -79,7 +79,7 @@ DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
 | 1 | FLARM | packet layer against a compiled `flare` (docs/094, 3000 packets) | RF layer: our GFSK keyer into our demod; no real-air or reference IQ |
 | 2 | HFDL | **DONE radar #1059** — dumphfdl 1.7.0's whole reading of three Kiwi captures, frames paired in order, contacts compared | — (`HfdlOracleTest`, dumphfdl reading our encoder, stays as the encoder's check) |
 | 3 | Mode-S / ADS-B | **DONE radar #1055** (below) | a real 6 MS/s cs16 capture through the station's own `IqStreams` |
-| 4 | ACARS | real air vs acarsdec's registrations/flights | acarsdec's message text and labels, committed |
+| 4 | ACARS | **DONE radar #1060** — acarsdec 3.7's whole reading of the real-air capture, and of crafted blocks our modulator sends, field by field | — |
 | 5 | RS41 | real air + rs41mod output (burst, PTU, XDATA) | — |
 | 6 | DSC | HF real air (two calls) | a reference decoder's output; VHF physical layer still our own keyer |
 | 7 | RTTY / WFAX / VOR | RTTY real air vs DWD text; WFAX line rate only; VOR nothing | a WFAX reference image; any real VOR (above 30 MHz: station recorder) |
@@ -114,3 +114,13 @@ retired-Python golden is left in radar's identity layer.
 contact rows too), 224 WK018H named missed by place. Found: a logon resume's network PDU (flight,
 position, time) after the ICAO address was never read — now read, for the resume only. Next: ACARS
 (acarsdec's text and labels committed), WSPR (wsprd output), DSC (a reference decoder).
+
+**Item 4 DONE (radar #1060):** acarsdec (run, never vendored; `tools/acars-xcheck`) reads the real-air
+capture — its channel kept, envelope-detected, resampled exactly to 12500 S/s — and five messages from
+four aircraft are committed with every field; blocks the air never carries (short downlinks, ETB both
+ways, line breaks, padding) are crafted, sent by our modulator, and read by acarsdec too. Our receiver
+says the same of every one, under three named policies (absent field null, one newline a break,
+padding stripped). Found: a short downlink's sequence and flight were read past its ETX/ETB — a
+fragment read as complete, an eight-character one lost both fields; ETB was never surfaced, and is
+now marked "(more follows)" in the Receivers list and the plane panel. Next: WSPR (wsprd output —
+wsprd reads 3 on 10140k where we read 4, 25 on 7040k where we read 19; types 2/3 not unpacked), DSC.
