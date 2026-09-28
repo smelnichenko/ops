@@ -404,6 +404,17 @@ fixed; 23 revert checks of my own, all red. Untested for want of a seam: the tic
 after registering a request. Next: the operator's yes to switch the lane on in test (it starts outbound requests to
 companies' sites), then 4b-3 (Accept + the company's visits), 4b-4 (one identity-key rule) and the site's card (item 5).
 
+**Item 6 — coverage after the lane's first day (measured 2026-09-28, test)**: 180 visits to 142 companies (1 153
+requests, 2026-09-27 09:03–21:21 Tallinn), then nothing due — every hiring company visited, and an unconfirmed one is
+due again only after a complete register read (the weekly one had run at 20:00 that day). Latest visit per company:
+UNCONFIRMED 78, KNOWN_SITE 29, PROVED 19, ROBOTS_DENIED 10, MATCHED 4, FETCH_FAILED 1, NO_CANDIDATE 1. What the visits
+wrote: **23 websites** (PROVED/MATCHED), **30 careers pages**, **6 ATS boards**; **0 placements** on the register (the
+proofs were of companies that had their code; no stub's site both printed its code and was tied to it). Hiring
+companies (138): with a website 60 (from ≈ 48 of 144 on 2026-09-25), with a code 91, with a careers page 51, with an
+ATS 28. The operator's backlog is the 69 hiring companies without a website whose last visit was UNCONFIRMED — each
+now on its page with Accept and, from the next visit on (changeset 050 postdates these), where a guess ended up and a
+code to place. Measure again after next Sunday's register read, when the unconfirmed are visited again.
+
 **Item 5 LIVE in test 2026-09-27**: masi #70 (75e4ed3, changeset 050: `found_by`, `tried_url`, `named_code`; the
 endpoint serves a named code only while it can be placed) live 22:24 Tallinn; site #33 (b3e9fff, the "Own site" card,
 the activity labels, red masi badges level with their row) live 22:40. Reviews: masi 4 warnings, site 4 warnings + 3
