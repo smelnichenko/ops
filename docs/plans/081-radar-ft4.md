@@ -127,3 +127,16 @@ Add FT4 receive alongside FT8: same in-JVM decode lineage (the ft8_lib port in
   config; FT4-20 day / FT4-40 evening acceptance runs on the next successful boot.
 - **Fallout**: the oracle-fixture discipline audit for every other decoder ("music unit tests
   for all bands") is drafted as plan 082.
+
+## Acceptance (2026-09-28, on the clean-room receiver)
+
+The decoder this plan shipped is gone: radar's FT8/FT4 decoding was rewritten clean-room
+(`decode/ftx`, radar PRs #1048–#1052, docs/108–109), so acceptance ran on that receiver, not the
+ft8_lib port. FT4-20 by day, 16:46–16:48 EEST (13:46–13:48 UTC), local RSP1A + telescopic whip on
+14.080 MHz: **22 consecutive 7.5 s slots, none skipped, 52 decodes** (2.4 a slot; e.g. `CQ
+RA9LL MO27` −10 dB, `W4IMD PE1JAT R+01` −18 dB), DT p10/median/p90 −0.1/−0.1/+0.1 s, decode
+1.8 s a slot on average (max 2.6 s) of the 7.5 s budget, no warnings. The C2 fix holds on air: no
+slot opened late enough to lose its stations. FT4 was put back off afterwards (the station's radios
+are booked for RS41 and UVB-76). **FT4-40 by evening** (the "dead band or deaf antenna" lens) is the
+one check left.
+
