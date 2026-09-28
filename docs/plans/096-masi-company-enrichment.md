@@ -149,7 +149,9 @@ not documented: `HttpFetcher` moves onto the same `PinnedResolver` (its own PR, 
 not-blacklisted companies, most open jobs first, due by their **latest visit** (by run time, then id): none yet; older
 than 30 days; `REGISTER_BUSY` an hour ago; `INDEX_NOT_READY` once a complete register read exists; `UNCONFIRMED`
 without a code and a complete read since (`register_index_read.read_at` is stamped when a read is **complete**, not
-when it began); `FETCH_FAILED` or `VISIT_FAILED` a day ago while fewer than 5 failed in a row. The house lane of
+when it began); `FETCH_FAILED` or `VISIT_FAILED` a day ago while fewer than 5 failed in a row; `UNCONFIRMED` or
+`CODE_HELD` recorded before changeset 050 (no `found_by`), once, so the company page can say where a guess went and offer
+a code to place. The house lane of
 `AnalysisScheduler` — one tick at a time, drained on shutdown — but on a **platform thread** (a visit parses up to 1 MB;
 CPU work on a virtual thread starved the health endpoint on 2026-09-25). On a platform thread an interrupt ends no
 socket read and stops no JDBC call, so the shutdown also aborts the requests on the wire, and a visit **cut short**
@@ -413,7 +415,8 @@ proofs were of companies that had their code; no stub's site both printed its co
 companies (138): with a website 60 (from ≈ 48 of 144 on 2026-09-25), with a code 91, with a careers page 51, with an
 ATS 28. The operator's backlog is the 69 hiring companies without a website whose last visit was UNCONFIRMED — each
 now on its page with Accept and, from the next visit on (changeset 050 postdates these), where a guess ended up and a
-code to place. Measure again after next Sunday's register read, when the unconfirmed are visited again.
+code to place. The unconfirmed are visited once more within about three hours of masi #73's deploy (a site judged
+before changeset 050 is due once), not only after next Sunday's register read; measure again after that.
 
 **Item 5 LIVE in test 2026-09-27**: masi #70 (75e4ed3, changeset 050: `found_by`, `tried_url`, `named_code`; the
 endpoint serves a named code only while it can be placed) live 22:24 Tallinn; site #33 (b3e9fff, the "Own site" card,
