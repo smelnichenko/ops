@@ -87,7 +87,7 @@ DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
 | 9 | AIVDM | **DONE radar #1056** — AIS-catcher's full reading of 34 sentences (real air + M.1371-crafted) | — |
 | 10 | DMR RF | FEC/LC against MMDVMHost and ETSI | the symbol↔dibit mapping awaits real 70 cm |
 | 11 | WSPR demod | real air, four stations | wsprd output committed |
-| — | AIS identity | flags **DONE radar #1057** against the ITU's MID table (found Panama 374 missing); ship types against AIS-catcher's text for all 100 codes (PR next) | — |
+| — | AIS identity | **DONE**: flags #1057 against the ITU's MID table (found Panama 374 missing); ship types #1058 against AIS-catcher's text for all 256 codes (placed the newer 1-19/38/39) | — |
 | — | APRS, CommB, Morse | own keyers | not in the original list |
 
 **Item 3 DONE (radar #1055, 2026-09-28):** readsb (run, never vendored; `tools/modes-xcheck`) reads the
@@ -104,5 +104,8 @@ neither brought (southern/western hemispheres, types 2/3/19, msg 24B, every "not
 station's MMSI, a runt, fill bits) — and `AivdmOracleTest` holds every field to it; 25 reverts bite; with
 `AIS_CATCHER` set the truth must regenerate byte for byte. **AIS identity, flags (radar #1057):** the
 ITU's own MID allocation table; exact names, the listed flags pinned, 000-999 swept; found Panama's 374
-missing and added the territory registers Madeira, Gibraltar, Greenland, Macao. Ship types next: AIS-
-catcher's text for every code, including the newer table's 1-19/38/39 that M.1371-5 left reserved.
+missing and added the territory registers Madeira, Gibraltar, Greenland, Macao. **Ship types (radar
+#1058):** AIS-catcher's text for every value 0-255 (M.1371-6's table) — the codes M.1371-5 left reserved
+had all read "other"; trawler/fish factory/fish farm are fishing now, the 1-19 work vessels special. No
+retired-Python golden is left in radar's identity layer. Next: HFDL (commit dumphfdl's output; turn the
+oracle the right way round), then ACARS, WSPR, DSC.
