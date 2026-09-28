@@ -71,3 +71,28 @@ PRs take fixtures from whatever the antenna DOES hear first.
 ## Status
 
 DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
+
+**Re-audited 2026-09-28** (radar main 050713ee). Much moved without this plan being worked from:
+
+| # | item | grounding now | still missing |
+|---|---|---|---|
+| 1 | FLARM | packet layer against a compiled `flare` (docs/094, 3000 packets) | RF layer: our GFSK keyer into our demod; no real-air or reference IQ |
+| 2 | HFDL | real air (`KiwiCorpusTest`, `hfdl-8942k`) ⊆ dumphfdl's IDs | dumphfdl output as a committed file; `HfdlOracleTest` still runs the wrong direction, env-gated |
+| 3 | Mode-S / ADS-B | **DONE radar #1055** (below) | a real 6 MS/s cs16 capture through the station's own `IqStreams` |
+| 4 | ACARS | real air vs acarsdec's registrations/flights | acarsdec's message text and labels, committed |
+| 5 | RS41 | real air + rs41mod output (burst, PTU, XDATA) | — |
+| 6 | DSC | HF real air (two calls) | a reference decoder's output; VHF physical layer still our own keyer |
+| 7 | RTTY / WFAX / VOR | RTTY real air vs DWD text; WFAX line rate only; VOR nothing | a WFAX reference image; any real VOR (above 30 MHz: station recorder) |
+| 8 | DCF77 / MSF / NDB | time signals decode real air against the broadcast time | an NDB ident decode; `OfflineCaptureSmokeTest` superseded, not fixed |
+| 9 | AIVDM | **still our retired Python's output** | an independent decoder over the corpus; a full type-5 field check |
+| 10 | DMR RF | FEC/LC against MMDVMHost and ETSI | the symbol↔dibit mapping awaits real 70 cm |
+| 11 | WSPR demod | real air, four stations | wsprd output committed |
+| — | APRS, CommB, Morse, AIS identity | own keyers / retired Python | not in the original list |
+
+**Item 3 DONE (radar #1055, 2026-09-28):** readsb (run, never vendored; `tools/modes-xcheck`) reads the
+real-air vector (dump1090's modes1.bin, resampled exactly to 2.4 MS/s): 129 DF17 frames of 4d2023/AMC421
+with every field, committed as truth, plus crafted frames for the signs and "no information" values the
+vector never shows. The decoder matches readsb on every field; the demod finds 128 of 129 at 6 MS/s
+through the station's own pump (106 at 2 MS/s), with a cap on candidates offered. `modes-golden.frames`
+(frozen own output) deleted; the stale `LrptSatdumpOracleTest` reference struck. Found on the way: the pump
+lost every frame straddling two 256 KB IQ reads — fixed. Next worst: **9 AIVDM**.
