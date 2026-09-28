@@ -77,7 +77,7 @@ DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
 | # | item | grounding now | still missing |
 |---|---|---|---|
 | 1 | FLARM | packet layer against a compiled `flare` (docs/094, 3000 packets) | RF layer: our GFSK keyer into our demod; no real-air or reference IQ |
-| 2 | HFDL | real air (`KiwiCorpusTest`, `hfdl-8942k`) ⊆ dumphfdl's IDs | dumphfdl output as a committed file; `HfdlOracleTest` still runs the wrong direction, env-gated |
+| 2 | HFDL | **DONE radar #1059** — dumphfdl 1.7.0's whole reading of three Kiwi captures, frames paired in order, contacts compared | — (`HfdlOracleTest`, dumphfdl reading our encoder, stays as the encoder's check) |
 | 3 | Mode-S / ADS-B | **DONE radar #1055** (below) | a real 6 MS/s cs16 capture through the station's own `IqStreams` |
 | 4 | ACARS | real air vs acarsdec's registrations/flights | acarsdec's message text and labels, committed |
 | 5 | RS41 | real air + rs41mod output (burst, PTU, XDATA) | — |
@@ -107,5 +107,10 @@ ITU's own MID allocation table; exact names, the listed flags pinned, 000-999 sw
 missing and added the territory registers Madeira, Gibraltar, Greenland, Macao. **Ship types (radar
 #1058):** AIS-catcher's text for every value 0-255 (M.1371-6's table) — the codes M.1371-5 left reserved
 had all read "other"; trawler/fish factory/fish farm are fishing now, the 1-19 work vessels special. No
-retired-Python golden is left in radar's identity layer. Next: HFDL (commit dumphfdl's output; turn the
-oracle the right way round), then ACARS, WSPR, DSC.
+retired-Python golden is left in radar's identity layer.
+
+**Item 2 DONE (radar #1059):** dumphfdl reads each committed Kiwi capture at its own rate
+(`tools/hfdl-xcheck`); our FCS-valid frames must be its messages in time order, field by field (the
+contact rows too), 224 WK018H named missed by place. Found: a logon resume's network PDU (flight,
+position, time) after the ICAO address was never read — now read, for the resume only. Next: ACARS
+(acarsdec's text and labels committed), WSPR (wsprd output), DSC (a reference decoder).
