@@ -84,5 +84,14 @@ places kept; 1 merged with a job masi had. Enabled on `0 57 */6 * * *`.
 Microsoft and Ericsson (Eightfold), Telia (Workday); their first runs listed 36 Estonian postings (21 + 7 + 2 + 3 + 3),
 11 of them merging with jobs masi already had (cvpro 9, Ericsson 1, Telia 1). Side fixes on the way: strict dates in every collector (a
 "31.02" read as 28.02), ingest keeping a posting date a later run does not say, one description cap for every
-collector. Open for later: K+N's Tallinn search past 10 jobs (survey the widget endpoint); Eightfold jobs whose slug
-names another country first; 7 of cvpro's 21 "IT" cards are not IT work (the operator's call).
+collector. The three open ends were fixed the next day (below).
+
+2026-09-30: **Open ends fixed** — masi #82 (3bbeecf), changesets 057/058. Kuehne+Nagel reads the site's search widget
+(`POST /widgets`), filtered by its country facet and paged by offset to the first page's count, instead of the one-page
+search for "Tallinn"; a first page with jobs but none of the country's fails the run. Microsoft and Ericsson read the
+sites' own search (`/api/pcsx/search?location=Estonia`, robots.txt allows it by name), asked in the session the careers
+page sets (without it: 429); a job is Estonian when any of its places is. 058 moved their listings to the address
+without the slug. cvpro lists only titles the shared IT rule (`ItTitles`, Töötukassa's, now with network
+administrators/engineers) accepts; a dropped card still counts against the site's total. Hand-runs 01:50 Tallinn
+(22:50 UTC 29.09), all OK and complete: K+N 1 request, 7 jobs; Microsoft 3 jobs, the multi-country Program Manager
+new; Ericsson 3 jobs, all matched at their new addresses (0 new); cvpro 12 IT postings, its 9 others close by misses.
