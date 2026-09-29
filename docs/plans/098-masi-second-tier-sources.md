@@ -70,3 +70,8 @@ register collectors' dates made strict (the same "31.02" flaw).
 2026-09-29: **PR2 Kuehne+Nagel LIVE** — masi #79 (1373ec8), platform 44d0eaf. First hand-run 17:08 Tallinn: OK, complete,
 8 requests (the search + 7 job pages), 7 Tallinn jobs, all with their text and the list's posting dates; enabled on
 `0 49 */6 * * *`. `HtmlText.MAX_DESCRIPTION` is now the one description cap for every collector.
+2026-09-29: **PR3 Eightfold LIVE** — masi #80 (e264b7a), platform a2b039c. First hand-runs 19:47/19:49 Tallinn: Microsoft
+OK, complete, 3 requests, its 2 Estonian jobs; Ericsson OK, complete, 10 requests (sitemap + 3 Estonian + its 6 slugs
+without a place, whose pages all named another country), 3 jobs (1 merged with a job masi had). Enabled on
+`0 51 */12` and `0 53 */12`. The sites' API is closed (403): a job in several countries whose slug names another first
+is not found. Microsoft's trailing dashes are punctuation ("…-washington-d-c-"), so `placelessSlugs` is Ericsson's only.
