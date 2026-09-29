@@ -67,3 +67,6 @@ an Estonian list request in English or Russian now and then (1 of 4 reads) — r
 cards are not IT work (builder, salesperson, electrician, low-voltage installer, CCTV technician, support, repair
 technician): the category is the site's, and whether to filter it is the operator's call. Follow-up masi #78: the four
 register collectors' dates made strict (the same "31.02" flaw).
+2026-09-29: **PR2 Kuehne+Nagel LIVE** — masi #79 (1373ec8), platform 44d0eaf. First hand-run 17:08 Tallinn: OK, complete,
+8 requests (the search + 7 job pages), 7 Tallinn jobs, all with their text and the list's posting dates; enabled on
+`0 49 */6 * * *`. `HtmlText.MAX_DESCRIPTION` is now the one description cap for every collector.
