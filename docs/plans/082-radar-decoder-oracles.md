@@ -81,7 +81,7 @@ DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
 | 3 | Mode-S / ADS-B | **DONE radar #1055** (below) | a real 6 MS/s cs16 capture through the station's own `IqStreams` |
 | 4 | ACARS | **DONE radar #1060** — acarsdec 3.7's whole reading of the real-air capture, and of crafted blocks our modulator sends, field by field | — |
 | 5 | RS41 | real air + rs41mod output (burst, PTU, XDATA) | — |
-| 6 | DSC | HF real air (two calls) | a reference decoder's output; VHF physical layer still our own keyer |
+| 6 | DSC | **DONE radar #1062** — DSCsnoop's reading of four Kiwi captures and twelve M.493-crafted calls, field by field | VHF physical layer (DSCsnoop is MF/HF only) |
 | 7 | RTTY / WFAX / VOR | RTTY real air vs DWD text; WFAX line rate only; VOR nothing | a WFAX reference image; any real VOR (above 30 MHz: station recorder) |
 | 8 | DCF77 / MSF / NDB | time signals decode real air against the broadcast time | an NDB ident decode; `OfflineCaptureSmokeTest` superseded, not fixed |
 | 9 | AIVDM | **DONE radar #1056** — AIS-catcher's full reading of 34 sentences (real air + M.1371-crafted) | — |
@@ -132,4 +132,14 @@ drift, dt and SNR; exceptions named. Found: SNR 11-22 dB low on the crowded 7040
 band's median, which there is a station) — now the floor across ±160 Hz; the candidate search had the
 same median (14 candidates a pass for 25 stations); WsprDemod's 63-tap filter sloped 1.8 dB inside the
 band and let 265 Hz fold in at -24 dB — now a flat 657-tap Blackman. Ratchet 7040 margin 83 -> 85.
-Next: DSC (a reference decoder).
+
+
+**Item 6 DONE (radar #1062):** PA2OHH's DSCsnoop (run unmodified and headless; `tools/dsc-xcheck`) reads the
+real-air captures (one call each on three, none on 2187.5 kHz — the same three we accept) and twelve calls
+crafted from M.493 and sent by our keyer: distress in two quadrants and unknown, all-ships, individual with
+frequencies (incl. 10 Hz extended), group, area, acknowledgement, relay, position reply and request. Found:
+the decoder read only the distress layout (second telecommand, frequencies, distress time/subsequent, an
+ack's/relay's distressed ship, an area — read as an MMSI —, position replies all unread); relays were
+"routine" and, once distress, the UI put the relaying coast station under the SOS; the test keyer sent
+±42.5 Hz with inverted polarity (HF DSC is ±85 Hz, a 1 the lower tone). Crafted captures' SHA-256 pinned
+ungated (ACARS too). Next: VOR, FLARM RF, APRS (the remaining own-keyer bands).
