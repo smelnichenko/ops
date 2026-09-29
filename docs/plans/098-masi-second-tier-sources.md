@@ -45,7 +45,13 @@ T1 sources all run; what masi misses today is these employers' own boards and cv
    run; the text only when the posting has its own (the site writes a stand-in line otherwise). How many of its
    postings merge with Töötukassa's is read on the first hand-run. 6 of the 21 "IT" cards were not IT work (a builder,
    a salesperson, an electrician): the category is the site's, and the operator's to judge.
-2. masi: AtsCollector vendor `phenom` (K+N), Tallinn/Estonia jobs; job page for the description.
+2. masi: AtsCollector vendor `phenom` (K+N), Tallinn/Estonia jobs; job page for the description. Measured 2026-09-29:
+   the search page for "Tallinn" shows 8 of 8 (7 in Tallinn, 1 in Porto) with a page size of 10; asked for its next
+   page (`&from=N&s=1`) the site DROPS the keywords and pages through all 1 122 jobs worldwide. So the collector reads
+   the first page only and calls a larger count an incomplete run (nothing is closed for it). Before K+N's Tallinn
+   count passes 10, survey the page's `widgetApiEndpoint` (`https://jobs.kuehne-nagel.com/widgets`) for a paged search
+   that keeps the keywords. A job's page answers at `/job/<jobId>` without its title; its JobPosting's `datePosted` is
+   the day it was served, so the list's `postedDate` stands.
 3. masi: vendor `eightfold` (sitemap + ld+json JobPosting), Ericsson and Microsoft rows.
 4. masi: vendor `workday` (Telia), relative `postedOn` read against the run's day.
 5. platform: allowed hosts per source, pushed before each enable.
