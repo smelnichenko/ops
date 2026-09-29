@@ -75,3 +75,14 @@ OK, complete, 3 requests, its 2 Estonian jobs; Ericsson OK, complete, 10 request
 without a place, whose pages all named another country), 3 jobs (1 merged with a job masi had). Enabled on
 `0 51 */12` and `0 53 */12`. The sites' API is closed (403): a job in several countries whose slug names another first
 is not found. Microsoft's trailing dashes are punctuation ("…-washington-d-c-"), so `placelessSlugs` is Ericsson's only.
+2026-09-29: **PR4 Telia LIVE** — masi #81 (7be0619), platform 9f37f03. First hand-run 21:49 Tallinn: OK, complete,
+4 requests (the list by its Estonia facet + 3 records), 3 jobs with text, posting dates and deadlines (endDate is the
+day the posting comes down: the last day stored is the day before — Raadiovõrgu insener 01.10 for endDate 02.10), all
+places kept; 1 merged with a job masi had. Enabled on `0 57 */6 * * *`.
+
+**PLAN 098 COMPLETE (2026-09-29).** Five second-tier sources live and enabled: cvpro.ee, Kuehne+Nagel (Phenom),
+Microsoft and Ericsson (Eightfold), Telia (Workday); about 36 more Estonian postings a day's reads, roughly a third of
+them merging with jobs cv.ee or Töötukassa already had. Side fixes on the way: strict dates in every collector (a
+"31.02" read as 28.02), ingest keeping a posting date a later run does not say, one description cap for every
+collector. Open for later: K+N's Tallinn search past 10 jobs (survey the widget endpoint); Eightfold jobs whose slug
+names another country first; 7 of cvpro's 21 "IT" cards are not IT work (the operator's call).
