@@ -53,3 +53,11 @@ T1 sources all run; what masi misses today is these employers' own boards and cv
 ## Status
 
 2026-09-29: plan written; volumes measured from the live sites (above).
+2026-09-29: **PR1 cvpro LIVE** — masi #77 (e785ec7), platform daf03e6 (allowed host). First hand-run 15:21 Tallinn:
+OK, complete, 23 requests (2 list pages + 21 posting pages), 21 postings, 12 new jobs; 9 merged with jobs cv.ee and/or
+Töötukassa already had (6 each, 3 with both), so "may merge" is about half. 16 carry their own text; 5 only the site's
+stand-in line (kept as no description). Enabled on its seeded cron `0 50 5,17 * * *`. Found on the way: the site answers
+an Estonian list request in English or Russian now and then (1 of 4 reads) — read alike in all three. 7 of the 21 "IT"
+cards are not IT work (builder, salesperson, electrician, low-voltage installer, CCTV technician, support, repair
+technician): the category is the site's, and whether to filter it is the operator's call. Follow-up masi #78: the four
+register collectors' dates made strict (the same "31.02" flaw).
