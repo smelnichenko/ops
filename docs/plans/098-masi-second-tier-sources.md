@@ -81,8 +81,8 @@ day the posting comes down: the last day stored is the day before — Raadiovõr
 places kept; 1 merged with a job masi had. Enabled on `0 57 */6 * * *`.
 
 **PLAN 098 COMPLETE (2026-09-29).** Five second-tier sources live and enabled: cvpro.ee, Kuehne+Nagel (Phenom),
-Microsoft and Ericsson (Eightfold), Telia (Workday); about 36 more Estonian postings a day's reads, roughly a third of
-them merging with jobs cv.ee or Töötukassa already had. Side fixes on the way: strict dates in every collector (a
+Microsoft and Ericsson (Eightfold), Telia (Workday); their first runs listed 36 Estonian postings (21 + 7 + 2 + 3 + 3),
+11 of them merging with jobs masi already had (cvpro 9, Ericsson 1, Telia 1). Side fixes on the way: strict dates in every collector (a
 "31.02" read as 28.02), ingest keeping a posting date a later run does not say, one description cap for every
 collector. Open for later: K+N's Tallinn search past 10 jobs (survey the widget endpoint); Eightfold jobs whose slug
 names another country first; 7 of cvpro's 21 "IT" cards are not IT work (the operator's call).
