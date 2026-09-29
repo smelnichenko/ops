@@ -417,6 +417,15 @@ ATS 28. The operator's backlog is the 69 hiring companies without a website whos
 now on its page with Accept and, from the next visit on (changeset 050 postdates these), where a guess ended up and a
 code to place. The unconfirmed are visited once more within about three hours of masi #73's deploy (a site judged
 before changeset 050 is due once), not only after next Sunday's register read; measure again after that.
+**Item 6 re-measured 2026-09-30 01:55 Tallinn (test)**: 281 visits to 166 companies in all (1 839 requests); since the
+first measure 101 more (09-28 80 visits / 572 requests, 09-29 21 / 114; last 09-29 19:49), then nothing due until the
+next complete register read. Latest visit per company: UNCONFIRMED 94, KNOWN_SITE 31, PROVED 22, ROBOTS_DENIED 12,
+MATCHED 5, FETCH_FAILED 1, NO_CANDIDATE 1. **3 placements on the register** (from 0), each a code the company's own
+site printed: Tartu Ülikool 74001073 (OWN, ut.ee), Threod Systems AS 12323903 (CONTACT, threod.com), Coop Pank AS
+10237832 (OWN, cooppank.ee). How the latest visit found its candidate: GUESS 45, REGISTER 30, CONTACT 13, OWN 10,
+unrecorded 68 (visits before changeset 050). Hiring companies (159): with a website 65, a code 94, a careers page 57,
+an ATS 30. The operator's backlog: 83 hiring companies without a website whose last visit was UNCONFIRMED, 4 of them
+with a named code to place and 9 with the address a guess ended up at. **Item 6 done**; the lane stays on.
 
 **Item 5 LIVE in test 2026-09-27**: masi #70 (75e4ed3, changeset 050: `found_by`, `tried_url`, `named_code`; the
 endpoint serves a named code only while it can be placed) live 22:24 Tallinn; site #33 (b3e9fff, the "Own site" card,
