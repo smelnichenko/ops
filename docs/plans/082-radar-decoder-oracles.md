@@ -86,7 +86,7 @@ DRAFT 2026-08-19 — audit complete, execution not started; follows the 081 arc.
 | 8 | DCF77 / MSF / NDB | time signals decode real air against the broadcast time | an NDB ident decode; `OfflineCaptureSmokeTest` superseded, not fixed |
 | 9 | AIVDM | **DONE radar #1056** — AIS-catcher's full reading of 34 sentences (real air + M.1371-crafted) | — |
 | 10 | DMR RF | FEC/LC against MMDVMHost and ETSI | the symbol↔dibit mapping awaits real 70 cm |
-| 11 | WSPR demod | real air, four stations | wsprd output committed |
+| 11 | WSPR demod | **DONE radar #1061** — wsprd's reading of both Kiwi captures, per-station SNR/dt/frequency/drift | types 2/3 unpacked (clean-room); three 7040 kHz misses |
 | — | AIS identity | **DONE**: flags #1057 against the ITU's MID table (found Panama 374 missing); ship types #1058 against AIS-catcher's text for all 256 codes (placed the newer 1-19/38/39) | — |
 | — | APRS, CommB, Morse | own keyers | not in the original list |
 
@@ -124,3 +124,12 @@ padding stripped). Found: a short downlink's sequence and flight were read past 
 fragment read as complete, an eight-character one lost both fields; ETB was never surfaced, and is
 now marked "(more follows)" in the Receivers list and the plane panel. Next: WSPR (wsprd output —
 wsprd reads 3 on 10140k where we read 4, 25 on 7040k where we read 19; types 2/3 not unpacked), DSC.
+
+**Item 11 DONE (radar #1061):** wsprd (run, never vendored; `tools/wspr-xcheck`) reads each Kiwi capture —
+resampled to 12000 S/s, cut to ±1400 Hz (else the real part folds an image onto the band: wsprd read
+10140 kHz 3 dB low and missed IW2DWN), moved to 1500 Hz audio. Every type-1 station agrees on frequency,
+drift, dt and SNR; exceptions named. Found: SNR 11-22 dB low on the crowded 7040 kHz capture (noise was the
+band's median, which there is a station) — now the floor across ±160 Hz; the candidate search had the
+same median (14 candidates a pass for 25 stations); WsprDemod's 63-tap filter sloped 1.8 dB inside the
+band and let 265 Hz fold in at -24 dB — now a flat 657-tap Blackman. Ratchet 7040 margin 83 -> 85.
+Next: DSC (a reference decoder).
