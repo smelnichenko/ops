@@ -152,3 +152,13 @@ decodes). Three test reviews: prefix/callsign space rules, the shortest type-1 c
 stations or identical twins are two decodes (payload AND place, not text), the station's delivery,
 and the HF logs keyed by row id (a `<...>` row click opened another station). Next: the 7040 misses.
 
+**7040 kHz misses (radar #1067, 2026-09-30):** PE1AHJ/M0GUC (0.8 Hz apart, one candidate) read by
+a second, time-distinct start per candidate; a payload that unpacks to nothing is no decode and is
+never subtracted (it had erased PA1JCK; synthetic test, 5 scenes). 22 -> 24; the ratchet now records
+each WSPR fixture's fanoCalls (lower is better): the extra start costs 10140 kHz 80 -> 93 calls.
+M1LCR stays missed: never a candidate beside the M0LHP/DK3BI pair's subtraction residue.
+
+**ADS-B 2 MS/s (radar #1068):** each sample repeated to six a bit before slicing: 106 -> 125 of
+readsb's 129. I/Q interpolation (127 clean) lost weak frames under noise; a seed-by-seed paired
+check against the two-a-bit slicer, not a floor, is what tells them apart. Next: APRS vs direwolf.
+
