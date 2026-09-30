@@ -1198,3 +1198,21 @@ ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#1
 is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) and reposts + history (masi #32, site #19) merged and live 2026-09-22; every source enabled and verified 2026-09-22 (masi #33–#36); what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
+
+**2026-09-30 — the operator: "masi is not production grade yet; no production deploy until I say"; "fix everything".** The
+Later list is closed (reconciliation parked by the operator: no organization, so no Admin key, and masi shares the one API
+key; PR preview envs dropped: the test namespace is masi's preview). Production-grade list, from the week's runs in test:
+1. Package 1's two 400s (09-21): the account had no credit, before masi told NO_CREDIT apart (86fefc3, the same
+   morning); no bug left, the package stays FAILED for the operator to regenerate or skip.
+2. A deploy stopped the runs in flight and a slot fired while the pod was down was lost (Töötukassa 3, LHV, Datel,
+   aruanded 1 each in a week): **masi #83 (410435a) LIVE 12:10 Tallinn** — a few minutes after a start each source whose
+   latest slot has no verdict runs once more, one after another, re-checked at its turn. Live proof on its own deploy:
+   Wise's 12:07 slot fell while the pod was down and ran at 12:13:01 (OK, complete, 62 postings); Pipedrive's own 12:13
+   run was in flight when it was picked and was skipped at its turn as answered.
+3. No alert in test: alerts mail, and the operator's rule is no unattended mail for what needs no action — not done;
+   the Sources page shows health.
+4. Startup budget: already 10 minutes since 09-28.
+5. A judged tuning evaluation (below the claims guard): next.
+6. The enrichment lane's two shutdown races without a test: **masi #84** — pinned with test hooks; the second race's
+   test found a real bug (a shutdown or the deadline mid-connect made the HTTP client throw IllegalStateException /
+   NullPointerException / CancellationException, which left the visit and lost a cut visit's record), fixed.
