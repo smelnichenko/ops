@@ -180,3 +180,15 @@ test — pinned by AdsbReceiverCommBTest (29/30 mutants, one equivalent). `task 
 WSPRD, DIREWOLF, ACARSDEC and DSCSNOOP where installed: every oracle's byte-for-byte check runs at every
 gate (first run: all seven classes ran, none skipped). Remaining: VOR and FLARM RF (need real captures), Morse.
 
+**Morse DONE (radar #1074, 2026-09-30):** multimon-ng's MORSE_CW, run black-box
+(`tools/morse-xcheck`), told each recording's dit length, reads an 11-message corpus keyed by OUR keyer
+(pangrams, digits, E/T, VOR idents at 7 wpm, 5-25 wpm, up to 20% jitter) exactly as sent; ours, given
+the same durations, reads what it read, except a lone element (no unit to measure against: T reads E).
+Measured limits: multimon-ng misreads above 30 wpm or at 30% jitter; ours holds 5-40 wpm at 30%
+(now pinned in MorseDecoderTest). Review found the gating broken for EIGHT oracles: `task gate` sets
+an absent program's variable empty, and `Files.isExecutable(Path.of(""))` is true, so on a host without
+the program they failed instead of skipping (`OracleProgram.named` now); and AIS_CATCHER and
+DUMPHFDL_RUN were never set by the gate, so the AIVDM, ship-type and HFDL real-air checks had skipped
+at every gate. Open: ours breaks when every mark is lengthened or shortened by 0.34 dit (an envelope
+detector's bias) while multimon-ng reads -0.40..+0.50: the next Morse PR, failing test first.
+
