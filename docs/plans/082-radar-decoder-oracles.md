@@ -162,3 +162,12 @@ M1LCR stays missed: never a candidate beside the M0LHP/DK3BI pair's subtraction 
 readsb's 129. I/Q interpolation (127 clean) lost weak frames under noise; a seed-by-seed paired
 check against the two-a-bit slicer, not a floor, is what tells them apart. Next: APRS vs direwolf.
 
+**APRS DONE (radar #1069, 2026-09-30):** direwolf run black-box (`tools/aprs-xcheck`) reads a
+54-packet corpus keyed by OUR keyer: it hears every packet; our demod recovers the same frames
+(addresses included); the parser matches its positions to 1e-5 deg except 18 named packets where
+direwolf is lenient (ambiguity as zeros, beyond +-90/+-180, misaligned object/item names, unmarked
+object, table outside the spec, no symbol code) and Mic-E. Objects/items now parsed — and review
+found every position was filed under the SENDER (a digipeater moved 16.8 deg to its repeater
+object): objects are rows of their own now, killed ones leave. Remaining own-keyer bands: VOR,
+FLARM RF (need real captures); CommB, Morse.
+
