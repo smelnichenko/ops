@@ -1212,7 +1212,15 @@ key; PR preview envs dropped: the test namespace is masi's preview). Production-
 3. No alert in test: alerts mail, and the operator's rule is no unattended mail for what needs no action — not done;
    the Sources page shows health.
 4. Startup budget: already 10 minutes since 09-28.
-5. A judged tuning evaluation (below the claims guard): next.
-6. The enrichment lane's two shutdown races without a test: **masi #84** — pinned with test hooks; the second race's
-   test found a real bug (a shutdown or the deadline mid-connect made the HTTP client throw IllegalStateException /
-   NullPointerException / CancellationException, which left the visit and lost a cut visit's record), fixed.
+5. A judged tuning evaluation: **masi #85 (3481542) merged** — `TuningEvaluationTest` runs the whole pipeline as
+   production does over labelled postings and reports what the claims guard cannot see (must-haves shown, in the prose
+   too; posting terms the master lacks used in the CV or the letter, each with its line; often-named terms); it asserts
+   only what needs no baseline (every package prepared or refused by the guard, tuned, in its posting's language). Its
+   scoring (`TuneScore`) is unit-tested in CI and reads evidence and Estonian endings as the claims guard does. It calls
+   the real API (MASI_EVAL_API_KEY; ~0.1–0.2 USD a posting) and sends the fictitious sample CV and the postings'
+   requirements to Anthropic: NOT RUN — the operator's call. Gates come from the spread of three runs, terms judged.
+6. The enrichment lane's two shutdown races without a test: **masi #84 (0f8a017) LIVE 14:52 Tallinn** — pinned with test
+   hooks; the second race's test found a real bug (a shutdown or the deadline mid-connect made the HTTP client throw
+   IllegalStateException / NullPointerException / CancellationException, which left the visit and lost a cut visit's
+   record), fixed. masi #86: a catch-up that finds nothing missed says so (after #84's deploy the pod logged no catch-up
+   line, which read the same as one that never ran).
