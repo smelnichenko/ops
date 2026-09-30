@@ -171,3 +171,12 @@ found every position was filed under the SENDER (a digipeater moved 16.8 deg to 
 object): objects are rows of their own now, killed ones leave. Remaining own-keyer bands: VOR,
 FLARM RF (need real captures); CommB, Morse.
 
+**Comm-B DONE (radar #1072, 2026-09-30):** DF20/DF21 replies packed from ICAO Doc 9871 (plus two real-air
+replies from J. Sun's "The 1090 MHz Riddle", of another aircraft) read by readsb black-box through its raw
+port: our fields match every 5,0/6,0 readsb reads; our register inference (against the aircraft's own ADS-B,
+exactly one register fitting) is readsb's but for ten named, deliberate differences. Review found the
+station's own Comm-B rule (ambiguity guard, 30 s staleness, 15 s pairing, one sample per pair) reached by NO
+test — pinned by AdsbReceiverCommBTest (29/30 mutants, one equivalent). `task gate` now sets READSB,
+WSPRD, DIREWOLF, ACARSDEC and DSCSNOOP where installed: every oracle's byte-for-byte check runs at every
+gate (first run: all seven classes ran, none skipped). Remaining: VOR and FLARM RF (need real captures), Morse.
+
