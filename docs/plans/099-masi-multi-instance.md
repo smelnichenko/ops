@@ -156,3 +156,10 @@ Plus the full suite (`./gradlew clean check`) and the Sonar gate.
 ## Status
 
 2026-09-30: approved by the operator (no special instance of any kind; claims expire on the item's own row). PR 1 next.
+
+2026-09-30: **PR 1 LIVE** — masi #87 merged as b59f5ac, deployed to schnappy-test 22:32 Tallinn (19:32 UTC). Changeset 059
+ran in 418 ms; no unfinished run, no lapsed claim, no slot with two first attempts. The start's catch-up claimed
+tootukassa's missed 19:29 UTC slot as attempt 1 (the pod was down when it fired), the row carrying the pod's claim, renewed
+while the paced run goes on. Tests: TwoInstancesTest (6 cases, a second full application on the same database), 55 revert
+checks (53 red, 2 equivalent), a test-quality audit that found 13 uncovered mechanisms before they were covered.
+Next: PR 2 (the lanes) — paused while the masi test run is brought under 3 minutes (operator, 2026-09-30).
