@@ -1095,7 +1095,7 @@ for Java and `npm run test` green for site.
     first run (masi #36). The daily AI budget is 2 EUR (2.30 USD) since 17:16.
 
 Later: ~~match scoring (`SCORE`)~~ (done, above, site included), company enrichment (`ENRICH`), ~~weekly-report notification~~
-(done, above: by mail), ~~T2 collectors~~ (the verified three, above), ~~Admin-API cost reconciliation~~ (PARKED 2026-09-30 by the operator: the Admin API needs an Anthropic organization, which the account is not to become for now; masi shares the one API key with monitor and admin — `MASI_ANTHROPIC_API_KEY` holds the same value — so the key isolation under Cost monitoring does not hold, by the operator's choice, and masi's own budgets are its only spend limit), PR preview envs for masi (see above: a plan of its own).
+(done, above: by mail), ~~T2 collectors~~ (the verified three, above), ~~Admin-API cost reconciliation~~ (PARKED 2026-09-30 by the operator: the Admin API needs an Anthropic organization, which the account is not to become for now; masi shares the one API key with monitor and admin — `MASI_ANTHROPIC_API_KEY` holds the same value — so the key isolation under Cost monitoring does not hold, by the operator's choice, and masi's own budgets are its only spend limit), ~~PR preview envs for masi~~ (DROPPED 2026-09-30 by the operator: "test is actually a preview environment" — every merge deploys to the test namespace, where each change is verified live).
 
 ### Verification
 
