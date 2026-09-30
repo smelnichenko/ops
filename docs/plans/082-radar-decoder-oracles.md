@@ -189,6 +189,11 @@ Measured limits: multimon-ng misreads above 30 wpm or at 30% jitter; ours holds 
 an absent program's variable empty, and `Files.isExecutable(Path.of(""))` is true, so on a host without
 the program they failed instead of skipping (`OracleProgram.named` now); and AIS_CATCHER and
 DUMPHFDL_RUN were never set by the gate, so the AIVDM, ship-type and HFDL real-air checks had skipped
-at every gate. Open: ours breaks when every mark is lengthened or shortened by 0.34 dit (an envelope
-detector's bias) while multimon-ng reads -0.40..+0.50: the next Morse PR, failing test first.
+at every gate.
+
+**Morse mark bias FIXED (radar #1076, 2026-09-30):** ours broke past 0.34 dit of mark bias (a threshold
+lengthens marks, shortens spaces) where multimon-ng reads -0.40..+0.50. Five biased rows joined the corpus
+(multimon-ng reads them exactly); the unit and the bias are now fitted together (log cost), believed only
+when clearly better than none. Paired vs the old decoder, 17000 runs: 3694 better, 25 worse (30% jitter,
+|b| .15-.25), none worse without bias. VorDemod's own keying measured -0.01..-0.04 dit: inert there today.
 
