@@ -287,9 +287,10 @@
               requests:
                 cpu: 50m
                 memory: 1Gi
+              # 4Gi: at 2Gi a restart that resumed ~20 apps' syncs at once was OOMKilled in a loop (2026-10-01)
               limits:
                 cpu: 1000m
-                memory: 2Gi
+                memory: 4Gi
 
           redis:
             resources:
