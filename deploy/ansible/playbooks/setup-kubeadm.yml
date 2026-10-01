@@ -383,22 +383,6 @@
       changed_when: true
       when: install_kube_proxy | default(false) | bool
 
-    # kubeadm's CoreDNS asks for 100m; the cluster's requests were halved on 2026-10-01.
-    # kubeadm upgrade re-renders the addon, so re-run this after every upgrade.
-    - name: Set the CoreDNS CPU request to 50m
-      ansible.builtin.shell: |
-        set -o pipefail
-        current=$(kubectl -n kube-system get deployment coredns \
-          -o jsonpath='{.spec.template.spec.containers[?(@.name=="coredns")].resources.requests.cpu}')
-        if [ "$current" != "50m" ]; then
-          kubectl -n kube-system set resources deployment coredns -c coredns --requests=cpu=50m
-          echo changed
-        fi
-      args:
-        executable: /bin/bash
-      register: coredns_cpu
-      changed_when: "'changed' in coredns_cpu.stdout"
-
     # ================================================================
     # Phase 5b: Install Helm
     # ================================================================
