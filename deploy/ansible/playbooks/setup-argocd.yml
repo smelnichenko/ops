@@ -264,7 +264,7 @@
           server:
             resources:
               requests:
-                cpu: 100m
+                cpu: 50m
                 memory: 128Mi
               limits:
                 cpu: 500m
@@ -273,7 +273,7 @@
           repoServer:
             resources:
               requests:
-                cpu: 100m
+                cpu: 50m
                 memory: 256Mi
               limits:
                 cpu: 1000m
@@ -285,7 +285,7 @@
           controller:
             resources:
               requests:
-                cpu: 100m
+                cpu: 50m
                 memory: 1Gi
               limits:
                 cpu: 1000m
@@ -294,7 +294,7 @@
           redis:
             resources:
               requests:
-                cpu: 50m
+                cpu: 25m
                 memory: 64Mi
               limits:
                 cpu: 200m
