@@ -73,9 +73,20 @@ PI_SCRIPT = <<-'PISCRIPT'
 PISCRIPT
 
 # kubeadm node packages
+# Same OS as production `ten`: the trixie box brought to the current point release and kernel (ten runs 13.7 on
+# a 6.12 trixie kernel). Its own provisioner so Vagrant reboots into the upgraded kernel before anything else runs.
+OS_UPGRADE_SCRIPT = <<-'OSSCRIPT'
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get full-upgrade -y -qq > /dev/null 2>&1
+OSSCRIPT
+
 KUBEADM_SCRIPT = <<-'KUBESCRIPT'
   export DEBIAN_FRONTEND=noninteractive
   KUBEADM_IP=$1
+
+  grep -q '^13\.' /etc/debian_version || { echo "kubeadm VM is not Debian 13 (trixie): $(cat /etc/debian_version)"; exit 1; }
+  echo "kubeadm VM OS: Debian $(cat /etc/debian_version), kernel $(uname -r)"
 
   # Static IP
   if ! ip addr show eth1 | grep -q "$KUBEADM_IP"; then
@@ -151,6 +162,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # ── kubeadm ──────────────────────────────────────────────────────────
   config.vm.define "kubeadm" do |k|
+    # production `ten` runs Debian 13 (trixie); the Pi VMs keep the default box above
+    k.vm.box = "debian/trixie64"
     k.vm.hostname = "ten"
     k.vm.network "private_network", ip: "192.168.56.10"
     k.vm.provider "libvirt" do |v|
@@ -171,6 +184,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       rsync__exclude: [".git/", "build/", ".gradle/"], create: true
     k.vm.synced_folder "../platform",    "/vagrant-platform", type: "rsync",
       rsync__exclude: [".git/"], create: true
+    k.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
     k.vm.provision "shell", inline: BASE_SCRIPT
     k.vm.provision "shell", inline: KUBEADM_SCRIPT, args: ["192.168.56.10"]
   end
