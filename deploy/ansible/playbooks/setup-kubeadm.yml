@@ -29,6 +29,18 @@
     install_nerdctl: "{{ install_nerdctl_override | default(false) }}"
     # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
     containerd_registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
+    # On ten, Argo CD (infra clusters/production/argocd/apps) owns Istio, cert-manager, metrics-server, the Prometheus
+    # stack and the data operators; this playbook installs them only where no Argo will (most Vagrant tests).
+    platform_by_argo: "{{ platform_by_argo_override | default(false) }}"
+    # the versions ten runs (2026-10-02), so a rebuild and every Vagrant test start from production
+    cert_manager_version: "v1.20.0"
+    external_secrets_chart_version: "2.2.0"
+    metrics_server_chart_version: "3.14.0"
+    prometheus_operator_crds_chart_version: "27.0.1"  # operator v0.89.0
+    gateway_api_version: "v1.2.1"
+    local_path_provisioner_version: "v0.0.35"
+    # ten's local-path StorageClass is not the default (its PVCs name it); Vagrant tests rely on a default
+    local_path_default_class: "{{ local_path_default_class_override | default(false) }}"
     pod_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
@@ -509,6 +521,7 @@
         name: istio
         repo_url: https://istio-release.storage.googleapis.com/charts
 
+      when: not platform_by_argo | bool
     - name: Install Istio base (CRDs)
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -520,6 +533,7 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     - name: Install Istiod (control plane)
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -536,6 +550,7 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     - name: Install Istio CNI
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -550,6 +565,7 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     - name: Wait for Istiod
       kubernetes.core.k8s_info:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -569,28 +585,28 @@
           | map('selectattr', 'status', 'equalto', 'True')
           | map('list') | map('length') | min > 0
 
+      when: not platform_by_argo | bool
     # ================================================================
     # Phase 7: Install local-path-provisioner
     # ================================================================
 
-    - name: Add local-path-provisioner Helm repo
-      kubernetes.core.helm_repository:
-        name: local-path-provisioner
-        repo_url: https://charts.containeroo.ch
+    - name: Install local-path-provisioner (Rancher's manifest, as on ten)
+      # ten runs the upstream manifest applied with kubectl (namespace local-path-storage, StorageClass local-path,
+      # not the default class), not a Helm release. The downstream wait polls the deployment, so a cold image pull
+      # does not have to fit a timeout here.
+      ansible.builtin.command: >-
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f
+        https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml
+      register: _lpp_apply
+      changed_when: "'created' in _lpp_apply.stdout or 'configured' in _lpp_apply.stdout"
 
-    - name: Install local-path-provisioner via Helm
-      # wait=false so vagrant cold-starts (image pull + CNI ready) don't blow
-      # past helm timeout; downstream wait below polls the deployment.
-      kubernetes.core.helm:
-        kubeconfig: /etc/kubernetes/admin.conf
-        name: local-path-provisioner
-        chart_ref: local-path-provisioner/local-path-provisioner
-        release_namespace: local-path-storage
-        create_namespace: true
-        values:
-          storageClass:
-            defaultClass: true
-        wait: false
+    - name: Make local-path the default StorageClass (Vagrant tests; not on ten)
+      ansible.builtin.command: >-
+        kubectl --kubeconfig /etc/kubernetes/admin.conf patch storageclass local-path -p
+        '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      register: _lpp_default
+      changed_when: "'no change' not in _lpp_default.stdout"
+      when: local_path_default_class | bool
 
     - name: Wait for local-path-provisioner deployment to be Ready (up to 15 min)
       kubernetes.core.k8s_info:
@@ -656,11 +672,13 @@
         name: metrics-server
         repo_url: https://kubernetes-sigs.github.io/metrics-server/
 
+      when: not platform_by_argo | bool
     - name: Install metrics-server
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
         name: metrics-server
         chart_ref: metrics-server/metrics-server
+        chart_version: "{{ metrics_server_chart_version }}"
         release_namespace: kube-system
         values:
           args:
@@ -668,6 +686,7 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     # ================================================================
     # Phase 9: Install cert-manager
     # ================================================================
@@ -677,11 +696,13 @@
         name: jetstack
         repo_url: https://charts.jetstack.io
 
+      when: not platform_by_argo | bool
     - name: Install cert-manager
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
         name: cert-manager
         chart_ref: jetstack/cert-manager
+        chart_version: "{{ cert_manager_version }}"
         release_namespace: cert-manager
         create_namespace: true
         values:
@@ -690,13 +711,14 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     # ================================================================
     # Phase 10: Install Gateway API CRDs
     # ================================================================
 
     - name: Install Gateway API CRDs
       ansible.builtin.shell: |
-        kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+        kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml
       changed_when: true
 
     # ================================================================
@@ -713,6 +735,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: external-secrets
         chart_ref: external-secrets/external-secrets
+        chart_version: "{{ external_secrets_chart_version }}"
         release_namespace: external-secrets
         create_namespace: true
         wait: true
@@ -727,16 +750,19 @@
     # so schnappy-observability's monitoring resources can be applied
     # in tests. Production installs the full kube-prometheus-stack via
     # ArgoCD; Vagrant tests just need the CRDs.
+      when: not platform_by_argo | bool
     - name: Install Prometheus Operator CRDs
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
         name: prometheus-operator-crds
         chart_ref: prometheus-community/prometheus-operator-crds
+        chart_version: "{{ prometheus_operator_crds_chart_version }}"
         release_namespace: monitoring
         create_namespace: true
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     # ================================================================
     # Phase 13: Install database/streaming operators
     # ================================================================
@@ -746,6 +772,7 @@
         name: cnpg
         repo_url: https://cloudnative-pg.github.io/charts
 
+      when: not platform_by_argo | bool
     - name: Install CNPG operator
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -765,11 +792,13 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     - name: Add Strimzi Helm repo
       kubernetes.core.helm_repository:
         name: strimzi
         repo_url: https://strimzi.io/charts/
 
+      when: not platform_by_argo | bool
     - name: Install Strimzi operator
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -787,11 +816,13 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     - name: Add ScyllaDB operator Helm repo
       kubernetes.core.helm_repository:
         name: scylla-operator
         repo_url: https://scylla-operator-charts.storage.googleapis.com/stable
 
+      when: not platform_by_argo | bool
     - name: Install ScyllaDB operator
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -803,6 +834,7 @@
         wait: true
         wait_timeout: 300s
 
+      when: not platform_by_argo | bool
     - name: Install ScyllaDB Manager
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -816,7 +848,7 @@
             developerMode: true
         wait: true
         wait_timeout: 15m
-      when: install_scylla_manager | default(true) | bool
+      when: not platform_by_argo | bool and install_scylla_manager | default(true) | bool
 
     # Plan 064 — Valkey operator (replaces hand-rolled redis Deployment).
     # The chart still renders a hand-rolled Deployment when
@@ -837,7 +869,7 @@
         create_namespace: true
         wait: true
         wait_timeout: 300s
-      when: install_valkey_operator | default(true) | bool
+      when: not platform_by_argo | bool and install_valkey_operator | default(true) | bool
 
     # ================================================================
     # Phase 14: Configure HAProxy

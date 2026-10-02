@@ -340,7 +340,10 @@ tasks:
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
-      - task: _vagrant:k8s-stack
+      - task: _vagrant:pi-stack
+      # as on ten: Argo CD owns Istio, cert-manager, metrics-server, the Prometheus stack and the data operators
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
@@ -348,7 +351,7 @@ tasks:
     desc: Re-run the kubeadm stack on the existing Vagrant VMs and diff the inventory again (after a fix; no rebuild)
     deps: [deploy:install]
     cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt

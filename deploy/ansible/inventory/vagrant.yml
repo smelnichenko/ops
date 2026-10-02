@@ -22,6 +22,8 @@ all:
     # the node builds images (test:cicd, test:dr, test:microservices) and pulls them from a plain-HTTP registry
     install_nerdctl_override: true
     containerd_registry_config_path_override: "/etc/containerd/certs.d"
+    # the tests' PVCs leave storageClassName empty; ten's name local-path
+    local_path_default_class_override: true
 
     # ── Test-only credential fixtures ──────────────────────────────────────
     # Production inventory maps each of these to a lookup('env', ...). All
