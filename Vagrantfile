@@ -25,8 +25,8 @@ VAGRANTFILE_API_VERSION = "2"
 # Shared base provisioning for all VMs
 BASE_SCRIPT = <<-'BASESCRIPT'
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq curl unzip zip jq ufw openssl python3 git > /dev/null 2>&1
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq curl unzip zip jq ufw openssl python3 git > /dev/null 2>&1
 
   # UFW base rules
   ufw allow 22/tcp comment "SSH"
@@ -39,8 +39,16 @@ PI_SCRIPT = <<-'PISCRIPT'
   PI_IP=$1
   PI_NAME=$2
 
-  # Additional Pi packages
-  apt-get install -y -qq postgresql postgresql-client default-jre-headless glusterfs-server keepalived golang > /dev/null 2>&1
+  grep -q '^13\.' /etc/debian_version || { echo "$PI_NAME VM is not Debian 13 (trixie): $(cat /etc/debian_version)"; exit 1; }
+  echo "$PI_NAME VM OS: Debian $(cat /etc/debian_version), kernel $(uname -r)"
+
+  # Additional Pi packages (apt waits for the dpkg lock, which unattended-upgrades can hold right after boot; a failed install prints its log)
+  PI_PACKAGES="postgresql postgresql-client default-jre-headless glusterfs-server keepalived golang"
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq $PI_PACKAGES > /tmp/pi-packages.log 2>&1 \
+    || { echo "$PI_NAME: package install failed:"; tail -30 /tmp/pi-packages.log; exit 1; }
+  for p in $PI_PACKAGES; do
+    dpkg -s "$p" > /dev/null 2>&1 || { echo "$PI_NAME: package $p is not installed"; exit 1; }
+  done
 
   # Static IP on private network
   if ! ip addr show eth1 | grep -q "$PI_IP"; then
@@ -72,15 +80,15 @@ PI_SCRIPT = <<-'PISCRIPT'
   echo "$PI_NAME provisioned with IP $PI_IP"
 PISCRIPT
 
-# kubeadm node packages
-# Same OS as production `ten`: the trixie box brought to the current point release and kernel (ten runs 13.7 on
-# a 6.12 trixie kernel). Its own provisioner so Vagrant reboots into the upgraded kernel before anything else runs.
+# Same OS as production: the trixie box brought to the current point release and kernel (ten and the Pis run 13.x).
+# Its own provisioner so Vagrant reboots into the upgraded kernel before anything else runs.
 OS_UPGRADE_SCRIPT = <<-'OSSCRIPT'
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get full-upgrade -y -qq > /dev/null 2>&1
+  apt-get -o DPkg::Lock::Timeout=600 update -qq
+  apt-get -o DPkg::Lock::Timeout=600 full-upgrade -y -qq > /dev/null 2>&1
 OSSCRIPT
 
+# kubeadm node packages
 KUBEADM_SCRIPT = <<-'KUBESCRIPT'
   export DEBIAN_FRONTEND=noninteractive
   KUBEADM_IP=$1
@@ -104,15 +112,15 @@ KUBEADM_SCRIPT = <<-'KUBESCRIPT'
   # (test:dr, test:microservices). Skipped cleanly if repos not mounted.
   # Debian's apt nodejs is 18 — too old for the site's Vite. Pull Node 22
   # from NodeSource so `npm run build` succeeds.
-  apt-get install -y -qq rsync ca-certificates curl gnupg > /dev/null 2>&1 || true
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq rsync ca-certificates curl gnupg > /dev/null 2>&1 || true
   if ! command -v node >/dev/null || [ "$(node -v 2>/dev/null | cut -d. -f1)" != "v22" ]; then
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
       | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --yes
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
       > /etc/apt/sources.list.d/nodesource.list
-    apt-get update -qq
-    apt-get install -y -qq nodejs > /dev/null 2>&1 || true
+    apt-get -o DPkg::Lock::Timeout=600 update -qq
+    apt-get -o DPkg::Lock::Timeout=600 install -y -qq nodejs > /dev/null 2>&1 || true
   fi
 
   # SDKMAN + Java 25 + Gradle (for source builds)
@@ -133,7 +141,8 @@ VSDK
 KUBESCRIPT
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.vm.box = "debian/bookworm64"
+  # production runs Debian 13 (trixie) on ten and on both Pis
+  config.vm.box = "debian/trixie64"
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
   # ── Pi 1 ─────────────────────────────────────────────────────────────
@@ -144,6 +153,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       v.memory = 4096
       v.cpus = 2
     end
+    pi1.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
     pi1.vm.provision "shell", inline: BASE_SCRIPT
     pi1.vm.provision "shell", inline: PI_SCRIPT, args: ["192.168.56.20", "pi1"]
   end
@@ -156,14 +166,13 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       v.memory = 4096
       v.cpus = 2
     end
+    pi2.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
     pi2.vm.provision "shell", inline: BASE_SCRIPT
     pi2.vm.provision "shell", inline: PI_SCRIPT, args: ["192.168.56.21", "pi2"]
   end
 
   # ── kubeadm ──────────────────────────────────────────────────────────
   config.vm.define "kubeadm" do |k|
-    # production `ten` runs Debian 13 (trixie); the Pi VMs keep the default box above
-    k.vm.box = "debian/trixie64"
     k.vm.hostname = "ten"
     k.vm.network "private_network", ip: "192.168.56.10"
     k.vm.provider "libvirt" do |v|
