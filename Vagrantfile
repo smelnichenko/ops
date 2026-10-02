@@ -26,11 +26,7 @@ VAGRANTFILE_API_VERSION = "2"
 BASE_SCRIPT = <<-'BASESCRIPT'
   export DEBIAN_FRONTEND=noninteractive
   apt-get -o DPkg::Lock::Timeout=600 update -qq
-  apt-get -o DPkg::Lock::Timeout=600 install -y -qq curl unzip zip jq ufw openssl python3 git > /dev/null 2>&1
-
-  # UFW base rules
-  ufw allow 22/tcp comment "SSH"
-  ufw --force enable
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq curl unzip zip jq openssl python3 git > /dev/null 2>&1
 BASESCRIPT
 
 # Pi-specific packages (both pi1 and pi2)
@@ -55,7 +51,10 @@ PI_SCRIPT = <<-'PISCRIPT'
     ip addr add $PI_IP/24 dev eth1 2>/dev/null || true
   fi
 
-  # UFW for Pi services
+  # UFW for Pi services - the Pis run UFW in production (setup-vault-pi.yml manages rules); ten does not
+  apt-get -o DPkg::Lock::Timeout=600 install -y -qq ufw > /dev/null 2>&1
+  ufw allow 22/tcp comment "SSH"
+  ufw --force enable
   ufw allow 3000/tcp comment "Forgejo"
   ufw allow 8080/tcp comment "Keycloak"
   ufw allow 8200/tcp comment "Vault"
@@ -106,12 +105,8 @@ KUBEADM_SCRIPT = <<-'KUBESCRIPT'
     ip addr add $KUBEADM_IP/24 dev eth1 2>/dev/null || true
   fi
 
-  # UFW for k8s
-  ufw allow 6443/tcp comment "Kubernetes API"
-  ufw allow 10250/tcp comment "Kubelet"
-  ufw allow 10257/tcp comment "Controller Manager"
-  ufw allow 10259/tcp comment "Scheduler"
-  ufw allow 30000:32767/tcp comment "NodePort range"
+  # No host firewall here: ten has no UFW (its firewall is the base-filter nftables table from
+  # setup-host-hardening.yml). A UFW here blocked Cilium's Hubble port 4244 (2026-10-02).
 
   # Rsync target + build deps for tests that build monitor/gateway/site JARs
   # (test:dr, test:microservices). Skipped cleanly if repos not mounted.

@@ -108,12 +108,10 @@
         - /usr/local/bin/containerd-stress
         - /usr/local/bin/ctr
       when: install_nerdctl | bool
-      register: _nerdctl_containerd_removed
+      notify: Reload systemd units
 
-    - name: Reload systemd after dropping nerdctl-full's containerd unit
-      ansible.builtin.systemd_service:
-        daemon_reload: true
-      when: _nerdctl_containerd_removed is changed
+    - name: Apply the systemd reload now (before containerd is configured and restarted)
+      ansible.builtin.meta: flush_handlers
 
     - name: Create containerd config directory
       ansible.builtin.file:
@@ -236,6 +234,16 @@
         state: present
         update_cache: true
         allow_change_held_packages: true
+
+    - name: Kubelet node IP (the cluster address, as kubeadm init advertises it)
+      # Without --node-ip the kubelet takes the default-route interface: ten has only one, but a Vagrant VM's is
+      # libvirt NAT, so the node's InternalIP was 192.168.121.x and node-addressed traffic (hubble-peer -> the Cilium
+      # agent) timed out. Explicit, it is the same address on ten and the right one everywhere.
+      ansible.builtin.copy:
+        dest: /etc/default/kubelet
+        content: "KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}\n"
+        mode: '0644'
+      notify: Restart kubelet
 
     - name: Hold kubernetes packages
       ansible.builtin.dpkg_selections:
@@ -490,6 +498,12 @@
               enabled: true
           cni:
             exclusive: false
+          # Socket-level load balancing only in the host namespace: in a pod it rewrote a Service IP to a pod IP at
+          # connect(), before Istio's redirect, so the sidecar found no listener, passed the traffic through in plain
+          # text and STRICT mTLS reset it (Vagrant 2026-10-02: CNPG's replica join and every app -> Postgres). ten has
+          # had it since bootstrap.sh patched cilium-config by hand; a helm upgrade without it would drop it there.
+          socketLB:
+            hostNamespaceOnly: true
         wait: true
         wait_timeout: 180s
 
@@ -897,3 +911,13 @@
             1. Install Pi Vault (setup-vault-pi.yml) — Consul backend on both Pis
             2. Install ArgoCD (setup-argocd.yml)
             3. Seed secrets (deploy:seed-secrets)
+
+  handlers:
+    - name: Reload systemd units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Restart kubelet
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: restarted

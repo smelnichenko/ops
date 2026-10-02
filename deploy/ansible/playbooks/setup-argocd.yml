@@ -40,6 +40,8 @@
     keycloak_host: "{{ keycloak_domain | default('auth.pmon.dev') }}"
     keycloak_enabled: "{{ argocd_keycloak_enabled | default(true) }}"
     ingress_enabled: "{{ argocd_ingress_enabled | default(false) }}"
+    # where Argo reaches Forgejo: the VIP and both Pi statics (any Pi may own the VIP); the Vagrant inventory names its own
+    argocd_forgejo_cidrs: "{{ forgejo_cidrs | default(['192.168.11.5/32', '192.168.11.4/32', '192.168.11.6/32']) }}"
 
   tasks:
     # ================================================================
@@ -453,13 +455,7 @@
               # Earlier this was hostvars['pi1']['ansible_host'] which
               # only opened pi1's static (.4) — git.pmon.dev resolves
               # to .5 (the VIP), so all repo-server fetches timed out.
-              - to:
-                  - ipBlock:
-                      cidr: 192.168.11.5/32
-                  - ipBlock:
-                      cidr: 192.168.11.4/32
-                  - ipBlock:
-                      cidr: 192.168.11.6/32
+              - to: "{{ argocd_forgejo_cidrs | map('community.general.dict_kv', 'cidr') | map('community.general.dict_kv', 'ipBlock') | list }}"
                 ports:
                   - protocol: TCP
                     port: 3000

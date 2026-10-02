@@ -163,30 +163,82 @@
             path: /tmp/vault.zip
             state: absent
 
-    # ── TLS cert (self-signed, per-Pi; idempotent via creates:) ────────
-    - name: Generate TLS cert + key (self-signed, per-Pi)
-      ansible.builtin.shell: |
-        openssl req -x509 \
-          -newkey ec -pkeyopt ec_paramgen_curve:P-384 \
-          -days 3650 -nodes \
-          -keyout /etc/vault.d/tls/vault-key.pem \
-          -out /etc/vault.d/tls/vault-cert.pem \
-          -subj "/CN={{ vault_pi_dns }}" \
-          -addext "subjectAltName=DNS:{{ vault_pi_dns }},DNS:{{ inventory_hostname }}.schnappy.io,IP:{{ node_ip }},IP:127.0.0.1"
-      args:
-        creates: /etc/vault.d/tls/vault-cert.pem
+    # ── TLS: one CA, per-Pi certs signed by it (production's layout) ────
+    # Production's Vault certs (2026-04-04) are signed by one CA and carry the node IP, the keepalived VIP and
+    # 127.0.0.1, so ESO trusts one CA (the vault-pi-ca Secret) for both Pis and reaches Vault through the VIP. This
+    # playbook used to self-sign each Pi without the VIP - a fresh deployment (the Vagrant upgrade test) could not
+    # reach Vault through the VIP. Every step is guarded: a Pi that already has its CA / cert (production) is untouched.
+    - name: Stat the Vault cert (already issued?)
+      ansible.builtin.stat:
+        path: /etc/vault.d/tls/vault-cert.pem
+      register: _vault_cert
 
-    # CA cert slot: referenced by vault.hcl's tls_client_ca_file. On
-    # production this is a real CA from an earlier run; if absent, fall
-    # back to the node's own cert (self-trust — the listener still works
-    # because we don't require client certs).
-    - name: Ensure ca-cert.pem exists (self-trust fallback)
-      ansible.builtin.shell: |
-        if [ ! -f /etc/vault.d/tls/ca-cert.pem ]; then
-          cp /etc/vault.d/tls/vault-cert.pem /etc/vault.d/tls/ca-cert.pem
-        fi
+    - name: Create the Vault CA on pi1 (once; production already has its CA)
+      ansible.builtin.command: >-
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -days 3650 -nodes
+        -keyout /etc/vault.d/tls/ca-key.pem -out /etc/vault.d/tls/ca-cert.pem -subj "/CN=Schnappy Vault CA"
       args:
         creates: /etc/vault.d/tls/ca-cert.pem
+      delegate_to: pi1
+      run_once: true
+
+    - name: Read the Vault CA cert from pi1
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tls/ca-cert.pem
+      register: _vault_ca
+      delegate_to: pi1
+      run_once: true
+
+    - name: Install the Vault CA cert (pi2 gets pi1's)
+      ansible.builtin.copy:
+        dest: /etc/vault.d/tls/ca-cert.pem
+        content: "{{ _vault_ca.content | b64decode }}"
+        force: false
+        mode: '0644'
+
+    - name: Generate the Pi's key and CSR (node IP, VIP, loopback)
+      ansible.builtin.command: >-
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes
+        -keyout /etc/vault.d/tls/vault-key.pem -out /etc/vault.d/tls/vault.csr -subj "/CN={{ vault_pi_dns }}"
+        -addext "subjectAltName={{ _sans | join(',') }}"
+      args:
+        creates: /etc/vault.d/tls/vault.csr
+      vars:
+        _sans:
+          - "DNS:{{ vault_pi_dns }}"
+          - "DNS:{{ inventory_hostname }}.schnappy.io"
+          - "IP:{{ node_ip }}"
+          - "IP:{{ keepalived_vip | default('192.168.11.5') }}"
+          - "IP:127.0.0.1"
+      when: not _vault_cert.stat.exists
+
+    - name: Read the CSR
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tls/vault.csr
+      register: _vault_csr
+      when: not _vault_cert.stat.exists
+
+    - name: Sign the CSR with the CA on pi1
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf '%s' "{{ _vault_csr.content | b64decode }}" > /tmp/{{ inventory_hostname }}-vault.csr
+        openssl x509 -req -in /tmp/{{ inventory_hostname }}-vault.csr \
+          -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault.d/tls/ca-key.pem -CAcreateserial \
+          -copy_extensions copyall -days 3650
+        rm -f /tmp/{{ inventory_hostname }}-vault.csr
+      args:
+        executable: /bin/bash
+      register: _vault_signed
+      delegate_to: pi1
+      changed_when: true
+      when: not _vault_cert.stat.exists
+
+    - name: Install the signed cert
+      ansible.builtin.copy:
+        dest: /etc/vault.d/tls/vault-cert.pem
+        content: "{{ _vault_signed.stdout }}\n"
+        mode: '0644'
+      when: not _vault_cert.stat.exists
 
     - name: Set TLS file ownership
       ansible.builtin.file:
