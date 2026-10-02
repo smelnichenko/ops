@@ -66,6 +66,10 @@ operator approves.
 6. The Postgres image `ghcr.io/cloudnative-pg/postgresql:17` is a deprecated rolling tag: pin a digest.
 7. Strimzi v1beta2 templates (`kafka-users.yaml`, `kafkatopic-events.yaml`, ops test-realtime.yml) must move to v1.
 8. local-path-provisioner chart is unpinned; its image pre-pull says 0.0.36 while 0.0.35 runs.
+9. `git.pmon.dev/schnappy/apt-cacher-ng:1.0` is gone from the registry; ten runs it only from its node cache (a
+   rebuilt node or DR restore could not pull it). Built by hand once (2026-03-17), never in CI. Fix (operator
+   2026-10-02, options 2+3): platform 7b46aea builds `apt-cache/` in CI, tagged with the commit; the new tag is
+   deployed in Wave 1 as a values change, tested in Vagrant first.
 
 ## The Vagrant upgrade test
 
@@ -92,7 +96,7 @@ Waves in this order, one step at a time, each verified before the next:
 
 0. Backups (Velero all namespaces, CNPG backup + `pg_dumpall` to the Pi, Scylla Manager backup, etcd snapshot) and the
    eight defects above.
-1. Patches: cert-manager 1.20.4, CNPG 1.30.1, Velero 1.18.4 + plugin 1.14.4, versitygw 1.8.0, local-path 0.0.37,
+1. Patches: apt-cacher-ng from CI (defect 9), cert-manager 1.20.4, CNPG 1.30.1, Velero 1.18.4 + plugin 1.14.4, versitygw 1.8.0, local-path 0.0.37,
    kube-prometheus-stack 91.8.2, Alertmanager, blackbox, Grafana 12.4.12, Mimir 2.17.11, Fluent Bit 4.2.8,
    Argo CD 3.3.14.
 2. Platform: Cilium 1.19.8 → k8s 1.34.12 → containerd 2.3 → k8s 1.35 → Cilium 1.20.2 → Gateway API v1.5 → Istio
