@@ -74,8 +74,13 @@ operator approves.
     `secret: <cluster>-app`, which nothing creates (on ten CNPG generated it on 2026-04-10 through a path that named
     no secret). Found by the Vagrant build ("secret schnappy-production-postgres-app not found"); the DR drill misses
     it because it restores through `recovery`. The Vagrant test recreates ten's Secret (tests/ansible/upgrade/
-    production-state.yml). Proposed fix: drop `initdb.secret` so CNPG generates it, as it did for production - the
-    init-users job sets every role's password afterwards anyway. Tested in Vagrant first.
+    production-state.yml). Refined 2026-10-02: on ten the -app Secret names user `app`, not the owner `monitor`, so
+    CNPG's owner-password sync FAILS every few minutes ("wrong username 'app' in secret, expected 'monitor'", 6-7/h
+    in the operator log) - and only that failure keeps monitor's password: a correct-username Secret with another
+    password made CNPG reset monitor's role on the next Postgres restart (Vagrant). Fix, proven in Vagrant: the -app
+    Secret is an ExternalSecret from Vault's postgres-monitor (basic-auth, username monitor, monitor's own password) -
+    a fresh cluster bootstraps, CNPG's sync agrees with init-users, the error loop ends; monitor survived a primary
+    restart/failover with it. For production: the ExternalSecret in the data chart (replacing the CNPG-owned Secret).
 11. Objects on ten that no git repo creates (made by hand; a rebuild loses them): ServiceAccounts
     schnappy-{alertmanager,grafana,mimir,reports} in schnappy-infra (the observability chart runs its pods as these;
     the mesh chart creates schnappy-infra-*), the caddy-cert-reader Role/RoleBinding/ServiceAccount, five KafkaTopics

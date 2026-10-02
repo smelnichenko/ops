@@ -2,7 +2,8 @@
 # Objects that exist on ten but in no git repo, recreated in the Vagrant copy so it starts from production's state.
 # Each entry says why it is not in git and what fixes that for good (plan 100 lists them as defects).
 #
-#   schnappy-production-postgres-app - the CNPG Cluster's initdb names this Secret (platform helm/schnappy-data,
+#   schnappy-production-postgres-app (an ExternalSecret from Vault's postgres-monitor, see the task) - the CNPG
+#     Cluster's initdb names this Secret (platform helm/schnappy-data,
 #     cnpg-cluster.yaml), and nothing creates it: on ten CNPG generated it when the cluster was first bootstrapped
 #     (2026-04-10, owner=Cluster, kubernetes.io/basic-auth) through a path that named no secret. A fresh bootstrap
 #     waits for it forever (Vagrant, 2026-10-02: "secret schnappy-production-postgres-app not found"), so a DR
@@ -32,29 +33,35 @@
             name: "{{ item }}"
       loop: [schnappy-production, schnappy-infra]
 
-    - name: Read an existing schnappy-production-postgres-app (keep its password on a re-run)
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig }}"
-        kind: Secret
-        namespace: schnappy-production
-        name: schnappy-production-postgres-app
-      register: _app_secret
-
-    - name: Create schnappy-production-postgres-app as CNPG made it on ten (basic-auth, the owner monitor)
+    - name: CNPG owner secret schnappy-production-postgres-app from Vault's postgres-monitor (proposed fix, plan 100 defect 10)
+      # The CNPG owner secret must name the owner (monitor) with monitor's own password: CNPG keeps the owner's
+      # password in sync with it. On ten it says username "app" (CNPG generated it via another bootstrap path), so that
+      # sync fails every few minutes (operator log: "wrong username 'app' in secret, expected 'monitor'") and only that
+      # failure keeps monitor's password. A plain secret with another password here made CNPG reset monitor's password
+      # on the next Postgres restart (Vagrant, 2026-10-02). From Vault, it equals what monitor itself uses.
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
         definition:
-          apiVersion: v1
-          kind: Secret
-          type: kubernetes.io/basic-auth
+          apiVersion: external-secrets.io/v1
+          kind: ExternalSecret
           metadata:
             name: schnappy-production-postgres-app
             namespace: schnappy-production
-          stringData:
-            username: monitor
-            password: "{{ lookup('community.general.random_string', length=32, special=false) }}"
-      when: _app_secret.resources | length == 0
-      no_log: true
+          spec:
+            refreshInterval: 15m
+            secretStoreRef:
+              kind: ClusterSecretStore
+              name: vault-backend
+            target:
+              name: schnappy-production-postgres-app
+              creationPolicy: Owner
+              template:
+                type: kubernetes.io/basic-auth
+            data:
+              - secretKey: username
+                remoteRef: { key: secret/data/schnappy/postgres-monitor, property: username }
+              - secretKey: password
+                remoteRef: { key: secret/data/schnappy/postgres-monitor, property: password }
 
     - name: ServiceAccounts the observability chart runs as, made by hand on ten (2026-04-10)
       kubernetes.core.k8s:

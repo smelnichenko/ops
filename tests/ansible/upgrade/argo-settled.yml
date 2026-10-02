@@ -24,17 +24,18 @@
       register: _apps
       retries: "{{ (settle_minutes | int * 60 / poll_seconds | int) | int }}"
       delay: "{{ poll_seconds }}"
+      # every read tolerates a failed API call (no .resources), so a just-restarted cluster keeps the loop retrying
       until:
-        - _apps.resources | length > 0
+        - _apps.resources | default([]) | length > 0
         - >-
-          _apps.resources | rejectattr('status.sync.status', 'defined') | list | length == 0
+          _apps.resources | default([]) | rejectattr('status.sync.status', 'defined') | list | length == 0
         - >-
-          _apps.resources
+          _apps.resources | default([])
           | selectattr('status.sync.status', 'equalto', 'Synced')
           | selectattr('status.health.status', 'equalto', 'Healthy')
-          | list | length == _apps.resources | length
+          | list | length == _apps.resources | default([]) | length
         - >-
-          _apps.resources | selectattr('status.operationState.phase', 'defined')
+          _apps.resources | default([]) | selectattr('status.operationState.phase', 'defined')
           | selectattr('status.operationState.phase', 'equalto', 'Running') | list | length == 0
       failed_when: false
 
