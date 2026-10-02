@@ -70,6 +70,12 @@ operator approves.
    rebuilt node or DR restore could not pull it). Built by hand once (2026-03-17), never in CI. Fix (operator
    2026-10-02, options 2+3): platform 7b46aea builds `apt-cache/` in CI, tagged with the commit; the new tag is
    deployed in Wave 1 as a values change, tested in Vagrant first.
+10. A fresh CNPG cluster never bootstraps: platform `helm/schnappy-data/templates/cnpg-cluster.yaml` gives initdb
+    `secret: <cluster>-app`, which nothing creates (on ten CNPG generated it on 2026-04-10 through a path that named
+    no secret). Found by the Vagrant build ("secret schnappy-production-postgres-app not found"); the DR drill misses
+    it because it restores through `recovery`. The Vagrant test recreates ten's Secret (tests/ansible/upgrade/
+    production-state.yml). Proposed fix: drop `initdb.secret` so CNPG generates it, as it did for production - the
+    init-users job sets every role's password afterwards anyway. Tested in Vagrant first.
 
 ## The Vagrant upgrade test
 
