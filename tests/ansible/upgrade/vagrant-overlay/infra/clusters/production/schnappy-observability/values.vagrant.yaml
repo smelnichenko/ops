@@ -1,0 +1,8 @@
+# Vagrant only (upgrade test): Alertmanager must not mail anyone. Production's receiver and routes stay as they are;
+# only delivery is a dead end - the operator's address and Resend's SMTP are replaced, so a test alert cannot leave the
+# cluster even if the mail password were real (2026-10-02: the first Vagrant Alertmanager tried smtp.resend.com).
+alertmanager:
+  alertEmailTo: nobody@vagrant.invalid
+  smtp:
+    host: 127.0.0.1
+    port: 1

@@ -1,0 +1,91 @@
+---
+# Wait until every Argo CD Application in the Vagrant upgrade test is Synced and Healthy with no operation running,
+# and every pod is ready - the test's definition of green. On timeout it prints, for each app that is not green, its
+# sync/health/operation state and the resources that are out of sync or unhealthy, plus the pods that are not
+# ready, then fails.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml [-e settle_minutes=40]
+- name: Argo CD settled (all apps Synced + Healthy, all pods ready)
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    settle_minutes: 40
+    poll_seconds: 30
+
+  tasks:
+    - name: Wait for every Application to be Synced + Healthy with no operation running
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: argocd
+      register: _apps
+      retries: "{{ (settle_minutes | int * 60 / poll_seconds | int) | int }}"
+      delay: "{{ poll_seconds }}"
+      until:
+        - _apps.resources | length > 0
+        - >-
+          _apps.resources | rejectattr('status.sync.status', 'defined') | list | length == 0
+        - >-
+          _apps.resources
+          | selectattr('status.sync.status', 'equalto', 'Synced')
+          | selectattr('status.health.status', 'equalto', 'Healthy')
+          | list | length == _apps.resources | length
+        - >-
+          _apps.resources | selectattr('status.operationState.phase', 'defined')
+          | selectattr('status.operationState.phase', 'equalto', 'Running') | list | length == 0
+      failed_when: false
+
+    - name: Is every app green (re-evaluated, not inferred from the retry count)
+      ansible.builtin.set_fact:
+        _settled: >-
+          {{ (_apps.resources | default([]) | length > 0)
+             and (_apps.resources | selectattr('status.sync.status', 'defined')
+                  | selectattr('status.sync.status', 'equalto', 'Synced')
+                  | selectattr('status.health.status', 'equalto', 'Healthy') | list | length
+                  == _apps.resources | length)
+             and (_apps.resources | selectattr('status.operationState.phase', 'defined')
+                  | selectattr('status.operationState.phase', 'equalto', 'Running') | list | length == 0) }}
+
+    - name: Pods that are not ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl --kubeconfig {{ kubeconfig }} get pods -A --no-headers \
+          | awk '{split($3,a,"/"); if ($4!="Completed" && (a[1]!=a[2] || $4!="Running")) print}'
+      args:
+        executable: /bin/bash
+      register: _unready
+      changed_when: false
+
+    - name: The state of every app that is not green
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.metadata.name }}: sync={{ item.status.sync.status | default('?') }}
+          health={{ item.status.health.status | default('?') }}
+          op={{ item.status.operationState.phase | default('-') }}
+          {{ (item.status.operationState.message | default(''))[:300] }}
+          | resources not green: {{ item.status.resources | default([])
+             | rejectattr('status', 'equalto', 'Synced') | map(attribute='name') | list
+             + (item.status.resources | default([]) | selectattr('health', 'defined')
+                | rejectattr('health.status', 'equalto', 'Healthy') | map(attribute='name') | list) }}
+          | conditions: {{ item.status.conditions | default([]) | map(attribute='message') | list }}
+      loop: >-
+        {{ _apps.resources | default([])
+           | rejectattr('status.health.status', 'equalto', 'Healthy') | list
+           + (_apps.resources | default([]) | rejectattr('status.sync.status', 'equalto', 'Synced') | list) | unique }}
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+    - name: Not settled
+      ansible.builtin.fail:
+        msg: |
+          Argo CD did not settle in {{ settle_minutes }} min ({{ _apps.resources | default([]) | length }} apps).
+          Pods not ready:
+          {{ _unready.stdout | default('') }}
+      when: not _settled | bool or _unready.stdout | length > 0
+
+    - name: Settled
+      ansible.builtin.debug:
+        msg: "ARGO SETTLED: {{ _apps.resources | length }} apps Synced + Healthy, every pod ready"

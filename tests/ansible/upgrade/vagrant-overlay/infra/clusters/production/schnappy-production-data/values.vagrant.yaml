@@ -1,0 +1,12 @@
+# Vagrant only (upgrade test): memory REQUESTS shrunk so production fits the 20 GB VM (ten's pods use ~30 GB;
+# operator 2026-10-02). Requests only decide scheduling - limits stay production's. Postgres keeps its 2 instances:
+# the upgrade test must see CNPG's switchover and the major-version upgrade as production will.
+postgres:
+  resources:
+    requests: { memory: 512Mi }      # ten: 1Gi (per instance, 2 instances)
+kafka:
+  resources:
+    requests: { memory: 768Mi }      # ten: 1536Mi
+scylla:
+  resources:
+    requests: { memory: 1Gi }        # ten: 2Gi

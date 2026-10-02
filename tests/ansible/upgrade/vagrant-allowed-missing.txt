@@ -1,0 +1,18 @@
+# Inventory lines of production (tests/ansible/upgrade/prod-inventory.txt) the Vagrant copy does not have, and why.
+# scripts/inventory-diff.sh accepts these as missing (never as different); anything else missing or extra fails.
+#
+# left out of the Vagrant copy (operator 2026-10-02: the VM has 20 GB; or production-only by nature)
+argo-chart kagent kagent@0.9.9
+argo-chart kagent-crds kagent-crds@0.9.9
+image docker.io/library/postgres 18.3-alpine
+argo-chart woodpecker woodpecker@3.7.3
+image docker.io/woodpeckerci/woodpecker-agent v3.18.1
+image docker.io/woodpeckerci/woodpecker-server v3.18.1
+image sonarqube 26.3.0.120487-community
+image ghcr.io/browserless/chromium latest
+# job pods that happened to exist on ten when its inventory was taken (CronJobs / hooks; the k6 smoke hook is off in
+# Vagrant - the upgrade test runs that job itself)
+image alpine/k8s 1.34.0
+image curlimages/curl 8.10.1
+image curlimages/curl 8.12.1
+image grafana/k6 1.7.1

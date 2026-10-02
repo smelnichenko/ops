@@ -1,0 +1,11 @@
+# Vagrant only: the woodpecker namespace. Woodpecker itself is left out of the Vagrant copy (it logs in through
+# git.pmon.dev), but cluster-config and the infra mesh still put their woodpecker objects there; on ten the Woodpecker
+# Application creates it (CreateNamespace). Labels as on ten.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: woodpecker
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

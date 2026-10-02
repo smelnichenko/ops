@@ -334,16 +334,23 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
 
   # ============== UPGRADE TEST (plan 100) ==============
-  test:upgrade:baseline:
-    desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
+  _upgrade:base:
+    internal: true
     deps: [deploy:install]
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
       - task: _vagrant:pi-stack
+      # the Pi VIP, as in production (Vault, Git and the backup store are reached through it)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
       # as on ten: Argo CD owns Istio, cert-manager, metrics-server, the Prometheus stack and the data operators
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
+
+  test:upgrade:baseline:
+    desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
+    cmds:
+      - task: _upgrade:base
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
@@ -355,6 +362,34 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
+
+  test:upgrade:argo:
+    desc: On the baseline VMs, add the Argo layer as on ten - seed Vault, mirror infra/platform, preload app images, install Argo CD - and wait until every app is green
+    deps: [deploy:install]
+    cmds:
+      # production's own seeding playbook, with test-only values (tests/ansible/upgrade/vagrant-secrets.env), in an
+      # EMPTY environment: this Taskfile loads ops/.env (production's secrets) into every task, and a variable the
+      # Vagrant file lacked would otherwise reach the Vagrant Vault with production's value
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/seed-vault-secrets.yml'
+      # production's scoped Vault token for the stale-PR-env sweeper (argocd/vault-cleanup-token), as on ten
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml
+      - cmd: scripts/vagrant-gitops-mirror.py
+      - cmd: scripts/vagrant-preload-images.sh
+      # isolate the cluster from production (DNS, network - proven by a probe) and connect ESO to the Vagrant Vault
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
+      # objects ten has that no git repo creates (each documented in the playbook)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml
+      # every version the Vagrant copy runs is production's (minus the documented left-outs)
+      - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
+
+  test:upgrade:build:
+    desc: Build the whole Vagrant copy of production from scratch - the baseline, then the Argo layer (VMs stay up)
+    cmds:
+      - task: _upgrade:base
+      - task: test:upgrade:argo
 
   # ============== K8S-CLUSTER TESTS ==============
   test:eso:

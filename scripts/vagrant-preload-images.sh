@@ -34,7 +34,15 @@ for doc in yaml.safe_load_all(sys.stdin): walk(doc)' | sort -u)
 cd "$ops"
 for img in "${images[@]}"; do
   echo "== $img"
-  docker pull -q "$img"
+  if ! docker pull -q "$img"; then
+    # The registry lacks it but ten runs it from its image cache (2026-10-02: apt-cacher-ng:1.0, built by hand once,
+    # gone from the registry - a rebuilt ten could not pull it either). Copy ten's exact image: a read-only export
+    # streamed over ssh, nothing written on ten.
+    echo "WARNING: $img is not in the registry - copying it from ten's image cache"
+    ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images export --platform linux/amd64 - '$img'" \
+      | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null | grep -v '^$' | tail -1
+    continue
+  fi
   docker save "$img" | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null | grep -v '^$' | tail -1
 done
 vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images ls -q | grep "^git.pmon.dev/schnappy/"' 2>/dev/null | tr -d '\r'

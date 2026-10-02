@@ -5,6 +5,9 @@ The Vagrant upgrade test runs Argo CD against copies of infra and platform, so e
 change production gets. This script takes each repo's committed `main` (never the working tree), adds ONE overlay
 commit on top, and force-pushes it to the Vagrant Forgejo (pi1 VM) under the `schnappy` org:
 
+  both repos
+    - every production LAN address (192.168.11.x) rewritten to its Vagrant counterpart, and the push refused if any
+      is left: the Vagrant cluster must not reach production's Vault, backup store or anything else.
   infra overlay
     - repo URLs https://git.pmon.dev/schnappy/<repo>.git -> the Vagrant Forgejo (application images still come from
       git.pmon.dev's registry);
@@ -19,7 +22,8 @@ commit on top, and force-pushes it to the Vagrant Forgejo (pi1 VM) under the `sc
 Upgrade steps are later commits on top of the overlay, changing the same files production's would.
 
 Usage: scripts/vagrant-gitops-mirror.py [--infra ../infra] [--platform ../platform] [--forgejo 192.168.56.20:3000]
-Env:   FORGEJO_ADMIN_USER (default forgejo_admin), FORGEJO_ADMIN_PASSWORD (default: the Vagrant inventory's)
+Env:   VAGRANT_FORGEJO_ADMIN_USER / VAGRANT_FORGEJO_ADMIN_PASSWORD (default: the Vagrant inventory's). Deliberately
+       not FORGEJO_ADMIN_*: the Taskfile loads ops/.env, whose FORGEJO_ADMIN_* are PRODUCTION's credentials.
 """
 import argparse
 import base64
@@ -49,6 +53,20 @@ INFRA_DROP = [
     "clusters/production/schnappy-test-data",
     "clusters/production/schnappy-test-mesh",
 ]
+
+# Production LAN -> Vagrant network. Every production address in BOTH repos (Vault, the Pi backup store, the gateway,
+# NetworkPolicy ipBlocks, probes) is rewritten, so nothing the Vagrant cluster runs can reach production; push() then
+# refuses a repo where any 192.168.11.x is left. (2026-10-02: the first Argo run's ESO tried production Vault.)
+ADDRESS_MAP = [
+    ("192.168.11.0/24", "192.168.56.0/24"),
+    ("192.168.11.2", "192.168.56.10"),   # ten -> the kubeadm VM
+    ("192.168.11.4", "192.168.56.20"),   # pi1
+    ("192.168.11.5", "192.168.56.50"),   # the Pi VIP
+    ("192.168.11.6", "192.168.56.21"),   # pi2
+]
+# anything else on the production LAN (prose like 192.168.11.{4,5,6}): the subnet, nothing more specific is known
+PROD_LAN_PREFIX = ("192.168.11.", "192.168.56.")
+PROD_LAN = re.compile(r"192\.168\.11\.")
 
 VALUE_FILE = re.compile(r"^(?P<indent>\s*)- (?P<q>['\"]?)(?P<path>\$values/.+?)\.yaml(?P=q)\s*$")
 HELM_KEY = re.compile(r"^(?P<indent>\s*)helm:\s*$")
@@ -124,6 +142,34 @@ def overlay_infra(repo, forgejo):
         sys.exit("infra overlay: no Argo app was rewritten - the repo layout changed")
 
 
+def isolate_from_production(repo):
+    """Rewrite every production LAN address to its Vagrant counterpart; abort if one is left."""
+    files = subprocess.run(["git", "-C", repo, "ls-files"], capture_output=True, text=True, check=True).stdout.split()
+    for rel in files:
+        p = os.path.join(repo, rel)
+        try:
+            text = open(p, encoding="utf-8").read()
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue  # binary, or dropped by the overlay
+        new = text
+        for prod, vagrant in ADDRESS_MAP:
+            new = re.sub(re.escape(prod) + r"(?![0-9])", vagrant, new)
+        new = new.replace(*PROD_LAN_PREFIX)
+        if new != text:
+            open(p, "w", encoding="utf-8").write(new)
+    left = []
+    for rel in files:
+        p = os.path.join(repo, rel)
+        try:
+            for i, line in enumerate(open(p, encoding="utf-8"), 1):
+                if PROD_LAN.search(line):
+                    left.append(f"{rel}:{i}: {line.strip()[:120]}")
+        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+            continue
+    if left:
+        sys.exit("production addresses left after the rewrite (not pushed):\n" + "\n".join(left[:20]))
+
+
 def copy_overlay(name, repo):
     src = os.path.join(OVERLAY, name)
     if os.path.isdir(src):
@@ -136,8 +182,8 @@ def main():
     ap.add_argument("--platform", default=os.path.join(OPS, "..", "platform"))
     ap.add_argument("--forgejo", default="192.168.56.20:3000")
     a = ap.parse_args()
-    user = os.environ.get("FORGEJO_ADMIN_USER", "forgejo_admin")
-    password = os.environ.get("FORGEJO_ADMIN_PASSWORD", "vagrant-forgejo-pw")
+    user = os.environ.get("VAGRANT_FORGEJO_ADMIN_USER", "forgejo_admin")
+    password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", "vagrant-forgejo-pw")
 
     api(a.forgejo, user, password, "POST", "/orgs", {"username": "schnappy", "visibility": "public"}, ok=(201, 422))
     work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=os.path.join(OPS, ".upgrade") if os.path.isdir(
@@ -153,6 +199,7 @@ def main():
             if name == "infra":
                 overlay_infra(repo, a.forgejo)
             copy_overlay(name, repo)
+            isolate_from_production(repo)
             run("git", "-C", repo, "add", "-A")
             run("git", "-C", repo, "-c", "user.name=vagrant-mirror", "-c", "user.email=mirror@vagrant.test",
                 "commit", "-q", "--allow-empty", "-m", f"vagrant overlay on {name} main {head}")

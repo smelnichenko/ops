@@ -1,0 +1,245 @@
+---
+# Isolate the Vagrant upgrade-test cluster from production, then connect it to the VAGRANT Pi Vault the way
+# bootstrap.sh connects ten to production's. Runs after the baseline, before Argo CD syncs the mirrored repos.
+#
+# Why: the first Argo run (2026-10-02) synced production's own manifests, and ESO tried to log in to production
+# Vault. The mirror now rewrites every production address (scripts/vagrant-gitops-mirror.py); this playbook closes
+# the remaining paths and PROVES it:
+#   1. DNS     - CoreDNS answers every *.pmon.dev with the Vagrant Pi VIP (apps call auth.pmon.dev and friends);
+#   2. network - the node drops all traffic to the production LAN (nftables, for the node's own traffic) and a
+#                CiliumClusterwideNetworkPolicy denies it to every pod; a probe pod must FAIL to reach production's
+#                VIP and SUCCEED to reach the Vagrant VIP, or the run aborts;
+#   3. Vault   - ESO trusts the Vagrant Vault CA and logs in with Kubernetes auth (role eso-role), as on ten.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
+- name: Read the Vagrant Vault CA (pi1)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the Vault CA cert
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tls/ca-cert.pem
+      register: _vault_ca
+
+- name: Isolate the Vagrant cluster from production
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    production_lan: 192.168.11.0/24
+    production_vip: 192.168.11.5
+    vagrant_vip: "{{ keepalived_vip }}"
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+
+  tasks:
+    # ── 1. DNS ─────────────────────────────────────────────────────────
+    - name: CoreDNS answers *.pmon.dev as production resolves it, with Vagrant addresses
+      # Production (resolved from ten, 2026-10-02): auth, git and vault are the Pi VIP; every other pmon.dev name,
+      # the apex included, is ten's gateway. Here: the Vagrant Pi VIP and the kubeadm node. Replaces an earlier
+      # version of this block, so a re-run converges.
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cf=$({{ kubectl }} -n kube-system get cm coredns -o jsonpath='{.data.Corefile}')
+        new=$(CF="$cf" python3 - <<'PY'
+        import os, re
+        cf = os.environ["CF"]
+        # drop any pmon.dev template blocks written before (one nesting level)
+        cf = re.sub(r"\n    template IN (A|AAAA) pmon\.dev \{\n(?:       [^\n]*\n)*?    \}", "", cf)
+        block = (
+            "    template IN A pmon.dev {\n"
+            "       match ^({{ pi_hosts | join('|') }})\\.pmon\\.dev\\.$\n"
+            "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_vip }}\"\n"
+            "       fallthrough\n"
+            "    }\n"
+            "    template IN A pmon.dev {\n"
+            "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_gateway }}\"\n"
+            "    }\n"
+            "    template IN AAAA pmon.dev {\n"
+            "       rcode NOERROR\n"
+            "    }\n")
+        out, done = [], False
+        for line in cf.split("\n"):
+            if not done and line.startswith("    forward . "):
+                out.append(block.rstrip("\n")); done = True
+            out.append(line)
+        print("\n".join(out))
+        PY
+        )
+        if [ "$new" = "$cf" ]; then echo unchanged; exit 0; fi
+        {{ kubectl }} -n kube-system create cm coredns --from-literal=Corefile="$new" --dry-run=client -o yaml \
+          | {{ kubectl }} apply -f - > /dev/null
+        {{ kubectl }} -n kube-system rollout restart deployment coredns > /dev/null
+        {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null
+        echo changed
+      args:
+        executable: /bin/bash
+      vars:
+        pi_hosts: [auth, git, vault]
+        vagrant_gateway: "{{ ansible_host }}"
+      register: _dns
+      changed_when: "'changed' in _dns.stdout"
+
+    # ── 2. network ─────────────────────────────────────────────────────
+    - name: Node guard - drop the node's own traffic to the production LAN (nftables, re-applied at boot)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vagrant-isolate-production.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Vagrant upgrade test: no traffic to the production LAN
+          After=network-pre.target
+          [Service]
+          Type=oneshot
+          RemainAfterExit=true
+          ExecStart=/usr/sbin/nft -f /etc/vagrant-isolate-production.nft
+          [Install]
+          WantedBy=multi-user.target
+    - name: Node guard rules (an own table; nothing else in nftables is touched)
+      ansible.builtin.copy:
+        dest: /etc/vagrant-isolate-production.nft
+        mode: '0644'
+        content: |
+          table inet vagrant_isolation
+          delete table inet vagrant_isolation
+          table inet vagrant_isolation {
+            chain output { type filter hook output priority 0; ip daddr {{ production_lan }} drop; }
+            chain forward { type filter hook forward priority 0; ip daddr {{ production_lan }} drop; }
+          }
+    - name: Apply the node guard now and at boot
+      ansible.builtin.systemd_service:
+        name: vagrant-isolate-production
+        enabled: true
+        state: restarted
+        daemon_reload: true
+      changed_when: false
+
+    - name: Pod guard - deny every pod's egress to the production LAN (Cilium, without switching on default-deny)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          metadata:
+            name: vagrant-deny-production-lan
+          spec:
+            description: Vagrant upgrade test - no pod may reach the production LAN
+            endpointSelector: {}
+            enableDefaultDeny:
+              egress: false
+              ingress: false
+            egressDeny:
+              - toCIDR:
+                  - "{{ production_lan }}"
+
+    - name: Prove it - the node cannot reach production's VIP
+      ansible.builtin.uri:
+        url: "https://{{ production_vip }}:8200/v1/sys/health"
+        validate_certs: false
+        timeout: 5
+        status_code: [-1]
+      register: _node_probe
+      failed_when: _node_probe.status | default(-1) != -1
+
+    - name: Prove it - a pod cannot reach production's VIP, and can reach the Vagrant VIP
+      ansible.builtin.shell: |
+        set -uo pipefail
+        {{ kubectl }} delete pod isolation-probe -n default --ignore-not-found --wait=true > /dev/null
+        {{ kubectl }} run isolation-probe -n default --restart=Never --image=curlimages/curl:8.12.1 \
+          --overrides='{"metadata":{"labels":{"sidecar.istio.io/inject":"false"}}}' --command -- sh -c '
+            p=https://{{ production_vip }}:8200/v1/sys/health; v=https://{{ vagrant_vip }}:8200/v1/sys/health
+            curl -sk -o /dev/null -m 5 "$p" && echo PRODUCTION-REACHABLE || echo production-blocked
+            curl -sk -o /dev/null -m 10 "$v" && echo vagrant-reachable || echo VAGRANT-UNREACHABLE' > /dev/null
+        {{ kubectl }} wait pod/isolation-probe -n default --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s > /dev/null
+        {{ kubectl }} logs isolation-probe -n default
+        {{ kubectl }} delete pod isolation-probe -n default --wait=false > /dev/null
+      args:
+        executable: /bin/bash
+      register: _pod_probe
+      changed_when: false
+      failed_when: >-
+        _pod_probe.rc != 0 or 'production-blocked' not in _pod_probe.stdout
+        or 'vagrant-reachable' not in _pod_probe.stdout
+
+    # ── 3. Vault (bootstrap.sh configure_eso, against the Vagrant Vault) ──
+    - name: Create the vault-pi-ca Secret (ESO trusts the Vagrant Vault CA)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: vault-pi-ca
+            namespace: external-secrets
+          data:
+            ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
+
+    - name: Token reviewer for Vault's Kubernetes auth (as bootstrap.sh)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          - apiVersion: rbac.authorization.k8s.io/v1
+            kind: ClusterRoleBinding
+            metadata:
+              name: vault-token-reviewer
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: ClusterRole
+              name: system:auth-delegator
+            subjects:
+              - kind: ServiceAccount
+                name: external-secrets
+                namespace: external-secrets
+          - apiVersion: v1
+            kind: Secret
+            metadata:
+              name: vault-token-reviewer
+              namespace: external-secrets
+              annotations:
+                kubernetes.io/service-account.name: external-secrets
+            type: kubernetes.io/service-account-token
+
+    - name: Read the reviewer token and the cluster CA
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for i in $(seq 1 30); do
+          t=$({{ kubectl }} -n external-secrets get secret vault-token-reviewer -o jsonpath='{.data.token}' 2>/dev/null || true)
+          [ -n "$t" ] && break; sleep 2
+        done
+        [ -n "$t" ] || { echo "no reviewer token"; exit 1; }
+        echo "$t"
+      args:
+        executable: /bin/bash
+      register: _reviewer
+      changed_when: false
+      no_log: true
+
+    - name: Read the cluster CA
+      ansible.builtin.slurp:
+        src: /etc/kubernetes/pki/ca.crt
+      register: _k8s_ca
+
+- name: Configure Kubernetes auth in the Vagrant Vault (as bootstrap.sh does for ten)
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Write auth/kubernetes/config and role eso-role
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
+        printf '%s' "$K8S_CA" > /tmp/k8s-ca.pem
+        vault write auth/kubernetes/config kubernetes_host="https://{{ hostvars['target']['ansible_host'] }}:6443" \
+          kubernetes_ca_cert=@/tmp/k8s-ca.pem token_reviewer_jwt="$REVIEWER" disable_local_ca_jwt=true > /dev/null
+        rm -f /tmp/k8s-ca.pem
+        vault write auth/kubernetes/role/eso-role bound_service_account_names=external-secrets \
+          bound_service_account_namespaces=external-secrets policies=eso-reader ttl=1h > /dev/null
+      args:
+        executable: /bin/bash
+      environment:
+        K8S_CA: "{{ hostvars['target']['_k8s_ca'].content | b64decode }}"
+        REVIEWER: "{{ hostvars['target']['_reviewer'].stdout | b64decode }}"
+      no_log: true
+      changed_when: true

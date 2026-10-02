@@ -1,0 +1,18 @@
+# Vagrant only (upgrade test): memory REQUESTS shrunk so production fits the 20 GB VM (ten's pods use ~30 GB;
+# operator 2026-10-02). Requests only decide scheduling - limits, and so the JVMs' sizing, stay production's.
+app:
+  resources:
+    requests: { memory: 1Gi }        # ten: 3Gi
+chatService:
+  resources:
+    requests: { memory: 768Mi }      # ten: 1536Mi
+chessService:
+  resources:
+    requests: { memory: 768Mi }      # ten: 1536Mi
+
+# The chart's PostSync k6 smoke hook checks https://pmon.dev with full TLS verification; the Vagrant gateway's
+# certificate is self-signed (no Let's Encrypt here), so the hook can never pass and holds the app's sync forever.
+# The upgrade test runs the same k6 job itself, rendered from this chart with production's values, trusting the
+# Vagrant certificate.
+smokeTest:
+  enabled: false

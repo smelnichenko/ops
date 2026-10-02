@@ -1,0 +1,68 @@
+---
+# Objects that exist on ten but in no git repo, recreated in the Vagrant copy so it starts from production's state.
+# Each entry says why it is not in git and what fixes that for good (plan 100 lists them as defects).
+#
+#   schnappy-production-postgres-app - the CNPG Cluster's initdb names this Secret (platform helm/schnappy-data,
+#     cnpg-cluster.yaml), and nothing creates it: on ten CNPG generated it when the cluster was first bootstrapped
+#     (2026-04-10, owner=Cluster, kubernetes.io/basic-auth) through a path that named no secret. A fresh bootstrap
+#     waits for it forever (Vagrant, 2026-10-02: "secret schnappy-production-postgres-app not found"), so a DR
+#     rebuild that bootstraps with initdb would too. Its password only matters during initdb: the init-users job
+#     then sets every role's password, the owner's included, from that service's own Secret.
+#
+#   ServiceAccounts schnappy-alertmanager, -grafana, -mimir, -reports (schnappy-infra) - the observability chart
+#     (release "schnappy") runs its pods as schnappy-<name>, but the mesh chart creates schnappy-infra-<name>; on ten
+#     the four were created by hand on 2026-04-10 14:58:43 (no Argo, Helm or kubectl-apply trace). Without them
+#     Alertmanager, Grafana and Mimir never get a pod.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml
+- name: Production state that is in no git repo
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies their labels)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+      loop: [schnappy-production, schnappy-infra]
+
+    - name: Read an existing schnappy-production-postgres-app (keep its password on a re-run)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Secret
+        namespace: schnappy-production
+        name: schnappy-production-postgres-app
+      register: _app_secret
+
+    - name: Create schnappy-production-postgres-app as CNPG made it on ten (basic-auth, the owner monitor)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/basic-auth
+          metadata:
+            name: schnappy-production-postgres-app
+            namespace: schnappy-production
+          stringData:
+            username: monitor
+            password: "{{ lookup('community.general.random_string', length=32, special=false) }}"
+      when: _app_secret.resources | length == 0
+      no_log: true
+
+    - name: ServiceAccounts the observability chart runs as, made by hand on ten (2026-04-10)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: "schnappy-{{ item }}"
+            namespace: schnappy-infra
+      loop: [alertmanager, grafana, mimir, reports]
