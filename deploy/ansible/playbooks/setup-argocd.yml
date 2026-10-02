@@ -199,6 +199,21 @@
                   - .spec.data[]?.remoteRef.metadataPolicy
                   - .spec.target.creationPolicy
                   - .spec.target.deletionPolicy
+              # An Application's health is its own status.health: without this, the root app-of-apps treats every
+              # child Application as healthy the moment it exists, so its sync waves wait for nothing - on a fresh
+              # cluster the app sets started pods before istiod's injection webhook existed and they ran without
+              # sidecars (Vagrant rebuild, 2026-10-02). Argo's documented check for app-of-apps.
+              resource.customizations.health.argoproj.io_Application: |
+                hs = {}
+                hs.status = "Progressing"
+                hs.message = ""
+                if obj.status ~= nil and obj.status.health ~= nil then
+                  hs.status = obj.status.health.status
+                  if obj.status.health.message ~= nil then
+                    hs.message = obj.status.health.message
+                  end
+                end
+                return hs
               resource.customizations.health.gateway.networking.k8s.io_HTTPRoute: |
                 hs = {}
                 hs.status = "Healthy"

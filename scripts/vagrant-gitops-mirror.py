@@ -68,6 +68,26 @@ ADDRESS_MAP = [
 PROD_LAN_PREFIX = ("192.168.11.", "192.168.56.")
 PROD_LAN = re.compile(r"192\.168\.11\.")
 
+# Changes to production's own files that are being proven in Vagrant before they go to infra (operator 2026-10-01:
+# nothing reaches production until the Vagrant tests pass and the operator approves). Each: file -> sync wave.
+# - the application sets wait for Istio (istiod wave 1, istio-cni wave 2): with argoproj.io/Application health in
+#   argocd-cm the root app waits for those, so no meshed pod starts before the sidecar injector exists
+# - once waves really wait (the health check above), the operators' own order matters: scylla-operator (wave -1) needs
+#   cert-manager's CRDs (no wave = 0), and scylla-manager (also -1) needs scylla-operator's ScyllaCluster CRD
+# - cluster-config (wave 0) holds ServiceMonitors, whose CRD comes with kube-prometheus-stack (was wave 3): Prometheus
+#   moves to -1 with the other operators (its pods are not meshed on ten, so they need not wait for Istio)
+INFRA_SYNC_WAVES = {
+    "clusters/production/argocd/apps/cert-manager.yaml": "-2",
+    "clusters/production/argocd/apps/prometheus.yaml": "-1",
+    "clusters/production/argocd/apps/scylla-manager.yaml": "0",
+    "clusters/production/argocd/apps/schnappy-mesh-envs.yaml": "4",
+    "clusters/production/argocd/apps/schnappy-data-envs.yaml": "4",
+    "clusters/production/argocd/apps/schnappy-realtime-envs.yaml": "4",
+    "clusters/production/argocd/apps/schnappy-apps-envs.yaml": "4",
+    # observability needs the infra data set's S3 secret and the mesh set's ServiceAccounts (both wave 4)
+    "clusters/production/argocd/apps/schnappy-observability.yaml": "5",
+}
+
 VALUE_FILE = re.compile(r"^(?P<indent>\s*)- (?P<q>['\"]?)(?P<path>\$values/.+?)\.yaml(?P=q)\s*$")
 HELM_KEY = re.compile(r"^(?P<indent>\s*)helm:\s*$")
 
@@ -125,6 +145,18 @@ def overlay_infra(repo, forgejo):
             os.remove(p)
         else:
             sys.exit(f"infra overlay: {rel} does not exist in infra main - the drop list is stale")
+    for rel, wave in INFRA_SYNC_WAVES.items():
+        p = os.path.join(repo, rel)
+        text = open(p).read()
+        if "argocd.argoproj.io/sync-wave" in text:
+            new = re.sub(r'(argocd\.argoproj\.io/sync-wave: )"[-0-9]+"', rf'\g<1>"{wave}"', text, count=1)
+        else:
+            new = re.sub(r"^(metadata:\n(?:  .*\n)*?  name: [^\n]+\n)",
+                         lambda m: m.group(1) + f'  annotations:\n    argocd.argoproj.io/sync-wave: "{wave}"\n',
+                         text, count=1, flags=re.M)
+        if new == text:
+            sys.exit(f"infra overlay: could not add the sync wave to {rel}")
+        open(p, "w").write(new)
     apps = os.path.join(repo, "clusters/production/argocd")
     changed = 0
     for root, _, files in os.walk(apps):

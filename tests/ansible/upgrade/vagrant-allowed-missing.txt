@@ -10,9 +10,11 @@ image docker.io/woodpeckerci/woodpecker-agent v3.18.1
 image docker.io/woodpeckerci/woodpecker-server v3.18.1
 image sonarqube 26.3.0.120487-community
 image ghcr.io/browserless/chromium latest
-# job pods that happened to exist on ten when its inventory was taken (CronJobs / hooks; the k6 smoke hook is off in
+# job pods that happened to exist on ten when its inventory was taken (CronJobs - rclone is the hourly etcd backup -
+# and hooks; the k6 smoke hook is off in
 # Vagrant - the upgrade test runs that job itself)
 image alpine/k8s 1.34.0
 image curlimages/curl 8.10.1
 image curlimages/curl 8.12.1
 image grafana/k6 1.7.1
+image rclone/rclone 1.75.1
