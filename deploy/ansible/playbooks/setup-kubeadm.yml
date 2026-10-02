@@ -22,6 +22,13 @@
 
   vars:
     k8s_version: "1.34"
+    # the exact package version: an unpinned install takes the repo's newest patch, not what ten runs
+    k8s_package_version: "1.34.6-1.1"
+    # nerdctl-full (CLI + buildkit) only where images are built on the node (Vagrant tests); ten has none.
+    # Play vars outrank inventory vars, so an inventory sets the *_override names (as with node_ip).
+    install_nerdctl: "{{ install_nerdctl_override | default(false) }}"
+    # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
+    containerd_registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
     pod_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
@@ -67,10 +74,34 @@
           "https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
         tar -C /usr/local -xzf /tmp/nerdctl-full.tar.gz
         rm -f /tmp/nerdctl-full.tar.gz
+        # its bundled containerd must never start: the node runs the apt one, as production does (see below)
+        rm -f /usr/local/lib/systemd/system/containerd.service /usr/local/bin/containerd \
+          /usr/local/bin/containerd-shim-runc-v2 /usr/local/bin/containerd-stress /usr/local/bin/ctr
         systemctl daemon-reload
         systemctl enable --now buildkit
-      when: not _nerdctl_stat.stat.exists
+      when: install_nerdctl | bool and not _nerdctl_stat.stat.exists
       changed_when: true
+
+    - name: Keep the node's containerd the apt one (drop nerdctl-full's bundled containerd)
+      # nerdctl-full also ships containerd (2.x) with a unit in /usr/local/lib/systemd/system that outranks the apt
+      # package's, so the node would run a different containerd than production. Only its CLI and buildkit are wanted.
+      # The install above removes them before anything starts; this covers a node installed before that.
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/lib/systemd/system/containerd.service
+        - /usr/local/bin/containerd
+        - /usr/local/bin/containerd-shim-runc-v2
+        - /usr/local/bin/containerd-stress
+        - /usr/local/bin/ctr
+      when: install_nerdctl | bool
+      register: _nerdctl_containerd_removed
+
+    - name: Reload systemd after dropping nerdctl-full's containerd unit
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: _nerdctl_containerd_removed is changed
 
     - name: Create containerd config directory
       ansible.builtin.file:
@@ -94,18 +125,33 @@
         regexp: 'SystemdCgroup = false'
         replace: 'SystemdCgroup = true'
 
-    - name: Set containerd CRI registry config_path (v2 plugin path)
-      # containerd v2.x's default config already has
-      #   [plugins.'io.containerd.cri.v1.images'.registry]
-      #     config_path = ''
-      # Edit it in place (don't append — duplicate table is a TOML error).
-      # Setting config_path makes kubelet → CRI read
-      # /etc/containerd/certs.d/<host>/hosts.toml so vagrant-test plain-HTTP
-      # registries (Forgejo on NodePort) actually work.
+    - name: Set containerd CRI registry config_path
+      # The default config already has an empty registry config_path - 1.7 (ten) writes
+      #   [plugins."io.containerd.grpc.v1.cri".registry] config_path = ""
+      # and 2.x writes [plugins.'io.containerd.cri.v1.images'.registry] config_path = ''.
+      # Edit it in place (don't append - a duplicate table is a TOML error). Set, it makes the CRI read
+      # /etc/containerd/certs.d/<host>/hosts.toml, which the Vagrant tests need for their plain-HTTP registry.
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
-        regexp: "^(\\s*)config_path = ''$"
-        replace: "\\1config_path = '/etc/containerd/certs.d'"
+        regexp: "^(\\s*)config_path = (''|\"\")$"
+        replace: "\\1config_path = \"{{ containerd_registry_config_path }}\""
+      when: containerd_registry_config_path | length > 0
+
+    - name: Create /opt/cni/bin (the link's target, filled later by kubernetes-cni and Cilium)
+      ansible.builtin.file:
+        path: /opt/cni/bin
+        state: directory
+        mode: '0755'
+
+    - name: Point Debian containerd's CNI plugin dir at /opt/cni/bin
+      # Debian's containerd default config looks for CNI plugins in /usr/lib/cni (bin_dir), while the CNI installers
+      # (Cilium's cilium-cni, the kubernetes-cni package) put them in /opt/cni/bin: without this link no pod gets a
+      # network ("failed to find plugin cilium-cni in path [/usr/lib/cni]"). ten has had exactly this link since the
+      # kubeadm migration (2026-03-30), made by hand and never in this playbook until a Vagrant rebuild hit it.
+      ansible.builtin.file:
+        src: /opt/cni/bin
+        dest: /usr/lib/cni
+        state: link
 
     - name: Create /etc/containerd/certs.d
       ansible.builtin.file:
@@ -172,11 +218,12 @@
     - name: Install kubeadm, kubelet, kubectl
       ansible.builtin.apt:
         name:
-          - kubeadm
-          - kubelet
-          - kubectl
+          - "kubeadm={{ k8s_package_version }}"
+          - "kubelet={{ k8s_package_version }}"
+          - "kubectl={{ k8s_package_version }}"
         state: present
         update_cache: true
+        allow_change_held_packages: true
 
     - name: Hold kubernetes packages
       ansible.builtin.dpkg_selections:
@@ -267,6 +314,7 @@
       # manifests/etcd dir exist) and abort the whole play.
       ansible.builtin.shell: |
         kubeadm init \
+          --kubernetes-version=v{{ k8s_package_version | regex_replace('-.*$', '') }} \
           --pod-network-cidr={{ pod_cidr }} \
           --service-cidr={{ service_cidr }} \
           --apiserver-advertise-address={{ node_ip }} \

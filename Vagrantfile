@@ -84,8 +84,13 @@ PISCRIPT
 # Its own provisioner so Vagrant reboots into the upgraded kernel before anything else runs.
 OS_UPGRADE_SCRIPT = <<-'OSSCRIPT'
   export DEBIAN_FRONTEND=noninteractive
+  # The VMs boot BIOS with grub-pc; production boots UEFI with grub-efi, so grub-pc is not under test. Its upgrade
+  # failed in grub-install on first boot (2026-10-02, 2 of 3 VMs, error hidden by its postinst) and aborted
+  # provisioning: keep it at the box's version. The kernel still upgrades and its hook still adds the boot entry.
+  apt-mark hold grub-pc grub-pc-bin > /dev/null
   apt-get -o DPkg::Lock::Timeout=600 update -qq
-  apt-get -o DPkg::Lock::Timeout=600 full-upgrade -y -qq > /dev/null 2>&1
+  apt-get -o DPkg::Lock::Timeout=600 full-upgrade -y -qq > /tmp/os-upgrade.log 2>&1 \
+    || { echo "OS upgrade failed:"; tail -30 /tmp/os-upgrade.log; exit 1; }
 OSSCRIPT
 
 # kubeadm node packages

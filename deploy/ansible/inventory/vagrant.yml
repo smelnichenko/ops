@@ -19,6 +19,9 @@ all:
     forgejo_db_host: "localhost:5432"
     keycloak_db_host: "localhost:5432"
     keepalived_vip: "192.168.56.50"
+    # the node builds images (test:cicd, test:dr, test:microservices) and pulls them from a plain-HTTP registry
+    install_nerdctl_override: true
+    containerd_registry_config_path_override: "/etc/containerd/certs.d"
 
     # ── Test-only credential fixtures ──────────────────────────────────────
     # Production inventory maps each of these to a lookup('env', ...). All

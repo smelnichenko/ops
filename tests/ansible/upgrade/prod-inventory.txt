@@ -4,8 +4,8 @@ argo-chart external-secrets external-secrets@2.2.0
 argo-chart istio-base base@1.25.2
 argo-chart istio-cni cni@1.25.2
 argo-chart istiod istiod@1.25.2
-argo-chart kagent-crds kagent-crds@0.9.9
 argo-chart kagent kagent@0.9.9
+argo-chart kagent-crds kagent-crds@0.9.9
 argo-chart metrics-server metrics-server@*
 argo-chart porkbun-webhook cert-manager-webhook-porkbun@*
 argo-chart prometheus kube-prometheus-stack@82.16.0
@@ -68,11 +68,11 @@ image postgres 17-alpine
 image prom/alertmanager v0.31.1
 image prom/blackbox-exporter v0.27.0
 image quay.io/argoproj/argocd v3.3.8
-image quay.io/cilium/cilium-envoy v1.35.9-1770979049-232ed4a26881e4ab4f766f251f258ed424fff663
 image quay.io/cilium/cilium v1.19.1
+image quay.io/cilium/cilium-envoy v1.35.9-1770979049-232ed4a26881e4ab4f766f251f258ed424fff663
 image quay.io/cilium/hubble-relay v1.19.1
-image quay.io/cilium/hubble-ui-backend v0.13.3
 image quay.io/cilium/hubble-ui v0.13.3
+image quay.io/cilium/hubble-ui-backend v0.13.3
 image quay.io/cilium/operator-generic v1.19.1
 image quay.io/jetstack/cert-manager-cainjector v1.20.0
 image quay.io/jetstack/cert-manager-controller v1.20.0

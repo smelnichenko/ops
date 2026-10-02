@@ -56,4 +56,4 @@ for p in json.load(sys.stdin)["items"]:
     -o jsonpath='{"crd prometheus-operator "}{.metadata.annotations.operator\.prometheus\.io/version}{"\n"}' 2>/dev/null || true
 
   echo "k8s server $(kubectl version -o json | python3 -c 'import json,sys;print(json.load(sys.stdin)["serverVersion"]["gitVersion"])')"
-} | sort -u
+} | LC_ALL=C sort -u

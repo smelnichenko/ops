@@ -8,3 +8,4 @@ deploy/ansible/venv/
 # DR drill run logs (task dr:drill)
 .dr/
 __pycache__/
+.upgrade/
