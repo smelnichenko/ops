@@ -57,7 +57,11 @@ operator approves.
    `helm upgrade` drops it and breaks Istio. Move it to `socketLB.hostNamespaceOnly: true` in `setup-kubeadm.yml`.
 2. External Secrets runs `installCRDs: false`: its CRDs are whatever was first installed and are never upgraded.
 3. velero-plugin-for-aws 1.11.1 belongs to Velero 1.15; Velero 1.18 pairs with 1.14.x.
-4. Two containerd installs: Debian's 1.7.24 and nerdctl-full's 2.0.2 (with its own unit in /usr/local). One must go.
+4. ~~Two containerd installs on ten~~ — not on ten: ten runs only Debian's containerd 1.7.24 (its unit in
+   /usr/lib). The Vagrant VM is the one with two: setup-kubeadm.yml installs nerdctl-full (for test:cicd), whose
+   containerd 2.0.2 unit in /usr/local overrides Debian's — so the Vagrant node ran a different containerd than
+   production. (History: ten ran Docker's containerd.io 2.2 from 2026-02-15 until the kubeadm migration replaced it
+   with Debian's 1.7.24 on 2026-03-30; Docker's apt repo is still configured on ten.)
 5. containerd 1.7.24 is below the Kubernetes 1.34 floor (1.7.28).
 6. The Postgres image `ghcr.io/cloudnative-pg/postgresql:17` is a deprecated rolling tag: pin a digest.
 7. Strimzi v1beta2 templates (`kafka-users.yaml`, `kafkatopic-events.yaml`, ops test-realtime.yml) must move to v1.
@@ -67,7 +71,10 @@ operator approves.
 
 A new `tests/ansible/test-upgrade.yml` with `task test:upgrade`, run detached like the DR drill.
 
-1. **Baseline = production today.** VMs on Debian **trixie** (the current box is bookworm: change it), the kubeadm
+1. **Baseline = production today, proven by diff.** `scripts/version-inventory.sh` lists every versioned component
+   (host packages, binaries, Helm releases, Argo chart sources, images, CRD bundles); production's list is
+   `tests/ansible/upgrade/prod-inventory.txt` (2026-10-02). The baseline counts only when the VM's list matches it
+   (application images aside). VMs on Debian **trixie** (the current box is bookworm: change it), the kubeadm
    stack at today's versions through the same playbooks and charts production uses.
 2. **Seed data** that must survive: Postgres rows and a CNPG backup, Kafka topics with messages, Scylla keyspaces with
    rows, Mimir series, Tempo traces, ClickHouse logs, a Grafana dashboard, SonarQube project.
