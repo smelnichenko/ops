@@ -76,6 +76,18 @@ operator approves.
     it because it restores through `recovery`. The Vagrant test recreates ten's Secret (tests/ansible/upgrade/
     production-state.yml). Proposed fix: drop `initdb.secret` so CNPG generates it, as it did for production - the
     init-users job sets every role's password afterwards anyway. Tested in Vagrant first.
+11. Objects on ten that no git repo creates (made by hand; a rebuild loses them): ServiceAccounts
+    schnappy-{alertmanager,grafana,mimir,reports} in schnappy-infra (the observability chart runs its pods as these;
+    the mesh chart creates schnappy-infra-*), the caddy-cert-reader Role/RoleBinding/ServiceAccount, five KafkaTopics
+    from 2026-04-10; also hand patches now in the playbooks (Cilium bpf-lb-sock-hostns-only, the /usr/lib/cni link).
+    The Vagrant test recreates the ServiceAccounts (production-state.yml); fix: create them in the charts.
+12. A production REBUILD under Argo comes up broken (the DR drill restores into a cluster that already has Istio, so it
+    never sees this): the root app-of-apps waits for nothing (no argoproj.io/Application health check), so the app
+    sets start pods before istiod's injector exists - no sidecars, all traffic reset by STRICT mTLS. Fixed and proven
+    in Vagrant (ops 8e95262): the health check in setup-argocd.yml, and sync waves - cert-manager -2; Prometheus -1
+    (its CRDs before cluster-config's ServiceMonitors); scylla-manager 0 (after scylla-operator); the app sets 4
+    (after Istio); observability 5 (after the infra data set's S3 secret). The waves are Vagrant-only patches in the
+    mirror (INFRA_SYNC_WAVES) until approved for infra; applying them on ten is harmless (they order creation only).
 
 ## The Vagrant upgrade test
 
