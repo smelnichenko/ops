@@ -1,0 +1,5 @@
+# Scylla Operator + Manager charts v1.20.2 -> v1.20.3: the latest 1.20 patch before 1.21 (the operator upgrades N+1
+# only). infra upgrade/36-scylla-operator-1.20.3.
+argo-chart scylla-manager scylla-manager@v1.20.2 => argo-chart scylla-manager scylla-manager@v1.20.3
+argo-chart scylla-operator scylla-operator@v1.20.2 => argo-chart scylla-operator scylla-operator@v1.20.3
+image scylladb/scylla-operator 1.20.2 => image scylladb/scylla-operator 1.20.3

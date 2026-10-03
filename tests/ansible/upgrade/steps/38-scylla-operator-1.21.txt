@@ -1,0 +1,10 @@
+# Scylla Operator + Manager charts v1.20.3 -> v1.21.1: Manager 3.10.1 with its backend ScyllaDB 2026.1.3, the
+# clusters' agents 3.10.1. 1.21's requirements (RFC 1123 task names, non-empty spec.version) hold on ten.
+# infra upgrade/38-scylla-operator-1.21.
+argo-chart scylla-manager scylla-manager@v1.20.3 => argo-chart scylla-manager scylla-manager@v1.21.1
+argo-chart scylla-operator scylla-operator@v1.20.3 => argo-chart scylla-operator scylla-operator@v1.21.1
+image scylladb/scylla-operator 1.20.3 => image scylladb/scylla-operator 1.21.1
+image scylladb/scylla-manager 3.9.0 => image scylladb/scylla-manager 3.10.1
+image scylladb/scylla-manager-agent 3.9.0 => image scylladb/scylla-manager-agent 3.10.1
+image docker.io/scylladb/scylla-manager-agent 3.9.0 => image docker.io/scylladb/scylla-manager-agent 3.10.1
+image scylladb/scylla 2026.1.0 => image scylladb/scylla 2026.1.3
