@@ -46,13 +46,17 @@
         backup: "upgrade-check-{{ lookup('pipe', 'date +%s') }}"
       register: _created
 
+    # Up to 30 minutes, as long as production's own daily backup takes (20-29 min, 2026-09-30..10-03). The Vagrant
+    # copy's takes 8-11 and grows each step: every check adds 79 snapshots to the kopia repository and deletes them,
+    # faster than Velero's hourly quick maintenance compacts the index ("too many index blobs" - a repository open then
+    # takes 30 s). A 10-minute bound failed step 17 on a backup that completed in 11.
     - name: It ends Completed
       ansible.builtin.command: >-
         {{ kubectl }} get backups.velero.io {{ _created.result.metadata.name }}
-        -o jsonpath={.status.phase}/{.status.errors}/{.status.warnings}
+        -o jsonpath={.status.phase}/{.status.errors}/{.status.warnings}/{.status.startTimestamp}/{.status.completionTimestamp}
       register: _phase
       changed_when: false
-      retries: 60
+      retries: 180
       delay: 10
       until: _phase.stdout.split('/')[0] in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
       failed_when: _phase.stdout.split('/')[0] != 'Completed' or _phase.stdout.split('/')[1] not in ['', '0']
@@ -84,4 +88,7 @@
 
     - name: Backup works
       ansible.builtin.debug:
-        msg: "BACKUP OK: {{ _created.result.metadata.name }} Completed, {{ _pvb.stdout_lines | length }} volumes"
+        msg: >-
+          BACKUP OK: {{ _created.result.metadata.name }} Completed, {{ _pvb.stdout_lines | length }} volumes, in
+          {{ ((_phase.stdout.split('/')[4] | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
+              - (_phase.stdout.split('/')[3] | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }} s
