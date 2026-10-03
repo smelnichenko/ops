@@ -20,6 +20,10 @@
 # reconciled by the operator now running, at the Kafka version it asks for. The Strimzi steps (1.x, Kafka 4.3) roll
 # the brokers.
 #
+# ScyllaDB the same way (third play): a keyspace upgrade_check with 1 000 known rows, read back through cqlsh and
+# compared (count + md5) after the operator has finished - every rack updated and ready at the version the cluster
+# asks for, Available and not Progressing. The Scylla steps roll the database through 2025.1, 2026.1 and 2026.3.
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed|verify
 - name: Postgres data that must survive the upgrade
   hosts: target
@@ -206,3 +210,78 @@
     - name: Kafka data intact
       ansible.builtin.debug:
         msg: "KAFKA DATA OK: {{ topic }} {{ messages }} messages, md5 {{ expected_md5 }}, operator {{ _strimzi.stdout.split(':')[-1] }}"
+
+- name: ScyllaDB data that must survive the upgrade
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    scylla_namespace: schnappy-production
+    scylla_cluster: schnappy-production-scylla
+    rows: 1000
+    # md5 of "k|v-k" for k = 1..N, sorted by k, newline-separated with a trailing newline - what the read prints
+    expected_md5: "{{ (range(1, rows + 1) | map('regex_replace', '^(.*)$', '\\1|v-\\1') | join('\n') ~ '\n') | hash('md5') }}"
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ scylla_namespace }}"
+  tasks:
+    - name: The operator has finished - every rack updated, ready, at the version asked for; Available, not Progressing
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get scyllaclusters.scylla.scylladb.com {{ scylla_cluster }} -o json | python3 -c '
+        import json, sys
+        c = json.load(sys.stdin)
+        s, want = c.get("status", {}), c["spec"]["version"]
+        conds = {x["type"]: x["status"] for x in s.get("conditions", [])}
+        racks = s.get("racks", {}).values()
+        ok = (s.get("observedGeneration") == c["metadata"]["generation"]
+              and conds.get("Available") == "True" and conds.get("Progressing") == "False"
+              and racks and all(r.get("version") == want and r.get("updatedMembers") == r.get("members") == r.get("readyMembers")
+                                for r in racks))
+        print(ok, want)'
+      args:
+        executable: /bin/bash
+      register: _scylla
+      changed_when: false
+      retries: 60
+      delay: 15
+      until: _scylla.rc == 0 and _scylla.stdout.startswith('True ')
+
+    - name: A ScyllaDB pod
+      ansible.builtin.command: "{{ kubectl }} get pods -l scylla/cluster={{ scylla_cluster }} -o jsonpath={.items[0].metadata.name}"
+      register: _node
+      changed_when: false
+      failed_when: _node.stdout | length == 0
+
+    - name: Seed - the keyspace, the table and its rows (only rows that are missing)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {
+          echo "CREATE KEYSPACE IF NOT EXISTS upgrade_check WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};"
+          echo "CREATE TABLE IF NOT EXISTS upgrade_check.canary (k int PRIMARY KEY, v text);"
+          for k in $(seq 1 {{ rows }}); do echo "INSERT INTO upgrade_check.canary (k, v) VALUES ($k, 'v-$k');"; done
+        } | {{ kubectl }} exec -i {{ _node.stdout }} -c scylla -- cqlsh > /dev/null
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: mode == 'seed'
+
+    - name: The table holds exactly the seeded rows
+      ansible.builtin.shell: |
+        set -euo pipefail
+        out=$(mktemp); trap 'rm -f "$out"' EXIT
+        {{ kubectl }} exec {{ _node.stdout }} -c scylla -- cqlsh -e "PAGING OFF; SELECT k, v FROM upgrade_check.canary;" \
+          | awk -F'|' 'NF == 2 && $1 ~ /^ *[0-9]+ *$/ {gsub(/ /, "", $1); gsub(/^ +| +$/, "", $2); print $1 "|" $2}' \
+          | sort -n > "$out" || true
+        echo "$(wc -l < "$out") $(md5sum < "$out" | cut -d' ' -f1)"
+      args:
+        executable: /bin/bash
+      register: _read
+      changed_when: false
+      retries: 5
+      delay: 15
+      until: _read.stdout == rows ~ ' ' ~ expected_md5
+      failed_when: _read.stdout != rows ~ ' ' ~ expected_md5
+
+    - name: ScyllaDB data intact
+      ansible.builtin.debug:
+        msg: "SCYLLA DATA OK: upgrade_check.canary {{ rows }} rows, md5 {{ expected_md5 }}, ScyllaDB {{ _scylla.stdout.split()[1] }}"
