@@ -1,0 +1,87 @@
+---
+# A new volume can be provisioned after an upgrade step: a PVC on local-path (the StorageClass every production
+# volume uses), bound, written and read back by a pod, then deleted with its volume.
+#
+# Why: the volumes that exist keep working whatever happens to the provisioner, so the other checks pass with a broken
+# local-path-provisioner (plan 100 step 06), kubelet or container runtime; a StatefulSet scaled up or rebuilt after the
+# upgrade would then wait for a volume forever.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/storage-check.yml
+- name: A local-path volume is provisioned, written and read back
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    ns: default
+    check_name: upgrade-storage-check
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ ns }}"
+  tasks:
+    - name: The marker, fixed once (a lookup in vars is re-evaluated at every use)
+      ansible.builtin.set_fact:
+        marker: "written {{ lookup('pipe', 'date +%s') }}"
+
+    - name: Nothing left from an earlier run
+      ansible.builtin.shell: |
+        {{ kubectl }} delete pod {{ check_name }} --ignore-not-found --wait=true > /dev/null
+        {{ kubectl }} delete pvc {{ check_name }} --ignore-not-found --wait=true > /dev/null
+      changed_when: false
+
+    - name: A PVC and a pod that writes then reads it
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          - apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata: { name: "{{ check_name }}", namespace: "{{ ns }}" }
+            spec:
+              storageClassName: local-path
+              accessModes: [ReadWriteOnce]
+              resources: { requests: { storage: 16Mi } }
+          - apiVersion: v1
+            kind: Pod
+            metadata:
+              name: "{{ check_name }}"
+              namespace: "{{ ns }}"
+              labels: { sidecar.istio.io/inject: "false" }
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: check
+                  image: busybox:1.37
+                  command: [sh, -c, 'echo "$MARKER" > /data/marker && sync && cat /data/marker']
+                  env: [{ name: MARKER, value: "{{ marker }}" }]
+                  volumeMounts: [{ name: data, mountPath: /data }]
+              volumes: [{ name: data, persistentVolumeClaim: { claimName: "{{ check_name }}" } }]
+
+    - name: The pod ran to completion
+      ansible.builtin.command: "{{ kubectl }} get pod {{ check_name }} -o jsonpath={.status.phase}"
+      register: _phase
+      changed_when: false
+      retries: 36
+      delay: 5
+      until: _phase.stdout in ['Succeeded', 'Failed']
+      failed_when: _phase.stdout != 'Succeeded'
+
+    - name: It read back what it wrote, from a provisioned and bound volume
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} logs {{ check_name }}
+        {{ kubectl }} get pvc {{ check_name }} -o jsonpath='{.status.phase} {.spec.volumeName}{"\n"}'
+      args:
+        executable: /bin/bash
+      register: _read
+      changed_when: false
+      failed_when: >-
+        _read.stdout_lines | length != 2 or _read.stdout_lines[0] != marker
+        or not _read.stdout_lines[1].startswith('Bound pvc-')
+
+    - name: Delete the pod and the volume
+      ansible.builtin.shell: |
+        {{ kubectl }} delete pod {{ check_name }} --wait=true > /dev/null
+        {{ kubectl }} delete pvc {{ check_name }} --wait=true > /dev/null
+      changed_when: true
+
+    - name: Storage works
+      ansible.builtin.debug:
+        msg: "STORAGE OK: {{ _read.stdout_lines[1] }} provisioned, written, read back, deleted"

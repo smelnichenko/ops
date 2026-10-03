@@ -142,7 +142,9 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   waits until every Argo app is synced to exactly those commits with all pods ready, checks the seeded Postgres rows
   on every instance (`data-check.yml`), runs the smoke, and diffs the inventory against production's plus every
   step's changes so far (`scripts/upgrade-expected-inventory.py`).
-- **Steps proven** (2026-10-03): 01 apt-cacher-ng from CI (7b46aea), 02 cert-manager v1.20.4, 03 CNPG 1.30.1.
+- **Steps proven** (2026-10-03): 01 apt-cacher-ng from CI (7b46aea), 02 cert-manager v1.20.4, 03 CNPG 1.30.1,
+  04 Velero 1.18.4 + plugin 1.14.4, 05 versitygw 1.8.0 (cluster and Pis), 06 local-path 0.0.37. Each step also takes a
+  Velero backup from production's daily schedule (`backup-check.yml`) and provisions a new volume (`storage-check.yml`).
 - **Argo green is not "the operator has finished"**: after the CNPG operator upgrade Argo settled at once, and CNPG
   restarted both instances a minute later, while the checks ran. The data check now first waits for every instance
   to run under the new operator version. Each operator step (Strimzi, Scylla) needs the same wait for its own
