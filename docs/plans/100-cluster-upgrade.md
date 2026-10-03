@@ -223,8 +223,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 28 | External Secrets 2.11.0 | infra | green (all 25 CRDs = chart 2.11.0, 2 new) |
 | 29-30 | Argo CD 3.4.6, 3.5.3 | playbook | green (root stayed Synced through both) |
 | 31 | cert-manager v1.21.2 | infra | green |
-| 32 | Strimzi templates on v1 (defect 7) | platform | running |
-| 33 | Strimzi v1 conversion (Argo automation off) | infra + playbook | S |
+| 32 | Strimzi templates on v1 (defect 7) | platform | green |
+| 33 | Strimzi v1 conversion (Argo automation off) | infra + playbook | S; running (10 CRDs store only v1, Kafka Ready) |
 | 34 | Strimzi 1.2.0 (automation back) | infra | S |
 | 35 | Kafka 4.3.1 | platform | S |
 | 36-41 | Scylla Operator 1.20.3/1.21.1/1.22.0 with ScyllaDB 2025.1.16/2026.1.14/2026.3.2 | infra | S |
