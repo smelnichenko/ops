@@ -1,0 +1,7 @@
+# containerd: Debian's 1.7.24 (below Kubernetes 1.34's 1.7.28 floor, end of life 2026-09-30) -> containerd.io 2.3.6
+# from Docker's apt repository, one install (upgrade-containerd.yml); it replaces Debian's runc with its own. Running
+# containers must survive. At the rollout setup-kubeadm.yml installs containerd.io at this version.
+- pkg containerd 1.7.24~ds1-6+deb13u1
+- pkg runc 1.1.15+ds1-2+b4
++ pkg containerd.io 2.3.6-1~debian.13~trixie
+playbook upgrade-containerd.yml -e containerd_upgrade_to=2.3.6
