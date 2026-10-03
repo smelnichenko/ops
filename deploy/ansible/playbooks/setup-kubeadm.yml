@@ -742,9 +742,14 @@
     # ================================================================
 
     - name: Install Gateway API CRDs
-      ansible.builtin.shell: |
-        kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml
+      # Server-side, as Gateway API's own upgrade instructions say: a client-side apply keeps the whole CRD in an
+      # annotation, which the larger CRDs of later releases overflow. --force-conflicts takes over the fields an
+      # earlier client-side apply owns (ten's v1.2.1 was applied that way).
+      ansible.builtin.command: >-
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts
+        -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml
       changed_when: true
+      tags: [gateway-api]  # an upgrade runs just this: --tags gateway-api -e gateway_api_version=...
 
     # ================================================================
     # Phase 11: Install ESO

@@ -1,0 +1,6 @@
+# Gateway API CRDs v1.2.1 -> v1.5.1 (before Istio 1.30). v1.5.1 still serves every version v1.2.1 did (v1, and v1beta1
+# of GatewayClass/Gateway/HTTPRoute/ReferenceGrant), so Istio 1.25 keeps what it reads; it adds BackendTLSPolicy,
+# ListenerSet, TLSRoute and a safe-upgrades ValidatingAdmissionPolicy. Applied server-side by the kubeadm playbook's
+# task (host-side). At the rollout gateway_api_version becomes v1.5.1.
+crd gateway-api v1.2.1 => crd gateway-api v1.5.1
+playbook setup-kubeadm.yml --tags gateway-api -e gateway_api_version=v1.5.1
