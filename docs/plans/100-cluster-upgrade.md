@@ -198,8 +198,8 @@ S = stateful (shown to the operator with the exact change before it runs in prod
 | 13 | Cilium 1.19.8 | playbook | green |
 | 14 | Kubernetes 1.34.12 | playbook | green |
 | 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | green |
-| 16 | Kubernetes 1.35.9 (+ etcd backup image) | infra + playbook | running |
-| 17 | Cilium 1.20.2 | playbook | |
+| 16 | Kubernetes 1.35.9 (+ etcd backup image) | infra + playbook | green |
+| 17 | Cilium 1.20.2 | playbook | running |
 | 18 | Gateway API v1.5.1 | playbook | |
 | 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | |
 | 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | |
