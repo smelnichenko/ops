@@ -30,6 +30,9 @@
     argocd_namespace: "{{ argocd_ns | default('argocd') }}"
     argocd_chart: "argo/argo-cd"
     argocd_chart_version: "{{ argocd_version | default('9.5.4') }}"
+    # empty: the chart's own Argo CD version; set to run a newer patch of the same line than the newest chart ships
+    # (chart 9.5.11, the last of the 9.5 line, ships v3.3.9)
+    argocd_image_tag: "{{ argocd_image_tag_override | default('') }}"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
     _forgejo_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
@@ -179,6 +182,8 @@
         values:
           global:
             domain: "{{ argocd_host }}"
+            image:
+              tag: "{{ argocd_image_tag }}"
 
           configs:
             params:
