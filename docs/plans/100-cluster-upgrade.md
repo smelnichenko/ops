@@ -209,7 +209,7 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 17 | Cilium 1.20.2 | playbook | green |
 | 18 | Gateway API v1.5.1 | playbook | green |
 | 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | green; IN PRODUCTION 2026-10-03 19:47 (infra e89bbbb, operator OK) |
-| 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | 20, 21 green (mesh restarted each); 22-23 running |
+| 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | 20-22 green (mesh restarted each); 23 running |
 | 26 | Kubernetes 1.36.5 (+ etcd backup image) | infra + playbook | |
 | 27 | External Secrets CRDs under Argo (defect 2) | infra | |
 | 28 | External Secrets 2.11.0 | infra | |
