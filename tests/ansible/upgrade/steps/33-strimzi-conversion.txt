@@ -3,3 +3,6 @@
 # own tool from the operator image - convert-resource --all-namespaces (also ten's 13 KafkaTopics no repo creates) and
 # crd-upgrade. Stateful: shown to the operator before it runs in production.
 playbook strimzi-v1-conversion.yml
+# Argo then shows Strimzi OutOfSync - its 0.51 chart's CRDs store v1beta2, the live ones now v1 - and must not sync it
+# (automation off) until step 34's 1.2.0 chart.
+argo-out-of-sync strimzi

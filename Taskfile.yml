@@ -408,6 +408,9 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f1
       PLATFORM_REF:
         sh: scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f2
+      # apps the step leaves OutOfSync on purpose (its argo-out-of-sync lines), allowed only after its playbooks
+      OUT_OF_SYNC:
+        sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
@@ -420,7 +423,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, step 12),
       # which only the next step's first wait saw
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}}
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
       # a Velero backup from production's daily schedule, volumes included, into the Pi backup store

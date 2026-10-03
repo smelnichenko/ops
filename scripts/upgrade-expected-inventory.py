@@ -8,6 +8,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
     + <inventory line the step adds>
     - <inventory line the step removes>
     playbook <ops playbook> <arguments>       (a host-side change: run against the Vagrant inventory)
+    argo-out-of-sync <app>                    (the step leaves this Argo app OutOfSync on purpose - its automated
+                                               sync off while the step changes what its chart would put back)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -22,6 +24,10 @@ A copy restored to an earlier snapshot is brought forward by running the steps i
 otherwise, since a skipped step's versions are missing. A version a playbook line sets with -e becomes the
 playbook's default at the production rollout, not before.
 
+Out-of-sync apps (--out-of-sync): the given step's argo-out-of-sync apps, comma-separated (empty for most steps).
+After the step's playbooks the settle check lets them be OutOfSync - still Healthy, on the pushed commit; the next
+step's own settle wants them Synced again.
+
 Refs (--refs): for each repo, its highest upgrade/NN-* branch with NN up to the step's, else main - so a step that
 changes only infra still mirrors platform with every earlier platform step. Aborts if a step branch does not contain
 the previous one.
@@ -29,6 +35,7 @@ the previous one.
 Usage: scripts/upgrade-expected-inventory.py <step, e.g. 01-apt-cacher-ng>           (prints the inventory)
        scripts/upgrade-expected-inventory.py --refs <step>                          (prints "<infra-ref> <platform-ref>")
        scripts/upgrade-expected-inventory.py --playbooks <step>                     (prints "<playbook> <arguments>" lines)
+       scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)
 """
 import os
 import re
@@ -40,7 +47,7 @@ UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
 
 
-def parse(path, playbooks=None):
+def parse(path, playbooks=None, out_of_sync=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -50,6 +57,9 @@ def parse(path, playbooks=None):
         if line.startswith("playbook "):
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
+        elif line.startswith("argo-out-of-sync "):
+            if out_of_sync is not None:
+                out_of_sync.append(line[len("argo-out-of-sync "):].strip())
         elif " => " in line:
             before, after = (x.strip() for x in line.split(" => "))
             changes.append((before, after, where))
@@ -82,7 +92,7 @@ def ref(repo, step_no):
 
 def main():
     args = sys.argv[1:]
-    mode = args[0] if args[:1] in (["--refs"], ["--playbooks"]) else None
+    mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -95,6 +105,11 @@ def main():
         parse(os.path.join(STEPS, args[0] + ".txt"), playbooks)
         if playbooks:
             print("\n".join(playbooks))
+        return
+    if mode == "--out-of-sync":
+        apps = []
+        parse(os.path.join(STEPS, args[0] + ".txt"), out_of_sync=apps)
+        print(",".join(apps))
         return
     if mode == "--refs":
         step_no = int(args[0][:2])
