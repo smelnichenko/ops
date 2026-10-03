@@ -197,7 +197,7 @@
         - "quay.io/cilium/operator-generic:v{{ cilium_version }}"
         - "docker.io/istio/pilot:{{ istio_version }}"
         - "docker.io/istio/proxyv2:{{ istio_version }}"
-        - "docker.io/rancher/local-path-provisioner:v0.0.36"
+        - "docker.io/rancher/local-path-provisioner:{{ local_path_provisioner_version }}"
       loop_control: { label: "{{ item }}" }
       register: _prepull
       retries: 6
@@ -613,6 +613,7 @@
         https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml
       register: _lpp_apply
       changed_when: "'created' in _lpp_apply.stdout or 'configured' in _lpp_apply.stdout"
+      tags: [local-path]  # an upgrade runs just these three: --tags local-path -e local_path_provisioner_version=...
 
     - name: Make local-path the default StorageClass (Vagrant tests; not on ten)
       ansible.builtin.command: >-
@@ -621,8 +622,10 @@
       register: _lpp_default
       changed_when: "'no change' not in _lpp_default.stdout"
       when: local_path_default_class | bool
+      tags: [local-path]
 
     - name: Wait for local-path-provisioner deployment to be Ready (up to 15 min)
+      # rolled out, not just ready: on an upgrade the old pod stays ready until the new one replaces it
       kubernetes.core.k8s_info:
         kubeconfig: /etc/kubernetes/admin.conf
         api_version: apps/v1
@@ -634,7 +637,11 @@
       delay: 10
       until:
         - _lpp.resources | default([]) | length > 0
-        - (_lpp.resources[0].status.readyReplicas | default(0)) >= 1
+        - (_lpp.resources[0].status.observedGeneration | default(0)) == _lpp.resources[0].metadata.generation
+        - (_lpp.resources[0].status.updatedReplicas | default(0)) == _lpp.resources[0].spec.replicas
+        - (_lpp.resources[0].status.readyReplicas | default(0)) == _lpp.resources[0].spec.replicas
+        - (_lpp.resources[0].status.unavailableReplicas | default(0)) == 0
+      tags: [local-path]
 
     # ================================================================
     # Phase 7b: PriorityClasses (production-aligned; tests reference them)

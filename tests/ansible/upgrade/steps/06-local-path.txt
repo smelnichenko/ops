@@ -1,0 +1,5 @@
+# local-path-provisioner v0.0.35 -> v0.0.37: Rancher's manifest applied by the kubeadm playbook, as on ten (host-side;
+# at the rollout local_path_provisioner_version becomes v0.0.37). The manifest now names the image docker.io/... and
+# adds health probes.
+image rancher/local-path-provisioner v0.0.35 => image docker.io/rancher/local-path-provisioner v0.0.37
+playbook setup-kubeadm.yml --tags local-path -e local_path_provisioner_version=v0.0.37
