@@ -26,6 +26,11 @@
     target: "{{ k8s_upgrade_to | default('') }}"
     target_minor: "{{ target.split('.')[:2] | join('.') }}"
     control_plane: [kube-apiserver, kube-controller-manager, kube-scheduler]
+    # kubeadm preflight checks to pass over - none on ten. The Vagrant copy's CoreDNS carries `template` blocks (its
+    # isolation from production), which kubeadm's Corefile migration does not know and refuses on a CoreDNS bump;
+    # kubeadm then migrates the rest and leaves those blocks as they are.
+    ignore_preflight: "{{ k8s_upgrade_ignore_preflight_errors_override | default('') }}"
+    ignore_preflight_flag: "{{ ('--ignore-preflight-errors=' ~ ignore_preflight) if ignore_preflight | length > 0 else '' }}"
 
   tasks:
     # ── 1. checks ────────────────────────────────────────────────────
@@ -105,13 +110,13 @@
       failed_when: _kubeadm.stdout != 'v' ~ target
 
     - name: Kubeadm upgrade plan (the cluster can go to the target)
-      ansible.builtin.command: "kubeadm upgrade plan v{{ target }}"
+      ansible.builtin.command: "kubeadm upgrade plan v{{ target }} {{ ignore_preflight_flag }}"
       register: _plan
       changed_when: false
 
     - name: Kubeadm upgrade apply - without the kube-proxy addon (Cilium replaces it)
       ansible.builtin.command: >-
-        kubeadm upgrade apply v{{ target }} --yes --skip-phases=addon/kube-proxy
+        kubeadm upgrade apply v{{ target }} --yes --skip-phases=addon/kube-proxy {{ ignore_preflight_flag }}
       register: _apply
       changed_when: true
       timeout: 1800

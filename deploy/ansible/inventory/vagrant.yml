@@ -24,6 +24,9 @@ all:
     containerd_registry_config_path_override: "/etc/containerd/certs.d"
     # the tests' PVCs leave storageClassName empty; ten's name local-path
     local_path_default_class_override: true
+    # upgrade-kubeadm.yml: the isolation's CoreDNS `template` blocks (tests/ansible/upgrade/isolate-cluster.yml) are
+    # unknown to kubeadm's Corefile migration, which refuses a CoreDNS bump over them; ten's Corefile has none
+    k8s_upgrade_ignore_preflight_errors_override: CoreDNSUnsupportedPlugins
     # Argo CD's egress to Forgejo (setup-argocd.yml): the Pi VMs and their VIP
     forgejo_cidrs: ["192.168.56.20/32", "192.168.56.21/32", "192.168.56.50/32"]
     # The pmon.dev names production resolves to the Pi VIP (from ten and the Pis, 2026-10-02; every other one is ten's
