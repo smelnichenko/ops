@@ -398,7 +398,7 @@ tasks:
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
   test:upgrade:step:
-    desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt, its upgrade/NN-* branches in ../infra and ../platform, its playbooks) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, the seeded data, a Velero backup, a new volume, production's k6 smoke, the step's expected inventory
+    desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt, its upgrade/NN-* branches in ../infra and ../platform, its playbooks) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, the seeded data, a Velero backup, a new volume, every scrape target up, production's k6 smoke, the step's expected inventory
     deps: [deploy:install]
     requires:
       vars: [STEP]
@@ -422,6 +422,8 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
       # a new local-path volume provisioned, written and read back
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/storage-check.yml
+      # Prometheus reconciled, every target up, Mimir receiving
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
       - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt

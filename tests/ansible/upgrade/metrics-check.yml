@@ -1,0 +1,77 @@
+---
+# Monitoring still works after an upgrade step: Prometheus reconciled by its operator and available, every scrape
+# target up (bar the ones that cannot be up in a VM, listed below with the reason), and Mimir holding samples
+# Prometheus remote-wrote less than two minutes ago.
+#
+# Why: an operator or Prometheus upgrade (plan 100 step 07), or a CNI/runtime one, can leave every pod ready while
+# targets go down or remote write stops - the alerts that would say so run on this very Prometheus.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
+- name: Prometheus scrapes everything and writes to Mimir
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    proxy: /api/v1/namespaces/schnappy-infra/services
+    # scrape pools that are down in the Vagrant copy by nature
+    allowed_down:
+      # setup-host-hardening.yml sets the exporter up only where a disk reports SMART (ten's NVMe); the VM's virtio
+      # disk does not, so 192.168.56.10:9633 has nothing listening
+      - scrapeConfig/schnappy-infra/schnappy-smartctl-exporter
+  tasks:
+    - name: Prometheus is reconciled by the operator and available
+      # shell, quoted: the command module's word splitting strips the quotes inside the jsonpath filter
+      ansible.builtin.shell: >-
+        kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra get prometheus schnappy-prometheus
+        -o jsonpath='{.status.conditions[?(@.type=="Reconciled")].status}/{.status.conditions[?(@.type=="Available")].status}'
+      register: _prom
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _prom.stdout == 'True/True'
+
+    - name: Every scrape target is up (a restarted Prometheus needs a scrape interval or two)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/targets?state=active' \
+          | ALLOWED='{{ allowed_down | to_json }}' python3 -c '
+        import json, os, sys
+        targets = json.load(sys.stdin)["data"]["activeTargets"]
+        allowed = set(json.loads(os.environ["ALLOWED"]))
+        down = ["%s %s: %s" % (t["scrapePool"], t["scrapeUrl"], t["lastError"][:100]) for t in targets
+                if t["health"] != "up" and t["scrapePool"] not in allowed]
+        print("%d targets, %d down" % (len(targets), len(down)))
+        for d in down:
+            print("  DOWN", d)
+        sys.exit(1 if down or not targets else 0)'
+      args:
+        executable: /bin/bash
+      register: _targets
+      changed_when: false
+      retries: 12
+      delay: 15
+      until: _targets.rc == 0
+
+    - name: Mimir holds samples remote-written in the last two minutes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl --kubeconfig {{ kubeconfig }} get --raw \
+          '{{ proxy }}/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query=max(timestamp(up))' \
+          | python3 -c '
+        import json, sys, time
+        r = json.load(sys.stdin)["data"]["result"]
+        age = time.time() - float(r[0]["value"][1]) if r else None
+        print("newest sample", "none" if age is None else "%.0f s old" % age)
+        sys.exit(0 if age is not None and age < 120 else 1)'
+      args:
+        executable: /bin/bash
+      register: _mimir
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _mimir.rc == 0
+
+    - name: Monitoring works
+      ansible.builtin.debug:
+        msg: "METRICS OK: {{ _targets.stdout_lines[0] }} (allowed down: {{ allowed_down | length }}), Mimir {{ _mimir.stdout }}"
