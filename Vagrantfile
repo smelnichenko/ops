@@ -177,7 +177,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     k.vm.network "private_network", ip: "192.168.56.10"
     k.vm.provider "libvirt" do |v|
       v.memory = 20480
-      v.cpus = 8
+      # production's pods request ~8 CPUs (ten: 20, 44% requested). With 8 the copy sat at 98% and a new pod - the
+      # k6 smoke, a rollout's surge pod - could not be scheduled (2026-10-03). vCPUs cost the host no memory.
+      v.cpus = 14
     end
     # Source repos mounted for in-cluster image builds (test:dr, test:microservices).
     # rsync (not NFS) to avoid cross-host mount races and keep the guest fs fast.

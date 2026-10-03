@@ -83,9 +83,10 @@ operator approves.
     restart/failover with it. For production: the ExternalSecret in the data chart (replacing the CNPG-owned Secret).
 11. Objects on ten that no git repo creates (made by hand; a rebuild loses them): ServiceAccounts
     schnappy-{alertmanager,grafana,mimir,reports} in schnappy-infra (the observability chart runs its pods as these;
-    the mesh chart creates schnappy-infra-*), the caddy-cert-reader Role/RoleBinding/ServiceAccount, five KafkaTopics
-    from 2026-04-10; also hand patches now in the playbooks (Cilium bpf-lb-sock-hostns-only, the /usr/lib/cni link).
-    The Vagrant test recreates the ServiceAccounts (production-state.yml); fix: create them in the charts.
+    the mesh chart creates schnappy-infra-*), five KafkaTopics from 2026-04-10; also hand patches now in the playbooks
+    (Cilium bpf-lb-sock-hostns-only, the /usr/lib/cni link). (The caddy-cert-reader RBAC is not hand-made:
+    setup-caddy.yml applies it.) The Vagrant test recreates the ServiceAccounts (production-state.yml); fix: create
+    them in the charts.
 12. A production REBUILD under Argo comes up broken (the DR drill restores into a cluster that already has Istio, so it
     never sees this): the root app-of-apps waits for nothing (no argoproj.io/Application health check), so the app
     sets start pods before istiod's injector exists - no sidecars, all traffic reset by STRICT mTLS. Fixed and proven
@@ -93,6 +94,17 @@ operator approves.
     (its CRDs before cluster-config's ServiceMonitors); scylla-manager 0 (after scylla-operator); the app sets 4
     (after Istio); observability 5 (after the infra data set's S3 secret). The waves are Vagrant-only patches in the
     mirror (INFRA_SYNC_WAVES) until approved for infra; applying them on ten is harmless (they order creation only).
+13. `setup-caddy.yml` read the wildcard Secret and applied its RBAC with the controller's own kubectl
+    (`delegate_to: localhost`): whichever cluster the operator's kubeconfig named, so a run against any other inventory
+    read and wrote production. Fixed (2026-10-03): it runs kubectl on the inventory's `target` with its admin
+    kubeconfig - on ten the same endpoint, https://192.168.11.2:6443.
+14. The `schnappy` realm exists only in production's Keycloak database; git holds just the auth chart's realm-import
+    template (platform `helm/schnappy-auth`, from when Keycloak ran in the cluster), so the clients' redirect URIs and
+    every later change are nowhere else. The Vagrant copy builds its realm from that template
+    (`tests/ansible/upgrade/keycloak-realm.yml`). Fix: keep the realm (without secrets) in git and apply it from there.
+15. The Hyperfoil load test runs `git.pmon.dev/schnappy/hyperfoil:latest`: a floating tag, pulled on every run (pull
+    policy Always), so what runs at 03:00 is whatever was pushed last and no rebuild or copy can pin it. Off in the
+    Vagrant copy (it cannot reach production's registry). Fix: commit tags, like every application image.
 
 ## The Vagrant upgrade test
 
@@ -110,6 +122,19 @@ A new `tests/ansible/test-upgrade.yml` with `task test:upgrade`, run detached li
 4. **End:** the k6 smoke, the DR drill suites (Velero + barman restore), and a check that every version is the target.
 5. Any failure stops the run with diagnostics (events, describe, logs) — the harness pattern from the DR drill.
 
+Fidelity and isolation of the Vagrant copy (2026-10-02/03):
+- **Isolated from production** on every VM: the kubeadm node and its pods by `isolate-cluster.yml` (CoreDNS answers
+  `*.pmon.dev` with Vagrant addresses; nftables + a Cilium policy drop the production LAN; a probe proves it), the Pi
+  VMs by `tests/ansible/isolate-pis.yml`, first in every Vagrant flow - before it, libvirt's DNS resolved
+  git/auth/vault.pmon.dev on them to production's VIP (nothing had used it: no webhooks, connections or log lines).
+- **Production's own `*.pmon.dev` certificate** (operator, 2026-10-03): copied from ten into the Vagrant cluster
+  (`production-state.yml`) and served by Caddy on the Vagrant Pis as on the real ones, because every in-cluster client
+  of https://auth.pmon.dev verifies it against public CAs. A Vagrant-issued certificate failed all of them. The copy
+  has no Certificate for it (the mirror drops the mesh chart's): cert-manager replaced the copied Secret at once.
+- **Keycloak** gets production's realm from git (defect 14), before Argo: istiod fetches the realm's keys at start.
+- **The k6 smoke** runs as in production (the chart's PostSync hook) and on demand after each step
+  (`scripts/vagrant-smoke.sh`).
+
 New playbooks (ops): `upgrade-kubeadm.yml` (one minor per run, `kubeadm upgrade apply`, kubelet/kubectl, drain-free
 single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variables of the existing playbooks.
 
@@ -118,7 +143,7 @@ single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variab
 Waves in this order, one step at a time, each verified before the next:
 
 0. Backups (Velero all namespaces, CNPG backup + `pg_dumpall` to the Pi, Scylla Manager backup, etcd snapshot) and the
-   eight defects above.
+   defects above.
 1. Patches: apt-cacher-ng from CI (defect 9), cert-manager 1.20.4, CNPG 1.30.1, Velero 1.18.4 + plugin 1.14.4, versitygw 1.8.0, local-path 0.0.37,
    kube-prometheus-stack 91.8.2, Alertmanager, blackbox, Grafana 12.4.12, Mimir 2.17.11, Fluent Bit 4.2.8,
    Argo CD 3.3.14.

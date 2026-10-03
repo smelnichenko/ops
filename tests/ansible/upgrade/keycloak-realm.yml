@@ -1,0 +1,112 @@
+---
+# The schnappy realm in the Vagrant Pi Keycloak, built from git the way production's would be rebuilt.
+#
+# Production's realm lives only in its Keycloak database on the Pis: the schnappy-auth chart's realm import created it
+# while Keycloak still ran in the cluster, and it moved to the Pis with the database. The Vagrant Keycloak starts
+# empty, so the smoke test's token (client k6-smoke) and the issuer every app trusts would not exist. This creates the
+# realm from that chart's import (platform helm/schnappy-auth, keycloak-realm-configmap.yaml) with every client
+# production has, the client secrets from the Vagrant Vault (where the apps read theirs) and SMTP pointed at a dead end
+# (127.0.0.1:1), so the copy can never send mail. Production's own setup-keycloak-clients.yml then finishes it, as on
+# the Pis. An existing realm is left alone. Runs before Argo CD installs the mesh: istiod fetches the realm's signing
+# keys when it starts, and a fetch that finds no realm leaves it with a key set that refuses every token for up to
+# 20 min (Vagrant, 2026-10-02).
+#
+# Redirect URIs stay the chart's defaults (empty): production's live values are in its database only, and no test
+# here logs in through a browser.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml [-e platform_dir=...]
+- name: Render the realm import from the auth chart (controller)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    platform_dir: "{{ playbook_dir }}/../../../../platform"
+    clients: [app, forgejo, grafana, argocd, adminService, k6Smoke]
+  tasks:
+    - name: Helm-template the realm ConfigMap with every client enabled
+      ansible.builtin.command:
+        argv: "{{ ['helm', 'template', 'schnappy-auth', platform_dir ~ '/helm/schnappy-auth',
+                   '--show-only', 'templates/keycloak-realm-configmap.yaml',
+                   '--set', 'keycloak.enabled=true', '--set', 'keycloak.existingSecret=unused']
+                  + (clients | map('regex_replace', '^(.*)$', '--set=keycloak.clients.\\1.enabled=true') | list) }}"
+      register: _rendered
+      changed_when: false
+
+    - name: The realm JSON
+      ansible.builtin.set_fact:
+        realm_template: "{{ (_rendered.stdout | from_yaml).data['schnappy-realm.json'] }}"
+
+- name: Create the schnappy realm in the Vagrant Keycloak
+  hosts: pi1
+  become: true
+  gather_facts: false
+  vars:
+    keycloak_url: https://auth.pmon.dev
+    realm: schnappy
+  tasks:
+    - name: Read the Keycloak and Grafana secrets from the Vagrant Vault
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
+        python3 -c 'import json, sys; print(json.dumps({"keycloak": json.loads(sys.argv[1])["data"]["data"],
+                                                         "grafana": json.loads(sys.argv[2])["data"]["data"]}))' \
+          "$(vault kv get -format=json secret/schnappy/keycloak)" "$(vault kv get -format=json secret/schnappy/grafana)"
+      args:
+        executable: /bin/bash
+      register: _vault
+      changed_when: false
+      no_log: true
+
+    - name: Keycloak admin token
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: admin-cli
+          username: admin
+          password: "{{ (_vault.stdout | from_json).keycloak.admin_password }}"
+          grant_type: password
+      register: _token
+      no_log: true
+
+    - name: Does the realm exist?
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms/{{ realm }}"
+        headers: { Authorization: "Bearer {{ _token.json.access_token }}" }
+        status_code: [200, 404]
+      register: _realm
+
+    - name: Create the realm (client secrets from Vault, SMTP to a dead end)
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/admin/realms"
+        method: POST
+        headers: { Authorization: "Bearer {{ _token.json.access_token }}" }
+        body_format: json
+        body: "{{ realm | combine({'smtpServer': smtp}, recursive=true) }}"
+        status_code: [201]
+      changed_when: true
+      vars:
+        s: "{{ _vault.stdout | from_json }}"
+        realm: >-
+          {{ (hostvars['localhost'].realm_template
+             | replace('FORGEJO_CLIENT_SECRET_PLACEHOLDER', s.keycloak.forgejo_client_secret)
+             | replace('GRAFANA_CLIENT_SECRET_PLACEHOLDER', s.grafana.oauth_client_secret)
+             | replace('ARGOCD_CLIENT_SECRET_PLACEHOLDER', s.keycloak.argocd_client_secret)
+             | replace('ADMIN_SERVICE_CLIENT_SECRET_PLACEHOLDER', s.keycloak.admin_service_client_secret)
+             | replace('K6_SMOKE_CLIENT_SECRET_PLACEHOLDER', s.keycloak.k6_smoke_client_secret)
+             | replace('SMTP_PASSWORD_PLACEHOLDER', 'unused')) | from_json }}
+        smtp: { host: 127.0.0.1, port: "1", auth: "false", starttls: "false" }
+      when: _realm.status == 404
+      no_log: true
+
+    - name: The realm answers with its issuer
+      ansible.builtin.uri:
+        url: "{{ keycloak_url }}/realms/{{ realm }}/.well-known/openid-configuration"
+      register: _oidc
+      failed_when: _oidc.json.issuer | default('') != keycloak_url ~ '/realms/' ~ realm
+
+# production's procedure for the realm's roles and the client service accounts
+- name: Production's realm roles and client service accounts
+  ansible.builtin.import_playbook: ../../../deploy/ansible/playbooks/setup-keycloak-clients.yml

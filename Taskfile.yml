@@ -321,6 +321,8 @@ tasks:
     internal: true
     deps: [deploy:install]
     cmds:
+      # before anything is installed: the Pi VMs would otherwise resolve *.pmon.dev to production and route to its LAN
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml
@@ -378,10 +380,17 @@ tasks:
       - cmd: scripts/vagrant-preload-images.sh
       # isolate the cluster from production (DNS, network - proven by a probe) and connect ESO to the Vagrant Vault
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
-      # objects ten has that no git repo creates (each documented in the playbook)
+      # objects ten has that no git repo creates (each documented in the playbook), production's wildcard certificate too
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml
+      # as on the Pis: Caddy serves git/auth/nexus.pmon.dev on 443 with that wildcard
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-caddy.yml'
+      # the schnappy realm, which production keeps only in its Keycloak database: from the auth chart's import + Vault.
+      # Before Argo: istiod fetches the realm's keys when it starts
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml
+      # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
+      - cmd: scripts/vagrant-smoke.sh
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt

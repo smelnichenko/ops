@@ -5,11 +5,13 @@
 # Why: the first Argo run (2026-10-02) synced production's own manifests, and ESO tried to log in to production
 # Vault. The mirror now rewrites every production address (scripts/vagrant-gitops-mirror.py); this playbook closes
 # the remaining paths and PROVES it:
-#   1. DNS     - CoreDNS answers every *.pmon.dev with the Vagrant Pi VIP (apps call auth.pmon.dev and friends);
+#   1. DNS     - CoreDNS answers every *.pmon.dev with Vagrant addresses (apps call auth.pmon.dev and friends);
 #   2. network - the node drops all traffic to the production LAN (nftables, for the node's own traffic) and a
 #                CiliumClusterwideNetworkPolicy denies it to every pod; a probe pod must FAIL to reach production's
 #                VIP and SUCCEED to reach the Vagrant VIP, or the run aborts;
 #   3. Vault   - ESO trusts the Vagrant Vault CA and logs in with Kubernetes auth (role eso-role), as on ten.
+#
+# The Pi VMs are isolated before anything is installed on them, in every Vagrant flow (../isolate-pis.yml).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
 - name: Read the Vagrant Vault CA (pi1)
@@ -36,9 +38,8 @@
   tasks:
     # ── 1. DNS ─────────────────────────────────────────────────────────
     - name: CoreDNS answers *.pmon.dev as production resolves it, with Vagrant addresses
-      # Production (resolved from ten, 2026-10-02): auth, git and vault are the Pi VIP; every other pmon.dev name,
-      # the apex included, is ten's gateway. Here: the Vagrant Pi VIP and the kubeadm node. Replaces an earlier
-      # version of this block, so a re-run converges.
+      # Production: pi_served_names (inventory) are the Pi VIP; every other pmon.dev name, the apex included, is ten's
+      # gateway. Here: the Vagrant Pi VIP and the kubeadm node. Replaces an earlier version of this block, so a re-run converges.
       ansible.builtin.shell: |
         set -euo pipefail
         cf=$({{ kubectl }} -n kube-system get cm coredns -o jsonpath='{.data.Corefile}')
@@ -49,7 +50,7 @@
         cf = re.sub(r"\n    template IN (A|AAAA) pmon\.dev \{\n(?:       [^\n]*\n)*?    \}", "", cf)
         block = (
             "    template IN A pmon.dev {\n"
-            "       match ^({{ pi_hosts | join('|') }})\\.pmon\\.dev\\.$\n"
+            "       match ^({{ pi_served_names | join('|') }})\\.pmon\\.dev\\.$\n"
             "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_vip }}\"\n"
             "       fallthrough\n"
             "    }\n"
@@ -76,7 +77,6 @@
       args:
         executable: /bin/bash
       vars:
-        pi_hosts: [auth, git, vault]
         vagrant_gateway: "{{ ansible_host }}"
       register: _dns
       changed_when: "'changed' in _dns.stdout"

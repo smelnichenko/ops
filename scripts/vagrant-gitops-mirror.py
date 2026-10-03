@@ -17,6 +17,10 @@ commit on top, and force-pushes it to the Vagrant Forgejo (pi1 VM) under the `sc
     - after every `$values/<dir>/<name>.yaml` value file, `$values/<dir>/<name>.vagrant.yaml` with
       ignoreMissingValueFiles: true; those files come from tests/ansible/upgrade/vagrant-overlay/infra/.
   platform overlay
+    - left out: the *.pmon.dev wildcard's Certificate (schnappy-mesh). The Vagrant copy serves production's own
+      certificate (tests/ansible/upgrade/production-state.yml, operator 2026-10-03), and a Certificate for that Secret
+      makes cert-manager replace it at once ("Secret contains a private key that does not match the current
+      CertificateRequest", 2026-10-03);
     - files from tests/ansible/upgrade/vagrant-overlay/platform/, if any.
 
 Upgrade steps are later commits on top of the overlay, changing the same files production's would.
@@ -52,6 +56,11 @@ INFRA_DROP = [
     "clusters/production/schnappy-test-apps",
     "clusters/production/schnappy-test-data",
     "clusters/production/schnappy-test-mesh",
+]
+
+# platform paths the Vagrant copy leaves out (see the docstring)
+PLATFORM_DROP = [
+    "helm/schnappy-mesh/templates/certificates.yaml",
 ]
 
 # Production LAN -> Vagrant network. Every production address in BOTH repos (Vault, the Pi backup store, the gateway,
@@ -137,14 +146,7 @@ def add_vagrant_value_files(text):
 
 
 def overlay_infra(repo, forgejo):
-    for rel in INFRA_DROP:
-        p = os.path.join(repo, rel)
-        if os.path.isdir(p):
-            shutil.rmtree(p)
-        elif os.path.exists(p):
-            os.remove(p)
-        else:
-            sys.exit(f"infra overlay: {rel} does not exist in infra main - the drop list is stale")
+    drop(repo, "infra", INFRA_DROP)
     for rel, wave in INFRA_SYNC_WAVES.items():
         p = os.path.join(repo, rel)
         text = open(p).read()
@@ -172,6 +174,18 @@ def overlay_infra(repo, forgejo):
                 changed += 1
     if changed == 0:
         sys.exit("infra overlay: no Argo app was rewritten - the repo layout changed")
+
+
+def drop(repo, name, rels):
+    """Remove the paths the Vagrant copy leaves out; abort if one no longer exists (a stale list drops nothing)."""
+    for rel in rels:
+        p = os.path.join(repo, rel)
+        if os.path.isdir(p):
+            shutil.rmtree(p)
+        elif os.path.exists(p):
+            os.remove(p)
+        else:
+            sys.exit(f"{name} overlay: {rel} does not exist in {name} main - the drop list is stale")
 
 
 def isolate_from_production(repo):
@@ -230,6 +244,8 @@ def main():
                                   capture_output=True, text=True, check=True).stdout.strip()
             if name == "infra":
                 overlay_infra(repo, a.forgejo)
+            else:
+                drop(repo, "platform", PLATFORM_DROP)
             copy_overlay(name, repo)
             isolate_from_production(repo)
             run("git", "-C", repo, "add", "-A")

@@ -1,6 +1,8 @@
 # Vagrant copy only (replaces production's file): the Vagrant cluster cannot and must not use Let's Encrypt - DNS-01
 # needs production's Porkbun keys, and an ACME account would be registered with the operator's address. The issuer
-# keeps production's NAME, so every Certificate that references it is unchanged; it issues self-signed instead.
+# keeps production's NAME, so a Certificate that references it is unchanged. Its only one in production, the
+# *.pmon.dev wildcard, is not in the Vagrant copy: the copy serves production's own certificate (production-state.yml;
+# the mirror leaves the Certificate out).
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer

@@ -26,6 +26,10 @@ all:
     local_path_default_class_override: true
     # Argo CD's egress to Forgejo (setup-argocd.yml): the Pi VMs and their VIP
     forgejo_cidrs: ["192.168.56.20/32", "192.168.56.21/32", "192.168.56.50/32"]
+    # The pmon.dev names production resolves to the Pi VIP (from ten and the Pis, 2026-10-02; every other one is ten's
+    # gateway). The Vagrant copy answers them with its own VIP: the Pis in /etc/hosts (tests/ansible/isolate-pis.yml),
+    # the cluster in CoreDNS (tests/ansible/upgrade/isolate-cluster.yml).
+    pi_served_names: [auth, git, vault, nexus, nexus-docker]
 
     # ── Test-only credential fixtures ──────────────────────────────────────
     # Production inventory maps each of these to a lookup('env', ...). All

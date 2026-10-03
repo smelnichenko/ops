@@ -1,0 +1,76 @@
+---
+# Isolate the Vagrant Pi VMs from production - the first step of every Vagrant flow, before anything is installed on
+# them (Taskfile _vagrant:pi-stack).
+#
+# Why: libvirt's DNS forwards to the host's LAN resolver, so the Pi VMs resolved git/auth/vault.pmon.dev to
+# production's Pi VIP, and their traffic to the production LAN was routed (found 2026-10-02, when Caddy came to the
+# upgrade-test copy; nothing had used those names yet: no webhooks, no connections, no log lines). Now:
+#   1. DNS     - the names the Pis serve (pi_served_names, inventory) resolve to the Vagrant VIP (/etc/hosts);
+#                every other pmon.dev name still resolves to production, and 2. drops it;
+#   2. network - nftables drops all traffic to the production LAN (an own table, re-applied at boot);
+#   3. proof   - each Pi must resolve its names to the Vagrant VIP and FAIL to reach production's VIP, or the run
+#                aborts.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
+- name: Isolate the Vagrant Pis from production
+  hosts: pi1:pi2
+  become: true
+  gather_facts: false
+  vars:
+    production_lan: 192.168.11.0/24
+    production_vip: 192.168.11.5
+  tasks:
+    - name: The names the Pis serve resolve to the Vagrant VIP (any other pmon.dev name goes to production and is dropped)
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} vagrant: pmon.dev names served by the Vagrant Pis"
+        block: "{{ keepalived_vip }} {{ pi_served_names | map('regex_replace', '$', '.pmon.dev') | join(' ') }}"
+
+    - name: Pi guard - drop all traffic to the production LAN (nftables, re-applied at boot)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/vagrant-isolate-production.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Vagrant test: no traffic to the production LAN
+          After=network-pre.target
+          [Service]
+          Type=oneshot
+          RemainAfterExit=true
+          ExecStart=/usr/sbin/nft -f /etc/vagrant-isolate-production.nft
+          [Install]
+          WantedBy=multi-user.target
+    - name: Pi guard rules (an own table; UFW's tables are not touched)
+      ansible.builtin.copy:
+        dest: /etc/vagrant-isolate-production.nft
+        mode: '0644'
+        content: |
+          table inet vagrant_isolation
+          delete table inet vagrant_isolation
+          table inet vagrant_isolation {
+            chain output { type filter hook output priority 0; ip daddr {{ production_lan }} drop; }
+          }
+    - name: Apply the Pi guard now and at boot
+      ansible.builtin.systemd_service:
+        name: vagrant-isolate-production
+        enabled: true
+        state: restarted
+        daemon_reload: true
+      changed_when: false
+
+    - name: Prove it - the Pi resolves its names to the Vagrant VIP and cannot reach production's VIP
+      ansible.builtin.shell: |
+        set -uo pipefail
+        for n in {{ pi_served_names | map('regex_replace', '$', '.pmon.dev') | join(' ') }}; do
+          echo "$n $(getent hosts "$n" | awk '{print $1}')"
+        done
+        curl -sk -o /dev/null -m 5 https://{{ production_vip }}:8200/v1/sys/health && echo PRODUCTION-REACHABLE \
+          || echo production-blocked
+      args:
+        executable: /bin/bash
+      register: _pi_probe
+      changed_when: false
+      failed_when: >-
+        _pi_probe.rc != 0 or 'production-blocked' not in _pi_probe.stdout
+        or (_pi_probe.stdout_lines | select('match', '^[^ ]+\\.pmon\\.dev ')
+            | reject('match', '^[^ ]+ ' ~ (keepalived_vip | regex_escape) ~ '$') | list | length) > 0

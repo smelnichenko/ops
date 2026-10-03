@@ -1,5 +1,6 @@
 ---
-# Wait until the Vagrant copy is usable after its VMs (re)start: Vault ACTIVE on the Pi VIP and the kubeadm node Ready.
+# Wait until the Vagrant copy is usable after its VMs (re)start: the Pis isolated from production, Vault ACTIVE on the
+# Pi VIP and the kubeadm node Ready.
 # After a cold start of both Pis, Vault is unsealed but takes ~45 s to elect an active node (Consul lock); in between
 # every request bounces between standbys (health 474, "Exceeded 30 redirects") and the Vault seeding refuses to run
 # (2026-10-02, after the first base-ready snapshot).
@@ -12,6 +13,10 @@
     - name: Wait for SSH
       ansible.builtin.wait_for_connection:
         timeout: 300
+
+# isolated from production before anything else runs (a snapshot taken before the Pi fence existed lacks it)
+- name: The Pi VMs are isolated from production
+  ansible.builtin.import_playbook: ../isolate-pis.yml
 
 - name: The Vagrant VMs are ready
   hosts: target

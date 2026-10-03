@@ -10,9 +10,8 @@ chessService:
   resources:
     requests: { memory: 768Mi }      # ten: 1536Mi
 
-# The chart's PostSync k6 smoke hook checks https://pmon.dev with full TLS verification; the Vagrant gateway's
-# certificate is self-signed (no Let's Encrypt here), so the hook can never pass and holds the app's sync forever.
-# The upgrade test runs the same k6 job itself, rendered from this chart with production's values, trusting the
-# Vagrant certificate.
-smokeTest:
+# The nightly Hyperfoil load test's image is a floating git.pmon.dev/schnappy/hyperfoil:latest, which the kubelet
+# pulls on every run (pull policy Always) from production's registry - unreachable here by design. Its 03:00 pod sat
+# in ImagePullBackOff holding 550m CPU (2026-10-03). Plan 100 defect 15.
+hyperfoil:
   enabled: false

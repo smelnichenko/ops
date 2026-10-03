@@ -15,6 +15,10 @@
 #     the four were created by hand on 2026-04-10 14:58:43 (no Argo, Helm or kubectl-apply trace). Without them
 #     Alertmanager, Grafana and Mimir never get a pod.
 #
+#   pmon-dev-wildcard-tls (schnappy-infra) - production's own *.pmon.dev certificate (operator 2026-10-03, see the
+#     task). Production's is a public Let's Encrypt certificate that every in-cluster client of https://auth.pmon.dev
+#     verifies against public CAs; the Vagrant copy cannot get one of its own.
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml
 - name: Production state that is in no git repo
   hosts: target
@@ -22,6 +26,7 @@
   gather_facts: false
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
+    production_ssh: sm@192.168.11.2   # ten
   tasks:
     - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies their labels)
       kubernetes.core.k8s:
@@ -73,3 +78,50 @@
             name: "schnappy-{{ item }}"
             namespace: schnappy-infra
       loop: [alertmanager, grafana, mimir, reports]
+
+    - name: Read production's *.pmon.dev wildcard Secret on ten (read-only; held in memory, never written here)
+      ansible.builtin.command:
+        argv: [ssh, "{{ production_ssh }}", sudo, kubectl, -n, schnappy-infra, get, secret, pmon-dev-wildcard-tls, -o, json]
+      delegate_to: localhost
+      become: false
+      register: _prod_wildcard
+      changed_when: false
+      no_log: true
+
+    - name: Production's wildcard as the Vagrant cluster's (operator 2026-10-03)
+      # Every in-cluster client of https://auth.pmon.dev - the apps' JWKS fetch, admin's Keycloak Admin API, Centrifugo,
+      # the gateway's route to Keycloak, istiod - verifies it against public CAs; a Vagrant-issued certificate fails all
+      # of them (2026-10-02: the smoke's token was refused everywhere). The Vagrant copy has no Certificate for this
+      # Secret (the mirror leaves the mesh chart's out): with one, cert-manager replaced the copy at once ("Secret
+      # contains a private key that does not match the current CertificateRequest", 2026-10-03). Production renews its
+      # certificate 30 days before expiry; a re-run copies the new one. Caddy on the Vagrant Pis serves the same Secret
+      # (setup-caddy.yml).
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        force: true
+        definition:
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/tls
+          metadata:
+            name: pmon-dev-wildcard-tls
+            namespace: schnappy-infra
+            annotations: "{{ w.metadata.annotations }}"
+            labels: "{{ w.metadata.labels | default({}) }}"
+          data: "{{ w.data }}"
+      vars:
+        w: "{{ _prod_wildcard.stdout | from_json }}"
+      no_log: true
+
+    - name: The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra get secret pmon-dev-wildcard-tls -o jsonpath='{.data.tls\.crt}' \
+          | base64 -d | openssl x509 -noout -issuer -ext subjectAltName -checkend 86400
+      args:
+        executable: /bin/bash
+      register: _wildcard_check
+      changed_when: false
+      failed_when: >-
+        _wildcard_check.rc != 0 or "Let's Encrypt" not in _wildcard_check.stdout
+        or 'DNS:*.pmon.dev' not in _wildcard_check.stdout
