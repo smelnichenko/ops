@@ -120,6 +120,14 @@ operator approves.
     root OutOfSync, the root re-applied itself mid-sync and could lose its .operation, sitting 'Running' with
     nothing syncing (Vagrant, the Argo CD 3.3.14 step; ten's 10-01 run recovered by luck). Fixed: the root is created
     only when absent, exactly as git has it - the Argo CD steps (12, 29, 30) rely on this.
+20. Velero backs up none of production's data volumes. Every PV is a local-path hostPath volume, which Velero's
+    file-system backup does not support: ten's velero-schnappy-daily (2026-10-03, 20 min) holds 79 volume backups,
+    all emptyDirs (sidecar sockets and certs, tmp, scratch), and no pgdata or data volume; velero-full-weekly backs up
+    every namespace the same way (its last run, 2026-09-27, ended PartiallyFailed). What does protect data: CNPG's
+    barman backups of Postgres (hourly, completed), etcd hourly. Kafka and ScyllaDB have none (no Scylla Manager backup
+    task). Not upgrade-related, not fixed by it; found by the backup check's slowdown, 2026-10-03. Fix options for the
+    operator: local-path's `local` volume type (Velero supports it) for new volumes, Scylla Manager backups,
+    Kafka mirror or tiered storage.
 
 ## The Vagrant upgrade test
 
