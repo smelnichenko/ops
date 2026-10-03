@@ -33,6 +33,7 @@
       kubernetes.core.helm_repository:
         name: istio
         repo_url: https://blob.istio.io/istio-release/charts  # GCP-hosted repo retired (Istio 1.31); same charts
+        force_update: true  # a host that registered the old URL under this name gets the new one
 
     - name: Check if Istio is already installed
       kubernetes.core.k8s_info:
