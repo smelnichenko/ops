@@ -168,6 +168,9 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   preflight CoreDNSUnsupportedPlugins refuses a Corefile plugin its migration does not know. Ten's Corefile has none,
   so only the Vagrant inventory passes over that one check (`k8s_upgrade_ignore_preflight_errors_override`); kubeadm
   migrates the rest and leaves the blocks as they are.
+- **A step that goes to production early leaves the stack**: it is cherry-picked onto main, the repo's step branches
+  are rebased on that main (`git rebase --update-refs main <last step branch>`; git drops the now-duplicate commit),
+  and its own branch is deleted. Step 19, 2026-10-03: every later branch's tree unchanged, 02-16 gained only it.
 - **The inventory lists what runs or is set to run**: pods not finished, CronJob templates, Jobs no CronJob owns. It
   listed finished pods too, so a CronJob's kept runs showed the image it had just left for hours (step 16: the etcd
   backup on etcd 3.6.5-0 beside the new 3.6.6-0). Production's baseline is the same under both (re-taken read-only
