@@ -11,17 +11,19 @@
 #
 # Leaves nothing behind.
 #
-# Usage: scripts/vagrant-smoke.sh [infra checkout] [platform checkout]   (each at its checked-out HEAD)
+# Usage: scripts/vagrant-smoke.sh [infra ref, default main] [platform ref, default main]
+#        (the refs the mirror pushed; read from the ../infra and ../platform checkouts' git, never their working trees)
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-infra=${1:-$ops/../infra}
-platform=${2:-$ops/../platform}
+infra_ref=${1:-main}
+platform_ref=${2:-main}
 mkdir -p "$ops/.upgrade"
 work=$(mktemp -d "$ops/.upgrade/smoke.XXXX")
 trap 'rm -rf "$work"' EXIT
 
-helm template schnappy-production "$platform/helm/schnappy" -n schnappy-production \
-  -f "$infra/clusters/production/schnappy-production-apps/values.yaml" \
+git -C "$ops/../platform" archive "$platform_ref" helm/schnappy | tar -x -C "$work"
+git -C "$ops/../infra" show "$infra_ref:clusters/production/schnappy-production-apps/values.yaml" > "$work/values.yaml"
+helm template schnappy-production "$work/helm/schnappy" -n schnappy-production -f "$work/values.yaml" \
   --set smokeTest.enabled=true > "$work/rendered.yaml"
 
 cat > "$work/pick.py" <<'EOF'

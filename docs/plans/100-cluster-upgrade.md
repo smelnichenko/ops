@@ -105,6 +105,8 @@ operator approves.
 15. The Hyperfoil load test runs `git.pmon.dev/schnappy/hyperfoil:latest`: a floating tag, pulled on every run (pull
     policy Always), so what runs at 03:00 is whatever was pushed last and no rebuild or copy can pin it. Off in the
     Vagrant copy (it cannot reach production's registry). Fix: commit tags, like every application image.
+16. CNPG backs up with the in-tree Barman Cloud support (`barmanObjectStore`), deprecated in 1.30 and removed in 1.31:
+    the move to the Barman Cloud Plugin must come before any CNPG 1.31 (this plan stops at 1.30.1).
 
 ## The Vagrant upgrade test
 
@@ -134,6 +136,13 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
 - **Keycloak** gets production's realm from git (defect 14), before Argo: istiod fetches the realm's keys at start.
 - **The k6 smoke** runs as in production (the chart's PostSync hook) and on demand after each step
   (`scripts/vagrant-smoke.sh`).
+- **Each step** (`task test:upgrade:step STEP=NN-name`): a step is `tests/ansible/upgrade/steps/NN-name.txt` (its
+  inventory changes) plus a branch `upgrade/NN-name` in infra and/or platform, stacked on the previous step's branch
+  in that repo - merged to main in this order at the rollout. The runner mirrors each repo's latest step branch,
+  waits until every Argo app is synced to exactly those commits with all pods ready, checks the seeded Postgres rows
+  on every instance (`data-check.yml`), runs the smoke, and diffs the inventory against production's plus every
+  step's changes so far (`scripts/upgrade-expected-inventory.py`).
+- **Steps proven** (2026-10-03): 01 apt-cacher-ng from CI (7b46aea), 02 cert-manager v1.20.4.
 
 New playbooks (ops): `upgrade-kubeadm.yml` (one minor per run, `kubeadm upgrade apply`, kubelet/kubectl, drain-free
 single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variables of the existing playbooks.

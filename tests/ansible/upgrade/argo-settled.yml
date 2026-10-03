@@ -6,7 +6,13 @@
 # is not green, its sync/health/operation state and the resources that are out of sync or unhealthy, plus the pods
 # that are not ready, then fails.
 #
+# With -e expect_mirror=true (after a mirror push) every app source from the mirrored repos must also be synced to the
+# commit the mirror pushed (.upgrade/mirror-revisions.json): until Argo has fetched it, an app still shows the old
+# commit as Synced + Healthy and the wait would pass before the step was even applied. Off after a snapshot restore,
+# whose Forgejo holds older commits than that file.
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml [-e settle_minutes=40]
+#        [-e expect_mirror=true]
 - name: Argo CD settled (all apps Synced + Healthy, all pods ready)
   hosts: target
   become: true
@@ -15,6 +21,10 @@
     kubeconfig: /etc/kubernetes/admin.conf
     settle_minutes: 40
     poll_seconds: 30
+    expect_mirror: false
+    mirror_revisions: >-
+      {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../.upgrade/mirror-revisions.json') | from_json
+         if expect_mirror | bool else {} }}
 
   tasks:
     - name: Wait until every app is green and every pod is ready
@@ -22,19 +32,28 @@
         set -o pipefail
         K="kubectl --kubeconfig {{ kubeconfig }}"
         apps=$($K -n argocd get applications -o json | python3 -c '
-        import json, sys
+        import json, os, sys
         items = json.load(sys.stdin)["items"]
+        want = json.loads(os.environ["MIRROR_REVISIONS"])
+        def stale(a):
+            spec, sync = a.get("spec", {}), a.get("status", {}).get("sync", {})
+            sources = spec.get("sources") or [spec.get("source", {})]
+            revisions = sync.get("revisions") or [sync.get("revision")]
+            return any(s.get("repoURL") in want and r != want[s["repoURL"]] for s, r in zip(sources, revisions))
         bad = [a["metadata"]["name"] for a in items
                if a.get("status", {}).get("sync", {}).get("status") != "Synced"
                or a.get("status", {}).get("health", {}).get("status") != "Healthy"
-               or a.get("status", {}).get("operationState", {}).get("phase") == "Running"]
-        print(len(items), len(bad))')
-        total=${apps% *}; not_green=${apps#* }
+               or a.get("status", {}).get("operationState", {}).get("phase") == "Running"
+               or stale(a)]
+        print(len(items), len(bad), ",".join(sorted(bad)) or "-")')
+        read -r total not_green names <<< "$apps"
         not_ready=$($K get pods -A --no-headers | awk '{split($3,a,"/"); if ($4!="Completed" && (a[1]!=a[2] || $4!="Running")) n++} END {print n+0}')
-        echo "apps=$total not_green=$not_green pods_not_ready=$not_ready"
+        echo "apps=$total not_green=$not_green pods_not_ready=$not_ready not_green_apps=$names"
         [ "$total" -gt 0 ] && [ "$not_green" = 0 ] && [ "$not_ready" = 0 ]
       args:
         executable: /bin/bash
+      environment:
+        MIRROR_REVISIONS: "{{ mirror_revisions | to_json }}"
       register: _green
       retries: "{{ (settle_minutes | int * 60 / poll_seconds | int) | int }}"
       delay: "{{ poll_seconds }}"

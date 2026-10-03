@@ -1,0 +1,79 @@
+---
+# Data that must survive every upgrade step, in the Vagrant copy of production.
+#
+#   -e mode=seed    once, on a green copy: a table of 10 000 rows with a known content (schema upgrade_check of the CNPG
+#                   cluster's database - Liquibase owns only its own schema), nothing else touched;
+#   -e mode=verify  after each step: every Postgres instance, replicas included, holds exactly those rows (count and an
+#                   md5 over all of them, compared with the value computed here, not read back from the seed), and the
+#                   primary takes a write. A missing table fails: it is never re-created by a verify.
+#
+# Why: a CNPG operator upgrade restarts every instance in place (and the PostgreSQL 18 step rewrites the data
+# directory); the smoke test only proves the apps answer, not that the rows are still there.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed|verify
+- name: Postgres data that must survive the upgrade
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    pg_namespace: schnappy-production
+    cluster: schnappy-production-postgres
+    rows: 10000
+    # md5 of the rows' payloads (md5 of each id), comma-joined in id order - what Postgres must compute
+    expected_md5: "{{ range(1, rows + 1) | map('string') | map('hash', 'md5') | join(',') | hash('md5') }}"
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
+  tasks:
+    - name: The mode is seed or verify
+      ansible.builtin.assert:
+        that: mode | default('') in ['seed', 'verify']
+        fail_msg: "-e mode=seed or -e mode=verify"
+
+    - name: The cluster's primary, its instances and its database
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }} \
+          -o jsonpath='{.status.currentPrimary} {.spec.bootstrap.initdb.database}{"\n"}'
+        {{ kubectl }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o name
+      args:
+        executable: /bin/bash
+      register: _pg
+      changed_when: false
+
+    - name: Facts
+      ansible.builtin.set_fact:
+        primary: "{{ _pg.stdout_lines[0].split()[0] }}"
+        database: "{{ _pg.stdout_lines[0].split()[1] }}"
+        instances: "{{ _pg.stdout_lines[1:] | map('regex_replace', '^pod/', '') | list }}"
+
+    - name: Seed - the table and its rows on the primary (only rows that are missing)
+      ansible.builtin.shell: |
+        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }} -c "
+          create schema if not exists upgrade_check;
+          create table if not exists upgrade_check.canary (id int primary key, payload text not null);
+          insert into upgrade_check.canary select g, md5(g::text) from generate_series(1, {{ rows }}) g
+            on conflict do nothing;"
+      when: mode == 'seed'
+      changed_when: true
+
+    - name: Every instance holds exactly the seeded rows
+      ansible.builtin.shell: |
+        {{ kubectl }} exec {{ item }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }} -c "
+          select count(*) || ' ' || md5(string_agg(payload, ',' order by id)) from upgrade_check.canary"
+      loop: "{{ instances }}"
+      register: _rows
+      changed_when: false
+      retries: 10        # a replica just restarted by the step may still be catching up
+      delay: 6
+      until: _rows.stdout | trim == rows ~ ' ' ~ expected_md5
+      failed_when: _rows.stdout | trim != rows ~ ' ' ~ expected_md5
+
+    - name: The primary takes a write (rolled back)
+      ansible.builtin.shell: |
+        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }} -c "
+          begin; insert into upgrade_check.canary values (-1, 'write check'); rollback;"
+      changed_when: false
+
+    - name: Data intact
+      ansible.builtin.debug:
+        msg: "DATA OK: {{ instances | length }} instances x {{ rows }} rows, md5 {{ expected_md5 }}, primary {{ primary }} writable"

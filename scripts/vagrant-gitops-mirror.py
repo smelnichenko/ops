@@ -2,8 +2,9 @@
 """vagrant-gitops-mirror.py — build the Vagrant copy of production's GitOps repos and push it to the Vagrant Forgejo.
 
 The Vagrant upgrade test runs Argo CD against copies of infra and platform, so every upgrade step is the same git
-change production gets. This script takes each repo's committed `main` (never the working tree), adds ONE overlay
-commit on top, and force-pushes it to the Vagrant Forgejo (pi1 VM) under the `schnappy` org:
+change production gets. This script takes a committed ref of each repo (`main`, or an upgrade step's branch; never
+the working tree), adds ONE overlay commit on top, and force-pushes it as `main` (the branch every Argo app tracks)
+to the Vagrant Forgejo (pi1 VM) under the `schnappy` org:
 
   both repos
     - every production LAN address (192.168.11.x) rewritten to its Vagrant counterpart, and the push refused if any
@@ -23,9 +24,11 @@ commit on top, and force-pushes it to the Vagrant Forgejo (pi1 VM) under the `sc
       CertificateRequest", 2026-10-03);
     - files from tests/ansible/upgrade/vagrant-overlay/platform/, if any.
 
-Upgrade steps are later commits on top of the overlay, changing the same files production's would.
+An upgrade step is a branch of infra and/or platform changing the same files production's change would; mirrored
+with --infra-ref/--platform-ref, Argo in Vagrant syncs it exactly as Argo on ten would sync it once merged.
 
 Usage: scripts/vagrant-gitops-mirror.py [--infra ../infra] [--platform ../platform] [--forgejo 192.168.56.20:3000]
+                                        [--infra-ref main] [--platform-ref main]
 Env:   VAGRANT_FORGEJO_ADMIN_USER / VAGRANT_FORGEJO_ADMIN_PASSWORD (default: the Vagrant inventory's). Deliberately
        not FORGEJO_ADMIN_*: the Taskfile loads ops/.env, whose FORGEJO_ADMIN_* are PRODUCTION's credentials.
 """
@@ -227,19 +230,22 @@ def main():
     ap.add_argument("--infra", default=os.path.join(OPS, "..", "infra"))
     ap.add_argument("--platform", default=os.path.join(OPS, "..", "platform"))
     ap.add_argument("--forgejo", default="192.168.56.20:3000")
+    ap.add_argument("--infra-ref", default="main", help="infra branch to mirror (an upgrade step's)")
+    ap.add_argument("--platform-ref", default="main", help="platform branch to mirror (an upgrade step's)")
     a = ap.parse_args()
     user = os.environ.get("VAGRANT_FORGEJO_ADMIN_USER", "forgejo_admin")
     password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", "vagrant-forgejo-pw")
 
     api(a.forgejo, user, password, "POST", "/orgs", {"username": "schnappy", "visibility": "public"}, ok=(201, 422))
-    work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=os.path.join(OPS, ".upgrade") if os.path.isdir(
-        os.path.join(OPS, ".upgrade")) else None)
+    os.makedirs(os.path.join(OPS, ".upgrade"), exist_ok=True)
+    work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=os.path.join(OPS, ".upgrade"))
+    pushed = {}
     try:
-        for name, src in (("infra", a.infra), ("platform", a.platform)):
+        for name, src, ref in (("infra", a.infra, a.infra_ref), ("platform", a.platform, a.platform_ref)):
             api(a.forgejo, user, password, "POST", "/orgs/schnappy/repos",
                 {"name": name, "default_branch": "main", "private": False}, ok=(201, 409))
             repo = os.path.join(work, name)
-            run("git", "clone", "-q", "--branch", "main", "--single-branch", os.path.abspath(src), repo)
+            run("git", "clone", "-q", "--branch", ref, "--single-branch", os.path.abspath(src), repo)
             head = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
                                   capture_output=True, text=True, check=True).stdout.strip()
             if name == "infra":
@@ -250,12 +256,17 @@ def main():
             isolate_from_production(repo)
             run("git", "-C", repo, "add", "-A")
             run("git", "-C", repo, "-c", "user.name=vagrant-mirror", "-c", "user.email=mirror@vagrant.test",
-                "commit", "-q", "--allow-empty", "-m", f"vagrant overlay on {name} main {head}")
+                "commit", "-q", "--allow-empty", "-m", f"vagrant overlay on {name} {ref} {head}")
             url = f"http://{user}:{password}@{a.forgejo}/schnappy/{name}.git"
             run("git", "-C", repo, "push", "-q", "--force", url, "HEAD:main")
-            print(f"{name}: main {head} + vagrant overlay pushed to http://{a.forgejo}/schnappy/{name}.git")
+            pushed[f"http://{a.forgejo}/schnappy/{name}.git"] = subprocess.run(
+                ["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            print(f"{name}: {ref} {head} + vagrant overlay pushed as main to http://{a.forgejo}/schnappy/{name}.git")
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    # the commits Argo must sync to before the copy counts as settled (tests/ansible/upgrade/argo-settled.yml)
+    with open(os.path.join(OPS, ".upgrade", "mirror-revisions.json"), "w") as f:
+        json.dump(pushed, f, indent=2)
 
 
 if __name__ == "__main__":
