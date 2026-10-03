@@ -1,0 +1,173 @@
+---
+# Upgrade the single-node kubeadm cluster by ONE step: a newer patch of the running minor, or the next minor
+# (kubeadm supports N -> N+1 only; run it once per minor). The kubeadm procedure for a control-plane node, without
+# the drain: ten is the only node, so a drain would evict everything to nowhere; the static control-plane pods restart
+# one at a time, workloads keep running.
+#
+#   1. checks: a version string, at most one minor up, the node Ready; a cluster already at the target or past it is
+#      left alone (so the step runner may replay every earlier step, and nothing can downgrade);
+#   2. the apt repository of the target minor (pkgs.k8s.io has one per minor);
+#   3. kubeadm to the target, `kubeadm upgrade plan`, then `kubeadm upgrade apply` - without the kube-proxy addon
+#      (Cilium replaces kube-proxy; ten has none, and the upgrade must not install one);
+#   4. kubelet and kubectl to the target, kubelet restarted;
+#   5. proof: node Ready on the new kubelet, every control-plane pod Ready on the new version.
+#
+# The packages stay held; setup-kubeadm.yml's k8s_version / k8s_package_version must follow (a rebuild installs what
+# they say) - at the production rollout, in the same change.
+#
+# Usage: ansible-playbook -i inventory/<env>.yml playbooks/upgrade-kubeadm.yml -e k8s_upgrade_to=1.34.12
+- name: Upgrade the kubeadm cluster by one version
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    target: "{{ k8s_upgrade_to | default('') }}"
+    target_minor: "{{ target.split('.')[:2] | join('.') }}"
+    control_plane: [kube-apiserver, kube-controller-manager, kube-scheduler]
+
+  tasks:
+    # ── 1. checks ────────────────────────────────────────────────────
+    - name: The target is a version (-e k8s_upgrade_to=X.Y.Z)
+      ansible.builtin.assert:
+        that: target is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+        fail_msg: "-e k8s_upgrade_to=X.Y.Z, e.g. 1.34.12"
+
+    - name: The version the cluster runs
+      ansible.builtin.command: "{{ kubectl }} get node -o jsonpath={.items[0].status.nodeInfo.kubeletVersion}"
+      register: _running
+      changed_when: false
+
+    - name: Nothing to do when the cluster already runs the target or a newer version (a re-run, or a later step's)
+      when: _running.stdout | regex_replace('^v', '') is version(target, '>=')
+      block:
+        - name: Already there
+          ansible.builtin.debug:
+            msg: "KUBERNETES ALREADY AT {{ _running.stdout }} (target v{{ target }}): nothing to do"
+        - name: End here
+          ansible.builtin.meta: end_host
+
+    - name: The target is at most one minor up (kubeadm upgrades N -> N+1 only)
+      vars:
+        running: "{{ _running.stdout | regex_replace('^v', '') }}"
+        running_minor: "{{ running.split('.')[1] | int }}"
+        to_minor: "{{ target.split('.')[1] | int }}"
+      ansible.builtin.assert:
+        that:
+          - target.split('.')[0] == running.split('.')[0]
+          - (to_minor | int) - (running_minor | int) in [0, 1]
+        fail_msg: "running {{ running }}: {{ target }} is more than one minor up"
+
+    - name: The node is Ready
+      ansible.builtin.command: "{{ kubectl }} wait node --all --for=condition=Ready --timeout=120s"
+      changed_when: false
+
+    # ── 2. the target minor's apt repository ─────────────────────────
+    - name: Kubernetes apt key for the target minor  # noqa: command-instead-of-module risky-shell-pipe
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key \
+          | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg --yes
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Kubernetes apt repository for the target minor
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/ /
+        mode: '0644'
+
+    - name: The target's package revision in that repository
+      ansible.builtin.shell: |
+        set -o pipefail
+        apt-get update -qq
+        apt-cache madison kubeadm | awk '{print $3}' | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
+      args:
+        executable: /bin/bash
+      register: _package
+      changed_when: false
+      failed_when: _package.stdout | length == 0
+
+    # ── 3. kubeadm, then the control plane ───────────────────────────
+    - name: Install the target kubeadm (held packages may change here only)
+      ansible.builtin.apt:
+        name: "kubeadm={{ _package.stdout }}"
+        allow_change_held_packages: true
+        allow_downgrade: false
+
+    - name: Kubeadm is the target version
+      ansible.builtin.command: kubeadm version -o short
+      register: _kubeadm
+      changed_when: false
+      failed_when: _kubeadm.stdout != 'v' ~ target
+
+    - name: Kubeadm upgrade plan (the cluster can go to the target)
+      ansible.builtin.command: "kubeadm upgrade plan v{{ target }}"
+      register: _plan
+      changed_when: false
+
+    - name: Kubeadm upgrade apply - without the kube-proxy addon (Cilium replaces it)
+      ansible.builtin.command: >-
+        kubeadm upgrade apply v{{ target }} --yes --skip-phases=addon/kube-proxy
+      register: _apply
+      changed_when: true
+      timeout: 1800
+
+    # ── 4. kubelet and kubectl ───────────────────────────────────────
+    - name: Install the target kubelet and kubectl
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ _package.stdout }}"
+          - "kubectl={{ _package.stdout }}"
+        allow_change_held_packages: true
+        allow_downgrade: false
+
+    - name: Keep the packages held
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop: [kubeadm, kubelet, kubectl]
+
+    - name: Restart the kubelet on the new version
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
+
+    # ── 5. proof ─────────────────────────────────────────────────────
+    - name: The node is Ready on the new kubelet
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} wait node --all --for=condition=Ready --timeout=60s > /dev/null
+        {{ kubectl }} get node -o jsonpath='{.items[0].status.nodeInfo.kubeletVersion}'
+      args:
+        executable: /bin/bash
+      register: _node
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _node.rc == 0 and _node.stdout == 'v' ~ target
+
+    - name: Every control-plane pod is Ready on the new version
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for c in {{ control_plane | join(' ') }}; do
+          {{ kubectl }} -n kube-system wait pod -l component=$c --for=condition=Ready --timeout=60s > /dev/null
+          echo "$c $({{ kubectl }} -n kube-system get pod -l component=$c -o jsonpath='{.items[0].spec.containers[0].image}')"
+        done
+      args:
+        executable: /bin/bash
+      register: _cp
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: >-
+        _cp.rc == 0
+        and (_cp.stdout_lines | reject('match', '^\S+ \S+:v' ~ (target | regex_escape) ~ '$') | list | length) == 0
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: "KUBERNETES UPGRADED: {{ _running.stdout }} -> v{{ target }} ({{ _cp.stdout_lines | join(', ') }})"
