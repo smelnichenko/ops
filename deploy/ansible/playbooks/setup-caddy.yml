@@ -19,6 +19,10 @@
 #   nexus.pmon.dev   → localhost:8081  (Nexus)
 #   s3.pmon.dev      → localhost:9000  (MinIO)
 #
+# Cluster reads and writes (the wildcard Secret, the cert-reader RBAC) run on the inventory's `target` host with its
+# admin kubeconfig, never with the controller's kubectl: the controller's kubeconfig points at production, so a run
+# against another inventory (the Vagrant copy) would otherwise read and write production's cluster.
+#
 # Prerequisites:
 #   - PORKBUN_API_KEY and PORKBUN_SECRET_KEY in .env
 #
@@ -97,10 +101,12 @@
 
     # argv form (not cmd:) so ansible does NOT shlex-split and eat the jsonpath
     # backslash — kubectl needs {.data.tls\.crt} (escaped dot, literal key name).
-    - name: Read the *.pmon.dev wildcard cert from the cluster (controller)
+    - name: Read the *.pmon.dev wildcard cert from the cluster (cluster host)
       ansible.builtin.command:
         argv:
           - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
           - get
           - secret
           - pmon-dev-wildcard-tls
@@ -108,17 +114,18 @@
           - schnappy-infra
           - -o
           - 'jsonpath={.data.tls\.crt}'
-      delegate_to: localhost
+      delegate_to: target
       run_once: true
-      become: false
       register: _wildcard_crt
       changed_when: false
       failed_when: _wildcard_crt.stdout | length == 0
 
-    - name: Read the *.pmon.dev wildcard key from the cluster (controller)
+    - name: Read the *.pmon.dev wildcard key from the cluster (cluster host)
       ansible.builtin.command:
         argv:
           - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
           - get
           - secret
           - pmon-dev-wildcard-tls
@@ -126,9 +133,8 @@
           - schnappy-infra
           - -o
           - 'jsonpath={.data.tls\.key}'
-      delegate_to: localhost
+      delegate_to: target
       run_once: true
-      become: false
       register: _wildcard_key
       changed_when: false
       no_log: true
@@ -227,10 +233,10 @@
     # cert-manager renews the wildcard in-cluster; without this the on-Pi copy
     # goes stale and HTTPS breaks (it did once). A least-privilege SA that can
     # GET only this one Secret backs a daily per-Pi systemd timer. Applied with
-    # kubectl (like the cert reads above) to avoid a python-kubernetes venv dep.
+    # kubectl on the cluster host (like the cert reads above).
     # The SA token is legacy/non-expiring: an off-cluster Pi can't refresh a
     # bound token, and the SA can GET only the one public cert Secret.
-    - name: Render the cert-sync RBAC manifest (controller)
+    - name: Render the cert-sync RBAC manifest (cluster host)
       ansible.builtin.copy:
         dest: /tmp/caddy-cert-reader-rbac.yml
         mode: '0600'
@@ -274,24 +280,24 @@
             annotations:
               kubernetes.io/service-account.name: caddy-cert-reader
           type: kubernetes.io/service-account-token
-      delegate_to: localhost
+      delegate_to: target
       run_once: true
-      become: false
 
-    - name: Apply the cert-sync RBAC (controller)
+    - name: Apply the cert-sync RBAC (cluster host)
       ansible.builtin.command:
-        argv: [kubectl, apply, -f, /tmp/caddy-cert-reader-rbac.yml]
-      delegate_to: localhost
+        argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, apply, -f, /tmp/caddy-cert-reader-rbac.yml]
+      delegate_to: target
       run_once: true
-      become: false
       register: _rbac
       changed_when: "'created' in _rbac.stdout or 'configured' in _rbac.stdout"
 
     # argv form preserves the jsonpath backslash (see the cert reads above).
-    - name: Wait for + read the cert-reader token (controller)
+    - name: Wait for + read the cert-reader token (cluster host)
       ansible.builtin.command:
         argv:
           - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
           - get
           - secret
           - caddy-cert-reader-token
@@ -299,9 +305,8 @@
           - schnappy-infra
           - -o
           - 'jsonpath={.data.token}'
-      delegate_to: localhost
+      delegate_to: target
       run_once: true
-      become: false
       register: _cert_reader_token
       changed_when: false
       until: _cert_reader_token.stdout | length > 0
@@ -309,10 +314,12 @@
       delay: 2
       no_log: true
 
-    - name: Read the cert-reader CA (controller)
+    - name: Read the cert-reader CA (cluster host)
       ansible.builtin.command:
         argv:
           - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
           - get
           - secret
           - caddy-cert-reader-token
@@ -320,24 +327,24 @@
           - schnappy-infra
           - -o
           - 'jsonpath={.data.ca\.crt}'
-      delegate_to: localhost
+      delegate_to: target
       run_once: true
-      become: false
       register: _cert_reader_ca
       changed_when: false
 
-    - name: Read the cluster API endpoint for the Pi client (controller)
+    - name: Read the cluster API endpoint for the Pi client (cluster host)
       ansible.builtin.command:
         argv:
           - kubectl
+          - --kubeconfig
+          - /etc/kubernetes/admin.conf
           - config
           - view
           - --minify
           - -o
           - 'jsonpath={.clusters[0].cluster.server}'
-      delegate_to: localhost
+      delegate_to: target
       run_once: true
-      become: false
       register: _cluster_api
       changed_when: false
 
