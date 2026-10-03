@@ -28,6 +28,11 @@
       delay: 15
       until: _bsl.stdout == 'Available'
 
+    - name: The backup storage location (where the kopia repository lives)
+      ansible.builtin.command: "{{ kubectl }} get backupstoragelocations.velero.io default -o json"
+      register: _bsl_json
+      changed_when: false
+
     - name: The schedule's backup template
       ansible.builtin.command: "{{ kubectl }} get schedules.velero.io {{ schedule }} -o json"
       register: _schedule
@@ -75,6 +80,67 @@
       failed_when: >-
         _pvb.stdout_lines | length == 0
         or (_pvb.stdout_lines | reject('match', '^\S+ Completed$') | list | length) > 0
+
+    # Vagrant only, as this whole file. Kopia closes an index epoch after 24 h at the earliest: production backs up
+    # once a day, so its index stays small, while this check backs up 79 volumes every step - by step 24 the
+    # repository held 4237 index blobs and each backup took ~25 s longer than the one before (2026-10-03). An hourly
+    # epoch (kopia's floor with its 20-minute refresh) lets Velero's hourly quick maintenance compact it. Set once,
+    # after the backup that created the repository, with the kopia release Velero 1.18 builds on.
+    - name: The test repository closes its index epochs hourly
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kubectl }}"
+          $K delete job kopia-epoch-hourly --ignore-not-found --wait=true > /dev/null
+          cat <<EOF | $K apply -f - > /dev/null
+          apiVersion: batch/v1
+          kind: Job
+          metadata: { name: kopia-epoch-hourly }
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: kopia
+                    image: kopia/kopia:0.16.0
+                    env:
+                      - { name: KOPIA_PASSWORD, valueFrom: { secretKeyRef: { name: velero-repo-credentials, key: repository-password } } }
+                      - { name: CLOUD, valueFrom: { secretKeyRef: { name: velero-credentials, key: cloud } } }
+                    command: [/bin/sh, -ec]
+                    args:
+                      - |
+                        export AWS_ACCESS_KEY_ID=\$(echo "\$CLOUD" | sed -n 's/^aws_access_key_id *= *//p')
+                        export AWS_SECRET_ACCESS_KEY=\$(echo "\$CLOUD" | sed -n 's/^aws_secret_access_key *= *//p')
+                        kopia repository connect s3 --bucket={{ _bsl_spec.objectStorage.bucket }} \
+                          --prefix={{ _bsl_spec.objectStorage.prefix | default('', true) | regex_replace('([^/])$', '\\1/') }}kopia/{{ namespace_backed_up }}/ \
+                          --endpoint={{ _bsl_spec.config.s3Url | regex_replace('^https?://', '') }} \
+                          {{ '--disable-tls' if _bsl_spec.config.s3Url.startswith('http://') else '' }} \
+                          --config-file=/tmp/kopia.config --cache-directory=/tmp/kopia-cache
+                        if kopia repository status --config-file=/tmp/kopia.config | grep -q 'minimum 1h0m0s'; then
+                          echo "EPOCH ALREADY HOURLY"
+                        else
+                          kopia repository set-parameters --epoch-min-duration=1h --config-file=/tmp/kopia.config
+                          echo "EPOCH SET HOURLY"
+                        fi
+                        kopia repository status --config-file=/tmp/kopia.config | grep -i -E '^Epoch|advance on'
+          EOF
+          $K wait job/kopia-epoch-hourly --for=condition=Complete --timeout=300s > /dev/null & ok=$!
+          $K wait job/kopia-epoch-hourly --for=condition=Failed --timeout=300s > /dev/null & failed=$!
+          wait -n $ok $failed || true
+          kill $ok $failed 2> /dev/null || true
+          $K logs job/kopia-epoch-hourly --tail=20
+          succeeded=$($K get job kopia-epoch-hourly -o jsonpath='{.status.succeeded}')
+          # gone again: the version inventory lists every Job's image
+          $K delete job kopia-epoch-hourly --wait=true > /dev/null
+          [ "$succeeded" = 1 ]
+      vars:
+        _bsl_spec: "{{ (_bsl_json.stdout | from_json).spec }}"
+        namespace_backed_up: "{{ (_schedule.stdout | from_json).spec.template.includedNamespaces[0] }}"
+      register: _epoch
+      changed_when: "'EPOCH SET HOURLY' in _epoch.stdout"
+      failed_when: _epoch.rc != 0 or 'minimum 1h0m0s' not in _epoch.stdout
 
     - name: Delete the test backup (and its data in the store)
       kubernetes.core.k8s:
