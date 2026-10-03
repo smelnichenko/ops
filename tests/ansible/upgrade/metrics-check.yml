@@ -1,7 +1,7 @@
 ---
 # Monitoring still works after an upgrade step: Prometheus reconciled by its operator and available, every scrape
-# target up (bar the ones that cannot be up in a VM, listed below with the reason), and Mimir holding samples
-# Prometheus remote-wrote less than two minutes ago.
+# target up (bar the ones that cannot be up in a VM, listed below with the reason), Mimir holding samples Prometheus
+# remote-wrote less than two minutes ago, and container logs reaching ClickHouse (Fluent Bit, ClickHouse steps).
 #
 # Why: an operator or Prometheus upgrade (plan 100 step 07), or a CNI/runtime one, can leave every pod ready while
 # targets go down or remote write stops - the alerts that would say so run on this very Prometheus.
@@ -72,6 +72,25 @@
       delay: 15
       until: _mimir.rc == 0
 
+    - name: Container logs reach ClickHouse (Fluent Bit -> logs.podlogs, rows of the last two minutes)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        K="kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
+        p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
+        $K exec "$p" -c clickhouse -- clickhouse-client -q \
+          "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120{{ logs_filter }}"
+      args:
+        executable: /bin/bash
+      vars:
+        logs_filter: ""
+      register: _logs
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _logs.rc == 0 and (_logs.stdout | int) > 0
+
     - name: Monitoring works
       ansible.builtin.debug:
-        msg: "METRICS OK: {{ _targets.stdout_lines[0] }} (allowed down: {{ allowed_down | length }}), Mimir {{ _mimir.stdout }}"
+        msg: >-
+          METRICS OK: {{ _targets.stdout_lines[0] }} (allowed down: {{ allowed_down | length }}), Mimir {{ _mimir.stdout }},
+          {{ _logs.stdout }} log rows in the last 2 min
