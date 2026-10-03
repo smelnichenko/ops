@@ -7,6 +7,11 @@
 #                   md5 over all of them, compared with the value computed here, not read back from the seed), and the
 #                   primary takes a write. A missing table fails: it is never re-created by a verify.
 #
+# Both first wait until CNPG has finished: the cluster healthy with every instance ready, each instance pod run by the
+# operator version now running (annotation cnpg.io/operatorVersion = the operator image's tag). After an operator
+# upgrade Argo is green at once while CNPG restarts the instances a minute later (Vagrant 2026-10-03, step 03: the
+# checks ran while it did). -e cnpg_operator_version=<v> overrides the version waited for (to prove the wait bites).
+#
 # Why: a CNPG operator upgrade restarts every instance in place (and the PostgreSQL 18 step rewrites the data
 # directory); the smoke test only proves the apps answer, not that the rows are still there.
 #
@@ -28,6 +33,40 @@
       ansible.builtin.assert:
         that: mode | default('') in ['seed', 'verify']
         fail_msg: "-e mode=seed or -e mode=verify"
+
+    - name: The operator version now running
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kubeconfig }} get deploy -A -l app.kubernetes.io/name=cloudnative-pg
+        -o jsonpath={.items[0].spec.template.spec.containers[0].image}
+      register: _operator
+      changed_when: false
+      when: cnpg_operator_version is not defined
+
+    - name: CNPG has finished - cluster healthy, every instance ready and run by that operator version
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }} -o json | python3 -c '
+        import json, sys
+        c = json.load(sys.stdin)
+        phase, ready, n = c["status"].get("phase"), c["status"].get("readyInstances"), c["spec"]["instances"]
+        print(f"HEALTHY {n}" if phase == "Cluster in healthy state" and ready == n else f"WAIT {phase} {ready}/{n}")'
+        {{ kubectl }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o json | python3 -c '
+        import json, sys
+        for p in json.load(sys.stdin)["items"]:
+            ready = all(c.get("ready") for c in p["status"].get("containerStatuses", []))
+            print(p["metadata"]["name"], p["metadata"].get("annotations", {}).get("cnpg.io/operatorVersion"), ready)'
+      args:
+        executable: /bin/bash
+      vars:
+        want: "{{ cnpg_operator_version | default(_operator.stdout.split(':')[-1]) }}"
+      register: _cnpg
+      changed_when: false
+      retries: 40
+      delay: 15
+      until: >-
+        _cnpg.rc == 0 and _cnpg.stdout_lines[0].startswith('HEALTHY ')
+        and (_cnpg.stdout_lines[1:] | length) == (_cnpg.stdout_lines[0].split()[1] | int)
+        and (_cnpg.stdout_lines[1:] | reject('match', '^\\S+ ' ~ (want | regex_escape) ~ ' True$') | list | length) == 0
 
     - name: The cluster's primary, its instances and its database
       ansible.builtin.shell: |
