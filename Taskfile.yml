@@ -441,6 +441,20 @@ tasks:
       - task: _upgrade:snapshot-base
       - task: test:upgrade:argo
 
+  # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
+  # step, not the chain; this proves the chain, unattended, from nothing.
+  test:upgrade:full:
+    desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails)
+    cmds:
+      - task: test:upgrade:build
+      - cmd: |
+          set -e
+          for step in $(ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V); do
+            echo "=== STEP $step $(date +%T)"
+            task test:upgrade:step STEP="$step"
+            echo "=== STEP $step GREEN $(date +%T)"
+          done
+
   # the baseline before Argo, so the Argo stage can be re-run on a cluster that has never seen Argo, in minutes
   _upgrade:snapshot-base:
     internal: true

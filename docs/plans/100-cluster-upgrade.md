@@ -181,6 +181,10 @@ single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variab
 Branches `upgrade/NN-*` in infra/platform (local until approved), stacked per repo; host-side steps as playbook lines.
 S = stateful (shown to the operator with the exact change before it runs in production). Status 2026-10-03.
 
+**Gate before the production rollout** (operator, 2026-10-03): every step green on its own, then one full run green -
+`task test:upgrade:full`: the Vagrant copy built from nothing, then steps 01-55 in order, unattended, every check
+after each. Fixes made while steps run one at a time prove the step, not the chain.
+
 | # | Step | Where | Vagrant |
 |---|---|---|---|
 | 01 | apt-cacher-ng from CI (defect 9) | platform | green |
