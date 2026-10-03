@@ -1,0 +1,112 @@
+---
+# Restart every workload whose pods run an Istio sidecar older than the control plane, so the data plane catches up
+# after an in-place istiod upgrade. Istio allows the control plane only ONE minor ahead of the sidecars, so each
+# in-place minor upgrade needs this before the next one.
+#
+# Each kind is restarted the way its owner restarts it:
+#   Deployment, StatefulSet, DaemonSet  `kubectl rollout restart` (the gateway too: istiod made it, but it is a
+#                                       Deployment and keeps the annotation);
+#   CNPG Cluster                        the kubectl.kubernetes.io/restartedAt annotation on the Cluster - what
+#                                       `kubectl cnpg restart` sets; CNPG rolls the instances, primary last;
+#   StrimziPodSet                       strimzi.io/manual-rolling-update=true - the operator rolls the pods;
+#   Job                                 left alone: it finishes on its own sidecar.
+# A pod with an old sidecar and any other owner fails the run (nothing here would restart it). Then it waits until
+# every running pod's istio-proxy runs the target version.
+#
+# Usage: ansible-playbook -i inventory/<env>.yml playbooks/restart-mesh-workloads.yml -e istio_version=1.26.8
+- name: Bring every sidecar to the control plane's version
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    target: "{{ istio_version | default('') }}"
+    # every pod (Pending or Running; not a finished Job's) with an istio-proxy older than the target, and its owner
+    stale_script: |
+      import json, os, sys
+      target = os.environ["TARGET"]
+      items = json.load(sys.stdin)["items"]
+      rs_owner = {(i["metadata"]["namespace"], i["metadata"]["name"]): (i["metadata"].get("ownerReferences") or [{}])[0]
+                  for i in items if i["kind"] == "ReplicaSet"}
+      out = set()
+      for p in (i for i in items if i["kind"] == "Pod"):
+          if p["status"].get("phase") in ("Succeeded", "Failed"):
+              continue
+          proxies = [c["image"] for c in p["spec"].get("containers", []) + p["spec"].get("initContainers", [])
+                     if c["name"] == "istio-proxy"]
+          if not proxies or all(i.rsplit(":", 1)[-1] == target for i in proxies):
+              continue
+          ns = p["metadata"]["namespace"]
+          o = (p["metadata"].get("ownerReferences") or [{"kind": "none", "name": p["metadata"]["name"]}])[0]
+          if o["kind"] == "ReplicaSet":
+              o = rs_owner.get((ns, o["name"])) or {"kind": "none", "name": o["name"]}
+          out.add(f'{o["kind"]} {ns} {o["name"]}')
+      print("\n".join(sorted(out)))
+  tasks:
+    - name: The target is a version (-e istio_version=X.Y.Z)
+      ansible.builtin.assert:
+        that: target is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+        fail_msg: "-e istio_version=X.Y.Z, e.g. 1.26.8"
+
+    - name: The control plane runs the target, rolled out
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n istio-system rollout status deployment istiod --timeout=60s > /dev/null
+        {{ kubectl }} -n istio-system get deployment istiod -o jsonpath='{.spec.template.spec.containers[0].image}'
+      args:
+        executable: /bin/bash
+      register: _istiod
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _istiod.rc == 0 and _istiod.stdout.endswith(':' ~ target)
+
+    - name: The workloads behind pods with an older sidecar
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT"
+      args:
+        executable: /bin/bash
+      environment:
+        SCRIPT: "{{ stale_script }}"
+      register: _stale
+      changed_when: false
+
+    - name: Nothing old has an owner this cannot restart
+      ansible.builtin.assert:
+        that: _stale.stdout_lines | reject('match', '^(Deployment|StatefulSet|DaemonSet|Cluster|StrimziPodSet|Job) ')
+              | list | length == 0
+        fail_msg: "no restart for: {{ _stale.stdout_lines | reject('match', '^(Deployment|StatefulSet|DaemonSet|Cluster|StrimziPodSet|Job) ') | list }}"
+
+    - name: Restart them
+      ansible.builtin.command: >-
+        {% set kind, ns, name = item.split() %}
+        {% if kind in ['Deployment', 'StatefulSet', 'DaemonSet'] %}
+        {{ kubectl }} -n {{ ns }} rollout restart {{ kind | lower }}/{{ name }}
+        {% elif kind == 'Cluster' %}
+        {{ kubectl }} -n {{ ns }} annotate clusters.postgresql.cnpg.io {{ name }}
+        kubectl.kubernetes.io/restartedAt={{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }} --overwrite
+        {% else %}
+        {{ kubectl }} -n {{ ns }} annotate strimzipodsets.core.strimzi.io {{ name }} strimzi.io/manual-rolling-update=true --overwrite
+        {% endif %}
+      loop: "{{ _stale.stdout_lines | reject('match', '^Job ') | list }}"
+      changed_when: true
+
+    - name: Every running sidecar is the target version (CNPG and Strimzi roll one pod at a time)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT" | grep -v '^Job ' || true
+      args:
+        executable: /bin/bash
+      environment:
+        SCRIPT: "{{ stale_script }}"
+      register: _left
+      changed_when: false
+      retries: 60
+      delay: 20
+      until: _left.stdout | length == 0
+
+    - name: Data plane caught up
+      ansible.builtin.debug:
+        msg: "SIDECARS AT {{ target }}: restarted {{ _stale.stdout_lines | reject('match', '^Job ') | list | length }} workloads"

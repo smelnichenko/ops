@@ -32,7 +32,7 @@
     - name: Add Istio Helm repo
       kubernetes.core.helm_repository:
         name: istio
-        repo_url: https://istio-release.storage.googleapis.com/charts
+        repo_url: https://blob.istio.io/istio-release/charts  # GCP-hosted repo retired (Istio 1.31); same charts
 
     - name: Check if Istio is already installed
       kubernetes.core.k8s_info:
