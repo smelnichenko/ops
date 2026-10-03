@@ -583,7 +583,21 @@
       delay: 10
       until: eso_crd.resources | length > 0
 
-    - name: Create root application
+    - name: Does the root application exist?
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        name: root
+        namespace: "{{ argocd_namespace }}"
+      register: _root_app
+
+    - name: Create root application (bootstrap only - after that infra's apps/root.yaml owns it)
+      # Created once, as infra's clusters/production/argocd/apps/root.yaml says (the root manages itself from there).
+      # Never patched afterwards: a merge patch with a different spec - this task's syncOptions used to lack
+      # RespectIgnoreDifferences, and a merge patch replaces a list - put the root OutOfSync with git on every run of
+      # this playbook, the root re-applied itself mid-sync, lost its .operation and sat 'Running' forever with nothing
+      # syncing (Vagrant 2026-10-03, after the Argo CD upgrade step; ten's run on 10-01 happened to recover).
       kubernetes.core.k8s:
         kubeconfig: /etc/kubernetes/admin.conf
         definition:
@@ -600,14 +614,21 @@
               repoURL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/schnappy/infra.git"
               targetRevision: main
               path: clusters/production/argocd/apps
-              directory:
-                recurse: false
             destination:
               server: https://kubernetes.default.svc
               namespace: "{{ argocd_namespace }}"
+            ignoreDifferences:
+              - group: argoproj.io
+                kind: Application
+                jqPathExpressions:
+                  - .status
+                  - .operation
+                  - .spec.source.directory.jsonnet
             syncPolicy:
               automated:
                 selfHeal: true
                 prune: false
               syncOptions:
                 - ServerSideApply=false
+                - RespectIgnoreDifferences=true
+      when: _root_app.resources | length == 0

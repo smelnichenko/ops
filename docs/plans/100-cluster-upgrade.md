@@ -115,6 +115,11 @@ operator approves.
     `schnappy` only, but the StatefulSet sets CLICKHOUSE_USER=default with CLICKHOUSE_PASSWORD, so the image's
     entrypoint writes users.d/default-user.xml, merged after it - `default`, with that password, from ::/0 (found by
     the ClickHouse upgrade review, 2026-10-03). Not upgrade-related; fix: CLICKHOUSE_SKIP_USER_SETUP=1, or name the user.
+19. `setup-argocd.yml` merge-patched the root Application on every run with a spec unlike infra's apps/root.yaml (no
+    RespectIgnoreDifferences - a merge patch replaces the list - and an extra directory.recurse): each run put the
+    root OutOfSync, the root re-applied itself mid-sync and could lose its .operation, sitting 'Running' with
+    nothing syncing (Vagrant, the Argo CD 3.3.14 step; ten's 10-01 run recovered by luck). Fixed: the root is created
+    only when absent, exactly as git has it - the Argo CD steps (12, 29, 30) rely on this.
 
 ## The Vagrant upgrade test
 

@@ -418,6 +418,9 @@ tasks:
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
+      # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, step 12),
+      # which only the next step's first wait saw
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
       # a Velero backup from production's daily schedule, volumes included, into the Pi backup store
