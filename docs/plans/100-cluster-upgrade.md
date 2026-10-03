@@ -226,8 +226,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 32 | Strimzi templates on v1 (defect 7) | platform | green |
 | 33 | Strimzi v1 conversion (Argo automation off) | infra + playbook | S; green (10 CRDs store only v1, Kafka Ready, messages intact) |
 | 34 | Strimzi 1.2.0 (automation back) | infra | S; green (Kafka rolled onto 1.2.0, messages intact; ignoreDifferences for the CRD's dropped empty map) |
-| 35 | Kafka 4.3.1 | platform | S; running |
-| 36-41 | Scylla Operator 1.20.3/1.21.1/1.22.0 with ScyllaDB 2025.1.16/2026.1.14/2026.3.2 | infra | S |
+| 35 | Kafka 4.3.1 | platform | S; green (metadata version moved with it, messages intact) |
+| 36-41 | Scylla Operator 1.20.3/1.21.1/1.22.0 with ScyllaDB 2025.1.16/2026.1.14/2026.3.2 | infra | S; 36 running |
 | 42 | PostgreSQL 18.6 in place (defect 6) | platform | S |
 | 43 | Valkey 9.1.2 | infra + platform | |
 | 44 | Grafana 13.2.3 (one-way storage migration) | infra | S |
