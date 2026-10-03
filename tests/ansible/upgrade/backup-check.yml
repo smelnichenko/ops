@@ -1,7 +1,9 @@
 ---
 # Velero still backs up after an upgrade step: one backup made from production's own daily schedule (namespace
-# schnappy-production, file-system backup of its volumes - Postgres included), into the Vagrant backup store, must end
-# Completed with no errors and every volume backup Completed. The backup is deleted afterwards (its data too).
+# schnappy-production, file-system backup of its pods' volumes), into the Vagrant backup store, must end Completed with
+# no errors and every volume backup Completed. The backup is deleted afterwards (its data too). Its volumes are the
+# pods' emptyDirs only, as in production: the data volumes are local-path hostPath PVs, which Velero's file-system
+# backup skips (plan 100 defect 20) - Postgres, Kafka and ScyllaDB are proven by data-check.yml instead.
 #
 # Why: a Velero or plugin upgrade (plan 100 step 04) can leave every pod green while backups fail - the plugin and the
 # server are paired versions - and nothing else in the step runner writes to the backup store.
