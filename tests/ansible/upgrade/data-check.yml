@@ -15,6 +15,11 @@
 # Why: a CNPG operator upgrade restarts every instance in place (and the PostgreSQL 18 step rewrites the data
 # directory); the smoke test only proves the apps answer, not that the rows are still there.
 #
+# Kafka the same way (second play): a topic of 1 000 known messages; verify reads them all from the start and compares
+# count and md5 with the value computed here, after waiting until Strimzi has finished - the Kafka cluster Ready,
+# reconciled by the operator now running, at the Kafka version it asks for. The Strimzi steps (1.x, Kafka 4.3) roll
+# the brokers.
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed|verify
 - name: Postgres data that must survive the upgrade
   hosts: target
@@ -116,3 +121,88 @@
     - name: Data intact
       ansible.builtin.debug:
         msg: "DATA OK: {{ instances | length }} instances x {{ rows }} rows, md5 {{ expected_md5 }}, primary {{ primary }} writable"
+
+- name: Kafka data that must survive the upgrade
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kafka_namespace: schnappy-production
+    kafka_cluster: schnappy-production
+    topic: upgrade-check
+    messages: 1000
+    # md5 of the messages m-1 .. m-N, newline-separated with a trailing newline - what the consumer prints
+    expected_md5: "{{ (range(1, messages + 1) | map('regex_replace', '^', 'm-') | join('\n') ~ '\n') | hash('md5') }}"
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ kafka_namespace }}"
+  tasks:
+    - name: The operator version now running
+      ansible.builtin.shell: >-
+        kubectl --kubeconfig {{ kubeconfig }} -n strimzi get deployment strimzi-cluster-operator
+        -o jsonpath='{.spec.template.spec.containers[0].image}'
+      register: _strimzi
+      changed_when: false
+
+    - name: Strimzi has finished - Kafka Ready, reconciled by that operator, at the version it asks for
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get kafkas.kafka.strimzi.io {{ kafka_cluster }} -o json | python3 -c '
+        import json, sys
+        k = json.load(sys.stdin)
+        s, spec = k.get("status", {}), k["spec"]["kafka"]
+        ready = any(c["type"] == "Ready" and c["status"] == "True" for c in s.get("conditions", []))
+        print(ready and s.get("observedGeneration") == k["metadata"]["generation"]
+              and s.get("kafkaVersion") == spec.get("version"), s.get("operatorLastSuccessfulVersion"))'
+      args:
+        executable: /bin/bash
+      register: _kafka
+      changed_when: false
+      retries: 60
+      delay: 15
+      until: _kafka.rc == 0 and _kafka.stdout == 'True ' ~ _strimzi.stdout.split(':')[-1]
+
+    - name: A broker pod
+      ansible.builtin.command: "{{ kubectl }} get pods -l strimzi.io/broker-role=true -o jsonpath={.items[0].metadata.name}"
+      register: _broker
+      changed_when: false
+      failed_when: _broker.stdout | length == 0
+
+    - name: Seed - the topic and its messages (only when the topic is new)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        B="{{ kubectl }} exec {{ _broker.stdout }} -c kafka --"
+        if $B /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list | grep -qx '{{ topic }}'; then
+          echo exists; exit 0
+        fi
+        $B /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} \
+          --partitions 1 --replication-factor 1 > /dev/null
+        seq 1 {{ messages }} | sed 's/^/m-/' | {{ kubectl }} exec -i {{ _broker.stdout }} -c kafka -- \
+          /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic {{ topic }} \
+          --producer-property acks=all > /dev/null
+        echo created
+      args:
+        executable: /bin/bash
+      register: _seeded
+      changed_when: "'created' in _seeded.stdout"
+      when: mode == 'seed'
+
+    - name: The topic holds exactly the seeded messages, from the start
+      ansible.builtin.shell: |
+        set -euo pipefail
+        out=$(mktemp); trap 'rm -f "$out"' EXIT
+        {{ kubectl }} exec {{ _broker.stdout }} -c kafka -- /opt/kafka/bin/kafka-console-consumer.sh \
+          --bootstrap-server localhost:9092 --topic {{ topic }} --from-beginning \
+          --max-messages {{ messages }} --timeout-ms 60000 2> /dev/null > "$out" || true
+        echo "$(wc -l < "$out") $(md5sum < "$out" | cut -d' ' -f1)"
+      args:
+        executable: /bin/bash
+      register: _read
+      changed_when: false
+      retries: 5
+      delay: 15
+      until: _read.stdout == messages ~ ' ' ~ expected_md5
+      failed_when: _read.stdout != messages ~ ' ' ~ expected_md5
+
+    - name: Kafka data intact
+      ansible.builtin.debug:
+        msg: "KAFKA DATA OK: {{ topic }} {{ messages }} messages, md5 {{ expected_md5 }}, operator {{ _strimzi.stdout.split(':')[-1] }}"

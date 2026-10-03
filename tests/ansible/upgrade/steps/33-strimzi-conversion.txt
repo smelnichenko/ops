@@ -1,0 +1,5 @@
+# Every Strimzi resource and the CRDs' stored version to v1, before Strimzi 1.x (which serves v1 only): Argo's
+# automated sync of Strimzi off (infra upgrade/33-strimzi-conversion - its 0.51 CRDs would come back), then Strimzi's
+# own tool from the operator image - convert-resource --all-namespaces (also ten's 13 KafkaTopics no repo creates) and
+# crd-upgrade. Stateful: shown to the operator before it runs in production.
+playbook strimzi-v1-conversion.yml
