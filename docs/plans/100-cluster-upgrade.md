@@ -164,6 +164,10 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   restarted both instances a minute later, while the checks ran. The data check now first waits for every instance
   to run under the new operator version. Each operator step (Strimzi, Scylla) needs the same wait for its own
   rollout before its checks count.
+- **The isolation's CoreDNS `template` blocks stop `kubeadm upgrade`** when it bumps CoreDNS (step 16, v1.12.1 -> v1.13.1):
+  preflight CoreDNSUnsupportedPlugins refuses a Corefile plugin its migration does not know. Ten's Corefile has none,
+  so only the Vagrant inventory passes over that one check (`k8s_upgrade_ignore_preflight_errors_override`); kubeadm
+  migrates the rest and leaves the blocks as they are.
 
 New playbooks (ops): `upgrade-kubeadm.yml` (one minor per run, `kubeadm upgrade apply`, kubelet/kubectl, drain-free
 single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variables of the existing playbooks.
@@ -189,8 +193,8 @@ S = stateful (shown to the operator with the exact change before it runs in prod
 | 12 | Argo CD 3.3.14 | playbook | green |
 | 13 | Cilium 1.19.8 | playbook | green |
 | 14 | Kubernetes 1.34.12 | playbook | green |
-| 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | running |
-| 16 | Kubernetes 1.35.9 | playbook | |
+| 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | green |
+| 16 | Kubernetes 1.35.9 | playbook | running |
 | 17 | Cilium 1.20.2 | playbook | |
 | 18 | Gateway API v1.5.1 | playbook | |
 | 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | |
