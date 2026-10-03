@@ -219,7 +219,7 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | green; IN PRODUCTION 2026-10-03 19:47 (infra e89bbbb, operator OK) |
 | 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | 20-25 green (mesh restarted each; 1.30 pulls from registry.istio.io) |
 | 26 | Kubernetes 1.36.5 (+ etcd backup image) | infra + playbook | green |
-| 27 | External Secrets CRDs under Argo (defect 2) | infra | running |
+| 27 | External Secrets CRDs under Argo (defect 2) | infra | green (argocd-controller applies the CRDs server-side) |
 | 28 | External Secrets 2.11.0 | infra | |
 | 29-30 | Argo CD 3.4.6, 3.5.3 | playbook | |
 | 31 | cert-manager v1.21.2 | infra | |
