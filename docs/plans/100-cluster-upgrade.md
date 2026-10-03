@@ -159,6 +159,53 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
 New playbooks (ops): `upgrade-kubeadm.yml` (one minor per run, `kubeadm upgrade apply`, kubelet/kubectl, drain-free
 single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variables of the existing playbooks.
 
+## Upgrade steps (tests/ansible/upgrade/steps; each a Vagrant run before production)
+
+Branches `upgrade/NN-*` in infra/platform (local until approved), stacked per repo; host-side steps as playbook lines.
+S = stateful (shown to the operator with the exact change before it runs in production). Status 2026-10-03.
+
+| # | Step | Where | Vagrant |
+|---|---|---|---|
+| 01 | apt-cacher-ng from CI (defect 9) | platform | green |
+| 02 | cert-manager v1.20.4 | infra | green |
+| 03 | CNPG 1.30.1 | infra | green |
+| 04 | Velero 1.18.4 + AWS plugin 1.14.4 (defect 3) | infra | green |
+| 05 | versitygw 1.8.0 (cluster, Pis) | platform + playbook | green |
+| 06 | local-path 0.0.37 | playbook | green |
+| 07 | kube-prometheus-stack 91.8.2 (operator 0.94.1) | infra | green |
+| 08 | Alertmanager 0.34.1, blackbox 0.28.0, ksm 2.20.0 | platform | green |
+| 09 | Grafana 12.4.12 | infra | green |
+| 10 | Mimir 2.17.11 | infra | green |
+| 11 | Fluent Bit 4.2.8 | infra | green |
+| 12 | Argo CD 3.3.14 | playbook | running |
+| 13 | Cilium 1.19.8 | playbook | |
+| 14 | Kubernetes 1.34.12 | playbook | |
+| 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | |
+| 16 | Kubernetes 1.35.9 | playbook | |
+| 17 | Cilium 1.20.2 | playbook | |
+| 18 | Gateway API v1.5.1 | playbook | |
+| 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | |
+| 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | |
+| 26 | Kubernetes 1.36.5 | playbook | |
+| 27 | External Secrets CRDs under Argo (defect 2) | infra | |
+| 28 | External Secrets 2.11.0 | infra | |
+| 29-30 | Argo CD 3.4.6, 3.5.3 | playbook | |
+| 31 | cert-manager v1.21.2 | infra | |
+| 32 | Strimzi templates on v1 (defect 7) | platform | |
+| 33 | Strimzi v1 conversion (Argo automation off) | infra + playbook | S |
+| 34 | Strimzi 1.2.0 (automation back) | infra | S |
+| 35 | Kafka 4.3.1 | platform | S |
+| 36-41 | Scylla Operator 1.20.3/1.21.1/1.22.0 with ScyllaDB 2025.1.16/2026.1.14/2026.3.2 | infra | S |
+| 42 | PostgreSQL 18.6 in place (defect 6) | platform | S |
+| 43 | Valkey 9.1.2 | infra + platform | |
+| 44 | Grafana 13.2.3 (one-way storage migration) | infra | S |
+| 45-47 | Mimir 3.0.8, 3.1.6, 3.2.1 | infra | |
+| 48 | Tempo 3.1.0 (monolithic, one-way) | infra + platform | S |
+| 49 | Fluent Bit 5.1.3 | infra | |
+| 50 | Centrifugo 6.9.7 | infra + platform | |
+| 51 | SonarQube 26.9.0 - not in the Vagrant copy: production-only | infra + platform | n/a |
+| 52+ | ClickHouse 25.8, 26.8 | (researching) | |
+
 ## Production rollout (after all tests pass and approval)
 
 Waves in this order, one step at a time, each verified before the next:
