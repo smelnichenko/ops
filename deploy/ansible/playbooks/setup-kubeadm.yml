@@ -205,6 +205,7 @@
       until: _prepull is succeeded
       changed_when: true
       failed_when: false
+      tags: [cilium, local-path]  # an upgrade of either pre-pulls its new images too
 
     # ================================================================
     # Phase 2: Install kubeadm, kubelet, kubectl
@@ -469,6 +470,7 @@
       kubernetes.core.helm_repository:
         name: cilium
         repo_url: https://helm.cilium.io/
+      tags: [cilium]  # an upgrade runs just the Cilium tasks: --tags cilium -e cilium_version=...
 
     - name: Install Cilium via Helm
       kubernetes.core.helm:
@@ -506,6 +508,7 @@
             hostNamespaceOnly: true
         wait: true
         wait_timeout: 180s
+      tags: [cilium]
 
     - name: Wait for Cilium pods
       kubernetes.core.k8s_info:
@@ -525,6 +528,7 @@
           | map('selectattr', 'type', 'equalto', 'Ready')
           | map('selectattr', 'status', 'equalto', 'True')
           | map('list') | map('length') | min > 0
+      tags: [cilium]
 
     # ================================================================
     # Phase 6b: Install Istio service mesh

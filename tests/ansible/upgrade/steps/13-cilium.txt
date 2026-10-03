@@ -1,0 +1,12 @@
+# Cilium 1.19.1 -> 1.19.8 (Hubble UI 0.13.3 -> 0.13.6), the first platform step: the kubeadm playbook's Cilium tasks
+# as on ten (host-side; ten's live Helm values equal the playbook's - checked 2026-10-03 - bar socketLB.hostNamespaceOnly,
+# which ten has in cilium-config by hand and gets into its Helm values here). At the rollout cilium_version becomes
+# 1.19.8.
+helm kube-system/cilium cilium-1.19.1 1.19.1 => helm kube-system/cilium cilium-1.19.8 1.19.8
+image quay.io/cilium/cilium v1.19.1 => image quay.io/cilium/cilium v1.19.8
+image quay.io/cilium/cilium-envoy v1.35.9-1770979049-232ed4a26881e4ab4f766f251f258ed424fff663 => image quay.io/cilium/cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82
+image quay.io/cilium/hubble-relay v1.19.1 => image quay.io/cilium/hubble-relay v1.19.8
+image quay.io/cilium/hubble-ui v0.13.3 => image quay.io/cilium/hubble-ui v0.13.6
+image quay.io/cilium/hubble-ui-backend v0.13.3 => image quay.io/cilium/hubble-ui-backend v0.13.6
+image quay.io/cilium/operator-generic v1.19.1 => image quay.io/cilium/operator-generic v1.19.8
+playbook setup-kubeadm.yml --tags cilium -e cilium_version=1.19.8
