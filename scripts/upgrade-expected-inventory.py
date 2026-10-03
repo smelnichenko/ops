@@ -16,9 +16,11 @@ Inventory: production's (tests/ansible/upgrade/prod-inventory.txt) with the chan
 the given one applied, in order. A change whose "before" line is not there at that point aborts: the step file is
 stale, and applying it anyway would check nothing.
 
-Playbooks (--playbooks): the playbook lines of every step up to and including the given one, in order - like the
-refs, so a copy restored to the baseline gets every earlier host-side change again (the playbooks are idempotent).
-A version a playbook line sets with -e becomes the playbook's default at the production rollout, not before.
+Playbooks (--playbooks): the playbook lines of the given step only. Unlike the refs they are not replayed: a Helm
+install is not an "at least" operation, so replaying step 13's Cilium 1.19.8 after step 17 would downgrade Cilium.
+A copy restored to an earlier snapshot is brought forward by running the steps in order - the inventory check fails
+otherwise, since a skipped step's versions are missing. A version a playbook line sets with -e becomes the
+playbook's default at the production rollout, not before.
 
 Refs (--refs): for each repo, its highest upgrade/NN-* branch with NN up to the step's, else main - so a step that
 changes only infra still mirrors platform with every earlier platform step. Aborts if a step branch does not contain
@@ -90,8 +92,7 @@ def main():
         sys.exit(f"no step {args[0]} (steps: {', '.join(names)})")
     if mode == "--playbooks":
         playbooks = []
-        for name in names[:names.index(args[0]) + 1]:
-            parse(os.path.join(STEPS, name + ".txt"), playbooks)
+        parse(os.path.join(STEPS, args[0] + ".txt"), playbooks)
         if playbooks:
             print("\n".join(playbooks))
         return

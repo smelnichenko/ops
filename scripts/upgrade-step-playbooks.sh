@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# upgrade-step-playbooks.sh <step> - run the host-side changes (playbook lines) of every upgrade step up to and
-# including <step> against the Vagrant inventory, in step order (scripts/upgrade-expected-inventory.py --playbooks).
+# upgrade-step-playbooks.sh <step> - run the host-side changes (playbook lines) of <step> against the Vagrant
+# inventory (scripts/upgrade-expected-inventory.py --playbooks: the step's own, never an earlier step's).
 # In an empty environment: the Taskfile loads ops/.env, which holds production's secrets.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)

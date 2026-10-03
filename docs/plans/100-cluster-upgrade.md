@@ -139,7 +139,9 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
 - **Each step** (`task test:upgrade:step STEP=NN-name`): a step is `tests/ansible/upgrade/steps/NN-name.txt` (its
   inventory changes) plus a branch `upgrade/NN-name` in infra and/or platform, stacked on the previous step's branch
   in that repo - merged to main in this order at the rollout. The runner mirrors each repo's latest step branch,
-  waits until every Argo app is synced to exactly those commits with all pods ready, checks the seeded Postgres rows
+  runs the step's own playbook lines (host-side changes; not an earlier step's - replaying a Helm install would
+  downgrade it), re-proves the isolation, waits until every Argo app is synced to exactly those commits with all pods
+  ready, checks the seeded Postgres rows
   on every instance (`data-check.yml`), runs the smoke, and diffs the inventory against production's plus every
   step's changes so far (`scripts/upgrade-expected-inventory.py`).
 - **Steps proven** (2026-10-03): 01 apt-cacher-ng from CI (7b46aea), 02 cert-manager v1.20.4, 03 CNPG 1.30.1,
