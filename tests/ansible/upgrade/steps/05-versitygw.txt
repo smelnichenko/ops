@@ -1,0 +1,5 @@
+# versitygw v1.6.0 -> v1.8.0: the in-cluster S3 gateway first (platform upgrade/05-versitygw), then the Pi backup store
+# (ops tasks/versitygw.yml; in production outside the 02:00-04:00 backup window). At the rollout the vgw_version
+# default becomes 1.8.0.
+image ghcr.io/versity/versitygw v1.6.0 => image ghcr.io/versity/versitygw v1.8.0
+playbook setup-pi-services.yml --tags versitygw -e vgw_version=1.8.0

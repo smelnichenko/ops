@@ -398,7 +398,7 @@ tasks:
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
   test:upgrade:step:
-    desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt and its upgrade/NN-* branches in ../infra and ../platform) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, production's k6 smoke, the step's expected inventory
+    desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt, its upgrade/NN-* branches in ../infra and ../platform, its playbooks) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, the seeded data, a Velero backup, production's k6 smoke, the step's expected inventory
     deps: [deploy:install]
     requires:
       vars: [STEP]
@@ -414,8 +414,12 @@ tasks:
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true
+      # host-side changes (the steps' playbook lines, every step up to this one), after the cluster side
+      - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
+      # a Velero backup from production's daily schedule, volumes included, into the Pi backup store
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
       - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
       - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt

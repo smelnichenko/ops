@@ -1,0 +1,87 @@
+---
+# Velero still backs up after an upgrade step: one backup made from production's own daily schedule (namespace
+# schnappy-production, file-system backup of its volumes - Postgres included), into the Vagrant backup store, must end
+# Completed with no errors and every volume backup Completed. The backup is deleted afterwards (its data too).
+#
+# Why: a Velero or plugin upgrade (plan 100 step 04) can leave every pod green while backups fail - the plugin and the
+# server are paired versions - and nothing else in the step runner writes to the backup store.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
+- name: A Velero backup from production's daily schedule completes
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    schedule: velero-schnappy-daily
+    # every resource fully qualified: `backup` alone is CNPG's Backup (postgresql.cnpg.io) - the first run of this
+    # check polled CNPG for Velero's backup for 10 minutes (2026-10-03)
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n velero"
+  tasks:
+    - name: The backup storage location is Available
+      ansible.builtin.command: "{{ kubectl }} get backupstoragelocations.velero.io default -o jsonpath={.status.phase}"
+      register: _bsl
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _bsl.stdout == 'Available'
+
+    - name: The schedule's backup template
+      ansible.builtin.command: "{{ kubectl }} get schedules.velero.io {{ schedule }} -o json"
+      register: _schedule
+      changed_when: false
+
+    - name: Start a backup from it
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: velero.io/v1
+          kind: Backup
+          metadata:
+            name: "{{ backup }}"
+            namespace: velero
+            labels: { upgrade-test: backup-check }
+          spec: "{{ (_schedule.stdout | from_json).spec.template | combine({'ttl': '1h'}) }}"
+      vars:
+        backup: "upgrade-check-{{ lookup('pipe', 'date +%s') }}"
+      register: _created
+
+    - name: It ends Completed
+      ansible.builtin.command: >-
+        {{ kubectl }} get backups.velero.io {{ _created.result.metadata.name }}
+        -o jsonpath={.status.phase}/{.status.errors}/{.status.warnings}
+      register: _phase
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _phase.stdout.split('/')[0] in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
+      failed_when: _phase.stdout.split('/')[0] != 'Completed' or _phase.stdout.split('/')[1] not in ['', '0']
+
+    - name: Its volumes were backed up
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get podvolumebackups.velero.io -l velero.io/backup-name={{ _created.result.metadata.name }} \
+          -o jsonpath='{range .items[*]}{.spec.volume} {.status.phase}{"\n"}{end}'
+      args:
+        executable: /bin/bash
+      register: _pvb
+      changed_when: false
+      failed_when: >-
+        _pvb.stdout_lines | length == 0
+        or (_pvb.stdout_lines | reject('match', '^\S+ Completed$') | list | length) > 0
+
+    - name: Delete the test backup (and its data in the store)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: velero.io/v1
+          kind: DeleteBackupRequest
+          metadata:
+            generateName: "{{ _created.result.metadata.name }}-"
+            namespace: velero
+          spec:
+            backupName: "{{ _created.result.metadata.name }}"
+
+    - name: Backup works
+      ansible.builtin.debug:
+        msg: "BACKUP OK: {{ _created.result.metadata.name }} Completed, {{ _pvb.stdout_lines | length }} volumes"
