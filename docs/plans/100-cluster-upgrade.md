@@ -204,8 +204,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | green |
 | 16 | Kubernetes 1.35.9 (+ etcd backup image) | infra + playbook | green |
 | 17 | Cilium 1.20.2 | playbook | green |
-| 18 | Gateway API v1.5.1 | playbook | running |
-| 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | |
+| 18 | Gateway API v1.5.1 | playbook | green |
+| 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | green |
 | 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | |
 | 26 | Kubernetes 1.36.5 (+ etcd backup image) | infra + playbook | |
 | 27 | External Secrets CRDs under Argo (defect 2) | infra | |
