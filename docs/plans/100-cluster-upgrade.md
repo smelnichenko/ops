@@ -168,6 +168,10 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   preflight CoreDNSUnsupportedPlugins refuses a Corefile plugin its migration does not know. Ten's Corefile has none,
   so only the Vagrant inventory passes over that one check (`k8s_upgrade_ignore_preflight_errors_override`); kubeadm
   migrates the rest and leaves the blocks as they are.
+- **The inventory lists what runs or is set to run**: pods not finished, CronJob templates, Jobs no CronJob owns. It
+  listed finished pods too, so a CronJob's kept runs showed the image it had just left for hours (step 16: the etcd
+  backup on etcd 3.6.5-0 beside the new 3.6.6-0). Production's baseline is the same under both (re-taken read-only
+  2026-10-03) but for the k6 smoke Job's two images, there only for the 24 h after a sync.
 
 New playbooks (ops): `upgrade-kubeadm.yml` (one minor per run, `kubeadm upgrade apply`, kubelet/kubectl, drain-free
 single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variables of the existing playbooks.
@@ -194,12 +198,12 @@ S = stateful (shown to the operator with the exact change before it runs in prod
 | 13 | Cilium 1.19.8 | playbook | green |
 | 14 | Kubernetes 1.34.12 | playbook | green |
 | 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | green |
-| 16 | Kubernetes 1.35.9 | playbook | running |
+| 16 | Kubernetes 1.35.9 (+ etcd backup image) | infra + playbook | running |
 | 17 | Cilium 1.20.2 | playbook | |
 | 18 | Gateway API v1.5.1 | playbook | |
 | 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | |
 | 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | |
-| 26 | Kubernetes 1.36.5 | playbook | |
+| 26 | Kubernetes 1.36.5 (+ etcd backup image) | infra + playbook | |
 | 27 | External Secrets CRDs under Argo (defect 2) | infra | |
 | 28 | External Secrets 2.11.0 | infra | |
 | 29-30 | Argo CD 3.4.6, 3.5.3 | playbook | |

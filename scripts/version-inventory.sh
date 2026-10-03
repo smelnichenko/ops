@@ -39,13 +39,24 @@ for a in json.load(sys.stdin)["items"]:
         if s.get("chart"): print("argo-chart", a["metadata"]["name"], s["chart"]+"@"+str(s.get("targetRevision")))'
   fi
 
-  # every container image running (digests dropped: the tag is the version)
-  kubectl get pods -A -o json \
+  # every container image that runs or is set to run (digests dropped: the tag is the version): pods not finished,
+  # each CronJob's template, each Job no CronJob owns. A finished pod runs nothing, like a removed package: a CronJob
+  # keeps its last runs' pods for hours, with the image they ran - after its image moves too.
+  kubectl get pods,cronjobs,jobs -A -o json \
     | python3 -c 'import json,sys
 seen=set()
-for p in json.load(sys.stdin)["items"]:
-    if p["metadata"]["namespace"]=="woodpecker" and p["metadata"]["name"].startswith("wp-"): continue
-    for c in p["spec"].get("containers",[])+p["spec"].get("initContainers",[]):
+for o in json.load(sys.stdin)["items"]:
+    meta=o["metadata"]
+    if meta["namespace"]=="woodpecker" and meta["name"].startswith("wp-"): continue
+    if o["kind"]=="Pod":
+        if o["status"].get("phase") in ("Succeeded","Failed"): continue
+        spec=o["spec"]
+    elif o["kind"]=="CronJob":
+        spec=o["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    else:
+        if any(r["kind"]=="CronJob" for r in meta.get("ownerReferences",[])): continue
+        spec=o["spec"]["template"]["spec"]
+    for c in spec.get("containers",[])+spec.get("initContainers",[]):
         img=c["image"].split("@")[0]
         if img not in seen: seen.add(img); print("image", img.rsplit(":",1)[0], img.rsplit(":",1)[1] if ":" in img.split("/")[-1] else "latest")'
 
