@@ -186,10 +186,10 @@ S = stateful (shown to the operator with the exact change before it runs in prod
 | 09 | Grafana 12.4.12 | infra | green |
 | 10 | Mimir 2.17.11 | infra | green |
 | 11 | Fluent Bit 4.2.8 | infra | green |
-| 12 | Argo CD 3.3.14 | playbook | running |
-| 13 | Cilium 1.19.8 | playbook | |
-| 14 | Kubernetes 1.34.12 | playbook | |
-| 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | |
+| 12 | Argo CD 3.3.14 | playbook | green |
+| 13 | Cilium 1.19.8 | playbook | green |
+| 14 | Kubernetes 1.34.12 | playbook | green |
+| 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | running |
 | 16 | Kubernetes 1.35.9 | playbook | |
 | 17 | Cilium 1.20.2 | playbook | |
 | 18 | Gateway API v1.5.1 | playbook | |
