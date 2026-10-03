@@ -1,0 +1,11 @@
+# Istio 1.28.10 -> 1.29.8, in place (one minor: Istio's in-place rule): base, istiod, cni (infra upgrade/23-istio-1.29),
+# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of
+# the sidecars. Upgrade notes checked against production 2026-10-03: The base chart drops the RBAC it duplicated into istiod's chart (istiod's copies already exist); Envoy metrics
+# compressed by default (Prometheus reads gzip).
+argo-chart istio-base base@1.28.10 => argo-chart istio-base base@1.29.8
+argo-chart istio-cni cni@1.28.10 => argo-chart istio-cni cni@1.29.8
+argo-chart istiod istiod@1.28.10 => argo-chart istiod istiod@1.29.8
+image docker.io/istio/install-cni 1.28.10 => image docker.io/istio/install-cni 1.29.8
+image docker.io/istio/pilot 1.28.10 => image docker.io/istio/pilot 1.29.8
+image docker.io/istio/proxyv2 1.28.10 => image docker.io/istio/proxyv2 1.29.8
+playbook restart-mesh-workloads.yml -e istio_version=1.29.8

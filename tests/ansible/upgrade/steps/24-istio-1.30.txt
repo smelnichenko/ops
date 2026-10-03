@@ -1,0 +1,11 @@
+# Istio 1.29.8 -> 1.30.5, in place (one minor: Istio's in-place rule): base, istiod, cni (infra upgrade/24-istio-1.30),
+# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of
+# the sidecars. Upgrade notes checked against production 2026-10-03: Needs Gateway API v1.5 (step 18). Hostnames in several namespaces now prefer a Service (our one ServiceEntry,
+# auth.pmon.dev, has none).
+argo-chart istio-base base@1.29.8 => argo-chart istio-base base@1.30.5
+argo-chart istio-cni cni@1.29.8 => argo-chart istio-cni cni@1.30.5
+argo-chart istiod istiod@1.29.8 => argo-chart istiod istiod@1.30.5
+image docker.io/istio/install-cni 1.29.8 => image docker.io/istio/install-cni 1.30.5
+image docker.io/istio/pilot 1.29.8 => image docker.io/istio/pilot 1.30.5
+image docker.io/istio/proxyv2 1.29.8 => image docker.io/istio/proxyv2 1.30.5
+playbook restart-mesh-workloads.yml -e istio_version=1.30.5

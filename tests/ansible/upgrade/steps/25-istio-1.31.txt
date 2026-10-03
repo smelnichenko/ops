@@ -1,0 +1,10 @@
+# Istio 1.30.5 -> 1.31.1, in place (one minor: Istio's in-place rule): base, istiod, cni (infra upgrade/25-istio-1.31),
+# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of
+# the sidecars. Upgrade notes checked against production 2026-10-03: Charts only on blob.istio.io (step 19). Supports Kubernetes 1.32-1.37.
+argo-chart istio-base base@1.30.5 => argo-chart istio-base base@1.31.1
+argo-chart istio-cni cni@1.30.5 => argo-chart istio-cni cni@1.31.1
+argo-chart istiod istiod@1.30.5 => argo-chart istiod istiod@1.31.1
+image docker.io/istio/install-cni 1.30.5 => image docker.io/istio/install-cni 1.31.1
+image docker.io/istio/pilot 1.30.5 => image docker.io/istio/pilot 1.31.1
+image docker.io/istio/proxyv2 1.30.5 => image docker.io/istio/proxyv2 1.31.1
+playbook restart-mesh-workloads.yml -e istio_version=1.31.1

@@ -21,10 +21,10 @@ operator approves.
 | Component | Now | Target | Path |
 |---|---|---|---|
 | Kubernetes (kubeadm) | 1.34.6 | 1.36.5 | 1.34.12 → 1.35.x → 1.36.5 (one minor per run) |
-| etcd / CoreDNS | 3.6.5 / 1.12.1 | with kubeadm; etcd pinned ≥ 3.6.11 at 1.36 | |
+| etcd / CoreDNS | 3.6.5 / 1.12.1 | 3.6.8 / 1.14.2 (kubeadm 1.36.5's) | with kubeadm; etcd ≥ 3.6.11 is etcd 3.7's prerequisite - k8s 1.37, not now |
 | containerd | 1.7.24 (Debian) + 2.0.2 (nerdctl-full in /usr/local) | 2.3 LTS | one install, from Docker's apt repo |
 | Cilium (+ Hubble UI) | 1.19.1 (0.13.3) | 1.20.2 (0.13.6) | 1.19.8 → 1.20.2 |
-| Istio | 1.25.2 (EOL, unsupported on k8s 1.34) | 1.31.1 | canary 1.25 → 1.27 → 1.29 → 1.31 |
+| Istio | 1.25.2 (EOL, unsupported on k8s 1.34) | 1.31.1 | in place, one minor per step (operator 2026-10-03): 1.26 → … → 1.31, mesh workloads restarted each step; charts from blob.istio.io first (defect 17) |
 | Gateway API CRDs | v1.2.1 | v1.5.x | before Istio 1.30 |
 | Argo CD | 3.3.8 (chart 9.5.4) | 3.5.3 (chart 10.9.6) | 3.3.14 → 3.4 → 3.5 |
 | cert-manager | 1.20.0 | 1.21.2 | 1.20.4 → 1.21.2 |
@@ -107,6 +107,10 @@ operator approves.
     Vagrant copy (it cannot reach production's registry). Fix: commit tags, like every application image.
 16. CNPG backs up with the in-tree Barman Cloud support (`barmanObjectStore`), deprecated in 1.30 and removed in 1.31:
     the move to the Barman Cloud Plugin must come before any CNPG 1.31 (this plan stops at 1.30.1).
+17. Istio's charts come from istio-release.storage.googleapis.com, which Istio retires from 1.31 on (planned outages
+    2026-10-13 15:00-18:00 UTC and 2026-11-17, off from 2026-12-09): ten's three Istio Argo apps would stop syncing.
+    blob.istio.io serves the same charts (1.25.2 through 1.31.1). Step 19 moves them, nothing else - it can go to
+    production on its own, before the first outage.
 
 ## The Vagrant upgrade test
 
