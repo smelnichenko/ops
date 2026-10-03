@@ -111,6 +111,10 @@ operator approves.
     2026-10-13 15:00-18:00 UTC and 2026-11-17, off from 2026-12-09): ten's three Istio Argo apps would stop syncing.
     blob.istio.io serves the same charts (1.25.2 through 1.31.1). Step 19 moves them, nothing else - it can go to
     production on its own, before the first outage.
+18. ClickHouse has a `default` user the config says it has not: clickhouse-users.xml replaces the users with
+    `schnappy` only, but the StatefulSet sets CLICKHOUSE_USER=default with CLICKHOUSE_PASSWORD, so the image's
+    entrypoint writes users.d/default-user.xml, merged after it - `default`, with that password, from ::/0 (found by
+    the ClickHouse upgrade review, 2026-10-03). Not upgrade-related; fix: CLICKHOUSE_SKIP_USER_SETUP=1, or name the user.
 
 ## The Vagrant upgrade test
 
@@ -204,7 +208,10 @@ S = stateful (shown to the operator with the exact change before it runs in prod
 | 49 | Fluent Bit 5.1.3 | infra | |
 | 50 | Centrifugo 6.9.7 | infra + platform | |
 | 51 | SonarQube 26.9.0 - not in the Vagrant copy: production-only | infra + platform | n/a |
-| 52+ | ClickHouse 25.8, 26.8 | (researching) | |
+| 52 | ClickHouse compatibility 24.8 (keeps formats readable for a rollback) | platform | |
+| 53 | ClickHouse 25.8.33.6 | infra + platform | S |
+| 54 | ClickHouse compatibility 25.8 | platform | |
+| 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S |
 
 ## Production rollout (after all tests pass and approval)
 

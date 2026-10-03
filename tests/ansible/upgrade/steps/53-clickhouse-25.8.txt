@@ -1,0 +1,4 @@
+# ClickHouse 24.8 -> 25.8.33.6, pinned (was the floating 24.8-alpine): infra values and platform's default, both
+# upgrade/53-clickhouse-25.8. A single replica, so a downtime upgrade, which ClickHouse supports across the year; 24.8's
+# formats kept by the pin. Stateful: shown before production, its volume backed up first.
+image clickhouse/clickhouse-server 24.8-alpine => image clickhouse/clickhouse-server 25.8.33.6-alpine
