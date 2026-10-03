@@ -222,8 +222,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 27 | External Secrets CRDs under Argo (defect 2) | infra | green (argocd-controller applies the CRDs server-side) |
 | 28 | External Secrets 2.11.0 | infra | green (all 25 CRDs = chart 2.11.0, 2 new) |
 | 29-30 | Argo CD 3.4.6, 3.5.3 | playbook | green (root stayed Synced through both) |
-| 31 | cert-manager v1.21.2 | infra | running |
-| 32 | Strimzi templates on v1 (defect 7) | platform | |
+| 31 | cert-manager v1.21.2 | infra | green |
+| 32 | Strimzi templates on v1 (defect 7) | platform | running |
 | 33 | Strimzi v1 conversion (Argo automation off) | infra + playbook | S |
 | 34 | Strimzi 1.2.0 (automation back) | infra | S |
 | 35 | Kafka 4.3.1 | platform | S |
