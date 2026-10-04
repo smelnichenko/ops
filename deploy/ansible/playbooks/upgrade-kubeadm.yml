@@ -86,9 +86,12 @@
     # ── 2. the target minor's apt repository ─────────────────────────
     - name: Kubernetes apt key for the target minor  # noqa: command-instead-of-module risky-shell-pipe
       ansible.builtin.shell: |
-        set -o pipefail
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key \
-          | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg --yes
+        set -euo pipefail
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key -o "$tmp/Release.key"
+        gpg --batch --dearmor -o "$tmp/keyring.gpg" "$tmp/Release.key"
+        install -m 0644 "$tmp/keyring.gpg" /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       args:
         executable: /bin/bash
       changed_when: true
@@ -212,6 +215,8 @@
         kubelet_up=$(( now - $(date -d "$(systemctl show kubelet -p ActiveEnterTimestamp --value)" +%s) ))
         started=$({{ kubectl }} -n kube-system get pod -l component=kube-apiserver \
           -o jsonpath='{.items[0].status.containerStatuses[0].state.running.startedAt}')
+        # not running (no startedAt) is not up: an empty date reads as midnight
+        [ -n "$started" ]
         apiserver_up=$(( now - $(date -d "$started" +%s) ))
         readyz=$({{ kubectl }} get --raw /readyz)
         admin=$({{ kubectl }} auth can-i '*' '*')
