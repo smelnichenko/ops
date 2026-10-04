@@ -10,8 +10,11 @@
 #                                       `kubectl cnpg restart` sets; CNPG rolls the instances, primary last;
 #   StrimziPodSet                       strimzi.io/manual-rolling-update=true - the operator rolls the pods;
 #   Job                                 left alone: it finishes on its own sidecar.
-# A pod with an old sidecar and any other owner fails the run (nothing here would restart it). Then it waits until
-# every running pod's istio-proxy runs the target version.
+# A pod with an old sidecar and any other owner fails the run (nothing here would restart it). The data tier goes
+# first (CNPG clusters, Strimzi pod sets, StatefulSets) and is waited for, then the rest - so the apps come back to a
+# database that is up, not all at once (production has one Kafka broker, one ClickHouse, one ScyllaDB node). Then it
+# waits until every running pod's istio-proxy runs the target version. kagent's pods are restarted like any other:
+# the skew rule allows no older sidecar (operator, 2026-10-04).
 #
 # Usage: ansible-playbook -i inventory/<env>.yml playbooks/restart-mesh-workloads.yml -e istio_version=1.26.8
 - name: Bring every sidecar to the control plane's version
@@ -62,6 +65,21 @@
       delay: 15
       until: _istiod.rc == 0 and _istiod.stdout.endswith(':' ~ target)
 
+    # the CNI plugin injects nothing itself but redirects every meshed pod's traffic: on the target before any pod
+    # restarts on it
+    - name: The istio-cni DaemonSet runs the target, rolled out
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n istio-system rollout status daemonset istio-cni-node --timeout=60s > /dev/null
+        {{ kubectl }} -n istio-system get daemonset istio-cni-node -o jsonpath='{.spec.template.spec.containers[0].image}'
+      args:
+        executable: /bin/bash
+      register: _cni
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _cni.rc == 0 and _cni.stdout.endswith(':' ~ target)
+
     - name: The workloads behind pods with an older sidecar
       ansible.builtin.shell: |
         set -euo pipefail
@@ -79,24 +97,47 @@
               | list | length == 0
         fail_msg: "no restart for: {{ _stale.stdout_lines | reject('match', '^(Deployment|StatefulSet|DaemonSet|Cluster|StrimziPodSet|Job) ') | list }}"
 
-    - name: Restart them
+    - name: Restart the data tier first (CNPG clusters, Strimzi pod sets, StatefulSets)
       ansible.builtin.command: >-
         {% set kind, ns, name = item.split() %}
-        {% if kind in ['Deployment', 'StatefulSet', 'DaemonSet'] %}
-        {{ kubectl }} -n {{ ns }} rollout restart {{ kind | lower }}/{{ name }}
+        {% if kind == 'StatefulSet' %}
+        {{ kubectl }} -n {{ ns }} rollout restart statefulset/{{ name }}
         {% elif kind == 'Cluster' %}
         {{ kubectl }} -n {{ ns }} annotate clusters.postgresql.cnpg.io {{ name }}
         kubectl.kubernetes.io/restartedAt={{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }} --overwrite
         {% else %}
         {{ kubectl }} -n {{ ns }} annotate strimzipodsets.core.strimzi.io {{ name }} strimzi.io/manual-rolling-update=true --overwrite
         {% endif %}
-      loop: "{{ _stale.stdout_lines | reject('match', '^Job ') | list }}"
+      loop: "{{ _stale.stdout_lines | select('match', '^(Cluster|StrimziPodSet|StatefulSet) ') | list }}"
+      changed_when: true
+
+    - name: The data tier's sidecars are the target version (CNPG and Strimzi roll one pod at a time)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT" \
+          | { grep -E '^(Cluster|StrimziPodSet|StatefulSet) ' || [ $? -eq 1 ]; }
+      args:
+        executable: /bin/bash
+      environment:
+        SCRIPT: "{{ stale_script }}"
+      register: _data_left
+      changed_when: false
+      retries: 60
+      delay: 20
+      until: _data_left.rc == 0 and _data_left.stdout | length == 0
+
+    - name: Then the rest (Deployments, DaemonSets)
+      ansible.builtin.command: >-
+        {% set kind, ns, name = item.split() %}
+        {{ kubectl }} -n {{ ns }} rollout restart {{ kind | lower }}/{{ name }}
+      loop: "{{ _stale.stdout_lines | select('match', '^(Deployment|DaemonSet) ') | list }}"
       changed_when: true
 
     - name: Every running sidecar is the target version (CNPG and Strimzi roll one pod at a time)
       ansible.builtin.shell: |
         set -euo pipefail
-        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT" | grep -v '^Job ' || true
+        {{ kubectl }} get pods,replicasets -A -o json | TARGET='{{ target }}' python3 -c "$SCRIPT" \
+          | { grep -v '^Job ' || [ $? -eq 1 ]; }
       args:
         executable: /bin/bash
       environment:
@@ -105,7 +146,7 @@
       changed_when: false
       retries: 60
       delay: 20
-      until: _left.stdout | length == 0
+      until: _left.rc == 0 and _left.stdout | length == 0
 
     - name: Data plane caught up
       ansible.builtin.debug:
