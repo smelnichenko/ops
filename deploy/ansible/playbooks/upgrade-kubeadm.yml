@@ -69,7 +69,7 @@
       changed_when: false
 
     # kubeadm upgrade rewrites the kubelet's config.yaml from this ConfigMap: without them there, the upgrade turns the
-    # graceful node shutdown off (plan 100 review R5) - configure-node.yml puts them there first
+    # graceful node shutdown off - configure-node.yml puts them there first
     - name: The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)
       ansible.builtin.shell: |
         set -euo pipefail

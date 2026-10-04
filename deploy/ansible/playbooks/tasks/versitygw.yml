@@ -40,8 +40,8 @@
   changed_when: false
   when: _vgw_binary.stat.exists
 
-# A deb install moves the version either way: a run with the old default after an upgrade would go back (plan 100
-# step 05 moves the default in the same change)
+# A deb install moves the version either way: a run with the old default after an upgrade would go back (the
+# upgrade moves the default in the same change)
 - name: No downgrade - the installed versitygw is not newer than {{ vgw_version }}
   vars:
     _installed_version: "{{ _vgw_installed.stdout | default('') | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('', true) }}"

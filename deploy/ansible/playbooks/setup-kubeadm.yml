@@ -43,6 +43,8 @@
     prometheus_operator_crds_chart_version: "27.0.1"  # operator v0.89.0
     gateway_api_version: "v1.2.1"
     local_path_provisioner_version: "v0.0.35"
+    # the provisioner's node paths - upstream's default, as ten runs (/opt/local-path-provisioner, on the NVMe root)
+    local_path_node_paths: [{node: DEFAULT_PATH_FOR_NON_LISTED_NODES, paths: [/opt/local-path-provisioner]}]
     # ten's local-path StorageClass is not the default (its PVCs name it); Vagrant tests rely on a default
     local_path_default_class: "{{ local_path_default_class_override | default(false) }}"
     pod_cidr: "10.42.0.0/16"
@@ -680,6 +682,24 @@
     # Phase 7: Install local-path-provisioner
     # ================================================================
 
+    # The manifest replaces local-path-config: a node path set there by hand would be dropped, and new volumes would
+    # land elsewhere. So the live paths must be the ones this playbook knows (ten 2026-10-04: upstream's default), and
+    # after the apply too - a manifest that changed its default fails here rather than move new volumes.
+    - name: The live local-path node paths are the expected ones (the manifest replaces them)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig /etc/kubernetes/admin.conf -n local-path-storage get configmap local-path-config \
+            --ignore-not-found -o jsonpath='{.data.config\.json}' \
+            | python3 -c 'import json, sys; t = sys.stdin.read().strip(); print(json.dumps(json.loads(t)["nodePathMap"], sort_keys=True) if t else "none")'
+      register: _lpp_paths_before
+      changed_when: false
+      failed_when: >-
+        _lpp_paths_before.rc != 0
+        or _lpp_paths_before.stdout not in ['none', local_path_node_paths | to_json(sort_keys=True)]
+      tags: [local-path]
+
     - name: Install local-path-provisioner (Rancher's manifest, as on ten)
       # ten runs the upstream manifest applied with kubectl (namespace local-path-storage, StorageClass local-path,
       # not the default class), not a Helm release. The downstream wait polls the deployment, so a cold image pull
@@ -690,6 +710,19 @@
       register: _lpp_apply
       changed_when: "'created' in _lpp_apply.stdout or 'configured' in _lpp_apply.stdout"
       tags: [local-path]  # an upgrade runs just these three: --tags local-path -e local_path_provisioner_version=...
+
+    - name: The node paths after the apply are the expected ones still
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig /etc/kubernetes/admin.conf -n local-path-storage get configmap local-path-config \
+            -o jsonpath='{.data.config\.json}' \
+            | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["nodePathMap"], sort_keys=True))'
+      register: _lpp_paths_after
+      changed_when: false
+      failed_when: _lpp_paths_after.rc != 0 or _lpp_paths_after.stdout != local_path_node_paths | to_json(sort_keys=True)
+      tags: [local-path]
 
     - name: Make local-path the default StorageClass (Vagrant tests; not on ten)
       ansible.builtin.command: >-

@@ -34,7 +34,7 @@
 
 # kubeadm rewrites /var/lib/kubelet/config.yaml from the kube-system/kubelet-config ConfigMap on every `kubeadm
 # upgrade`: edited only in the file, both settings went back to 0s - the next reboot then gave Kafka, ClickHouse and
-# Postgres no time to flush (ten 2026-10-04: file 180s/30s, ConfigMap 0s/0s; plan 100 review R5). So they go into the
+# Postgres no time to flush (ten 2026-10-04: file 180s/30s, ConfigMap 0s/0s). So they go into the
 # ConfigMap too. A switch, so the Vagrant copy's baseline can stay as ten is until the upgrade step that sets it.
 - name: Keep the shutdown grace across kubeadm upgrades - in the kubelet-config ConfigMap
   ansible.builtin.shell: |

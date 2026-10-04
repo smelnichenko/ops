@@ -30,11 +30,15 @@
     argocd_namespace: "{{ argocd_ns | default('argocd') }}"
     argocd_chart: "argo/argo-cd"
     argocd_chart_version: "{{ argocd_version | default('9.5.4') }}"
-    # empty: the chart's own Argo CD version; set to run a newer patch of the same line than the newest chart ships
-    # (chart 9.5.11, the last of the 9.5 line, ships v3.3.9)
-    argocd_image_tag: "{{ argocd_image_tag_override | default('') }}"
+    # Empty: the chart's own Argo CD version. An image newer than the one its chart ships is pinned per chart version
+    # (chart 9.5.11 ships v3.3.9, the 3.3 line is at v3.3.14): a later chart never runs it, where a plain override,
+    # made the default when the upgrade reaches production, would put v3.3.14 under charts 10.2.2 and 10.9.6 too.
+    argocd_image_pins:
+      "9.5.11": v3.3.14
+    argocd_image_tag: "{{ argocd_image_tag_override | default(argocd_image_pins[argocd_chart_version] | default('')) }}"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
+    argocd_root_repo: schnappy/infra
     _forgejo_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
     _forgejo_password: "{{ forgejo_admin_password }}"
     validate_certs: "{{ argocd_validate_certs | default(true) }}"
@@ -47,8 +51,8 @@
     argocd_forgejo_cidrs: "{{ forgejo_cidrs | default(['192.168.11.5/32', '192.168.11.4/32', '192.168.11.6/32']) }}"
 
   tasks:
-    # Never backwards: the chart default stays what ten ran until each Argo CD step moves it (plan 100), so a re-run
-    # after an upgrade must refuse, not Helm-downgrade Argo CD and its CRDs (2026-10-04 review). First, before the
+    # Never backwards: the chart default stays what ten ran until each Argo CD upgrade moves it, so a re-run
+    # after an upgrade must refuse, not Helm-downgrade Argo CD and its CRDs. First, before the
     # Forgejo token is replaced.
     - name: No downgrade - the Argo CD chart and image now running
       ansible.builtin.shell: |
@@ -113,7 +117,38 @@
       ansible.builtin.debug:
         msg: "Creating personal access token for Argo CD Git access"
 
-    - name: Check existing Forgejo tokens
+    # The token Argo CD reads git with is kept while it works - a re-run (each Argo CD upgrade step runs this) changes
+    # nothing. A new one is made only when it does not, under a new name, written to the secret, and only then are the
+    # older ones deleted: this deleted the token first and created its replacement after, so Argo CD's credentials
+    # were revoked in between - for good if the create failed.
+    - name: The repo credentials Argo CD has now
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Secret
+        namespace: "{{ argocd_namespace }}"
+        name: forgejo-repo-creds
+      register: _repo_creds
+      no_log: true
+
+    # the root app's repository, read with it: the token's one scope is read:repository - /api/v1/user answers 403
+    # to it (user scope), and a token Forgejo does not know gets 401 even on a public repository
+    - name: Does its token still read the root app's repository
+      ansible.builtin.uri:
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/repos/{{ argocd_root_repo }}"
+        method: GET
+        headers:
+          Authorization: "token {{ _repo_creds.resources[0].data.password | b64decode }}"
+        validate_certs: "{{ validate_certs }}"
+        status_code: [200, 401, 403]
+      register: _token_check
+      when: _repo_creds.resources | length > 0 and _repo_creds.resources[0].data.password is defined
+      no_log: true
+
+    - name: Facts - keep the token, or make a new one
+      ansible.builtin.set_fact:
+        _token_works: "{{ _token_check.status | default(0) == 200 }}"
+
+    - name: Forgejo's tokens of this user
       ansible.builtin.uri:
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: GET
@@ -124,23 +159,9 @@
         status_code: 200
       register: existing_tokens
       changed_when: false
+      when: not _token_works | bool
 
-    - name: Find existing Argo CD token
-      ansible.builtin.set_fact:
-        existing_argocd_token: "{{ existing_tokens.json | selectattr('name', 'equalto', 'argocd') | list | first | default(None) }}"
-
-    - name: Delete existing Argo CD token (to get fresh secret)
-      ansible.builtin.uri:
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ existing_argocd_token.id }}"
-        method: DELETE
-        user: "{{ _forgejo_user }}"
-        password: "{{ _forgejo_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ validate_certs }}"
-        status_code: 204
-      when: existing_argocd_token is not none
-
-    - name: Create Forgejo PAT for Argo CD
+    - name: A new token for Argo CD, under a new name (the old one stays until the secret holds the new one)
       ansible.builtin.uri:
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: POST
@@ -150,15 +171,13 @@
         validate_certs: "{{ validate_certs }}"
         body_format: json
         body:
-          name: "argocd"
+          name: "argocd-{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%S') }}"
           scopes:
             - "read:repository"
         status_code: 201
       register: argocd_token_result
-
-    - name: Set Argo CD token fact
-      ansible.builtin.set_fact:
-        argocd_git_token: "{{ argocd_token_result.json.sha1 }}"
+      changed_when: true
+      when: not _token_works | bool
       no_log: true
 
     - name: Create Forgejo repo credentials secret for Argo CD
@@ -177,8 +196,25 @@
             type: git
             url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
             username: "{{ _forgejo_user }}"
-            password: "{{ argocd_git_token }}"
+            password: "{{ argocd_token_result.json.sha1 }}"
+      when: not _token_works | bool
       no_log: true
+
+    - name: Delete the older Argo CD tokens (the secret holds the new one now)
+      ansible.builtin.uri:
+        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        user: "{{ _forgejo_user }}"
+        password: "{{ _forgejo_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ validate_certs }}"
+        status_code: 204
+      loop: >-
+        {{ existing_tokens.json | default([])
+           | selectattr('name', 'match', '^argocd(-[0-9T]+)?$') | list }}
+      loop_control:
+        label: "{{ item.name }}"
+      when: not _token_works | bool
 
     # ================================================================
     # Phase 3: Deploy Argo CD via Helm
@@ -366,8 +402,8 @@
           notifications:
             enabled: false
 
-          applicationSet:
-            enabled: false
+          # no applicationSet key: the chart has no switch for its controller (an `enabled: false` here rendered the
+          # same, 9.5.4 and 9.5.11), and production's ApplicationSets (schnappy-apps-envs, schnappy-data-envs) need it
 
     - name: Wait for argocd-server to be ready
       kubernetes.core.k8s_info:
@@ -648,7 +684,7 @@
           spec:
             project: default
             source:
-              repoURL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/schnappy/infra.git"
+              repoURL: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/{{ argocd_root_repo }}.git"
               targetRevision: main
               path: clusters/production/argocd/apps
             destination:

@@ -1,8 +1,8 @@
 ---
 # Fail closed before a run would take the node or the cluster backwards. Until a playbook's pins follow an upgrade
-# (plan 100: each production step moves its default in the same change), a re-run must refuse rather than downgrade:
-# after the containerd.io step a full setup-kubeadm run would put Debian's containerd 1.7 back under every pod
-# (2026-10-04 review). Each check applies only when the tasks it guards are about to run - an upgrade passes --tags
+# (each production upgrade moves its default in the same change), a re-run must refuse rather than downgrade:
+# after the containerd.io step a full setup-kubeadm run would put Debian's containerd 1.7 back under every pod.
+# Each check applies only when the tasks it guards are about to run - an upgrade passes --tags
 # and -e for its own component. Included first by setup-kubeadm.yml, with tags: always.
 #
 # Uses: k8s_package_version, cilium_version, local_path_provisioner_version, gateway_api_version,
@@ -17,7 +17,7 @@
     fail_msg: >-
       REFUSED: this node runs containerd.io {{ ansible_facts.packages['containerd.io'][0].version
       | default('') }}; a full run of this playbook installs Debian's containerd over it - make it install
-      containerd.io first (plan 100, step 15)
+      containerd.io first (as upgrade-containerd.yml does)
     quiet: true
   when: "'all' in ansible_run_tags"
 

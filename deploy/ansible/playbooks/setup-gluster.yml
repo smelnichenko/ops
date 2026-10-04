@@ -137,7 +137,7 @@
 
     # A volume absent from glusterd's own list is new; any CLI error fails here. Read as "no volume" (`|| echo 0`), an
     # error took the new-install path on a live cluster: Forgejo stopped, data copied into the live brick behind
-    # Gluster's back (plan 100 review R8).
+    # Gluster's back.
     - name: Count existing forgejo-repos bricks
       ansible.builtin.shell: |
         set -euo pipefail
@@ -251,7 +251,7 @@
 # ─── Mounts at boot: after the volumes' bricks are up ──────────────────────
 # At a cold boot the three nodes start together. systemd mounted each volume before any of its bricks had started:
 # the client got the volfile, found every brick down ("first lookup on root failed"), exited - and nothing tried
-# again; Forgejo and versitygw failed on their missing mounts and stayed down (plan 100 defect 22, Vagrant
+# again; Forgejo and versitygw failed on their missing mounts and stayed down (Vagrant,
 # 2026-10-04). gluster-volumes-ready returns once every volume in fstab mounts (a trial mount); the volumes' mount
 # units are ordered after it (x-systemd.after in their fstab options, the plays below), the services after their
 # mounts (RequiresMountsFor) - all of them wait, however long the bricks take.
