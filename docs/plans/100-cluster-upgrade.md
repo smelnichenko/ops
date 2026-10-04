@@ -408,6 +408,46 @@ Test harness
 Plan and claims
 - R24 Every false or stale claim the reviews listed, corrected in this file, the step files and playbook comments.
 
+## Support matrices and the new step order (R14; official pages read 2026-10-04)
+
+Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
+releases, Argo CD tested-kubernetes-versions, cert-manager releases, cloudnative-pg supported_releases,
+external-secrets stability-support, Scylla Operator releases + metadata.yaml, Strimzi downloads, Velero README):
+
+| Component | Versions in the plan | Kubernetes |
+|---|---|---|
+| Istio | 1.25 / 1.26 / 1.27 / 1.28 / 1.29 / 1.30 / 1.31 | 1.29-1.32 / 1.29-1.33 / 1.29-1.33 / 1.30-1.34 / 1.31-1.35 / 1.32-1.36 / 1.32-1.36 |
+| Cilium | 1.19 / 1.20 | 1.32-1.35 / 1.33-1.36 |
+| containerd | 1.7.24 (below 1.34's floor 1.7.28; EOL 2026-09-30) / 2.3.6 | 2.3 listed for 1.36+ only; 1.35 accepts 1.7.28+, 2.1.5+, 2.2+; 1.36 needs 2.2+ |
+| Argo CD | 3.3 / 3.4 / 3.5 | 1.32-1.35 / 1.32-1.35 / 1.33-1.36 |
+| cert-manager | 1.20 / 1.21 | 1.32-1.35 / 1.33-1.36 |
+| CNPG | 1.29 (EOL 2026-09-29) / 1.30 | 1.33-1.35 / 1.34-1.36 |
+| External Secrets | 2.2 / 2.11 | 1.34-1.35 / 1.36 only |
+| Scylla Operator | 1.20 / 1.21 / 1.22 | 1.32-1.35 / 1.33-1.36 / 1.33-1.36 |
+| Strimzi | 0.51 / 1.2 | 1.30-1.35 / 1.30-1.36 |
+| kube-state-metrics | 2.18 / 2.20 | pairs with 1.34 / 1.36 |
+| kubectl images (alpine/k8s 1.34.0) | no step moves it | +-1 minor of the API server: out at 1.36 |
+
+Pairings: ScyllaDB 6.2.3 is outside operator 1.20's and Manager 3.9's lists today; operator 1.22 lists ScyllaDB 2025.1,
+2026.1-2026.3, but Manager 3.12 lists 2025.1, 2025.4, 2026.1, 2026.2 - not 2026.3. Istio pins Gateway API per
+release: 1.25 v1.2.1, 1.26-1.27 v1.3.0, 1.28-1.29 v1.4.0, 1.30 v1.5.1 (install v1.5 before 1.30 - a hard minimum),
+1.31 v1.6.0. Gateway API v1.5 refuses a downgrade (step 18 is one-way). Strimzi 0.51 -> 1.2 directly: not yet
+checked against Strimzi's upgrade notes.
+
+The current order runs Argo CD 3.3, cert-manager 1.20, ESO 2.2, Strimzi 0.51 and Scylla Operator 1.20 on Kubernetes
+1.36 (steps 26-37), Istio 1.25-1.28 on 1.35 (16-22). Proposed order (each step's content unchanged):
+A (at 1.34): 19, 20, 21, 22, 23 (Istio 1.29 before 1.35 - 1.28 ends at 1.34), 18, 24, 25, 04, 13, 14, 15, 36, 37,
+38, 39, 40; B: 01, 02, 03, 05, 06, 07, 09, 10, 11, 12; C (move to 1.36-capable versions, still on 1.34): 17, 29, 30,
+31, 32, 33, 34, 35, 27; D: 16, 26, 28 (right after 26: ESO 2.11 lists 1.36 only), 08 (ksm 2.20 pairs with 1.36);
+E: 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, then 41. Every moved step is re-proven by the full run.
+Unavoidable windows: Istio 1.26-1.27 on 1.34 (one minor at a time); containerd 2.3 is listed for 1.36 only (a direct
+1.7 -> 2.3 LTS hop is supported by containerd); ESO 2.2 on 1.36 between 26 and 28; ksm 2.18 on 1.35.
+Mine to fix: the kubectl images to 1.35.x before 26; step 25's comment (Istio 1.31: 1.32-1.36, not 1.37); the
+Versions table's Manager 3.12.1 (step 40 ships 3.12.0).
+For the operator: ScyllaDB target 2026.3 (outside Manager 3.12's list) or 2026.1 LTS; containerd in one hop or three
+(1.7.29, 2.2.6, 2.3.6 - zero window, two more steps); ESO 2.8 before 26 (no window) or not; Gateway API v1.5.1 or
+on to v1.6 after Istio 1.31.
+
 ## Stateful steps - for the operator's approval
 
 Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first
