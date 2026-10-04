@@ -288,6 +288,24 @@ before production; defect 22 (Gluster cold boot) is fixed in production. Checked
 works (Scylla Manager task schnappy-production-daily-backup, 158 runs, last 2026-10-04 03:00 DONE) - defect 20 was
 wrong about Scylla; Kafka has none.
 
+Read-only pre-checks on ten and the Pis, 2026-10-04 (results feed the fixes):
+- containerd: ten's config.toml is containerd 1.7's default plus SystemdCgroup=true, nothing else; root
+  /var/lib/containerd on the NVMe root. The Docker apt source is exactly what upgrade-containerd.yml writes.
+- kubelet: config.yaml has shutdownGracePeriod 180s / 30s, the kubelet-config ConfigMap 0s / 0s - each kubeadm
+  upgrade would reset them (R5 confirmed). kubeadm-config keeps terminated-pod-gc-threshold 100.
+- local-path: upstream's config, /opt/local-path-provisioner on the NVMe root (plan 071's /mnt/storage is wrong).
+- Helm on ten: argocd chart 9.5.4 (v3.3.8), cilium 1.19.1, external-secrets 2.2.0; root's cilium repo index (April)
+  has neither 1.19.8 nor 1.20.2 (R16 confirmed).
+- Argo: all 31 apps Synced + Healthy.
+- CNPG: production on timeline 3 (00000003.history in the archive) - PostgreSQL 18 restarting at timeline 1 on the
+  same path is R1 confirmed. Test cluster on timeline 1.
+- ScyllaCluster version/agentVersion and Kafka spec.kafka.version are owned by argocd-controller: the inherited
+  managedFieldsManagers ignore rules do not hide those bumps.
+- kagent's pods (its Postgres too) carry istio-proxy: they restart with the mesh (operator's decision).
+- apt-cacher-ng:7b46aea from git.pmon.dev: anonymous pull refused (401) - step 01 needs imagePullSecrets.
+- Pis: every Gluster mount's source is <own address>:/<volume> - setup-gluster's remount condition holds; versitygw
+  1.6.0 on both.
+
 Fix list (status: open unless marked):
 
 Production / data
