@@ -384,7 +384,9 @@ Test harness
   ends the wait; comparedTo not checked. DONE: tests/ansible/upgrade/files/argo-settled.py - per app Synced, Healthy,
   nothing running, the last sync not Failed/Error, comparedTo = spec, on the pushed commit; per pod ready (a
   node-shutdown leftover excepted: ten has 13); a failed kubectl call is not green; green held for stable_polls polls
-  with no container restarting in between (4 = 30 s; the runner's first wait, before the playbooks, 1). Proven: ten's
+  with no container restarting in between (4 = 30 s; the runner's first wait, before the playbooks, 1), and no
+  container restarted in the last 5 min (CrashLoopBackOff's longest back-off: a crash loop never settles, one restart
+  costs at most 5 min - fixture: restarted 60 s ago not ready, 400 s ago ready). Proven: ten's
   state read-only GREEN (31 apps); one-fault fixtures each NOT GREEN on their fault; a simulated loop - a restart
   resets the count, a crash loop and a pod restarting every 30 s while "ready" never settle, a failed poll resets;
   Vagrant without Argo: every poll failed, NOT SETTLED, the task failed.

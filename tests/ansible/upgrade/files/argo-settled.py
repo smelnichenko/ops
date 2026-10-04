@@ -7,14 +7,17 @@ the pushed commit. Per pod: Succeeded, or Running with every container ready. A 
 never "nothing to wait for".
 
 Green must hold for --stable-polls polls in a row with no container restarting in between: one green poll can be the
-moment between two crash loops, or Argo still showing the health it had before a restart. Restarts since the wait began
-are listed when it ends.
+moment between two crash loops, or Argo still showing the health it had before a restart. And no container may have
+restarted in the last --restart-quiet seconds (300 = CrashLoopBackOff's longest back-off): a crash loop restarts within
+it, so it never settles, while one restart costs at most that long. Restarts since the wait began are listed when it
+ends.
 
 Exit 0 settled, 1 not settled in --minutes (the state of everything not green is printed), 2 bad arguments.
 --once evaluates one poll and exits; --apps-json/--pods-json evaluate saved `kubectl get -o json` output instead of
 the cluster (both for checking this script).
 """
 import argparse
+import datetime
 import json
 import os
 import subprocess
@@ -66,28 +69,42 @@ def node_shutdown_leftover(status):
             and "node shutdown" in status.get("message", ""))
 
 
-def pod_state(pod):
-    """(ready, restarts) of a pod: Succeeded, or Running with every container ready; a node-shutdown leftover is no
-    pod to wait for."""
+def last_restart_age(containers, now):
+    """Seconds since the latest container restart of a pod (its previous run ended), None if none restarted."""
+    ends = [c["lastState"]["terminated"]["finishedAt"] for c in containers
+            if c.get("restartCount", 0) > 0 and c.get("lastState", {}).get("terminated", {}).get("finishedAt")]
+    if not ends:
+        return None
+    latest = max(datetime.datetime.fromisoformat(e.replace("Z", "+00:00")) for e in ends)
+    return (now - latest).total_seconds()
+
+
+def pod_state(pod, now=None, quiet=0):
+    """(ready, restarts, why) of a pod: Succeeded, or Running with every container ready and none restarted in the
+    last `quiet` seconds; a node-shutdown leftover is no pod to wait for."""
     status = pod.get("status", {})
     containers = status.get("containerStatuses") or []
     restarts = sum(c.get("restartCount", 0) for c in containers)
     if status.get("phase") == "Succeeded" or node_shutdown_leftover(status):
-        return True, restarts
-    ready = status.get("phase") == "Running" and bool(containers) and all(c.get("ready") for c in containers)
-    return ready, restarts
+        return True, restarts, ""
+    if not (status.get("phase") == "Running" and containers and all(c.get("ready") for c in containers)):
+        return False, restarts, status.get("phase", "?")
+    age = last_restart_age(containers, now or datetime.datetime.now(datetime.timezone.utc))
+    if age is not None and age < quiet:
+        return False, restarts, f"restarted {age:.0f} s ago"
+    return True, restarts, ""
 
 
-def evaluate(apps, pods, allowed, mirror):
+def evaluate(apps, pods, allowed, mirror, now=None, quiet=0):
     """One poll: (green, app problems by name, pods not ready, restart counts by pod uid)."""
     problems = {a["metadata"]["name"]: p for a in apps["items"] if (p := app_problems(a, allowed, mirror))}
     not_ready, restarts = [], {}
     for pod in pods["items"]:
         meta = pod["metadata"]
-        ready, count = pod_state(pod)
+        ready, count, why = pod_state(pod, now, quiet)
         restarts[meta["uid"]] = (f"{meta['namespace']}/{meta['name']}", count)
         if not ready:
-            not_ready.append(f"{meta['namespace']}/{meta['name']} ({pod.get('status', {}).get('phase', '?')})")
+            not_ready.append(f"{meta['namespace']}/{meta['name']} ({why})")
     green = len(apps["items"]) > 0 and not problems and not not_ready
     return green, problems, not_ready, restarts
 
@@ -116,6 +133,8 @@ def main():
     ap.add_argument("--minutes", type=float, default=40)
     ap.add_argument("--poll", type=float, default=10)
     ap.add_argument("--stable-polls", type=int, default=6)
+    ap.add_argument("--restart-quiet", type=float, default=300)
+    ap.add_argument("--now", help="the time to judge restarts by (ISO 8601; with --apps-json), default now")
     ap.add_argument("--allow-out-of-sync", default="")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--apps-json")
@@ -130,7 +149,8 @@ def main():
     if a.apps_json:
         with open(a.apps_json) as f_apps, open(a.pods_json) as f_pods:
             apps, pods = json.load(f_apps), json.load(f_pods)
-        green, problems, not_ready, _ = evaluate(apps, pods, allowed, mirror)
+        now = datetime.datetime.fromisoformat(a.now.replace("Z", "+00:00")) if a.now else None
+        green, problems, not_ready, _ = evaluate(apps, pods, allowed, mirror, now, a.restart_quiet)
         print(("GREEN " if green else "NOT GREEN ") + summary(apps, problems, not_ready, allowed))
         report(problems, not_ready)
         return 0 if green else 1
@@ -141,7 +161,7 @@ def main():
         try:
             apps = kubectl(a.kubeconfig, "-n", "argocd", "get", "applications.argoproj.io", "-o", "json")
             pods = kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json")
-            green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror)
+            green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror, None, a.restart_quiet)
             line = summary(apps, problems, not_ready, allowed)
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             green, problems, not_ready, restarts, line = False, {}, [], last or {}, f"poll failed: {e}"
