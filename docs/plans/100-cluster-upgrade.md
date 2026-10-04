@@ -232,8 +232,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 43 | Valkey 9.1.2 | infra + platform | green |
 | 44 | Grafana 13.2.3 (one-way storage migration) | infra | S; green (database ok, 6 dashboards as on ten, 3 datasources) |
 | 45-47 | Mimir 3.0.8, 3.1.6, 3.2.1 | infra | green |
-| 48 | Tempo 3.1.0 (monolithic, one-way) | infra + platform | S; running |
-| 49 | Fluent Bit 5.1.3 | infra | |
+| 48 | Tempo 3.1.0 (monolithic, one-way) | infra + platform | S; green (v3.1.0 receiving OTLP and Zipkin spans, search answers) |
+| 49 | Fluent Bit 5.1.3 | infra | running |
 | 50 | Centrifugo 6.9.7 | infra + platform | |
 | 51 | SonarQube 26.9.0 - not in the Vagrant copy: production-only | infra + platform | n/a |
 | 52 | ClickHouse compatibility 24.8 (keeps formats readable for a rollback) | platform | |
