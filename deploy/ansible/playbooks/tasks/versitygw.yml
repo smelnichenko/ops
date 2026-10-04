@@ -29,14 +29,26 @@
     vgw_backend_dir: "{{ vgw_backend_dir | default('/var/lib/minio/data/buckets') }}"
     vgw_sidecar_dir: "{{ vgw_sidecar_dir | default('/var/lib/minio/data/.sidecar') }}"
 
+- name: The versitygw binary (absent on a first run)
+  ansible.builtin.stat:
+    path: /usr/bin/versitygw
+  register: _vgw_binary
+
 - name: Check installed versitygw version
   ansible.builtin.command: versitygw --version
   register: _vgw_installed
   changed_when: false
-  # Binary is absent on first run (rc != 0); rc/stdout drives the install
-  # 'when' below. apt(deb:) is itself idempotent, so even a missed version
-  # string only causes a redundant re-fetch, never a bad install.
-  failed_when: false
+  when: _vgw_binary.stat.exists
+
+# A deb install moves the version either way: a run with the old default after an upgrade would go back (plan 100
+# step 05 moves the default in the same change)
+- name: No downgrade - the installed versitygw is not newer than {{ vgw_version }}
+  vars:
+    _installed_version: "{{ _vgw_installed.stdout | default('') | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('', true) }}"
+  ansible.builtin.assert:
+    that: _installed_version == '' or _installed_version is version(vgw_version, '<=')
+    fail_msg: "REFUSED: versitygw {{ _installed_version }} is installed; this run would install {{ vgw_version }} - set vgw_version"
+    quiet: true
 
 - name: Install versitygw {{ vgw_version }}
   ansible.builtin.apt:
@@ -114,18 +126,61 @@
     state: started
     daemon_reload: true
 
-- name: Restart versitygw if unit or env changed
-  ansible.builtin.systemd:
-    name: versitygw
-    state: restarted
-  when: _vgw_unit is changed or _vgw_env is changed
+# A new package replaces the binary under the running gateway, which keeps serving the old one ("(deleted)"): the
+# upgrade restarted nothing, and a run that failed between install and restart left no trace for the next. So the
+# running process is compared with the installed binary, whatever this run changed.
+- name: The binary the running versitygw executes
+  ansible.builtin.shell: |
+    set -euo pipefail
+    pid=$(systemctl show -p MainPID --value versitygw)
+    if [ "$pid" = 0 ]; then echo "not running"; else readlink /proc/$pid/exe; fi
+  args:
+    executable: /bin/bash
+  register: _vgw_running_exe
+  changed_when: false
 
-- name: Wait for versitygw health
-  ansible.builtin.uri:
-    url: "http://localhost:{{ vgw_port }}/health"
-    status_code: 200
+- name: Facts - does versitygw need a restart here
+  ansible.builtin.set_fact:
+    _vgw_restart: "{{ _vgw_unit is changed or _vgw_env is changed or _vgw_running_exe.stdout != '/usr/bin/versitygw' }}"
+
+# one Pi at a time, each serving again before the next: both gateways down at once is the backup store down
+- name: Restart versitygw where needed - one Pi at a time, each healthy before the next  # noqa: command-instead-of-module
+  ansible.builtin.shell: |
+    set -euo pipefail
+    systemctl restart versitygw
+    for _ in $(seq 30); do
+      if curl -fsS -o /dev/null http://localhost:{{ vgw_port }}/health; then
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "versitygw on {{ item }} not healthy 60 s after its restart" >&2
+    exit 1
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ item }}"
+  loop: >-
+    {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vgw_restart', 'defined') | selectattr('_vgw_restart')
+       | map(attribute='inventory_hostname') | list }}
+  run_once: true
+  changed_when: true
+
+- name: Versitygw serves, on the installed binary, version {{ vgw_version }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -fsS -o /dev/null http://localhost:{{ vgw_port }}/health
+    pid=$(systemctl show -p MainPID --value versitygw)
+    echo "running $(readlink /proc/$pid/exe)"
+    versitygw --version
+  args:
+    executable: /bin/bash
+  register: _vgw_serving
+  changed_when: false
   retries: 20
   delay: 3
+  until: >-
+    _vgw_serving.rc == 0 and 'running /usr/bin/versitygw' in _vgw_serving.stdout_lines
+    and vgw_version in _vgw_serving.stdout
 
 # Buckets are top-level dirs, but create them via the S3 API so versitygw also
 # records the bucket in its sidecar metadata (idempotent).

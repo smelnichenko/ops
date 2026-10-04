@@ -353,7 +353,12 @@ Rollout behaviour
 - R14 Step order inside every support matrix (operator); test env before production for Postgres, Kafka, ScyllaDB
   (versions as values per environment).
 - R15 Step 05: the Pis' versitygw upgrade never restarts the service; restart on version change, one Pi at a time;
-  assert the running version.
+  assert the running version. DONE: a restart wherever the running process is not the installed binary (a package
+  upgrade leaves it on "(deleted)"; a run failing between install and restart is caught by the next), one Pi at a
+  time, each healthy before the next; the run ends only with every Pi serving the installed binary at vgw_version; a
+  lower vgw_version than installed is refused. Vagrant: 1.6.0 re-run no change; 1.8.0 - both "(deleted)" after the
+  install, restarted pi1 then pi2, both 1.8.0; re-run no change; 1.6.0 refused. Step 05's earlier green left the Pis
+  running 1.6.0 (nothing checked the process).
 - R16 Cilium on ten: helm repo index never refreshed (steps 13/17 would fail); compare rendered cilium-config with the
   live, hand-patched one; upgradeCompatibility for 1.19->1.20. DONE: the repo refreshed (force_update); one
   cilium_values for install and check; before an upgrade the running chart is rendered from them on the node's Helm and
