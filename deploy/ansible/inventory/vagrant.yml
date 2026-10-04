@@ -57,6 +57,8 @@ all:
     postgres_replication_password: "vagrant-pg-repl-pw"
     backup_root_user: "velero-admin"
     backup_root_password: "vagrant-minio-pw"
+    # SonarQube is not in the Vagrant copy: the Wave 0 postgres backup has no SonarQube database to dump here
+    upgrade_backup_sonarqube: false
     nexus_admin_password: "vagrant-nexus-pw"
     keepalived_vrrp_password: "k33p4l1v"
     argocd_keycloak_client_secret: "vagrant-argocd-oidc-secret"

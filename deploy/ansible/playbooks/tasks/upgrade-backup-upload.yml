@@ -1,9 +1,9 @@
 ---
 # One file of a Wave 0 backup into the Pi backup store: the object, its sha256 beside it (<key>.sha256), and the
-# object read back whole - its sha256 must be the file's. Signed with curl's own S3 signing (ten has no S3 client).
+# object read back whole - its sha256 must be the file's. Signed with curl's own S3 signing (ten has no S3 client),
+# the credentials from the curl config store_curl (never on a command line or in the environment).
 #
-# Expects: upload_file (a path on this host), upload_key, upgrade_backup_endpoint, upgrade_backup_bucket,
-#          backup_root_user, backup_root_password.
+# Expects: upload_file (a path on this host), upload_key, upgrade_backup_endpoint, upgrade_backup_bucket, store_curl.
 - name: "Upload - the sha256 of the file: {{ upload_key }}"
   ansible.builtin.command: sha256sum {{ upload_file }}
   register: _upload_sum
@@ -15,15 +15,11 @@
     cmd: |
       set -euo pipefail
       put() {
-        curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" -T "$1" \
-          "{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/$2"
+        curl -fsS -K {{ store_curl }} -T "$1" "{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/$2"
       }
       echo "{{ _upload_sum.stdout.split()[0] }}" > {{ upload_file }}.sha256
       put {{ upload_file }} {{ upload_key }}
       put {{ upload_file }}.sha256 {{ upload_key }}.sha256
-  environment:
-    STORE_KEY: "{{ backup_root_user }}"
-    STORE_SECRET: "{{ backup_root_password }}"
   changed_when: true
 
 - name: "Upload - read back, its sha256 the file's: {{ upload_key }}"
@@ -31,11 +27,8 @@
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" \
-        "{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/{{ upload_key }}" | sha256sum | cut -d' ' -f1
-  environment:
-    STORE_KEY: "{{ backup_root_user }}"
-    STORE_SECRET: "{{ backup_root_password }}"
+      curl -fsS -K {{ store_curl }} "{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/{{ upload_key }}" \
+        | sha256sum | cut -d' ' -f1
   register: _upload_back
   changed_when: false
   failed_when: _upload_back.rc != 0 or _upload_back.stdout != _upload_sum.stdout.split()[0]
