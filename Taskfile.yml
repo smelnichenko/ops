@@ -411,6 +411,8 @@ tasks:
       # apps the step leaves OutOfSync on purpose (its argo-out-of-sync lines), allowed only after its playbooks
       OUT_OF_SYNC:
         sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
+      BACKUP_CHECK:
+        sh: scripts/upgrade-expected-inventory.py --backup-check {{.STEP}}
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
@@ -426,8 +428,14 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}}
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
-      # a Velero backup from production's daily schedule, volumes included, into the Pi backup store
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
+      # a Velero backup from production's daily schedule, volumes included, into the Pi backup store - only after a
+      # step that can change what it runs on (the step file's backup-check line): ~8 min, half a step's time
+      - cmd: |
+          if [ "{{.BACKUP_CHECK}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
+          else
+            echo "BACKUP CHECK: not after this step (no backup-check line)"
+          fi
       # a new local-path volume provisioned, written and read back
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/storage-check.yml
       # Prometheus reconciled, every target up, Mimir receiving

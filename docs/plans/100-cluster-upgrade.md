@@ -189,7 +189,7 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
 - **The Velero backup check runs only after the 17 steps that can change what it runs on** (a step file's
   `backup-check` line: Velero, the store, the node, the network, storage, the credentials, the pods it backs up, the
   first and the last step). It ran after every step until full run 2, at ~8 of each step's ~15 minutes; the runner
-  reads the marks from the run after full run 2 (operator, 2026-10-04: full run 2 stays as it started).
+  reads the marks from full run 3 on (2026-10-04; full run 2 stopped at step 24 to restart with every fix).
 - **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
   ConfigMap change, so steps 52 and 54 change nothing in the running server; the image bumps right after them (53,
   55) restart it with the pin in place before the new version writes a part - the order that matters. Checked with
@@ -212,7 +212,8 @@ S = stateful (shown to the operator with the exact change before it runs in prod
 
 **Every step green on its own in Vagrant: 2026-10-04 06:23** (01-55; 51 changes nothing in the copy). Full run 1
 (06:24): build and steps 01-15 green, step 16 failed - upgrade-kubeadm.yml finished while the new kubelet restarted
-the control plane (fixed efb07bb). Full run 2 started 11:04, from nothing.
+the control plane (fixed efb07bb). Full run 2 (11:04): steps 01-23 green, stopped at 24 by the operator to restart
+with every fix - the guards, backup checks only on their 17 steps, the restore check at the end. Full run 3 next.
 
 **Gate before the production rollout** (operator, 2026-10-03): every step green on its own, then one full run green -
 `task test:upgrade:full`: the Vagrant copy built from nothing, then steps 01-55 in order, unattended, every check
