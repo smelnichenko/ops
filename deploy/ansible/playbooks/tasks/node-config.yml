@@ -31,3 +31,35 @@
     name: kubelet
     state: restarted
   when: _kubelet_grace is changed or _kubelet_grace_critical is changed
+
+# kubeadm rewrites /var/lib/kubelet/config.yaml from the kube-system/kubelet-config ConfigMap on every `kubeadm
+# upgrade`: edited only in the file, both settings went back to 0s - the next reboot then gave Kafka, ClickHouse and
+# Postgres no time to flush (ten 2026-10-04: file 180s/30s, ConfigMap 0s/0s; plan 100 review R5). So they go into the
+# ConfigMap too. A switch, so the Vagrant copy's baseline can stay as ten is until the upgrade step that sets it.
+- name: Keep the shutdown grace across kubeadm upgrades - in the kubelet-config ConfigMap
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k="kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system"
+    patch=$(mktemp)
+    trap 'rm -f "$patch"' EXIT
+    $k get configmap kubelet-config -o json | python3 -c '
+    import json, re, sys
+    data = json.load(sys.stdin)["data"]["kubelet"]
+    new = data
+    for key, value in (("shutdownGracePeriod", "180s"), ("shutdownGracePeriodCriticalPods", "30s")):
+        if re.search(r"(?m)^" + key + r":", new):
+            new = re.sub(r"(?m)^" + key + r":.*$", key + ": " + value, new)
+        else:
+            new = new.rstrip("\n") + "\n" + key + ": " + value + "\n"
+    if new != data:
+        print(json.dumps({"data": {"kubelet": new}}))
+    ' > "$patch"
+    if [ -s "$patch" ]; then
+      $k patch configmap kubelet-config --type merge --patch-file "$patch" > /dev/null
+      echo patched
+    fi
+  args:
+    executable: /bin/bash
+  register: _kubelet_config_map
+  changed_when: "'patched' in _kubelet_config_map.stdout"
+  when: kubelet_grace_in_kubelet_config_map | default(true) | bool

@@ -27,6 +27,9 @@ all:
     # setup-kubeadm: External Secrets by Helm as ten had it (2026-04-05, CRDs included) - with platform_by_argo the
     # default is off, as on ten today
     external_secrets_by_helm_override: true
+    # tasks/node-config.yml: the kubelet's shutdown grace only in its file, not in the kubelet-config ConfigMap - as ten
+    # is until the upgrade step that sets it there (it runs configure-node.yml with this set true)
+    kubelet_grace_in_kubelet_config_map: false
     # upgrade-kubeadm.yml: the isolation's CoreDNS `template` blocks (tests/ansible/upgrade/isolate-cluster.yml) are
     # unknown to kubeadm's Corefile migration, which refuses a CoreDNS bump over them; ten's Corefile has none
     k8s_upgrade_ignore_preflight_errors_override: CoreDNSUnsupportedPlugins

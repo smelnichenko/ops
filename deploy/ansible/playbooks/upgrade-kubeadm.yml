@@ -68,6 +68,21 @@
       ansible.builtin.command: "{{ kubectl }} wait node --all --for=condition=Ready --timeout=120s"
       changed_when: false
 
+    # kubeadm upgrade rewrites the kubelet's config.yaml from this ConfigMap: without them there, the upgrade turns the
+    # graceful node shutdown off (plan 100 review R5) - configure-node.yml puts them there first
+    - name: The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n kube-system get configmap kubelet-config -o jsonpath='{.data.kubelet}' \
+          | grep -E '^shutdownGracePeriod(CriticalPods)?:' | sort
+      args:
+        executable: /bin/bash
+      register: _grace_in_map
+      changed_when: false
+      failed_when: >-
+        _grace_in_map.rc != 0
+        or _grace_in_map.stdout_lines != ['shutdownGracePeriod: 180s', 'shutdownGracePeriodCriticalPods: 30s']
+
     # ── 2. the target minor's apt repository ─────────────────────────
     - name: Kubernetes apt key for the target minor  # noqa: command-instead-of-module risky-shell-pipe
       ansible.builtin.shell: |
@@ -155,6 +170,18 @@
       retries: 30
       delay: 10
       until: _node.rc == 0 and _node.stdout == 'v' ~ target
+
+    - name: The kubelet runs with the shutdown grace after the upgrade (180s / 30s)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        grep -E '^shutdownGracePeriod(CriticalPods)?:' /var/lib/kubelet/config.yaml | sort
+      args:
+        executable: /bin/bash
+      register: _grace_in_file
+      changed_when: false
+      failed_when: >-
+        _grace_in_file.rc != 0
+        or _grace_in_file.stdout_lines != ['shutdownGracePeriod: 180s', 'shutdownGracePeriodCriticalPods: 30s']
 
     - name: Every control-plane pod is Ready on the new version
       ansible.builtin.shell: |
