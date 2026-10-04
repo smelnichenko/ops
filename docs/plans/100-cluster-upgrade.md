@@ -241,8 +241,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 50 | Centrifugo 6.9.7 | infra + platform | green |
 | 51 | SonarQube 26.9.0 - not in the Vagrant copy: production-only | infra + platform | n/a (the step ran green: nothing else moved) |
 | 52 | ClickHouse compatibility 24.8 (keeps formats readable for a rollback) | platform | green (in effect from 53's restart) |
-| 53 | ClickHouse 25.8.33.6 | infra + platform | S; running (25.8.33.6 up with compatibility 24.8, logs flowing) |
-| 54 | ClickHouse compatibility 25.8 | platform | |
+| 53 | ClickHouse 25.8.33.6 | infra + platform | S; green (25.8.33.6 up with compatibility 24.8, logs flowing) |
+| 54 | ClickHouse compatibility 25.8 | platform | running |
 | 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S |
 
 ## Production rollout (after all tests pass and approval)
