@@ -425,7 +425,7 @@ tasks:
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1
       # host-side changes (this step's playbook lines), after the cluster side
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
