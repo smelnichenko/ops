@@ -1,0 +1,46 @@
+---
+# CNPG still backs Postgres up after an upgrade step (the runner runs this after the steps marked barman-check: the
+# CNPG operator, PostgreSQL 18): the cluster's WAL archiving works (its ContinuousArchiving condition) and a fresh
+# base backup to the Vagrant store completes. This is the backup production's data depends on - Velero holds no data
+# volume (plan 100 defect 20). After PostgreSQL 18 it is also the base backup the new major needs: the old major's WAL
+# cannot restore it. The backup object is removed afterwards; its data stays in the store.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml
+- name: CNPG backs Postgres up to its object store
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    pg_namespace: schnappy-production
+    cluster: schnappy-production-postgres
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: The backup's name (fixed once - a lookup in vars is re-run on every use)
+      ansible.builtin.set_fact:
+        cnpg_backup: "upgrade-barman-check-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+    # shell, not command: the command module strips the filter's double quotes
+    - name: WAL archiving works (the cluster's ContinuousArchiving condition)
+      ansible.builtin.shell: >-
+        {{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }}
+        -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}'
+      register: _archiving
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _archiving.stdout == 'True'
+
+    - name: A fresh base backup
+      ansible.builtin.include_tasks: tasks/cnpg-backup.yml
+
+    - name: Remove the backup object (its data stays in the store)
+      ansible.builtin.command: "{{ kubectl }} delete backups.postgresql.cnpg.io {{ cnpg_backup }}"
+      changed_when: true
+
+    - name: CNPG backs up
+      ansible.builtin.debug:
+        msg: "BARMAN OK: WAL archiving True, base backup {{ cnpg_backup }} completed"

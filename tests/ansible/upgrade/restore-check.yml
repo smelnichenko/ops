@@ -59,25 +59,10 @@
       ansible.builtin.command: "{{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true"
       changed_when: false
 
-    - name: Back the cluster up now
-      kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig }}"
-        definition:
-          apiVersion: postgresql.cnpg.io/v1
-          kind: Backup
-          metadata: { name: "{{ _backup }}", namespace: "{{ pg_namespace }}" }
-          spec:
-            method: barmanObjectStore
-            cluster: { name: "{{ cluster }}" }
-
-    - name: The backup completes
-      ansible.builtin.command: "{{ kubectl }} get backups.postgresql.cnpg.io {{ _backup }} -o jsonpath={.status.phase}"
-      register: _phase
-      changed_when: false
-      retries: 60
-      delay: 10
-      until: _phase.stdout in ['completed', 'failed']
-      failed_when: _phase.stdout != 'completed'
+    - name: A fresh base backup
+      ansible.builtin.include_tasks: tasks/cnpg-backup.yml
+      vars:
+        cnpg_backup: "{{ _backup }}"
 
     - name: A side cluster recovered from the object store (base backup and WAL)
       kubernetes.core.k8s:

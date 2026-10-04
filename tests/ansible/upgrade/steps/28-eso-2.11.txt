@@ -2,5 +2,3 @@
 # infra upgrade/28-eso-2.11.
 argo-chart external-secrets external-secrets@2.2.0 => argo-chart external-secrets external-secrets@2.11.0
 image ghcr.io/external-secrets/external-secrets v2.2.0 => image ghcr.io/external-secrets/external-secrets v2.11.0
-# A Velero backup after it: External Secrets delivers the store credentials.
-backup-check

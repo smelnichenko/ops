@@ -1,0 +1,24 @@
+---
+# A CNPG barman base backup of {{ cluster }} (namespace {{ pg_namespace }}) named {{ cnpg_backup }}, to the object
+# store the cluster archives to; it must complete. Used by barman-check.yml and restore-check.yml.
+- name: Back the cluster up now ({{ cnpg_backup }})
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    definition:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Backup
+      metadata: { name: "{{ cnpg_backup }}", namespace: "{{ pg_namespace }}" }
+      spec:
+        method: barmanObjectStore
+        cluster: { name: "{{ cluster }}" }
+
+- name: The backup completes ({{ cnpg_backup }})
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }} get backups.postgresql.cnpg.io {{ cnpg_backup }}
+    -o jsonpath={.status.phase}
+  register: _cnpg_backup_phase
+  changed_when: false
+  retries: 60
+  delay: 10
+  until: _cnpg_backup_phase.stdout in ['completed', 'failed']
+  failed_when: _cnpg_backup_phase.stdout != 'completed'

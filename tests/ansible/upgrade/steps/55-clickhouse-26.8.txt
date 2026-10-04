@@ -3,5 +3,3 @@
 # drop or unlock the renamed system.*_log_N tables (26.7 #95079). Removing the pin later is the operator's decision -
 # the point of no return. Stateful: shown before production, its volume backed up first.
 image clickhouse/clickhouse-server 25.8.33.6-alpine => image clickhouse/clickhouse-server 26.8.15.10-alpine
-# A Velero backup after it: the end state.
-backup-check

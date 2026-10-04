@@ -5,5 +5,3 @@
 image docker.io/scylladb/scylla 2026.1.14 => image docker.io/scylladb/scylla 2026.3.2
 + image docker.io/scylladb/scylladb-node-exporter 1.12.1-1
 image scylladb/scylla 6.2 => image scylladb/scylla 2026.3.2
-# A Velero backup after it: the operator adds a sidecar and volumes to the ScyllaDB pod it backs up.
-backup-check

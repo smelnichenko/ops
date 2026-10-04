@@ -5,5 +5,3 @@
 - pkg runc 1.1.15+ds1-2+b4
 + pkg containerd.io 2.3.6-1~debian.13~trixie
 playbook upgrade-containerd.yml -e containerd_upgrade_to=2.3.6
-# A Velero backup after it: the runtime the node agent and the data movers run on.
-backup-check

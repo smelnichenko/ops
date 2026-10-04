@@ -413,6 +413,8 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
       BACKUP_CHECK:
         sh: scripts/upgrade-expected-inventory.py --backup-check {{.STEP}}
+      BARMAN_CHECK:
+        sh: scripts/upgrade-expected-inventory.py --barman-check {{.STEP}}
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
@@ -428,8 +430,16 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}}
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
+      # CNPG's WAL archiving and a fresh barman base backup - only after a step that changes CNPG or Postgres (the step
+      # file's barman-check line): the backup production's data depends on
+      - cmd: |
+          if [ "{{.BARMAN_CHECK}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml
+          else
+            echo "BARMAN CHECK: not after this step (no barman-check line)"
+          fi
       # a Velero backup from production's daily schedule, volumes included, into the Pi backup store - only after a
-      # step that can change what it runs on (the step file's backup-check line): ~8 min, half a step's time
+      # step that changes Velero or its store (the step file's backup-check line): ~8 min, and it holds no data
       - cmd: |
           if [ "{{.BACKUP_CHECK}}" = yes ]; then
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml

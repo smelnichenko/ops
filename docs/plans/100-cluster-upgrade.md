@@ -186,10 +186,12 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   step that is also the fresh base backup it needs), and a Velero file-system backup of a test namespace restored
   with its emptyDir's random token intact. Production's namespace is never replaced; its names are fixed and refuse
   an `-e` override. The plan's end-of-test restore, which the runner lacked until 2026-10-04.
-- **The Velero backup check runs only after the 17 steps that can change what it runs on** (a step file's
-  `backup-check` line: Velero, the store, the node, the network, storage, the credentials, the pods it backs up, the
-  first and the last step). It ran after every step until full run 2, at ~8 of each step's ~15 minutes; the runner
-  reads the marks from full run 3 on (2026-10-04; full run 2 stopped at step 24 to restart with every fix).
+- **Backup checks only where a step touches a backup** (operator, 2026-10-04). The Velero check (production's schedule,
+  ~8 min) runs after 04 and 05 only - Velero and its store: it holds no data volume (defect 20), so after any other
+  step it guarded the least valuable backup at half a step's time; it ran after every step until full run 2. The
+  backup production's data depends on, CNPG's barman backup of Postgres, is checked after 03 (the CNPG operator) and
+  42 (PostgreSQL 18): WAL archiving working and a fresh base backup completed (`barman-check.yml`). Step files mark
+  them (`backup-check`, `barman-check`); the restore check closes the run.
 - **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
   ConfigMap change, so steps 52 and 54 change nothing in the running server; the image bumps right after them (53,
   55) restart it with the pin in place before the new version writes a part - the order that matters. Checked with

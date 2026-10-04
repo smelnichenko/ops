@@ -3,5 +3,3 @@
 # Rollout, same change: setup-kubeadm.yml's External Secrets Helm install gets `when: not platform_by_argo` (it is the
 # second owner that made that Helm release; a full run would roll Argo's ESO back to the playbook's version). The stale
 # Helm release record stays - never `helm uninstall` it: that deletes the CRDs and with them every ExternalSecret.
-# A Velero backup after it: External Secrets delivers the store credentials.
-backup-check
