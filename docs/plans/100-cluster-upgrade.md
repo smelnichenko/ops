@@ -335,7 +335,13 @@ Production / data
   (production pi1 matches). DONE (Vagrant: remount after the cold boot, a re-run changed=0, a marked volume resumed;
   the count and heal logic against a stub gluster).
 - R9 Defect 22 (Gluster cold boot): mounts that retry until bricks are up, services after them; Vagrant cold boot
-  proof, then the Pis.
+  proof, then the Pis. Cause (Vagrant journal + client log): systemd mounted each volume at 3 s, before glusterd
+  (ready 5.4 s) and any brick - "first lookup on root failed", no retry, Forgejo/versitygw "Dependency failed".
+  Fix: gluster-volumes-ready.service waits until every fstab volume mounts (a trial mount every 5 s), the mount units
+  are ordered after it (x-systemd.after), the services after their mounts (RequiresMountsFor); fstab entries of
+  mounted volumes are rewritten without a remount. DONE in Vagrant (all three VMs halted and started together: pi2
+  waited one retry, all 10 mounts up, Forgejo and versitygw 200 on both; the apply run kept all 10 FUSE clients).
+  Production: with the operator's OK (setup-gluster on the Pis).
 - R10 Defect 18: ClickHouse default user from ::/0 - fix; the metrics check reads as schnappy.
 
 Rollout behaviour
