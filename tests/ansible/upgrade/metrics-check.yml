@@ -76,14 +76,15 @@
       until: _mimir.rc == 0
 
     - name: Container logs reach ClickHouse (Fluent Bit -> logs.podlogs, rows of the last two minutes)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        K="kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
-        p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
-        $K exec "$p" -c clickhouse -- clickhouse-client -q \
-          "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120{{ logs_filter }}"
-      args:
+      ansible.builtin.shell:
         executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
+          p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
+          # as schnappy, the one user ClickHouse is meant to have (the image's `default` goes with step 52)
+          $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ \
+            "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120{{ logs_filter }}"
       vars:
         logs_filter: ""
       register: _logs

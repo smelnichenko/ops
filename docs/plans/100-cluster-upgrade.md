@@ -342,7 +342,12 @@ Production / data
   mounted volumes are rewritten without a remount. DONE in Vagrant (all three VMs halted and started together: pi2
   waited one retry, all 10 mounts up, Forgejo and versitygw 200 on both; the apply run kept all 10 FUSE clients).
   Production: with the operator's OK (setup-gluster on the Pis).
-- R10 Defect 18: ClickHouse default user from ::/0 - fix; the metrics check reads as schnappy.
+- R10 Defect 18: ClickHouse default user from ::/0 - fix; the metrics check reads as schnappy. Production read-only
+  2026-10-04: users.d/default-user.xml present, a bare clickhouse-client logs in as default; in a day every query
+  came from schnappy (609,784). The metrics check reads as schnappy - DONE. The chart: CLICKHOUSE_USER=schnappy +
+  CLICKHOUSE_SKIP_USER_SETUP=1 (the image's entrypoint then writes no default-user.xml; clickhouse-client honours
+  CLICKHOUSE_USER, so the runbooks' bare client works as schnappy) - in step 52's branch, where ClickHouse restarts
+  anyway (with R14).
 
 Rollout behaviour
 - R11 Root sync waits on child health wave by wave from step 12: every production app Healthy before 12 and before
