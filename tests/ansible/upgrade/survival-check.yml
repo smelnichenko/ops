@@ -1,0 +1,188 @@
+---
+# Data of the one-way observability steps that must survive them, in the Vagrant copy of production - none of it is
+# checked by data-check.yml (the databases), and these steps change storage formats for good: Grafana 13 (its
+# database), Tempo 3 (its blocks), the Mimir majors (their blocks), ClickHouse 25.8 and 26.8 (its parts).
+#
+#   -e mode=seed    once, on a green copy (the build's Argo stage): a ClickHouse MergeTree table of known rows, merged
+#                   into one part in the format of the version running; a Grafana dashboard of known content, and the
+#                   UIDs of every dashboard then; a Tempo trace of a known ID; the time of the seed and how many `up`
+#                   series Mimir holds for it. The UIDs, the time and the count go to .upgrade/survival.json.
+#   -e mode=verify  after each step: the rows (count and md5 computed here), ClickHouse's compatibility setting as the
+#                   step files say (-e clickhouse_compat, the runner passes the latest clickhouse-compat line up to the
+#                   step; empty = not set), its users (-e clickhouse_users, from the clickhouse-users lines: an
+#                   image-made `default` goes with the 25.8 step), every dashboard UID of the seed and the seeded dashboard's content, the
+#                   trace by its ID, and Mimir's `up` series at the seed's time - as many as then.
+#
+# Why: these steps were green on "new data arrives" alone (the metrics check counts ClickHouse rows of the last two
+# minutes): losing or detaching every old part, the dashboards, the old blocks or the pin would all have passed.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=seed|verify
+#        [-e clickhouse_compat=24.8]
+- name: Observability data survives the one-way steps
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
+    proxy: /api/v1/namespaces/schnappy-infra/services
+    survival_file: "{{ playbook_dir }}/../../../.upgrade/survival.json"
+    rows: 1000
+    # md5 of "v-1,v-2,...,v-N" - what ClickHouse must compute over the rows sorted by key
+    expected_md5: "{{ range(1, rows + 1) | map('string') | map('regex_replace', '^', 'v-') | join(',') | hash('md5') }}"
+    dashboard_uid: upgrade-check
+    dashboard_text: "upgrade survival canary"
+    trace_id: 5eedc0de5eedc0de5eedc0de5eedc0de
+    span_id: 5eedc0de5eedc0de
+    clickhouse_compat: ""
+    clickhouse_users: default,schnappy
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: The mode is seed or verify
+      ansible.builtin.assert:
+        that: mode | default('') in ['seed', 'verify']
+        fail_msg: "-e mode=seed or -e mode=verify"
+
+    - name: The seed's record (verify)
+      ansible.builtin.set_fact:
+        _seed: "{{ lookup('ansible.builtin.file', survival_file) | from_json }}"
+      when: mode == 'verify'
+
+    # ── ClickHouse ────────────────────────────────────────────────────
+    - name: ClickHouse - the canary table, its rows written and merged into one part (seed)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} exec -i schnappy-clickhouse-0 -c clickhouse -- sh -c 'clickhouse-client --user schnappy \
+            --password "$CLICKHOUSE_PASSWORD" --multiquery' <<'SQL'
+          CREATE DATABASE IF NOT EXISTS upgrade_check;
+          CREATE TABLE IF NOT EXISTS upgrade_check.canary (k UInt32, v String) ENGINE = MergeTree ORDER BY k;
+          INSERT INTO upgrade_check.canary SELECT number + 1, concat('v-', toString(number + 1)) FROM numbers({{ rows }})
+            WHERE number + 1 NOT IN (SELECT k FROM upgrade_check.canary);
+          OPTIMIZE TABLE upgrade_check.canary FINAL;
+          SQL
+      changed_when: true
+      when: mode == 'seed'
+
+    - name: ClickHouse - exactly the seeded rows, the compatibility setting as the step files say, the version
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          q() {
+            {{ kubectl }} exec schnappy-clickhouse-0 -c clickhouse -- sh -c 'clickhouse-client --user schnappy \
+              --password "$CLICKHOUSE_PASSWORD" --format TSV -q "$1"' _ "$1"
+          }
+          q "SELECT count(), lower(hex(MD5(arrayStringConcat(arrayMap(x -> x.2, arraySort(groupArray((k, v)))), ','))))
+             FROM upgrade_check.canary"
+          q "SELECT concat('compat=', getSetting('compatibility')), version()"
+          q "SELECT concat('users=', arrayStringConcat(arraySort(groupArray(name)), ',')) FROM system.users"
+      register: _ch
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: _ch.rc == 0 and _ch.stdout_lines | length == 3
+      failed_when: >-
+        _ch.rc != 0 or _ch.stdout_lines | length != 3
+        or _ch.stdout_lines[0].split() != [rows | string, expected_md5]
+        or _ch.stdout_lines[1].split()[0] != 'compat=' ~ clickhouse_compat
+        or _ch.stdout_lines[2] != 'users=' ~ clickhouse_users
+
+    # ── Grafana ───────────────────────────────────────────────────────
+    - name: Grafana - the canary dashboard (seed)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} exec -i deploy/schnappy-grafana -c grafana -- sh -c 'curl -sf -u \
+            "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" -H "Content-Type: application/json" \
+            -X POST --data-binary @- http://localhost:3000/api/dashboards/db' <<'JSON'
+          {"overwrite": true, "dashboard": {"uid": "{{ dashboard_uid }}", "title": "Upgrade check",
+           "panels": [{"id": 1, "type": "text", "title": "canary", "gridPos": {"h": 4, "w": 8, "x": 0, "y": 0},
+                       "options": {"mode": "markdown", "content": "{{ dashboard_text }}"}}]}}
+          JSON
+      changed_when: true
+      when: mode == 'seed'
+
+    - name: Grafana - every dashboard UID, and the canary's content
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          G="{{ kubectl }} exec deploy/schnappy-grafana -c grafana -- sh -c"
+          $G 'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" \
+            "http://localhost:3000/api/search?type=dash-db&limit=5000"' | python3 -c '
+          import json, sys; print(json.dumps(sorted(d["uid"] for d in json.load(sys.stdin))))'
+          $G 'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" \
+            http://localhost:3000/api/dashboards/uid/{{ dashboard_uid }}' | python3 -c '
+          import json, sys; d = json.load(sys.stdin)["dashboard"]; print(d["panels"][0]["options"]["content"])'
+      register: _grafana
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: _grafana.rc == 0
+      failed_when: >-
+        _grafana.rc != 0 or _grafana.stdout_lines[1] != dashboard_text
+        or (mode == 'verify' and (_seed.grafana_uids | difference(_grafana.stdout_lines[0] | from_json)) | length > 0)
+
+    # ── Tempo ─────────────────────────────────────────────────────────
+    - name: Tempo - the canary trace, pushed over OTLP/HTTP (seed)
+      ansible.builtin.include_tasks: tasks/tempo-push.yml
+      vars:
+        push_trace_id: "{{ trace_id }}"
+        push_span_id: "{{ span_id }}"
+        push_name: upgrade-canary
+      when: mode == 'seed'
+
+    - name: Tempo - the canary trace by its ID
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-tempo:3200/proxy/api/traces/{{ trace_id }}'
+      register: _trace
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _trace.rc == 0 and 'upgrade-canary' in _trace.stdout
+
+    # ── Mimir ─────────────────────────────────────────────────────────
+    # two minutes back: samples of that time have all arrived (remote write lags by seconds)
+    - name: The seed's time (seed; Prometheus has been remote-writing since the build)
+      ansible.builtin.set_fact:
+        _mimir_at: "{{ lookup('ansible.builtin.pipe', 'date +%s') | int - 120 }}"
+      when: mode == 'seed'
+
+    - name: Mimir - the `up` series at the seed's time
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig {{ kubeconfig }} get --raw \
+            '{{ proxy }}/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query=count(up)&time={{ _seed.mimir_at if mode == "verify" else _mimir_at }}' \
+            | python3 -c 'import json, sys; r = json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else 0)'
+      register: _mimir
+      changed_when: false
+      retries: 10
+      delay: 15
+      until: >-
+        _mimir.rc == 0 and (_mimir.stdout | int) > 0
+        and (mode == 'seed' or (_mimir.stdout | int) >= (_seed.mimir_up | int))
+
+    - name: The seed's record
+      ansible.builtin.copy:
+        content: >-
+          {{ {'grafana_uids': _grafana.stdout_lines[0] | from_json, 'mimir_at': _mimir_at | int,
+              'mimir_up': _mimir.stdout | int} | to_nice_json }}
+        dest: "{{ survival_file }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      when: mode == 'seed'
+
+    - name: Survived
+      ansible.builtin.debug:
+        msg: >-
+          SURVIVAL OK: ClickHouse {{ _ch.stdout_lines[1].split()[-1] }} {{ rows }} rows md5 {{ expected_md5 }},
+          {{ _ch.stdout_lines[1].split()[0] }}; Grafana {{ (_grafana.stdout_lines[0] | from_json) | length }}
+          dashboards, the canary intact; Tempo trace {{ trace_id }}; Mimir {{ _mimir.stdout }} `up` series at the seed

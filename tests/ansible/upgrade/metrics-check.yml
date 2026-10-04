@@ -3,10 +3,16 @@
 # target up (bar the ones that cannot be up in a VM, listed below with the reason), Mimir holding samples Prometheus
 # remote-wrote less than two minutes ago, and container logs reaching ClickHouse (Fluent Bit, ClickHouse steps).
 #
-# Why: an operator or Prometheus upgrade (plan 100 step 07), or a CNI/runtime one, can leave every pod ready while
+# Why: an operator or Prometheus upgrade, or a CNI/runtime one, can leave every pod ready while
 # targets go down or remote write stops - the alerts that would say so run on this very Prometheus.
 #
+# Targets that vanish are not "down": a ServiceMonitor whose selector stops matching drops its targets, and the rest
+# stay up. So the scrape pools and their target counts are kept in .upgrade/scrape-pools.json - recorded on a green
+# copy (-e record_scrape_pools=true, the build's Argo stage), then after each step no pool may be gone or smaller, and
+# the file takes the counts that passed (a new pool is fine).
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
+#        [-e record_scrape_pools=true]
 - name: Prometheus scrapes everything and writes to Mimir
   hosts: target
   become: true
@@ -14,6 +20,8 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     proxy: /api/v1/namespaces/schnappy-infra/services
+    record_scrape_pools: false
+    scrape_pools_file: "{{ playbook_dir }}/../../../.upgrade/scrape-pools.json"
     # scrape pools that are down in the Vagrant copy by nature
     allowed_down:
       # setup-host-hardening.yml sets the exporter up only where a disk reports SMART (ten's NVMe); the VM's virtio
@@ -56,6 +64,50 @@
       delay: 15
       until: _targets.rc == 0
 
+    - name: The recorded scrape pools (taken on a green copy - -e record_scrape_pools=true)
+      ansible.builtin.stat:
+        path: "{{ scrape_pools_file }}"
+      delegate_to: localhost
+      become: false
+      register: _pools_file
+
+    - name: A record to compare with
+      ansible.builtin.assert:
+        that: record_scrape_pools | bool or _pools_file.stat.exists
+        fail_msg: "no {{ scrape_pools_file }}: record it on a green copy with -e record_scrape_pools=true"
+        quiet: true
+
+    - name: No scrape pool gone or smaller than recorded (a selector that stops matching drops targets unseen)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/targets?state=active' \
+            | python3 -c '
+          import collections, json, os, sys
+          now = collections.Counter(t["scrapePool"] for t in json.load(sys.stdin)["data"]["activeTargets"])
+          before = json.loads(os.environ["BEFORE"])
+          lost = ["%s: %d -> %d" % (p, n, now.get(p, 0)) for p, n in sorted(before.items()) if now.get(p, 0) < n]
+          for l in lost:
+              print("  GONE OR SMALLER", l)
+          print(json.dumps(dict(sorted(now.items()))))
+          sys.exit(1 if lost or not now else 0)'
+      environment:
+        BEFORE: "{{ lookup('ansible.builtin.file', scrape_pools_file) if _pools_file.stat.exists and not record_scrape_pools | bool else '{}' }}"
+      register: _pools
+      changed_when: false
+      retries: 12
+      delay: 15
+      until: _pools.rc == 0
+
+    - name: The pools that passed become the record
+      ansible.builtin.copy:
+        content: "{{ _pools.stdout_lines[-1] | from_json | to_nice_json }}\n"
+        dest: "{{ scrape_pools_file }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+
     - name: Mimir holds samples remote-written in the last two minutes
       ansible.builtin.shell: |
         set -euo pipefail
@@ -82,7 +134,7 @@
           set -euo pipefail
           K="kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
           p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
-          # as schnappy, the one user ClickHouse is meant to have (the image's `default` goes with step 52)
+          # as schnappy, the one user ClickHouse is meant to have (the image's `default` goes with the ClickHouse 25.8 step)
           $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ \
             "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120{{ logs_filter }}"
       vars:

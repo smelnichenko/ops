@@ -2,7 +2,7 @@
 # CNPG still backs Postgres up after an upgrade step (the runner runs this after the steps marked barman-check: the
 # CNPG operator, PostgreSQL 18): the cluster's WAL archiving works (its ContinuousArchiving condition) and a fresh
 # base backup to the Vagrant store completes. This is the backup production's data depends on - Velero holds no data
-# volume (plan 100 defect 20). After PostgreSQL 18 it is also the base backup the new major needs: the old major's WAL
+# volume (local-path hostPath PVs). After PostgreSQL 18 it is also the base backup the new major needs: the old major's WAL
 # cannot restore it. The backup object is removed afterwards; its data stays in the store.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml

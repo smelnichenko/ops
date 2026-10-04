@@ -4,12 +4,19 @@
 #   -e mode=seed    once, on a green copy: a table of 10 000 rows with a known content (schema upgrade_check of the CNPG
 #                   cluster's database - Liquibase owns only its own schema), nothing else touched;
 #   -e mode=verify  after each step: every Postgres instance, replicas included, holds exactly those rows (count and an
-#                   md5 over all of them, compared with the value computed here, not read back from the seed), and the
-#                   primary takes a write. A missing table fails: it is never re-created by a verify.
+#                   md5 over all of them, compared with the value computed here, not read back from the seed). A missing
+#                   table fails: it is never re-created by a verify.
+#
+# Writes made now, in both modes (rows written before the step prove survival, not that anything still works): the
+# primary streams to every other instance, and a heartbeat row of this run committed on it reaches every replica; the
+# WAL segment holding it, switched out, is archived to the object store with no new archiver failure (CNPG's
+# ContinuousArchiving condition can predate the step, and the network steps change the path to the store); a message
+# of this run goes through Kafka's bootstrap Service and is read back; a row of this run is written and read through
+# ScyllaDB's client Service (each in its own heartbeat table/topic - the seeded data stays as seeded).
 #
 # Both first wait until CNPG has finished: the cluster healthy with every instance ready, each instance pod run by the
 # operator version now running (annotation cnpg.io/operatorVersion = the operator image's tag). After an operator
-# upgrade Argo is green at once while CNPG restarts the instances a minute later (Vagrant 2026-10-03, step 03: the
+# upgrade Argo is green at once while CNPG restarts the instances a minute later (Vagrant 2026-10-03, the CNPG upgrade: the
 # checks ran while it did). -e cnpg_operator_version=<v> overrides the version waited for (to prove the wait bites).
 #
 # Why: a CNPG operator upgrade restarts every instance in place (and the PostgreSQL 18 step rewrites the data
@@ -22,7 +29,9 @@
 #
 # ScyllaDB the same way (third play): a keyspace upgrade_check with 1 000 known rows, read back through cqlsh and
 # compared (count + md5) after the operator has finished - every rack updated and ready at the version the cluster
-# asks for, Available and not Progressing. The Scylla steps roll the database through 2025.1, 2026.1 and 2026.3.
+# asks for, Available and not Progressing, and every ScyllaDB pod running the operator's own containers at the image of
+# the operator now running (an operator-only step changes no cluster generation: the old status read as finished). The
+# Scylla steps roll the database through 2025.1, 2026.1 and 2026.3.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed|verify
 - name: Postgres data that must survive the upgrade
@@ -45,6 +54,10 @@
       ansible.builtin.assert:
         that: mode | default('') in ['seed', 'verify']
         fail_msg: "-e mode=seed or -e mode=verify"
+
+    - name: This run's id (the heartbeat every store must carry)
+      ansible.builtin.set_fact:
+        run_id: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%S%N') }}"
 
     - name: The operator version now running
       ansible.builtin.command: >-
@@ -120,15 +133,65 @@
       until: _rows.stdout | trim == rows ~ ' ' ~ expected_md5
       failed_when: _rows.stdout | trim != rows ~ ' ' ~ expected_md5
 
-    - name: The primary takes a write (rolled back)
-      ansible.builtin.shell: |
-        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }} -c "
-          begin; insert into upgrade_check.canary values (-1, 'write check'); rollback;"
+    - name: The primary streams to every other instance
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }}
+        -c "select count(*) from pg_stat_replication where state = 'streaming'"
+      register: _streaming
       changed_when: false
+      retries: 20
+      delay: 6
+      until: _streaming.rc == 0 and (_streaming.stdout | trim) == ((instances | length) - 1) | string
+
+    - name: A heartbeat row of this run, committed on the primary
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }}
+        -c "create table if not exists upgrade_check.heartbeat (run text primary key, at timestamptz not null default now());
+            insert into upgrade_check.heartbeat (run) values ('{{ run_id }}')"
+      changed_when: true
+
+    - name: Every instance shows it (replication carries a write made after the step)
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ item }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ database }}
+        -c "select count(*) from upgrade_check.heartbeat where run = '{{ run_id }}'"
+      loop: "{{ instances }}"
+      register: _heartbeat
+      changed_when: false
+      retries: 10
+      delay: 3
+      until: _heartbeat.rc == 0 and (_heartbeat.stdout | trim) == '1'
+
+    - name: The heartbeat's WAL segment switched out (archiver failures so far)
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -F ' ' -d {{ database }}
+        -c "select pg_walfile_name(pg_switch_wal()), failed_count from pg_stat_archiver"
+      register: _switched
+      changed_when: true
+
+    - name: It is archived, with no new archiver failure
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -F ' ' -d {{ database }}
+        -c "select coalesce(last_archived_wal, '-'), failed_count from pg_stat_archiver"
+      vars:
+        _segment: "{{ _switched.stdout.split()[0] }}"
+        _failed_before: "{{ _switched.stdout.split()[1] }}"
+      register: _archived
+      changed_when: false
+      retries: 30
+      delay: 5
+      # WAL file names sort in order within a timeline
+      until: >-
+        _archived.rc == 0 and _archived.stdout.split()[0] >= _segment
+        and _archived.stdout.split()[1] == _failed_before
+      failed_when: >-
+        _archived.rc != 0 or _archived.stdout.split()[1] != _failed_before
 
     - name: Data intact
       ansible.builtin.debug:
-        msg: "DATA OK: {{ instances | length }} instances x {{ rows }} rows, md5 {{ expected_md5 }}, primary {{ primary }} writable"
+        msg: >-
+          DATA OK: {{ instances | length }} instances x {{ rows }} rows, md5 {{ expected_md5 }}; primary {{ primary }}
+          streams to {{ _streaming.stdout | trim }}, heartbeat {{ run_id }} on every instance, its WAL
+          {{ _switched.stdout.split()[0] }} archived
 
 - name: Kafka data that must survive the upgrade
   hosts: target
@@ -214,9 +277,36 @@
       until: _read.stdout == messages ~ ' ' ~ expected_md5
       failed_when: _read.stdout != messages ~ ' ' ~ expected_md5
 
+    - name: A message of this run through the bootstrap Service, read back from it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          B="{{ kubectl }} exec -i {{ _broker.stdout }} -c kafka --"
+          bs={{ kafka_cluster }}-kafka-bootstrap:9092
+          $B /opt/kafka/bin/kafka-topics.sh --bootstrap-server "$bs" --create --if-not-exists --topic {{ topic }}-live \
+            --partitions 1 --replication-factor 1 < /dev/null > /dev/null
+          # the end offset before the write: the read starts there and wants exactly this run's message
+          end=$($B /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server "$bs" --topic {{ topic }}-live --time -1 \
+            < /dev/null | awk -F: '$2 == 0 {print $3}')
+          [ -n "$end" ]
+          echo "run-{{ run_id }}" | $B /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server "$bs" \
+            --topic {{ topic }}-live --producer-property acks=all > /dev/null
+          # the console consumer exits non-zero when its timeout ends: what it printed decides
+          got=$($B /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server "$bs" --topic {{ topic }}-live \
+            --partition 0 --offset "$end" --max-messages 1 --timeout-ms 30000 2> /dev/null < /dev/null || true)
+          [ "$got" = "run-{{ run_id }}" ] && echo 1 || echo "0 (read: ${got:-nothing} at offset $end)"
+      register: _live
+      changed_when: true
+      retries: 3
+      delay: 10
+      until: _live.rc == 0 and (_live.stdout | trim) == '1'
+
     - name: Kafka data intact
       ansible.builtin.debug:
-        msg: "KAFKA DATA OK: {{ topic }} {{ messages }} messages, md5 {{ expected_md5 }}, operator {{ _strimzi.stdout.split(':')[-1] }}"
+        msg: >-
+          KAFKA DATA OK: {{ topic }} {{ messages }} messages, md5 {{ expected_md5 }}, operator
+          {{ _strimzi.stdout.split(':')[-1] }}; run-{{ run_id }} produced and consumed through the bootstrap Service
 
 - name: ScyllaDB data that must survive the upgrade
   hosts: target
@@ -234,7 +324,15 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
-    - name: The operator has finished - every rack updated, ready, at the version asked for; Available, not Progressing
+    - name: The operator version now running
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kubeconfig }} -n scylla-operator get deployment scylla-operator
+        -o jsonpath={.spec.template.spec.containers[0].image}
+      register: _scylla_operator
+      changed_when: false
+
+    - name: The operator has finished - every rack updated, ready, at the version asked for; Available, not Progressing;
+        every pod's operator containers at the operator's image
       ansible.builtin.shell: |
         set -euo pipefail
         {{ kubectl }} get scyllaclusters.scylla.scylladb.com {{ scylla_cluster }} -o json | python3 -c '
@@ -248,13 +346,23 @@
               and racks and all(r.get("version") == want and r.get("updatedMembers") == r.get("members") == r.get("readyMembers")
                                 for r in racks))
         print(ok, want)'
+        {{ kubectl }} get pods -l scylla/cluster={{ scylla_cluster }} -o json | OPERATOR={{ _scylla_operator.stdout }} python3 -c '
+        import json, os, sys
+        own = ("sidecar-injection", "scylladb-api-status-probe", "scylladb-ignition")
+        pods = json.load(sys.stdin)["items"]
+        stale = [p["metadata"]["name"] + ":" + c["name"] + "=" + c["image"] for p in pods
+                 for c in p["spec"].get("initContainers", []) + p["spec"]["containers"]
+                 if c["name"] in own and c["image"] != os.environ["OPERATOR"]]
+        print(len(pods) > 0 and not stale, ",".join(stale) or "-")'
       args:
         executable: /bin/bash
       register: _scylla
       changed_when: false
       retries: 60
       delay: 15
-      until: _scylla.rc == 0 and _scylla.stdout.startswith('True ')
+      until: >-
+        _scylla.rc == 0 and _scylla.stdout_lines | length == 2
+        and _scylla.stdout_lines[0].startswith('True ') and _scylla.stdout_lines[1].startswith('True ')
 
     - name: A ScyllaDB pod
       ansible.builtin.command: "{{ kubectl }} get pods -l scylla/cluster={{ scylla_cluster }} -o jsonpath={.items[0].metadata.name}"
@@ -292,6 +400,24 @@
       until: _read.stdout == rows ~ ' ' ~ expected_md5
       failed_when: _read.stdout != rows ~ ' ' ~ expected_md5
 
+    - name: A row of this run, written and read back through the client Service
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          Q="{{ kubectl }} exec {{ _node.stdout }} -c scylla -- cqlsh {{ scylla_cluster }}-client 9042"
+          $Q -e "CREATE TABLE IF NOT EXISTS upgrade_check.heartbeat (run text PRIMARY KEY, at timestamp);
+                 INSERT INTO upgrade_check.heartbeat (run, at) VALUES ('{{ run_id }}', toTimestamp(now()));"
+          $Q -e "SELECT run FROM upgrade_check.heartbeat WHERE run = '{{ run_id }}';" | { grep -c "{{ run_id }}" || [ $? -eq 1 ]; }
+      register: _live
+      changed_when: true
+      retries: 3
+      delay: 10
+      until: _live.rc == 0 and (_live.stdout | trim) == '1'
+
     - name: ScyllaDB data intact
       ansible.builtin.debug:
-        msg: "SCYLLA DATA OK: upgrade_check.canary {{ rows }} rows, md5 {{ expected_md5 }}, ScyllaDB {{ _scylla.stdout.split()[1] }}"
+        msg: >-
+          SCYLLA DATA OK: upgrade_check.canary {{ rows }} rows, md5 {{ expected_md5 }}, ScyllaDB
+          {{ _scylla.stdout_lines[0].split()[1] }}, operator {{ _scylla_operator.stdout.split(':')[-1] }}; row {{ run_id }}
+          written and read through {{ scylla_cluster }}-client

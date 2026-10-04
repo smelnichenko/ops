@@ -1,6 +1,6 @@
 ---
 # Objects that exist on ten but in no git repo, recreated in the Vagrant copy so it starts from production's state.
-# Each entry says why it is not in git and what fixes that for good (plan 100 lists them as defects).
+# Each entry says why it is not in git and what fixes that for good.
 #
 #   schnappy-production-postgres-app (an ExternalSecret from Vault's postgres-monitor, see the task) - the CNPG
 #     Cluster's initdb names this Secret (platform helm/schnappy-data,
@@ -41,35 +41,39 @@
             name: "{{ item }}"
       loop: [schnappy-production, schnappy-infra]
 
-    - name: CNPG owner secret schnappy-production-postgres-app from Vault's postgres-monitor (proposed fix, plan 100 defect 10)
-      # The CNPG owner secret must name the owner (monitor) with monitor's own password: CNPG keeps the owner's
-      # password in sync with it. On ten it says username "app" (CNPG generated it via another bootstrap path), so that
-      # sync fails every few minutes (operator log: "wrong username 'app' in secret, expected 'monitor'") and only that
-      # failure keeps monitor's password. A plain secret with another password here made CNPG reset monitor's password
-      # on the next Postgres restart (Vagrant, 2026-10-02). From Vault, it equals what monitor itself uses.
+    # The CNPG owner secret as ten has it - CNPG's own (an earlier bootstrap path generated it), username "app" - not a
+    # fix of it: the CNPG steps must meet production's state. CNPG's instance manager then fails to sync the owner's
+    # password from it, as on ten ("wrong username 'app' in secret, expected 'monitor'", about 6 an hour, read
+    # 2026-10-04), and only that failure keeps monitor's password (the apps' own, from Vault). Its password is none of
+    # monitor's; it is made once, when the Secret is absent.
+    - name: Is the CNPG owner secret there already
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: Secret
+        namespace: schnappy-production
+        name: schnappy-production-postgres-app
+      register: _app_secret
+
+    - name: CNPG owner secret schnappy-production-postgres-app as ten has it (username app)
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
         definition:
-          apiVersion: external-secrets.io/v1
-          kind: ExternalSecret
+          apiVersion: v1
+          kind: Secret
+          type: kubernetes.io/basic-auth
           metadata:
             name: schnappy-production-postgres-app
             namespace: schnappy-production
-          spec:
-            refreshInterval: 15m
-            secretStoreRef:
-              kind: ClusterSecretStore
-              name: vault-backend
-            target:
-              name: schnappy-production-postgres-app
-              creationPolicy: Owner
-              template:
-                type: kubernetes.io/basic-auth
-            data:
-              - secretKey: username
-                remoteRef: { key: secret/data/schnappy/postgres-monitor, property: username }
-              - secretKey: password
-                remoteRef: { key: secret/data/schnappy/postgres-monitor, property: password }
+            labels:
+              cnpg.io/cluster: schnappy-production-postgres
+              cnpg.io/reload: "true"
+              cnpg.io/userType: app
+          stringData:
+            username: app
+            password: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}"
+            dbname: app
+      when: _app_secret.resources | length == 0
+      no_log: true
 
     - name: ServiceAccounts the observability chart runs as, made by hand on ten (2026-04-10)
       kubernetes.core.k8s:

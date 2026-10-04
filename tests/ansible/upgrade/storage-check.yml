@@ -1,9 +1,10 @@
 ---
 # A new volume can be provisioned after an upgrade step: a PVC on local-path (the StorageClass every production
-# volume uses), bound, written and read back by a pod, then deleted with its volume.
+# volume uses), bound, written by a pod, read back by a second pod (from the volume, not the first one's cache), then
+# deleted - and its PersistentVolume and its directory on the node are gone.
 #
 # Why: the volumes that exist keep working whatever happens to the provisioner, so the other checks pass with a broken
-# local-path-provisioner (plan 100 step 06), kubelet or container runtime; a StatefulSet scaled up or rebuilt after the
+# local-path-provisioner (its upgrade), kubelet or container runtime; a StatefulSet scaled up or rebuilt after the
 # upgrade would then wait for a volume forever.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/storage-check.yml
@@ -26,7 +27,7 @@
 
     - name: Nothing left from an earlier run
       ansible.builtin.shell: |
-        {{ kubectl }} delete pod {{ check_name }} --ignore-not-found --wait=true > /dev/null
+        {{ kubectl }} delete pod {{ check_name }} {{ check_name }}-read --ignore-not-found --wait=true > /dev/null
         {{ kubectl }} delete pvc {{ check_name }} --ignore-not-found --wait=true > /dev/null
       changed_when: false
 
@@ -79,12 +80,69 @@
         _read.stdout_lines | length != 2 or _read.stdout_lines[0] != marker
         or not _read.stdout_lines[1].startswith('Bound pvc-')
 
-    - name: Delete the pod and the volume
+    - name: The volume's directory on the node
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kubeconfig }} get pv {{ _read.stdout_lines[1].split()[1] }}
+        -o jsonpath={.spec.hostPath.path}{.spec.local.path}
+      register: _pv_path
+      changed_when: false
+      failed_when: _pv_path.rc != 0 or not _pv_path.stdout.startswith('/')
+
+    - name: A second pod reads it from the volume
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ check_name }}-read"
+            namespace: "{{ ns }}"
+            labels: { sidecar.istio.io/inject: "false" }
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: check
+                image: busybox:1.37
+                command: [cat, /data/marker]
+                volumeMounts: [{ name: data, mountPath: /data }]
+            volumes: [{ name: data, persistentVolumeClaim: { claimName: "{{ check_name }}" } }]
+
+    - name: It read what the first wrote
       ansible.builtin.shell: |
-        {{ kubectl }} delete pod {{ check_name }} --wait=true > /dev/null
+        set -euo pipefail
+        phase=$({{ kubectl }} get pod {{ check_name }}-read -o jsonpath={.status.phase})
+        echo "$phase"
+        if [ "$phase" = Succeeded ]; then {{ kubectl }} logs {{ check_name }}-read; fi
+      args:
+        executable: /bin/bash
+      register: _reread
+      changed_when: false
+      retries: 36
+      delay: 5
+      until: _reread.stdout_lines[:1] in [['Succeeded'], ['Failed']]
+      failed_when: _reread.stdout_lines != ['Succeeded', marker]
+
+    - name: Delete the pods and the volume
+      ansible.builtin.shell: |
+        {{ kubectl }} delete pod {{ check_name }} {{ check_name }}-read --wait=true > /dev/null
         {{ kubectl }} delete pvc {{ check_name }} --wait=true > /dev/null
       changed_when: true
 
+    - name: The PersistentVolume and its directory are gone
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "pv $(kubectl --kubeconfig {{ kubeconfig }} get pv {{ _read.stdout_lines[1].split()[1] }} --ignore-not-found -o name | wc -l)"
+        echo "dir $([ -e '{{ _pv_path.stdout }}' ] && echo 1 || echo 0)"
+      args:
+        executable: /bin/bash
+      register: _gone
+      changed_when: false
+      retries: 24
+      delay: 5
+      until: _gone.stdout_lines == ['pv 0', 'dir 0']
+
     - name: Storage works
       ansible.builtin.debug:
-        msg: "STORAGE OK: {{ _read.stdout_lines[1] }} provisioned, written, read back, deleted"
+        msg: >-
+          STORAGE OK: {{ _read.stdout_lines[1] }} provisioned, written, read back by a second pod, deleted with its
+          volume and {{ _pv_path.stdout }}

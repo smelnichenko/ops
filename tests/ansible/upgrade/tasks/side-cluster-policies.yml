@@ -1,0 +1,30 @@
+---
+# A side CNPG cluster gets what the production cluster's pods have by its name: the NetworkPolicy (the store on :9000,
+# the API server, the operator) and the PeerAuthentication (the operator's plain-text port) of
+# <pg_cluster>, cloned with its own name and selector - without them the namespace's default-deny held the side
+# cluster's recovery at barman's listing of the store for 5 minutes, then it failed (Vagrant 2026-10-04).
+#
+# Expects: kubectl, pg_namespace, pg_cluster, side_cluster, side_state (present | absent).
+- name: "Side cluster policies - cloned from the production cluster's: {{ side_state }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      K="{{ kubectl }} -n {{ pg_namespace }}"
+      for kind in networkpolicies.networking.k8s.io peerauthentications.security.istio.io; do
+        if [ "{{ side_state }}" = absent ]; then
+          $K delete "$kind" "{{ side_cluster }}" --ignore-not-found
+          continue
+        fi
+        src=$($K get "$kind" "{{ pg_namespace }}-cnpg-postgres" --ignore-not-found -o json)
+        [ -n "$src" ] || { echo "no $kind {{ pg_namespace }}-cnpg-postgres"; continue; }
+        echo "$src" | SIDE="{{ side_cluster }}" SOURCE="{{ pg_cluster }}" python3 -c '
+      import json, os, sys
+      o = json.load(sys.stdin)
+      o["metadata"] = {"name": os.environ["SIDE"], "namespace": o["metadata"]["namespace"],
+                       "labels": {"upgrade-test": "side-cluster"}}
+      o.pop("status", None)
+      text = json.dumps(o).replace("\"" + os.environ["SOURCE"] + "\"", "\"" + os.environ["SIDE"] + "\"")
+      print(text)' | $K apply -f -
+      done
+  changed_when: true

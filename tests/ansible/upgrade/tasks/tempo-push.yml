@@ -1,0 +1,25 @@
+---
+# One span pushed to Tempo over OTLP/HTTP through the API server's service proxy, as the queries go - with curl and the
+# admin client certificate: kubectl create --raw sends a content type Tempo refuses (415, it takes application/json
+# or protobuf).
+#
+# Expects: kubeconfig, proxy (the schnappy-infra services' proxy path), push_trace_id, push_span_id, push_name.
+- name: "Tempo - a trace pushed over OTLP/HTTP: {{ push_trace_id }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+      k="kubectl --kubeconfig {{ kubeconfig }} config view --raw -o jsonpath"
+      $k='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > "$d/ca"
+      $k='{.users[0].user.client-certificate-data}' | base64 -d > "$d/cert"
+      $k='{.users[0].user.client-key-data}' | base64 -d > "$d/key"
+      server=$($k='{.clusters[0].cluster.server}')
+      now=$(date +%s%N)
+      curl -fsS --cacert "$d/ca" --cert "$d/cert" --key "$d/key" -H 'Content-Type: application/json' \
+        "$server{{ proxy }}/schnappy-tempo:4318/proxy/v1/traces" --data-binary @- <<JSON
+      {"resourceSpans": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "upgrade-check"}}]},
+        "scopeSpans": [{"spans": [{"traceId": "{{ push_trace_id }}", "spanId": "{{ push_span_id }}", "name": "{{ push_name }}",
+          "kind": 1, "startTimeUnixNano": "$((now - 1000000000))", "endTimeUnixNano": "$now"}]}]}]}
+      JSON
+  changed_when: true

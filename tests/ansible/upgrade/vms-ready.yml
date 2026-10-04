@@ -21,7 +21,7 @@
 - name: The Pi VMs are isolated from production
   ansible.builtin.import_playbook: ../isolate-pis.yml
 
-# The Gluster volumes mount at boot by themselves (setup-gluster's gluster-volumes-ready, plan 100 defect 22) - checked
+# The Gluster volumes mount at boot by themselves (setup-gluster's gluster-volumes-ready) - checked
 # here, never mounted by the harness: a copy that needs a hand after a reboot hides the gap production has.
 - name: The Pis' Gluster volumes are mounted and their services up
   hosts: pi1:pi2

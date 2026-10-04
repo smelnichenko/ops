@@ -12,7 +12,7 @@ image sonarqube 26.3.0.120487-community
 image curlimages/curl 8.12.1
 image ghcr.io/browserless/chromium latest
 # the nightly Hyperfoil load test (off in Vagrant: its image is a floating :latest, so the kubelet pulls it from
-# production's registry on every run - plan 100 defect 15 - and an isolated copy can never run it)
+# production's registry on every run, and an isolated copy can never run it)
 image git.pmon.dev/schnappy/hyperfoil latest
 # the k6 smoke's PostSync Job (curl waits for the app, then k6), listed only for the 24 h it is kept after each sync
 # (ttlSecondsAfterFinished) - on ten when its inventory was taken

@@ -1,0 +1,63 @@
+---
+# cert-manager still issues after its upgrade (the runner runs this after the steps marked cert-renew - the cert-manager upgrades): every
+# Certificate is renewed as `cmctl renew` does it - an Issuing condition (ManuallyTriggered) added through the status
+# subresource - and must come back Ready at a higher revision. Green steps proved only that the controller ran; nothing
+# issued a certificate after the upgrade.
+#
+# In the Vagrant copy this is cert-manager's self-signed and CA issuance (the porkbun webhook's chain, the Scylla
+# operator's serving cert): the mirror leaves out the wildcard, and the overlay makes letsencrypt-dns self-signed. The
+# ACME path through the porkbun webhook is production's alone - the read-only check after these steps there.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/cert-check.yml
+- name: Every Certificate renews
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: The Certificates and their revisions now
+      ansible.builtin.command: >-
+        {{ kubectl }} get certificates.cert-manager.io -A
+        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.status.revision}{"\n"}{end}'
+      register: _before
+      changed_when: false
+      failed_when: _before.rc != 0 or _before.stdout_lines | length == 0
+
+    - name: Renew each (an Issuing condition, as cmctl renew)
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ item.split()[0] }} patch certificates.cert-manager.io {{ item.split()[1] }}
+        --subresource=status --type=json
+        -p '[{"op": "add", "path": "/status/conditions/-", "value": {"type": "Issuing", "status": "True",
+        "reason": "ManuallyTriggered", "message": "renewed by the upgrade test",
+        "lastTransitionTime": "{{ lookup('ansible.builtin.pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"}}]'
+      loop: "{{ _before.stdout_lines }}"
+      changed_when: true
+
+    - name: Each is Ready again at a higher revision
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} -n {{ item.split()[0] }} get certificates.cert-manager.io {{ item.split()[1] }} -o json | python3 -c '
+          import json, sys
+          c = json.load(sys.stdin)["status"]
+          ready = any(x["type"] == "Ready" and x["status"] == "True" for x in c.get("conditions", []))
+          issuing = any(x["type"] == "Issuing" and x["status"] == "True" for x in c.get("conditions", []))
+          print(ready and not issuing, c.get("revision", 0))'
+      loop: "{{ _before.stdout_lines }}"
+      register: _after
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: >-
+        _after.rc == 0 and _after.stdout.split()[0] == 'True'
+        and (_after.stdout.split()[1] | int) > ((item.split() + ['0'])[2] | int)
+
+    - name: Renewed
+      ansible.builtin.debug:
+        msg: "CERTS OK: {{ _after.results | map(attribute='item') | map('split') | map('first') | list | length }} Certificates renewed and Ready"

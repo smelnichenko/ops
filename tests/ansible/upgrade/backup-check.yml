@@ -3,9 +3,9 @@
 # schnappy-production, file-system backup of its pods' volumes), into the Vagrant backup store, must end Completed with
 # no errors and every volume backup Completed. The backup is deleted afterwards (its data too). Its volumes are the
 # pods' emptyDirs only, as in production: the data volumes are local-path hostPath PVs, which Velero's file-system
-# backup skips (plan 100 defect 20) - Postgres, Kafka and ScyllaDB are proven by data-check.yml instead.
+# backup skips - Postgres, Kafka and ScyllaDB are proven by data-check.yml instead.
 #
-# Why: a Velero or plugin upgrade (plan 100 step 04) can leave every pod green while backups fail - the plugin and the
+# Why: a Velero or plugin upgrade can leave every pod green while backups fail - the plugin and the
 # server are paired versions - and nothing else in the step runner writes to the backup store.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
@@ -41,6 +41,31 @@
       register: _schedule
       changed_when: false
 
+    # every emptyDir of the pods running now must get a volume backup - "Completed" with fewer volume backups than
+    # that passed; a pod gone by the end is not counted
+    - name: The volumes the backup must hold - every emptyDir of the pods running in its namespaces now
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for ns in {{ (_schedule.stdout | from_json).spec.template.includedNamespaces | join(' ') }}; do
+            kubectl --kubeconfig {{ kubeconfig }} -n "$ns" get pods --field-selector=status.phase=Running -o json
+          done | python3 -c '
+          import json, sys
+          dec = json.JSONDecoder(); text = sys.stdin.read().strip(); i = 0; out = []
+          while i < len(text):
+              doc, i = dec.raw_decode(text, i)
+              while i < len(text) and text[i].isspace():
+                  i += 1
+              for p in doc["items"]:
+                  m = p["metadata"]
+                  excluded = set(filter(None, m.get("annotations", {}).get("backup.velero.io/backup-volumes-excludes", "").split(",")))
+                  out += [{"uid": m["uid"], "pod": m["namespace"] + "/" + m["name"], "volume": v["name"]}
+                          for v in p["spec"].get("volumes", []) if "emptyDir" in v and v["name"] not in excluded]
+          print(json.dumps(out))'
+      register: _expected_volumes
+      changed_when: false
+
     - name: Start a backup from it
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
@@ -59,7 +84,7 @@
     # Up to 30 minutes, as long as production's own daily backup takes (20-29 min, 2026-09-30..10-03). The Vagrant
     # copy's takes 8-11 and grows each step: every check adds 79 snapshots to the kopia repository and deletes them,
     # faster than Velero's hourly quick maintenance compacts the index ("too many index blobs" - a repository open then
-    # takes 30 s). A 10-minute bound failed step 17 on a backup that completed in 11.
+    # takes 30 s). A 10-minute bound failed the Cilium 1.20 step on a backup that completed in 11.
     - name: It ends Completed
       ansible.builtin.command: >-
         {{ kubectl }} get backups.velero.io {{ _created.result.metadata.name }}
@@ -71,21 +96,36 @@
       until: _phase.stdout.split('/')[0] in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
       failed_when: _phase.stdout.split('/')[0] != 'Completed' or _phase.stdout.split('/')[1] not in ['', '0']
 
-    - name: Its volumes were backed up
-      ansible.builtin.shell: |
-        set -euo pipefail
-        {{ kubectl }} get podvolumebackups.velero.io -l velero.io/backup-name={{ _created.result.metadata.name }} \
-          -o jsonpath='{range .items[*]}{.spec.volume} {.status.phase}{"\n"}{end}'
-      args:
+    - name: Every expected volume was backed up, every volume backup Completed
+      ansible.builtin.shell:
         executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          # files, not environment variables: 79 volume backups' JSON is over the kernel's limit for one variable
+          d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+          {{ kubectl }} get podvolumebackups.velero.io -l velero.io/backup-name={{ _created.result.metadata.name }} -o json > "$d/pvbs"
+          kubectl --kubeconfig {{ kubeconfig }} get pods -A -o jsonpath='{.items[*].metadata.uid}' > "$d/uids"
+          python3 - "$d" <<'PY'
+          import json, os, sys
+          d = sys.argv[1]
+          expected = json.loads(os.environ["EXPECTED"])
+          alive = set(open(d + "/uids").read().split())
+          pvbs = json.load(open(d + "/pvbs"))["items"]
+          done = {(b["spec"]["pod"]["namespace"] + "/" + b["spec"]["pod"]["name"], b["spec"]["volume"])
+                  for b in pvbs if b.get("status", {}).get("phase") == "Completed"}
+          bad = [b["spec"]["volume"] + " " + b.get("status", {}).get("phase", "?") for b in pvbs
+                 if b.get("status", {}).get("phase") != "Completed"]
+          missing = [e["pod"] + ":" + e["volume"] for e in expected if e["uid"] in alive and (e["pod"], e["volume"]) not in done]
+          print("%d volume backups, %d expected, missing %s, not completed %s" % (len(pvbs), len(expected), missing or "-", bad or "-"))
+          sys.exit(1 if missing or bad or not pvbs else 0)
+          PY
+      environment:
+        EXPECTED: "{{ _expected_volumes.stdout }}"
       register: _pvb
       changed_when: false
-      failed_when: >-
-        _pvb.stdout_lines | length == 0
-        or (_pvb.stdout_lines | reject('match', '^\S+ Completed$') | list | length) > 0
 
     # Vagrant only, as this whole file. Kopia closes an index epoch after 24 h at the earliest: production backs up
-    # once a day, so its index stays small, while this check backs up 79 volumes every step - by step 24 the
+    # once a day, so its index stays small, while this check backs up 79 volumes every step - by the Istio 1.30 step the
     # repository held 4237 index blobs and each backup took ~25 s longer than the one before (2026-10-03). An hourly
     # epoch (kopia's floor with its 20-minute refresh) lets Velero's hourly quick maintenance compact it. Set once,
     # after the backup that created the repository, with the kopia release Velero 1.18 builds on.
@@ -160,6 +200,6 @@
     - name: Backup works
       ansible.builtin.debug:
         msg: >-
-          BACKUP OK: {{ _created.result.metadata.name }} Completed, {{ _pvb.stdout_lines | length }} volumes, in
+          BACKUP OK: {{ _created.result.metadata.name }} Completed ({{ _pvb.stdout }}), in
           {{ ((_phase.stdout.split('/')[4] | to_datetime('%Y-%m-%dT%H:%M:%SZ'))
               - (_phase.stdout.split('/')[3] | to_datetime('%Y-%m-%dT%H:%M:%SZ'))).total_seconds() | int }} s

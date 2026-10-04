@@ -3,21 +3,26 @@
 # step; `task test:upgrade:restore-check` on its own). Nothing of production's namespace is replaced:
 #
 #   1. Postgres, the production way: an on-demand CNPG barman backup of schnappy-production-postgres to the Vagrant
-#      store, then a side cluster (upgrade-restore-check) recovered from that object store - base backup and WAL,
-#      as a real recovery would - must hold exactly the seeded rows (count and md5, computed here). After the
-#      PostgreSQL 18 step this is also the fresh base backup that step needs.
+#      store, then a marker row written after it and its WAL segment archived, then a side cluster
+#      (upgrade-restore-check) recovered from that object store - base backup and WAL, as a real recovery would - must
+#      hold exactly the seeded rows (count and md5, computed here) and the marker: a recovery that replayed no WAL
+#      would lack it. After the PostgreSQL 18 step this is also the fresh base backup that step needs.
+#      With -e restore_server=<serverName> -e restore_image=<image> it recovers that server's latest backup instead,
+#      as it is (no fresh backup, no marker): the undo of the PostgreSQL 18 step, Postgres 17's backup.
 #   2. Velero with data: a namespace whose pod writes a random token to an emptyDir once, a file-system backup of it,
 #      the namespace deleted, the backup restored - the pod must come back with the same token. Without the
-#      restored volume it would write a new one. (Velero holds no data volume of production's - defect 20 - so
+#      restored volume it would write a new one. (Velero holds no data volume of production's - its data volumes are local-path hostPath PVs - so
 #      this is what its restore can be held to.)
 #
 # Each part removes what it created, the backups' data in the store excepted.
 #
-# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml [--tags postgres]
+#        [-e restore_server=<serverName> -e restore_image=<image>]
 - name: Postgres recovers from its barman backup
   hosts: target
   become: true
   gather_facts: false
+  tags: [postgres]
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     pg_namespace: schnappy-production
@@ -40,6 +45,13 @@
       ansible.builtin.set_fact:
         _spec: "{{ (_cluster.stdout | from_json).spec }}"
         _backup: "{{ recovered }}-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+        _fresh: "{{ restore_server is not defined }}"
+
+    - name: What is recovered - the cluster's own server (a fresh backup) or the one asked for, with its image
+      ansible.builtin.set_fact:
+        _server: "{{ restore_server | default(_spec.backup.barmanObjectStore.serverName | default(cluster)) }}"
+        _image: "{{ restore_image | default(_spec.imageName) }}"
+        _marker: "restore-{{ _backup }}"
 
     - name: Its names are the fixed ones - what it deletes cannot be redirected with -e
       ansible.builtin.assert:
@@ -63,62 +75,119 @@
       ansible.builtin.include_tasks: tasks/cnpg-backup.yml
       vars:
         cnpg_backup: "{{ _backup }}"
+      when: _fresh | bool
 
-    - name: A side cluster recovered from the object store (base backup and WAL)
-      kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig }}"
-        definition:
-          apiVersion: postgresql.cnpg.io/v1
-          kind: Cluster
-          metadata: { name: "{{ recovered }}", namespace: "{{ pg_namespace }}" }
-          spec:
-            instances: 1
-            imageName: "{{ _spec.imageName }}"
-            # the mesh exclusion of the object store's port, as the cluster has it
-            inheritedMetadata: "{{ _spec.inheritedMetadata | default({}) }}"
-            storage: { size: 2Gi, storageClass: "{{ _spec.storage.storageClass }}" }
-            resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
-            bootstrap:
-              recovery: { source: origin }
-            externalClusters:
-              - name: origin
-                barmanObjectStore: "{{ _spec.backup.barmanObjectStore | combine({'serverName': cluster}) }}"
-
-    - name: The side cluster is healthy
-      ansible.builtin.command: >-
-        {{ kubectl }} get clusters.postgresql.cnpg.io {{ recovered }}
-        -o jsonpath={.status.phase}/{.status.readyInstances}
-      register: _recovered
-      changed_when: false
-      retries: 60
-      delay: 10
-      until: _recovered.stdout == 'Cluster in healthy state/1'
-
-    - name: It holds exactly the seeded rows
-      ansible.builtin.shell: |
-        {{ kubectl }} exec {{ recovered }}-1 -c postgres -- psql -v ON_ERROR_STOP=1 -qAt \
-          -d {{ _spec.bootstrap.initdb.database }} -c "
-          select count(*) || ' ' || md5(string_agg(payload, ',' order by id)) from upgrade_check.canary"
-      register: _rows
-      changed_when: false
-      failed_when: _rows.stdout | trim != rows ~ ' ' ~ expected_md5
-
-    - name: Remove the side cluster (its volume goes with it) and the backup object (its data stays in the store)
-      ansible.builtin.shell: |
-        {{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --wait=true
-        {{ kubectl }} delete backups.postgresql.cnpg.io {{ _backup }}
+    # two commands, not one: psql -c runs several statements as one transaction, and a switch inside it puts the
+    # insert's commit in the next segment - which is not archived, and the marker never comes back
+    - name: After it, a marker row committed, then its WAL segment switched out (only WAL replay can bring it back)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          P="{{ kubectl }} exec {{ _primary }} -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ _spec.bootstrap.initdb.database }}"
+          $P -c "create table if not exists upgrade_check.heartbeat (run text primary key, at timestamptz not null default now())"
+          $P -c "insert into upgrade_check.heartbeat (run) values ('{{ _marker }}')"
+          $P -c "select pg_walfile_name(pg_switch_wal())"
+      vars:
+        _primary: "{{ (_cluster.stdout | from_json).status.currentPrimary }}"
+      register: _marker_wal
       changed_when: true
+      when: _fresh | bool
+
+    - name: That segment is archived
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ (_cluster.stdout | from_json).status.currentPrimary }} -c postgres -- psql -qAt
+        -c "select coalesce(last_archived_wal, '-') from pg_stat_archiver"
+      register: _marker_archived
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: _marker_archived.rc == 0 and _marker_archived.stdout | trim >= _marker_wal.stdout_lines[-1] | trim
+      when: _fresh | bool
+
+    - name: The side cluster, recovered and checked - removed with its policies whatever happens
+      block:
+        - name: The side cluster's policies (the production cluster's, cloned)
+          ansible.builtin.include_tasks: tasks/side-cluster-policies.yml
+          vars:
+            pg_cluster: "{{ cluster }}"
+            side_cluster: "{{ recovered }}"
+            side_state: present
+
+        - name: A side cluster recovered from the object store (base backup and WAL)
+          kubernetes.core.k8s:
+            kubeconfig: "{{ kubeconfig }}"
+            definition:
+              apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              metadata: { name: "{{ recovered }}", namespace: "{{ pg_namespace }}" }
+              spec:
+                instances: 1
+                imageName: "{{ _image }}"
+                # the mesh exclusion of the object store's port, as the cluster has it
+                inheritedMetadata: "{{ _spec.inheritedMetadata | default({}) }}"
+                storage: { size: 2Gi, storageClass: "{{ _spec.storage.storageClass }}" }
+                resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+                bootstrap:
+                  recovery: { source: origin }
+                externalClusters:
+                  - name: origin
+                    barmanObjectStore: "{{ _spec.backup.barmanObjectStore | combine({'serverName': _server}) }}"
+
+        - name: The side cluster is healthy
+          ansible.builtin.command: >-
+            {{ kubectl }} get clusters.postgresql.cnpg.io {{ recovered }}
+            -o jsonpath={.status.phase}/{.status.readyInstances}
+          register: _recovered
+          changed_when: false
+          retries: 60
+          delay: 10
+          until: _recovered.stdout == 'Cluster in healthy state/1'
+
+        - name: It holds exactly the seeded rows
+          ansible.builtin.shell: |
+            {{ kubectl }} exec {{ recovered }}-1 -c postgres -- psql -v ON_ERROR_STOP=1 -qAt \
+              -d {{ _spec.bootstrap.initdb.database }} -c "
+              select count(*) || ' ' || md5(string_agg(payload, ',' order by id)) from upgrade_check.canary"
+          register: _rows
+          changed_when: false
+          failed_when: _rows.stdout | trim != rows ~ ' ' ~ expected_md5
+
+        - name: And the marker written after the base backup (WAL replayed)
+          ansible.builtin.command: >-
+            {{ kubectl }} exec {{ recovered }}-1 -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -d {{ _spec.bootstrap.initdb.database }}
+            -c "select count(*) from upgrade_check.heartbeat where run = '{{ _marker }}'"
+          register: _replayed
+          changed_when: false
+          failed_when: _replayed.rc != 0 or _replayed.stdout | trim != '1'
+          when: _fresh | bool
+      always:
+        - name: Remove the side cluster (its volume goes with it) and the backup object (its data stays in the store)
+          ansible.builtin.shell: |
+            set -eu
+            {{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true
+            {{ kubectl }} delete backups.postgresql.cnpg.io {{ _backup }} --ignore-not-found
+          changed_when: true
+
+        - name: Remove the side cluster's policies
+          ansible.builtin.include_tasks: tasks/side-cluster-policies.yml
+          vars:
+            pg_cluster: "{{ cluster }}"
+            side_cluster: "{{ recovered }}"
+            side_state: absent
 
     - name: Postgres restores
       ansible.builtin.debug:
         msg: >-
-          POSTGRES RESTORE OK: {{ _backup }} recovered into {{ recovered }} ({{ _spec.imageName }}),
-          {{ rows }} rows, md5 {{ expected_md5 }}
+          POSTGRES RESTORE OK: {{ _backup if _fresh | bool else 'the latest backup of ' ~ _server }} recovered into
+          {{ recovered }} ({{ _image }}), {{ rows }} rows, md5 {{ expected_md5 }}{{ ', the marker written after the
+          base backup (WAL replayed)' if _fresh | bool else '' }}
 
 - name: Velero restores a volume's data
   hosts: target
   become: true
   gather_facts: false
+  tags: [velero]
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     ns: upgrade-restore-check

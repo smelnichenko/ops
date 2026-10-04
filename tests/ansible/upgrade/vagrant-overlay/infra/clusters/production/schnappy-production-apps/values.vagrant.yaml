@@ -12,6 +12,6 @@ chessService:
 
 # The nightly Hyperfoil load test's image is a floating git.pmon.dev/schnappy/hyperfoil:latest, which the kubelet
 # pulls on every run (pull policy Always) from production's registry - unreachable here by design. Its 03:00 pod sat
-# in ImagePullBackOff holding 550m CPU (2026-10-03). Plan 100 defect 15.
+# in ImagePullBackOff holding 550m CPU (2026-10-03).
 hyperfoil:
   enabled: false
