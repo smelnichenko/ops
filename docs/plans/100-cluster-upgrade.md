@@ -196,8 +196,9 @@ single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variab
 Branches `upgrade/NN-*` in infra/platform (local until approved), stacked per repo; host-side steps as playbook lines.
 S = stateful (shown to the operator with the exact change before it runs in production). Status 2026-10-03.
 
-**Every step green on its own in Vagrant: 2026-10-04 06:23** (01-55; 51 changes nothing in the copy). The full run
-is next.
+**Every step green on its own in Vagrant: 2026-10-04 06:23** (01-55; 51 changes nothing in the copy). Full run 1
+(06:24): build and steps 01-15 green, step 16 failed - upgrade-kubeadm.yml finished while the new kubelet restarted
+the control plane (fixed efb07bb). Full run 2 started 11:04, from nothing.
 
 **Gate before the production rollout** (operator, 2026-10-03): every step green on its own, then one full run green -
 `task test:upgrade:full`: the Vagrant copy built from nothing, then steps 01-55 in order, unattended, every check
