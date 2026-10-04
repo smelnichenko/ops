@@ -15,6 +15,9 @@
 # commit): a step that turns an app's automated sync off and then changes what its chart would put back (Strimzi's v1
 # conversion) leaves it so on purpose, until the next step. The runner passes a step's argo-out-of-sync lines.
 #
+# With expect_mirror it first asks Argo to refresh every app (argocd.argoproj.io/refresh=normal): otherwise Argo sees
+# the pushed commits only at its next 3-minute poll, and the wait averaged 3.8 min a step in full run 2 (2026-10-04).
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml [-e settle_minutes=40]
 #        [-e expect_mirror=true] [-e allow_out_of_sync=strimzi]
 - name: Argo CD settled (all apps Synced + Healthy, all pods ready)
@@ -24,7 +27,7 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     settle_minutes: 40
-    poll_seconds: 30
+    poll_seconds: 10
     expect_mirror: false
     allow_out_of_sync: ""
     mirror_revisions: >-
@@ -34,6 +37,13 @@
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Argo refreshes every app now, so it sees the pushed commits at once
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kubeconfig }} -n argocd annotate applications.argoproj.io --all
+        argocd.argoproj.io/refresh=normal --overwrite
+      when: expect_mirror | bool
+      changed_when: true
 
     - name: Wait until every app is green and every pod is ready
       ansible.builtin.shell: |
