@@ -6,7 +6,10 @@
 #      store, then a marker row written after it and its WAL segment archived, then a side cluster
 #      (upgrade-restore-check) recovered from that object store - base backup and WAL, as a real recovery would - must
 #      hold exactly the seeded rows (count and md5, computed here) and the marker: a recovery that replayed no WAL
-#      would lack it. After the PostgreSQL 18 step this is also the fresh base backup that step needs.
+#      would lack it. The recovery starts from that base backup by its ID (recoveryTarget.backupID), not from
+#      whichever is newest. After the PostgreSQL 18 step this is also the fresh base backup that step needs.
+#      With -e restore_backup=wave0 it recovers the newest Wave 0 base backup (upgrade-backup.yml's
+#      upgrade-wave0-<time>) by its ID instead, as it is (no fresh backup, no marker).
 #      With -e restore_server=<serverName> -e restore_image=<image> it recovers that server's latest backup instead,
 #      as it is (no fresh backup, no marker): the undo of the PostgreSQL 18 step, Postgres 17's backup.
 #   2. Velero with data: a namespace whose pod writes a random token to an emptyDir once, a file-system backup of it,
@@ -17,7 +20,7 @@
 # Each part removes what it created, the backups' data in the store excepted.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml [--tags postgres]
-#        [-e restore_server=<serverName> -e restore_image=<image>]
+#        [-e restore_backup=wave0 | -e restore_server=<serverName> -e restore_image=<image>]
 - name: Postgres recovers from its barman backup
   hosts: target
   become: true
@@ -45,7 +48,7 @@
       ansible.builtin.set_fact:
         _spec: "{{ (_cluster.stdout | from_json).spec }}"
         _backup: "{{ recovered }}-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
-        _fresh: "{{ restore_server is not defined }}"
+        _fresh: "{{ restore_server is not defined and restore_backup is not defined }}"
 
     - name: What is recovered - the cluster's own server (a fresh backup) or the one asked for, with its image
       ansible.builtin.set_fact:
@@ -59,7 +62,8 @@
           - recovered == 'upgrade-restore-check'
           - _backup is match('^upgrade-restore-check-[0-9]+$')
           - recovered != cluster
-        fail_msg: "REFUSED: recovered={{ recovered }} backup={{ _backup }} cluster={{ cluster }}"
+          - restore_backup | default('wave0') == 'wave0'
+        fail_msg: "REFUSED: recovered={{ recovered }} backup={{ _backup }} cluster={{ cluster }} restore_backup={{ restore_backup | default('-') }}"
         quiet: true
 
     - name: The cluster backs up to an object store
@@ -76,6 +80,24 @@
       vars:
         cnpg_backup: "{{ _backup }}"
       when: _fresh | bool
+
+    - name: The base backup recovered from - the fresh one, or the newest completed Wave 0 one (its barman ID)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get backups.postgresql.cnpg.io -o json | python3 -c '
+          import json, sys
+          name, wave0 = sys.argv[1], sys.argv[2] == "wave0"
+          ok = [b for b in json.load(sys.stdin)["items"] if b.get("status", {}).get("phase") == "completed"
+                and b["spec"]["cluster"]["name"] == sys.argv[3]
+                and (b["metadata"]["name"].startswith("upgrade-wave0-") if wave0 else b["metadata"]["name"] == name)]
+          ok.sort(key=lambda b: b["status"].get("stoppedAt", ""))
+          print(ok[-1]["metadata"]["name"], ok[-1]["status"]["backupId"]) if ok else sys.exit("no such completed backup")
+          ' {{ _backup }} {{ restore_backup | default('-') }} {{ cluster }}
+      register: _base
+      changed_when: false
+      when: restore_server is not defined
 
     # two commands, not one: psql -c runs several statements as one transaction, and a switch inside it puts the
     # insert's commit in the next segment - which is not archived, and the marker never comes back
@@ -129,7 +151,8 @@
                 storage: { size: 2Gi, storageClass: "{{ _spec.storage.storageClass }}" }
                 resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
                 bootstrap:
-                  recovery: { source: origin }
+                  recovery: "{{ {'source': 'origin'} | combine({'recoveryTarget': {'backupID': _base.stdout.split()[1]}}
+                                if _base.stdout is defined else {}) }}"
                 externalClusters:
                   - name: origin
                     barmanObjectStore: "{{ _spec.backup.barmanObjectStore | combine({'serverName': _server}) }}"
@@ -161,6 +184,27 @@
           changed_when: false
           failed_when: _replayed.rc != 0 or _replayed.stdout | trim != '1'
           when: _fresh | bool
+      # what the side cluster was doing, before the always removes it: a recovery that hung once (Vagrant 2026-10-05,
+      # "Setting up primary" for 10 minutes, not reproduced) left nothing to read
+      rescue:
+        - name: The side cluster's state, its recovery job's log and events (it failed)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -o pipefail
+              {{ kubectl }} get clusters.postgresql.cnpg.io {{ recovered }} -o jsonpath='{.status.phase}: {.status.phaseReason}{"\n"}'
+              {{ kubectl }} get pods,pvc,jobs -o wide | grep -E '^(NAME|.*{{ recovered }})'
+              {{ kubectl }} get events --sort-by=.lastTimestamp | grep {{ recovered }} | tail -20
+              for p in $({{ kubectl }} get pods -o name | grep {{ recovered }}); do
+                echo "== $p"; {{ kubectl }} logs "$p" --all-containers --tail=30 2>&1 | cut -c1-400
+              done
+          register: _diag
+          changed_when: false
+          failed_when: false
+
+        - name: It failed
+          ansible.builtin.fail:
+            msg: "the side cluster did not recover - its state above: {{ _diag.stdout_lines | default([]) | length }} lines"
       always:
         - name: Remove the side cluster (its volume goes with it) and the backup object (its data stays in the store)
           ansible.builtin.shell: |
@@ -179,7 +223,8 @@
     - name: Postgres restores
       ansible.builtin.debug:
         msg: >-
-          POSTGRES RESTORE OK: {{ _backup if _fresh | bool else 'the latest backup of ' ~ _server }} recovered into
+          POSTGRES RESTORE OK: {{ (_base.stdout | replace(' ', ' (barman ') ~ ')') if _base.stdout is defined
+          else 'the latest backup of ' ~ _server }} recovered into
           {{ recovered }} ({{ _image }}), {{ rows }} rows, md5 {{ expected_md5 }}{{ ', the marker written after the
           base backup (WAL replayed)' if _fresh | bool else '' }}
 

@@ -45,8 +45,9 @@ step's own settle wants them Synced again.
 
 Refs (--refs): for each repo, its highest upgrade/NN-* branch with NN up to the step's, else main - so a step that
 changes only infra still mirrors platform with every earlier platform step. Aborts if a step branch does not contain
-the previous one, or if the branches up to the step are not exactly the ones their step files declare (branch lines):
-a missing branch fell back to the previous step's, and the step went green without its change.
+the previous one or changes nothing on it, or if the branches up to the step are not exactly the ones their step files
+declare (branch lines): a missing or empty branch fell back to the previous step's, and the step went green without
+its change.
 
 Usage: scripts/upgrade-expected-inventory.py <step, e.g. 01-apt-cacher-ng>           (prints the inventory)
        scripts/upgrade-expected-inventory.py --refs <step>                          (prints "<infra-ref> <platform-ref>")
@@ -137,6 +138,10 @@ def ref(repo, step_no, names):
             break
         if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", prev, b]).returncode != 0:
             sys.exit(f"{repo}: {b} does not contain {prev} - rebase it on the previous step's branch")
+        # a branch pointing at its predecessor's commit stacks too, and carries no change: its step would go green
+        # without it
+        if not subprocess.run(["git", "-C", repo, "diff", "--quiet", prev, b]).returncode:
+            sys.exit(f"{repo}: {b} changes nothing on {prev} - the step's change is missing")
         prev = b
     return prev
 

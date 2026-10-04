@@ -10,8 +10,10 @@
 #   -e mode=verify  after each step: the rows (count and md5 computed here), ClickHouse's compatibility setting as the
 #                   step files say (-e clickhouse_compat, the runner passes the latest clickhouse-compat line up to the
 #                   step; empty = not set), its users (-e clickhouse_users, from the clickhouse-users lines: an
-#                   image-made `default` goes with the 25.8 step), every dashboard UID of the seed and the seeded dashboard's content, the
-#                   trace by its ID, and Mimir's `up` series at the seed's time - as many as then.
+#                   image-made `default` goes with the 25.8 step), every dashboard UID of the seed and the seeded
+#                   dashboard's content, the trace by its ID, Mimir's `up` series at the seed's time - as many as
+#                   then - and, from 4 h after the seed, a stored block covering that time in the store-gateway's
+#                   list (before that the ingester answers the query from its own data: tasks/mimir-blocks.yml).
 #
 # Why: these steps were green on "new data arrives" alone (the metrics check counts ClickHouse rows of the last two
 # minutes): losing or detaching every old part, the dashboards, the old blocks or the pin would all have passed.
@@ -169,6 +171,13 @@
         _mimir.rc == 0 and (_mimir.stdout | int) > 0
         and (mode == 'seed' or (_mimir.stdout | int) >= (_seed.mimir_up | int))
 
+    - name: Mimir - its stored blocks, read by the store-gateway (verify)
+      ansible.builtin.include_tasks: tasks/mimir-blocks.yml
+      vars:
+        mimir_proxy: "{{ proxy }}"
+        mimir_at: "{{ _seed.mimir_at }}"
+      when: mode == 'verify'
+
     - name: The seed's record
       ansible.builtin.copy:
         content: >-
@@ -185,4 +194,5 @@
         msg: >-
           SURVIVAL OK: ClickHouse {{ _ch.stdout_lines[1].split()[-1] }} {{ rows }} rows md5 {{ expected_md5 }},
           {{ _ch.stdout_lines[1].split()[0] }}; Grafana {{ (_grafana.stdout_lines[0] | from_json) | length }}
-          dashboards, the canary intact; Tempo trace {{ trace_id }}; Mimir {{ _mimir.stdout }} `up` series at the seed
+          dashboards, the canary intact; Tempo trace {{ trace_id }}; Mimir {{ _mimir.stdout }} `up` series at the seed,
+          {{ _mimir_block.stdout | default('blocks not checked at the seed') }}

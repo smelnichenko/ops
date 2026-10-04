@@ -260,22 +260,26 @@
       changed_when: "'created' in _seeded.stdout"
       when: mode == 'seed'
 
-    - name: The topic holds exactly the seeded messages, from the start
+    # exactly: the log ends at the seeded count (a duplicate or an extra message moves it), and those messages are
+    # the seeded ones in order - the read stops at that count, so the end offset is what rules out extras
+    - name: The topic holds exactly the seeded messages, from the start, and ends there
       ansible.builtin.shell: |
         set -euo pipefail
         out=$(mktemp); trap 'rm -f "$out"' EXIT
+        end=$({{ kubectl }} exec {{ _broker.stdout }} -c kafka -- /opt/kafka/bin/kafka-get-offsets.sh \
+          --bootstrap-server localhost:9092 --topic {{ topic }} --time -1 | awk -F: '{n += $3} END {print n}')
         {{ kubectl }} exec {{ _broker.stdout }} -c kafka -- /opt/kafka/bin/kafka-console-consumer.sh \
           --bootstrap-server localhost:9092 --topic {{ topic }} --from-beginning \
           --max-messages {{ messages }} --timeout-ms 60000 2> /dev/null > "$out" || true
-        echo "$(wc -l < "$out") $(md5sum < "$out" | cut -d' ' -f1)"
+        echo "$(wc -l < "$out") $(md5sum < "$out" | cut -d' ' -f1) $end"
       args:
         executable: /bin/bash
       register: _read
       changed_when: false
       retries: 5
       delay: 15
-      until: _read.stdout == messages ~ ' ' ~ expected_md5
-      failed_when: _read.stdout != messages ~ ' ' ~ expected_md5
+      until: _read.stdout == messages ~ ' ' ~ expected_md5 ~ ' ' ~ messages
+      failed_when: _read.stdout != messages ~ ' ' ~ expected_md5 ~ ' ' ~ messages
 
     - name: A message of this run through the bootstrap Service, read back from it
       ansible.builtin.shell:

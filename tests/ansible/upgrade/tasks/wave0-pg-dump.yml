@@ -1,0 +1,110 @@
+---
+# One pg_dumpall of a Wave 0 backup, read back from the Pi store (its sha256 the stored one) and replayed into an empty
+# side CNPG cluster: the only errors allowed are the roles and databases the side cluster has already; every table of
+# every database must then hold the rows the dump has (files/pg-dump-verify.py), and the production cluster's dump the
+# seeded rows too (count and md5). The side cluster and its policies are removed whatever happens.
+#
+# Expects: dump_name (a file of the backup's local directory), _stamp, _cluster (the production cluster, as JSON),
+#          kubectl, kubeconfig, pg_namespace, pg_cluster, restored, work_dir, local_dir, endpoint, bucket, store_curl,
+#          rows, expected_md5.
+- name: "Postgres - read back from the Pi store, its sha256 the stored one: {{ dump_name }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      key="postgres/{{ _stamp.stdout }}/{{ dump_name }}"
+      get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
+      get "$key" > {{ work_dir }}/dump.sql.gz
+      [ "$(get "$key.sha256")" = "$(sha256sum {{ work_dir }}/dump.sql.gz | cut -d' ' -f1)" ]
+      echo "$key"
+  changed_when: false
+
+- name: "Postgres - no side cluster left from an earlier run: {{ dump_name }}"
+  ansible.builtin.command: >-
+    {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
+  changed_when: false
+
+- name: "Postgres - the side cluster, replayed and checked, removed whatever happens: {{ dump_name }}"
+  block:
+    - name: "Postgres - the side cluster's policies (the production cluster's, cloned): {{ dump_name }}"
+      ansible.builtin.include_tasks: side-cluster-policies.yml
+      vars:
+        side_cluster: "{{ restored }}"
+        side_state: present
+
+    - name: "Postgres - an empty side cluster: {{ dump_name }}"
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata: { name: "{{ restored }}", namespace: "{{ pg_namespace }}" }
+          spec:
+            instances: 1
+            imageName: "{{ (_cluster.stdout | from_json).spec.imageName }}"
+            inheritedMetadata: "{{ (_cluster.stdout | from_json).spec.inheritedMetadata | default({}) }}"
+            enableSuperuserAccess: true
+            storage: { size: 2Gi, storageClass: "{{ (_cluster.stdout | from_json).spec.storage.storageClass }}" }
+            resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+
+    - name: "Postgres - the side cluster is healthy: {{ dump_name }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ pg_namespace }} get clusters.postgresql.cnpg.io {{ restored }}
+        -o jsonpath={.status.phase}/{.status.readyInstances}
+      register: _side
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _side.stdout == 'Cluster in healthy state/1'
+
+    # pg_dumpall recreates the roles and databases: the ones the side cluster has already (postgres,
+    # streaming_replica, ...) error - those and nothing else
+    - name: "Postgres - the dump replayed, no error but the roles and databases it had: {{ dump_name }}"
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          gzip -dc {{ work_dir }}/dump.sql.gz \
+            | {{ kubectl }} -n {{ pg_namespace }} exec -i {{ restored }}-1 -c postgres -- psql -q -U postgres -d postgres \
+              -v ON_ERROR_STOP=0 2>&1 | { grep ERROR || true; } > {{ work_dir }}/replay-errors
+          unexpected=$(grep -vE 'ERROR:  (role|database) "[^"]+" already exists' {{ work_dir }}/replay-errors || true)
+          [ -z "$unexpected" ] || { echo "$unexpected"; exit 1; }
+          grep -c . {{ work_dir }}/replay-errors || true
+      register: _replay
+      changed_when: true
+
+    - name: "Postgres - every table holds the rows the dump has: {{ dump_name }}"
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          python3 {{ work_dir }}/pg-dump-verify.py {{ work_dir }}/dump.sql.gz
+          {{ kubectl }} -n {{ pg_namespace }} exec {{ restored }}-1 -c postgres -- psql -U postgres -qAt
+      register: _tables
+      changed_when: false
+
+    - name: "Postgres - the seeded rows (the production cluster's dump): {{ dump_name }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ pg_namespace }} exec {{ restored }}-1 -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -U postgres
+        -d {{ (_cluster.stdout | from_json).spec.bootstrap.initdb.database }}
+        -c "select count(*) || ' ' || md5(string_agg(payload, ',' order by id)) from upgrade_check.canary"
+      register: _rows
+      changed_when: false
+      failed_when: _rows.rc != 0 or _rows.stdout | trim != rows ~ ' ' ~ expected_md5
+      when: dump_name == pg_namespace ~ '-' ~ pg_cluster ~ '.sql.gz'
+
+    - name: "Postgres - restored: {{ dump_name }}"
+      ansible.builtin.set_fact:
+        _pg_restored: >-
+          {{ _pg_restored | default([]) + [dump_name ~ ': ' ~ _tables.stdout ~ ', ' ~ _replay.stdout_lines[-1]
+             ~ ' expected errors' ~ ((', seeded ' ~ _rows.stdout) if _rows.stdout is defined else '')] }}
+  always:
+    - name: "Postgres - remove the side cluster (its volume goes with it): {{ dump_name }}"
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
+      changed_when: true
+
+    - name: "Postgres - remove the side cluster's policies: {{ dump_name }}"
+      ansible.builtin.include_tasks: side-cluster-policies.yml
+      vars:
+        side_cluster: "{{ restored }}"
+        side_state: absent

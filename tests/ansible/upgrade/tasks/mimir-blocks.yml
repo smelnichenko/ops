@@ -1,0 +1,31 @@
+---
+# A stored Mimir block covers the survival seed's time: the store-gateway lists one. A query at that time is answered by
+# the ingester's own data for its first 12 hours (Mimir's query-store-after) and proves nothing about the blocks a
+# Mimir major must read - this does. The ingester cuts a 2 h block once its head spans 3 h and ships it, the
+# store-gateway syncs every 15 minutes: from 4 h after the seed the block is required; before that it is reported only.
+#
+# Expects: kubeconfig, mimir_proxy (the schnappy-infra services' proxy path), mimir_at (the seed's time, seconds).
+- name: Mimir - a stored block covers the seed's time (required from 4 h after it)
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      kubectl --kubeconfig {{ kubeconfig }} get --raw \
+        '{{ mimir_proxy }}/schnappy-mimir:9009/proxy/store-gateway/tenant/anonymous/blocks' | python3 -c '
+      import json, sys, time
+      at = int(sys.argv[1]) * 1000
+      metas = json.load(sys.stdin).get("metas") or []
+      hit = [m for m in metas if m.get("minTime", 0) <= at < m.get("maxTime", 0)]
+      hours = (time.time() - at / 1000) / 3600
+      if hit:
+          print("block %s covers it (%d blocks)" % (hit[0].get("ulid"), len(metas)))
+      elif hours < 4:
+          print("no block yet, not required %.1f h after the seed (%d blocks)" % (hours, len(metas)))
+      else:
+          print("no block covers it %.1f h after the seed: %d blocks, e.g. %s" % (hours, len(metas), json.dumps(metas[:1])[:300]))
+          sys.exit(1)' {{ mimir_at }}
+  register: _mimir_block
+  changed_when: false
+  retries: 4
+  delay: 15
+  until: _mimir_block.rc == 0

@@ -535,7 +535,7 @@ tasks:
       STORES: '{{.STORES | default "postgres clickhouse grafana kafka scylla gateway"}}'
     cmds:
       - for: { var: STORES, split: ' ' }
-        cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-backup.yml -e store={{.ITEM}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/wave0-rehearsal.yml -e store={{.ITEM}}
+        cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-backup.yml -e store={{.ITEM}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/wave0-rehearsal.yml -e store={{.ITEM}}{{if eq .ITEM "postgres"}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres -e restore_backup=wave0{{end}}
 
   test:upgrade:restore-check:
     desc: On the Vagrant copy (upgraded or not), prove the backups restore - Postgres recovered from its barman backup into a side cluster with every seeded row, and a Velero file-system backup of a test namespace restored with its volume's data; production's namespace is not touched

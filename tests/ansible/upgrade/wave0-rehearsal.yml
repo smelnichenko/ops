@@ -3,23 +3,31 @@
 # (task test:upgrade:wave0). Each restore reads the backup back from the Pi store (its sha256 checked against the
 # stored one), not from the node's local copy, and must bring back the seeded canaries:
 #
-#   -e store=postgres    production's dump restored into a side CNPG cluster (upgrade-wave0-restore): every seeded
-#                        row of data-check (count and md5, computed here)
+#   -e store=postgres    every dump of the backup replayed into an empty side CNPG cluster (upgrade-wave0-restore),
+#                        one at a time: no error but the roles and databases it had, every table of every database
+#                        with the rows the dump has (files/pg-dump-verify.py), production's dump with data-check's
+#                        seeded rows (count and md5, computed here). The CNPG base backup of the run: restore-check.yml
+#                        -e restore_backup=wave0 (task test:upgrade:wave0 runs both)
 #   -e store=clickhouse  the canary table's frozen parts attached to a new table of its schema
 #                        (upgrade_check.canary_restore): survival-check's rows (count and md5)
 #   -e store=grafana     the database copy intact (SQLite's integrity check), the canary dashboard in it, and every
 #                        dashboard UID survival-check recorded
-#   -e store=kafka       in place: one message more in data-check's canary topic after the backup, then the broker
-#                        stopped (the operator paused), its volume replaced by the backup's, started again - the topic
-#                        holds exactly the seeded messages, the extra one gone (so the data came from the backup)
-#   -e store=scylla      in place: data-check's canary table truncated, then restored with sctool from the newest
-#                        snapshot (the Wave 0 backup's) - exactly the seeded rows
+#   -e store=kafka       in place: one message more in data-check's canary topic after the backup (the end offset
+#                        one past where it was proves it arrived), then the broker stopped (the operator paused, the node cordoned - a
+#                        recreated pod waits Pending; not running when its volume is replaced), its volume replaced by
+#                        the backup's, started again - the topic holds exactly
+#                        the seeded messages and ends there, the extra one gone (so the data came from the backup)
+#   -e store=scylla      in place: data-check's canary table truncated, then restored with sctool from the snapshot
+#                        the Wave 0 run recorded (snapshots.txt beside it) - exactly the seeded rows
 #   -e store=gateway     in place: a Tempo trace pushed after the backup; the pods of the in-cluster object store,
-#                        Mimir and Tempo held off (their node cordoned), the three volumes replaced by the backup's - every
-#                        object's ETag and every bucket's ACL back in the extended attributes, survival-check's trace
-#                        back and the later one gone, Mimir's `up` series at the seed's time as many as then
+#                        Mimir and Tempo held off (their node cordoned), the three volumes replaced by the backup's -
+#                        before they start, every object the backup listed back with its ETag and every bucket with
+#                        its ACL (files/objectstore-manifest.py); then survival-check's trace back and the later one
+#                        gone, Mimir's `up` series at the seed's time as many as then and a stored block covering it
 #
-# Nothing of production's namespace is replaced; what it creates it removes.
+# Vagrant only. Postgres, ClickHouse and Grafana restore beside the copy's own data (a side cluster, a new table, a
+# file), and what they create they remove; Kafka, ScyllaDB and the gateway volumes are restored in place - the
+# copy's data for them is the backup's afterwards.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/wave0-rehearsal.yml -e store=postgres
 - name: A Wave 0 backup restores
@@ -33,6 +41,7 @@
     bucket: upgrade-backups
     local_dir: /var/backups/upgrade
     work_dir: /var/backups/upgrade-rehearsal
+    store_curl: "{{ work_dir }}/store.curl"
     pg_namespace: schnappy-production
     pg_cluster: schnappy-production-postgres
     restored: upgrade-wave0-restore
@@ -86,104 +95,43 @@
       ansible.builtin.shell: rm -rf {{ work_dir }} && mkdir -m 0700 {{ work_dir }}
       changed_when: true
 
-    # ── postgres ──────────────────────────────────────────────────────
-    - name: Postgres - the dump read back from the Pi store, its sha256 the stored one
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          key="postgres/{{ _stamp.stdout }}/{{ pg_namespace }}-{{ pg_cluster }}.sql.gz"
-          get() { curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" "{{ endpoint }}/{{ bucket }}/$1"; }
-          get "$key" > {{ work_dir }}/dump.sql.gz
-          want=$(get "$key.sha256")
-          got=$(sha256sum {{ work_dir }}/dump.sql.gz | cut -d' ' -f1)
-          [ "$want" = "$got" ]
-          echo "$key $got"
-      environment:
-        STORE_KEY: "{{ backup_root_user }}"
-        STORE_SECRET: "{{ backup_root_password }}"
-      register: _dump
-      changed_when: false
+    - name: The store's credentials in a curl config only root reads (in the work directory)
+      ansible.builtin.copy:
+        content: |
+          user = "{{ (backup_root_user ~ ':' ~ backup_root_password) | replace('\\', '\\\\') | replace('"', '\\"') }}"
+          aws-sigv4 = "aws:amz:us-east-1:s3"
+        dest: "{{ store_curl }}"
+        mode: '0600'
+      no_log: true
+
+    # ── postgres: every dump of the backup, each into a side cluster (the base backup: restore-check.yml) ──
+    - name: Postgres - the dumps of the backup
+      ansible.builtin.find:
+        paths: "{{ local_dir }}/postgres/{{ _stamp.stdout }}"
+        patterns: "*.sql.gz"
+      register: _dumps
+      failed_when: _dumps.matched == 0
       when: store == 'postgres'
 
-    - name: Postgres - the cluster's spec (image, storage)
+    - name: Postgres - the production cluster's spec (the side cluster's image and storage)
       ansible.builtin.command: "{{ kubectl }} -n {{ pg_namespace }} get clusters.postgresql.cnpg.io {{ pg_cluster }} -o json"
       register: _cluster
       changed_when: false
       when: store == 'postgres'
 
-    - name: Postgres - no side cluster left from an earlier run
-      ansible.builtin.command: >-
-        {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
-      changed_when: false
+    - name: Postgres - the dump checker on the node
+      ansible.builtin.copy:
+        src: files/pg-dump-verify.py
+        dest: "{{ work_dir }}/pg-dump-verify.py"
+        mode: '0700'
       when: store == 'postgres'
 
-    - name: Postgres - the side cluster, restored and checked - removed with its policies whatever happens
+    - name: Postgres - each dump replayed into a side cluster and checked
+      ansible.builtin.include_tasks: tasks/wave0-pg-dump.yml
+      loop: "{{ _dumps.files | default([]) | map(attribute='path') | map('basename') | sort }}"
+      loop_control:
+        loop_var: dump_name
       when: store == 'postgres'
-      block:
-        - name: Postgres - the side cluster's policies (the production cluster's, cloned)
-          ansible.builtin.include_tasks: tasks/side-cluster-policies.yml
-          vars:
-            side_cluster: "{{ restored }}"
-            side_state: present
-
-        - name: Postgres - an empty side cluster
-          kubernetes.core.k8s:
-            kubeconfig: "{{ kubeconfig }}"
-            definition:
-              apiVersion: postgresql.cnpg.io/v1
-              kind: Cluster
-              metadata: { name: "{{ restored }}", namespace: "{{ pg_namespace }}" }
-              spec:
-                instances: 1
-                imageName: "{{ (_cluster.stdout | from_json).spec.imageName }}"
-                inheritedMetadata: "{{ (_cluster.stdout | from_json).spec.inheritedMetadata | default({}) }}"
-                enableSuperuserAccess: true
-                storage: { size: 2Gi, storageClass: "{{ (_cluster.stdout | from_json).spec.storage.storageClass }}" }
-                resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
-
-        - name: Postgres - the side cluster is healthy
-          ansible.builtin.command: >-
-            {{ kubectl }} -n {{ pg_namespace }} get clusters.postgresql.cnpg.io {{ restored }}
-            -o jsonpath={.status.phase}/{.status.readyInstances}
-          register: _side
-          changed_when: false
-          retries: 60
-          delay: 10
-          until: _side.stdout == 'Cluster in healthy state/1'
-
-        # pg_dumpall recreates the roles and databases: the ones the side cluster has already (postgres, app, ...) error
-        # and are passed over; what counts is the data below
-        - name: Postgres - the dump replayed into it
-          ansible.builtin.shell:
-            executable: /bin/bash
-            cmd: |
-              set -euo pipefail
-              gzip -dc {{ work_dir }}/dump.sql.gz \
-                | {{ kubectl }} -n {{ pg_namespace }} exec -i {{ restored }}-1 -c postgres -- psql -q -U postgres -d postgres \
-                  -v ON_ERROR_STOP=0 2>&1 | { grep -c ERROR || [ $? -eq 1 ]; }
-          register: _replay
-          changed_when: true
-
-        - name: Postgres - it holds exactly the seeded rows
-          ansible.builtin.command: >-
-            {{ kubectl }} -n {{ pg_namespace }} exec {{ restored }}-1 -c postgres -- psql -v ON_ERROR_STOP=1 -qAt -U postgres
-            -d {{ (_cluster.stdout | from_json).spec.bootstrap.initdb.database }}
-            -c "select count(*) || ' ' || md5(string_agg(payload, ',' order by id)) from upgrade_check.canary"
-          register: _rows
-          changed_when: false
-          failed_when: _rows.rc != 0 or _rows.stdout | trim != rows ~ ' ' ~ expected_md5
-      always:
-        - name: Postgres - remove the side cluster (its volume goes with it)
-          ansible.builtin.command: >-
-            {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
-          changed_when: true
-
-        - name: Postgres - remove the side cluster's policies
-          ansible.builtin.include_tasks: tasks/side-cluster-policies.yml
-          vars:
-            side_cluster: "{{ restored }}"
-            side_state: absent
 
     # ── a file of the backup, read back from the store (clickhouse, grafana) ──
     - name: The backup's file read back from the Pi store, its sha256 the stored one
@@ -192,13 +140,10 @@
         cmd: |
           set -euo pipefail
           key="{{ store }}/{{ _stamp.stdout }}/{{ {'clickhouse': 'clickhouse.tar.gz', 'grafana': 'grafana.db.gz'}[store] }}"
-          get() { curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" "{{ endpoint }}/{{ bucket }}/$1"; }
+          get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
           get "$key" > {{ work_dir }}/backup
           [ "$(get "$key.sha256")" = "$(sha256sum {{ work_dir }}/backup | cut -d' ' -f1)" ]
           echo "$key"
-      environment:
-        STORE_KEY: "{{ backup_root_user }}"
-        STORE_SECRET: "{{ backup_root_password }}"
       register: _file
       changed_when: false
       when: store in ['clickhouse', 'grafana']
@@ -283,15 +228,36 @@
       failed_when: _broker.rc != 0 or _broker.stdout.split() | length != 2
       when: store == 'kafka'
 
-    - name: Kafka - one message more in the canary topic, after the backup
+    - name: Kafka - one message more in the canary topic, after the backup (the end offset before it, printed)
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
+          {{ kubectl }} -n schnappy-production exec {{ _broker.stdout.split()[0] }} -c kafka -- \
+            /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic upgrade-check --time -1 \
+            | awk -F: '{n += $3} END {print n}'
           echo after-the-backup | {{ kubectl }} -n schnappy-production exec -i {{ _broker.stdout.split()[0] }} -c kafka -- \
             /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic upgrade-check \
             --producer-property acks=all > /dev/null
+      register: _kafka_before
       changed_when: true
+      when: store == 'kafka'
+
+    # the producer sends asynchronously and exits 0 on a failed send: only the log's end offset shows it arrived -
+    # without it, "the extra one gone" would hold for a restore that changed nothing
+    - name: Kafka - it arrived (the topic's end offset one past where it was)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: >-
+          set -o pipefail;
+          {{ kubectl }} -n schnappy-production exec {{ _broker.stdout.split()[0] }} -c kafka --
+          /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic upgrade-check --time -1
+          | awk -F: '{n += $3} END {print n}'
+      register: _kafka_extra
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: _kafka_extra.rc == 0 and (_kafka_extra.stdout | int) == (_kafka_before.stdout | int) + 1
       when: store == 'kafka'
 
     - name: Kafka - the backup's broker volume read back from the Pi store
@@ -300,12 +266,9 @@
         cmd: |
           set -euo pipefail
           key="kafka/{{ _stamp.stdout }}/schnappy-production-{{ _broker.stdout.split()[0] }}.tar.gz"
-          get() { curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" "{{ endpoint }}/{{ bucket }}/$1"; }
+          get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
           get "$key" > {{ work_dir }}/broker.tar.gz
           [ "$(get "$key.sha256")" = "$(sha256sum {{ work_dir }}/broker.tar.gz | cut -d' ' -f1)" ]
-      environment:
-        STORE_KEY: "{{ backup_root_user }}"
-        STORE_SECRET: "{{ backup_root_password }}"
       changed_when: false
       when: store == 'kafka'
 
@@ -328,6 +291,19 @@
           delay: 5
           until: _paused.stdout == 'True'
 
+        # the StrimziPodSet controller recreates a deleted broker even while the Kafka is paused: the cordon keeps the
+        # new pod Pending (as upgrade-backup.yml does)
+        - name: Kafka - the broker's node cordoned
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              node=$({{ kubectl }} -n schnappy-production get pod {{ _broker.stdout.split()[0] }} -o jsonpath='{.spec.nodeName}')
+              {{ kubectl }} cordon "$node" > /dev/null
+              echo "$node"
+          register: _kafka_node
+          changed_when: true
+
         - name: Kafka - the broker pod deleted and gone
           ansible.builtin.command: >-
             {{ kubectl }} -n schnappy-production delete pod {{ _broker.stdout.split()[0] }} --wait=true --timeout=300s
@@ -342,8 +318,17 @@
               [ -d "$dir" ] && [ "$dir" != / ]
               find "$dir" -mindepth 1 -delete
               tar --numeric-owner -C "$dir" -xzf {{ work_dir }}/broker.tar.gz
+              # stopped throughout: a recreated pod waited Pending on the cordoned node while its files were replaced
+              [ "$({{ kubectl }} -n schnappy-production get pod {{ _broker.stdout.split()[0] }} --ignore-not-found \
+                -o jsonpath='{.status.phase}/{.spec.nodeName}')" != "Running/{{ _kafka_node.stdout }}" ] \
+                || { echo "the broker ran while its volume was replaced"; exit 1; }
           changed_when: true
       always:
+        - name: Kafka - the node uncordoned
+          ansible.builtin.command: "{{ kubectl }} uncordon {{ _kafka_node.stdout }}"
+          changed_when: true
+          when: _kafka_node.stdout | default('') | length > 0
+
         - name: Kafka - the pause lifted
           ansible.builtin.command: >-
             {{ kubectl }} -n schnappy-production annotate kafkas.kafka.strimzi.io schnappy-production
@@ -367,27 +352,33 @@
           out=$({{ kubectl }} -n schnappy-production exec "$pod" -c kafka -- /opt/kafka/bin/kafka-console-consumer.sh \
             --bootstrap-server localhost:9092 --topic upgrade-check --from-beginning --timeout-ms 30000 2> /dev/null || true)
           printf '%s\n' "$out" | grep -c . ; printf '%s\n' "$out" | md5sum | cut -d' ' -f1
+          {{ kubectl }} -n schnappy-production exec "$pod" -c kafka -- /opt/kafka/bin/kafka-get-offsets.sh \
+            --bootstrap-server localhost:9092 --topic upgrade-check --time -1 | awk -F: '{n += $3} END {print n}'
       register: _kafka_back
       changed_when: false
       retries: 10
       delay: 15
-      until: _kafka_back.rc == 0 and _kafka_back.stdout_lines == ['1000', kafka_expected_md5]
+      until: _kafka_back.rc == 0 and _kafka_back.stdout_lines == ['1000', kafka_expected_md5, '1000']
       when: store == 'kafka'
 
     # ── scylla (in place) ─────────────────────────────────────────────
-    - name: Scylla - the canary table truncated, then restored from the newest snapshot
+    # the snapshot the Wave 0 run took and recorded (snapshots.txt beside the backup: "<cluster id> <name> <task>
+    # <location> <tag>") - every snapshot since the seed holds the same rows, so only the record ties the restore to
+    # this backup
+    - name: Scylla - the canary table truncated, then restored from the Wave 0 backup's own snapshot
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           M="{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
-          c=$($M sctool cluster list | awk -F'|' '$3 ~ /schnappy-production-scylla/ {gsub(/ /, "", $2); print $2}')
-          [ -n "$c" ]
-          tag=$($M sctool backup list -c "$c" | grep -oE 'sm_[0-9]{14}UTC' | head -1)
-          [ -n "$tag" ]
+          rec=$(curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/scylla/{{ _stamp.stdout }}/snapshots.txt" \
+            | awk '$2 ~ /(^|\/)schnappy-production-scylla$/')
+          read -r c name task loc tag <<< "$rec"
+          [[ $tag =~ ^sm_[0-9]{14}UTC$ ]] || { echo "no snapshot recorded for schnappy-production-scylla: $rec"; exit 1; }
+          $M sctool backup list -c "$c" -L "$loc" | grep -q "$tag" || { echo "$tag not in $loc"; exit 1; }
           node=$({{ kubectl }} -n schnappy-production get pods -l scylla/cluster=schnappy-production-scylla -o jsonpath='{.items[0].metadata.name}')
           {{ kubectl }} -n schnappy-production exec "$node" -c scylla -- cqlsh -e "TRUNCATE upgrade_check.canary;"
-          task=$($M sctool restore -c "$c" -L s3:scylla-backups -T "$tag" --restore-tables -K 'upgrade_check.canary')
+          task=$($M sctool restore -c "$c" -L "$loc" -T "$tag" --restore-tables -K 'upgrade_check.canary')
           echo "$c $task $tag"
       register: _scylla_restore
       changed_when: true
@@ -440,18 +431,26 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          get() { curl -fsS --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" "{{ endpoint }}/{{ bucket }}/$1"; }
+          get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
           for pvc in {{ gateway_pvcs | join(' ') }}; do
             key="gateway/{{ _stamp.stdout }}/$pvc.tar.gz"
             get "$key" > "{{ work_dir }}/$pvc.tar.gz"
             [ "$(get "$key.sha256")" = "$(sha256sum "{{ work_dir }}/$pvc.tar.gz" | cut -d' ' -f1)" ] || { echo "$key: sha256 differs"; exit 1; }
             echo "$key"
           done
-      environment:
-        STORE_KEY: "{{ backup_root_user }}"
-        STORE_SECRET: "{{ backup_root_password }}"
+          # the objects the backup checked into the archive: what the restore must give back
+          key="gateway/{{ _stamp.stdout }}/schnappy-infra-s3gw.objects.json"
+          get "$key" > "{{ work_dir }}/objects.json"
+          [ "$(get "$key.sha256")" = "$(sha256sum "{{ work_dir }}/objects.json" | cut -d' ' -f1)" ] || { echo "$key: sha256 differs"; exit 1; }
       register: _gw_files
       changed_when: false
+      when: store == 'gateway'
+
+    - name: Gateway - the object store's checker on the node
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/files/objectstore-manifest.py"
+        dest: "{{ work_dir }}/objectstore-manifest.py"
+        mode: '0700'
       when: store == 'gateway'
 
     - name: Gateway - a second trace pushed after the backup (the restore must take it away)
@@ -529,6 +528,15 @@
               done <<< "{{ _gw.stdout }}"
           register: _gw_replaced
           changed_when: true
+
+        # before the pods start (nothing written yet): every object the backup listed, with its ETag (a single-part
+        # one's content its md5), and every bucket with its ACL - the posix backend reads both from extended attributes
+        - name: Gateway - the object store restored as the backup listed it
+          ansible.builtin.command: >-
+            python3 {{ work_dir }}/objectstore-manifest.py verify-tree
+            {{ _gw.stdout_lines | select('match', 'schnappy-infra-s3gw ') | first | split | last }}/buckets {{ work_dir }}/objects.json
+          register: _gw_xattrs
+          changed_when: false
       always:
         - name: Gateway - the node uncordoned
           ansible.builtin.command: "{{ kubectl }} uncordon {{ _gw_node.stdout }}"
@@ -550,47 +558,6 @@
       until: >-
         _gw_up.rc == 0 and _gw_up.stdout_lines | length >= 3
         and _gw_up.stdout_lines | reject('search', ' Running ready$') | list | length == 0
-      when: store == 'gateway'
-
-    # the posix backend reads each object's ETag and each bucket's owner from extended attributes: every object
-    # must have its ETag, a single-part one the md5 of its content, every bucket its ACL
-    - name: Gateway - the object store's extended attributes restored with the objects
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          python3 - "$(awk '$1 == "schnappy-infra-s3gw" {print $2}' <<< "{{ _gw.stdout }}")/buckets" <<'PY'
-          import hashlib, os, sys
-          root = sys.argv[1]
-          buckets = [b for b in os.listdir(root) if os.path.isdir(os.path.join(root, b))]
-          bad = [b + ": no ACL" for b in buckets if "user.acl" not in os.listxattr(os.path.join(root, b))]
-          objects = single = 0
-          for b in buckets:
-              for dp, dns, fns in os.walk(os.path.join(root, b)):
-                  dns[:] = [x for x in dns if x != ".sgwtmp"]
-                  for fn in fns:
-                      p = os.path.join(dp, fn)
-                      try:
-                          etag = os.getxattr(p, "user.etag").decode().strip('"')
-                      except OSError:
-                          bad.append(p + ": no ETag")
-                          continue
-                      objects += 1
-                      if "-" not in etag:
-                          h = hashlib.md5()
-                          with open(p, "rb") as f:
-                              for chunk in iter(lambda: f.read(1 << 20), b""):
-                                  h.update(chunk)
-                          single += 1
-                          if h.hexdigest() != etag:
-                              bad.append(p + ": ETag " + etag + ", md5 " + h.hexdigest())
-          print(len(buckets), "buckets,", objects, "objects,", single, "single-part ETags the md5 of the content")
-          if bad or not buckets or not objects:
-              print("\n".join(bad[:20]))
-              sys.exit(1)
-          PY
-      register: _gw_xattrs
-      changed_when: false
       when: store == 'gateway'
 
     - name: Gateway - Tempo has the seeded trace back, and not the one pushed after the backup
@@ -628,6 +595,13 @@
       until: _gw_mimir.rc == 0 and (_gw_mimir.stdout | int) > 0 and (_gw_mimir.stdout | int) >= (_survival.mimir_up | int)
       when: store == 'gateway'
 
+    - name: Gateway - Mimir's stored blocks, read by the store-gateway from the restored bucket
+      ansible.builtin.include_tasks: tasks/mimir-blocks.yml
+      vars:
+        mimir_proxy: "{{ infra_proxy }}"
+        mimir_at: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../../.upgrade/survival.json') | from_json).mimir_at }}"
+      when: store == 'gateway'
+
     - name: Remove the work directory
       ansible.builtin.file:
         path: "{{ work_dir }}"
@@ -638,18 +612,21 @@
         msg: "WAVE 0 {{ store }} RESTORES: {{ _restored[store] }}"
       vars:
         _restored:
-          postgres: >-
-            {{ _dump.stdout | default('') }} -> {{ restored }}, {{ rows }} rows md5 {{ expected_md5 }}
-            ({{ _replay.stdout | default('?') }} replay errors on roles and databases it had)
+          postgres: "{{ _pg_restored | default(['?']) | join('; ') }}"
           clickhouse: >-
             {{ _file.stdout | default('') }} -> upgrade_check.canary_restore, rows and md5
             {{ _ch_restore.stdout_lines[-1] | default('?') }}
           grafana: "{{ _file.stdout | default('') }}: {{ _grafana_restore.stdout | default('?') }}"
           kafka: >-
             {{ _broker.stdout | default('') }} -> the topic upgrade-check holds
-            {{ _kafka_back.stdout_lines | default(['?']) | join(' messages, md5 ') }}, the extra one gone
-          scylla: "upgrade_check.canary truncated, restored: {{ _scylla_rows.stdout | default('?') }} (rows md5)"
+            {{ (_kafka_back.stdout_lines | default(['?', '?', '?']))[0] }} messages, md5
+            {{ (_kafka_back.stdout_lines | default(['?', '?', '?']))[1] }}, ends at offset
+            {{ (_kafka_back.stdout_lines | default(['?', '?', '?']))[2] }} - the extra one (offset
+            {{ _kafka_extra.stdout | default('?') }} before) gone
+          scylla: >-
+            upgrade_check.canary truncated, restored from {{ _scylla_restore.stdout.split()[-1] | default('?') }}:
+            {{ _scylla_rows.stdout | default('?') }} (rows md5)
           gateway: >-
             {{ _gw_files.stdout_lines | default([]) | join(', ') }} -> {{ _gw_replaced.stdout_lines | default([]) | join(', ') }};
             {{ _gw_xattrs.stdout | default('?') }}; Tempo: {{ _gw_tempo.stdout | default('?') }};
-            Mimir {{ _gw_mimir.stdout | default('?') }} `up` series at the seed
+            Mimir {{ _gw_mimir.stdout | default('?') }} `up` series at the seed, {{ _mimir_block.stdout | default('?') }}

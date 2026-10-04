@@ -42,25 +42,37 @@
       delay: 15
       until: _prom.stdout == 'True/True'
 
-    - name: Every scrape target is up (a restarted Prometheus needs a scrape interval or two)
+    # up now, and up through the last 3 minutes (min_over_time of `up`): one lucky poll does not pass a target that
+    # flaps without restarting (scrape timeouts, an intermittent 503 through the mesh)
+    - name: Every scrape target is up, and stayed up for 3 minutes
       ansible.builtin.shell: |
         set -euo pipefail
-        kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/targets?state=active' \
-          | ALLOWED='{{ allowed_down | to_json }}' python3 -c '
+        P='{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1'
+        d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/targets?state=active" > "$d/targets"
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=min_over_time(up%5B3m%5D)%20%3C%201" > "$d/flapped"
+        ALLOWED='{{ allowed_down | to_json }}' python3 - "$d" <<'PY'
         import json, os, sys
-        targets = json.load(sys.stdin)["data"]["activeTargets"]
+        d = sys.argv[1]
+        targets = json.load(open(d + "/targets"))["data"]["activeTargets"]
         allowed = set(json.loads(os.environ["ALLOWED"]))
+        allowed_jobs = {t["labels"].get("job") for t in targets if t["scrapePool"] in allowed}
         down = ["%s %s: %s" % (t["scrapePool"], t["scrapeUrl"], t["lastError"][:100]) for t in targets
                 if t["health"] != "up" and t["scrapePool"] not in allowed]
-        print("%d targets, %d down" % (len(targets), len(down)))
-        for d in down:
-            print("  DOWN", d)
-        sys.exit(1 if down or not targets else 0)'
+        flapped = ["%s %s" % (r["metric"].get("job"), r["metric"].get("instance"))
+                   for r in json.load(open(d + "/flapped"))["data"]["result"] if r["metric"].get("job") not in allowed_jobs]
+        print("%d targets, %d down, %d down at some time in the last 3 minutes" % (len(targets), len(down), len(flapped)))
+        for x in down:
+            print("  DOWN", x)
+        for x in flapped:
+            print("  WAS DOWN", x)
+        sys.exit(1 if down or flapped or not targets else 0)
+        PY
       args:
         executable: /bin/bash
       register: _targets
       changed_when: false
-      retries: 12
+      retries: 20
       delay: 15
       until: _targets.rc == 0
 

@@ -63,10 +63,29 @@ def app_problems(app, allowed, mirror):
 
 
 def node_shutdown_leftover(status):
-    """A pod the kubelet's graceful node shutdown terminated: Failed for good, its owner has started a new one. They
-    stay until the pod GC threshold (ten 2026-10-04: 13 of them, 2 to 8 days old, every one replaced)."""
+    """A pod the kubelet's graceful node shutdown terminated: Failed for good. They stay until the pod GC threshold
+    (ten 2026-10-04: 13 of them, 2 to 8 days old, every one replaced) - one counts as settled only when its owner runs
+    a ready pod again (owner_key)."""
     return (status.get("phase") == "Failed" and status.get("reason") in ("Terminated", "NodeShutdown")
             and "node shutdown" in status.get("message", ""))
+
+
+def owner_key(pod):
+    """The workload a pod belongs to: its controller, a ReplicaSet counted as its Deployment (the name without the
+    template hash - a replacement may come from a newer ReplicaSet). None for a pod without one."""
+    meta = pod["metadata"]
+    owner = next((o for o in meta.get("ownerReferences", []) if o.get("controller")), None)
+    if owner is None:
+        return None
+    name = owner["name"]
+    if owner["kind"] == "ReplicaSet" and meta.get("labels", {}).get("pod-template-hash"):
+        name = name[: -len(meta["labels"]["pod-template-hash"]) - 1]
+    return meta["namespace"], owner["kind"] if owner["kind"] != "ReplicaSet" else "Deployment", name
+
+
+def ready_now(status):
+    containers = status.get("containerStatuses") or []
+    return status.get("phase") == "Running" and containers and all(c.get("ready") for c in containers)
 
 
 def last_restart_age(containers, now):
@@ -79,15 +98,19 @@ def last_restart_age(containers, now):
     return (now - latest).total_seconds()
 
 
-def pod_state(pod, now=None, quiet=0):
+def pod_state(pod, now=None, quiet=0, replaced=frozenset()):
     """(ready, restarts, why) of a pod: Succeeded, or Running with every container ready and none restarted in the
-    last `quiet` seconds; a node-shutdown leftover is no pod to wait for."""
+    last `quiet` seconds; a node-shutdown leftover whose owner runs a ready pod again (its key in `replaced`) is no pod
+    to wait for - one whose owner never replaced it is."""
     status = pod.get("status", {})
     containers = status.get("containerStatuses") or []
     restarts = sum(c.get("restartCount", 0) for c in containers)
-    if status.get("phase") == "Succeeded" or node_shutdown_leftover(status):
+    if status.get("phase") == "Succeeded":
         return True, restarts, ""
-    if not (status.get("phase") == "Running" and containers and all(c.get("ready") for c in containers)):
+    if node_shutdown_leftover(status):
+        key = owner_key(pod)
+        return (True, restarts, "") if key in replaced else (False, restarts, "node-shutdown leftover, not replaced")
+    if not ready_now(status):
         return False, restarts, status.get("phase", "?")
     age = last_restart_age(containers, now or datetime.datetime.now(datetime.timezone.utc))
     if age is not None and age < quiet:
@@ -99,9 +122,10 @@ def evaluate(apps, pods, allowed, mirror, now=None, quiet=0):
     """One poll: (green, app problems by name, pods not ready, restart counts by pod uid)."""
     problems = {a["metadata"]["name"]: p for a in apps["items"] if (p := app_problems(a, allowed, mirror))}
     not_ready, restarts = [], {}
+    replaced = {owner_key(p) for p in pods["items"] if ready_now(p.get("status", {}))} - {None}
     for pod in pods["items"]:
         meta = pod["metadata"]
-        ready, count, why = pod_state(pod, now, quiet)
+        ready, count, why = pod_state(pod, now, quiet, replaced)
         restarts[meta["uid"]] = (f"{meta['namespace']}/{meta['name']}", count)
         if not ready:
             not_ready.append(f"{meta['namespace']}/{meta['name']} ({why})")
