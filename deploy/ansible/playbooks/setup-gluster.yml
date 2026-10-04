@@ -553,7 +553,9 @@
     # Forgejo can run active-active (autostart: true) because
     # Postgres provides locking for shared filesystem access.
     backup_volumes:
-      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: minio, autostart: false }
+      # the store's gateway (versitygw since 2026-06-27; this said minio, which no longer exists - the gateway kept
+      # serving while its data dir was unmounted, and writes then would land on the local disk under the mount)
+      - { name: backup-minio, mount: /var/lib/minio/data, stop_service: versitygw, autostart: true }
       - { name: backup-git-mirror, mount: /mnt/backups/git-mirror, stop_service: "", autostart: true }
       - { name: nexus-data, mount: /mnt/data/nexus, stop_service: nexus, autostart: false }
       - { name: forgejo-data, mount: /var/lib/forgejo/data, stop_service: forgejo, autostart: true }
@@ -625,6 +627,29 @@
   gather_facts: false
 
   tasks:
+    # A replica created over existing data is consistent only once self-heal has run: until then the second brick
+    # holds the directories as root (Vagrant, 2026-10-04: versitygw, running as minio, was refused its buckets dir on
+    # pi2's copy and crash-looped). Heal every volume now and wait until nothing is pending; on a healed cluster
+    # (ten: all 0) this passes at once.
+    - name: Every volume healed - nothing pending on any brick
+      ansible.builtin.shell: |
+        set -euo pipefail
+        pending=0
+        for vol in $(gluster volume list); do
+          gluster volume heal "$vol" > /dev/null
+          n=$(gluster volume heal "$vol" info | awk -F': ' '/^Number of entries/ {s += $2} END {print s+0}')
+          echo "$vol $n"
+          pending=$((pending + n))
+        done
+        [ "$pending" -eq 0 ]
+      args:
+        executable: /bin/bash
+      register: _healed
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _healed.rc == 0
+
     - name: Check all backup volume statuses
       ansible.builtin.shell: |
         for vol in backup-minio backup-git-mirror nexus-data; do

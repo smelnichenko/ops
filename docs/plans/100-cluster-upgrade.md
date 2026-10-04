@@ -129,6 +129,15 @@ operator approves.
     operator: local-path's `local` volume type (Velero supports it) for new volumes, Scylla Manager backups,
     Kafka mirror or tiered storage.
 
+21. `setup-gluster.yml` mounts the Pi backup store's Gluster volume with `stop_service: minio` - a service gone
+    since versitygw replaced MinIO (2026-06-27) - and unmounts every volume on every run ("Unmount if already
+    mounted with different source" is unconditional). A re-run would unmount the store from under versitygw, whose
+    RequiresMountsFor then stops it, and nothing started it again. Fixed: the mount play stops and starts
+    versitygw. And a freshly created replica is consistent only after self-heal (until then the second brick holds
+    the directories as root): the verify play now heals every volume and waits until nothing is pending - on ten,
+    all 0, it passes at once. Found 2026-10-04 by the Vagrant copy, which never ran setup-gluster: each Pi kept its
+    own store, and a VIP on pi2 found no velero bucket (full run 4, step 04).
+
 ## The Vagrant upgrade test
 
 A new `tests/ansible/test-upgrade.yml` with `task test:upgrade`, run detached like the DR drill.
