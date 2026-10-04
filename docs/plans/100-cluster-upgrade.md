@@ -129,17 +129,17 @@ operator approves.
     operator: local-path's `local` volume type (Velero supports it) for new volumes, Scylla Manager backups,
     Kafka mirror or tiered storage.
 
-21. `setup-gluster.yml` mounts the Pi backup store's Gluster volume with `stop_service: minio` - a service gone
-    since versitygw replaced MinIO (2026-06-27) - and unmounts every volume on every run ("Unmount if already
-    mounted with different source" is unconditional). A re-run would unmount the store from under versitygw, whose
-    RequiresMountsFor then stops it, and nothing started it again. Fixed: the mount play stops and starts
-    versitygw. And a freshly created replica is consistent only after self-heal (until then the second brick holds
-    the directories as root): the verify play now heals every volume and waits until nothing is pending - on ten,
-    all 0, it passes at once. And a fresh install copies existing data straight into pi1's brick, which Gluster
-    never learns of: pi2 got only what something touched (neither heal nor `heal full` copied the rest); the run now
-    looks up every entry of each new volume through pi1's mount and waits until pi2's brick has as many entries. Found
-    2026-10-04 by the Vagrant copy, which never ran setup-gluster: each Pi kept its own store, and a VIP on pi2 found
-    no velero bucket (full run 4, step 04); its first build with Gluster had pi1 listing 5 buckets, pi2 2 (run 5).
+21. `setup-gluster.yml` disrupted every re-run and never replicated a fresh install in full. Its mount plays stopped
+    every service and unmounted every volume on every run ("Unmount if already mounted with different source" had no
+    condition): each re-run took Forgejo and Nexus down, and the backup store's gateway - listed as `minio`, gone since
+    versitygw - kept serving the local disk under the unmounted store, where writes would vanish behind the remount.
+    And a fresh install copies existing data straight into pi1's brick, which Gluster never learns of: pi2 got only
+    what something touched (neither heal nor `heal full` copied the rest). Fixed: only a volume not mounted from itself
+    is (re)mounted, its service (versitygw for the store) stopped around it and started after; each volume the run
+    created gets every entry looked up through pi1's mount, pi2's brick must then hold every path pi1's does, and
+    their heals must finish. A re-run on ten stops, unmounts and crawls nothing. Found 2026-10-04 by the Vagrant copy,
+    which never ran setup-gluster: each Pi kept its own store and a VIP on pi2 found no velero bucket (full run 4);
+    its first build with Gluster had pi1 listing 5 buckets, pi2 2 (run 5).
 
 ## The Vagrant upgrade test
 

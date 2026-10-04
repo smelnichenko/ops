@@ -346,7 +346,7 @@ tasks:
       # the Pis' shared Gluster volumes, as in production - the backup store's data dir among them: without it each
       # Pi kept its own store, and a VIP on pi2 found no velero bucket (full run 4, 2026-10-04)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
-      # the store's dirs and buckets again, now on the Gluster volume mounted over its data dir
+      # the store answers on the Gluster volume, on both Pis, with every bucket (its tasks again, idempotent)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml --tags versitygw
       # the Pi VIP, as in production (Vault, Git and the backup store are reached through it)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml

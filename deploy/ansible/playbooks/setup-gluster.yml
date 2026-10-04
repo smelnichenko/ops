@@ -214,35 +214,47 @@
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
 
   tasks:
-    - name: Stop Forgejo
-      ansible.builtin.systemd:
-        name: forgejo
-        state: stopped
+    # Forgejo is stopped and the repos remounted only when they are not mounted from the volume already - this used to
+    # happen on every run, each re-run an outage of Forgejo.
+    - name: Current source of the repos mount
+      ansible.builtin.command: findmnt -rn -o SOURCE --mountpoint {{ gluster_mount }}
+      register: _repos_mount
+      changed_when: false
+      failed_when: _repos_mount.rc not in [0, 1]
 
-    - name: Unmount if already mounted  # noqa: syntax-check[unknown-module]
-      ansible.builtin.mount:
-        path: "{{ gluster_mount }}"
-        state: unmounted
+    - name: Remount the repos from the volume
+      when: _repos_mount.stdout | trim != node_ip ~ ':/forgejo-repos'
+      block:
+        - name: Stop Forgejo
+          ansible.builtin.systemd:
+            name: forgejo
+            state: stopped
 
-    - name: Mount GlusterFS volume
-      ansible.builtin.mount:
-        path: "{{ gluster_mount }}"
-        src: "{{ node_ip }}:/forgejo-repos"
-        fstype: glusterfs
-        opts: "defaults,_netdev,backup-volfile-servers={{ pi2_ip if inventory_hostname == 'pi1' else pi1_ip }}"
-        state: mounted
+        - name: Unmount what is mounted there now  # noqa: syntax-check[unknown-module]
+          ansible.builtin.mount:
+            path: "{{ gluster_mount }}"
+            state: unmounted
+          when: _repos_mount.stdout | trim | length > 0
 
-    - name: Fix ownership
-      ansible.builtin.file:
-        path: "{{ gluster_mount }}"
-        owner: forgejo
-        group: forgejo
-        mode: '0700'
+        - name: Mount GlusterFS volume
+          ansible.builtin.mount:
+            path: "{{ gluster_mount }}"
+            src: "{{ node_ip }}:/forgejo-repos"
+            fstype: glusterfs
+            opts: "defaults,_netdev,backup-volfile-servers={{ pi2_ip if inventory_hostname == 'pi1' else pi1_ip }}"
+            state: mounted
 
-    - name: Start Forgejo
-      ansible.builtin.systemd:
-        name: forgejo
-        state: started
+        - name: Fix ownership
+          ansible.builtin.file:
+            path: "{{ gluster_mount }}"
+            owner: forgejo
+            group: forgejo
+            mode: '0700'
+
+        - name: Start Forgejo
+          ansible.builtin.systemd:
+            name: forgejo
+            state: started
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify GlusterFS
@@ -570,13 +582,42 @@
       - { name: forgejo-data, mount: /var/lib/forgejo/data, stop_service: forgejo, autostart: true }
 
   tasks:
-    - name: Stop services before mounting
+    # Only a volume not mounted from itself is (re)mounted, and only its service stopped around it. This play stopped
+    # every service and unmounted every volume on every run ("Unmount if already mounted with different source" had
+    # no condition): each re-run took Forgejo and Nexus down, and the backup store's gateway - listed as minio, gone
+    # since versitygw - kept serving the local disk under the unmounted store.
+    - name: Current source of each mount
+      ansible.builtin.command: findmnt -rn -o SOURCE --mountpoint {{ item.mount }}
+      loop: "{{ backup_volumes }}"
+      loop_control:
+        label: "{{ item.mount }}"
+      register: _current_mounts
+      changed_when: false
+      failed_when: _current_mounts.rc not in [0, 1]
+
+    - name: None to (re)mount yet
+      ansible.builtin.set_fact:
+        backup_remount: []
+
+    - name: The volumes to (re)mount here - not mounted, or from another source
+      ansible.builtin.set_fact:
+        backup_remount: "{{ backup_remount + [item.item] }}"
+      loop: "{{ _current_mounts.results }}"
+      loop_control:
+        label: "{{ item.item.mount }}"
+      when: item.stdout | trim != node_ip ~ ':/' ~ item.item.name
+
+    - name: The services on this Pi
+      ansible.builtin.service_facts:
+
+    - name: Stop their services before mounting (those installed - Nexus comes later, with setup-nexus.yml)
       ansible.builtin.systemd:
         name: "{{ item.stop_service }}"
         state: stopped
-      loop: "{{ backup_volumes }}"
-      when: item.stop_service | length > 0
-      failed_when: false
+      loop: "{{ backup_remount }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.stop_service | length > 0 and (item.stop_service ~ '.service') in ansible_facts.services
 
     - name: Create mount points
       ansible.builtin.file:
@@ -585,11 +626,14 @@
         mode: '0755'
       loop: "{{ backup_volumes }}"
 
-    - name: Unmount if already mounted with different source
+    - name: Unmount what another source has mounted there
       ansible.builtin.mount:
-        path: "{{ item.mount }}"
+        path: "{{ item.item.mount }}"
         state: unmounted
-      loop: "{{ backup_volumes }}"
+      loop: "{{ _current_mounts.results }}"
+      loop_control:
+        label: "{{ item.item.mount }}"
+      when: item.stdout | trim | length > 0 and item.stdout | trim != node_ip ~ ':/' ~ item.item.name
 
     - name: Mount backup volumes
       ansible.builtin.mount:
@@ -622,41 +666,25 @@
     # Nexus ownership is handled by setup-nexus.yml (which runs after and
     # creates the nexus user with a fixed UID first).
 
-    - name: Start services after mounting
-      ansible.builtin.systemd:
-        name: "{{ item.stop_service }}"
-        state: started
-      loop: "{{ backup_volumes }}"
-      when: item.stop_service | length > 0 and item.autostart | bool
-      failed_when: false
+    # their services start after the new volumes are replicated (the play after 'New volumes - pi2's brick ...'):
+    # started here, the store's gateway met pi2's copy still unhealed and crash-looped until the heal landed
 
-# ─── New volumes: a full heal, until pi2's brick holds what pi1's does ───
+# ─── New volumes: replicated in full before anything uses them ─────────────
 # A fresh install copies the existing data straight into pi1's brick before creating the volume; pi2's brick starts
 # empty. Gluster knows nothing of files written behind its back: neither index heal nor `heal full` copied them
 # (Vagrant, 2026-10-04: pi1's mount listed the store's 5 buckets, pi2's 2, still after 5 min of a full heal). A
 # lookup of every entry through pi1's mount does - it gives each file its GFID and heals it onto pi2 (29 of 29 at
-# once). Volumes that existed before this run are left alone (ten: none is created).
-- name: New volumes - pi1's brick entries counted, every entry looked up through pi1's mount
+# once). Then pi2's brick must hold every entry pi1's does, by path. Volumes that existed before this run are left
+# alone (ten: none is created).
+- name: New volumes - every entry looked up through pi1's mount, pi1's entries listed
   hosts: pi1
   become: true
   gather_facts: false
   tasks:
-    - name: Entries on pi1's brick of each new volume (the copy's source)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        brick=$(gluster volume info {{ item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
-        [ -n "$brick" ]
-        find "$brick" -path "$brick/.glusterfs" -prune -o -print | wc -l
-      args:
-        executable: /bin/bash
-      loop: "{{ gluster_new_volumes | default([]) }}"
-      register: _source_entries
-      changed_when: false
-
     - name: Look every entry of each new volume up through pi1's mount (assigns the GFIDs, heals onto pi2)
       ansible.builtin.shell: |
         set -euo pipefail
-        mount=$(findmnt -rn -o TARGET --source "{{ ansible_host }}:/{{ item }}")
+        mount=$(findmnt -rn -t fuse.glusterfs -o TARGET,SOURCE | awk -v src=":/{{ item }}" '$2 ~ src "$" {print $1; exit}')
         [ -n "$mount" ]
         find "$mount" -noleaf -print0 | xargs -0 -r stat > /dev/null
       args:
@@ -664,27 +692,77 @@
       loop: "{{ gluster_new_volumes | default([]) }}"
       changed_when: true
 
+    - name: The entries on pi1's brick of each new volume, by path
+      ansible.builtin.shell: |
+        set -euo pipefail
+        brick=$(gluster volume info {{ item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
+        [ -n "$brick" ]
+        find "$brick" -path "$brick/.glusterfs" -prune -o -printf '%P\n' | sort
+      args:
+        executable: /bin/bash
+      loop: "{{ gluster_new_volumes | default([]) }}"
+      register: _source_entries
+      changed_when: false
+
 - name: New volumes - pi2's brick holds every entry pi1's does
   hosts: pi2
   become: true
   gather_facts: false
   tasks:
-    - name: Wait until pi2's brick of each new volume has as many entries as pi1's
+    - name: Pi1's entry list of each new volume, for the comparison
+      ansible.builtin.copy:
+        content: "{{ item.stdout }}\n"
+        dest: "/var/tmp/gluster-{{ item.item }}.pi1-entries"
+        mode: '0600'
+      loop: "{{ hostvars['pi1']['_source_entries'].results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }} ({{ item.stdout_lines | length }} entries on pi1)"
+
+    - name: Wait until pi2's brick of each new volume has every entry pi1's has
       ansible.builtin.shell: |
         set -euo pipefail
         brick=$(gluster volume info {{ item.item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
         [ -n "$brick" ]
-        find "$brick" -path "$brick/.glusterfs" -prune -o -print | wc -l
+        comm -23 /var/tmp/gluster-{{ item.item }}.pi1-entries \
+          <(find "$brick" -path "$brick/.glusterfs" -prune -o -printf '%P\n' | sort) | head -5
       args:
         executable: /bin/bash
       loop: "{{ hostvars['pi1']['_source_entries'].results | default([]) }}"
       loop_control:
-        label: "{{ item.item }} ({{ item.stdout }} entries on pi1)"
-      register: _sink_entries
+        label: "{{ item.item }}"
+      register: _missing_on_pi2
       changed_when: false
       retries: 60
       delay: 10
-      until: (_sink_entries.stdout | int) >= (item.stdout | int)
+      until: _missing_on_pi2.rc == 0 and _missing_on_pi2.stdout | length == 0
+
+    - name: Remove the lists
+      ansible.builtin.file:
+        path: "/var/tmp/gluster-{{ item.item }}.pi1-entries"
+        state: absent
+      loop: "{{ hostvars['pi1']['_source_entries'].results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+- name: Start the services of the remounted volumes
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The services on this Pi
+      ansible.builtin.service_facts:
+
+    # autostart: false ones are started by keepalived's notify on the VIP's Pi only (see the mount play's vars)
+    - name: Start them (those installed, and not keepalived's)
+      ansible.builtin.systemd:
+        name: "{{ item.stop_service }}"
+        state: started
+      loop: "{{ backup_remount | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: >-
+        item.stop_service | length > 0 and item.autostart | bool
+        and (item.stop_service ~ '.service') in ansible_facts.services
 
 - name: Verify backup volumes
   hosts: pi1
@@ -692,15 +770,15 @@
   gather_facts: false
 
   tasks:
-    # A replica created over existing data is consistent only once self-heal has run: until then the second brick
-    # holds the directories as root (Vagrant, 2026-10-04: versitygw, running as minio, was refused its buckets dir on
-    # pi2's copy and crash-looped). Heal every volume now and wait until nothing is pending; on a healed cluster
-    # (ten: all 0) this passes at once.
-    - name: Every volume healed - nothing pending on any brick
+    # A new volume's heals - the entries the lookups created on pi2, then their data and metadata - done before the run
+    # ends: until then pi2's copy can hold a directory as root (Vagrant, 2026-10-04: versitygw, running as minio, was
+    # refused its buckets dir there). Only the volumes this run created: an existing one lists every file with a write
+    # in flight as pending, which a busy Forgejo or a running backup always has.
+    - name: The volumes created in this run are healed - nothing pending on any brick
       ansible.builtin.shell: |
         set -euo pipefail
         pending=0
-        for vol in $(gluster volume list); do
+        for vol in {{ gluster_new_volumes | default([]) | join(' ') }}; do
           gluster volume heal "$vol" > /dev/null
           n=$(gluster volume heal "$vol" info | awk -F': ' '/^Number of entries/ {s += $2} END {print s+0}')
           echo "$vol $n"
