@@ -31,38 +31,48 @@
     - name: Stand up in-cluster valkey (chart references schnappy-valkey)
       ansible.builtin.import_tasks: tasks/setup-test-valkey.yml
 
+    # the v1 API (served from Strimzi 0.49, the only one from 1.0) and KRaft on a node pool, as production's
+    # schnappy-data chart: Strimzi 0.46 and later run no Kafka without one
     - name: Stand up Strimzi Kafka cluster (provides schnappy-kafka-bootstrap)
       kubernetes.core.k8s:
         kubeconfig: /etc/kubernetes/admin.conf
         state: present
         definition:
-          apiVersion: kafka.strimzi.io/v1beta2
-          kind: Kafka
-          metadata: { name: schnappy-kafka, namespace: "{{ ns }}" }
-          spec:
-            kafka:
-              version: 4.2.0
+          - apiVersion: kafka.strimzi.io/v1
+            kind: KafkaNodePool
+            metadata:
+              name: kafka
+              namespace: "{{ ns }}"
+              labels: { strimzi.io/cluster: schnappy-kafka }
+            spec:
               replicas: 1
-              listeners:
-                - { name: plain, port: 9092, type: internal, tls: false }
-              config:
-                offsets.topic.replication.factor: 1
-                transaction.state.log.replication.factor: 1
-                transaction.state.log.min.isr: 1
-                default.replication.factor: 1
-                min.insync.replicas: 1
-              storage:
-                type: jbod
-                volumes:
-                  - { id: 0, type: persistent-claim, size: 5Gi, deleteClaim: true }
-            entityOperator:
-              topicOperator: {}
-              userOperator: {}
+              roles: [controller, broker]
+              storage: { type: persistent-claim, size: 5Gi, deleteClaim: true }
+          - apiVersion: kafka.strimzi.io/v1
+            kind: Kafka
+            metadata:
+              name: schnappy-kafka
+              namespace: "{{ ns }}"
+              annotations: { strimzi.io/kraft: enabled, strimzi.io/node-pools: enabled }
+            spec:
+              kafka:
+                version: 4.2.0
+                listeners:
+                  - { name: plain, port: 9092, type: internal, tls: false }
+                config:
+                  offsets.topic.replication.factor: 1
+                  transaction.state.log.replication.factor: 1
+                  transaction.state.log.min.isr: 1
+                  default.replication.factor: 1
+                  min.insync.replicas: 1
+              entityOperator:
+                topicOperator: {}
+                userOperator: {}
 
     - name: Wait for Strimzi Kafka cluster Ready
       kubernetes.core.k8s_info:
         kubeconfig: /etc/kubernetes/admin.conf
-        api_version: kafka.strimzi.io/v1beta2
+        api_version: kafka.strimzi.io/v1
         kind: Kafka
         name: schnappy-kafka
         namespace: "{{ ns }}"
@@ -147,7 +157,7 @@
     - name: Wait for KafkaTopics Ready
       kubernetes.core.k8s_info:
         kubeconfig: /etc/kubernetes/admin.conf
-        api_version: kafka.strimzi.io/v1beta2
+        api_version: kafka.strimzi.io/v1
         kind: KafkaTopic
         namespace: "{{ ns }}"
         name: "{{ item }}"
