@@ -3,18 +3,28 @@
 # containerd.io from Docker's apt repository (the 2.x line), as one install. Running containers stay up: the unit's
 # KillMode=process leaves their shims running while containerd is swapped, and the new containerd reattaches to them.
 #
-#   1. Docker's apt repository (ten has it since docker-ce was installed, 2026-02);
-#   2. a node already on containerd.io at the target or newer is left alone (the step runner replays earlier steps);
+#   1. checks: a version; the node done already (containerd.io at the target or newer, a containerd 2 config - schema
+#      3 or newer; 2.3 writes 4 - the CRI answering on that version) ends here - anything less, a run that failed half-way included, carries on;
+#      while still on Debian's containerd, its live config must be 1.7's default plus exactly the settings carried
+#      over (SystemdCgroup, the CRI registry config_path where an inventory sets one), or the run refuses: the new
+#      config is built from containerd 2's defaults, so any other setting would be lost (ten 2026-10-04: default
+#      plus SystemdCgroup only);
+#   2. Docker's apt repository (ten has it since docker-ce was installed, 2026-02);
 #   3. the live config kept as config.toml.pre-containerd-io, then containerd.io installed - keeping that config
 #      (force-confold): the package's own default disables the CRI, the kubelet's runtime. containerd.io conflicts
-#      with and replaces Debian's containerd and runc (it bundles runc);
-#   4. a new config from containerd 2's own defaults (schema 3) with the node's two settings, as setup-kubeadm.yml
-#      makes them: SystemdCgroup, and the CRI registry config_path where an inventory sets one;
-#   5. containerd restarted on it, then the kubelet;
-#   6. proof: the server's version is the target, every container running before still runs, the node Ready.
+#      with and replaces Debian's containerd and runc (it bundles runc). It is held: an `apt upgrade` would otherwise
+#      move it, and restart the runtime under every pod;
+#   4. a new config from containerd 2's own defaults (schema 4 from 2.3) with those settings;
+#   5. containerd restarted on it; if the CRI does not answer, the kept config is put back and containerd restarted
+#      on it (containerd 2 reads the 1.7 schema), and the run fails - the node keeps a working runtime;
+#   6. the kubelet restarted; proof: the server's version is the target, every container running before still runs,
+#      the node Ready.
+#
+# Back to Debian's containerd, by hand: apt-mark unhold containerd.io; apt-get install containerd=<the version the
+# run printed> runc=<its version>; cp config.toml.pre-containerd-io config.toml; systemctl restart containerd kubelet.
 #
 # setup-kubeadm.yml installs Debian's containerd: it must install containerd.io at this version for a rebuild to match
-# - at the production rollout, in the same change.
+# - at the production rollout, in the same change (until then its no-downgrade check refuses a full run here).
 #
 # Usage: ansible-playbook -i inventory/<env>.yml playbooks/upgrade-containerd.yml -e containerd_upgrade_to=2.3.6
 - name: Replace containerd with containerd.io
@@ -28,8 +38,8 @@
     # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
     registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
 
-
   tasks:
+    # ── 1. checks ────────────────────────────────────────────────────
     - name: The target is a version (-e containerd_upgrade_to=X.Y.Z)
       ansible.builtin.assert:
         that: target is match('^[0-9]+\.[0-9]+\.[0-9]+$')
@@ -38,33 +48,71 @@
     - name: The containerd package now installed
       ansible.builtin.shell: |
         set -o pipefail
-        dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' containerd containerd.io 2>/dev/null \
+        dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' containerd containerd.io runc 2>/dev/null \
           | awk '$1 ~ /^[ih]i/ {print $2, $3}'
       args:
         executable: /bin/bash
       register: _installed
       changed_when: false
-      failed_when: _installed.stdout_lines | length != 1
+      failed_when: >-
+        _installed.stdout_lines | select('match', '^containerd(\.io)? ') | list | length != 1
 
-    - name: Nothing to do when containerd.io is already at the target or newer
+    - name: Facts - the runtime package and its version
+      ansible.builtin.set_fact:
+        _runtime_line: "{{ _installed.stdout_lines | select('match', '^containerd(\\.io)? ') | first }}"
+
+    - name: The node's runtime now - config schema, CRI, runtime version
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "schema $(awk -F' *= *' '/^version *=/ {print $2; exit}' /etc/containerd/config.toml)"
+        echo "runtime $({{ crictl }} version 2>/dev/null | awk '/^RuntimeVersion/ {print $2}')"
+      args:
+        executable: /bin/bash
+      register: _now
+      changed_when: false
+
+    - name: Nothing to do when the node is done - containerd.io at the target or newer, a containerd 2 config, the CRI on it
+      vars:
+        _state: "{{ dict(_now.stdout_lines | map('split', ' ', 1) | map('list') | list) }}"
       when: >-
-        _installed.stdout.split()[0] == 'containerd.io'
-        and (_installed.stdout.split()[1] | regex_replace('-.*$', '')) is version(target, '>=')
+        _runtime_line.split()[0] == 'containerd.io'
+        and (_runtime_line.split()[1] | regex_replace('-.*$', '')) is version(target, '>=')
+        and (_state.schema | default('0') | int) >= 3
+        and (_state.runtime | default('') | regex_replace('^v', '')) is version(target, '>=')
       block:
         - name: Already there
           ansible.builtin.debug:
-            msg: "CONTAINERD ALREADY {{ _installed.stdout }} (target {{ target }}): nothing to do"
+            msg: "CONTAINERD ALREADY {{ _runtime_line }}, config schema {{ _state.schema }}, runtime {{ _state.runtime }} (target {{ target }})"
         - name: End here
           ansible.builtin.meta: end_host
 
-    # ── 1. Docker's apt repository ───────────────────────────────────
+    - name: Still on Debian's containerd - its live config is 1.7's default plus only the settings carried over
+      when: _runtime_line.split()[0] == 'containerd'
+      ansible.builtin.shell: |
+        set -euo pipefail
+        expected=$(mktemp)
+        trap 'rm -f "$expected"' EXIT
+        containerd config default > "$expected"
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' "$expected"
+        {% if registry_config_path | length > 0 %}
+        sed -i -E "s#^(\s*)config_path = (''|\"\")\$#\1config_path = \"{{ registry_config_path }}\"#" "$expected"
+        {% endif %}
+        normal() { grep -v '^\s*#' "$1" | sed 's/\s*$//' | grep -v '^$'; }
+        diff <(normal "$expected") <(normal /etc/containerd/config.toml)
+      args:
+        executable: /bin/bash
+      register: _config_diff
+      changed_when: false
+      failed_when: _config_diff.rc != 0
+
+    # ── 2. Docker's apt repository ───────────────────────────────────
     - name: Docker's apt key
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/debian/gpg
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
 
-    - name: Docker's apt repository (as on ten)
+    - name: Docker's apt repository (as on ten - its docker.list, checked 2026-10-04)
       ansible.builtin.copy:
         dest: /etc/apt/sources.list.d/docker.list
         content: |
@@ -91,7 +139,7 @@
       changed_when: false
 
     # ── 3. the package ───────────────────────────────────────────────
-    - name: Keep the live config
+    - name: Keep the live config (the first run's - never overwritten by a re-run)
       ansible.builtin.copy:
         src: /etc/containerd/config.toml
         dest: /etc/containerd/config.toml.pre-containerd-io
@@ -104,6 +152,12 @@
         name: "containerd.io={{ _package.stdout }}"
         dpkg_options: force-confold,force-confdef
         allow_downgrade: false
+        allow_change_held_packages: true
+
+    - name: Hold containerd.io (an apt upgrade would restart the runtime under every pod)
+      ansible.builtin.dpkg_selections:
+        name: containerd.io
+        selection: hold
 
     # ── 4. containerd 2's config ─────────────────────────────────────
     - name: Containerd 2's default config, with the node's settings
@@ -122,21 +176,50 @@
         executable: /bin/bash
       changed_when: true
 
-    # ── 5. restart ───────────────────────────────────────────────────
-    - name: Restart containerd on it
-      ansible.builtin.systemd_service:
-        name: containerd
-        state: restarted
-        enabled: true
-        daemon_reload: true
+    # ── 5. restart; back to the kept config if the CRI does not come up ──
+    - name: Containerd on the new config, its CRI answering
+      block:
+        - name: Restart containerd on it
+          ansible.builtin.systemd_service:
+            name: containerd
+            state: restarted
+            enabled: true
+            daemon_reload: true
 
-    - name: The CRI answers
-      ansible.builtin.command: "{{ crictl }} info"
-      register: _cri
-      changed_when: false
-      retries: 30
-      delay: 2
-      until: _cri.rc == 0
+        - name: The CRI answers
+          ansible.builtin.command: "{{ crictl }} info"
+          register: _cri
+          changed_when: false
+          retries: 30
+          delay: 2
+          until: _cri.rc == 0
+      rescue:
+        - name: Put the kept config back
+          ansible.builtin.copy:
+            src: /etc/containerd/config.toml.pre-containerd-io
+            dest: /etc/containerd/config.toml
+            remote_src: true
+            mode: '0644'
+
+        - name: Restart containerd on the kept config
+          ansible.builtin.systemd_service:
+            name: containerd
+            state: restarted
+
+        - name: The CRI answers on the kept config
+          ansible.builtin.command: "{{ crictl }} info"
+          register: _cri_back
+          changed_when: false
+          retries: 30
+          delay: 2
+          until: _cri_back.rc == 0
+
+        - name: Failed - the runtime runs on the kept config
+          ansible.builtin.fail:
+            msg: >-
+              containerd.io {{ _package.stdout }} did not serve the CRI on containerd 2's config; the kept 1.7 config is
+              back and the CRI answers on it. Fix the config and run again - or go back to Debian's containerd (the
+              playbook's header says how; it was {{ _runtime_line }}).
 
     - name: Restart the kubelet
       ansible.builtin.systemd_service:
@@ -170,5 +253,5 @@
     - name: Replaced
       ansible.builtin.debug:
         msg: >-
-          CONTAINERD REPLACED: {{ _installed.stdout }} -> containerd.io {{ _package.stdout }} (runtime
-          {{ _version.stdout }}); {{ _before.stdout_lines | length }} containers kept running
+          CONTAINERD REPLACED: {{ _runtime_line }} -> containerd.io {{ _package.stdout }} (runtime
+          {{ _version.stdout }}, held); {{ _before.stdout_lines | length }} containers kept running
