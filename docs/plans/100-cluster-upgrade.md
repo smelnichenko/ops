@@ -196,6 +196,9 @@ single node), `upgrade-containerd.yml`, Cilium/Istio/Gateway-API steps as variab
 Branches `upgrade/NN-*` in infra/platform (local until approved), stacked per repo; host-side steps as playbook lines.
 S = stateful (shown to the operator with the exact change before it runs in production). Status 2026-10-03.
 
+**Every step green on its own in Vagrant: 2026-10-04 06:23** (01-55; 51 changes nothing in the copy). The full run
+is next.
+
 **Gate before the production rollout** (operator, 2026-10-03): every step green on its own, then one full run green -
 `task test:upgrade:full`: the Vagrant copy built from nothing, then steps 01-55 in order, unattended, every check
 after each. Fixes made while steps run one at a time prove the step, not the chain.
@@ -243,7 +246,7 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 52 | ClickHouse compatibility 24.8 (keeps formats readable for a rollback) | platform | green (in effect from 53's restart) |
 | 53 | ClickHouse 25.8.33.6 | infra + platform | S; green (25.8.33.6 up with compatibility 24.8, logs flowing) |
 | 54 | ClickHouse compatibility 25.8 | platform | green (in effect from 55's restart) |
-| 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S; running |
+| 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S; green (26.8.15.10 with compatibility 25.8, logs flowing) |
 
 ## Production rollout (after all tests pass and approval)
 
