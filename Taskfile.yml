@@ -335,7 +335,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
 
-  # ============== UPGRADE TEST (plan 100) ==============
+  # ============== UPGRADE TEST (the Vagrant copy of production) ==============
   _upgrade:base:
     internal: true
     deps: [deploy:install]
@@ -358,7 +358,7 @@ tasks:
     desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
     cmds:
       - task: _upgrade:base
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:baseline:resume:
@@ -367,7 +367,7 @@ tasks:
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:argo:
@@ -383,6 +383,8 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml
       - cmd: scripts/vagrant-gitops-mirror.py
       - cmd: scripts/vagrant-preload-images.sh
+      # production's floating tags (postgresql:17, ...) as ten runs them, not today's builds of those tags
+      - cmd: scripts/vagrant-preload-floating.sh
       # isolate the cluster from production (DNS, network - proven by a probe) and connect ESO to the Vagrant Vault
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
       # objects ten has that no git repo creates (each documented in the playbook), production's wildcard certificate too
@@ -396,10 +398,14 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
+      # data of the one-way observability steps (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=seed
+      # the scrape pools and their target counts, the record every step's metrics check compares with
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml -e record_scrape_pools=true
       # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
       - cmd: scripts/vagrant-smoke.sh
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
   test:upgrade:step:
@@ -420,6 +426,16 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --backup-check {{.STEP}}
       BARMAN_CHECK:
         sh: scripts/upgrade-expected-inventory.py --barman-check {{.STEP}}
+      RESTORE_CHECK:
+        sh: scripts/upgrade-expected-inventory.py --restore-check {{.STEP}}
+      CLICKHOUSE_COMPAT:
+        sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.STEP}}
+      CLICKHOUSE_USERS:
+        sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.STEP}}
+      CERT_RENEW:
+        sh: scripts/upgrade-expected-inventory.py --cert-renew {{.STEP}}
+      RESTORE_UNDO:
+        sh: scripts/upgrade-expected-inventory.py --restore-undo {{.STEP}}
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
@@ -430,11 +446,13 @@ tasks:
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
-      # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, step 12),
+      # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}}
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
+      # the observability data the one-way steps must keep, and ClickHouse's compatibility setting as the step files say
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=verify -e clickhouse_compat='{{.CLICKHOUSE_COMPAT}}' -e clickhouse_users='{{.CLICKHOUSE_USERS}}'
       # CNPG's WAL archiving and a fresh barman base backup - only after a step that changes CNPG or Postgres (the step
       # file's barman-check line): the backup production's data depends on
       - cmd: |
@@ -442,6 +460,29 @@ tasks:
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml
           else
             echo "BARMAN CHECK: not after this step (no barman-check line)"
+          fi
+      # every Certificate renewed and Ready again - only after a step that changes cert-manager (cert-renew line)
+      - cmd: |
+          if [ "{{.CERT_RENEW}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/cert-check.yml
+          else
+            echo "CERT RENEW: not after this step (no cert-renew line)"
+          fi
+      # a copy of Postgres recovered from a fresh backup and its WAL (a marker written after the backup must come
+      # back) - only after a step that changes CNPG, Postgres or their store (the step file's restore-check line)
+      - cmd: |
+          if [ "{{.RESTORE_CHECK}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres
+          else
+            echo "RESTORE CHECK: not after this step (no restore-check line)"
+          fi
+      # the step's undo: the previous major's backup recovered with its image (restore-undo line)
+      - cmd: |
+          if [ -n "{{.RESTORE_UNDO}}" ]; then
+            set -- {{.RESTORE_UNDO}}
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres -e restore_server="$1" -e restore_image="$2"
+          else
+            echo "RESTORE UNDO: none for this step (no restore-undo line)"
           fi
       # a Velero backup from production's daily schedule, volumes included, into the Pi backup store - only after a
       # step that changes Velero or its store (the step file's backup-check line): ~8 min, and it holds no data
@@ -456,7 +497,7 @@ tasks:
       # Prometheus reconciled, every target up, Mimir receiving
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
       - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt
       - cmd: scripts/inventory-diff.sh .upgrade/expected-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
@@ -486,6 +527,15 @@ tasks:
           done
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
       - task: test:upgrade:restore-check
+
+  test:upgrade:wave0:
+    desc: On the Vagrant copy, the Wave 0 backups as production takes them, each restored from the Pi store and its seeded canaries checked (STORES limits the list)
+    deps: [deploy:install]
+    vars:
+      STORES: '{{.STORES | default "postgres clickhouse grafana kafka scylla gateway"}}'
+    cmds:
+      - for: { var: STORES, split: ' ' }
+        cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-backup.yml -e store={{.ITEM}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/wave0-rehearsal.yml -e store={{.ITEM}}
 
   test:upgrade:restore-check:
     desc: On the Vagrant copy (upgraded or not), prove the backups restore - Postgres recovered from its barman backup into a side cluster with every seeded row, and a Velero file-system backup of a test namespace restored with its volume's data; production's namespace is not touched
@@ -777,6 +827,54 @@ tasks:
     deps: [deploy:install]
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
+
+  # ── one upgrade step in production, after its Vagrant proof and the operator's approval ──
+  deploy:upgrade:check:
+    desc: "Read-only, before and after each production upgrade step: ten's version inventory against what step STEP leaves (before a step: the step before it), and Argo CD's apps and pods as the Vagrant test judges them"
+    deps: [deploy:install]
+    requires:
+      vars: [STEP]
+    cmds:
+      - cmd: set -o pipefail; mkdir -p .upgrade && ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/prod-inventory-now.txt && for p in 192.168.11.4 192.168.11.6; do ssh {{.TARGET_USER}}@$p 'sudo -n bash -s' < scripts/version-inventory-pi.sh; done >> .upgrade/prod-inventory-now.txt
+      - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/prod-expected.txt
+      - cmd: scripts/inventory-diff.sh .upgrade/prod-expected.txt .upgrade/prod-inventory-now.txt tests/ansible/upgrade/prod-transient.txt
+      # one look, read-only (no wait): green means every app Synced, Healthy, its last sync not failed, every pod ready
+      - cmd: python3 tests/ansible/upgrade/files/argo-settled.py --kubeconfig "$HOME/.kube/config" --once
+
+  deploy:upgrade:preview:
+    desc: "Read-only: what upgrade step STEP's playbook lines would change on ten and the Pis - ansible's check mode, with diffs (it stops at the first check that needs the change made: check mode makes none)"
+    deps: [deploy:install]
+    requires:
+      vars: [STEP]
+    cmds:
+      - cmd: scripts/upgrade-step-playbooks.sh --production --check {{.STEP}}
+
+  deploy:upgrade:backup:
+    desc: "PRODUCTION: Wave 0 - one store backed up into the Pi store right before its one-way upgrade step (STORE=postgres|clickhouse|grafana|kafka|gateway|scylla; kafka stops the broker for the copy)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    requires:
+      vars: [STORE]
+    prompt: "Back up {{.STORE}} on PRODUCTION into the Pi store{{if eq .STORE \"kafka\"}} (Kafka is down while its volume is copied){{end}}?"
+    cmds:
+      - cmd: venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-backup.yml -e store={{.STORE}}
+
+  deploy:upgrade:playbooks:
+    desc: "PRODUCTION: the host-side half of upgrade step STEP - its playbook lines against ten and the Pis"
+    deps: [deploy:install]
+    requires:
+      vars: [STEP]
+    prompt: "Run the playbook lines of upgrade step {{.STEP}} against PRODUCTION (ten, the Pis)?"
+    cmds:
+      - cmd: scripts/upgrade-step-playbooks.sh --production {{.STEP}}
+
+  deploy:upgrade:merge:
+    desc: "PRODUCTION: the GitOps half of upgrade step STEP in REPO (infra or platform) - its branch fast-forwarded onto main and pushed"
+    requires:
+      vars: [STEP, REPO]
+    prompt: "Merge and push {{.REPO}} branch upgrade/{{.STEP}} to main - into PRODUCTION?"
+    cmds:
+      - cmd: scripts/upgrade-merge-step.sh {{.STEP}} {{.REPO}}
 
   deploy:node-config:
     desc: Apply node/kubelet tuning to the live node (idempotent; safe to re-run, no bootstrap)

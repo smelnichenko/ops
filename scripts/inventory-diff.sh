@@ -3,7 +3,7 @@
 # is not infrastructure: the application images CD moves (git.pmon.dev/schnappy/<app>), and the image-build tools only
 # the Vagrant node has (nerdctl, buildkitd: install_nerdctl_override). Exits non-zero when anything else differs.
 # Infrastructure built in git.pmon.dev (apt-cacher-ng) is compared: every git.pmon.dev/schnappy/ image was filtered,
-# and step 01 passed with apt-cacher-ng still on 1.0 (plan 100 review, harness M1).
+# and the apt-cacher-ng step passed with it still on 1.0.
 set -euo pipefail
 filter() {
   { grep -v -E '^image git\.pmon\.dev/schnappy/(admin|chat|chess|game-scp|hyperfoil|masi|monitor|site) |^binary /usr/local/bin/(nerdctl|buildkitd) ' "$1" || true; } \

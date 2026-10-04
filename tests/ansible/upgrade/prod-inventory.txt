@@ -103,6 +103,8 @@ image valkey/valkey 8.1-alpine
 image velero/velero-plugin-for-aws v1.11.1
 k8s server v1.34.6
 os debian 13.7
+pi pi1 versitygw 1.6.0
+pi pi2 versitygw 1.6.0
 pkg containerd 1.7.24~ds1-6+deb13u1
 pkg cri-tools 1.34.0-1.1
 pkg kubeadm 1.34.6-1.1 (held)

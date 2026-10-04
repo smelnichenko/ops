@@ -1,0 +1,43 @@
+#!/bin/bash
+# upgrade-restack-in-place.sh - every upgrade/NN-* branch of a repo put back on the one before it, in the same order
+# and under the same names, after a commit was added to an earlier step branch (the later ones do not carry it until
+# then, and the runner's refs check stops at the first). Each branch's own commits - its old predecessor..itself, from
+# their merge base when it was forked lower - are rebased onto the new predecessor; then every step's own change (its
+# changed lines) is compared with what it was. The SHAs before the first run are kept in .git/restack-old-shas: on a
+# conflict the rebase is left in progress - resolve it, `git rebase --continue`, run this again. Afterwards check
+# every step: scripts/upgrade-expected-inventory.py --refs <step>. To change the order, scripts/upgrade-restack.py.
+#
+# Usage: scripts/upgrade-restack-in-place.sh <repo dir>    (clean, on main; e.g. ../infra)
+set -uo pipefail
+dir=$1; repo=$(basename "$dir")
+cd "$dir" || exit 1
+state=.git/restack-old-shas
+mapfile -t heads < <(git for-each-ref --format='%(refname:short)' 'refs/heads/upgrade/*' | sort -t/ -k2 -n)
+if [ ! -f "$state" ]; then
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] && [ -z "$(git status --porcelain)" ] || { echo "$repo: not clean on main"; exit 1; }
+  { echo "main $(git rev-parse main)"; for b in "${heads[@]}"; do echo "$b $(git rev-parse "$b")"; done; } > "$state"
+fi
+[ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] && { echo "$repo: a rebase is in progress - finish it first"; exit 1; }
+declare -A old
+while read -r b s; do old[$b]=$s; done < "$state"
+own() { git diff -U0 "$1" "$2" | grep -E '^[-+]' | grep -vE '^(---|\+\+\+) ' | sha256sum | cut -c1-16; }
+prev=main; moved=0
+for b in "${heads[@]}"; do
+  prev_old=${old[$prev]}; prev_new=$(git rev-parse "$prev"); cur=$(git rev-parse "$b")
+  if git merge-base --is-ancestor "$prev_new" "$b" && { [ "$cur" != "${old[$b]}" ] || [ "$prev_old" = "$prev_new" ]; }; then
+    :
+  else
+    if ! git rebase -q --onto "$prev_new" "$prev_old" "$b" > /dev/null 2>&1; then
+      echo "$repo: $b conflicts on its predecessor - left in progress:"; git status --short | grep -E '^(UU|AA|DU|UD) '; exit 2
+    fi
+    moved=$((moved + 1)); echo "$repo: $b moved (${old[$b]:0:7} -> $(git rev-parse --short "$b"))"
+  fi
+  # the step's own change as before (a branch forked below its predecessor: its own commits start at their merge base)
+  if [ "$(own "$(git merge-base "$prev_old" "${old[$b]}")" "${old[$b]}")" != "$(own "$prev_new" "$b")" ]; then
+    echo "$repo: $b - its own change differs from before"; git checkout -q main; exit 1
+  fi
+  prev=$b
+done
+git checkout -q main
+rm -f "$state"
+echo "$repo: $moved moved this run, every step's own change as before, each branch on its predecessor"

@@ -154,6 +154,9 @@ def overlay_infra(repo, forgejo):
     for rel, wave in INFRA_SYNC_WAVES.items():
         p = os.path.join(repo, rel)
         text = open(p).read()
+        # infra carries these from the fresh-install step on: nothing to do where git has the wave already
+        if f'argocd.argoproj.io/sync-wave: "{wave}"' in text:
+            continue
         if "argocd.argoproj.io/sync-wave" in text:
             new = re.sub(r'(argocd\.argoproj\.io/sync-wave: )"[-0-9]+"', rf'\g<1>"{wave}"', text, count=1)
         else:

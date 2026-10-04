@@ -1,0 +1,7 @@
+# Inventory lines production has only for a while - `task deploy:upgrade:check` accepts them as missing (never as
+# different; scripts/inventory-diff.sh's allowed-missing). Read against ten 2026-10-04: everything else of the baseline
+# (prod-inventory.txt, 10-02/03) still runs.
+#
+# the k6 smoke's PostSync Job (curl waits for the app, then k6), kept 24 h after each sync (ttlSecondsAfterFinished)
+image curlimages/curl 8.10.1
+image grafana/k6 1.7.1

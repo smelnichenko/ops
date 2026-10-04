@@ -14,7 +14,17 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                after it - production's schedule, every pod volume; ~8 min)
     barman-check                              (the step changes CNPG or Postgres: the runner checks WAL archiving and
                                                takes a CNPG barman base backup of Postgres after it)
+    restore-check                             (the step changes CNPG, Postgres or their store: the runner recovers a
+                                               copy of Postgres from a fresh backup and its WAL after it)
+    cert-renew                                (the step changes cert-manager: the runner renews every Certificate
+                                               after it and wants each Ready at a higher revision)
+    restore-undo <serverName> <image>         (the step's undo: the runner recovers that server's latest backup with
+                                               that image into a side cluster after it - the seeded rows must be there)
     branch <infra|platform>                   (the step's change is the branch upgrade/NN-<name> in that repo)
+    clickhouse-compat <version>               (from this step on ClickHouse runs with that compatibility setting;
+                                               before the first such line it has none)
+    clickhouse-users <user>,<user>            (from this step on ClickHouse has exactly these users, by name; before
+                                               the first such line: default,schnappy)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -24,7 +34,7 @@ the given one applied, in order. A change whose "before" line is not there at th
 stale, and applying it anyway would check nothing.
 
 Playbooks (--playbooks): the playbook lines of the given step only. Unlike the refs they are not replayed: a Helm
-install is not an "at least" operation, so replaying step 13's Cilium 1.19.8 after step 17 would downgrade Cilium.
+install is not an "at least" operation, so replaying the Cilium 1.19.8 step after the Cilium 1.20 one would downgrade Cilium.
 A copy restored to an earlier snapshot is brought forward by running the steps in order - the inventory check fails
 otherwise, since a skipped step's versions are missing. A version a playbook line sets with -e becomes the
 playbook's default at the production rollout, not before.
@@ -44,6 +54,11 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 01-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)
        scripts/upgrade-expected-inventory.py --backup-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --barman-check <step>                  (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --cert-renew <step>                    (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --restore-undo <step>                  (prints "<serverName> <image>" or nothing)
+       scripts/upgrade-expected-inventory.py --clickhouse-compat <step>             (prints the version or nothing)
+       scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
 """
 import os
 import re
@@ -55,7 +70,7 @@ UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
 
 
-def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None):
+def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -65,9 +80,18 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None):
         if line.startswith("playbook "):
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
-        elif line in ("backup-check", "barman-check"):
+        elif line in ("backup-check", "barman-check", "restore-check", "cert-renew"):
             if flags is not None:
                 flags.add(line)
+        elif re.fullmatch(r"restore-undo [a-z0-9-]+ \S+", line):
+            if undo is not None:
+                undo.append(line[len("restore-undo "):])
+        elif re.fullmatch(r"clickhouse-users [a-z0-9_]+(,[a-z0-9_]+)*", line):
+            if users is not None:
+                users.append(line.split()[1])
+        elif re.fullmatch(r"clickhouse-compat \d+\.\d+", line):
+            if compat is not None:
+                compat.append(line.split()[1])
         elif line in ("branch infra", "branch platform"):
             if branches is not None:
                 branches.add(line[len("branch "):])
@@ -120,7 +144,8 @@ def ref(repo, step_no, names):
 def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
-                                   ["--barman-check"]) else None
+                                   ["--barman-check"], ["--restore-check"], ["--cert-renew"],
+                                   ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -134,10 +159,27 @@ def main():
         if playbooks:
             print("\n".join(playbooks))
         return
-    if mode in ("--backup-check", "--barman-check"):
+    if mode in ("--backup-check", "--barman-check", "--restore-check", "--cert-renew"):
         flags = set()
         parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
         print("yes" if mode[2:] in flags else "no")
+        return
+    if mode == "--restore-undo":
+        undo = []
+        parse(os.path.join(STEPS, args[0] + ".txt"), undo=undo)
+        print(undo[0] if undo else "")
+        return
+    if mode == "--clickhouse-users":
+        users = []
+        for name in names[:names.index(args[0]) + 1]:
+            parse(os.path.join(STEPS, name + ".txt"), users=users)
+        print(users[-1] if users else "default,schnappy")
+        return
+    if mode == "--clickhouse-compat":
+        compat = []
+        for name in names[:names.index(args[0]) + 1]:
+            parse(os.path.join(STEPS, name + ".txt"), compat=compat)
+        print(compat[-1] if compat else "")
         return
     if mode == "--out-of-sync":
         apps = []
