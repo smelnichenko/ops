@@ -684,7 +684,8 @@
 
     # The manifest replaces local-path-config: a node path set there by hand would be dropped, and new volumes would
     # land elsewhere. So the live paths must be the ones this playbook knows (ten 2026-10-04: upstream's default), and
-    # after the apply too - a manifest that changed its default fails here rather than move new volumes.
+    # the manifest's own too - read from the file before it is applied (once applied, the provisioner takes the new
+    # paths at once) - and the same file is what gets applied.
     - name: The live local-path node paths are the expected ones (the manifest replaces them)
       ansible.builtin.shell:
         executable: /bin/bash
@@ -700,16 +701,45 @@
         or _lpp_paths_before.stdout not in ['none', local_path_node_paths | to_json(sort_keys=True)]
       tags: [local-path]
 
-    - name: Install local-path-provisioner (Rancher's manifest, as on ten)
+    - name: The local-path-provisioner manifest of the version, downloaded
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml
+        dest: /root/local-path-storage-{{ local_path_provisioner_version }}.yaml
+        mode: '0600'
+      tags: [local-path]
+
+    - name: The manifest's node paths are the expected ones (before anything is applied)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig /etc/kubernetes/admin.conf create --dry-run=client -o json \
+            -f /root/local-path-storage-{{ local_path_provisioner_version }}.yaml | python3 -c '
+          import json, sys
+          # one JSON document per object, one after the other (not a List)
+          text, dec, i, items = sys.stdin.read(), json.JSONDecoder(), 0, []
+          while i < len(text.rstrip()):
+              doc, i = dec.raw_decode(text, i)
+              items.append(doc)
+              while i < len(text) and text[i].isspace():
+                  i += 1
+          cm = [i for i in items if i["kind"] == "ConfigMap" and i["metadata"]["name"] == "local-path-config"]
+          print(json.dumps(json.loads(cm[0]["data"]["config.json"])["nodePathMap"], sort_keys=True) if cm else "none")'
+      register: _lpp_paths_manifest
+      changed_when: false
+      failed_when: >-
+        _lpp_paths_manifest.rc != 0 or _lpp_paths_manifest.stdout != local_path_node_paths | to_json(sort_keys=True)
+      tags: [local-path]
+
+    - name: Install local-path-provisioner (Rancher's manifest, as on ten - the file just checked)
       # ten runs the upstream manifest applied with kubectl (namespace local-path-storage, StorageClass local-path,
       # not the default class), not a Helm release. The downstream wait polls the deployment, so a cold image pull
       # does not have to fit a timeout here.
       ansible.builtin.command: >-
-        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f
-        https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f /root/local-path-storage-{{ local_path_provisioner_version }}.yaml
       register: _lpp_apply
       changed_when: "'created' in _lpp_apply.stdout or 'configured' in _lpp_apply.stdout"
-      tags: [local-path]  # an upgrade runs just these three: --tags local-path -e local_path_provisioner_version=...
+      tags: [local-path]  # an upgrade runs the local-path tasks: --tags local-path -e local_path_provisioner_version=...
 
     - name: The node paths after the apply are the expected ones still
       ansible.builtin.shell:

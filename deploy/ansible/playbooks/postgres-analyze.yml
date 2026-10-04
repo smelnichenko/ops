@@ -1,8 +1,9 @@
 ---
 # After a PostgreSQL major upgrade: fresh planner statistics on every database (vacuumdb --all --analyze-in-stages, on
-# the primary). pg_upgrade carries no statistics over, so until ANALYZE has run the planner guesses on every table -
-# CloudNativePG's major-upgrade notes ask for this. Waits first until the cluster is healthy with every instance on
-# the major asked for; read-mostly (ANALYZE writes statistics only).
+# the primary) of every CNPG cluster - production's and the test environment's move together. pg_upgrade carries no
+# statistics over, so until ANALYZE has run the planner guesses on every table - CloudNativePG's major-upgrade notes ask
+# for this. Waits first until each cluster is healthy with every instance on the major asked for; read-mostly (ANALYZE
+# writes statistics only).
 #
 # Usage: task deploy:upgrade:playbooks STEP=<the PostgreSQL 18 step>   (its playbook line)
 #        ansible-playbook -i inventory/<env>.yml playbooks/postgres-analyze.yml -e pg_major=18
@@ -12,27 +13,35 @@
   gather_facts: false
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
-    pg_namespace: schnappy-production
-    pg_cluster: schnappy-production-postgres
-    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
   tasks:
     - name: The major is given (-e pg_major=18)
       ansible.builtin.assert:
         that: pg_major | default('') | string is match('^[0-9]+$')
         fail_msg: "-e pg_major=<major>, e.g. 18"
 
-    - name: The cluster is healthy, every instance ready, on that major
+    - name: The CNPG clusters
+      ansible.builtin.command: >-
+        {{ kubectl }} get clusters.postgresql.cnpg.io -A
+        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}'
+      register: _clusters
+      changed_when: false
+      failed_when: _clusters.rc != 0 or _clusters.stdout_lines | length == 0
+
+    - name: Each cluster healthy, every instance ready, on that major
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          {{ kubectl }} get clusters.postgresql.cnpg.io {{ pg_cluster }} -o json | python3 -c '
+          K="{{ kubectl }} -n {{ item.split()[0] }}"
+          $K get clusters.postgresql.cnpg.io {{ item.split()[1] }} -o json | python3 -c '
           import json, sys
           c = json.load(sys.stdin)
           s, n = c.get("status", {}), c["spec"]["instances"]
           print(s.get("phase") == "Cluster in healthy state" and s.get("readyInstances") == n, s.get("currentPrimary", ""))'
-          p=$({{ kubectl }} get clusters.postgresql.cnpg.io {{ pg_cluster }} -o jsonpath='{.status.currentPrimary}')
-          {{ kubectl }} exec "$p" -c postgres -- psql -qAt -c 'show server_version_num'
+          p=$($K get clusters.postgresql.cnpg.io {{ item.split()[1] }} -o jsonpath='{.status.currentPrimary}')
+          $K exec "$p" -c postgres -- psql -qAt -c 'show server_version_num'
+      loop: "{{ _clusters.stdout_lines }}"
       register: _pg
       changed_when: false
       retries: 60
@@ -41,13 +50,19 @@
         _pg.rc == 0 and _pg.stdout_lines | length == 2 and _pg.stdout_lines[0].startswith('True ')
         and (_pg.stdout_lines[1] | int) // 10000 == pg_major | int
 
-    - name: Every database analysed in stages
+    - name: Every database of each cluster analysed in stages
       ansible.builtin.command: >-
-        {{ kubectl }} exec {{ _pg.stdout_lines[0].split()[1] }} -c postgres --
+        {{ kubectl }} -n {{ r.item.split()[0] }} exec {{ r.stdout_lines[0].split()[1] }} -c postgres --
         vacuumdb --all --analyze-in-stages
+      loop: "{{ _pg.results }}"
+      loop_control:
+        loop_var: r
+        label: "{{ r.item }}"
       register: _analyze
       changed_when: true
 
     - name: Analysed
       ansible.builtin.debug:
-        msg: "POSTGRES ANALYSED: {{ pg_cluster }} on {{ _pg.stdout_lines[1] }}, {{ _analyze.stdout_lines | length }} lines of vacuumdb"
+        msg: >-
+          POSTGRES ANALYSED: {{ _pg.results | map(attribute='item') | map('replace', ' ', '/') | join(', ') }} on
+          {{ _pg.results | map(attribute='stdout_lines') | map('last') | unique | join(', ') }}

@@ -486,6 +486,12 @@ Plan and claims
   (istio_version, cert_manager_version, external_secrets_chart_version, metrics_server_chart_version, vgw_version,
   gateway_api_version - v1.2.1 fails against v1.5's safe-upgrades policy): the default edits as one reviewed change, then
   a fresh build at the targets and a green task dr:drill before the production rollout.
+  The playbook variables the steps set (their last value, from the step files 2026-10-05): argocd_version 10.9.6,
+  cilium_version 1.20.2, containerd_upgrade_to 2.3.6 (setup-kubeadm then installs containerd.io 2.3.6, not Debian's),
+  gateway_api_version v1.5.1, istio_version 1.31.1, local_path_provisioner_version v0.0.37, vgw_version 1.8.0,
+  kubelet_grace_in_kubelet_config_map true; and the ones only Argo moves in production but setup-kubeadm installs
+  on a build without it: cert_manager_version, external_secrets_chart_version, metrics_server_chart_version,
+  k8s_package_version (1.36.5).
 - R28 Scope and pins: the Pis' own services (Keycloak, Forgejo, Consul, Nexus, Caddy, Vault, Patroni, PgBouncer,
   HAProxy, Gluster) are not in this plan - stated; metrics-server and porkbun-webhook float at targetRevision "*" and can
   move mid-rollout - pinned to what ten runs.
@@ -500,6 +506,30 @@ Plan and claims
   environment then; SonarQube, ScyllaDB, Mimir, Tempo, Velero and the operators carry no sidecar.
 - R30 Gateway API v1.5.1 is one-way (its safe-upgrades ValidatingAdmissionPolicy refuses v1.0-v1.4 CRDs): flagged
   in the step and the stateful table.
+
+Second review (2026-10-05, the new work: Wave 0, the checks, the production commands) - every finding fixed:
+- Production: Kafka's pause/stop/copy/unpause is one detached script on the node (async) whose EXIT trap lifts the
+  pause - an interrupted run or a lost connection left both clusters paused with their brokers deleted. Proven live
+  (Vagrant 2026-10-05): the StrimziPodSet controller recreates a deleted broker even while its Kafka is paused, so
+  every earlier Kafka backup copied a running broker; now the node is cordoned for the copy (the recreated pod waits
+  Pending; ten has one node - no new pod is scheduled anywhere for the copy, seconds at 103M per broker, shown to the
+  operator at that step), each broker checked not running before and after its copy, the trap uncordons first. ClickHouse's snapshot is removed in an always (a failed tar left its hard links
+  on the root disk). CNPG base backups only for clusters with an object store (the test cluster's has none - every
+  production run would have failed). The gateway tar accepts exit 1 only for files changing while read (the WAL, the
+  indexes) and is checked against the objects listed before and after it (files/objectstore-manifest.py: ETag and
+  md5 per object, ACL per bucket; the list stored beside it); unit test tests/ansible/unit/objectstore-manifest.
+  SonarQube's dump is required where it runs. The store's credentials in a 0600 curl config, never on a command line
+  or in the environment. postgres-analyze covers every CNPG cluster. local-path: the manifest's own node paths are
+  checked before that same downloaded file is applied (after the apply the provisioner already had the new paths).
+- Checks that did not bite: Mimir - a stored block covering the seed time must be in the store-gateway's list from
+  4 h after the seed (before 12 h the ingester answers the query alone); the Kafka rehearsal proves its extra
+  message arrived (end offset 1001) and the restored log ends at 1000; the gateway restore is compared with the
+  backup's object list before the pods start; Scylla restores the snapshot the Wave 0 run recorded (snapshots.txt),
+  not the newest; data-check's Kafka read is exact by the end offset; scrape targets must have stayed up for 3
+  minutes; an empty step branch fails the refs check; a node-shutdown leftover counts only when its workload runs a
+  ready pod again; restore-check recovers its base backup by barman ID (recoveryTarget.backupID), and -e
+  restore_backup=wave0 recovers the Wave 0 base backup; the Postgres rehearsal replays every dump, allows only the
+  roles and databases the side cluster had, and compares every table's row count with the dump.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
