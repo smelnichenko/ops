@@ -173,6 +173,31 @@
         _cp.rc == 0
         and (_cp.stdout_lines | reject('match', '^\S+ \S+:v' ~ (target | regex_escape) ~ '$') | list | length) == 0
 
+    # The new kubelet can restart the static control-plane pods a few seconds after its own restart (their spec hash
+    # changes with its version): the checks above can pass on the pods' previous status while the API server is
+    # going down, and the next caller then meets an API server whose RBAC caches are still empty - "clusterrole
+    # cluster-admin not found" (Vagrant full run, 1.35.9, 2026-10-04). Done only once the kubelet has been up for a
+    # minute, the API server has been running for 30 s and answers ready on every check, RBAC included.
+    - name: The control plane has settled after the kubelet's restart
+      ansible.builtin.shell: |
+        set -euo pipefail
+        now=$(date +%s)
+        kubelet_up=$(( now - $(date -d "$(systemctl show kubelet -p ActiveEnterTimestamp --value)" +%s) ))
+        started=$({{ kubectl }} -n kube-system get pod -l component=kube-apiserver \
+          -o jsonpath='{.items[0].status.containerStatuses[0].state.running.startedAt}')
+        apiserver_up=$(( now - $(date -d "$started" +%s) ))
+        readyz=$({{ kubectl }} get --raw /readyz)
+        admin=$({{ kubectl }} auth can-i '*' '*')
+        echo "kubelet up ${kubelet_up}s, API server up ${apiserver_up}s, readyz $readyz, cluster admin $admin"
+        [ "$kubelet_up" -ge 60 ] && [ "$apiserver_up" -ge 30 ] && [ "$readyz" = ok ] && [ "$admin" = yes ]
+      args:
+        executable: /bin/bash
+      register: _settled
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _settled.rc == 0
+
     - name: Upgraded
       ansible.builtin.debug:
         msg: "KUBERNETES UPGRADED: {{ _running.stdout }} -> v{{ target }} ({{ _cp.stdout_lines | join(', ') }})"
