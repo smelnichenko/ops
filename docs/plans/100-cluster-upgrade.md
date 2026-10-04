@@ -230,8 +230,8 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 36-41 | Scylla Operator 1.20.3/1.21.1/1.22.0 with ScyllaDB 2025.1.16/2026.1.14/2026.3.2 | infra | S; green (ScyllaDB 2026.3.2 with the operator's node-exporter sidecar, rows intact) |
 | 42 | PostgreSQL 18.6 in place (defect 6) | platform | S; green (both instances 18.6, data major 18, rows intact) |
 | 43 | Valkey 9.1.2 | infra + platform | green |
-| 44 | Grafana 13.2.3 (one-way storage migration) | infra | S; running |
-| 45-47 | Mimir 3.0.8, 3.1.6, 3.2.1 | infra | |
+| 44 | Grafana 13.2.3 (one-way storage migration) | infra | S; green (database ok, 6 dashboards as on ten, 3 datasources) |
+| 45-47 | Mimir 3.0.8, 3.1.6, 3.2.1 | infra | 45 running |
 | 48 | Tempo 3.1.0 (monolithic, one-way) | infra + platform | S |
 | 49 | Fluent Bit 5.1.3 | infra | |
 | 50 | Centrifugo 6.9.7 | infra + platform | |
