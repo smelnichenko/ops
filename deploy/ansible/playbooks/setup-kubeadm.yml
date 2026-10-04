@@ -32,6 +32,10 @@
     # On ten, Argo CD (infra clusters/production/argocd/apps) owns Istio, cert-manager, metrics-server, the Prometheus
     # stack and the data operators; this playbook installs them only where no Argo will (most Vagrant tests).
     platform_by_argo: "{{ platform_by_argo_override | default(false) }}"
+    # External Secrets by Helm: only where no Argo owns it - on ten Argo does, and a re-run would roll Argo's ESO back to
+    # this chart. The Vagrant upgrade copy sets the override: its baseline has the CRDs from this install, as ten has
+    # them from 2026-04-05, until the step that moves them under Argo.
+    external_secrets_by_helm: "{{ external_secrets_by_helm_override | default(not (platform_by_argo | bool)) }}"
     # the versions ten runs (2026-10-02), so a rebuild and every Vagrant test start from production
     cert_manager_version: "v1.20.0"
     external_secrets_chart_version: "2.2.0"
@@ -49,6 +53,14 @@
     data_dir: "/mnt/storage"
 
   tasks:
+    # never backwards: refuses before a run would downgrade what the node or the cluster runs (tasks/no-downgrade.yml)
+    - name: No downgrade
+      ansible.builtin.include_tasks:
+        file: tasks/no-downgrade.yml
+        apply:
+          tags: [always]
+      tags: [always]
+
     # ================================================================
     # Phase 1: Install containerd
     # ================================================================
@@ -466,10 +478,13 @@
     # Phase 6: Install Cilium CNI
     # ================================================================
 
+    # force_update refreshes the repo's index: an existing repo is otherwise never refreshed, and ten's index (April)
+    # lists neither 1.19.8 nor 1.20.2 (2026-10-04)
     - name: Add Cilium Helm repo
       kubernetes.core.helm_repository:
         name: cilium
         repo_url: https://helm.cilium.io/
+        force_update: true
       tags: [cilium]  # an upgrade runs just the Cilium tasks: --tags cilium -e cilium_version=...
 
     - name: Install Cilium via Helm
@@ -760,6 +775,7 @@
       kubernetes.core.helm_repository:
         name: external-secrets
         repo_url: https://charts.external-secrets.io
+      when: external_secrets_by_helm | bool
 
     - name: Install External Secrets Operator
       kubernetes.core.helm:
@@ -771,6 +787,7 @@
         create_namespace: true
         wait: true
         wait_timeout: 300s
+      when: external_secrets_by_helm | bool
 
     - name: Add Prometheus Operator CRDs Helm repo
       kubernetes.core.helm_repository:

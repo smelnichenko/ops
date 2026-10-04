@@ -47,6 +47,43 @@
     argocd_forgejo_cidrs: "{{ forgejo_cidrs | default(['192.168.11.5/32', '192.168.11.4/32', '192.168.11.6/32']) }}"
 
   tasks:
+    # Never backwards: the chart default stays what ten ran until each Argo CD step moves it (plan 100), so a re-run
+    # after an upgrade must refuse, not Helm-downgrade Argo CD and its CRDs (2026-10-04 review). First, before the
+    # Forgejo token is replaced.
+    - name: No downgrade - the Argo CD chart and image now running
+      ansible.builtin.shell: |
+        set -euo pipefail
+        k="kubectl --kubeconfig /etc/kubernetes/admin.conf"
+        if [ -f /etc/kubernetes/admin.conf ]; then
+          helm --kubeconfig /etc/kubernetes/admin.conf list -n {{ argocd_namespace }} -o json \
+            | python3 -c 'import json, sys; print(next((r["chart"].rsplit("-", 1)[1] for r in json.load(sys.stdin) if r["name"] == "argocd"), ""))'
+          image=$($k -n {{ argocd_namespace }} get deployment argocd-server --ignore-not-found \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "${image##*:}"
+        else
+          printf '\n\n'
+        fi
+      args:
+        executable: /bin/bash
+      register: _argocd_running
+      changed_when: false
+
+    - name: No downgrade - this run deploys neither an older chart nor an older image than runs
+      vars:
+        _chart: "{{ _argocd_running.stdout_lines[0] | default('') }}"
+        _image: "{{ _argocd_running.stdout_lines[1] | default('') }}"
+      ansible.builtin.assert:
+        that:
+          - _chart == '' or _chart is version(argocd_chart_version, '<=')
+          - >-
+            argocd_image_tag | length == 0 or _image == ''
+            or (_image | regex_replace('^v', '')) is version(argocd_image_tag | regex_replace('^v', ''), '<=')
+        fail_msg: >-
+          REFUSED: Argo CD runs chart {{ _chart }} with image {{ _image }}; this run would deploy chart
+          {{ argocd_chart_version }}{{ ' with image ' ~ argocd_image_tag if argocd_image_tag | length > 0 else '' }}
+          - set argocd_version (and argocd_image_tag_override) to what runs first
+        quiet: true
+
     # ================================================================
     # Phase 1: Namespace
     # ================================================================

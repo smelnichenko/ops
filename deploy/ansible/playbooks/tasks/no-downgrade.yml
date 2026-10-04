@@ -1,0 +1,110 @@
+---
+# Fail closed before a run would take the node or the cluster backwards. Until a playbook's pins follow an upgrade
+# (plan 100: each production step moves its default in the same change), a re-run must refuse rather than downgrade:
+# after the containerd.io step a full setup-kubeadm run would put Debian's containerd 1.7 back under every pod
+# (2026-10-04 review). Each check applies only when the tasks it guards are about to run - an upgrade passes --tags
+# and -e for its own component. Included first by setup-kubeadm.yml, with tags: always.
+#
+# Uses: k8s_package_version, cilium_version, local_path_provisioner_version, gateway_api_version,
+#       external_secrets_chart_version, external_secrets_by_helm.
+- name: No downgrade - the installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: No downgrade - containerd.io is not replaced by Debian's containerd (a full run installs the latter)
+  ansible.builtin.assert:
+    that: "'containerd.io' not in ansible_facts.packages"
+    fail_msg: >-
+      REFUSED: this node runs containerd.io {{ ansible_facts.packages['containerd.io'][0].version
+      | default('') }}; a full run of this playbook installs Debian's containerd over it - make it install
+      containerd.io first (plan 100, step 15)
+    quiet: true
+  when: "'all' in ansible_run_tags"
+
+- name: No downgrade - kubelet, kubeadm and kubectl are not newer than k8s_package_version
+  ansible.builtin.assert:
+    that: >-
+      ansible_facts.packages[item] is not defined
+      or (ansible_facts.packages[item][0].version | regex_replace('-.*$', ''))
+         is version(k8s_package_version | regex_replace('-.*$', ''), '<=')
+    fail_msg: >-
+      REFUSED: {{ item }} {{ ansible_facts.packages[item][0].version | default('') }} is installed; this run pins
+      {{ k8s_package_version }} - set k8s_version / k8s_package_version to what runs first
+    quiet: true
+  loop: [kubelet, kubeadm, kubectl]
+  when: "'all' in ansible_run_tags"
+
+- name: No downgrade - is there a cluster yet
+  ansible.builtin.stat:
+    path: /etc/kubernetes/admin.conf
+  register: _no_downgrade_cluster
+
+- name: No downgrade - the Helm releases
+  ansible.builtin.command: helm --kubeconfig /etc/kubernetes/admin.conf list -A -o json
+  register: _no_downgrade_helm
+  changed_when: false
+  when: _no_downgrade_cluster.stat.exists
+
+- name: No downgrade - Cilium, and External Secrets where this playbook installs it
+  vars:
+    _chart: >-
+      {{ (_no_downgrade_helm.stdout | default('[]') | from_json)
+         | selectattr('name', 'equalto', item.release) | map(attribute='chart') | first | default('') }}
+    _running: "{{ _chart | regex_replace('^.*-', '') if _chart | length > 0 else '' }}"
+  ansible.builtin.assert:
+    that: _running == '' or _running is version(item.want, '<=')
+    fail_msg: >-
+      REFUSED: Helm release {{ item.release }} runs chart {{ _running }}; this run would install {{ item.want }} -
+      set {{ item.var }} to what runs first
+    quiet: true
+  loop:
+    - release: cilium
+      want: "{{ cilium_version }}"
+      var: cilium_version
+      runs: "{{ 'all' in ansible_run_tags or 'cilium' in ansible_run_tags }}"
+    - release: external-secrets
+      want: "{{ external_secrets_chart_version }}"
+      var: external_secrets_chart_version
+      runs: "{{ 'all' in ansible_run_tags and external_secrets_by_helm | bool }}"
+  loop_control:
+    label: "{{ item.release }}"
+  when: _no_downgrade_cluster.stat.exists and item.runs | bool
+
+- name: No downgrade - the running local-path provisioner and Gateway API bundle
+  ansible.builtin.shell: |
+    set -euo pipefail
+    k="kubectl --kubeconfig /etc/kubernetes/admin.conf"
+    image=$($k -n local-path-storage get deployment local-path-provisioner --ignore-not-found \
+      -o jsonpath='{.spec.template.spec.containers[0].image}')
+    echo "local-path ${image##*:}"
+    echo "gateway-api $($k get crd gateways.gateway.networking.k8s.io --ignore-not-found \
+      -o jsonpath='{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}')"
+  args:
+    executable: /bin/bash
+  register: _no_downgrade_manifests
+  changed_when: false
+  when: _no_downgrade_cluster.stat.exists
+
+- name: No downgrade - local-path and Gateway API are not newer than this run installs
+  vars:
+    _running: "{{ dict(_no_downgrade_manifests.stdout_lines | map('split', ' ') | map('list') | list) }}"
+  ansible.builtin.assert:
+    that: >-
+      (_running[item.name] | default('')) == ''
+      or (_running[item.name] | regex_replace('^v', '')) is version(item.want | regex_replace('^v', ''), '<=')
+    fail_msg: >-
+      REFUSED: {{ item.name }} runs {{ _running[item.name] }}; this run would apply {{ item.want }} - set
+      {{ item.var }} to what runs first
+    quiet: true
+  loop:
+    - name: local-path
+      want: "{{ local_path_provisioner_version }}"
+      var: local_path_provisioner_version
+      runs: "{{ 'all' in ansible_run_tags or 'local-path' in ansible_run_tags }}"
+    - name: gateway-api
+      want: "{{ gateway_api_version }}"
+      var: gateway_api_version
+      runs: "{{ 'all' in ansible_run_tags or 'gateway-api' in ansible_run_tags }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: _no_downgrade_cluster.stat.exists and item.runs | bool
