@@ -258,7 +258,7 @@ seeded data (Postgres 10,000 rows on both instances, 1,000 Kafka messages, 1,000
 |---|---|---|---|---|
 | 33 | Argo stops auto-syncing Strimzi; Strimzi's own tool rewrites every Strimzi resource (ten's 13 unmanaged KafkaTopics too) and the CRDs' stored version to v1 | none | 0.51 serves v1 too: staying on 0.51 works; v1beta2 storage does not come back | 10 CRDs store only v1, Kafka Ready, messages intact |
 | 34 | Strimzi 0.51.0 -> 1.2.0, auto-sync back; the broker rolls onto the 1.2.0 image (Kafka 4.2.0) | Kafka, one roll | chart back to 0.51 (reads v1) | operator 1.2.0 reconciles, messages intact |
-| 35 | Kafka 4.2.0 -> 4.3.1; Strimzi then moves the metadata version to 4.3-IV0 | Kafka, two rolls | none once the metadata version moved | 4.3.1, 4.3-IV0, Ready, messages intact |
+| 35 | Kafka 4.2.0 -> 4.3.1; Strimzi then moves the metadata version to 4.3-IV0 | Kafka, a rolling update | none once the metadata version moved | 4.3.1, 4.3-IV0, Ready, messages intact |
 | 37 | ScyllaDB 6.2.3 -> 2025.1.16 (source-available line) | ScyllaDB, one roll | none (new SSTables) | rows intact |
 | 39 | ScyllaDB 2025.1.16 -> 2026.1.14 (LTS to LTS) | ScyllaDB, one roll | none | rows intact |
 | 41 | ScyllaDB 2026.1.14 -> 2026.3.2; node-exporter becomes the operator's sidecar | ScyllaDB, one roll | none | rows intact, every scrape target up |
