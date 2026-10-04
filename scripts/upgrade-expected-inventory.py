@@ -10,6 +10,9 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
     playbook <ops playbook> <arguments>       (a host-side change: run against the Vagrant inventory)
     argo-out-of-sync <app>                    (the step leaves this Argo app OutOfSync on purpose - its automated
                                                sync off while the step changes what its chart would put back)
+    backup-check                              (the step can change what a Velero backup runs on - Velero, the store,
+                                               the node, the network, storage, the credentials, or the pods it backs
+                                               up: the runner takes a backup after it; ~8 min, so only there)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -36,6 +39,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 01-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --refs <step>                          (prints "<infra-ref> <platform-ref>")
        scripts/upgrade-expected-inventory.py --playbooks <step>                     (prints "<playbook> <arguments>" lines)
        scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)
+       scripts/upgrade-expected-inventory.py --backup-check <step>                  (prints "yes" or "no")
 """
 import os
 import re
@@ -47,7 +51,7 @@ UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
 
 
-def parse(path, playbooks=None, out_of_sync=None):
+def parse(path, playbooks=None, out_of_sync=None, flags=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -57,6 +61,9 @@ def parse(path, playbooks=None, out_of_sync=None):
         if line.startswith("playbook "):
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
+        elif line == "backup-check":
+            if flags is not None:
+                flags.add(line)
         elif line.startswith("argo-out-of-sync "):
             if out_of_sync is not None:
                 out_of_sync.append(line[len("argo-out-of-sync "):].strip())
@@ -92,7 +99,7 @@ def ref(repo, step_no):
 
 def main():
     args = sys.argv[1:]
-    mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"]) else None
+    mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -105,6 +112,11 @@ def main():
         parse(os.path.join(STEPS, args[0] + ".txt"), playbooks)
         if playbooks:
             print("\n".join(playbooks))
+        return
+    if mode == "--backup-check":
+        flags = set()
+        parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
+        print("yes" if "backup-check" in flags else "no")
         return
     if mode == "--out-of-sync":
         apps = []

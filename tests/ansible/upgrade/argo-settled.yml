@@ -32,6 +32,9 @@
          if expect_mirror | bool else {} }}
 
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Wait until every app is green and every pod is ready
       ansible.builtin.shell: |
         set -o pipefail

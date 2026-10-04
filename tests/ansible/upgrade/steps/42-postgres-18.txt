@@ -4,3 +4,5 @@
 # and test clusters (and PR environments' image). platform upgrade/42-postgres-18. Stateful, with downtime: shown to
 # the operator before production; a fresh base backup follows it there (the old major's WAL archive cannot restore 18).
 image ghcr.io/cloudnative-pg/postgresql 17 => image ghcr.io/cloudnative-pg/postgresql 18.6-system-bullseye
+# A Velero backup after it: CNPG re-creates the Postgres pods it backs up.
+backup-check

@@ -28,6 +28,9 @@
     kubeconfig: /etc/kubernetes/admin.conf
     production_ssh: sm@192.168.11.2   # ten
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies their labels)
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"

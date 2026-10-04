@@ -176,6 +176,20 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   preflight CoreDNSUnsupportedPlugins refuses a Corefile plugin its migration does not know. Ten's Corefile has none,
   so only the Vagrant inventory passes over that one check (`k8s_upgrade_ignore_preflight_errors_override`); kubeadm
   migrates the rest and leaves the blocks as they are.
+- **Every upgrade test playbook refuses to run anywhere but the Vagrant VMs** (`tests/ansible/vagrant-only.yml`, the
+  first task of each play): the host's own addresses must be in 192.168.56.0/24 and none in production's
+  192.168.11.0/24 - no inventory or `-e` decides. Proven both ways 2026-10-04: data-check and restore-check pointed at
+  production stopped at that task (only `hostname -I` ran on ten); the Vagrant VMs pass. Before, nothing stopped
+  data-check seeding a table into production's database, or isolate-cluster rewriting ten's CoreDNS.
+- **The end of the full run proves the backups restore** (`restore-check.yml`, also `task test:upgrade:restore-check`):
+  Postgres recovered from its barman object store into a side cluster with every seeded row (after the PostgreSQL 18
+  step that is also the fresh base backup it needs), and a Velero file-system backup of a test namespace restored
+  with its emptyDir's random token intact. Production's namespace is never replaced; its names are fixed and refuse
+  an `-e` override. The plan's end-of-test restore, which the runner lacked until 2026-10-04.
+- **The Velero backup check runs only after the 17 steps that can change what it runs on** (a step file's
+  `backup-check` line: Velero, the store, the node, the network, storage, the credentials, the pods it backs up, the
+  first and the last step). It ran after every step until full run 2, at ~8 of each step's ~15 minutes; the runner
+  reads the marks from the run after full run 2 (operator, 2026-10-04: full run 2 stays as it started).
 - **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
   ConfigMap change, so steps 52 and 54 change nothing in the running server; the image bumps right after them (53,
   55) restart it with the pin in place before the new version writes a part - the order that matters. Checked with

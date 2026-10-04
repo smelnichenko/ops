@@ -12,3 +12,5 @@ pkg kubectl 1.35.9-1.1 (held) => pkg kubectl 1.36.5-1.1 (held)
 pkg kubelet 1.35.9-1.1 (held) => pkg kubelet 1.36.5-1.1 (held)
 k8s server v1.35.9 => k8s server v1.36.5
 playbook upgrade-kubeadm.yml -e k8s_upgrade_to=1.36.5
+# A Velero backup after it: the kubelet.
+backup-check

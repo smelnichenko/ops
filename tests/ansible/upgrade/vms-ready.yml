@@ -14,6 +14,9 @@
       ansible.builtin.wait_for_connection:
         timeout: 300
 
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
 # isolated from production before anything else runs (a snapshot taken before the Pi fence existed lacks it)
 - name: The Pi VMs are isolated from production
   ansible.builtin.import_playbook: ../isolate-pis.yml
@@ -23,6 +26,9 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Vault answers on the Pi VIP with an active node (standbyok - the VIP may sit on the standby, which forwards)
       ansible.builtin.uri:
         url: "https://{{ keepalived_vip }}:8200/v1/sys/health?standbyok=true"

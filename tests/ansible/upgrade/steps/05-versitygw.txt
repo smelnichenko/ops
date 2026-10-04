@@ -3,3 +3,5 @@
 # default becomes 1.8.0.
 image ghcr.io/versity/versitygw v1.6.0 => image ghcr.io/versity/versitygw v1.8.0
 playbook setup-pi-services.yml --tags versitygw -e vgw_version=1.8.0
+# A Velero backup after it: the backup store.
+backup-check

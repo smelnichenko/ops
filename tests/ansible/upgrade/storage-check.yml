@@ -17,6 +17,9 @@
     check_name: upgrade-storage-check
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ ns }}"
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: The marker, fixed once (a lookup in vars is re-evaluated at every use)
       ansible.builtin.set_fact:
         marker: "written {{ lookup('pipe', 'date +%s') }}"

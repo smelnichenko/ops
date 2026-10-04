@@ -1,0 +1,277 @@
+---
+# Backups restore on the upgraded copy - the end of the upgrade test (`task test:upgrade:full` runs it after the last
+# step; `task test:upgrade:restore-check` on its own). Nothing of production's namespace is replaced:
+#
+#   1. Postgres, the production way: an on-demand CNPG barman backup of schnappy-production-postgres to the Vagrant
+#      store, then a side cluster (upgrade-restore-check) recovered from that object store - base backup and WAL,
+#      as a real recovery would - must hold exactly the seeded rows (count and md5, computed here). After the
+#      PostgreSQL 18 step this is also the fresh base backup that step needs.
+#   2. Velero with data: a namespace whose pod writes a random token to an emptyDir once, a file-system backup of it,
+#      the namespace deleted, the backup restored - the pod must come back with the same token. Without the
+#      restored volume it would write a new one. (Velero holds no data volume of production's - defect 20 - so
+#      this is what its restore can be held to.)
+#
+# Each part removes what it created, the backups' data in the store excepted.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml
+- name: Postgres recovers from its barman backup
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    pg_namespace: schnappy-production
+    cluster: schnappy-production-postgres
+    recovered: upgrade-restore-check
+    rows: 10000
+    # as data-check.yml: md5 of the rows' payloads (md5 of each id), comma-joined in id order
+    expected_md5: "{{ range(1, rows + 1) | map('string') | map('hash', 'md5') | join(',') | hash('md5') }}"
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: The cluster's spec
+      ansible.builtin.command: "{{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }} -o json"
+      register: _cluster
+      changed_when: false
+
+    - name: Facts (the backup's name fixed once - a lookup in vars is re-run on every use)
+      ansible.builtin.set_fact:
+        _spec: "{{ (_cluster.stdout | from_json).spec }}"
+        _backup: "{{ recovered }}-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+    - name: Its names are the fixed ones - what it deletes cannot be redirected with -e
+      ansible.builtin.assert:
+        that:
+          - recovered == 'upgrade-restore-check'
+          - _backup is match('^upgrade-restore-check-[0-9]+$')
+          - recovered != cluster
+        fail_msg: "REFUSED: recovered={{ recovered }} backup={{ _backup }} cluster={{ cluster }}"
+        quiet: true
+
+    - name: The cluster backs up to an object store
+      ansible.builtin.assert:
+        that: _spec.backup.barmanObjectStore is defined
+        fail_msg: "{{ cluster }} has no spec.backup.barmanObjectStore"
+
+    - name: No side cluster left from an earlier run
+      ansible.builtin.command: "{{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true"
+      changed_when: false
+
+    - name: Back the cluster up now
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Backup
+          metadata: { name: "{{ _backup }}", namespace: "{{ pg_namespace }}" }
+          spec:
+            method: barmanObjectStore
+            cluster: { name: "{{ cluster }}" }
+
+    - name: The backup completes
+      ansible.builtin.command: "{{ kubectl }} get backups.postgresql.cnpg.io {{ _backup }} -o jsonpath={.status.phase}"
+      register: _phase
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _phase.stdout in ['completed', 'failed']
+      failed_when: _phase.stdout != 'completed'
+
+    - name: A side cluster recovered from the object store (base backup and WAL)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Cluster
+          metadata: { name: "{{ recovered }}", namespace: "{{ pg_namespace }}" }
+          spec:
+            instances: 1
+            imageName: "{{ _spec.imageName }}"
+            # the mesh exclusion of the object store's port, as the cluster has it
+            inheritedMetadata: "{{ _spec.inheritedMetadata | default({}) }}"
+            storage: { size: 2Gi, storageClass: "{{ _spec.storage.storageClass }}" }
+            resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+            bootstrap:
+              recovery: { source: origin }
+            externalClusters:
+              - name: origin
+                barmanObjectStore: "{{ _spec.backup.barmanObjectStore | combine({'serverName': cluster}) }}"
+
+    - name: The side cluster is healthy
+      ansible.builtin.command: >-
+        {{ kubectl }} get clusters.postgresql.cnpg.io {{ recovered }}
+        -o jsonpath={.status.phase}/{.status.readyInstances}
+      register: _recovered
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _recovered.stdout == 'Cluster in healthy state/1'
+
+    - name: It holds exactly the seeded rows
+      ansible.builtin.shell: |
+        {{ kubectl }} exec {{ recovered }}-1 -c postgres -- psql -v ON_ERROR_STOP=1 -qAt \
+          -d {{ _spec.bootstrap.initdb.database }} -c "
+          select count(*) || ' ' || md5(string_agg(payload, ',' order by id)) from upgrade_check.canary"
+      register: _rows
+      changed_when: false
+      failed_when: _rows.stdout | trim != rows ~ ' ' ~ expected_md5
+
+    - name: Remove the side cluster (its volume goes with it) and the backup object (its data stays in the store)
+      ansible.builtin.shell: |
+        {{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --wait=true
+        {{ kubectl }} delete backups.postgresql.cnpg.io {{ _backup }}
+      changed_when: true
+
+    - name: Postgres restores
+      ansible.builtin.debug:
+        msg: >-
+          POSTGRES RESTORE OK: {{ _backup }} recovered into {{ recovered }} ({{ _spec.imageName }}),
+          {{ rows }} rows, md5 {{ expected_md5 }}
+
+- name: Velero restores a volume's data
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    ns: upgrade-restore-check
+    # every Velero resource fully qualified: `backup` alone is CNPG's Backup
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    velero: "kubectl --kubeconfig {{ kubeconfig }} -n velero"
+    # an image the cluster runs already (the etcd backup's upload), with a shell
+    image: rclone/rclone:1.75.1
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Facts (the backup's name fixed once)
+      ansible.builtin.set_fact:
+        _name: "{{ ns }}-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+    - name: Its names are the fixed ones - what it deletes cannot be redirected with -e
+      ansible.builtin.assert:
+        that:
+          - ns == 'upgrade-restore-check'
+          - _name is match('^upgrade-restore-check-[0-9]+$')
+        fail_msg: "REFUSED: ns={{ ns }} name={{ _name }}"
+        quiet: true
+
+    - name: No namespace left from an earlier run
+      ansible.builtin.command: "{{ kubectl }} delete namespace {{ ns }} --ignore-not-found --wait=true --timeout=300s"
+      changed_when: false
+
+    - name: A pod that writes a random token to its emptyDir once
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          - apiVersion: v1
+            kind: Namespace
+            metadata: { name: "{{ ns }}" }
+          - apiVersion: apps/v1
+            kind: Deployment
+            metadata: { name: token, namespace: "{{ ns }}" }
+            spec:
+              replicas: 1
+              selector: { matchLabels: { app: token } }
+              template:
+                metadata: { labels: { app: token } }
+                spec:
+                  terminationGracePeriodSeconds: 1
+                  containers:
+                    - name: token
+                      image: "{{ image }}"
+                      command: [/bin/sh, -c]
+                      args:
+                        - >-
+                          [ -s /data/token ] || head -c 32 /dev/urandom | md5sum | cut -d' ' -f1 > /data/token;
+                          exec sleep 2147483647
+                      resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 32Mi } }
+                      volumeMounts: [{ name: data, mountPath: /data }]
+                  volumes: [{ name: data, emptyDir: {} }]
+
+    - name: Its token
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n {{ ns }} rollout status deployment token --timeout=300s > /dev/null
+        {{ kubectl }} -n {{ ns }} exec deploy/token -- cat /data/token
+      args:
+        executable: /bin/bash
+      register: _before
+      changed_when: false
+      failed_when: _before.stdout | length != 32
+
+    - name: Back the namespace up, its volume included
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: velero.io/v1
+          kind: Backup
+          metadata: { name: "{{ _name }}", namespace: velero }
+          spec: { includedNamespaces: ["{{ ns }}"], defaultVolumesToFsBackup: true, ttl: 1h }
+
+    - name: The backup completes
+      ansible.builtin.command: "{{ velero }} get backups.velero.io {{ _name }} -o jsonpath={.status.phase}"
+      register: _backup
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _backup.stdout in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
+      failed_when: _backup.stdout != 'Completed'
+
+    - name: Delete the namespace
+      ansible.builtin.command: "{{ kubectl }} delete namespace {{ ns }} --wait=true --timeout=300s"
+      changed_when: true
+
+    - name: Restore it
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: velero.io/v1
+          kind: Restore
+          metadata: { name: "{{ _name }}", namespace: velero }
+          spec: { backupName: "{{ _name }}" }
+
+    - name: The restore completes
+      ansible.builtin.command: "{{ velero }} get restores.velero.io {{ _name }} -o jsonpath={.status.phase}"
+      register: _restore
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: _restore.stdout in ['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation']
+      failed_when: _restore.stdout != 'Completed'
+
+    - name: The restored pod has the same token - its volume came back
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n {{ ns }} rollout status deployment token --timeout=300s > /dev/null
+        {{ kubectl }} -n {{ ns }} exec deploy/token -- cat /data/token
+      args:
+        executable: /bin/bash
+      register: _after
+      changed_when: false
+      retries: 12
+      delay: 10
+      until: _after.rc == 0
+      failed_when: _after.rc != 0 or _after.stdout != _before.stdout
+
+    - name: Remove the namespace, the restore, the backup (its data too) and the namespace's repository
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} delete namespace {{ ns }} --wait=true --timeout=300s
+        {{ velero }} delete restores.velero.io {{ _name }} --ignore-not-found
+        cat <<EOF | {{ velero }} create -f - > /dev/null
+        apiVersion: velero.io/v1
+        kind: DeleteBackupRequest
+        metadata: { generateName: {{ _name }}-, namespace: velero }
+        spec: { backupName: {{ _name }} }
+        EOF
+        {{ velero }} delete backuprepositories.velero.io -l velero.io/volume-namespace={{ ns }} --ignore-not-found
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Velero restores
+      ansible.builtin.debug:
+        msg: "VELERO RESTORE OK: {{ _name }} - the emptyDir's token {{ _before.stdout }} came back"

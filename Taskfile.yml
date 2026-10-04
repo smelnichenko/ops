@@ -457,6 +457,14 @@ tasks:
             task test:upgrade:step STEP="$step"
             echo "=== STEP $step GREEN $(date +%T)"
           done
+      # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
+      - task: test:upgrade:restore-check
+
+  test:upgrade:restore-check:
+    desc: On the Vagrant copy (upgraded or not), prove the backups restore - Postgres recovered from its barman backup into a side cluster with every seeded row, and a Velero file-system backup of a test namespace restored with its volume's data; production's namespace is not touched
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml
 
   # the baseline before Argo, so the Argo stage can be re-run on a cluster that has never seen Argo, in minutes
   _upgrade:snapshot-base:

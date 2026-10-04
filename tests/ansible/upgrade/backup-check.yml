@@ -20,6 +20,9 @@
     # check polled CNPG for Velero's backup for 10 minutes (2026-10-03)
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n velero"
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: The backup storage location is Available
       ansible.builtin.command: "{{ kubectl }} get backupstoragelocations.velero.io default -o jsonpath={.status.phase}"
       register: _bsl

@@ -20,6 +20,9 @@
       # disk does not, so 192.168.56.10:9633 has nothing listening
       - scrapeConfig/schnappy-infra/schnappy-smartctl-exporter
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Prometheus is reconciled by the operator and available
       # shell, quoted: the command module's word splitting strips the quotes inside the jsonpath filter
       ansible.builtin.shell: >-

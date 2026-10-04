@@ -38,6 +38,9 @@
     expected_md5: "{{ range(1, rows + 1) | map('string') | map('hash', 'md5') | join(',') | hash('md5') }}"
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: The mode is seed or verify
       ansible.builtin.assert:
         that: mode | default('') in ['seed', 'verify']
@@ -140,6 +143,9 @@
     expected_md5: "{{ (range(1, messages + 1) | map('regex_replace', '^', 'm-') | join('\n') ~ '\n') | hash('md5') }}"
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ kafka_namespace }}"
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: The operator version now running
       ansible.builtin.shell: >-
         kubectl --kubeconfig {{ kubeconfig }} -n strimzi get deployment strimzi-cluster-operator
@@ -224,6 +230,9 @@
     expected_md5: "{{ (range(1, rows + 1) | map('regex_replace', '^(.*)$', '\\1|v-\\1') | join('\n') ~ '\n') | hash('md5') }}"
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ scylla_namespace }}"
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: The operator has finished - every rack updated, ready, at the version asked for; Available, not Progressing
       ansible.builtin.shell: |
         set -euo pipefail

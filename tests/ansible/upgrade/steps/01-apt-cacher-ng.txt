@@ -1,3 +1,5 @@
 # apt-cacher-ng from its CI build (plan 100 defect 9): the hand-built 1.0 is gone from the registry, ten runs it only
 # from its node cache. platform upgrade/01-apt-cacher-ng.
 image git.pmon.dev/schnappy/apt-cacher-ng 1.0 => image git.pmon.dev/schnappy/apt-cacher-ng 7b46aea
+# A Velero backup after it: the baseline: production's backup, before any upgrade.
+backup-check

@@ -19,6 +19,9 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Read the Vault CA cert
       ansible.builtin.slurp:
         src: /etc/vault.d/tls/ca-cert.pem
@@ -36,6 +39,9 @@
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
 
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     # ── 1. DNS ─────────────────────────────────────────────────────────
     - name: CoreDNS answers *.pmon.dev as production resolves it, with Vagrant addresses
       # Production: pi_served_names (inventory) are the Pi VIP; every other pmon.dev name, the apex included, is ten's
@@ -225,6 +231,9 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Write auth/kubernetes/config and role eso-role
       ansible.builtin.shell: |
         set -euo pipefail

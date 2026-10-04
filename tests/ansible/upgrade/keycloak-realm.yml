@@ -44,6 +44,9 @@
     keycloak_url: https://auth.pmon.dev
     realm: schnappy
   tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
     - name: Read the Keycloak and Grafana secrets from the Vagrant Vault
       ansible.builtin.shell: |
         set -euo pipefail
