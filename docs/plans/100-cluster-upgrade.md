@@ -278,6 +278,75 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 54 | ClickHouse compatibility 25.8 | platform | green (in effect from 55's restart) |
 | 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S; green (26.8.15.10 with compatibility 25.8, logs flowing) |
 
+## Review 2026-10-04 - findings, decisions, fix list
+
+Four independent read-only reviews (production playbooks; infra/platform step branches; the test harness; the plan and
+its claims) of everything since a90384a. Verdict: not ready for production. Operator decisions the same day: kagent's
+pods restart with the mesh at each Istio step (the skew rule); a scripted, Vagrant-rehearsed backup + restore of every
+store is a hard gate before its one-way step; the steps are reordered to stay inside every support matrix, test env
+before production; defect 22 (Gluster cold boot) is fixed in production. Checked since: production's Scylla backup
+works (Scylla Manager task schnappy-production-daily-backup, 158 runs, last 2026-10-04 03:00 DONE) - defect 20 was
+wrong about Scylla; Kafka has none.
+
+Fix list (status: open unless marked):
+
+Production / data
+- R1 Step 42: PostgreSQL 18 archives to the 17 path (pg_upgrade resets the timeline to 1; ten is past 1): a new
+  serverName in the same change; read ten's timelineID and archive history first; pin the image by digest.
+- R2 Re-runs downgrade: setup-kubeadm (Debian containerd over containerd.io, ESO 2.2.0, k8s pins) and setup-argocd
+  (chart default) - fail-closed guards against a downgrade, then the new defaults, before any production step.
+- R3 Backups gate (Wave 0 as code): every store a one-way step changes - Postgres (pg_dumpall + CNPG base backup),
+  Kafka, ScyllaDB (prove a restore of the existing backup), Grafana, ClickHouse, Mimir/Tempo (in-cluster versitygw
+  PV), SonarQube's Postgres; each restore rehearsed in Vagrant.
+- R4 upgrade-containerd rebuilds config from defaults: read ten's live config.toml; migrate it (containerd config
+  migrate) and fail on unknown settings; a guard that requires the new config + CRI + version; a rescue to the kept
+  config.
+- R5 kubeadm upgrade resets the kubelet's graceful shutdown (config.yaml rewritten from the kubelet-config ConfigMap):
+  the settings into the ConfigMap, re-asserted after each upgrade.
+- R6 Tempo 3: backend_scheduler.local_work_path defaults to /var/tempo on a read-only root - no compaction or
+  retention; set it under /data; prove retention deletes in Vagrant.
+- R7 Step 27: ESO CRDs under Argo prune - a revert deletes every ExternalSecret and its Secrets: CRD annotations
+  Prune=false,Delete=false in the same change.
+- R8 setup-gluster: a gluster CLI error reads as "no volume" and copies over the live forgejo-repos brick; recursive
+  chown of all Forgejo data every run; error swallowing (cp || true, failed_when false); "Number of entries: -" counted
+  as 0; the fresh-install path not resumable.
+- R9 Defect 22 (Gluster cold boot): mounts that retry until bricks are up, services after them; Vagrant cold boot
+  proof, then the Pis.
+- R10 Defect 18: ClickHouse default user from ::/0 - fix; the metrics check reads as schnappy.
+
+Rollout behaviour
+- R11 Root sync waits on child health wave by wave from step 12: every production app Healthy before 12 and before
+  20-25; the infra sync waves committed (scylla manager after operator, ...) instead of the Vagrant-only overrides.
+- R12 restart-mesh-workloads: `|| true` passes a failed read; restart the data tier first, then apps; kagent included
+  (operator); steps 20-25 marked stateful with their outages.
+- R13 Step 24: Istio 1.30 images from registry.istio.io (scream tests 10-13, 11-17, 12-08/09): global.hub docker.io.
+- R14 Step order inside every support matrix (operator); test env before production for Postgres, Kafka, ScyllaDB
+  (versions as values per environment).
+- R15 Step 05: the Pis' versitygw upgrade never restarts the service; restart on version change, one Pi at a time;
+  assert the running version.
+- R16 Cilium on ten: helm repo index never refreshed (steps 13/17 would fail); compare rendered cilium-config with the
+  live, hand-patched one; upgradeCompatibility for 1.19->1.20.
+- R17 Grafana: RollingUpdate on one SQLite volume - Grafana 12 and 13 at once during the one-way migration: Recreate.
+- R18 Step files' playbook lines are Vagrant command lines: a production command per step; task deploy:upgrade:*
+  wrappers; read-only production checks after each step; per-step abort/revert and outage notes.
+- R19 apt-cacher-ng image pull on ten (no imagePullSecrets); local-path-config on ten (path); ScyllaCluster/Kafka
+  managedFieldsManagers ignore rules; Docker apt source on ten; argocd image-tag override across 12/29/30; strimzi
+  guard fail-open; restart-mesh and settle checks on empty data; apt keyring emptied by a failed curl.
+
+Test harness
+- R20 argo-settled: a failed sync passes; restarts ignored; a failed pod query counts as all ready; one green poll
+  ends the wait; comparedTo not checked.
+- R21 Data survival not checked for one-way steps: seed and verify ClickHouse, Grafana, Tempo, Mimir; the
+  compatibility pin via system.merge_tree_settings; versions per step.
+- R22 data-check never writes after a step (replication, Kafka produce, Scylla write); metrics-check misses vanished
+  targets; barman check missing at 05; restore-check never replays WAL nor restores the Postgres 17 backup.
+- R23 Smaller: step 01 invisible to the inventory diff; a missing step branch unnoticed; step-file arguments
+  unvalidated; empty step list green; no pipefail in task; CoreDNS rewrite unchecked; vms-ready must bring Gluster
+  mounts up after the harness's own reboots (until R9).
+
+Plan and claims
+- R24 Every false or stale claim the reviews listed, corrected in this file, the step files and playbook comments.
+
 ## Stateful steps - for the operator's approval
 
 Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first
