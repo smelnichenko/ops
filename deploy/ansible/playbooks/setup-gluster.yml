@@ -213,13 +213,25 @@
       when: brick_count.stdout | trim | int == 2
       changed_when: true
 
+    # each set only when it differs: a set sends every client a new volfile - Forgejo's mounts on a live cluster
     - name: Set volume options
       ansible.builtin.shell: |
-        set -eu
-        gluster volume set forgejo-repos auth.allow {{ pi1_ip }},{{ pi2_ip }},{{ ten_ip }},127.0.0.1
-        gluster volume set forgejo-repos performance.cache-size 256MB
-        gluster volume set forgejo-repos server.allow-insecure on
-      changed_when: brick_count.stdout | trim | int != 3
+        set -euo pipefail
+        while read -r option value; do
+          now=$(gluster volume get forgejo-repos "$option" | awk -v o="$option" '$1 == o {print $2}')
+          if [ "$now" != "$value" ]; then
+            gluster volume set forgejo-repos "$option" "$value" > /dev/null
+            echo "$option $value (was $now)"
+          fi
+        done <<EOF
+        auth.allow {{ pi1_ip }},{{ pi2_ip }},{{ ten_ip }},127.0.0.1
+        performance.cache-size 256MB
+        server.allow-insecure on
+        EOF
+      args:
+        executable: /bin/bash
+      register: _repos_options
+      changed_when: _repos_options.stdout | length > 0
 
     - name: Ensure volume is started (idempotent)
       ansible.builtin.shell: |
