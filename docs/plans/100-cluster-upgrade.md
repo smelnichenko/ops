@@ -243,19 +243,33 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 
 ## Production rollout (after all tests pass and approval)
 
-Waves in this order, one step at a time, each verified before the next:
+Gate: every step green in Vagrant on its own, then `task test:upgrade:full` green (built from nothing, steps 01-55 in
+one unattended run), then the operator's approval. Step 19 is already in production (2026-10-03, infra e89bbbb).
 
-0. Backups (Velero all namespaces, CNPG backup + `pg_dumpall` to the Pi, Scylla Manager backup, etcd snapshot) and the
-   defects above.
-1. Patches: apt-cacher-ng from CI (defect 9), cert-manager 1.20.4, CNPG 1.30.1, Velero 1.18.4 + plugin 1.14.4, versitygw 1.8.0, local-path 0.0.37,
-   kube-prometheus-stack 91.8.2, Alertmanager, blackbox, Grafana 12.4.12, Mimir 2.17.11, Fluent Bit 4.2.8,
-   Argo CD 3.3.14.
-2. Platform: Cilium 1.19.8 → k8s 1.34.12 → containerd 2.3 → k8s 1.35 → Cilium 1.20.2 → Gateway API v1.5 → Istio
-   1.27 / 1.29 / 1.31 → k8s 1.36.5.
-3. Operators and data: External Secrets 2.11, Argo CD 3.5, cert-manager 1.21, Strimzi 1.2 + Kafka 4.3.1, Scylla
-   operator + ScyllaDB + Manager, PostgreSQL 18, Valkey 9.1.
-4. Observability majors: Grafana 13, Mimir 3.x, Tempo 3, Fluent Bit 5, ClickHouse 25.8 → 26.8, SonarQube 26.9,
-   Centrifugo 6.9.7.
+How a step goes to production: its `upgrade/NN-*` branches merge to main in step order (infra and platform are pushed
+straight to main; Argo syncs them), and its `playbook` lines run against `inventory/production.yml` - after which that
+playbook's default takes the step's `-e` value in the same change (setup-kubeadm.yml: k8s_version/k8s_package_version,
+containerd.io instead of Debian's containerd, cilium_version, gateway_api_version, local_path_provisioner_version, and
+the External Secrets Helm install `when: not platform_by_argo`; setup-argocd.yml: argocd_version). One step at a time,
+each verified as in Vagrant (Argo synced and healthy, data, backup, metrics, the k6 smoke) before the next.
 
-Rules: one component per change; check its history and live effect first; stateful steps shown to the operator with
-the exact change before they run.
+Waves in this order:
+
+0. Backups: CNPG base backup + `pg_dumpall` to the Pi, etcd snapshot, Grafana's volume (13 migrates it one way). Velero
+   holds no data volume (defect 20): Kafka and ScyllaDB need their own copy before steps 33-41 - a Scylla Manager
+   backup task (none exists) and a Kafka topic export - or the operator accepts their loss risk.
+1. Patches (01-12): apt-cacher-ng from CI (defect 9), cert-manager 1.20.4, CNPG 1.30.1, Velero 1.18.4 + plugin 1.14.4,
+   versitygw 1.8.0, local-path 0.0.37, kube-prometheus-stack 91.8.2, Alertmanager, blackbox, ksm, Grafana 12.4.12,
+   Mimir 2.17.11, Fluent Bit 4.2.8, Argo CD 3.3.14.
+2. Platform (13-26): Cilium 1.19.8 -> k8s 1.34.12 -> containerd.io 2.3.6 -> k8s 1.35.9 -> Cilium 1.20.2 -> Gateway API
+   v1.5.1 -> Istio 1.26 ... 1.31 in place, one minor each with every mesh workload restarted
+   (restart-mesh-workloads.yml) -> k8s 1.36.5.
+3. Operators and data (27-43): External Secrets CRDs under Argo, then 2.11; Argo CD 3.4, 3.5; cert-manager 1.21;
+   Strimzi v1 conversion, 1.2.0, Kafka 4.3.1; Scylla operator 1.20.3 -> 1.21 -> 1.22 with ScyllaDB 2025.1 -> 2026.1 ->
+   2026.3; PostgreSQL 18 in place (downtime; a fresh base backup after it - the old major's WAL cannot restore 18);
+   Valkey 9.1.
+4. Observability (44-55): Grafana 13, Mimir 3.0 -> 3.1 -> 3.2, Tempo 3, Fluent Bit 5, Centrifugo 6.9, SonarQube 26.9,
+   ClickHouse 25.8 -> 26.8 (the compatibility pin's removal is the operator's decision).
+
+Rules: one component per change; check its history and live effect first; stateful steps (S in the table) shown to
+the operator with the exact change before they run.
