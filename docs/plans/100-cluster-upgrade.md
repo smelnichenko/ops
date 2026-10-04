@@ -313,21 +313,27 @@ Production / data
   serverName in the same change; read ten's timelineID and archive history first; pin the image by digest.
 - R2 Re-runs downgrade: setup-kubeadm (Debian containerd over containerd.io, ESO 2.2.0, k8s pins) and setup-argocd
   (chart default) - fail-closed guards against a downgrade, then the new defaults, before any production step.
+  DONE 3ac3eb9 (guards; the new defaults move with each production step).
 - R3 Backups gate (Wave 0 as code): every store a one-way step changes - Postgres (pg_dumpall + CNPG base backup),
   Kafka, ScyllaDB (prove a restore of the existing backup), Grafana, ClickHouse, Mimir/Tempo (in-cluster versitygw
   PV), SonarQube's Postgres; each restore rehearsed in Vagrant.
 - R4 upgrade-containerd rebuilds config from defaults: read ten's live config.toml; migrate it (containerd config
   migrate) and fail on unknown settings; a guard that requires the new config + CRI + version; a rescue to the kept
-  config.
+  config. DONE fed85ea (Vagrant: pre-check, swap with 16 containers kept, re-run, rescue).
 - R5 kubeadm upgrade resets the kubelet's graceful shutdown (config.yaml rewritten from the kubelet-config ConfigMap):
-  the settings into the ConfigMap, re-asserted after each upgrade.
+  the settings into the ConfigMap, re-asserted after each upgrade. DONE 3eb9a2d (the ConfigMap step for production
+  comes with R14's restructure).
 - R6 Tempo 3: backend_scheduler.local_work_path defaults to /var/tempo on a read-only root - no compaction or
   retention; set it under /data; prove retention deletes in Vagrant.
 - R7 Step 27: ESO CRDs under Argo prune - a revert deletes every ExternalSecret and its Secrets: CRD annotations
   Prune=false,Delete=false in the same change.
 - R8 setup-gluster: a gluster CLI error reads as "no volume" and copies over the live forgejo-repos brick; recursive
   chown of all Forgejo data every run; error swallowing (cp || true, failed_when false); "Number of entries: -" counted
-  as 0; the fresh-install path not resumable.
+  as 0; the fresh-install path not resumable. Found while fixing: every run set each brick root to root:root behind
+  Gluster's back (the volume roots then root's until a chown through the mount - since 771dc71 none ran for the repos);
+  the old-volume cleanup matched the live git-mirror mount and deleted its fstab line, put back by a later play
+  (production pi1 matches). DONE (Vagrant: remount after the cold boot, a re-run changed=0, a marked volume resumed;
+  the count and heal logic against a stub gluster).
 - R9 Defect 22 (Gluster cold boot): mounts that retry until bricks are up, services after them; Vagrant cold boot
   proof, then the Pis.
 - R10 Defect 18: ClickHouse default user from ::/0 - fix; the metrics check reads as schnappy.
@@ -336,7 +342,7 @@ Rollout behaviour
 - R11 Root sync waits on child health wave by wave from step 12: every production app Healthy before 12 and before
   20-25; the infra sync waves committed (scylla manager after operator, ...) instead of the Vagrant-only overrides.
 - R12 restart-mesh-workloads: `|| true` passes a failed read; restart the data tier first, then apps; kagent included
-  (operator); steps 20-25 marked stateful with their outages.
+  (operator); steps 20-25 marked stateful with their outages. DONE e4c87da (the stateful marks with R18).
 - R13 Step 24: Istio 1.30 images from registry.istio.io (scream tests 10-13, 11-17, 12-08/09): global.hub docker.io.
 - R14 Step order inside every support matrix (operator); test env before production for Postgres, Kafka, ScyllaDB
   (versions as values per environment).
@@ -349,7 +355,8 @@ Rollout behaviour
   wrappers; read-only production checks after each step; per-step abort/revert and outage notes.
 - R19 apt-cacher-ng image pull on ten (no imagePullSecrets); local-path-config on ten (path); ScyllaCluster/Kafka
   managedFieldsManagers ignore rules; Docker apt source on ten; argocd image-tag override across 12/29/30; strimzi
-  guard fail-open; restart-mesh and settle checks on empty data; apt keyring emptied by a failed curl.
+  guard fail-open; restart-mesh and settle checks on empty data; apt keyring emptied by a failed curl. DONE: strimzi
+  guard + its RBAC always removed, settle check, apt keyring (b5b9f40), restart-mesh (e4c87da); the rest open.
 
 Test harness
 - R20 argo-settled: a failed sync passes; restarts ignored; a failed pod query counts as all ready; one green poll

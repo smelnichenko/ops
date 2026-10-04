@@ -32,6 +32,11 @@
         name: glusterfs-server
         state: present
 
+    - name: Is UFW installed (the Pis have it; ten has none, 2026-10-04)
+      ansible.builtin.stat:
+        path: /usr/sbin/ufw
+      register: _ufw
+
     - name: Allow GlusterFS ports through UFW
       community.general.ufw:
         rule: allow
@@ -42,7 +47,7 @@
         - { port: "24007", proto: "tcp", name: "GlusterFS daemon" }
         - { port: "24008", proto: "tcp", name: "GlusterFS management" }
         - { port: "49152:61000", proto: "tcp", name: "GlusterFS bricks" }
-      failed_when: false  # ten may not have UFW active
+      when: _ufw.stat.exists
 
     - name: Enable and start GlusterFS
       ansible.builtin.systemd:
@@ -68,22 +73,20 @@
       changed_when: "'changed' in uid_result.stdout"
       when: inventory_hostname in ['pi1', 'pi2']
 
+    # A brick is created when missing and never touched after: its root is the volume's root, owned by Gluster (the
+    # mount's owner, storage.owner-uid). These set root:root 0755 on every run, behind Gluster's back on all three
+    # bricks - the repos, Forgejo's data and Nexus's store then belonged to root until something chowned them through
+    # the mount (production's are their services', 2026-10-04).
     - name: Create brick directory (data on pi1+pi2)
-      ansible.builtin.file:
-        path: "{{ gluster_brick }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
+      ansible.builtin.command:
+        cmd: mkdir -p -m 0755 {{ gluster_brick }}
+        creates: "{{ gluster_brick }}"
       when: inventory_hostname in ['pi1', 'pi2']
 
     - name: Create arbiter brick directory (metadata-only, on ten)
-      ansible.builtin.file:
-        path: "{{ gluster_arbiter_brick }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
+      ansible.builtin.command:
+        cmd: mkdir -p -m 0755 {{ gluster_arbiter_brick }}
+        creates: "{{ gluster_arbiter_brick }}"
       when: inventory_hostname == 'target'
 
 # ─── Probe peers and create/migrate forgejo-repos volume ──────────────────
@@ -111,17 +114,16 @@
     # Use the gluster CLI directly: the gluster.gluster.gluster_peer
     # Ansible module imports `distutils`, which Python 3.12+ removed
     # from the stdlib (Trixie ships Python 3.13). `gluster peer probe`
-    # is idempotent — re-probing an already-known peer just reports
-    # "Peer hostname is already in peer list" and returns 0.
+    # is idempotent — re-probing an already-known peer reports
+    # "Host ... already in peer list" and returns 0; a new one "success".
     - name: Probe peers (pi2 + ten)
       ansible.builtin.shell: |
-        set -e
+        set -eu
         for node in {{ gluster_peers | join(' ') }}; do
-          gluster peer probe "$node" 2>&1 | grep -vE "already in peer list|Probe successful" || true
+          gluster peer probe "$node"
         done
-        gluster peer status
       register: peer_probe
-      changed_when: "'Probe successful' in peer_probe.stdout"
+      changed_when: "'peer probe: success' in peer_probe.stdout"
 
     - name: Wait for 2 peers connected (pi2 + ten)
       ansible.builtin.shell: |
@@ -133,29 +135,59 @@
       delay: 5
       changed_when: false
 
+    # A volume absent from glusterd's own list is new; any CLI error fails here. Read as "no volume" (`|| echo 0`), an
+    # error took the new-install path on a live cluster: Forgejo stopped, data copied into the live brick behind
+    # Gluster's back (plan 100 review R8).
     - name: Count existing forgejo-repos bricks
       ansible.builtin.shell: |
-        gluster volume info forgejo-repos 2>/dev/null | grep -c "^Brick[0-9]" || echo 0
+        set -euo pipefail
+        volumes=$(gluster volume list)
+        if grep -qx forgejo-repos <<< "$volumes"; then
+          gluster volume info forgejo-repos | grep -c '^Brick[0-9]'
+        else
+          echo 0
+        fi
+      args:
+        executable: /bin/bash
       register: brick_count
       changed_when: false
+      failed_when: brick_count.rc != 0 or brick_count.stdout | trim not in ['0', '2', '3']
 
+    # Forgejo is not installed yet on a bare Pi: only that is no failure
     - name: Stop Forgejo on pi1 (new install — need to migrate existing data)
       ansible.builtin.systemd:
         name: forgejo
         state: stopped
+      register: _stop_forgejo
       when: brick_count.stdout | trim | int == 0
-      failed_when: false
+      failed_when: >-
+        _stop_forgejo is failed and 'Could not find the requested service' not in (_stop_forgejo.msg | default(''))
 
     - name: Stop Forgejo on pi2 (new install)
       ansible.builtin.systemd:
         name: forgejo
         state: stopped
       delegate_to: pi2
+      register: _stop_forgejo
       when: brick_count.stdout | trim | int == 0
-      failed_when: false
+      failed_when: >-
+        _stop_forgejo is failed and 'Could not find the requested service' not in (_stop_forgejo.msg | default(''))
+
+    # A new volume is marked before its first write and unmarked once it is replicated in full ('Verify backup
+    # volumes'): a run that fails half-way finds the mark and carries on - copy again, look up, compare, heal - where
+    # it would otherwise take the half-done volume for an existing one
+    - name: Mark forgejo-repos as new (new install)
+      ansible.builtin.file:
+        path: /var/lib/gluster/forgejo-repos.seeding
+        state: touch
+        mode: '0600'
+        modification_time: preserve
+        access_time: preserve
+      when: brick_count.stdout | trim | int == 0
 
     - name: Copy existing repos to data brick on pi1 (new install)
       ansible.builtin.shell: |
+        set -eu
         if [ -d {{ gluster_mount }}/schnappy ]; then
           cp -a {{ gluster_mount }}/schnappy {{ gluster_brick }}/
           chown -R {{ forgejo_uid }}:{{ forgejo_gid }} {{ gluster_brick }}/
@@ -171,7 +203,6 @@
           {{ ten_ip }}:{{ gluster_arbiter_brick }} \
           force 2>&1
       when: brick_count.stdout | trim | int == 0
-      register: _forgejo_repos_created
       changed_when: true
 
     - name: Migrate replica-2 → replica-3-arbiter (production migration)
@@ -184,6 +215,7 @@
 
     - name: Set volume options
       ansible.builtin.shell: |
+        set -eu
         gluster volume set forgejo-repos auth.allow {{ pi1_ip }},{{ pi2_ip }},{{ ten_ip }},127.0.0.1
         gluster volume set forgejo-repos performance.cache-size 256MB
         gluster volume set forgejo-repos server.allow-insecure on
@@ -191,6 +223,7 @@
 
     - name: Ensure volume is started (idempotent)
       ansible.builtin.shell: |
+        set -euo pipefail
         STATE=$(gluster volume info forgejo-repos | awk '/^Status:/ {print $2}')
         if [ "$STATE" != "Started" ]; then
           gluster volume start forgejo-repos
@@ -198,6 +231,8 @@
         else
           echo "already-started"
         fi
+      args:
+        executable: /bin/bash
       register: vol_start
       changed_when: "'started' in vol_start.stdout and 'already' not in vol_start.stdout"
 
@@ -214,6 +249,10 @@
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
 
   tasks:
+    - name: No service to start yet (the services stopped for a mount start in the last plays)
+      ansible.builtin.set_fact:
+        gluster_services_to_start: []
+
     # Forgejo is stopped and the repos remounted only when they are not mounted from the volume already - this used to
     # happen on every run, each re-run an outage of Forgejo.
     - name: Current source of the repos mount
@@ -251,10 +290,10 @@
             group: forgejo
             mode: '0700'
 
-        - name: Start Forgejo
-          ansible.builtin.systemd:
-            name: forgejo
-            state: started
+        # not here: on a new volume pi2's brick is still empty until the 'New volumes' plays have run
+        - name: Forgejo starts in the last plays
+          ansible.builtin.set_fact:
+            gluster_services_to_start: "{{ gluster_services_to_start + ['forgejo'] }}"
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify GlusterFS
@@ -305,17 +344,27 @@
   gather_facts: false
 
   tasks:
+    # Only what the old volumes mount, by exact mountpoint and source. This matched "$mnt.*glusterfs" in `mount`, which
+    # /mnt/backups/git-mirror (backup-git-mirror, live) matches for /mnt/backups: every run deleted the git-mirror line
+    # from fstab (and `umount /mnt/backups || true` failed unseen), the mount play below put it back - a run failing in
+    # between left the Pi without it (production pi1 matches, 2026-10-04).
     - name: Unmount old GlusterFS backup mounts
       ansible.builtin.shell: |
+        set -eu
+        old=':/(backups|backup-scylla|backup-postgres|backup-velero)$'
         for mnt in /mnt/backups /mnt/backups/scylla /mnt/backups/postgres /mnt/backups/velero; do
-          if mount | grep -q "$mnt.*glusterfs"; then
-            umount "$mnt" 2>/dev/null || true
-            sed -i "\|$mnt|d" /etc/fstab
+          if src=$(findmnt -rn -t fuse.glusterfs -o SOURCE --mountpoint "$mnt") && echo "$src" | grep -qE "$old"; then
+            umount "$mnt"
             echo "unmounted $mnt"
           fi
         done
+        entries='^[^[:space:]]+:/(backups|backup-scylla|backup-postgres|backup-velero)[[:space:]]'
+        if grep -qE "$entries" /etc/fstab; then
+          sed -i -E "\,$entries,d" /etc/fstab
+          echo "fstab: the old volumes' entries removed"
+        fi
       register: unmount_old
-      changed_when: "'unmounted' in unmount_old.stdout"
+      changed_when: unmount_old.stdout | length > 0
 
     # Empty stub directories left behind after the old monolithic
     # backups volume was retired. Only remove if truly empty — never
@@ -351,13 +400,19 @@
   tasks:
     - name: Stop and delete old backup volumes
       ansible.builtin.shell: |
+        set -euo pipefail
+        volumes=$(gluster volume list)
         for vol in backups backup-scylla backup-postgres backup-velero; do
-          if gluster volume info $vol >/dev/null 2>&1; then
-            gluster volume stop $vol force --mode=script 2>/dev/null || true
-            gluster volume delete $vol --mode=script 2>/dev/null || true
+          if grep -qx "$vol" <<< "$volumes"; then
+            if [ "$(gluster volume info "$vol" | awk '/^Status:/ {print $2}')" = Started ]; then
+              gluster volume stop "$vol" force --mode=script
+            fi
+            gluster volume delete "$vol" --mode=script
             echo "deleted $vol"
           fi
         done
+      args:
+        executable: /bin/bash
       register: delete_old
       changed_when: "'deleted' in delete_old.stdout"
 
@@ -403,31 +458,40 @@
         stop_service: ''
 
   tasks:
+    # created when missing, never touched after (see 'Create brick directory' in the first play)
     - name: Create data brick directories on pi1 + pi2
-      ansible.builtin.file:
-        path: "{{ item.1.brick }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
+      ansible.builtin.command:
+        cmd: mkdir -p -m 0755 {{ item.1.brick }}
+        creates: "{{ item.1.brick }}"
       delegate_to: "{{ item.0 }}"
       loop: "{{ ['pi1', 'pi2'] | product(backup_volumes) | list }}"
+      loop_control:
+        label: "{{ item.1.name }} on {{ item.0 }}"
 
     - name: Create arbiter brick directories on ten
-      ansible.builtin.file:
-        path: "{{ item.arbiter_brick }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
+      ansible.builtin.command:
+        cmd: mkdir -p -m 0755 {{ item.arbiter_brick }}
+        creates: "{{ item.arbiter_brick }}"
       delegate_to: target
       loop: "{{ backup_volumes }}"
+      loop_control:
+        label: "{{ item.name }}"
 
+    # as for forgejo-repos above: glusterd's own list says which volumes exist, a CLI error fails
     - name: Count existing bricks per volume
       ansible.builtin.shell: |
-        gluster volume info {{ item.name }} 2>/dev/null | grep -c "^Brick[0-9]" || echo 0
+        set -euo pipefail
+        volumes=$(gluster volume list)
+        if grep -qx {{ item.name }} <<< "$volumes"; then
+          gluster volume info {{ item.name }} | grep -c '^Brick[0-9]'
+        else
+          echo 0
+        fi
+      args:
+        executable: /bin/bash
       register: backup_brick_count
       changed_when: false
+      failed_when: backup_brick_count.rc != 0 or backup_brick_count.stdout | trim not in ['0', '2', '3']
       loop: "{{ backup_volumes }}"
 
     # === Fresh-install ordering: stop service → migrate-to-brick → create volume ===
@@ -459,29 +523,37 @@
       loop: "{{ fresh_install_services | product(['pi1', 'pi2']) | list }}"
       loop_control:
         label: "{{ item.0.name }} on {{ item.1 }}"
-      failed_when: false
+      register: _stop_owner
+      failed_when: >-
+        _stop_owner is failed and 'Could not find the requested service' not in (_stop_owner.msg | default(''))
 
-    - name: Migrate existing data to bricks (only when brick truly empty)
+    # A new volume is marked before its first write, as forgejo-repos above. The brick must be empty - no data, no
+    # .glusterfs metadata - unless the mark says this playbook's own copy is in it (a run that failed half-way: copied
+    # again, completing it). A brick with anything else in it is refused: a volume is never created over it. A copy
+    # error fails the run (it was `2>/dev/null || true`: a half copy went on to become the volume).
+    - name: Migrate existing data to bricks (new volumes only)
       ansible.builtin.shell: |
-        # Brick must have NO files yet — neither user data nor gluster
-        # .glusterfs metadata. If gluster has already created the volume,
-        # this step is a no-op (data must be migrated through the mount
-        # in that case — see manual recovery in CLAUDE.md).
-        if [ -d "{{ item.item.mount }}" ] && [ ! -L "{{ item.item.mount }}" ] && [ -z "$(ls -A {{ item.item.brick }}/ 2>/dev/null)" ]; then
-          cp -a "{{ item.item.mount }}"/. "{{ item.item.brick }}/" 2>/dev/null || true
+        set -eu
+        marker=/var/lib/gluster/{{ item.item.name }}.seeding
+        if [ -n "$(ls -A {{ item.item.brick }}/)" ] && [ ! -e "$marker" ]; then
+          echo "REFUSED: {{ item.item.brick }} is not empty, and not marked new by this playbook" >&2
+          exit 1
+        fi
+        touch "$marker"
+        if [ -d "{{ item.item.mount }}" ] && [ ! -L "{{ item.item.mount }}" ]; then
+          cp -a "{{ item.item.mount }}"/. "{{ item.item.brick }}/"
           echo "migrated"
-        else
-          echo "skip"
         fi
       register: migrate
       when: item.stdout | trim | int == 0
-      changed_when: "'migrated' in migrate.stdout | default('')"
+      changed_when: true
       loop: "{{ backup_brick_count.results }}"
       loop_control:
         label: "{{ item.item.name }}"
 
     - name: Create replica-3-arbiter volume (new install)
       ansible.builtin.shell: |
+        set -eu
         gluster volume create {{ item.item.name }} replica 3 arbiter 1 \
           {{ pi1_ip }}:{{ item.item.brick }} \
           {{ pi2_ip }}:{{ item.item.brick }} \
@@ -497,36 +569,47 @@
       loop_control:
         label: "{{ item.item.name }}"
 
-    # the volumes this run created (a fresh install): healed in full before anything relies on them (the plays
-    # before 'Verify backup volumes')
-    - name: The volumes created in this run
+    # the new volumes - marked, by this run or by one that failed half-way: replicated in full before anything relies
+    # on them (the plays up to 'Verify backup volumes', which unmarks them)
+    - name: The volumes marked new
+      ansible.builtin.find:
+        paths: /var/lib/gluster
+        patterns: '*.seeding'
+      register: _seeding
+
+    - name: The new volumes
       ansible.builtin.set_fact:
         gluster_new_volumes: >-
-          {{ (['forgejo-repos'] if (_forgejo_repos_created is changed) else [])
-             + (vol_create.results | selectattr('changed') | map(attribute='item.item.name') | list) }}
+          {{ _seeding.files | map(attribute='path') | map('basename') | map('regex_replace', '[.]seeding$', '') | list }}
 
     # Gluster re-asserts brick ownership from arbiter metadata on every
     # mount / peer-reconnect / self-heal. Setting `storage.owner-*` options
     # makes Gluster itself enforce the ownership, so client-side chown stays
-    # durable. nexus runs as uid/gid 901/901 (see setup-nexus.yml).
-    - name: Set nexus-data volume ownership (durable across heals)
+    # durable. nexus runs as uid/gid 901/901 (see setup-nexus.yml), forgejo
+    # as 900/900 (set by 'Align Forgejo UID/GID' in the first play of this
+    # file). Both volumes exist here - created above on a new install (this
+    # said "the next play creates it", and swallowed every error).
+    - name: Volume ownership enforced by Gluster (durable across heals)
       ansible.builtin.shell: |
-        gluster volume set nexus-data storage.owner-uid 901
-        gluster volume set nexus-data storage.owner-gid 901
-      changed_when: true
-      failed_when: false  # volume may not exist yet on fresh install — next play creates it
-
-    # forgejo runs as uid/gid 900 (set by 'Align Forgejo UID/GID'
-    # in the first play of this file).
-    - name: Set forgejo-data volume ownership (durable across heals)
-      ansible.builtin.shell: |
-        gluster volume set forgejo-data storage.owner-uid 900
-        gluster volume set forgejo-data storage.owner-gid 900
-      changed_when: true
-      failed_when: false  # volume may not exist yet on fresh install — next play creates it
+        set -euo pipefail
+        for opt in storage.owner-uid storage.owner-gid; do
+          now=$(gluster volume get {{ item.name }} "$opt" | awk -v o="$opt" '$1 == o {print $2}')
+          if [ "$now" != "{{ item.id }}" ]; then
+            gluster volume set {{ item.name }} "$opt" {{ item.id }} > /dev/null
+            echo "$opt {{ item.id }} (was $now)"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      loop:
+        - { name: nexus-data, id: 901 }
+        - { name: forgejo-data, id: 900 }
+      register: _owner
+      changed_when: _owner.stdout | length > 0
 
     - name: Migrate existing replica-2 → replica-3-arbiter
       ansible.builtin.shell: |
+        set -eu
         gluster volume add-brick {{ item.item.name }} replica 3 arbiter 1 \
           {{ ten_ip }}:{{ item.item.arbiter_brick }} \
           force
@@ -543,6 +626,7 @@
     # Check status first so reruns don't error and stopped volumes recover.
     - name: Ensure volumes are started
       ansible.builtin.shell: |
+        set -euo pipefail
         STATE=$(gluster volume info {{ item.name }} | awk '/^Status:/ {print $2}')
         if [ "$STATE" != "Started" ]; then
           gluster volume start {{ item.name }}
@@ -550,6 +634,8 @@
         else
           echo "already-started"
         fi
+      args:
+        executable: /bin/bash
       register: vol_start
       changed_when: "'started' in vol_start.stdout and 'already' not in vol_start.stdout"
       loop: "{{ backup_volumes }}"
@@ -607,6 +693,18 @@
         label: "{{ item.item.mount }}"
       when: item.stdout | trim != node_ip ~ ':/' ~ item.item.name
 
+    # started in the last plays: those of the volumes (re)mounted here, and of the new volumes - on a run that failed
+    # half-way they were stopped by the run before, and nothing is remounted now
+    - name: The services to start in the last plays
+      vars:
+        _new: "{{ hostvars['pi1']['gluster_new_volumes'] | default([]) }}"
+        _volumes: "{{ backup_remount + (backup_volumes | selectattr('name', 'in', _new) | list) }}"
+      ansible.builtin.set_fact:
+        gluster_services_to_start: >-
+          {{ (gluster_services_to_start | default([]))
+             + (['forgejo'] if 'forgejo-repos' in _new else [])
+             + (_volumes | selectattr('autostart') | map(attribute='stop_service') | select | list) }}
+
     - name: The services on this Pi
       ansible.builtin.service_facts:
 
@@ -659,9 +757,21 @@
     # A chown through the mount normalizes it. This used to happen as a side
     # effect of the uid-migration chown in the first play, which no longer
     # runs now that Forgejo is created with a fixed uid 900 (setup-pi-services).
-    - name: Fix Forgejo data ownership (recursive — heal/ownership can lag)
-      ansible.builtin.command: chown -R forgejo:forgejo /var/lib/forgejo/data
-      changed_when: false
+    # Only where the volume was (re)mounted here or is new, and only what is
+    # not Forgejo's: a `chown -R` of all of it on every run wrote every file's
+    # metadata on three bricks, the packages included, and said "ok".
+    - name: Fix Forgejo data ownership (heal/ownership can lag on a new volume)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find /var/lib/forgejo/data \( ! -user forgejo -o ! -group forgejo \) -print \
+          -exec chown -h forgejo:forgejo {} + | wc -l
+      args:
+        executable: /bin/bash
+      register: _forgejo_owner
+      changed_when: _forgejo_owner.stdout | trim != '0'
+      when: >-
+        'forgejo-data' in (backup_remount | map(attribute='name'))
+        or 'forgejo-data' in (hostvars['pi1']['gluster_new_volumes'] | default([]))
 
     # Nexus ownership is handled by setup-nexus.yml (which runs after and
     # creates the nexus user with a fixed UID first).
@@ -755,14 +865,10 @@
     # autostart: false ones are started by keepalived's notify on the VIP's Pi only (see the mount play's vars)
     - name: Start them (those installed, and not keepalived's)
       ansible.builtin.systemd:
-        name: "{{ item.stop_service }}"
+        name: "{{ item }}"
         state: started
-      loop: "{{ backup_remount | default([]) }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when: >-
-        item.stop_service | length > 0 and item.autostart | bool
-        and (item.stop_service ~ '.service') in ansible_facts.services
+      loop: "{{ gluster_services_to_start | default([]) | unique }}"
+      when: (item ~ '.service') in ansible_facts.services
 
 - name: Verify backup volumes
   hosts: pi1
@@ -774,17 +880,24 @@
     # ends: until then pi2's copy can hold a directory as root (Vagrant, 2026-10-04: versitygw, running as minio, was
     # refused its buckets dir there). Only the volumes this run created: an existing one lists every file with a write
     # in flight as pending, which a busy Forgejo or a running backup always has.
-    - name: The volumes created in this run are healed - nothing pending on any brick
+    # Every brick must answer with a count: one that does not lists "Number of entries: -", which read as 0 here.
+    - name: The new volumes are healed - every brick answering, nothing pending on any
       ansible.builtin.shell: |
         set -euo pipefail
-        pending=0
+        healed=yes
         for vol in {{ gluster_new_volumes | default([]) | join(' ') }}; do
           gluster volume heal "$vol" > /dev/null
-          n=$(gluster volume heal "$vol" info | awk -F': ' '/^Number of entries/ {s += $2} END {print s+0}')
-          echo "$vol $n"
-          pending=$((pending + n))
+          info=$(gluster volume heal "$vol" info)
+          read -r bricks counted pending <<< "$(awk -F': ' '
+            /^Brick / {b++}
+            /^Number of entries/ {if ($2 ~ /^[0-9]+$/) {c++; p += $2}}
+            END {print b+0, c+0, p+0}' <<< "$info")"
+          echo "$vol: $counted of $bricks bricks answering, $pending pending"
+          if [ "$bricks" -eq 0 ] || [ "$counted" -ne "$bricks" ] || [ "$pending" -ne 0 ]; then
+            healed=no
+          fi
         done
-        [ "$pending" -eq 0 ]
+        [ "$healed" = yes ]
       args:
         executable: /bin/bash
       register: _healed
@@ -792,6 +905,12 @@
       retries: 60
       delay: 10
       until: _healed.rc == 0
+
+    - name: The new volumes are replicated in full - unmark them
+      ansible.builtin.file:
+        path: "/var/lib/gluster/{{ item }}.seeding"
+        state: absent
+      loop: "{{ gluster_new_volumes | default([]) }}"
 
     - name: Check all backup volume statuses
       ansible.builtin.shell: |
