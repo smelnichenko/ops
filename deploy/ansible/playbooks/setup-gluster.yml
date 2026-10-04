@@ -171,6 +171,7 @@
           {{ ten_ip }}:{{ gluster_arbiter_brick }} \
           force 2>&1
       when: brick_count.stdout | trim | int == 0
+      register: _forgejo_repos_created
       changed_when: true
 
     - name: Migrate replica-2 → replica-3-arbiter (production migration)
@@ -484,6 +485,14 @@
       loop_control:
         label: "{{ item.item.name }}"
 
+    # the volumes this run created (a fresh install): healed in full before anything relies on them (the plays
+    # before 'Verify backup volumes')
+    - name: The volumes created in this run
+      ansible.builtin.set_fact:
+        gluster_new_volumes: >-
+          {{ (['forgejo-repos'] if (_forgejo_repos_created is changed) else [])
+             + (vol_create.results | selectattr('changed') | map(attribute='item.item.name') | list) }}
+
     # Gluster re-asserts brick ownership from arbiter metadata on every
     # mount / peer-reconnect / self-heal. Setting `storage.owner-*` options
     # makes Gluster itself enforce the ownership, so client-side chown stays
@@ -620,6 +629,62 @@
       loop: "{{ backup_volumes }}"
       when: item.stop_service | length > 0 and item.autostart | bool
       failed_when: false
+
+# ─── New volumes: a full heal, until pi2's brick holds what pi1's does ───
+# A fresh install copies the existing data straight into pi1's brick before creating the volume; pi2's brick starts
+# empty. Gluster knows nothing of files written behind its back: neither index heal nor `heal full` copied them
+# (Vagrant, 2026-10-04: pi1's mount listed the store's 5 buckets, pi2's 2, still after 5 min of a full heal). A
+# lookup of every entry through pi1's mount does - it gives each file its GFID and heals it onto pi2 (29 of 29 at
+# once). Volumes that existed before this run are left alone (ten: none is created).
+- name: New volumes - pi1's brick entries counted, every entry looked up through pi1's mount
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Entries on pi1's brick of each new volume (the copy's source)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        brick=$(gluster volume info {{ item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
+        [ -n "$brick" ]
+        find "$brick" -path "$brick/.glusterfs" -prune -o -print | wc -l
+      args:
+        executable: /bin/bash
+      loop: "{{ gluster_new_volumes | default([]) }}"
+      register: _source_entries
+      changed_when: false
+
+    - name: Look every entry of each new volume up through pi1's mount (assigns the GFIDs, heals onto pi2)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mount=$(findmnt -rn -o TARGET --source "{{ ansible_host }}:/{{ item }}")
+        [ -n "$mount" ]
+        find "$mount" -noleaf -print0 | xargs -0 -r stat > /dev/null
+      args:
+        executable: /bin/bash
+      loop: "{{ gluster_new_volumes | default([]) }}"
+      changed_when: true
+
+- name: New volumes - pi2's brick holds every entry pi1's does
+  hosts: pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait until pi2's brick of each new volume has as many entries as pi1's
+      ansible.builtin.shell: |
+        set -euo pipefail
+        brick=$(gluster volume info {{ item.item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
+        [ -n "$brick" ]
+        find "$brick" -path "$brick/.glusterfs" -prune -o -print | wc -l
+      args:
+        executable: /bin/bash
+      loop: "{{ hostvars['pi1']['_source_entries'].results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }} ({{ item.stdout }} entries on pi1)"
+      register: _sink_entries
+      changed_when: false
+      retries: 60
+      delay: 10
+      until: (_sink_entries.stdout | int) >= (item.stdout | int)
 
 - name: Verify backup volumes
   hosts: pi1

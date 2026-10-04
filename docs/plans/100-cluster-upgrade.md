@@ -135,8 +135,11 @@ operator approves.
     RequiresMountsFor then stops it, and nothing started it again. Fixed: the mount play stops and starts
     versitygw. And a freshly created replica is consistent only after self-heal (until then the second brick holds
     the directories as root): the verify play now heals every volume and waits until nothing is pending - on ten,
-    all 0, it passes at once. Found 2026-10-04 by the Vagrant copy, which never ran setup-gluster: each Pi kept its
-    own store, and a VIP on pi2 found no velero bucket (full run 4, step 04).
+    all 0, it passes at once. And a fresh install copies existing data straight into pi1's brick, which Gluster
+    never learns of: pi2 got only what something touched (neither heal nor `heal full` copied the rest); the run now
+    looks up every entry of each new volume through pi1's mount and waits until pi2's brick has as many entries. Found
+    2026-10-04 by the Vagrant copy, which never ran setup-gluster: each Pi kept its own store, and a VIP on pi2 found
+    no velero bucket (full run 4, step 04); its first build with Gluster had pi1 listing 5 buckets, pi2 2 (run 5).
 
 ## The Vagrant upgrade test
 
