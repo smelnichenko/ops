@@ -176,6 +176,10 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   preflight CoreDNSUnsupportedPlugins refuses a Corefile plugin its migration does not know. Ten's Corefile has none,
   so only the Vagrant inventory passes over that one check (`k8s_upgrade_ignore_preflight_errors_override`); kubeadm
   migrates the rest and leaves the blocks as they are.
+- **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
+  ConfigMap change, so steps 52 and 54 change nothing in the running server; the image bumps right after them (53,
+  55) restart it with the pin in place before the new version writes a part - the order that matters. Checked with
+  `getSetting('compatibility')` after each step.
 - **A step that goes to production early leaves the stack**: it is cherry-picked onto main, the repo's step branches
   are rebased on that main (`git rebase --update-refs main <last step branch>`; git drops the now-duplicate commit),
   and its own branch is deleted. Step 19, 2026-10-03: every later branch's tree unchanged, 02-16 gained only it.
