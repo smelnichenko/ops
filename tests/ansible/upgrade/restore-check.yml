@@ -202,9 +202,13 @@
           changed_when: false
           failed_when: false
 
+        - name: That state
+          ansible.builtin.debug:
+            var: _diag.stdout_lines
+
         - name: It failed
           ansible.builtin.fail:
-            msg: "the side cluster did not recover - its state above: {{ _diag.stdout_lines | default([]) | length }} lines"
+            msg: "the side cluster did not recover - its state above"
       always:
         - name: Remove the side cluster (its volume goes with it) and the backup object (its data stays in the store)
           ansible.builtin.shell: |

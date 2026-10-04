@@ -364,8 +364,8 @@
     # ── scylla (in place) ─────────────────────────────────────────────
     # the snapshot the Wave 0 run took and recorded (snapshots.txt beside the backup: "<cluster id> <name> <task>
     # <location> <tag>") - every snapshot since the seed holds the same rows, so only the record ties the restore to
-    # this backup
-    - name: Scylla - the canary table truncated, then restored from the Wave 0 backup's own snapshot
+    # this backup. Scylla Manager lists a snapshot a little after its backup is done: waited for
+    - name: Scylla - the Wave 0 backup's own snapshot, recorded and listed in its location
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -375,7 +375,22 @@
             | awk '$2 ~ /(^|\/)schnappy-production-scylla$/')
           read -r c name task loc tag <<< "$rec"
           [[ $tag =~ ^sm_[0-9]{14}UTC$ ]] || { echo "no snapshot recorded for schnappy-production-scylla: $rec"; exit 1; }
-          $M sctool backup list -c "$c" -L "$loc" | grep -q "$tag" || { echo "$tag not in $loc"; exit 1; }
+          $M sctool backup list -c "$c" -L "$loc" | grep -q "$tag" || { echo "$tag not (yet) in $loc"; exit 1; }
+          echo "$c $loc $tag"
+      register: _scylla_snap
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _scylla_snap.rc == 0
+      when: store == 'scylla'
+
+    - name: Scylla - the canary table truncated, then restored from that snapshot
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          M="{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
+          read -r c loc tag <<< "{{ _scylla_snap.stdout }}"
           node=$({{ kubectl }} -n schnappy-production get pods -l scylla/cluster=schnappy-production-scylla -o jsonpath='{.items[0].metadata.name}')
           {{ kubectl }} -n schnappy-production exec "$node" -c scylla -- cqlsh -e "TRUNCATE upgrade_check.canary;"
           task=$($M sctool restore -c "$c" -L "$loc" -T "$tag" --restore-tables -K 'upgrade_check.canary')

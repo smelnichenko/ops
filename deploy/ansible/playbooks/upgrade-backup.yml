@@ -180,6 +180,36 @@
           failed_when: _pg_base.stdout != 'completed'
           when: store == 'postgres'
 
+        # a backup taken from a standby (CNPG's default target) completes before the primary has archived the WAL its
+        # end needs: until then it does not restore ("WAL ends before end of online backup" - Vagrant 2026-10-05, a
+        # minute after the backup). The primary switches to a new segment (after a WAL record of its own), and the
+        # backup counts once its end WAL is archived
+        - name: Postgres - each base backup's end WAL archived (restorable now)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              K="{{ kubectl }} -n {{ item.split()[0] }}"
+              end=$($K get backups.postgresql.cnpg.io upgrade-wave0-{{ _stamp | lower | replace('t', '-') | replace('z', '') }} \
+                -o jsonpath='{.status.endWal}')
+              [ -n "$end" ]
+              P="$K exec {{ item.split()[2] }} -c postgres -- psql -qAt"
+              last=$($P -c "select coalesce(last_archived_wal, '') from pg_stat_archiver")
+              if [[ ! "$last" > "$end" ]] && [ "$last" != "$end" ]; then
+                # a switch with nothing written since the last one does nothing - and the end segment may hold no
+                # record yet (end LSN 0/1E000000: Vagrant 2026-10-05): one WAL record, touching no table, first
+                $P -c "select pg_logical_emit_message(false, 'upgrade-wave0', 'base backup end')" > /dev/null
+                $P -c "select pg_switch_wal()" > /dev/null
+              fi
+              echo "$end $($P -c "select coalesce(last_archived_wal, '') from pg_stat_archiver")"
+          loop: "{{ _pg_clusters.stdout_lines | default([]) | reject('search', ' -$') | list }}"
+          register: _pg_end_wal
+          changed_when: true
+          retries: 30
+          delay: 5
+          until: _pg_end_wal.rc == 0 and _pg_end_wal.stdout.split() | length == 2 and _pg_end_wal.stdout.split()[1] >= _pg_end_wal.stdout.split()[0]
+          when: store == 'postgres'
+
         # ── clickhouse ────────────────────────────────────────────────────
         - name: ClickHouse - its pod and volume directory
           ansible.builtin.shell:
@@ -591,7 +621,8 @@
             _details:
               postgres: >-
                 every cluster dumped; base backups where an object store is set (namespace, cluster, primary, object
-                store): {{ _pg_clusters.stdout_lines | default([]) | join('; ') }}
+                store): {{ _pg_clusters.stdout_lines | default([]) | join('; ') }}; their end WAL and the last archived:
+                {{ _pg_end_wal.results | default([]) | map(attribute='stdout') | join('; ') }}
               gateway: "{{ _gw_tar.stdout_lines | default([]) | join('; ') }}"
               kafka: "{{ _kafka_copy.stdout_lines | default([]) | join('; ') }}"
               scylla: "snapshots (cluster, name, task, location, tag): {{ _scylla_snapshots.stdout_lines | default([]) | join('; ') }}"

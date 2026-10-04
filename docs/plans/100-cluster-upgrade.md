@@ -530,6 +530,11 @@ Second review (2026-10-05, the new work: Wave 0, the checks, the production comm
   ready pod again; restore-check recovers its base backup by barman ID (recoveryTarget.backupID), and -e
   restore_backup=wave0 recovers the Wave 0 base backup; the Postgres rehearsal replays every dump, allows only the
   roles and databases the side cluster had, and compares every table's row count with the dump.
+- Found by that last rehearsal (Vagrant 2026-10-05): a CNPG base backup taken from the standby (CNPG's default
+  target) completes before the primary archives the WAL its end needs - recovered a minute later it failed ("WAL
+  ends before end of online backup"), restorable only after archive_timeout. upgrade-backup.yml now switches WAL on
+  the primary and waits until each base backup's end WAL is archived; production's Wave 0 base backup is
+  restorable the moment the playbook ends.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
