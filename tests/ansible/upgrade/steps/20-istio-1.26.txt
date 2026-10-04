@@ -1,6 +1,7 @@
 # Istio 1.25.2 -> 1.26.8, in place (one minor: Istio's in-place rule): base, istiod, cni (infra upgrade/20-istio-1.26),
-# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of
-# the sidecars. Upgrade notes checked against production 2026-10-03: Lightstep/OpenCensus telemetry providers go in 1.27 (we trace through meshConfig zipkin: unaffected).
+# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of the
+# sidecars. Upgrade notes checked against production 2026-10-03: Lightstep/OpenCensus telemetry providers go in 1.27 (we
+# trace through meshConfig zipkin: unaffected).
 argo-chart istio-base base@1.25.2 => argo-chart istio-base base@1.26.8
 argo-chart istio-cni cni@1.25.2 => argo-chart istio-cni cni@1.26.8
 argo-chart istiod istiod@1.25.2 => argo-chart istiod istiod@1.26.8

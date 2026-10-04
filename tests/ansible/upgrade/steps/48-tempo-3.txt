@@ -1,7 +1,8 @@
 # Tempo 2.7.2 -> 3.1.0 in monolithic mode (no Kafka): platform's template renders the 3.x config when the image is 3.x
-# (tempo-cli 3.1.0's migration of ours: live-store instead of the ingester, its WAL on /data, retention under the backend
-# worker), infra's values the image - both upgrade/48-tempo-3, in either order. One-way: Tempo 3 reads 2.x blocks, not
-# the reverse - in production the traces bucket is not touched, so 2.x could only be restored with older blocks.
+# (tempo-cli 3.1.0's migration of ours: live-store instead of the ingester, its WAL on /data, retention under the
+# backend worker), infra's values the image - both upgrade/48-tempo-3, in either order. One-way: Tempo 3 reads 2.x
+# blocks, not the reverse - in production the traces bucket is not touched, so 2.x could only be restored with older
+# blocks.
 image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0
 # its change: the branch upgrade/48-tempo-3 in infra and platform
 branch infra

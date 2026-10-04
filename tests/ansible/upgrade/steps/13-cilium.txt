@@ -1,5 +1,5 @@
-# Cilium 1.19.1 -> 1.19.8 (Hubble UI 0.13.3 -> 0.13.6), the first platform step: the kubeadm playbook's Cilium tasks
-# as on ten (host-side; ten's live Helm values equal the playbook's - checked 2026-10-03 - bar socketLB.hostNamespaceOnly,
+# Cilium 1.19.1 -> 1.19.8 (Hubble UI 0.13.3 -> 0.13.6), the first platform step: the kubeadm playbook's Cilium tasks as
+# on ten (host-side; ten's live Helm values equal the playbook's - checked 2026-10-03 - bar socketLB.hostNamespaceOnly,
 # which ten has in cilium-config by hand and gets into its Helm values here). At the rollout cilium_version becomes
 # 1.19.8.
 helm kube-system/cilium cilium-1.19.1 1.19.1 => helm kube-system/cilium cilium-1.19.8 1.19.8

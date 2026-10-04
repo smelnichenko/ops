@@ -1,4 +1,5 @@
-# Mimir 3.1.6 -> 3.2.1, one minor at a time (infra upgrade/47-mimir-3.2). 3.2 requires coming from 3.1 (querier/store-gateway gRPC types).
+# Mimir 3.1.6 -> 3.2.1, one minor at a time (infra upgrade/47-mimir-3.2). 3.2 requires coming from 3.1
+# (querier/store-gateway gRPC types).
 image grafana/mimir 3.1.6 => image grafana/mimir 3.2.1
 # its change: the branch upgrade/47-mimir-3.2 in infra
 branch infra

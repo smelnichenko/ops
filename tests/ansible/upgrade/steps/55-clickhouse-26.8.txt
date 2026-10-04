@@ -6,3 +6,5 @@ image clickhouse/clickhouse-server 25.8.33.6-alpine => image clickhouse/clickhou
 # its change: the branch upgrade/55-clickhouse-26.8 in infra and platform
 branch infra
 branch platform
+# from this step's restart ClickHouse runs with compatibility 25.8 (the setting the step before put in its config)
+clickhouse-compat 25.8

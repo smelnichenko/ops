@@ -4,5 +4,7 @@ argo-chart cnpg cloudnative-pg@0.28.0 => argo-chart cnpg cloudnative-pg@0.29.1
 image ghcr.io/cloudnative-pg/cloudnative-pg 1.29.0 => image ghcr.io/cloudnative-pg/cloudnative-pg 1.30.1
 # A CNPG barman backup after it - WAL archiving and a fresh base backup: the CNPG operator that takes them.
 barman-check
+# and a copy of Postgres recovered from a fresh backup and its WAL (the CNPG operator changed)
+restore-check
 # its change: the branch upgrade/03-cnpg in infra
 branch infra

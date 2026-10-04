@@ -1,13 +1,16 @@
 # Istio 1.30.5 -> 1.31.1, in place (one minor: Istio's in-place rule): base, istiod, cni (infra upgrade/25-istio-1.31),
 # then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of
-# the sidecars. Upgrade notes checked against production 2026-10-03: Charts only on blob.istio.io (step 19). Supports Kubernetes 1.32-1.37.
-# The 1.31 charts take their images from docker.io/istio again (their default hub; registry.istio.io has no 1.31.1).
+# the sidecars. Upgrade notes checked against production 2026-10-03: charts only on blob.istio.io (step 19).
+# Supports Kubernetes 1.32-1.36 (istio.io supported-releases, read 2026-10-04).
+# The 1.31 images from docker.io/istio, as every release here (global.hub, set with the 1.30 step).
+# 1.31 sends unhealthy endpoints to the proxies by default: PILOT_AUTO_SEND_UNHEALTHY_ENDPOINTS=false keeps the old
+# behaviour (one-replica services would otherwise send traffic to an unready pod).
 argo-chart istio-base base@1.30.5 => argo-chart istio-base base@1.31.1
 argo-chart istio-cni cni@1.30.5 => argo-chart istio-cni cni@1.31.1
 argo-chart istiod istiod@1.30.5 => argo-chart istiod istiod@1.31.1
-image registry.istio.io/release/install-cni 1.30.5 => image docker.io/istio/install-cni 1.31.1
-image registry.istio.io/release/pilot 1.30.5 => image docker.io/istio/pilot 1.31.1
-image registry.istio.io/release/proxyv2 1.30.5 => image docker.io/istio/proxyv2 1.31.1
+image docker.io/istio/install-cni 1.30.5 => image docker.io/istio/install-cni 1.31.1
+image docker.io/istio/pilot 1.30.5 => image docker.io/istio/pilot 1.31.1
+image docker.io/istio/proxyv2 1.30.5 => image docker.io/istio/proxyv2 1.31.1
 playbook restart-mesh-workloads.yml -e istio_version=1.31.1
 # its change: the branch upgrade/25-istio-1.31 in infra
 branch infra

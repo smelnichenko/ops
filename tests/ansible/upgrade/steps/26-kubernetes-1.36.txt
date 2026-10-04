@@ -14,3 +14,7 @@ k8s server v1.35.9 => k8s server v1.36.5
 playbook upgrade-kubeadm.yml -e k8s_upgrade_to=1.36.5
 # its change: the branch upgrade/26-kubernetes-1.36 in infra
 branch infra
+# kubectl in the stale PR env sweeper (infra) and the preview cleanup (platform) to 1.35.9 - within one minor of the API
+# server at 1.36 (the skew policy); Argo CD applies it before the kubeadm upgrade
+image alpine/k8s 1.34.0 => image alpine/k8s 1.35.9
+branch platform

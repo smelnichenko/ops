@@ -1,0 +1,10 @@
+# What a fresh install of the cluster needs from Argo CD, in git (infra): the root app-of-apps retries a failed sync 20
+# times with a capped back-off (10 s doubling to 3 min) instead of the default 5 - on a cold start the first wave's
+# operators are Degraded for a while and the 5 ran out before the later waves existed (Vagrant 2026-10-04); and the
+# sync waves the Vagrant mirror used to add (cert-manager first, Scylla Manager after its operator, the environment
+# sets and observability after the infra they need). Annotations and the root's retry only: no version changes.
+# And the two charts that floated at "*" pinned to what production runs (nothing running changes):
+argo-chart metrics-server metrics-server@* => argo-chart metrics-server metrics-server@3.14.0
+argo-chart porkbun-webhook cert-manager-webhook-porkbun@* => argo-chart porkbun-webhook cert-manager-webhook-porkbun@1.0.0
+# its change: the branch upgrade/00-argocd-root-retry in infra
+branch infra

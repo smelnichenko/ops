@@ -1,0 +1,6 @@
+# The kubelet's graceful node shutdown (180 s, 30 s for critical pods) into the kubelet-config ConfigMap, before the
+# first kubeadm upgrade: kubeadm rewrites the kubelet's config.yaml from that ConfigMap, which on ten holds 0s/0s -
+# every upgrade would turn the grace off. upgrade-kubeadm.yml refuses to run until the ConfigMap has it, and checks the
+# kubelet's file after. No version changes; nothing restarts (the kubelet reads the ConfigMap only when kubeadm writes
+# its file).
+playbook configure-node.yml -e kubelet_grace_in_kubelet_config_map=true

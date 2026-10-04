@@ -1,7 +1,8 @@
-# Argo CD v3.3.8 -> v3.3.14: chart 9.5.4 -> 9.5.11 (the last of the 9.5 line, which ships v3.3.9) with the image
-# pinned to the line's newest patch, through setup-argocd.yml as on ten (host-side). At the rollout argocd_version
-# becomes 9.5.11 and argocd_image_tag_override v3.3.14. The flags after those are the Vagrant copy's own
-# (Taskfile test:upgrade:argo).
+# Argo CD v3.3.8 -> v3.3.14: chart 9.5.4 -> 9.5.11 (the last 9.5 chart with Argo CD 3.3 - the line runs on to 9.5.22
+# with 3.4 - and it ships v3.3.9) with the image pinned to the 3.3 line's newest patch, through setup-argocd.yml as on
+# ten (host-side). At the rollout argocd_version becomes 9.5.11; the image v3.3.14 comes from the playbook's
+# argocd_image_pins for chart 9.5.11 (not an -e override, which the rollout would make the default under the later
+# charts too). The flags after argocd_version are the Vagrant copy's own (Taskfile test:upgrade:argo).
 helm argocd/argocd argo-cd-9.5.4 v3.3.8 => helm argocd/argocd argo-cd-9.5.11 v3.3.9
 image quay.io/argoproj/argocd v3.3.8 => image quay.io/argoproj/argocd v3.3.14
-playbook setup-argocd.yml -e argocd_version=9.5.11 -e argocd_image_tag_override=v3.3.14 -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+playbook setup-argocd.yml -e argocd_version=9.5.11 -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false

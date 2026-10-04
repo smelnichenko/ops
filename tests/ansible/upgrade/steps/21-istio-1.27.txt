@@ -1,6 +1,7 @@
 # Istio 1.26.8 -> 1.27.9, in place (one minor: Istio's in-place rule): base, istiod, cni (infra upgrade/21-istio-1.27),
-# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of
-# the sidecars. Upgrade notes checked against production 2026-10-03: Native sidecars become the default; istiod-values.yaml pins ENABLE_NATIVE_SIDECARS=false, so nothing changes.
+# then every mesh workload restarted (restart-mesh-workloads.yml) - the control plane may be only one minor ahead of the
+# sidecars. Upgrade notes checked against production 2026-10-03: Native sidecars become the default; istiod-values.yaml
+# pins ENABLE_NATIVE_SIDECARS=false, so nothing changes.
 argo-chart istio-base base@1.26.8 => argo-chart istio-base base@1.27.9
 argo-chart istio-cni cni@1.26.8 => argo-chart istio-cni cni@1.27.9
 argo-chart istiod istiod@1.26.8 => argo-chart istiod istiod@1.27.9

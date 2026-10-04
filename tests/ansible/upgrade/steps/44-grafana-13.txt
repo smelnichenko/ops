@@ -4,3 +4,5 @@
 image grafana/grafana 12.4.12 => image grafana/grafana 13.2.3
 # its change: the branch upgrade/44-grafana-13 in infra
 branch infra
+# and the branch upgrade/44-grafana-13 in platform (Recreate: one SQLite database, migrated on start)
+branch platform
