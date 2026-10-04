@@ -2,6 +2,8 @@
 # upgrade notes checked against production 2026-10-03: no L7/kafka policy rules, no v2alpha1 CiliumNodeConfig, Cilium's
 # own Gateway API off (Istio serves it), and the NodePort change for socketLB.hostNamespaceOnly does not apply - pods
 # reach the gateway on the node's IP (ten: pmon.dev -> 192.168.11.2), not a NodePort. Envoy and Hubble UI unchanged.
+# cilium_values carry upgradeCompatibility 1.19 (Cilium's upgrade guide): ten's cilium-config then changes only by the
+# keys of 1.20's new features, all at their off/default values - envoy-xds-mode stays as 1.19 had it, not ads.
 helm kube-system/cilium cilium-1.19.8 1.19.8 => helm kube-system/cilium cilium-1.20.2 1.20.2
 image quay.io/cilium/cilium v1.19.8 => image quay.io/cilium/cilium v1.20.2
 image quay.io/cilium/hubble-relay v1.19.8 => image quay.io/cilium/hubble-relay v1.20.2

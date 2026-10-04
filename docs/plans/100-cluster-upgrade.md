@@ -355,7 +355,12 @@ Rollout behaviour
 - R15 Step 05: the Pis' versitygw upgrade never restarts the service; restart on version change, one Pi at a time;
   assert the running version.
 - R16 Cilium on ten: helm repo index never refreshed (steps 13/17 would fail); compare rendered cilium-config with the
-  live, hand-patched one; upgradeCompatibility for 1.19->1.20.
+  live, hand-patched one; upgradeCompatibility for 1.19->1.20. DONE: the repo refreshed (force_update); one
+  cilium_values for install and check; before an upgrade the running chart is rendered from them on the node's Helm and
+  must equal the live cilium-config key for key, or the run refuses (ten read-only 2026-10-04: Helm 3.20 renders 154
+  keys, all equal to live; Vagrant: a key added by hand refused, a clean run passed without restarting Cilium);
+  upgradeCompatibility "1.19" - no change at 1.19, at 1.20.2 it keeps envoy-xds-mode as 1.19 had it, the only change
+  1.20 makes to ten's config besides its new features' keys at their defaults.
 - R17 Grafana: RollingUpdate on one SQLite volume - Grafana 12 and 13 at once during the one-way migration: Recreate.
 - R18 Step files' playbook lines are Vagrant command lines: a production command per step; task deploy:upgrade:*
   wrappers; read-only production checks after each step; per-step abort/revert and outage notes.

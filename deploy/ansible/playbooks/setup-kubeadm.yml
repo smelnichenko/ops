@@ -49,6 +49,39 @@
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
     cilium_version: "1.19.1"
+    # Cilium's Helm values. An upgrade renders cilium-config from these alone, so they must render what runs: the
+    # 'Cilium's live config' check refuses otherwise.
+    cilium_values:
+      cluster:
+        name: kubernetes
+      ipam:
+        operator:
+          clusterPoolIPv4PodCIDRList: "{{ pod_cidr }}"
+      k8sServiceHost: "{{ node_ip }}"
+      k8sServicePort: 6443
+      kubeProxyReplacement: true
+      routingMode: tunnel
+      tunnelProtocol: vxlan
+      operator:
+        replicas: 1
+      hubble:
+        enabled: true
+        relay:
+          enabled: true
+        ui:
+          enabled: true
+      cni:
+        exclusive: false
+      # Socket-level load balancing only in the host namespace: in a pod it rewrote a Service IP to a pod IP at
+      # connect(), before Istio's redirect, so the sidecar found no listener, passed the traffic through in plain
+      # text and STRICT mTLS reset it (Vagrant 2026-10-02: CNPG's replica join and every app -> Postgres). ten has
+      # had it since bootstrap.sh patched cilium-config by hand; a helm upgrade without it would drop it there.
+      socketLB:
+        hostNamespaceOnly: true
+      # the defaults of the minor first installed (1.19, 2026-04-05) kept across upgrades, as Cilium's upgrade guide
+      # asks: 1.20's own would switch envoy-xds-mode to ads - the one change it makes to ten's config besides keys of
+      # its new features (rendered 2026-10-04)
+      upgradeCompatibility: "1.19"
     istio_version: "1.25.2"
     data_dir: "/mnt/storage"
 
@@ -491,6 +524,51 @@
         force_update: true
       tags: [cilium]  # an upgrade runs just the Cilium tasks: --tags cilium -e cilium_version=...
 
+    - name: The running Cilium release
+      ansible.builtin.command: helm --kubeconfig /etc/kubernetes/admin.conf -n kube-system list --filter '^cilium$' -o json
+      register: _cilium_release
+      changed_when: false
+      tags: [cilium]
+
+    # A setting made in cilium-config by hand is dropped by the next upgrade, silently (ten's socketLB one was, until
+    # these values carried it). Before an upgrade the values render the running chart's cilium-config on the node's
+    # Helm, and it must be the live one, key for key.
+    - name: Cilium's live config is what these values render for the running chart (nothing set by hand)
+      when: _cilium_release.stdout | from_json | length > 0
+      vars:
+        _running_chart: "{{ (_cilium_release.stdout | from_json | first).chart | regex_replace('^cilium-', '') }}"
+      tags: [cilium]
+      block:
+        - name: The running chart's cilium-config, rendered from these values
+          ansible.builtin.command:
+            argv: [helm, template, cilium, cilium/cilium, --version, "{{ _running_chart }}", --namespace, kube-system,
+                   --values, '-', --show-only, templates/cilium-configmap.yaml]
+            stdin: "{{ cilium_values | to_nice_yaml }}"
+          register: _cilium_rendered
+          changed_when: false
+
+        - name: The live cilium-config
+          kubernetes.core.k8s_info:
+            kubeconfig: /etc/kubernetes/admin.conf
+            kind: ConfigMap
+            namespace: kube-system
+            name: cilium-config
+          register: _cilium_live
+
+        - name: The same, key for key
+          vars:
+            _rendered: "{{ (_cilium_rendered.stdout | from_yaml).data }}"
+            _live: "{{ _cilium_live.resources[0].data | default({}) }}"
+            _differ: >-
+              {{ (_rendered | dict2items) | symmetric_difference(_live | dict2items) | map(attribute='key') | unique
+                 | list }}
+          ansible.builtin.assert:
+            that: _differ | length == 0
+            fail_msg: >-
+              REFUSED: cilium-config differs from what cilium_values render for chart {{ _running_chart }} in
+              {{ _differ | join(', ') }} - set by hand? An upgrade would drop it: carry it in cilium_values first
+            quiet: true
+
     - name: Install Cilium via Helm
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -498,33 +576,7 @@
         chart_ref: cilium/cilium
         chart_version: "{{ cilium_version }}"
         release_namespace: kube-system
-        values:
-          cluster:
-            name: kubernetes
-          ipam:
-            operator:
-              clusterPoolIPv4PodCIDRList: "{{ pod_cidr }}"
-          k8sServiceHost: "{{ node_ip }}"
-          k8sServicePort: 6443
-          kubeProxyReplacement: true
-          routingMode: tunnel
-          tunnelProtocol: vxlan
-          operator:
-            replicas: 1
-          hubble:
-            enabled: true
-            relay:
-              enabled: true
-            ui:
-              enabled: true
-          cni:
-            exclusive: false
-          # Socket-level load balancing only in the host namespace: in a pod it rewrote a Service IP to a pod IP at
-          # connect(), before Istio's redirect, so the sidecar found no listener, passed the traffic through in plain
-          # text and STRICT mTLS reset it (Vagrant 2026-10-02: CNPG's replica join and every app -> Postgres). ten has
-          # had it since bootstrap.sh patched cilium-config by hand; a helm upgrade without it would drop it there.
-          socketLB:
-            hostNamespaceOnly: true
+        values: "{{ cilium_values }}"
         wait: true
         wait_timeout: 180s
       tags: [cilium]
