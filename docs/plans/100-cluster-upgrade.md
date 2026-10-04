@@ -248,6 +248,29 @@ after each. Fixes made while steps run one at a time prove the step, not the cha
 | 54 | ClickHouse compatibility 25.8 | platform | green (in effect from 55's restart) |
 | 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S; green (26.8.15.10 with compatibility 25.8, logs flowing) |
 
+## Stateful steps - for the operator's approval
+
+Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first
+three is an outage of that service for the restart. Each row was proven in Vagrant on a copy of production with
+seeded data (Postgres 10,000 rows on both instances, 1,000 Kafka messages, 1,000 ScyllaDB rows, md5 each).
+
+| # | Change | Outage | Undo | Vagrant proof |
+|---|---|---|---|---|
+| 33 | Argo stops auto-syncing Strimzi; Strimzi's own tool rewrites every Strimzi resource (ten's 13 unmanaged KafkaTopics too) and the CRDs' stored version to v1 | none | 0.51 serves v1 too: staying on 0.51 works; v1beta2 storage does not come back | 10 CRDs store only v1, Kafka Ready, messages intact |
+| 34 | Strimzi 0.51.0 -> 1.2.0, auto-sync back; the broker rolls onto the 1.2.0 image (Kafka 4.2.0) | Kafka, one roll | chart back to 0.51 (reads v1) | operator 1.2.0 reconciles, messages intact |
+| 35 | Kafka 4.2.0 -> 4.3.1; Strimzi then moves the metadata version to 4.3-IV0 | Kafka, two rolls | none once the metadata version moved | 4.3.1, 4.3-IV0, Ready, messages intact |
+| 37 | ScyllaDB 6.2.3 -> 2025.1.16 (source-available line) | ScyllaDB, one roll | none (new SSTables) | rows intact |
+| 39 | ScyllaDB 2025.1.16 -> 2026.1.14 (LTS to LTS) | ScyllaDB, one roll | none | rows intact |
+| 41 | ScyllaDB 2026.1.14 -> 2026.3.2; node-exporter becomes the operator's sidecar | ScyllaDB, one roll | none | rows intact, every scrape target up |
+| 42 | PostgreSQL 17 -> 18.6, CNPG offline in-place (pg_upgrade on the primary, replica re-cloned) | Postgres, minutes | none: restore from the pre-upgrade backup; take a fresh base backup after (17's WAL cannot restore 18) | both instances 18.6, data major 18, rows on both |
+| 44 | Grafana 12.4.12 -> 13.2.3, its storage migrated on start | Grafana, one restart | restore the volume backed up first | database ok, 6 dashboards as on ten, 3 datasources |
+| 48 | Tempo 2.7.2 -> 3.1.0 monolithic | Tempo, one restart | 2.x cannot read blocks 3.x wrote | v3.1.0 ingests OTLP and Zipkin, search answers |
+| 53 | ClickHouse 24.8 -> 25.8.33.6 with compatibility 24.8 (step 52) | ClickHouse, one restart (logs buffer in Fluent Bit) | image back to 24.8 while the pin stays | 25.8.33.6 under 24.8, logs flowing |
+| 55 | ClickHouse 25.8 -> 26.8.15.10 with compatibility 25.8 (step 54) | ClickHouse, one restart | image back to 25.8 while the pin stays; removing the pin is the point of no return (operator's call) | 26.8.15.10 under 25.8, logs flowing |
+
+Before 33-41 (Kafka, ScyllaDB): Velero holds no copy of their data (defect 20) - a backup first, or the operator
+accepts the risk. Before 42: CNPG base backup + `pg_dumpall` to the Pi. Before 44: Grafana's volume.
+
 ## Production rollout (after all tests pass and approval)
 
 Gate: every step green in Vagrant on its own, then `task test:upgrade:full` green (built from nothing, steps 01-55 in
