@@ -1,0 +1,442 @@
+---
+# Wave 0: a backup of one store right before the upgrade step that changes it for good, into the Pi backup store
+# (bucket upgrade-backups, keys <store>/<UTC time>/<file>, a <file>.sha256 beside each, every object read back and its
+# sha256 compared). A copy stays on the node under /var/backups/upgrade. One store per run:
+#
+#   -e store=postgres    every CNPG cluster: pg_dumpall of its primary, gzipped; and a CNPG base backup to its own
+#                        object store (both online)
+#   -e store=clickhouse  every MergeTree table frozen (a hard-linked snapshot inside its volume, consistent and
+#                        online), the snapshot and the tables' metadata tarred, the snapshot released
+#   -e store=grafana     its SQLite database through SQLite's online backup API (on the node, Grafana running)
+#   -e store=kafka       each Kafka cluster's broker volume, the broker stopped for the copy: the operator paused on it
+#                        (strimzi.io/pause-reconciliation - Argo CD keeps an annotation it did not apply), the broker pod
+#                        deleted, the volume tarred, the pause lifted - an outage of Kafka for the copy
+#   -e store=gateway     the in-cluster object store's volume (with its extended attributes) and Mimir's and Tempo's
+#                        own (blocks are immutable; online)
+#   -e store=scylla      a Scylla Manager backup of each ScyllaDB cluster now, to its usual location, waited for
+#
+# Restores are rehearsed in Vagrant (task test:upgrade:wave0) against the seeded canaries.
+#
+# Usage: task deploy:upgrade:backup STORE=<store>   (production; the Vagrant rehearsal runs the same playbook)
+- name: Wave 0 - back one store up before its one-way step
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    upgrade_backup_endpoint: "{{ upgrade_backup_endpoint_override | default('http://' ~ (keepalived_vip | default('192.168.11.5')) ~ ':9000') }}"
+    upgrade_backup_bucket: upgrade-backups
+    local_dir: /var/backups/upgrade
+    stores: [postgres, clickhouse, grafana, kafka, gateway, scylla]
+  tasks:
+    - name: The store is one this playbook backs up
+      ansible.builtin.assert:
+        that: store | default('') in stores
+        fail_msg: "-e store=<one of {{ stores | join(', ') }}>"
+
+    - name: This backup's time (the keys' prefix)
+      ansible.builtin.set_fact:
+        _stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+    - name: The local directory
+      ansible.builtin.file:
+        path: "{{ local_dir }}/{{ store }}/{{ _stamp }}"
+        state: directory
+        mode: '0700'
+
+    - name: The bucket exists in the store (created when missing)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          url="{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}"
+          s() { curl -sS -o /dev/null -w '%{http_code}' --aws-sigv4 "aws:amz:us-east-1:s3" --user "$STORE_KEY:$STORE_SECRET" "$@"; }
+          code=$(s -I "$url")
+          if [ "$code" = 200 ]; then echo exists; exit 0; fi
+          [ "$code" = 404 ] || { echo "HEAD $url: $code"; exit 1; }
+          code=$(s -X PUT "$url")
+          [ "$code" = 200 ] || { echo "PUT $url: $code"; exit 1; }
+          echo created
+      environment:
+        STORE_KEY: "{{ backup_root_user }}"
+        STORE_SECRET: "{{ backup_root_password }}"
+      register: _bucket
+      changed_when: "'created' in _bucket.stdout"
+
+    # ── postgres ──────────────────────────────────────────────────────
+    - name: Postgres - the CNPG clusters and their primaries
+      ansible.builtin.command: >-
+        {{ kubectl }} get clusters.postgresql.cnpg.io -A
+        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.status.currentPrimary}{"\n"}{end}'
+      register: _pg_clusters
+      changed_when: false
+      # a cluster without a primary is broken: no backup of it can be taken - stop here, naming it
+      failed_when: >-
+        _pg_clusters.rc != 0 or _pg_clusters.stdout_lines | length == 0
+        or (_pg_clusters.stdout_lines | map('split') | map('length') | reject('equalto', 3) | list | length) > 0
+      when: store == 'postgres'
+
+    - name: Postgres - pg_dumpall of each primary, gzipped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out="{{ local_dir }}/postgres/{{ _stamp }}/{{ item.split()[0] }}-{{ item.split()[1] }}.sql.gz"
+          {{ kubectl }} -n {{ item.split()[0] }} exec {{ item.split()[2] }} -c postgres -- pg_dumpall | gzip > "$out"
+          # a dump that ended early has no completion line: pg_dumpall writes it last
+          gzip -dc "$out" | tail -n 5 | grep -q 'PostgreSQL database cluster dump complete'
+          echo "$out"
+      loop: "{{ _pg_clusters.stdout_lines | default([]) }}"
+      register: _pg_dumps
+      changed_when: true
+      when: store == 'postgres'
+
+    # SonarQube's Postgres is a plain StatefulSet, not CNPG (production only: the Vagrant copy leaves SonarQube out)
+    - name: Postgres - pg_dumpall of SonarQube's Postgres, where it runs
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pod=$({{ kubectl }} -n schnappy-infra get pod schnappy-sonarqube-postgres-0 --ignore-not-found -o name)
+          [ -n "$pod" ] || { echo none; exit 0; }
+          out="{{ local_dir }}/postgres/{{ _stamp }}/schnappy-infra-sonarqube-postgres.sql.gz"
+          {{ kubectl }} -n schnappy-infra exec schnappy-sonarqube-postgres-0 -c postgres -- \
+            sh -c 'pg_dumpall -U "$POSTGRES_USER"' | gzip > "$out"
+          gzip -dc "$out" | tail -n 5 | grep -q 'PostgreSQL database cluster dump complete'
+          echo "$out"
+      register: _sonar_dump
+      changed_when: _sonar_dump.stdout != 'none'
+      when: store == 'postgres'
+
+    - name: Postgres - SonarQube's dump into the store
+      ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ _sonar_dump.stdout }}"
+        upload_key: "postgres/{{ _stamp }}/{{ _sonar_dump.stdout | basename }}"
+      when: store == 'postgres' and _sonar_dump.stdout != 'none'
+
+    - name: Postgres - each dump into the store
+      ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ item.stdout }}"
+        upload_key: "postgres/{{ _stamp }}/{{ item.stdout | basename }}"
+      loop: "{{ _pg_dumps.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: store == 'postgres'
+
+    - name: Postgres - a CNPG base backup of each cluster to its own object store
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: postgresql.cnpg.io/v1
+          kind: Backup
+          metadata:
+            name: "upgrade-wave0-{{ _stamp | lower | replace('t', '-') | replace('z', '') }}"
+            namespace: "{{ item.split()[0] }}"
+          spec:
+            cluster: { name: "{{ item.split()[1] }}" }
+            method: barmanObjectStore
+      loop: "{{ _pg_clusters.stdout_lines | default([]) }}"
+      when: store == 'postgres'
+
+    - name: Postgres - each base backup completed
+      ansible.builtin.command: >-
+        {{ kubectl }} -n {{ item.split()[0] }} get backups.postgresql.cnpg.io
+        upgrade-wave0-{{ _stamp | lower | replace('t', '-') | replace('z', '') }} -o jsonpath={.status.phase}
+      loop: "{{ _pg_clusters.stdout_lines | default([]) }}"
+      register: _pg_base
+      changed_when: false
+      retries: 90
+      delay: 10
+      until: _pg_base.stdout in ['completed', 'failed']
+      failed_when: _pg_base.stdout != 'completed'
+      when: store == 'postgres'
+
+    # ── clickhouse ────────────────────────────────────────────────────
+    - name: ClickHouse - its pod and volume directory
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pod=$({{ kubectl }} get pods -A -l app.kubernetes.io/component=clickhouse \
+            -o jsonpath='{.items[0].metadata.namespace} {.items[0].metadata.name}')
+          ns=${pod% *}; name=${pod#* }
+          pvc=$({{ kubectl }} -n "$ns" get pod "$name" \
+            -o jsonpath='{.spec.volumes[?(@.name=="data")].persistentVolumeClaim.claimName}')
+          pv=$({{ kubectl }} -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
+          echo "$ns $name $({{ kubectl }} get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')"
+      register: _ch
+      changed_when: false
+      failed_when: _ch.rc != 0 or _ch.stdout.split() | length != 3
+      when: store == 'clickhouse'
+
+    # the snapshot's name in letters, digits and _ only: ClickHouse escapes anything else in the directory's name
+    - name: ClickHouse - every MergeTree table frozen (a hard-linked snapshot in its volume)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          q() {
+            {{ kubectl }} -n {{ _ch.stdout.split()[0] }} exec {{ _ch.stdout.split()[1] }} -c clickhouse -- sh -c \
+              'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ "$1"
+          }
+          q "SELECT database || '.' || name FROM system.tables WHERE engine LIKE '%MergeTree%'
+             AND database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')" \
+            | while read -r t; do q "ALTER TABLE $t FREEZE WITH NAME 'wave0_{{ _stamp }}'" < /dev/null; echo "$t"; done
+      register: _ch_frozen
+      changed_when: true
+      when: store == 'clickhouse'
+
+    # metadata/<database> of an Atomic database is a symlink to its directory in store/ by the in-container path
+    # (/var/lib/clickhouse/store/...), dangling on the node: each one's directory is tarred by its path in the
+    # volume, or the tables' CREATE statements are not in the backup at all - only the links
+    - name: ClickHouse - the snapshot, the databases' and the tables' metadata, tarred  # noqa: command-instead-of-module
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          cd {{ _ch.stdout.split()[2] }}
+          dbs=()
+          for l in metadata/*; do
+            [ -L "$l" ] || continue
+            t=$(readlink "$l"); t=${t#/var/lib/clickhouse/}; t=${t%/}
+            [[ $t == store/* && -d $t ]] || { echo "$l -> $(readlink "$l"): no store directory in the volume"; exit 1; }
+            dbs+=("$t")
+          done
+          [ -n "${dbs[*]:-}" ] || { echo "no database directory linked under metadata/"; exit 1; }
+          tar --numeric-owner -czf {{ local_dir }}/clickhouse/{{ _stamp }}/clickhouse.tar.gz \
+            shadow/wave0_{{ _stamp }} metadata "${dbs[@]}"
+          printf '%s\n' "${dbs[@]}"
+      changed_when: true
+      when: store == 'clickhouse'
+
+    # what UNFREEZE does - its hard links dropped (SYSTEM UNFREEZE is off by default: enable_system_unfreeze)
+    - name: ClickHouse - the snapshot released
+      ansible.builtin.file:
+        path: "{{ _ch.stdout.split()[2] }}/shadow/wave0_{{ _stamp }}"
+        state: absent
+      when: store == 'clickhouse'
+
+    - name: ClickHouse - into the store
+      ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ local_dir }}/clickhouse/{{ _stamp }}/clickhouse.tar.gz"
+        upload_key: "clickhouse/{{ _stamp }}/clickhouse.tar.gz"
+      when: store == 'clickhouse'
+
+    # ── grafana ───────────────────────────────────────────────────────
+    - name: Grafana - its database file on the node
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pod=$({{ kubectl }} get pods -A -l app.kubernetes.io/component=grafana \
+            -o jsonpath='{.items[0].metadata.namespace} {.items[0].metadata.name}')
+          ns=${pod% *}; name=${pod#* }
+          pvc=$({{ kubectl }} -n "$ns" get pod "$name" \
+            -o jsonpath='{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' | grep . | head -1)
+          pv=$({{ kubectl }} -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
+          dir=$({{ kubectl }} get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')
+          [ -f "$dir/grafana.db" ]
+          echo "$dir/grafana.db"
+      register: _grafana_db
+      changed_when: false
+      when: store == 'grafana'
+
+    - name: Grafana - SQLite's online backup of it (consistent while Grafana runs), gzipped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out={{ local_dir }}/grafana/{{ _stamp }}/grafana.db
+          python3 -c '
+          import sqlite3, sys
+          src = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+          dst = sqlite3.connect(sys.argv[2])
+          src.backup(dst)
+          assert dst.execute("pragma integrity_check").fetchone()[0] == "ok"
+          tables = {r[0] for r in dst.execute("select name from sqlite_master")}
+          unified = dst.execute("select count(*) from resource where resource = ?", ("dashboards",)).fetchone()[0] \
+              if "resource" in tables else 0
+          print(dst.execute("select count(*) from dashboard where is_folder = 0").fetchone()[0], "dashboards in the legacy table,",
+                unified, "in unified storage")' {{ _grafana_db.stdout }} "$out"
+          gzip "$out"
+      register: _grafana_copy
+      changed_when: true
+      when: store == 'grafana'
+
+    - name: Grafana - into the store
+      ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ local_dir }}/grafana/{{ _stamp }}/grafana.db.gz"
+        upload_key: "grafana/{{ _stamp }}/grafana.db.gz"
+      when: store == 'grafana'
+
+    # ── gateway (the in-cluster object store, Mimir's and Tempo's volumes) ──
+    - name: The in-cluster object store's, Mimir's and Tempo's volume directories
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for pvc in schnappy-infra-s3gw schnappy-mimir schnappy-tempo; do
+            pv=$({{ kubectl }} -n schnappy-infra get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
+            echo "$pvc $({{ kubectl }} get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')"
+          done
+      register: _gw_dirs
+      changed_when: false
+      failed_when: _gw_dirs.rc != 0 or _gw_dirs.stdout_lines | length != 3
+      when: store == 'gateway'
+
+    # with the user.* extended attributes: the object store's posix backend keeps each object's ETag and checksums and
+    # each bucket's owner and ACL in them - a tar without them restores files no client may read
+    - name: Each volume tarred, extended attributes included  # noqa: command-instead-of-module
+      ansible.builtin.command: >-
+        tar --numeric-owner --xattrs --xattrs-include=user.* -C {{ item.split()[1] }}
+        -czf {{ local_dir }}/gateway/{{ _stamp }}/{{ item.split()[0] }}.tar.gz .
+      loop: "{{ _gw_dirs.stdout_lines | default([]) }}"
+      changed_when: true
+      when: store == 'gateway'
+
+    - name: Each into the Pi store
+      ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ local_dir }}/gateway/{{ _stamp }}/{{ item.split()[0] }}.tar.gz"
+        upload_key: "gateway/{{ _stamp }}/{{ item.split()[0] }}.tar.gz"
+      loop: "{{ _gw_dirs.stdout_lines | default([]) }}"
+      when: store == 'gateway'
+
+    # ── kafka ─────────────────────────────────────────────────────────
+    - name: Kafka - the clusters
+      ansible.builtin.command: >-
+        {{ kubectl }} get kafkas.kafka.strimzi.io -A
+        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}'
+      register: _kafka_clusters
+      changed_when: false
+      failed_when: _kafka_clusters.rc != 0 or _kafka_clusters.stdout_lines | length == 0
+      when: store == 'kafka'
+
+    - name: Kafka - their broker pods and volume directories
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get kafkas.kafka.strimzi.io -A -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' \
+          | while read -r ns k; do
+            {{ kubectl }} -n "$ns" get pods -l strimzi.io/cluster="$k",strimzi.io/broker-role=true -o name | while read -r pod; do
+              pvc=$({{ kubectl }} -n "$ns" get "$pod" -o jsonpath='{range .spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' | grep . | head -1)
+              pv=$({{ kubectl }} -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
+              echo "$ns $k ${pod#pod/} $({{ kubectl }} get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')"
+            done
+          done
+      register: _kafka
+      changed_when: false
+      failed_when: _kafka.rc != 0 or _kafka.stdout_lines | length == 0
+      when: store == 'kafka'
+
+    - name: Kafka - each broker stopped, its volume tarred, started again
+      when: store == 'kafka'
+      block:
+        - name: Kafka - the operator paused on each cluster (Argo CD keeps an annotation it did not apply)
+          ansible.builtin.command: >-
+            {{ kubectl }} -n {{ item.split()[0] }} annotate kafkas.kafka.strimzi.io {{ item.split()[1] }}
+            strimzi.io/pause-reconciliation=true --overwrite
+          loop: "{{ _kafka_clusters.stdout_lines }}"
+          changed_when: true
+
+        - name: Kafka - each cluster reports the reconciliation paused
+          ansible.builtin.shell: >-
+            {{ kubectl }} -n {{ item.split()[0] }} get kafkas.kafka.strimzi.io {{ item.split()[1] }}
+            -o jsonpath='{.status.conditions[?(@.type=="ReconciliationPaused")].status}'
+          loop: "{{ _kafka_clusters.stdout_lines }}"
+          register: _paused
+          changed_when: false
+          retries: 30
+          delay: 5
+          until: _paused.stdout == 'True'
+
+        - name: Kafka - each broker pod deleted (not recreated while paused) and gone
+          ansible.builtin.command: "{{ kubectl }} -n {{ item.split()[0] }} delete pod {{ item.split()[2] }} --wait=true --timeout=300s"
+          loop: "{{ _kafka.stdout_lines }}"
+          changed_when: true
+
+        - name: Kafka - each broker volume tarred  # noqa: command-instead-of-module
+          ansible.builtin.command: >-
+            tar --numeric-owner -C {{ item.split()[3] }} -czf {{ local_dir }}/kafka/{{ _stamp }}/{{ item.split()[0] }}-{{ item.split()[2] }}.tar.gz .
+          loop: "{{ _kafka.stdout_lines }}"
+          changed_when: true
+      always:
+        - name: Kafka - the pause lifted, whatever happened
+          ansible.builtin.command: >-
+            {{ kubectl }} -n {{ item.split()[0] }} annotate kafkas.kafka.strimzi.io {{ item.split()[1] }}
+            strimzi.io/pause-reconciliation-
+          loop: "{{ _kafka_clusters.stdout_lines }}"
+          changed_when: true
+
+        - name: Kafka - each cluster Ready again
+          ansible.builtin.command: >-
+            {{ kubectl }} -n {{ item.split()[0] }} wait kafkas.kafka.strimzi.io {{ item.split()[1] }}
+            --for=condition=Ready --timeout=600s
+          loop: "{{ _kafka_clusters.stdout_lines }}"
+          changed_when: false
+
+    - name: Kafka - each broker volume into the store
+      ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ local_dir }}/kafka/{{ _stamp }}/{{ item.split()[0] }}-{{ item.split()[2] }}.tar.gz"
+        upload_key: "kafka/{{ _stamp }}/{{ item.split()[0] }}-{{ item.split()[2] }}.tar.gz"
+      loop: "{{ _kafka.stdout_lines | default([]) }}"
+      when: store == 'kafka'
+
+    # ── scylla ────────────────────────────────────────────────────────
+    # a cluster's own backup task started now; one without any (the test environment's) gets a backup of its own to the
+    # location the others use
+    - name: Scylla - a Scylla Manager backup of each cluster now
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          M="{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
+          clusters=$($M sctool cluster list | awk -F'|' '$2 ~ /[0-9a-f]{8}-/ {gsub(/ /, "", $2); print $2}')
+          [ -n "$clusters" ]
+          loc=""
+          for c in $clusters; do
+            t=$($M sctool tasks -c "$c" | awk -F'|' '$2 ~ /backup\// {gsub(/ /, "", $2); print $2; exit}')
+            if [ -n "$t" ] && [ -z "$loc" ]; then
+              loc=$($M sctool info -c "$c" "$t" | awk -F"'" '/- location:/ {print $2; exit}')
+            fi
+          done
+          [ -n "$loc" ] || { echo "no backup location in any task"; exit 1; }
+          for c in $clusters; do
+            t=$($M sctool tasks -c "$c" | awk -F'|' '$2 ~ /backup\// {gsub(/ /, "", $2); print $2; exit}')
+            if [ -n "$t" ]; then
+              $M sctool start -c "$c" "$t" > /dev/null
+            else
+              t=$($M sctool backup -c "$c" --location "$loc" --retention 2)
+            fi
+            echo "$c $t"
+          done
+      register: _scylla_tasks
+      changed_when: true
+      failed_when: _scylla_tasks.rc != 0 or _scylla_tasks.stdout_lines | length == 0
+      when: store == 'scylla'
+
+    - name: Scylla - each backup done
+      ansible.builtin.command: >-
+        {{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --
+        sctool progress -c {{ item.split()[0] }} {{ item.split()[1] }}
+      loop: "{{ _scylla_tasks.stdout_lines | default([]) }}"
+      register: _scylla_progress
+      changed_when: false
+      retries: 90
+      delay: 20
+      until: _scylla_progress.stdout is search('Status:\s+(DONE|ERROR|ABORTED)')
+      failed_when: _scylla_progress.stdout is not search('Status:\s+DONE')
+      when: store == 'scylla'
+
+    - name: Backed up
+      ansible.builtin.debug:
+        msg: >-
+          WAVE 0 {{ store }}: {{ _stamp }} - local {{ local_dir }}/{{ store }}/{{ _stamp }},
+          store {{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/{{ store }}/{{ _stamp }}/
