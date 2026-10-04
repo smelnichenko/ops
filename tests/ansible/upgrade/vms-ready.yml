@@ -21,6 +21,35 @@
 - name: The Pi VMs are isolated from production
   ansible.builtin.import_playbook: ../isolate-pis.yml
 
+# The Gluster volumes mount at boot by themselves (setup-gluster's gluster-volumes-ready, plan 100 defect 22) - checked
+# here, never mounted by the harness: a copy that needs a hand after a reboot hides the gap production has.
+- name: The Pis' Gluster volumes are mounted and their services up
+  hosts: pi1:pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Every Gluster volume in fstab mounted from it, Forgejo and versitygw active
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          awk '$1 !~ /^#/ && $3 == "glusterfs" {print $1, $2}' /etc/fstab | while read -r src mnt; do
+            echo "$mnt $(findmnt -rn -o SOURCE --mountpoint "$mnt" || echo none) want $src"
+          done
+          for s in forgejo versitygw; do echo "$s $(systemctl is-active "$s" || true)"; done
+      register: _gluster
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: >-
+        _gluster.rc == 0
+        and (_gluster.stdout_lines | select('match', '^/') | list | length) > 0
+        and (_gluster.stdout_lines | select('match', '^/') | reject('match', '^(\S+) (\S+) want \2$') | list | length) == 0
+        and 'forgejo active' in _gluster.stdout_lines and 'versitygw active' in _gluster.stdout_lines
+
 - name: The Vagrant VMs are ready
   hosts: target
   become: true

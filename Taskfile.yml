@@ -358,7 +358,7 @@ tasks:
     desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
     cmds:
       - task: _upgrade:base
-      - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:baseline:resume:
@@ -367,7 +367,7 @@ tasks:
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
-      - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:argo:
@@ -399,7 +399,7 @@ tasks:
       # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
       - cmd: scripts/vagrant-smoke.sh
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
-      - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
   test:upgrade:step:
@@ -410,9 +410,9 @@ tasks:
     vars:
       # each repo's highest upgrade/NN-* branch up to this step (else main), checked to stack on the previous one
       INFRA_REF:
-        sh: scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f1
+        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f1
       PLATFORM_REF:
-        sh: scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f2
+        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.STEP}} | cut -d' ' -f2
       # apps the step leaves OutOfSync on purpose (its argo-out-of-sync lines), allowed only after its playbooks
       OUT_OF_SYNC:
         sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
@@ -456,7 +456,7 @@ tasks:
       # Prometheus reconciled, every target up, Mimir receiving
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
       - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
-      - cmd: mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
+      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt
       - cmd: scripts/inventory-diff.sh .upgrade/expected-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
@@ -473,9 +473,13 @@ tasks:
     desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails)
     cmds:
       - task: test:upgrade:build
+      # an empty step list is a failure, not a green run (the loop just did nothing)
       - cmd: |
-          set -e
-          for step in $(ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V); do
+          set -euo pipefail
+          steps=$(ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V)
+          [ -n "$steps" ] || { echo "no upgrade steps in tests/ansible/upgrade/steps"; exit 1; }
+          echo "=== $(echo "$steps" | wc -l) steps"
+          for step in $steps; do
             echo "=== STEP $step $(date +%T)"
             task test:upgrade:step STEP="$step"
             echo "=== STEP $step GREEN $(date +%T)"

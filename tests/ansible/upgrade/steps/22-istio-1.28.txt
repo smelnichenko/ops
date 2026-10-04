@@ -8,3 +8,5 @@ image docker.io/istio/install-cni 1.27.9 => image docker.io/istio/install-cni 1.
 image docker.io/istio/pilot 1.27.9 => image docker.io/istio/pilot 1.28.10
 image docker.io/istio/proxyv2 1.27.9 => image docker.io/istio/proxyv2 1.28.10
 playbook restart-mesh-workloads.yml -e istio_version=1.28.10
+# its change: the branch upgrade/22-istio-1.28 in infra
+branch infra

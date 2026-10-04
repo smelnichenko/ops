@@ -1,0 +1,10 @@
+---
+# The Vagrant guard as a play of its own, run first in the same ansible-playbook call as a production playbook the
+# upgrade test applies to the Vagrant copy (scripts/upgrade-step-playbooks.sh): every host of the inventory must be a
+# Vagrant VM, or it is dropped from every later play of the run.
+- name: Vagrant VMs only - every host the next playbook may touch
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: vagrant-only.yml

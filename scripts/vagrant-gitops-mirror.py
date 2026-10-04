@@ -34,6 +34,7 @@ Env:   VAGRANT_FORGEJO_ADMIN_USER / VAGRANT_FORGEJO_ADMIN_PASSWORD (default: the
 """
 import argparse
 import base64
+import ipaddress
 import json
 import os
 import re
@@ -233,6 +234,14 @@ def main():
     ap.add_argument("--infra-ref", default="main", help="infra branch to mirror (an upgrade step's)")
     ap.add_argument("--platform-ref", default="main", help="platform branch to mirror (an upgrade step's)")
     a = ap.parse_args()
+    # the mirror pushes and rewrites repos: only ever into the Vagrant Forgejo (192.168.56.0/24), never production's
+    host = a.forgejo.rsplit(":", 1)[0]
+    try:
+        vagrant = ipaddress.ip_address(host) in ipaddress.ip_network("192.168.56.0/24")
+    except ValueError:
+        vagrant = False
+    if not vagrant:
+        sys.exit(f"REFUSED: --forgejo {a.forgejo} is not a Vagrant address (192.168.56.0/24)")
     user = os.environ.get("VAGRANT_FORGEJO_ADMIN_USER", "forgejo_admin")
     password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", "vagrant-forgejo-pw")
 

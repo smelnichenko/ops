@@ -4,3 +4,5 @@ image prom/alertmanager v0.31.1 => image prom/alertmanager v0.34.1
 image prom/blackbox-exporter v0.27.0 => image prom/blackbox-exporter v0.28.0
 - image quay.io/prometheus-operator/prometheus-config-reloader v0.89.0
 image registry.k8s.io/kube-state-metrics/kube-state-metrics v2.18.0 => image registry.k8s.io/kube-state-metrics/kube-state-metrics v2.20.0
+# its change: the branch upgrade/08-alertmanager-blackbox-ksm in platform
+branch platform

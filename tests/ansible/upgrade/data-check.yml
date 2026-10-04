@@ -65,7 +65,8 @@
         {{ kubectl }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o json | python3 -c '
         import json, sys
         for p in json.load(sys.stdin)["items"]:
-            ready = all(c.get("ready") for c in p["status"].get("containerStatuses", []))
+            statuses = p["status"].get("containerStatuses", [])
+            ready = bool(statuses) and all(c.get("ready") for c in statuses)  # a Pending pod has none: not ready
             print(p["metadata"]["name"], p["metadata"].get("annotations", {}).get("cnpg.io/operatorVersion"), ready)'
       args:
         executable: /bin/bash

@@ -6,3 +6,5 @@
 image ghcr.io/cloudnative-pg/postgresql 17 => image ghcr.io/cloudnative-pg/postgresql 18.6-system-bullseye
 # A CNPG barman backup after it - WAL archiving and a fresh base backup: the new major (whose base backup the old WAL cannot restore).
 barman-check
+# its change: the branch upgrade/42-postgres-18 in platform
+branch platform

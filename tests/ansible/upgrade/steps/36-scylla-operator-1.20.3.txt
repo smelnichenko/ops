@@ -3,3 +3,5 @@
 argo-chart scylla-manager scylla-manager@v1.20.2 => argo-chart scylla-manager scylla-manager@v1.20.3
 argo-chart scylla-operator scylla-operator@v1.20.2 => argo-chart scylla-operator scylla-operator@v1.20.3
 image scylladb/scylla-operator 1.20.2 => image scylladb/scylla-operator 1.20.3
+# its change: the branch upgrade/36-scylla-operator-1.20.3 in infra
+branch infra

@@ -3,5 +3,9 @@
 # default becomes 1.8.0.
 image ghcr.io/versity/versitygw v1.6.0 => image ghcr.io/versity/versitygw v1.8.0
 playbook setup-pi-services.yml --tags versitygw -e vgw_version=1.8.0
-# A Velero backup after it: the backup store.
+# A Velero backup after it, and CNPG's WAL archiving and a base backup: both write to the Pi store, whose gateways
+# this step restarts (one Pi at a time).
 backup-check
+barman-check
+# its change: the branch upgrade/05-versitygw in platform
+branch platform

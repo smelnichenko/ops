@@ -46,46 +46,71 @@
     - name: CoreDNS answers *.pmon.dev as production resolves it, with Vagrant addresses
       # Production: pi_served_names (inventory) are the Pi VIP; every other pmon.dev name, the apex included, is ten's
       # gateway. Here: the Vagrant Pi VIP and the kubeadm node. Replaces an earlier version of this block, so a re-run converges.
-      ansible.builtin.shell: |
-        set -euo pipefail
-        cf=$({{ kubectl }} -n kube-system get cm coredns -o jsonpath='{.data.Corefile}')
-        new=$(CF="$cf" python3 - <<'PY'
-        import os, re
-        cf = os.environ["CF"]
-        # drop any pmon.dev template blocks written before (one nesting level)
-        cf = re.sub(r"\n    template IN (A|AAAA) pmon\.dev \{\n(?:       [^\n]*\n)*?    \}", "", cf)
-        block = (
-            "    template IN A pmon.dev {\n"
-            "       match ^({{ pi_served_names | join('|') }})\\.pmon\\.dev\\.$\n"
-            "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_vip }}\"\n"
-            "       fallthrough\n"
-            "    }\n"
-            "    template IN A pmon.dev {\n"
-            "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_gateway }}\"\n"
-            "    }\n"
-            "    template IN AAAA pmon.dev {\n"
-            "       rcode NOERROR\n"
-            "    }\n")
-        out, done = [], False
-        for line in cf.split("\n"):
-            if not done and line.startswith("    forward . "):
-                out.append(block.rstrip("\n")); done = True
-            out.append(line)
-        print("\n".join(out))
-        PY
-        )
-        if [ "$new" = "$cf" ]; then echo unchanged; exit 0; fi
-        {{ kubectl }} -n kube-system create cm coredns --from-literal=Corefile="$new" --dry-run=client -o yaml \
-          | {{ kubectl }} apply -f - > /dev/null
-        {{ kubectl }} -n kube-system rollout restart deployment coredns > /dev/null
-        {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null
-        echo changed
-      args:
+      ansible.builtin.shell:
         executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          cf=$({{ kubectl }} -n kube-system get cm coredns -o jsonpath='{.data.Corefile}')
+          new=$(CF="$cf" python3 - <<'PY'
+          import os, re
+          cf = os.environ["CF"]
+          # drop any pmon.dev template blocks written before (one nesting level)
+          cf = re.sub(r"\n    template IN (A|AAAA) pmon\.dev \{\n(?:       [^\n]*\n)*?    \}", "", cf)
+          block = (
+              "    template IN A pmon.dev {\n"
+              "       match ^({{ pi_served_names | join('|') }})\\.pmon\\.dev\\.$\n"
+              "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_vip }}\"\n"
+              "       fallthrough\n"
+              "    }\n"
+              "    template IN A pmon.dev {\n"
+              "       answer \"{{ '{{' }} .Name {{ '}}' }} 60 IN A {{ vagrant_gateway }}\"\n"
+              "    }\n"
+              "    template IN AAAA pmon.dev {\n"
+              "       rcode NOERROR\n"
+              "    }\n")
+          out, done = [], False
+          for line in cf.split("\n"):
+              if not done and line.startswith("    forward . "):
+                  out.append(block.rstrip("\n")); done = True
+              out.append(line)
+          if not done:
+              # no anchor: the old blocks are dropped and none written - production's names would resolve upstream
+              raise SystemExit("no '    forward . ' line in the Corefile - nowhere to insert the pmon.dev blocks")
+          print("\n".join(out))
+          PY
+          )
+          if [ "$new" = "$cf" ]; then echo unchanged; exit 0; fi
+          {{ kubectl }} -n kube-system create cm coredns --from-literal=Corefile="$new" --dry-run=client -o yaml \
+            | {{ kubectl }} apply -f - > /dev/null
+          {{ kubectl }} -n kube-system rollout restart deployment coredns > /dev/null
+          {{ kubectl }} -n kube-system rollout status deployment coredns --timeout=180s > /dev/null
+          echo changed
       vars:
         vagrant_gateway: "{{ ansible_host }}"
       register: _dns
       changed_when: "'changed' in _dns.stdout"
+
+    # the rewrite is proven by what the cluster's DNS answers, not by the ConfigMap: a Pi-served name -> the Vagrant
+    # Pi VIP, any other pmon.dev name and the apex -> this node, never a production address
+    - name: The cluster's DNS answers pmon.dev with Vagrant addresses
+      ansible.builtin.shell: |
+        set -euo pipefail
+        dns=$({{ kubectl }} -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
+        a() { host -W 3 -t A "$1" "$dns" | awk '/has address/ {print $NF}' | sort | tr '\n' ' '; }
+        echo "{{ pi_served_names | first }}.pmon.dev $(a {{ pi_served_names | first }}.pmon.dev)"
+        echo "pmon.dev $(a pmon.dev)"
+        echo "upgrade-probe.pmon.dev $(a upgrade-probe.pmon.dev)"
+      args:
+        executable: /bin/bash
+      register: _dns_probe
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: >-
+        _dns_probe.rc == 0 and _dns_probe.stdout_lines == [
+          (pi_served_names | first) ~ '.pmon.dev ' ~ vagrant_vip ~ ' ',
+          'pmon.dev ' ~ ansible_host ~ ' ',
+          'upgrade-probe.pmon.dev ' ~ ansible_host ~ ' ']
 
     # ── 2. network ─────────────────────────────────────────────────────
     - name: Node guard - drop the node's own traffic to the production LAN (nftables, re-applied at boot)

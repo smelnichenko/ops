@@ -391,10 +391,19 @@ Test harness
 - R21 Data survival not checked for one-way steps: seed and verify ClickHouse, Grafana, Tempo, Mimir; the
   compatibility pin via system.merge_tree_settings; versions per step.
 - R22 data-check never writes after a step (replication, Kafka produce, Scylla write); metrics-check misses vanished
-  targets; barman check missing at 05; restore-check never replays WAL nor restores the Postgres 17 backup.
+  targets; barman check missing at 05; restore-check never replays WAL nor restores the Postgres 17 backup. Barman
+  check at 05 - DONE (CNPG archives to the Pi store, 192.168.11.5:9000, whose gateways step 05 restarts).
 - R23 Smaller: step 01 invisible to the inventory diff; a missing step branch unnoticed; step-file arguments
   unvalidated; empty step list green; no pipefail in task; CoreDNS rewrite unchecked; vms-ready must bring Gluster
-  mounts up after the harness's own reboots (until R9).
+  mounts up after the harness's own reboots (until R9). DONE: the diff filters only the app images CD moves (step 01's
+  expected vs apt-cacher-ng 1.0 now DIFFERS); step files declare their branches (branch infra|platform) and --refs
+  refuses a declared branch missing or an existing one undeclared; step arguments naming an inventory, a limit, a
+  host address or an extra-vars file are refused, the guard play (tests/ansible/vagrant-only-play.yml) runs first in
+  the same call (production inventory: all 4 hosts refused, the next playbook reached none), stdin closed; an empty
+  step list fails; pipefail in the step vars and inventory pipes (an unknown step stopped at its refs); the CoreDNS
+  rewrite refuses a Corefile without its anchor and a DNS probe proves Vagrant answers; vms-ready checks every Gluster
+  mount and Forgejo/versitygw (never mounts them); data-check: a Pending pod is not ready; the mirror refuses a
+  Forgejo outside 192.168.56.0/24.
 
 Plan and claims
 - R24 Every false or stale claim the reviews listed, corrected in this file, the step files and playbook comments.

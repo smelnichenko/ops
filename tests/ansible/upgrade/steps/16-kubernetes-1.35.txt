@@ -12,3 +12,5 @@ pkg kubectl 1.34.12-1.1 (held) => pkg kubectl 1.35.9-1.1 (held)
 pkg kubelet 1.34.12-1.1 (held) => pkg kubelet 1.35.9-1.1 (held)
 k8s server v1.34.12 => k8s server v1.35.9
 playbook upgrade-kubeadm.yml -e k8s_upgrade_to=1.35.9
+# its change: the branch upgrade/16-kubernetes-1.35 in infra
+branch infra

@@ -2,3 +2,5 @@
 # source-available line (operator 2026-10-01); operator 1.20 supports 2025.1. A rolling restart by the operator.
 # infra upgrade/37-scylladb-2025.1. Stateful: shown to the operator before production.
 image docker.io/scylladb/scylla 6.2.3 => image docker.io/scylladb/scylla 2025.1.16
+# its change: the branch upgrade/37-scylladb-2025.1 in infra
+branch infra

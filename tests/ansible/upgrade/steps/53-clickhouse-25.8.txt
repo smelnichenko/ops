@@ -2,3 +2,6 @@
 # upgrade/53-clickhouse-25.8. A single replica, so a downtime upgrade, which ClickHouse supports across the year; 24.8's
 # formats kept by the pin. Stateful: shown before production, its volume backed up first.
 image clickhouse/clickhouse-server 24.8-alpine => image clickhouse/clickhouse-server 25.8.33.6-alpine
+# its change: the branch upgrade/53-clickhouse-25.8 in infra and platform
+branch infra
+branch platform

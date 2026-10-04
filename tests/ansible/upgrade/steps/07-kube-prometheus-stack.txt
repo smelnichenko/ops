@@ -7,3 +7,5 @@ crd prometheus-operator 0.89.0 => crd prometheus-operator 0.94.1
 + image quay.io/prometheus-operator/prometheus-config-reloader v0.94.1
 image quay.io/prometheus-operator/prometheus-operator v0.89.0 => image quay.io/prometheus-operator/prometheus-operator v0.94.1
 image quay.io/prometheus/prometheus v3.10.0 => image quay.io/prometheus/prometheus v3.15.0-distroless
+# its change: the branch upgrade/07-kube-prometheus-stack in infra
+branch infra

@@ -8,3 +8,5 @@ image scylladb/scylla-manager 3.9.0 => image scylladb/scylla-manager 3.10.1
 image scylladb/scylla-manager-agent 3.9.0 => image scylladb/scylla-manager-agent 3.10.1
 image docker.io/scylladb/scylla-manager-agent 3.9.0 => image docker.io/scylladb/scylla-manager-agent 3.10.1
 image scylladb/scylla 2026.1.0 => image scylladb/scylla 2026.1.3
+# its change: the branch upgrade/38-scylla-operator-1.21 in infra
+branch infra

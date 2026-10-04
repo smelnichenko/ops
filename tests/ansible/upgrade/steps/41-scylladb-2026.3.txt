@@ -5,3 +5,5 @@
 image docker.io/scylladb/scylla 2026.1.14 => image docker.io/scylladb/scylla 2026.3.2
 + image docker.io/scylladb/scylladb-node-exporter 1.12.1-1
 image scylladb/scylla 6.2 => image scylladb/scylla 2026.3.2
+# its change: the branch upgrade/41-scylladb-2026.3 in infra
+branch infra

@@ -14,6 +14,7 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                after it - production's schedule, every pod volume; ~8 min)
     barman-check                              (the step changes CNPG or Postgres: the runner checks WAL archiving and
                                                takes a CNPG barman base backup of Postgres after it)
+    branch <infra|platform>                   (the step's change is the branch upgrade/NN-<name> in that repo)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -34,7 +35,8 @@ step's own settle wants them Synced again.
 
 Refs (--refs): for each repo, its highest upgrade/NN-* branch with NN up to the step's, else main - so a step that
 changes only infra still mirrors platform with every earlier platform step. Aborts if a step branch does not contain
-the previous one.
+the previous one, or if the branches up to the step are not exactly the ones their step files declare (branch lines):
+a missing branch fell back to the previous step's, and the step went green without its change.
 
 Usage: scripts/upgrade-expected-inventory.py <step, e.g. 01-apt-cacher-ng>           (prints the inventory)
        scripts/upgrade-expected-inventory.py --refs <step>                          (prints "<infra-ref> <platform-ref>")
@@ -53,7 +55,7 @@ UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
 
 
-def parse(path, playbooks=None, out_of_sync=None, flags=None):
+def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -66,6 +68,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None):
         elif line in ("backup-check", "barman-check"):
             if flags is not None:
                 flags.add(line)
+        elif line in ("branch infra", "branch platform"):
+            if branches is not None:
+                branches.add(line[len("branch "):])
         elif line.startswith("argo-out-of-sync "):
             if out_of_sync is not None:
                 out_of_sync.append(line[len("argo-out-of-sync "):].strip())
@@ -81,11 +86,24 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None):
     return changes
 
 
-def ref(repo, step_no):
-    """The repo's highest upgrade/NN-* branch with NN <= step_no, checked to stack on the one before; else main."""
+def ref(repo, step_no, names):
+    """The repo's highest upgrade/NN-* branch with NN <= step_no, checked to stack on the one before; else main. The
+    branches up to the step must be exactly those the step files declare, by step name."""
     out = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/"],
                          capture_output=True, text=True, check=True).stdout.split()
     branches = sorted((int(m.group(1)), b) for b in out if (m := re.fullmatch(r"upgrade/(\d\d)-.+", b)))
+    repo_name = os.path.basename(os.path.normpath(repo))
+    declared = set()
+    for name in names:
+        if int(name[:2]) <= step_no:
+            repos = set()
+            parse(os.path.join(STEPS, name + ".txt"), branches=repos)
+            if repo_name in repos:
+                declared.add("upgrade/" + name)
+    present = {b for n, b in branches if n <= step_no}
+    if declared != present:
+        sys.exit(f"{repo_name}: step branches up to {step_no:02d} differ from the step files' branch lines - missing: "
+                 f"{sorted(declared - present) or '-'}, undeclared: {sorted(present - declared) or '-'}")
     numbers = [n for n, _ in branches]
     if len(numbers) != len(set(numbers)):
         sys.exit(f"{repo}: two upgrade branches share a number: {[b for _, b in branches]}")
@@ -128,7 +146,8 @@ def main():
         return
     if mode == "--refs":
         step_no = int(args[0][:2])
-        print(ref(os.path.join(OPS, "..", "infra"), step_no), ref(os.path.join(OPS, "..", "platform"), step_no))
+        print(ref(os.path.join(OPS, "..", "infra"), step_no, names),
+              ref(os.path.join(OPS, "..", "platform"), step_no, names))
         return
     inventory = set(l.rstrip("\n") for l in open(os.path.join(UPGRADE, "prod-inventory.txt")) if l.strip())
     for name in names[:names.index(args[0]) + 1]:
