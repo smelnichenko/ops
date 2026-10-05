@@ -37,7 +37,7 @@
       "9.5.11": v3.3.14
     argocd_image_tag: "{{ argocd_image_tag_override | default(argocd_image_pins[argocd_chart_version] | default('')) }}"
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
-    forgejo_host: "{{ forgejo_domain | default('git.pmon.dev') }}"
+    forgejo_host: "{{ argocd_forgejo_host | default(forgejo_domain | default('git.pmon.dev')) }}"
     argocd_root_repo: schnappy/infra
     _forgejo_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
     _forgejo_password: "{{ forgejo_admin_password }}"

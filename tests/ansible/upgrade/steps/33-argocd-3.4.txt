@@ -7,4 +7,4 @@
 # abort: setup-argocd.yml with the old chart version - its no-downgrade check refuses: by hand, not rehearsed
 helm argocd/argocd argo-cd-9.5.11 v3.3.9 => helm argocd/argocd argo-cd-10.2.2 v3.4.6
 image quay.io/argoproj/argocd v3.3.14 => image quay.io/argoproj/argocd v3.4.6
-playbook setup-argocd.yml -e argocd_version=10.2.2 -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+playbook setup-argocd.yml -e argocd_version=10.2.2

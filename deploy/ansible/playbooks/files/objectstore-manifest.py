@@ -42,10 +42,11 @@ def md5_of(stream):
 
 
 def manifest(root):
-    """The live store's objects. One deleted while this walks, or not yet given its ETag, is left out - verify-tar
-    checks only what both lists have."""
+    """The live store's objects. One deleted while this walks is left out; one without an ETag is listed apart
+    (noetag) - an upload not finished yet has none for a moment, but one without it in both lists verify-tar compares
+    is a store whose objects this cannot check (another attribute name, a mount without user xattrs) and fails it."""
     buckets = sorted(b for b in os.listdir(root) if os.path.isdir(os.path.join(root, b)))
-    objects, bad = {}, []
+    objects, noetag, bad = {}, [], []
     for b in buckets:
         if "user.acl" not in os.listxattr(os.path.join(root, b)):
             bad.append(f"bucket {b}: no ACL")
@@ -55,9 +56,11 @@ def manifest(root):
                 p = os.path.join(dp, fn)
                 try:
                     objects[os.path.relpath(p, root)] = bare(etag_of(os.getxattr(p, "user.etag")))
-                except OSError:
+                except FileNotFoundError:
                     pass
-    return {"buckets": buckets, "objects": objects}, bad
+                except OSError:
+                    noetag.append(os.path.relpath(p, root))
+    return {"buckets": buckets, "objects": objects, "noetag": sorted(noetag)}, bad
 
 
 def check_content(key, etag, stream, bad):
@@ -92,7 +95,13 @@ def verify_tar(archive, before_path, after_path, out_path):
     before, after = (json.load(open(p)) for p in (before_path, after_path))
     want = {k: v for k, v in before["objects"].items() if after["objects"].get(k) == v}
     buckets = set(before["buckets"]) & set(after["buckets"])
-    bad = []
+    bad = [f"{k}: no ETag in the store (before and after the archive)"
+           for k in sorted(set(before.get("noetag", [])) & set(after.get("noetag", [])))]
+    # nothing to compare is no proof; and the store does not lose a tenth of its objects in the minutes tar runs
+    if not want:
+        bad.append(f"no object to check ({len(before['objects'])} before, {len(after['objects'])} after)")
+    elif len(want) < 0.9 * len(before["objects"]):
+        bad.append(f"only {len(want)} of {len(before['objects'])} objects unchanged while tar ran - run it again")
     seen, acl = archive_entries(archive, want, bad)
     bad += [f"{k}: not in the archive" for k in sorted(set(want) - seen)]
     bad += [f"bucket {b}: no ACL in the archive" for b in sorted(buckets - acl)]
@@ -102,7 +111,7 @@ def verify_tar(archive, before_path, after_path, out_path):
 
 def verify_tree(root, manifest_path):
     m = json.load(open(manifest_path))
-    bad = []
+    bad = [] if m["objects"] else ["the backup's list holds no object - nothing proven"]
     for b in m["buckets"]:
         d = os.path.join(root, b)
         if not os.path.isdir(d) or "user.acl" not in os.listxattr(d):

@@ -6,4 +6,4 @@
 helm argocd/argocd argo-cd-10.2.2 v3.4.6 => helm argocd/argocd argo-cd-10.9.6 v3.5.3
 image quay.io/argoproj/argocd v3.4.6 => image quay.io/argoproj/argocd v3.5.3
 image ecr-public.aws.com/docker/library/redis 8.2.3-alpine => image ecr-public.aws.com/docker/library/redis 8.6.4-alpine
-playbook setup-argocd.yml -e argocd_version=10.9.6 -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+playbook setup-argocd.yml -e argocd_version=10.9.6

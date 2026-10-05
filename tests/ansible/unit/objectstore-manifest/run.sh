@@ -45,4 +45,17 @@ expect pass "restore" "4 objects in 2 buckets restored" python3 "$M" verify-tree
 expect fail "restore without the attributes" "bucket b1: missing or no ACL" python3 "$M" verify-tree r2/buckets out.json
 rm -rf r1/buckets/b2
 expect fail "restore without a bucket" "b2/multi: missing or no ETag" python3 "$M" verify-tree r1/buckets out.json
+# a store whose ETags are under another attribute name: listed apart, and the archive check fails on it, not "0 objects"
+python3 - <<'PY'
+import os
+os.makedirs("other/buckets/b1"); os.setxattr("other/buckets/b1", "user.acl", b'{"Owner":"x"}')
+open("other/buckets/b1/o1", "w").write("x\n"); os.setxattr("other/buckets/b1/o1", "user.md5", b'"abc"')
+PY
+python3 "$M" manifest other/buckets > o-before.json
+tar "${X[@]}" -C other -czf other.tgz .
+python3 "$M" manifest other/buckets > o-after.json
+expect fail "objects without an ETag" "b1/o1: no ETag in the store" python3 "$M" verify-tar other.tgz o-before.json o-after.json x.json
+expect fail "nothing to check" "no object to check" python3 "$M" verify-tar other.tgz o-before.json o-after.json x.json
+echo '{"buckets": ["b1"], "objects": {}}' > empty.json
+expect fail "an empty list proves nothing" "holds no object" python3 "$M" verify-tree r2/buckets empty.json
 [ "$fails" = 0 ] && echo "objectstore-manifest: ALL-PASS" || { echo "objectstore-manifest: $fails failed"; exit 1; }
