@@ -4,6 +4,7 @@
 #   its data directory but postmaster.pid, which a stopped Postgres removes); Patroni started again (whatever happened)
 #   and back to streaming, the same run passes on pi2 and leaves its database port (PgBouncer's) as it was.
 #   setup-consul on an unchanged cluster: the same gossip key on every server, no server restarted.
+#   setup-keepalived with a drifted config: rewritten, keepalived reloaded (PID kept), the VIP where it was.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
@@ -155,3 +156,50 @@
     - name: Unchanged
       ansible.builtin.debug:
         msg: "CONSUL RE-RUN: {{ inventory_hostname }} kept its key and was not restarted"
+
+# setup-keepalived with a changed config: keepalived reloaded, not restarted (its PID kept - a restart runs the stop
+# drop-in, releasing Nexus on the active Pi), the VIP where it was. The drift: a comment line appended on pi1.
+- name: Keepalived before, pi1's config drifted
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Keepalived's PID and whether this Pi holds the VIP
+      ansible.builtin.shell: |
+        echo "$(systemctl show keepalived -p MainPID --value) $(ip -o -4 addr show | grep -c ' {{ keepalived_vip }}/')"
+      register: _ka_before
+      changed_when: false
+
+    - name: A drift in pi1's config (setup-keepalived writes it back)
+      ansible.builtin.lineinfile:
+        path: /etc/keepalived/keepalived.conf
+        line: "# drift - the re-run guard test"
+      when: inventory_hostname == 'pi1'
+
+- name: setup-keepalived re-run
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Keepalived after - reloaded, the VIP where it was
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The same PID, the same VIP holder, the drift gone
+      ansible.builtin.shell: |
+        echo "$(systemctl show keepalived -p MainPID --value) $(ip -o -4 addr show | grep -c ' {{ keepalived_vip }}/')"
+        grep -c '^# drift - the re-run guard test$' /etc/keepalived/keepalived.conf || true
+      register: _ka_after
+      changed_when: false
+      failed_when: _ka_after.stdout_lines[0] != _ka_before.stdout or _ka_after.stdout_lines[1] != '0'
+
+    - name: Kept
+      ansible.builtin.debug:
+        msg: "KEEPALIVED RE-RUN: {{ inventory_hostname }} kept PID and VIP ({{ _ka_after.stdout_lines[0] }}), config rewritten by a reload"

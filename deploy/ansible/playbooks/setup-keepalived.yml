@@ -387,7 +387,9 @@
             notify_backup "/etc/keepalived/active_services_backup.sh"
             notify_fault "/etc/keepalived/active_services_backup.sh"
           }
-      notify: Restart Keepalived
+      # a reload re-reads the config and keeps the VRRP state: a restart would run the stop drop-in (releasing Nexus on
+      # the active Pi) and move the VIP
+      notify: Reload Keepalived
 
     - name: Enable and start Keepalived
       ansible.builtin.systemd:
@@ -501,6 +503,11 @@
       ansible.builtin.systemd:
         name: keepalived
         state: restarted
+
+    - name: Reload Keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        state: reloaded
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify Keepalived
