@@ -1,0 +1,12 @@
+---
+# The Pis' versions as production runs them (read 2026-10-05), for the upgrade copy's base build: the setup playbooks
+# install vars/forgejo.yml's, vars/patroni.yml's and vars/vault.yml's versions where a service is missing - the Pis'
+# phase-1 patch targets - so the copy is pinned back to what the Pis run until those patches are in production; then
+# this file moves with prod-inventory.txt's Pi lines. amd64 only (the Vagrant VMs). Extra vars, after vars/vault.yml.
+forgejo_version: "15.0.3"
+forgejo_checksums:
+  amd64: 3218dc54b71a0fd822c3b15d326a245a9a3594dfadfa35f2bdae9809e81bd77e   # its release's .sha256
+patroni_version: "4.1.0"
+vault_version: "1.21.3"
+vault_checksums:
+  amd64: c945e90979a7b6e4b4846285587c35b25f8191f9f70cb879132bc118ae42c368   # its SHA256SUMS

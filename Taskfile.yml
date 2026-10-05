@@ -320,23 +320,30 @@ tasks:
   _vagrant:pi-stack:
     internal: true
     deps: [deploy:install]
+    vars:
+      # extra arguments for the Pi service playbooks (the upgrade copy pins the Pis' versions to production's)
+      PI_ARGS: '{{.PI_ARGS | default ""}}'
     cmds:
       # before anything is installed: the Pi VMs would otherwise resolve *.pmon.dev to production and route to its LAN
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml {{.PI_ARGS}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml {{.PI_ARGS}}
       # PgBouncer in front of Patroni as on the Pis, and Forgejo and Keycloak moved onto it (setup-pi-services picks
       # PgBouncer's port where it runs) - production's database path, :6432
       - task: _vagrant:pi-pgbouncer
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+        vars:
+          PI_ARGS: '{{.PI_ARGS}}'
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml {{.PI_ARGS}}
 
   _vagrant:pi-pgbouncer:
     internal: true
     deps: [deploy:install]
+    vars:
+      PI_ARGS: '{{.PI_ARGS | default ""}}'
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pgbouncer.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml {{.PI_ARGS}}
 
   _vagrant:k8s-stack:
     internal: true
@@ -355,7 +362,10 @@ tasks:
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
+      # the Pis at production's versions (the setup playbooks install their patch targets where a service is missing)
       - task: _vagrant:pi-stack
+        vars:
+          PI_ARGS: -e @../../tests/ansible/upgrade/pi-baseline.yml
       # the Pis' shared Gluster volumes, as in production - the backup store's data dir among them: without it each
       # Pi kept its own store, and a VIP on pi2 found no velero bucket (full run 4, 2026-10-04)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-gluster.yml
