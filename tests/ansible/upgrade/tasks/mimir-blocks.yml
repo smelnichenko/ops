@@ -1,7 +1,8 @@
 ---
-# A stored Mimir block covers the survival seed's time: the store-gateway lists one. A query at that time is answered by
-# the ingester's own data for its first 12 hours (Mimir's query-store-after) and proves nothing about the blocks a
-# Mimir major must read - this does. The ingester cuts a 2 h block once its head spans 3 h and ships it, the
+# A stored Mimir block covers the survival seed's time: the store-gateway lists one. With Mimir's defaults a query at
+# that time is answered by the ingester's own data for 13 hours; the Vagrant copy's querier asks the ingesters for the
+# last 4 h only (its values overlay, from step 22 on), so from 4 h after the seed survival-check's query reads the
+# blocks - this check says a block is there. The ingester cuts a 2 h block once its head spans 3 h and ships it, the
 # store-gateway syncs every 15 minutes: from 4 h after the seed the block is required; before that it is reported only.
 #
 # Expects: kubeconfig, mimir_proxy (the schnappy-infra services' proxy path), mimir_at (the seed's time, seconds).

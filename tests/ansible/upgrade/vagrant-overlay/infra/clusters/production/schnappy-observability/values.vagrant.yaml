@@ -6,3 +6,12 @@ alertmanager:
   smtp:
     host: 127.0.0.1
     port: 1
+
+# Vagrant only (upgrade test): the querier asks the ingesters for the last 4 h only and the store-gateway for
+# anything older than 1 h (production: 13 h / 12 h, Mimir's defaults), so survival-check's query at the seed's time is
+# answered from the stored blocks 4 h after the seed - what a Mimir major must still read. Takes effect from the step
+# whose platform branch brings mimir.extraArgs (22).
+mimir:
+  extraArgs:
+    - -querier.query-store-after=1h
+    - -querier.query-ingesters-within=4h
