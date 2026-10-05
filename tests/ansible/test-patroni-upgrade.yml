@@ -1,7 +1,12 @@
 ---
-# upgrade-patroni.yml on the Vagrant Pis from production's version: the cluster first set to 4.1.0 (as ten's Pis run;
-# paused, so Postgres keeps running), then the upgrade - every node on vars/patroni.yml's version, the cluster healthy
-# and not paused, Forgejo (on Patroni's database) still answering. Vagrant only. Usage: task test:patroni-upgrade
+# upgrade-patroni.yml on the Vagrant Pis from production's version, checked from outside the playbook:
+#   set back   the cluster at production's 4.1.0 (as ten's Pis run; paused meanwhile, so Postgres keeps running)
+#   before     each node's Postgres start time, the leader and the timeline; the time the run starts
+#   after      each node's Patroni on the target (its REST API); no failover - the same leader and timeline, no
+#              Postgres restarted; HAProxy never marked the leader down; not paused; Forgejo answering
+#   again      a second run restarts nothing; refused: a downgrade, a run without every node, a paused cluster; a
+#              run whose package install fails resumes the cluster anyway
+# Vagrant only. Usage: task test:patroni-upgrade
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
 
@@ -50,14 +55,66 @@
           changed_when: true
           run_once: true
 
-- name: Production's upgrade playbook
-  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-patroni.yml
-
-- name: Forgejo still answering (its database on Patroni)
+- name: Before the run - each Postgres's start, the leader, the timeline
   hosts: pi1,pi2
   become: true
   gather_facts: false
   tasks:
+    - name: The time the run starts
+      ansible.builtin.set_fact:
+        _t_up: "{{ lookup('pipe', 'date +%s') | int }}"
+      run_once: true
+
+    - name: Each node's Postgres, as Patroni reports it
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_before
+
+- name: Production's upgrade playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-patroni.yml
+
+- name: After - from outside the playbook
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../deploy/ansible/vars/patroni.yml
+  tasks:
+    - name: Each node's Patroni on the target, its Postgres not restarted, the same role and timeline
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_after
+      failed_when: >-
+        _pg_after.json.patroni.version != patroni_version
+        or _pg_after.json.postmaster_start_time != _pg_before.json.postmaster_start_time
+        or _pg_after.json.role != _pg_before.json.role
+        or _pg_after.json.timeline != _pg_before.json.timeline
+
+    - name: HAProxy never marked the leader down during the run
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          leader={{ (['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_pg_before.json.role', 'in', ['primary', 'master'])
+                     | map(attribute='inventory_hostname') | first) }}
+          n=$(journalctl -u haproxy --since @{{ hostvars['pi1']._t_up }} --no-pager -o cat | grep -c "postgres_primary/$leader is DOWN" || true)
+          echo "$leader marked down $n times"
+          [ "$n" = 0 ]
+      register: _haproxy
+      changed_when: false
+
+    - name: Not paused
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out=$(patronictl -c /etc/patroni/patroni.yml list)
+          if grep 'Maintenance mode' <<< "$out" > /dev/null; then echo PAUSED; exit 1; fi
+      changed_when: false
+      run_once: true
+
     - name: Forgejo's API, which reads its database
       ansible.builtin.uri:
         url: http://127.0.0.1:3000/api/v1/repos/search?limit=1
@@ -65,6 +122,95 @@
       register: _fj
       failed_when: _fj.status != 200 or not _fj.json.ok
 
-    - name: Checked
+    - name: Each Patroni's start before the second run
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value patroni
+      register: _patroni_started
+      changed_when: false
+
+- name: A second run - nothing to do
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-patroni.yml
+
+- name: Nothing restarted; refusals; a failed install still resumes
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    run_playbook: >-
+      env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+      venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml playbooks/upgrade-patroni.yml
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+  tasks:
+    - name: Each Patroni's start, after
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value patroni
+      register: _patroni_started_after
+      changed_when: false
+      failed_when: _patroni_started_after.stdout != _patroni_started.stdout
+
+    - name: Refused - a downgrade, a run without every node
+      ansible.builtin.command:
+        cmd: "{{ run_playbook }} {{ item.args }}"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      loop:
+        - {name: downgrade, args: "-e patroni_version=4.1.0", expect: "newer than 4.1.0"}
+        - {name: one node, args: "--limit pi1,target", expect: "REFUSED: the run has"}
+      loop_control:
+        label: "{{ item.name }}"
+      register: _refused
+      changed_when: false
+      failed_when: _refused.rc == 0 or item.expect not in _refused.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: A paused cluster refused (even with nothing to do), then resumed
+      block:
+        - name: Paused
+          ansible.builtin.command: "{{ patronictl }} pause --wait"
+          changed_when: true
+          run_once: true
+        - name: Refused
+          ansible.builtin.command:
+            cmd: "{{ run_playbook }}"
+            chdir: "{{ playbook_dir }}/../../deploy/ansible"
+          register: _refused_paused
+          changed_when: false
+          failed_when: >-
+            _refused_paused.rc == 0 or 'REFUSED: the cluster is paused' not in _refused_paused.stdout
+          delegate_to: localhost
+          become: false
+          run_once: true
+      always:
+        - name: Resumed
+          ansible.builtin.command: "{{ patronictl }} resume --wait"
+          changed_when: true
+          run_once: true
+
+    - name: A run whose install fails (a version pip cannot find) - fails, and leaves the cluster resumed
+      ansible.builtin.command:
+        cmd: "{{ run_playbook }} -e patroni_version=4.1.99"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _failed_install
+      changed_when: false
+      failed_when: _failed_install.rc == 0 or 'Resumed' not in _failed_install.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Not paused after it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out=$({{ patronictl }} list)
+          if grep 'Maintenance mode' <<< "$out" > /dev/null; then echo PAUSED; exit 1; fi
+      changed_when: false
+      run_once: true
+
+    - name: Rehearsed
       ansible.builtin.debug:
-        msg: "PATRONI UPGRADE TEST: {{ inventory_hostname }} - Forgejo answers from the database"
+        msg: >-
+          PATRONI UPGRADE REHEARSED: 4.1.0 -> {{ hostvars['pi1']._pg_after.json.patroni.version }}; no failover
+          (leader, timeline {{ hostvars['pi1']._pg_after.json.timeline }}, Postgres start times unchanged);
+          {{ hostvars['pi1']._haproxy.stdout }}; Forgejo answering; second run restarted nothing; refused: downgrade,
+          one node, paused; a failed install left the cluster resumed
+      run_once: true

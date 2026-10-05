@@ -2,14 +2,19 @@
 # Patroni on both Pis to patroni_version (vars/patroni.yml) - Patroni's own procedure: the cluster paused (Postgres
 # keeps running and serving; no failover meanwhile), the package upgraded and Patroni restarted on each node, the
 # cluster resumed - whatever happens, once paused. Before: every node's version from its REST API, never a downgrade,
-# a healthy cluster (a leader, every replica streaming). After: every node on the version, the cluster healthy and
-# not paused. A run where both already run the target changes nothing.
+# a healthy cluster (a leader, every replica streaming), not paused already (a paused cluster - an interrupted run, or
+# someone's maintenance - is refused, even when both already run the target: it has no failover). The replicas'
+# Patroni restarts first, the leader's last, each followed by the primary answering through HAProxy (its /primary
+# check marks the leader down after ~9 s without Patroni's REST and cuts its sessions; a Pi's Patroni answers within
+# about a second). After: every node on the version, the cluster healthy and not paused. A run where both already run
+# the target changes nothing. Any node failing stops the run on both.
 #
 # Usage: task deploy:patroni:upgrade   (production; Vagrant: task test:patroni-upgrade)
 - name: Patroni on both Pis to one version
   hosts: pi1,pi2
   become: true
   gather_facts: false
+  any_errors_fatal: true
   vars_files:
     - ../vars/patroni.yml
   vars:
@@ -24,15 +29,37 @@
       print(("HEALTHY " if ok else "NOT HEALTHY ") + ", ".join("%s %s %s" % (x["Member"], x["Role"], x["State"]) for x in m))
       sys.exit(0 if ok else 1)
   tasks:
+    - name: Every node in the run (one left out stays on its version, paused or not)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | sort == ['pi1', 'pi2']
+        fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }}, Patroni runs on pi1 and pi2"
+        quiet: true
+      run_once: true
+
     - name: The version each node's Patroni runs
       ansible.builtin.uri:
         url: http://127.0.0.1:8008/patroni
         return_content: true
       register: _patroni_api
 
-    - name: Its version number
+    - name: Its version number and role
       ansible.builtin.set_fact:
         _running: "{{ _patroni_api.json.patroni.version }}"
+        _leader: "{{ _patroni_api.json.role in ['primary', 'master'] }}"
+
+    - name: Not paused already (no failover while paused - resume it, or finish the maintenance, first)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out=$({{ patronictl }} list)
+          if grep 'Maintenance mode' <<< "$out" > /dev/null; then
+            echo "REFUSED: the cluster is paused (Maintenance mode) - an interrupted run leaves it so: patronictl resume"
+            exit 1
+          fi
+      register: _not_paused
+      changed_when: false
+      run_once: true
 
     - name: Never a downgrade
       ansible.builtin.assert:
@@ -48,7 +75,7 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
-          set -o pipefail
+          set -euo pipefail
           {{ patronictl }} list -f json | python3 -c '{{ healthy_py }}'
       register: _before
       changed_when: false
@@ -67,20 +94,12 @@
             state: present
             break_system_packages: true
 
-        - name: Patroni restarted, one node at a time (paused, Postgres is not touched)
-          ansible.builtin.systemd:
-            name: patroni
-            state: restarted
-          throttle: 1
-
-        - name: Each node's Patroni on the version
-          ansible.builtin.uri:
-            url: http://127.0.0.1:8008/patroni
-            return_content: true
-          register: _after_api
-          retries: 30
-          delay: 5
-          until: _after_api.status | default(0) == 200 and _after_api.json.patroni.version == patroni_version
+        - name: The replicas first, then the leader - each restarted, on the version, the primary answering
+          ansible.builtin.include_tasks: tasks/patroni-restart-node.yml
+          loop: "{{ [false, true] }}"
+          loop_control:
+            loop_var: _turn_leader
+            label: "{{ 'the leader' if _turn_leader else 'the replicas' }}"
       always:
         - name: Resumed
           ansible.builtin.command: "{{ patronictl }} resume --wait"
@@ -91,9 +110,10 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
-          set -o pipefail
+          set -euo pipefail
           {{ patronictl }} list -f json | python3 -c '{{ healthy_py }}'
-          ! {{ patronictl }} list | grep -q 'Maintenance mode'
+          out=$({{ patronictl }} list)
+          if grep 'Maintenance mode' <<< "$out" > /dev/null; then echo "STILL PAUSED"; exit 1; fi
       register: _after
       retries: 12
       delay: 5
