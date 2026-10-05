@@ -52,9 +52,12 @@ check("37 has playbooks and leaves strimzi out of sync", (bool(i37["playbooks"])
 P = lambda step, phase, events, arg=None: m.problems(names, step, phase, events, info[step], arg)
 
 # begin: every earlier step done; once
-refused("begin 03 with 01 not done (02 is, before the ledger)",
-        P("03-istio-1.26", "begin", ev("02-istio-chart-repo done")), ["01-argocd-root-retry"])
-check("begin 01 with only 02 done", P("01-argocd-root-retry", "begin", ev("02-istio-chart-repo done")), [])
+refused("begin 03 with 01 not done (00 and 02 are; 02 before the ledger)",
+        P("03-istio-1.26", "begin", ev("00-gluster-boot done", "02-istio-chart-repo done")), ["01-argocd-root-retry"])
+check("begin 01 with 00 and 02 done", P("01-argocd-root-retry", "begin",
+                                        ev("00-gluster-boot done", "02-istio-chart-repo done")), [])
+refused("begin 01 before 00", P("01-argocd-root-retry", "begin", ev("02-istio-chart-repo done")), ["00-gluster-boot"])
+check("begin 00 first", P("00-gluster-boot", "begin", ev("02-istio-chart-repo done")), [])
 check("begin 47 with 01..46 done", P("47-postgres-18", "begin", ev(*done_upto("46-postgres-18-test"))), [])
 refused("begin 47 with 45 missing",
         P("47-postgres-18", "begin", ev(*[l for l in done_upto("46-postgres-18-test") if not l.startswith("45-")])),

@@ -1,0 +1,9 @@
+# The Pis' and ten's Gluster setup as ops main has it (setup-gluster.yml), before any upgrade: a cold boot waits for the
+# bricks before mounting (gluster-volumes-ready.service; the mounts after it, the services after their mounts), and a
+# re-run no longer mistakes a gluster CLI error for "no volume", chowns all of Forgejo's data or resets the brick roots
+# to root behind Gluster's back. Proven in Vagrant (all three VMs halted and started together: every mount up, Forgejo
+# and versitygw answering; a re-run changed nothing); production's Pis have run the older playbook since before it.
+# outage: none expected - fstab entries of mounted volumes are rewritten without a remount, the boot unit is added for
+# the next boot; the preview shows each change first
+# abort: revert the playbook's commits and run it again - not rehearsed
+playbook setup-gluster.yml
