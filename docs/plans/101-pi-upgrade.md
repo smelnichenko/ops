@@ -97,6 +97,28 @@ test:patroni-upgrade, test:vault-upgrade). Phase 2 after plan 100's rollout.
 Each with a Vagrant proof (the copy at today's versions, the patch applied, the checks green), then production one
 Pi at a time with the operator's approval.
 
+## Review (2026-10-05) and the production order
+
+A reliability review and a test audit of phases 0-1 found, and these were fixed before anything ran in production:
+upgrade-forgejo.yml let one Pi carry on when the other failed (two versions on one migrated database);
+upgrade-patroni.yml ignored its own final health check and passed a paused cluster; upgrade-vault.yml passed a
+sealed Vault on a re-run and put the unseal key shares on command lines; the Pi inventory script exited 1 on every
+Pi; setup-consul kept a config key Consul never loaded (the old playbook left that on every Vagrant server);
+Keycloak's passwords sat in a world-readable unit; the backup script put its token on command lines and could
+age out every bucket on an empty name. The tests behind each were rebuilt to check from outside the playbook
+(sampled versions and health, Postgres start times and timelines, traced processes, marker rows) and every guard
+revert-checked red.
+
+Production order (each step the operator's go):
+1. task deploy:forgejo:upgrade (15.0.9).
+2. task deploy:pi-backups, then one run of pi-tier0-backup.service.
+3. infra branch feat/pi-backup-check pushed (the late-backup check; before the first backup it fires at once).
+4. task deploy:patroni:upgrade (4.1.5).
+5. task deploy:vault:upgrade (1.21.4; also installs the stdin unseal script).
+6. prod-inventory.txt's Pi lines refreshed from production, then plan 100's full run 7.
+Keycloak's root-only secrets file reaches production with the next setup-pi-services run (it restarts Keycloak):
+with phase 2's Keycloak upgrade.
+
 ## Phase 2 - after plan 100's rollout (majors and migrating minors)
 
 Each a step file of its own, through a Vagrant full run and plan 100's production procedure (ledger, Wave 0, soak):
