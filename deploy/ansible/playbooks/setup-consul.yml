@@ -51,16 +51,43 @@
         - /etc/consul.d
         - /var/lib/consul/data
 
-    - name: Generate Consul encryption key (pi1 only)
+    # The gossip key the servers already share, kept: a new one each run changed every config, and the restart that
+    # followed took all three servers down at once (Vault and Patroni with their quorum). Generated only where none
+    # has one - a first install; two different keys refuse.
+    - name: The gossip key this server has
       ansible.builtin.shell: |
-        consul keygen
+        set -o pipefail
+        sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: _consul_key_here
+      changed_when: false
+
+    - name: One key among the servers that have one
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars, ['_consul_key_here', 'stdout']) | select | unique | list | length <= 1
+        fail_msg: "REFUSED: the Consul servers have different gossip keys - fix that by hand first"
+        quiet: true
+      run_once: true
+
+    - name: A key generated - only on a first install, where no server has one
+      ansible.builtin.command: consul keygen
       register: consul_key_gen
-      when: inventory_hostname == 'pi1'
+      when:
+        - inventory_hostname == 'pi1'
+        - ansible_play_hosts | map('extract', hostvars, ['_consul_key_here', 'stdout']) | select | list | length == 0
       changed_when: true
 
     - name: Set encryption key fact
       ansible.builtin.set_fact:
-        consul_encrypt_key: "{{ hostvars['pi1']['consul_key_gen']['stdout'] | default('') }}"
+        consul_encrypt_key: >-
+          {{ (ansible_play_hosts | map('extract', hostvars, ['_consul_key_here', 'stdout']) | select | list
+              + [hostvars['pi1']['consul_key_gen']['stdout'] | default('')]) | first }}
+
+    - name: Consul running here before this run (a restart then waits for the others)
+      ansible.builtin.systemd_service:
+        name: consul
+      register: _consul_before
 
     - name: Allow Consul ports through UFW
       community.general.ufw:
@@ -109,7 +136,7 @@
           connect {
             enabled = false
           }
-      notify: Restart Consul
+      register: _consul_config
 
     - name: Install Consul systemd service
       ansible.builtin.copy:
@@ -134,7 +161,7 @@
           TimeoutStartSec=120
           [Install]
           WantedBy=multi-user.target
-      notify: Restart Consul
+      register: _consul_unit
 
     - name: Enable and start Consul
       ansible.builtin.systemd_service:
@@ -155,12 +182,37 @@
       retries: 3
       delay: 5
 
-  handlers:
-    - name: Restart Consul
+# ─── Changed servers restarted one at a time ─────────────────────────────────
+# each back in the cluster, with a leader and all three voters, before the next: two down at once is a lost quorum
+- name: Restart the Consul servers whose config or unit changed, one at a time
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  serial: 1
+  tasks:
+    - name: Restarted
       ansible.builtin.systemd_service:
         name: consul
         state: restarted
         daemon_reload: true
+      when:
+        - _consul_config.changed or _consul_unit.changed
+        - _consul_before.status.ActiveState | default('') == 'active'
+
+    - name: Back, with a leader and three voters
+      ansible.builtin.shell: |
+        set -o pipefail
+        consul operator raft list-peers | awk 'NR > 1 && $5 == "true" {v++} NR > 1 && $4 == "leader" {l++} END {print v + 0, l + 0}'
+      args:
+        executable: /bin/bash
+      register: _consul_peers
+      retries: 30
+      delay: 5
+      until: _consul_peers.rc == 0 and _consul_peers.stdout == '3 1'
+      changed_when: false
+      when:
+        - _consul_config.changed or _consul_unit.changed
+        - _consul_before.status.ActiveState | default('') == 'active'
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Consul cluster

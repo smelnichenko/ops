@@ -3,6 +3,7 @@
 #   setup-patroni, Patroni stopped on pi2: refused, naming the reason, and pi2's data still there (the same files in
 #   its data directory but postmaster.pid, which a stopped Postgres removes); Patroni started again (whatever happened)
 #   and back to streaming, the same run passes on pi2.
+#   setup-consul on an unchanged cluster: the same gossip key on every server, no server restarted.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
@@ -85,3 +86,50 @@
         msg: >-
           PATRONI RE-RUN GUARD: stopped -> refused ({{ _refused.stdout | regex_search('REFUSED on pi2[^"]*?not active') }}),
           data untouched; running -> passed
+
+# setup-consul re-run on an unchanged cluster: the same gossip key on every server, and no server restarted (each
+# consul's start time as before) - it used to make a new key and restart all three at once
+- name: Consul's key and start times before
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Key and start time
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl) $(systemctl show consul -p ActiveEnterTimestampMonotonic --value)"
+      args:
+        executable: /bin/bash
+      register: _consul_before_rerun
+      changed_when: false
+
+- name: setup-consul re-run
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Consul's key and start times after - unchanged
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Key and start time as before
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl) $(systemctl show consul -p ActiveEnterTimestampMonotonic --value)"
+      args:
+        executable: /bin/bash
+      register: _consul_after_rerun
+      changed_when: false
+      failed_when: >-
+        _consul_after_rerun.stdout != _consul_before_rerun.stdout or _consul_after_rerun.stdout.split() | length != 2
+
+    - name: Unchanged
+      ansible.builtin.debug:
+        msg: "CONSUL RE-RUN: {{ inventory_hostname }} kept its key and was not restarted"
