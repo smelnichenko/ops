@@ -25,8 +25,17 @@ case "$u" in
   *:8008/patroni) [ -n "${PATRONI_JSON:-}" ] && echo "$PATRONI_JSON" || exit 7 ;;
   *) exit 7 ;;
 esac'
-stub dpkg-query 'p="${@: -1}"; v="DPKG_${p//-/_}"; st="DPKGST_${p//-/_}"
-[ -n "${!v:-}" ] && printf "%s %s" "${!st:-ii }" "${!v}" || { echo "dpkg-query: no packages found matching $p" >&2; exit 1; }'
+# as dpkg-query -W -f=FORMAT PKG...: each known package in FORMAT; any unknown one named on stderr and exit 1
+stub dpkg-query 'fmt=""; pkgs=()
+for a; do case "$a" in -W) ;; -f=*) fmt=${a#-f=} ;; *) pkgs+=("$a") ;; esac; done
+rc=0
+for p in "${pkgs[@]}"; do
+  v="DPKG_${p//-/_}"; st="DPKGST_${p//-/_}"
+  if [ -n "${!v:-}" ]; then
+    o=${fmt//"\${db:Status-Abbrev}"/${!st:-ii }}; o=${o//"\${Package}"/$p}; o=${o//"\${Version}"/${!v}}; printf "%b" "$o"
+  else echo "dpkg-query: no packages found matching $p" >&2; rc=1; fi
+done
+exit $rc'
 stub versitygw 'echo "Version  : 1.6.0"'
 stub vault 'echo "Vault v1.21.4 (f4f0f4eb), built 2026-02-03"'
 stub consul 'printf "Consul v1.20.6\nRevision 1\n"'
