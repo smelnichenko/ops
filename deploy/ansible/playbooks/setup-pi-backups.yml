@@ -2,14 +2,19 @@
 # The Pis' tier-0 data backed up daily into the Pi backup store (bucket pi-backups, keys <UTC time>/<file>), from the
 # Pi holding the VIP (one copy a day; the other Pi's timer finds it is not the holder and stops):
 #   consul.snap        `consul snapshot save` - Vault's data lives in Consul, and Patroni's cluster state; checked
-#                      with `consul snapshot inspect`
+#                      with `consul snapshot inspect`. Restoring all of it rolls Patroni's state back too: pause
+#                      Patroni first, or restore it into a throwaway agent and import only vault/ from there
 #   pg-<db>.dump       pg_dump --format=custom of every Patroni database (Forgejo's, Keycloak's, ...) through HAProxy
 #                      (the primary); each listed back with pg_restore --list
 #   pg-globals.sql     pg_dumpall --globals-only (roles)
-#   keycloak-<realm>.json  each realm's partial export (clients, groups, roles - users are in Keycloak's database dump):
-#                      portable across Keycloak versions
+#   keycloak-<realm>.json  each realm's partial export (clients, groups, roles) - a readable copy across Keycloak
+#                      versions, not a restore source: Keycloak masks client and identity-provider secrets in it
+#                      (**********) and leaves users out; Keycloak's restore is its database dump
 #   last-success       the run's time, written last - a check in the cluster alerts when it is old
-# Uploaded with rclone and compared (rclone check); copies older than pi_backup_retention_days deleted.
+# Uploaded with rclone and compared (rclone check); copies older than pi_backup_retention_days deleted - in this
+# bucket only (the store's key is its root key: an empty bucket name would reach every bucket, so it stops the run).
+# Secrets stay off command lines (any local user reads those in /proc): the Keycloak password and token go to curl
+# on stdin and through a config read from a pipe. A run is bounded (its unit's start limit; curl's own).
 #
 # Until now nothing backed these up: replication was the only copy, and the Pis' nightly vault-backup tarred
 # /var/lib/vault, which holds no secrets (they are in Consul).
@@ -66,6 +71,7 @@
           # The Pis' tier-0 data into the Pi store - setup-pi-backups.yml (ops) explains it. Credentials from the unit's
           # EnvironmentFile. Exit 0 also when this Pi does not hold the VIP (the other one backs up).
           set -euo pipefail
+          : "${PI_BACKUP_BUCKET:?no bucket}" "${PI_BACKUP_RETENTION_DAYS:?no retention}" "${PI_BACKUP_VIP:?no VIP}"
           # the VIP's address on this Pi (no grep -q in a pipe: under pipefail its early exit can fail the pipe)
           [ -n "$(ip -o -4 addr show to "${PI_BACKUP_VIP}/32")" ] || { echo "not the VIP's Pi - the other backs up"; exit 0; }
           ts=$(date -u +%Y%m%dT%H%M%SZ)
@@ -85,13 +91,15 @@
           pg_dumpall "${P[@]}" --globals-only > "$work/pg-globals.sql"
           # Keycloak's realms (users are in its database dump)
           kc=http://127.0.0.1:8080
-          token=$(curl -fsS -d client_id=admin-cli -d username=admin --data-urlencode "password=$KC_ADMIN_PASSWORD" \
-            -d grant_type=password "$kc/realms/master/protocol/openid-connect/token" \
+          # the password on curl's stdin, the token in a config curl reads from a pipe (printf is bash's own)
+          token=$(printf '%s' "$KC_ADMIN_PASSWORD" | curl -fsS --max-time 30 -d client_id=admin-cli -d username=admin \
+            --data-urlencode password@- -d grant_type=password "$kc/realms/master/protocol/openid-connect/token" \
             | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
-          realms=$(curl -fsS -H "Authorization: Bearer $token" "$kc/admin/realms" \
+          kc_auth() { printf 'header = "Authorization: Bearer %s"\n' "$token"; }
+          realms=$(curl -fsS --max-time 30 -K <(kc_auth) "$kc/admin/realms" \
             | python3 -c 'import json, sys; print(" ".join(r["realm"] for r in json.load(sys.stdin)))')
           for realm in $realms; do
-            curl -fsS -X POST -H "Authorization: Bearer $token" \
+            curl -fsS --max-time 120 -X POST -K <(kc_auth) \
               "$kc/admin/realms/$realm/partial-export?exportClients=true&exportGroupsAndRoles=true" > "$work/keycloak-$realm.json"
             python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["realm"] == sys.argv[2]' \
               "$work/keycloak-$realm.json" "$realm"
@@ -120,6 +128,8 @@
             Type=oneshot
             EnvironmentFile=/etc/pi-backup/env
             ExecStart=/usr/local/sbin/pi-tier0-backup.sh
+            # a hung run must not block the next day's (the late-backup check reports it)
+            TimeoutStartSec=3600
         - name: pi-tier0-backup.timer
           content: |
             [Unit]

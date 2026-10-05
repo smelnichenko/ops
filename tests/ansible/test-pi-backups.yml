@@ -1,17 +1,57 @@
 ---
-# The Pis' tier-0 backup (setup-pi-backups.yml) taken on the Vagrant Pi stack and every piece restored:
+# The Pis' tier-0 backup (setup-pi-backups.yml) taken on the Vagrant Pi stack and every piece restored, all read back
+# from the Pi store:
+#   before     a marker database with a random row; two probe objects in the bucket, 31 and 29 days old
+#   the run    started on both Pis: exactly one backs up and it is the VIP's Pi; the daily timer on, on both
 #   consul.snap      into a throwaway Consul dev agent on other ports - Vault's keys (vault/core/) and Patroni's
 #                    (service/) there
-#   pg-<db>.dump     into a scratch database on the Patroni primary - every table the dump lists is there, then
-#                    dropped
-#   keycloak-*.json  the realm's own name and its clients
-#   last-success     the run's time
-# all read back from the Pi store. Vagrant only (the guard play first). Usage: task test:pi-backups
+#   pg-<db>.dump     a dump for every database, each into a scratch database - every table it lists there, the marker
+#                    row there, Forgejo's and Keycloak's users as many as live
+#   keycloak-*.json  one per realm Keycloak has, each with clients
+#   last-success     this run's time
+#   retention        the 31-day probe gone, the 29-day one kept
+# Vagrant only (the guard play first). Usage: task test:pi-backups
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
 
 - name: Production's backup playbook
   ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/setup-pi-backups.yml
+
+- name: Before - a marker row, retention probes
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: A marker database with a random row
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          P=(-h 127.0.0.1 -p 5000 -U postgres -v ON_ERROR_STOP=1)
+          v=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          psql "${P[@]}" -d postgres -qc "drop database if exists backup_probe" -c "create database backup_probe"
+          psql "${P[@]}" -d backup_probe -qc "create table marker (v text)" -c "insert into marker values ('$v')"
+          echo "$v"
+      register: _marker
+      changed_when: true
+
+    - name: Two probe objects in the bucket, 31 and 29 days old
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+          for age in 31 29; do
+            mkdir -p "$d/retention-probe-${age}d"; echo probe > "$d/retention-probe-${age}d/probe"
+            touch -d "$age days ago" "$d/retention-probe-${age}d/probe"
+          done
+          rclone mkdir "store:$PI_BACKUP_BUCKET"
+          rclone copy "$d" "store:$PI_BACKUP_BUCKET"
+          rclone lsl "store:$PI_BACKUP_BUCKET" --include 'retention-probe-*/**'
+      register: _probes
+      changed_when: true
 
 - name: A backup taken now (the VIP's Pi does it, the other finds it is not)
   hosts: pis
@@ -22,21 +62,46 @@
       ansible.builtin.systemd:
         name: pi-tier0-backup.service
         state: started
-      register: _run
 
-    - name: Its result on each
-      ansible.builtin.command: journalctl -u pi-tier0-backup.service -n 3 --no-pager -o cat
+    - name: This run's invocation
+      ansible.builtin.command: systemctl show -p InvocationID --value pi-tier0-backup.service
+      register: _invocation
+      changed_when: false
+
+    - name: Its output, this run's only
+      ansible.builtin.command: journalctl _SYSTEMD_INVOCATION_ID={{ _invocation.stdout }} --no-pager -o cat
       register: _journal
       changed_when: false
 
-    - name: Exactly one Pi backed up
+    - name: Whether this Pi holds the VIP
+      ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
+      register: _vip
+      changed_when: false
+
+    - name: Exactly one Pi backed up, and it holds the VIP
       ansible.builtin.assert:
-        that: >-
-          ansible_play_hosts | map('extract', hostvars, ['_journal', 'stdout']) | select('search', 'PI TIER-0 BACKUP')
-          | list | length == 1
-        fail_msg: "{{ ansible_play_hosts | map('extract', hostvars, ['_journal', 'stdout']) | list }}"
+        that:
+          - _backed_up | length == 1
+          - _backed_up == _vip_holders
+        fail_msg: "backed up: {{ _backed_up }}, VIP on: {{ _vip_holders }}"
         quiet: true
+      vars:
+        _backed_up: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_journal.stdout', 'search', 'PI TIER-0 BACKUP') | map(attribute='inventory_hostname') | list }}"
+        _vip_holders: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vip.stdout', '!=', '') | map(attribute='inventory_hostname') | list }}"
       run_once: true
+
+    - name: This run's time
+      ansible.builtin.set_fact:
+        _run_ts: "{{ ansible_play_hosts | map('extract', hostvars, ['_journal', 'stdout']) | join('\n') | regex_search('PI TIER-0 BACKUP ([0-9TZ]+):', '\\1') | first }}"
+      run_once: true
+
+    - name: The daily timer on, with a next run
+      ansible.builtin.command: systemctl show -p UnitFileState -p NextElapseUSecRealtime pi-tier0-backup.timer
+      register: _timer
+      changed_when: false
+      failed_when: >-
+        'UnitFileState=enabled' not in _timer.stdout_lines
+        or _timer.stdout_lines | select('match', 'NextElapseUSecRealtime=.+') | list | length != 1
 
 - name: Every piece restored, read back from the store
   hosts: pi1
@@ -45,17 +110,31 @@
   vars:
     work: /var/backups/pi-backup-rehearsal
   tasks:
-    - name: The newest backup read back
+    - name: The last success is this run's, read back
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           set -a; . /etc/pi-backup/env; set +a
-          rm -rf {{ work }}; mkdir -p {{ work }}
           last=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success")
+          [ "$last" = "{{ _run_ts }}" ] || { echo "last-success $last, this run {{ _run_ts }}"; exit 1; }
+          rm -rf {{ work }}; mkdir -p {{ work }}
           rclone copy "store:$PI_BACKUP_BUCKET/$last" {{ work }}
           echo "$last"; ls {{ work }}
       register: _got
+      changed_when: false
+
+    - name: Retention - the 31-day probe gone, the 29-day one kept (then removed)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          left=$(rclone lsf -R "store:$PI_BACKUP_BUCKET" --include 'retention-probe-*/**' --files-only)
+          rclone purge "store:$PI_BACKUP_BUCKET/retention-probe-29d" 2>/dev/null || true
+          echo "left: $left"
+          [ "$left" = "retention-probe-29d/probe" ]
+      register: _retention
       changed_when: false
 
     - name: Consul's snapshot into a throwaway dev agent - Vault's and Patroni's keys there
@@ -82,15 +161,16 @@
       register: _consul
       changed_when: false
 
-    - name: Each database dump into a scratch database - every table it lists there
+    - name: Each database dump into a scratch database - its tables, the marker row, the users
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           set -a; . /etc/pi-backup/env; set +a
           P=(-h 127.0.0.1 -p 5000 -U postgres)
+          q() { psql "${P[@]}" -d "$1" -Atc "$2"; }
           # a dump for every database Patroni has, none missing
-          have=$(psql "${P[@]}" -d postgres -Atc "select datname from pg_database where not datistemplate and datname <> 'postgres' order by 1" | tr '\n' ' ')
+          have=$(q postgres "select datname from pg_database where not datistemplate and datname <> 'postgres' order by 1" | tr '\n' ' ')
           dumped=$(ls {{ work }}/pg-*.dump | sed 's|.*/pg-||; s|[.]dump$||' | sort | tr '\n' ' ')
           [ "$have" = "$dumped" ] || { echo "databases: $have; dumped: $dumped"; exit 1; }
           [ -s {{ work }}/pg-globals.sql ] || { echo "no roles dump"; exit 1; }
@@ -99,19 +179,37 @@
             psql "${P[@]}" -d postgres -qc "drop database if exists $scratch" -c "create database $scratch"
             pg_restore "${P[@]}" --no-owner --no-privileges -d "$scratch" "$f"
             want=$(pg_restore --list "$f" | awk '$4 == "TABLE" && $5 != "DATA" {n++} END {print n + 0}')
-            got=$(psql "${P[@]}" -d "$scratch" -Atc "select count(*) from information_schema.tables where table_type = 'BASE TABLE' and table_schema not in ('pg_catalog', 'information_schema')")
+            got=$(q "$scratch" "select count(*) from information_schema.tables where table_type = 'BASE TABLE' and table_schema not in ('pg_catalog', 'information_schema')")
+            extra=""
+            case "$db" in
+              backup_probe) extra=" marker $(q "$scratch" "select v from marker")"
+                            [ "$(q "$scratch" "select v from marker")" = "{{ _marker.stdout }}" ] || { echo "$db: marker missing"; exit 1; } ;;
+              forgejo) live=$(q forgejo 'select count(*) from "user"'); rest=$(q "$scratch" 'select count(*) from "user"')
+                       extra=" users $rest/$live"; [ "$rest" = "$live" ] && [ "$live" -gt 0 ] || { echo "$db: users$extra"; exit 1; } ;;
+              keycloak) live=$(q keycloak 'select count(*) from user_entity'); rest=$(q "$scratch" 'select count(*) from user_entity')
+                        extra=" users $rest/$live"; [ "$rest" = "$live" ] && [ "$live" -gt 0 ] || { echo "$db: users$extra"; exit 1; } ;;
+            esac
             psql "${P[@]}" -d postgres -qc "drop database $scratch"
-            echo "$db: $got of $want tables"
+            echo "$db: $got of $want tables$extra"
             [ "$want" -gt 0 ] && [ "$got" = "$want" ]
           done
       register: _pg
       changed_when: false
 
-    - name: Each realm export - its name and clients
+    - name: One export per realm Keycloak has, each with clients
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          kc=http://127.0.0.1:8080
+          token=$(printf '%s' "$KC_ADMIN_PASSWORD" | curl -fsS -d client_id=admin-cli -d username=admin \
+            --data-urlencode password@- -d grant_type=password "$kc/realms/master/protocol/openid-connect/token" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+          live=$(curl -fsS -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") "$kc/admin/realms" \
+            | python3 -c 'import json, sys; print(" ".join(sorted(r["realm"] for r in json.load(sys.stdin))))')
+          exported=$(ls {{ work }}/keycloak-*.json | sed 's|.*/keycloak-||; s|[.]json$||' | sort | tr '\n' ' ' | sed 's/ $//')
+          [ "$live" = "$exported" ] || { echo "realms: $live; exported: $exported"; exit 1; }
           for f in {{ work }}/keycloak-*.json; do
             python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); n = len(d.get("clients", []));
           assert n > 0, "no clients"; print(d["realm"], n, "clients")' "$f"
@@ -119,13 +217,19 @@
       register: _kc
       changed_when: false
 
-    - name: The work directory gone
-      ansible.builtin.file:
-        path: "{{ work }}"
-        state: absent
+    - name: The work directory and the marker database gone
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          rm -rf {{ work }}
+          psql -h 127.0.0.1 -p 5000 -U postgres -d postgres -qc "drop database if exists backup_probe"
+      changed_when: true
 
     - name: Restored
       ansible.builtin.debug:
         msg: >-
           PI TIER-0 BACKUP {{ _got.stdout_lines[0] }} RESTORES: consul - {{ _consul.stdout }}; postgres -
-          {{ _pg.stdout_lines | join(', ') }}; keycloak - {{ _kc.stdout_lines | join(', ') }}
+          {{ _pg.stdout_lines | join(', ') }}; keycloak - {{ _kc.stdout_lines | join(', ') }}; retention -
+          {{ _retention.stdout }}
