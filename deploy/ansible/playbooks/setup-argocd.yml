@@ -645,16 +645,10 @@
     # Phase 8: Create root application
     # ================================================================
 
-    - name: Wait for ESO CRDs to be available
-      kubernetes.core.k8s_info:
-        kubeconfig: /etc/kubernetes/admin.conf
-        api_version: apiextensions.k8s.io/v1
-        kind: CustomResourceDefinition
-        name: externalsecrets.external-secrets.io
-      register: eso_crd
-      retries: 30
-      delay: 10
-      until: eso_crd.resources | length > 0
+    # No wait for External Secrets' CRDs first (added 2026-04-05, when a root synced before them failed for good): the
+    # root retries with a capped back-off and the apps sync in waves, so the ones needing the CRDs wait for them - and
+    # where Argo installs External Secrets itself (from the eso-crds step on), waiting for its CRDs before the root
+    # exists never ends (a build at the targets, Vagrant 2026-10-05).
 
     - name: Does the root application exist?
       kubernetes.core.k8s_info:
@@ -704,4 +698,11 @@
               syncOptions:
                 - ServerSideApply=false
                 - RespectIgnoreDifferences=true
+              # as infra's root.yaml: the first sync is this spec's, and on a cold start it needs the retries
+              retry:
+                limit: 20
+                backoff:
+                  duration: 10s
+                  factor: 2
+                  maxDuration: 3m
       when: _root_app.resources | length == 0
