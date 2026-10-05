@@ -16,9 +16,15 @@ platform=${2:-$ops/../platform}
 infra_ref=${3:-main}
 platform_ref=${4:-main}
 
-# production's values plus the chart default they rely on (schnappy-data's apt-cacher-ng image)
+# production's values - with the Vagrant overlay's own values on top, as Argo there merges them (the copy may run
+# candidate images ahead of production) - plus the chart default they rely on (schnappy-data's apt-cacher-ng image)
+overlay=$ops/tests/ansible/upgrade/vagrant-overlay/infra/clusters/production
 mapfile -t images < <({ for f in schnappy-production-apps schnappy-infra-data; do
-                          git -C "$infra" show "$infra_ref:clusters/production/$f/values.yaml"; echo "---"; done
+                          git -C "$infra" show "$infra_ref:clusters/production/$f/values.yaml"
+                          if [ -f "$overlay/$f/values.vagrant.yaml" ]; then
+                            echo "---"; echo "__vagrant_overlay_follows__: true"; echo "---"; cat "$overlay/$f/values.vagrant.yaml"
+                          fi
+                          echo "---"; done
                         git -C "$platform" show "$platform_ref:helm/schnappy-data/values.yaml"; } \
                      | python3 -c '
 import sys, yaml
@@ -32,7 +38,20 @@ def walk(n):
         for v in n: walk(v)
     elif isinstance(n, str) and n.startswith("git.pmon.dev/") and ":" in n.split("/")[-1]:
         print(n)  # a whole image reference in one string
-for doc in yaml.safe_load_all(sys.stdin): walk(doc)' | sort -u)
+def merge(base, top):
+    # as Helm merges a later value file: maps key by key, anything else replaced
+    if isinstance(base, dict) and isinstance(top, dict):
+        return {k: merge(base[k], v) if k in base else v for k, v in top.items()} | {k: v for k, v in base.items() if k not in top}
+    return top
+values, overlay_next = [], False
+for doc in yaml.safe_load_all(sys.stdin):
+    if doc == {"__vagrant_overlay_follows__": True}:
+        overlay_next = True
+    elif overlay_next:
+        values[-1], overlay_next = merge(values[-1], doc or {}), False
+    else:
+        values.append(doc)
+for doc in values: walk(doc)' | sort -u)
 [ "${#images[@]}" -gt 0 ] || { echo "no git.pmon.dev images found in the production values"; exit 1; }
 
 cd "$ops"

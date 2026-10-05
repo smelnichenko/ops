@@ -1,12 +1,26 @@
 # Vagrant only (upgrade test): memory REQUESTS shrunk so production fits the 20 GB VM (ten's pods use ~30 GB;
 # operator 2026-10-02). Requests only decide scheduling - limits, and so the JVMs' sizing, stay production's.
+#
+# The candidate images of monitor, admin, chat and chess, ahead of production: Keycloak's keys fetched before readiness
+# and refreshed before they expire, the hot reads warmed (the full run's Istio 1.31 step failed its k6 smoke on cold
+# apps: first requests 0.5-3 s). The copy runs them so the full run and its review cover them; production keeps its
+# own tags until they are promoted after the review. Drop these tags once production's values carry them.
 app:
+  image:
+    tag: "cdb009f"
   resources:
     requests: { memory: 1Gi }        # ten: 3Gi
+admin:
+  image:
+    tag: "d0eab4b"
 chatService:
+  image:
+    tag: "b744e8d"
   resources:
     requests: { memory: 768Mi }      # ten: 1536Mi
 chessService:
+  image:
+    tag: "e5a1654"
   resources:
     requests: { memory: 768Mi }      # ten: 1536Mi
 
