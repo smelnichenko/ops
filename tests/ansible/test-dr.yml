@@ -374,7 +374,9 @@
             keycloakUrl: "http://schnappy-keycloak:8080"
             clientSecretName: schnappy-k6-smoke
             prometheusRwUrl: ""
-            skipGroups: [approval-mode, permissions, chat, chess]
+            # the chart's own default skips masi (it cannot see whether the target serves it); this list replaces
+            # that default, so masi is named here too - the drill deploys monitor and site only
+            skipGroups: [approval-mode, permissions, chat, chess, masi]
 
     - name: Wait for app to be ready
       ansible.builtin.shell: |
