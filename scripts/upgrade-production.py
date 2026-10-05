@@ -221,7 +221,7 @@ def inventory_check(applied):
         f.write(lines.replace("\r", ""))
     apart = ten(f"INVENTORY_ONLY_NAMESPACES={shlex.quote(TEST_NAMESPACES)} bash -s", stdin=script).stdout
     print(f"the test environment ({TEST_NAMESPACES}) - listed, not compared:")
-    print("\n".join("  " + l for l in apart.splitlines() if l.startswith(("image ", "helm "))))
+    print("\n".join("  " + l for l in apart.splitlines() if l.startswith(("image ", "helm ", "kafka-metadata "))))
     return run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
                 os.path.join(inv.UPGRADE, "prod-transient.txt")]).returncode == 0
 

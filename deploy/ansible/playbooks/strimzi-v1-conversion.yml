@@ -133,10 +133,14 @@
             EOF
             $K wait job/$job --for=condition=Complete --timeout=600s > /dev/null & ok=$!
             $K wait job/$job --for=condition=Failed --timeout=600s > /dev/null & failed=$!
-            wait -n $ok $failed || true
+            # whichever wait ends first (a timeout ends both with an error); the status of the Job below decides
+            first=0
+            wait -n $ok $failed || first=$?
+            # the other wait is still running - or ended already, which kill reports and nothing else needs
             kill $ok $failed 2> /dev/null || true
             $K logs job/$job --tail=40
-            [ "$($K get job $job -o jsonpath='{.status.succeeded}')" = 1 ]
+            [ "$($K get job $job -o jsonpath='{.status.succeeded}')" = 1 ] \
+              || { echo "$job did not succeed (the first wait ended with $first)"; exit 1; }
           args:
             executable: /bin/bash
           loop: [convert-resource, crd-upgrade]
@@ -161,12 +165,18 @@
           changed_when: false
 
       always:
+        # every removal tried, whichever fails; the task fails if any did
         - name: Remove the tool's Jobs and RBAC
           ansible.builtin.shell: |
-            {{ kubectl }} -n {{ operator_namespace }} delete job strimzi-v1-convertresource strimzi-v1-crdupgrade --ignore-not-found
-            {{ kubectl }} delete clusterrolebinding strimzi-v1-api-conversion --ignore-not-found
-            {{ kubectl }} delete clusterrole strimzi-v1-api-conversion --ignore-not-found
-            {{ kubectl }} -n {{ operator_namespace }} delete serviceaccount strimzi-v1-api-conversion --ignore-not-found
+            rc=0
+            {{ kubectl }} -n {{ operator_namespace }} delete job strimzi-v1-convertresource strimzi-v1-crdupgrade \
+              --ignore-not-found || rc=1
+            {{ kubectl }} delete clusterrolebinding strimzi-v1-api-conversion --ignore-not-found || rc=1
+            {{ kubectl }} delete clusterrole strimzi-v1-api-conversion --ignore-not-found || rc=1
+            {{ kubectl }} -n {{ operator_namespace }} delete serviceaccount strimzi-v1-api-conversion --ignore-not-found || rc=1
+            exit $rc
+          args:
+            executable: /bin/bash
           changed_when: true
 
     - name: Converted

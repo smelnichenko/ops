@@ -226,6 +226,7 @@ image talinx/cert-manager-webhook-porkbun 1.0.0
 image valkey/valkey 8.1-alpine
 image velero/velero-plugin-for-aws v1.11.1
 k8s server v1.34.6
+kafka-metadata schnappy-production/schnappy-production 4.2-IV1
 os debian 13.7
 pi pi1 versitygw 1.6.0
 pi pi2 versitygw 1.6.0

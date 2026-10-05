@@ -40,11 +40,14 @@
   changed_when: false
   when: _vgw_binary.stat.exists
 
+# the version itself, compared whole (a substring test took 1.8.0 for installed in 11.8.0, or in a build number)
+- name: The installed versitygw's version (empty when none)
+  ansible.builtin.set_fact:
+    _installed_version: "{{ _vgw_installed.stdout | default('') | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('', true) }}"
+
 # A deb install moves the version either way: a run with the old default after an upgrade would go back (the
 # upgrade moves the default in the same change)
 - name: No downgrade - the installed versitygw is not newer than {{ vgw_version }}
-  vars:
-    _installed_version: "{{ _vgw_installed.stdout | default('') | regex_search('[0-9]+[.][0-9]+[.][0-9]+') | default('', true) }}"
   ansible.builtin.assert:
     that: _installed_version == '' or _installed_version is version(vgw_version, '<=')
     fail_msg: "REFUSED: versitygw {{ _installed_version }} is installed; this run would install {{ vgw_version }} - set vgw_version"
@@ -53,7 +56,7 @@
 - name: Install versitygw {{ vgw_version }}
   ansible.builtin.apt:
     deb: "https://github.com/versity/versitygw/releases/download/v{{ vgw_version }}/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
-  when: vgw_version not in (_vgw_installed.stdout | default(''))
+  when: _installed_version != vgw_version
 
 # Backend (buckets) and sidecar (metadata) live on the Gluster volume so both
 # gateways share them; iam-dir is local because the root key comes from the env
@@ -180,7 +183,7 @@
   delay: 3
   until: >-
     _vgw_serving.rc == 0 and 'running /usr/bin/versitygw' in _vgw_serving.stdout_lines
-    and vgw_version in _vgw_serving.stdout
+    and (_vgw_serving.stdout | regex_findall('[0-9]+[.][0-9]+[.][0-9]+')) == [vgw_version]
 
 # Buckets are top-level dirs, but create them via the S3 API so versitygw also
 # records the bucket in its sidecar metadata (idempotent).

@@ -6,7 +6,8 @@
 # writes statistics only).
 #
 # With -e pg_namespaces=<ns>[,<ns>] only the clusters in those namespaces - the test environment's step, before
-# production's; where none of them has a cluster (the Vagrant copy has no test environment) it says so and does nothing.
+# production's. None of them having a cluster fails, unless the inventory sets postgres_analyze_allow_none (the Vagrant
+# copy, which has no test environment): then it says so and does nothing.
 #
 # Usage: task deploy:upgrade:playbooks STEP=<a PostgreSQL 18 step>   (its playbook line)
 #        ansible-playbook -i inventory/<env>.yml playbooks/postgres-analyze.yml -e pg_major=18 [-e pg_namespaces=schnappy-test]
@@ -35,9 +36,10 @@
       register: _clusters
       changed_when: false
       failed_when: >-
-        _clusters.rc != 0 or (_clusters.stdout_lines | length == 0 and pg_namespaces | default('') | length == 0)
+        _clusters.rc != 0 or (_clusters.stdout_lines | length == 0
+        and not (pg_namespaces | default('') | length > 0 and postgres_analyze_allow_none | default(false) | bool))
 
-    - name: Nothing to analyse - no CNPG cluster here in the namespaces given
+    - name: Nothing to analyse - no CNPG cluster here in the namespaces given (the inventory allows none)
       ansible.builtin.meta: end_play
       when: _clusters.stdout_lines | length == 0
 

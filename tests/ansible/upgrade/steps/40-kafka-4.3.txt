@@ -9,6 +9,8 @@
 # one-way: Kafka's volume (the broker stopped for the copy) backed up into the Pi store before the step changes anything
 wave0 kafka
 image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1
+# and Strimzi moves the metadata version (none set in the spec) - from here 4.2 cannot come back
+kafka-metadata schnappy-production/schnappy-production 4.2-IV1 => kafka-metadata schnappy-production/schnappy-production 4.3-IV0
 # its change: the branch upgrade/40-kafka-4.3 in infra and platform
 branch infra
 branch platform

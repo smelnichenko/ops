@@ -62,6 +62,8 @@ all:
     # Wave 0 files go to the Pi store in parts this small here, so the rehearsal puts them together from several
     # (production's default: 4 GiB)
     upgrade_backup_part_bytes: 4194304
+    # the PostgreSQL 18 test step analyses schnappy-test's clusters - the Vagrant copy has no test environment
+    postgres_analyze_allow_none: true
     keycloak_admin_password: "vagrant-keycloak-pw"
     postgres_admin_password: "vagrant-pg-pw"
     postgres_replication_password: "vagrant-pg-repl-pw"

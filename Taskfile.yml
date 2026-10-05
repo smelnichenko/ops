@@ -415,8 +415,9 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=seed{{if .CLICKHOUSE_COMPAT}} -e clickhouse_compat='{{.CLICKHOUSE_COMPAT}}'{{end}}{{if .CLICKHOUSE_USERS}} -e clickhouse_users='{{.CLICKHOUSE_USERS}}'{{end}}
       # the scrape pools and their target counts, the record every step's metrics check compares with
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml -e record_scrape_pools=true
-      # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
-      - cmd: scripts/vagrant-smoke.sh
+      # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production) - the
+      # Job of the refs mirrored (the targets build's are the last step's, not main's)
+      - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt {{.ALLOWED_MISSING}}

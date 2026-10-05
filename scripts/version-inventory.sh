@@ -82,6 +82,17 @@ for o in json.load(sys.stdin)["items"]:
     -o jsonpath='{"crd prometheus-operator "}{.metadata.annotations.operator\.prometheus\.io/version}{"\n"}' \
     2>/dev/null || true
 
+  # each Kafka cluster's metadata version: Strimzi moves it after a Kafka upgrade, and from then the older Kafka cannot
+  # come back (the step's abort turns on it)
+  if kubectl get crd kafkas.kafka.strimzi.io > /dev/null 2>&1; then
+    kubectl get kafkas.kafka.strimzi.io -A -o json | python3 -c 'import json,os,sys
+ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY_ONLY_NAMESPACES"].split()
+for k in json.load(sys.stdin)["items"]:
+    m=k["metadata"]
+    if m["namespace"] in ex or (only and m["namespace"] not in only): continue
+    print("kafka-metadata", m["namespace"] + "/" + m["name"], (k.get("status") or {}).get("kafkaMetadataVersion", "none"))'
+  fi
+
   # every CRD by name - one gone takes every resource of its kind with it (scripts/inventory-diff.sh allows a CRD more,
   # never one missing); External Secrets' CRDs that carry Argo CD's Prune=false,Delete=false, of all of them
   kubectl get crd -o json | python3 -c 'import json,sys
