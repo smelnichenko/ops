@@ -55,6 +55,8 @@
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
     cilium_version: "1.19.1"
+    # the Scylla Manager chart's values where Argo does not install it (production's pins from the step that needs them)
+    scylla_manager_values: {scylla: {developerMode: true}}
     # Cilium's Helm values. An upgrade renders cilium-config from these alone, so they must render what runs: the
     # 'Cilium's live config' check refuses otherwise.
     cilium_values:
@@ -1058,9 +1060,7 @@
         chart_version: "1.20.2"
         release_namespace: scylla-manager
         create_namespace: true
-        values:
-          scylla:
-            developerMode: true
+        values: "{{ scylla_manager_values }}"
         wait: true
         wait_timeout: 15m
       when: not platform_by_argo | bool and install_scylla_manager | default(true) | bool

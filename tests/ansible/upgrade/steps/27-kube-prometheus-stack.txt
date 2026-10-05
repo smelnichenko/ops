@@ -11,3 +11,5 @@ image quay.io/prometheus-operator/prometheus-operator v0.89.0 => image quay.io/p
 image quay.io/prometheus/prometheus v3.10.0 => image quay.io/prometheus/prometheus v3.15.0-distroless
 # its change: the branch upgrade/27-kube-prometheus-stack in infra
 branch infra
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: prometheus_operator_crds_chart_version: "27.0.1"  # operator v0.89.0 => prometheus_operator_crds_chart_version: "32.0.1"  # operator v0.94.1

@@ -9,3 +9,5 @@ image quay.io/jetstack/cert-manager-webhook v1.20.0 => image quay.io/jetstack/ce
 branch infra
 # every Certificate renewed after it (cert-manager issues, not just runs)
 cert-renew
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: cert_manager_version: "v1.20.0" => cert_manager_version: "v1.20.4"

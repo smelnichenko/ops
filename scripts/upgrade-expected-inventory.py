@@ -29,6 +29,7 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                before the step changes anything, and the backup rehearsed)
     soak <minutes>                            (production waits this long between the step's first green check and
                                                the next step - scripts/upgrade-production.py; default 15)
+    default <file>: <line> => <line>          (a playbook default the step moves - scripts/upgrade-defaults.py)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -112,6 +113,8 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         elif re.fullmatch(r"soak [1-9]\d*", line):
             if soak is not None:
                 soak.append(int(line.split()[1]))
+        elif line.startswith("default "):
+            pass  # scripts/upgrade-defaults.py
         elif line.startswith("argo-out-of-sync "):
             if out_of_sync is not None:
                 out_of_sync.append(line[len("argo-out-of-sync "):].strip())

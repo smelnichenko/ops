@@ -15,3 +15,6 @@ image docker.io/istio/proxyv2 1.27.9 => image docker.io/istio/proxyv2 1.28.10
 playbook restart-mesh-workloads.yml -e istio_version=1.28.10
 # its change: the branch upgrade/05-istio-1.28 in infra
 branch infra
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-istio.yml: istio_version: "1.27.9" => istio_version: "1.28.10"
+default deploy/ansible/playbooks/setup-kubeadm.yml: istio_version: "1.27.9" => istio_version: "1.28.10"

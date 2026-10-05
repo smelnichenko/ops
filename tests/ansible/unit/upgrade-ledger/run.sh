@@ -101,6 +101,21 @@ check("done 47 after them", P(S47, "done", ev(*ball, f"{S47} previewed", f"{S47}
 refused("done 01 before its merge", P("01-argocd-root-retry", "done", ev("01-argocd-root-retry begun")),
         ["not merged and settled yet: infra"])
 
+# defaults: after the playbook lines, before done - only a step with default lines
+S42 = "42-kubernetes-1.35"
+check("42 moves playbook defaults; 47 none", (info[S42]["defaults"], info[S47]["defaults"]), (True, False))
+d42 = [f"{S42} begun", f"{S42} backup etcd", f"{S42} merged infra a", f"{S42} settled infra a", f"{S42} previewed"] \
+    if "etcd" in info[S42]["wave0"] else [f"{S42} begun", f"{S42} merged infra a", f"{S42} settled infra a",
+                                          f"{S42} previewed"]
+refused("defaults 42 before its playbook lines", P(S42, "defaults", ev(*d42)), ["playbook lines have not run"])
+check("defaults 42 after them", P(S42, "defaults", ev(*d42, f"{S42} playbooks")), [])
+refused("done 42 without its defaults", P(S42, "done", ev(*d42, f"{S42} playbooks")), ["defaults are not committed"])
+check("done 42 with them", P(S42, "done", ev(*d42, f"{S42} playbooks", f"{S42} defaults abc")), [])
+refused("defaults twice", P(S42, "defaults", ev(*d42, f"{S42} playbooks", f"{S42} defaults abc")),
+        ["committed already"])
+refused("defaults at a step without default lines", P(S47, "defaults", ev(*ball, f"{S47} previewed",
+                                                                        f"{S47} playbooks")), ["no default lines"])
+
 # the soak
 e = ev(f"{S47} checked")
 check("soak: 60 min from checked, 10 min in", m.soak_state(e, S47, 60, T0 + datetime.timedelta(minutes=10))[1], 3000.0)

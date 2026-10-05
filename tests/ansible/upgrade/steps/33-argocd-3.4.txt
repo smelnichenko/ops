@@ -8,3 +8,5 @@
 helm argocd/argocd argo-cd-9.5.11 v3.3.9 => helm argocd/argocd argo-cd-10.2.2 v3.4.6
 image quay.io/argoproj/argocd v3.3.14 => image quay.io/argoproj/argocd v3.4.6
 playbook setup-argocd.yml -e argocd_version=10.2.2
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-argocd.yml: argocd_chart_version: "{{ argocd_version | default('9.5.11') }}" => argocd_chart_version: "{{ argocd_version | default('10.2.2') }}"

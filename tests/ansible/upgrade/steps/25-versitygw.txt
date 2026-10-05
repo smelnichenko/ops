@@ -18,3 +18,5 @@ barman-check
 restore-check
 # its change: the branch upgrade/25-versitygw in platform
 branch platform
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/tasks/versitygw.yml: vgw_version: "{{ vgw_version | default('1.6.0') }}" => vgw_version: "{{ vgw_version | default('1.8.0') }}"

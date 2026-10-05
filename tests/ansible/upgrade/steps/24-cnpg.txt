@@ -10,3 +10,5 @@ barman-check
 restore-check
 # its change: the branch upgrade/24-cnpg in infra
 branch infra
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: chart_version: "0.28.0" => chart_version: "0.29.1"

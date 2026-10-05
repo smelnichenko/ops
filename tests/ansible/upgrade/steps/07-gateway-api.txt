@@ -9,3 +9,5 @@
 # rehearsed)
 crd gateway-api v1.2.1 => crd gateway-api v1.5.1
 playbook setup-kubeadm.yml --tags gateway-api -e gateway_api_version=v1.5.1
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: gateway_api_version: "v1.2.1" => gateway_api_version: "v1.5.1"

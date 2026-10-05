@@ -12,6 +12,8 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
              state between two merges one the full run proved (upgrade-merge-order.py), merged and pushed
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
   playbooks  the step's playbook lines against production                                               -> playbooks
+  defaults   the step's default lines (scripts/upgrade-defaults.py) committed to ops main and pushed: a playbook
+             run from now on installs what production runs                                             -> defaults
   done       ten's inventory as step N leaves it and Argo settled. The first green call records checked; a call at
              least the step's soak later (its soak line; else 60 minutes after a wave0 step, 15 otherwise) that is
              green again with no container restarted since records done. A red call after checked records
@@ -25,7 +27,7 @@ run ran from - refused if deploy/, scripts/, tests/ or Taskfile.yml differ from 
 own change and every step up to N proven by one run; its phases want deploy/ and the step file as that run had them.
 
 Usage: scripts/upgrade-production.py init | status
-       scripts/upgrade-production.py begin|preview|playbooks|done <step>
+       scripts/upgrade-production.py begin|preview|playbooks|defaults|done <step>
        scripts/upgrade-production.py backup <step> <store>
        scripts/upgrade-production.py merge <step> <infra|platform>
        scripts/upgrade-production.py check <step>              (read-only: as `done` checks, nothing recorded)
@@ -70,6 +72,7 @@ def _load(name, path):
 
 
 inv = _load("upgrade_expected_inventory", os.path.join(OPS, "scripts", "upgrade-expected-inventory.py"))
+dflt = _load("upgrade_defaults", os.path.join(OPS, "scripts", "upgrade-defaults.py"))
 
 
 def step_names():
@@ -81,7 +84,8 @@ def step_info(name):
     inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak,
               out_of_sync=out_of_sync)
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
-            "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES}
+            "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
+            "defaults": bool(dflt.default_lines(name))}
 
 
 # ---- the ledger: rules (pure) ---------------------------------------------------------------------------------------
@@ -132,9 +136,15 @@ def problems(names, step, phase, events, info, arg=None):
             return out + [f"{step} has no playbook lines"]
         return out + (["not previewed (deploy:upgrade:preview)"] if "previewed" not in kinds else []) \
             + (["its playbook lines ran already"] if "playbooks" in kinds else [])
+    played = ["its playbook lines have not run (deploy:upgrade:playbooks)"] \
+        if info["playbooks"] and "playbooks" not in kinds else []
+    if phase == "defaults":
+        if not info["defaults"]:
+            return out + [f"{step} has no default lines"]
+        return out + played + (["its defaults are committed already"] if "defaults" in kinds else [])
     if phase == "done":
-        return out + (["its playbook lines have not run (deploy:upgrade:playbooks)"]
-                      if info["playbooks"] and "playbooks" not in kinds else [])
+        return out + played + (["its playbook defaults are not committed (deploy:upgrade:defaults)"]
+                               if info["defaults"] and "defaults" not in kinds else [])
     raise ValueError(phase)
 
 
@@ -362,8 +372,14 @@ def floating_problems(proven, inventory):
             for img, digest in sorted(proven.items()) if img in in_use and now.get(img) != digest]
 
 
-def proof_problems(step, names, repo=None):
-    """What the full run's proof says against running `step` (and merging `repo`) now."""
+def defaulted(events):
+    """The steps whose default lines production committed, in step order."""
+    return sorted({s for _, s, e, _ in events if e == "defaults"})
+
+
+def proof_problems(step, names, repo=None, defaulted_steps=()):
+    """What the full run's proof says against running `step` (and merging `repo`) now. deploy/ may differ from the
+    run's ops commit only by the default lines of `defaulted_steps`."""
     path = os.path.join(PROVEN, step + ".json")
     if not os.path.exists(path):
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
@@ -380,8 +396,15 @@ def proof_problems(step, names, repo=None):
         out += floating_problems(proof["floating"], inv.expected(names[:names.index(step)]))
     changed = ops_unchanged_since(proof["ops"], ("deploy", os.path.join("tests", "ansible", "upgrade", "steps",
                                                                         step + ".txt")))
+    try:
+        expected = dflt.applied(lambda p: run(["git", "-C", OPS, "show", f"{proof['ops']}:{p}"], capture_output=True,
+                                              check=True).stdout, list(defaulted_steps))
+    except ValueError as e:
+        return out + [f"the committed steps' default lines do not apply to the run's ops commit: {e}"]
+    changed = [p for p in changed if not (p in expected and open(os.path.join(OPS, p)).read() == expected[p])]
     if changed:
-        out.append(f"changed since the full run proved {step} (ops {proof['ops'][:10]}): {', '.join(changed)}")
+        out.append(f"changed since the full run proved {step} (ops {proof['ops'][:10]}), beyond the committed "
+                   f"steps' playbook defaults: {', '.join(changed)}")
     if repo:
         d = os.path.join(OPS, "..", repo)
         branch = "upgrade/" + step
@@ -421,7 +444,7 @@ def last_done_out_of_sync(events):
 
 def begin(step):
     names, events, _ = ledger_for(step, "begin")
-    refuse(proof_problems(step, names))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
     ok = inventory_check(applied_steps(events))
     # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
     before = [a for _, s, e, a in events if e == "apps" and s != step]
@@ -433,8 +456,8 @@ def begin(step):
 
 
 def backup(step, store):
-    names, _, _ = ledger_for(step, "backup", store)
-    refuse(proof_problems(step, names))
+    names, events, _ = ledger_for(step, "backup", store)
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
     refuse([] if ansible("playbooks/upgrade-backup.yml", "-e", f"store={store}") else [f"the {store} backup failed"])
     record(step, "backup", store)
 
@@ -450,7 +473,7 @@ def merge(step, repo):
     names, events, _ = ledger_for(step, "merge", repo)
     merged = any(s == step and e == "merged" and a[:1] == [repo] for _, s, e, a in events)
     if not merged:
-        refuse(proof_problems(step, names, repo))
+        refuse(proof_problems(step, names, repo, defaulted(events)))
         order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
         refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven (above)"])
         refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
@@ -466,14 +489,34 @@ def merge(step, repo):
 
 
 def playbooks(step):
-    names, _, _ = ledger_for(step, "playbooks")
-    refuse(proof_problems(step, names))
+    names, events, _ = ledger_for(step, "playbooks")
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if run([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")
 
 
 CHECK_MINUTES = 15
+
+
+def defaults(step):
+    """The step's default lines into ops main, committed and pushed - nothing else may be in the commit."""
+    names, events, _ = ledger_for(step, "defaults")
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    run(["git", "-C", OPS, "fetch", "-q", "origin", "main"], check=True)
+    head = run(["git", "-C", OPS, "rev-parse", "HEAD", "origin/main"], capture_output=True, check=True).stdout.split()
+    branch = run(["git", "-C", OPS, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, check=True).stdout
+    dirty = run(["git", "-C", OPS, "status", "--porcelain"], capture_output=True, check=True).stdout
+    refuse(([] if branch.strip() == "main" and head[0] == head[1] else ["ops is not on main at origin/main"])
+           + ([f"ops has uncommitted changes:\n{dirty}"] if dirty.strip() else []))
+    refuse([] if run([os.path.join(OPS, "scripts", "upgrade-defaults.py"), "--apply", step]).returncode == 0
+           else ["the default lines did not apply (above)"])
+    paths = sorted({p for p, _, _ in dflt.default_lines(step)})
+    run(["git", "-C", OPS, "commit", "-q", "-m", f"upgrade {step}: its playbook defaults (in production)", "--",
+         *paths], check=True)
+    run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
+    sha = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
+    record(step, "defaults", sha)
 
 
 def check(step, since=None, deciding=False):
@@ -525,6 +568,7 @@ def status():
     phases += [("preview", None, ("previewed", None))] if info["playbooks"] else []
     phases += [("merge", r, ("settled", r)) for r in info["branches"]]
     phases += [("playbooks", None, ("playbooks", None))] if info["playbooks"] else []
+    phases += [("defaults", None, ("defaults", None))] if info["defaults"] else []
     for phase, arg, mark in phases + [("done", None, ("done", None))]:
         if mark not in have:
             p = problems(names, pending, phase, events, info, arg)
@@ -540,6 +584,7 @@ def main():
     a = sys.argv[1:]
     actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start,
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
+               ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof}
     if a[:1] == ["check"] and len(a) == 2:
         sys.exit(0 if check(a[1]) else 1)

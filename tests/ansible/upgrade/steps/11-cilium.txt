@@ -12,3 +12,5 @@ image quay.io/cilium/hubble-ui v0.13.3 => image quay.io/cilium/hubble-ui v0.13.6
 image quay.io/cilium/hubble-ui-backend v0.13.3 => image quay.io/cilium/hubble-ui-backend v0.13.6
 image quay.io/cilium/operator-generic v1.19.1 => image quay.io/cilium/operator-generic v1.19.8
 playbook setup-kubeadm.yml --tags cilium -e cilium_version=1.19.8
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: cilium_version: "1.19.1" => cilium_version: "1.19.8"

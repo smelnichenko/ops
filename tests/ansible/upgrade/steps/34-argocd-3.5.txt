@@ -7,3 +7,5 @@ helm argocd/argocd argo-cd-10.2.2 v3.4.6 => helm argocd/argocd argo-cd-10.9.6 v3
 image quay.io/argoproj/argocd v3.4.6 => image quay.io/argoproj/argocd v3.5.3
 image ecr-public.aws.com/docker/library/redis 8.2.3-alpine => image ecr-public.aws.com/docker/library/redis 8.6.4-alpine
 playbook setup-argocd.yml -e argocd_version=10.9.6
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-argocd.yml: argocd_chart_version: "{{ argocd_version | default('10.2.2') }}" => argocd_chart_version: "{{ argocd_version | default('10.9.6') }}"

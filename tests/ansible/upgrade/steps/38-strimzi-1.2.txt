@@ -9,3 +9,5 @@ image quay.io/strimzi/operator 0.51.0 => image quay.io/strimzi/operator 1.2.0
 image quay.io/strimzi/kafka 0.51.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0
 # its change: the branch upgrade/38-strimzi-1.2 in infra
 branch infra
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: chart_version: "0.51.0" => chart_version: "1.2.0"

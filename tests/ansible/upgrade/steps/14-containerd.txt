@@ -7,3 +7,5 @@
 - pkg runc 1.1.15+ds1-2+b4
 + pkg containerd.io 2.3.6-1~debian.13~trixie (held)
 playbook upgrade-containerd.yml -e containerd_upgrade_to=2.3.6
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: containerd_io_version: "" => containerd_io_version: "2.3.6"

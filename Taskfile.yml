@@ -959,6 +959,14 @@ tasks:
     cmds:
       - cmd: scripts/upgrade-production.py playbooks {{.STEP}}
 
+  deploy:upgrade:defaults:
+    desc: "PRODUCTION (ops main): step STEP's default lines committed and pushed - from now on a playbook run without the step's -e installs what production runs"
+    requires:
+      vars: [STEP]
+    prompt: "Commit and push step {{.STEP}}'s playbook defaults to ops main?"
+    cmds:
+      - cmd: scripts/upgrade-production.py defaults {{.STEP}}
+
   deploy:upgrade:done:
     desc: "Step STEP's last phase (records it in the ledger; read-only otherwise): production as the step leaves it - the first green call starts the soak, a green call after it with no container restarted since ends the step"
     requires:
