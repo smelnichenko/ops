@@ -1,11 +1,14 @@
 # Tempo 2.7.2 -> 3.1.0 in monolithic mode (no Kafka): platform's template renders the 3.x config when the image is 3.x
 # (tempo-cli 3.1.0's migration of ours: live-store instead of the ingester, its WAL on /data, retention under the
-# backend worker), infra's values the image - both upgrade/54-tempo-3, in either order. One-way: Tempo 3 reads 2.x
+# backend worker), infra's values the image - both upgrade/54-tempo-3, platform first. One-way: Tempo 3 reads 2.x
 # blocks, not the reverse - in production the traces bucket is not touched, so 2.x could only be restored with older
 # blocks.
 # outage: Tempo restarts - spans sent meanwhile may be lost
 # abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup (rehearsed in Vagrant)
+# one-way: the in-cluster object store (Mimir's and Tempo's blocks) backed up into the Pi store before the step changes anything
+wave0 gateway
 image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0
-# its change: the branch upgrade/54-tempo-3 in infra and platform
-branch infra
+# its change: the branch upgrade/54-tempo-3 in platform, merged first (with the 2.x image it renders as before), then
+# infra's - infra first would start Tempo 3 on the 2.x config
 branch platform
+branch infra

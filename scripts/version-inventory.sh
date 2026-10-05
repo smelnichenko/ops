@@ -7,7 +7,14 @@
 #   ssh ten 'bash -s' < scripts/version-inventory.sh > prod.txt
 #   vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh > vagrant.txt
 #   diff prod.txt vagrant.txt
+#
+# INVENTORY_EXCLUDE_NAMESPACES="<ns> ...": the Helm releases and images of those namespaces left out - production's
+# test environment (schnappy-test), which the Vagrant copy does not have and whose own steps move it apart from
+# production. INVENTORY_ONLY_NAMESPACES="<ns> ...": only those namespaces' Helm releases and images (the part left
+# out, listed apart).
 set -euo pipefail
+export INVENTORY_EXCLUDE_NAMESPACES="${INVENTORY_EXCLUDE_NAMESPACES:-}"
+export INVENTORY_ONLY_NAMESPACES="${INVENTORY_ONLY_NAMESPACES:-}"
 
 export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
 [ -r "$KUBECONFIG" ] || KUBECONFIG="$HOME/.kube/config"
@@ -27,8 +34,11 @@ export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
 
   # Helm releases: chart and app version
   helm list -A -o json 2>/dev/null \
-    | python3 -c 'import json,sys
-for r in json.load(sys.stdin): print("helm", r["namespace"]+"/"+r["name"], r["chart"], r["app_version"])'
+    | python3 -c 'import json,os,sys
+ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY_ONLY_NAMESPACES"].split()
+for r in json.load(sys.stdin):
+    if r["namespace"] in ex or (only and r["namespace"] not in only): continue
+    print("helm", r["namespace"]+"/"+r["name"], r["chart"], r["app_version"])'
 
   # Argo CD Applications that render an upstream chart (they are not Helm releases)
   if kubectl get crd applications.argoproj.io >/dev/null 2>&1; then
@@ -43,11 +53,13 @@ for a in json.load(sys.stdin)["items"]:
   # each CronJob's template, each Job no CronJob owns. A finished pod runs nothing, like a removed package: a CronJob
   # keeps its last runs' pods for hours, with the image they ran - after its image moves too.
   kubectl get pods,cronjobs,jobs -A -o json \
-    | python3 -c 'import json,sys
+    | python3 -c 'import json,os,sys
+ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY_ONLY_NAMESPACES"].split()
 seen=set()
 for o in json.load(sys.stdin)["items"]:
     meta=o["metadata"]
     if meta["namespace"]=="woodpecker" and meta["name"].startswith("wp-"): continue
+    if meta["namespace"] in ex or (only and meta["namespace"] not in only): continue
     if o["kind"]=="Pod":
         if o["status"].get("phase") in ("Succeeded","Failed"): continue
         spec=o["spec"]
@@ -58,13 +70,18 @@ for o in json.load(sys.stdin)["items"]:
         spec=o["spec"]["template"]["spec"]
     for c in spec.get("containers",[])+spec.get("initContainers",[]):
         img=c["image"].split("@")[0]
-        if img not in seen: seen.add(img); print("image", img.rsplit(":",1)[0], img.rsplit(":",1)[1] if ":" in img.split("/")[-1] else "latest")'
+        if img in seen: continue
+        seen.add(img)
+        print("image", img.rsplit(":",1)[0], img.rsplit(":",1)[1] if ":" in img.split("/")[-1] else "latest")'
 
   # CRD groups that carry a bundle/operator version
   kubectl get crd gateways.gateway.networking.k8s.io \
-    -o jsonpath='{"crd gateway-api "}{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}' 2>/dev/null || true
+    -o jsonpath='{"crd gateway-api "}{.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}{"\n"}' \
+    2>/dev/null || true
   kubectl get crd prometheuses.monitoring.coreos.com \
-    -o jsonpath='{"crd prometheus-operator "}{.metadata.annotations.operator\.prometheus\.io/version}{"\n"}' 2>/dev/null || true
+    -o jsonpath='{"crd prometheus-operator "}{.metadata.annotations.operator\.prometheus\.io/version}{"\n"}' \
+    2>/dev/null || true
 
-  echo "k8s server $(kubectl version -o json | python3 -c 'import json,sys;print(json.load(sys.stdin)["serverVersion"]["gitVersion"])')"
+  echo "k8s server $(kubectl version -o json \
+    | python3 -c 'import json,sys;print(json.load(sys.stdin)["serverVersion"]["gitVersion"])')"
 } | LC_ALL=C sort -u

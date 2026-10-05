@@ -4,11 +4,10 @@
 # outage: ClickHouse restarts on 25.8 - log ingestion waits
 # abort: back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)); otherwise
 # the Wave 0 ClickHouse backup (rehearsed)
+# one-way: ClickHouse's data backed up into the Pi store before the step changes anything
+wave0 clickhouse
 image clickhouse/clickhouse-server 24.8-alpine => image clickhouse/clickhouse-server 25.8.33.6-alpine
-# its change: the branch upgrade/59-clickhouse-25.8 in infra and platform
+# its change: the branch upgrade/59-clickhouse-25.8 in infra and platform (only the chart default: nothing renders
+# anew in production) - compatibility 24.8 and the one user since step 58
 branch infra
 branch platform
-# from this step's restart ClickHouse runs with compatibility 24.8 (the setting the step before put in its config)
-clickhouse-compat 24.8
-# and ClickHouse has one user from it on: the image's `default` is not made any more (platform, the same restart)
-clickhouse-users schnappy

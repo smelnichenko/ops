@@ -25,6 +25,10 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                before the first such line it has none)
     clickhouse-users <user>,<user>            (from this step on ClickHouse has exactly these users, by name; before
                                                the first such line: default,schnappy)
+    wave0 <store>                             (a one-way step: that store (upgrade-backup.yml's store=) is backed up
+                                               before the step changes anything, and the backup rehearsed)
+    soak <minutes>                            (production waits this long between the step's first green check and
+                                               the next step - scripts/upgrade-production.py; default 15)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -34,7 +38,8 @@ the given one applied, in order. A change whose "before" line is not there at th
 stale, and applying it anyway would check nothing.
 
 Playbooks (--playbooks): the playbook lines of the given step only. Unlike the refs they are not replayed: a Helm
-install is not an "at least" operation, so replaying the Cilium 1.19.8 step after the Cilium 1.20 one would downgrade Cilium.
+install is not an "at least" operation, so replaying the Cilium 1.19.8 step after the Cilium 1.20 one would downgrade
+Cilium.
 A copy restored to an earlier snapshot is brought forward by running the steps in order - the inventory check fails
 otherwise, since a skipped step's versions are missing. A version a playbook line sets with -e becomes the
 playbook's default at the production rollout, not before.
@@ -50,14 +55,14 @@ declare (branch lines): a missing or empty branch fell back to the previous step
 its change.
 
 Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>           (prints the inventory)
-       scripts/upgrade-expected-inventory.py --refs <step>                          (prints "<infra-ref> <platform-ref>")
-       scripts/upgrade-expected-inventory.py --playbooks <step>                     (prints "<playbook> <arguments>" lines)
+       scripts/upgrade-expected-inventory.py --refs <step>                (prints "<infra-ref> <platform-ref>")
+       scripts/upgrade-expected-inventory.py --playbooks <step>           (prints "<playbook> <arguments>" lines)
        scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)
        scripts/upgrade-expected-inventory.py --backup-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --barman-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --cert-renew <step>                    (prints "yes" or "no")
-       scripts/upgrade-expected-inventory.py --restore-undo <step>                  (prints "<serverName> <image>" or nothing)
+       scripts/upgrade-expected-inventory.py --restore-undo <step>        (prints "<serverName> <image>" or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-compat <step>             (prints the version or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
 """
@@ -71,7 +76,11 @@ UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
 
 
-def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None):
+WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla")
+
+
+def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
+          wave0=None, soak=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -96,6 +105,12 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         elif line in ("branch infra", "branch platform"):
             if branches is not None:
                 branches.add(line[len("branch "):])
+        elif re.fullmatch(r"wave0 (" + "|".join(WAVE0_STORES) + ")", line):
+            if wave0 is not None:
+                wave0.append(line.split()[1])
+        elif re.fullmatch(r"soak [1-9]\d*", line):
+            if soak is not None:
+                soak.append(int(line.split()[1]))
         elif line.startswith("argo-out-of-sync "):
             if out_of_sync is not None:
                 out_of_sync.append(line[len("argo-out-of-sync "):].strip())
@@ -196,8 +211,13 @@ def main():
         print(ref(os.path.join(OPS, "..", "infra"), step_no, names),
               ref(os.path.join(OPS, "..", "platform"), step_no, names))
         return
+    print("\n".join(sorted(expected(names[:names.index(args[0]) + 1]))))
+
+
+def expected(applied):
+    """Production's inventory with the changes of the given steps applied, in their order."""
     inventory = set(l.rstrip("\n") for l in open(os.path.join(UPGRADE, "prod-inventory.txt")) if l.strip())
-    for name in names[:names.index(args[0]) + 1]:
+    for name in sorted(applied):
         for before, after, where in parse(os.path.join(STEPS, name + ".txt")):
             if before is not None:
                 if before not in inventory:
@@ -205,7 +225,16 @@ def main():
                 inventory.discard(before)
             if after is not None:
                 inventory.add(after)
-    print("\n".join(sorted(inventory)))
+    return inventory
+
+
+def branch_order(name):
+    """The step's branch lines, in the file's order - the order production merges them in."""
+    order = [l.split()[1] for l in open(os.path.join(STEPS, name + ".txt"))
+             if l.strip() in ("branch infra", "branch platform")]
+    if len(order) != len(set(order)):
+        sys.exit(f"{name}: a repo's branch line twice")
+    return order
 
 
 if __name__ == "__main__":

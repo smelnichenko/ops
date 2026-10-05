@@ -406,7 +406,7 @@ tasks:
       # the schnappy realm, which production keeps only in its Keycloak database: from the auth chart's import + Vault.
       # Before Argo: istiod fetches the realm's keys when it starts
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
@@ -557,8 +557,12 @@ tasks:
   # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
   # step, not the chain; this proves the chain, unattended, from nothing.
   test:upgrade:full:
-    desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails)
+    desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails); each green step's proof recorded for production's merge (.upgrade/proven)
     cmds:
+      # before anything boots: the ops tree committed (the run proves a commit - production's phases compare with it),
+      # and every step's state between its two merges one the run proves
+      - cmd: scripts/upgrade-production.py proof-start
+      - cmd: scripts/upgrade-merge-order.py --all
       - task: test:upgrade:build
       # an empty step list is a failure, not a green run (the loop just did nothing)
       - cmd: |
@@ -568,7 +572,12 @@ tasks:
           echo "=== $(echo "$steps" | wc -l) steps"
           for step in $steps; do
             echo "=== STEP $step $(date +%T)"
+            # the commits the step mirrors, before it: the proof refuses them if a branch moved meanwhile
+            refs=$(scripts/upgrade-expected-inventory.py --refs "$step")
+            infra_sha=$(git -C ../infra rev-parse "${refs% *}")
+            platform_sha=$(git -C ../platform rev-parse "${refs#* }")
             task test:upgrade:step STEP="$step"
+            scripts/upgrade-production.py record-proof "$step" "$infra_sha" "$platform_sha"
             echo "=== STEP $step GREEN $(date +%T)"
           done
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
@@ -707,7 +716,7 @@ tasks:
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:kafka-scylla:
@@ -874,53 +883,75 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
 
-  # ── one upgrade step in production, after its Vagrant proof and the operator's approval ──
-  deploy:upgrade:check:
-    desc: "Read-only, before and after each production upgrade step: ten's version inventory against what step STEP leaves (before a step: the step before it), and Argo CD's apps and pods as the Vagrant test judges them"
-    deps: [deploy:install]
-    requires:
-      vars: [STEP]
+  # ── the upgrade steps in production: one at a time, in order, each phase after the ones it needs - the ledger on ten
+  # (scripts/upgrade-production.py) refuses anything else. The procedure: docs/plans/100-cluster-upgrade.md,
+  # "Production, step by step". A step's phases: begin, backup (its wave0 lines), preview (playbook lines), merge (its
+  # branch lines, in the file's order), playbooks, done (twice: the soak between).
+  deploy:upgrade:ledger-init:
+    desc: "PRODUCTION: the upgrade ledger on ten (ConfigMap kube-system/upgrade-ledger), once - step 02 recorded done (in production since 2026-10-03)"
+    prompt: "Create the upgrade ledger on PRODUCTION (ten, kube-system/upgrade-ledger)?"
     cmds:
-      - cmd: set -o pipefail; mkdir -p .upgrade && ssh {{.TARGET_USER}}@{{.TARGET_HOST}} 'bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/prod-inventory-now.txt && for p in 192.168.11.4 192.168.11.6; do ssh {{.TARGET_USER}}@$p 'sudo -n bash -s' < scripts/version-inventory-pi.sh; done >> .upgrade/prod-inventory-now.txt
-      - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/prod-expected.txt
-      - cmd: scripts/inventory-diff.sh .upgrade/prod-expected.txt .upgrade/prod-inventory-now.txt tests/ansible/upgrade/prod-transient.txt
-      # one look, read-only (no wait): green means every app Synced, Healthy, its last sync not failed, every pod ready
-      - cmd: python3 tests/ansible/upgrade/files/argo-settled.py --kubeconfig "$HOME/.kube/config" --once
+      - cmd: scripts/upgrade-production.py init
 
-  deploy:upgrade:preview:
-    desc: "Read-only: what upgrade step STEP's playbook lines would change on ten and the Pis - ansible's check mode, with diffs (it stops at the first check that needs the change made: check mode makes none)"
-    deps: [deploy:install]
+  deploy:upgrade:status:
+    desc: "Read-only: the upgrade ledger's events and the next phase of the next step, with what stands before it"
+    cmds:
+      - cmd: scripts/upgrade-production.py status
+
+  deploy:upgrade:check:
+    desc: "Read-only: ten's and the Pis' version inventory against what the done steps and STEP leave (the test environment listed apart), and Argo CD settled on main's commits, judged on ten - nothing recorded"
     requires:
       vars: [STEP]
     cmds:
-      - cmd: scripts/upgrade-step-playbooks.sh --production --check {{.STEP}}
+      - cmd: scripts/upgrade-production.py check {{.STEP}}
+
+  deploy:upgrade:begin:
+    desc: "Upgrade step STEP's first phase (records it in the ledger; read-only otherwise): every earlier step done, the full run's proof for it, production as the done steps leave it"
+    requires:
+      vars: [STEP]
+    cmds:
+      - cmd: scripts/upgrade-production.py begin {{.STEP}}
 
   deploy:upgrade:backup:
-    desc: "PRODUCTION: Wave 0 - one store backed up into the Pi store right before its one-way upgrade step (STORE=postgres|clickhouse|grafana|kafka|gateway|scylla; kafka stops the broker for the copy)"
-    dir: deploy/ansible
+    desc: "PRODUCTION: Wave 0 - store STORE (one of step STEP's wave0 lines) backed up into the Pi store right before the step's one-way change (kafka stops the broker for the copy)"
     deps: [deploy:install]
     requires:
-      vars: [STORE]
-    prompt: "Back up {{.STORE}} on PRODUCTION into the Pi store{{if eq .STORE \"kafka\"}} (Kafka is down while its volume is copied){{end}}?"
+      vars: [STEP, STORE]
+    prompt: "Back up {{.STORE}} on PRODUCTION into the Pi store for step {{.STEP}}{{if eq .STORE \"kafka\"}} (Kafka is down while its volume is copied){{end}}?"
     cmds:
-      - cmd: venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-backup.yml -e store={{.STORE}}
+      - cmd: scripts/upgrade-production.py backup {{.STEP}} {{.STORE}}
+
+  deploy:upgrade:preview:
+    desc: "Read-only (records it in the ledger): what step STEP's playbook lines would change on ten and the Pis - ansible's check mode, with diffs (it stops at the first check that needs the change made: check mode makes none)"
+    deps: [deploy:install]
+    requires:
+      vars: [STEP]
+    cmds:
+      - cmd: scripts/upgrade-production.py preview {{.STEP}}
+
+  deploy:upgrade:merge:
+    desc: "PRODUCTION: the GitOps half of step STEP in REPO (infra or platform) - its branch, the change the full run proved, fast-forwarded onto main and pushed; then Argo settled on the pushed commits"
+    requires:
+      vars: [STEP, REPO]
+    prompt: "Merge and push {{.REPO}} branch upgrade/{{.STEP}} to main - into PRODUCTION?"
+    cmds:
+      - cmd: scripts/upgrade-production.py merge {{.STEP}} {{.REPO}}
 
   deploy:upgrade:playbooks:
-    desc: "PRODUCTION: the host-side half of upgrade step STEP - its playbook lines against ten and the Pis"
+    desc: "PRODUCTION: the host-side half of step STEP - its playbook lines against ten and the Pis"
     deps: [deploy:install]
     requires:
       vars: [STEP]
     prompt: "Run the playbook lines of upgrade step {{.STEP}} against PRODUCTION (ten, the Pis)?"
     cmds:
-      - cmd: scripts/upgrade-step-playbooks.sh --production {{.STEP}}
+      - cmd: scripts/upgrade-production.py playbooks {{.STEP}}
 
-  deploy:upgrade:merge:
-    desc: "PRODUCTION: the GitOps half of upgrade step STEP in REPO (infra or platform) - its branch fast-forwarded onto main and pushed"
+  deploy:upgrade:done:
+    desc: "Step STEP's last phase (records it in the ledger; read-only otherwise): production as the step leaves it - the first green call starts the soak, a green call after it with no container restarted since ends the step"
     requires:
-      vars: [STEP, REPO]
-    prompt: "Merge and push {{.REPO}} branch upgrade/{{.STEP}} to main - into PRODUCTION?"
+      vars: [STEP]
     cmds:
-      - cmd: scripts/upgrade-merge-step.sh {{.STEP}} {{.REPO}}
+      - cmd: scripts/upgrade-production.py done {{.STEP}}
 
   deploy:node-config:
     desc: Apply node/kubelet tuning to the live node (idempotent; safe to re-run, no bootstrap)
@@ -1061,7 +1092,7 @@ tasks:
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml -e forgejo_domain=192.168.56.20:3000 -e forgejo_scheme=http -e argocd_validate_certs=false -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml
 

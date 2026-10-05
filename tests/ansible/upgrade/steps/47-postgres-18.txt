@@ -2,20 +2,23 @@
 # (deprecated) becomes a pinned 18.6-system-bullseye, same flavour. CNPG stops the cluster, runs pg_upgrade on the
 # primary's volume, starts it on 18 and re-clones the replica; the data check reads the rows on both. Production's
 # cluster, after the test environment (step 46): the production values set cnpg.imageName and the new archive name
-# (infra), the chart default follows (platform), both upgrade/47-postgres-18. Stateful, with downtime: shown to the
+# (infra), then the chart default follows (platform), both upgrade/47-postgres-18. Stateful, with downtime: shown to the
 # operator before production; a fresh base backup follows it there (the old major's WAL archive cannot restore 18).
 # outage: Postgres down for pg_upgrade (minutes) - every app's writes fail; the replica re-cloned after
 # abort: the step's restore-undo: PostgreSQL 17's latest backup recovered (rehearsed in Vagrant), or the Wave 0 dump
+# one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
+wave0 postgres
 image ghcr.io/cloudnative-pg/postgresql 17 => image ghcr.io/cloudnative-pg/postgresql 18.6-system-bullseye
 # A CNPG barman backup after it - WAL archiving and a fresh base backup: the new major (whose base backup the old WAL
 # cannot restore).
 barman-check
 # and a copy of Postgres recovered from a fresh backup and its WAL (PostgreSQL 18 changed)
 restore-check
-# its change: the branch upgrade/47-postgres-18 in platform
-branch platform
-# its change: the branch upgrade/47-postgres-18 in infra (the image and the new server name) too
+# its change: the branch upgrade/47-postgres-18 in infra (the image and the new server name), merged first - then
+# platform's (the chart default follows; nothing renders anew). Platform first would move production to 18 by the
+# default, without the new server name.
 branch infra
+branch platform
 # its undo, rehearsed after it: PostgreSQL 17's latest backup (under the old server name) recovered with the image
 # production runs now
 restore-undo schnappy-production-postgres ghcr.io/cloudnative-pg/postgresql@sha256:b1885e2c8224bab6d75ce5fb7dfad339b4acf8976158d2dd561ab7458dee4f2b

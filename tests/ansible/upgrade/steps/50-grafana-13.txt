@@ -3,8 +3,9 @@
 # here uses grafana-cli/grafana-server, the Image Renderer or numeric datasource ids (all gone or disabled in 13).
 # outage: Grafana down while it migrates its database
 # abort: one-way: the Wave 0 Grafana backup (grafana.db) with Grafana 12 (rehearsed in Vagrant)
+# one-way: Grafana's SQLite database backed up into the Pi store before the step changes anything
+wave0 grafana
 image grafana/grafana 12.4.12 => image grafana/grafana 13.2.3
-# its change: the branch upgrade/50-grafana-13 in infra
+# its change: the branch upgrade/50-grafana-13 in infra (Grafana's Recreate is in since step 25: one SQLite
+# database, migrated on start by the one pod)
 branch infra
-# and the branch upgrade/50-grafana-13 in platform (Recreate: one SQLite database, migrated on start)
-branch platform

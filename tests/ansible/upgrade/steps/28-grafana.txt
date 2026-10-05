@@ -1,5 +1,5 @@
 # Grafana 12.4.2 -> 12.4.12 (patch releases; 13.x is a later step). infra upgrade/28-grafana.
-# outage: Grafana restarts (Recreate)
+# outage: Grafana restarts (Recreate since step 25: the old pod stops first)
 # abort: revert the step's merge on main (Argo syncs back)
 image grafana/grafana 12.4.2 => image grafana/grafana 12.4.12
 # its change: the branch upgrade/28-grafana in infra

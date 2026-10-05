@@ -9,8 +9,8 @@ argo-chart woodpecker woodpecker@3.7.3
 image docker.io/woodpeckerci/woodpecker-agent v3.18.1
 image docker.io/woodpeckerci/woodpecker-server v3.18.1
 image sonarqube 26.3.0.120487-community
+image sonarqube 26.9.0.129388-community
 image curlimages/curl 8.12.1
-image ghcr.io/browserless/chromium latest
 # the nightly Hyperfoil load test (off in Vagrant: its image is a floating :latest, so the kubelet pulls it from
 # production's registry on every run, and an isolated copy can never run it)
 image git.pmon.dev/schnappy/hyperfoil latest

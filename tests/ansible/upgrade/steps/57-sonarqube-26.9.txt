@@ -1,9 +1,13 @@
 # SonarQube Community 26.3.0 -> 26.9.0 (infra values and platform's default, both upgrade/57-sonarqube-26.9). SonarQube
 # is NOT in the Vagrant copy (left out with the operator's agreement, 2026-10-02), so this step proves only that the
 # rest stays green; the upgrade itself is production-only. SonarQube migrates its database on first start (via /setup).
-# The inventory line is on the allowed-missing list, so no change is expected here.
+# Its inventory line moves here for production's check; both versions are on the Vagrant copy's allowed-missing
+# list.
 # its change: the branch upgrade/57-sonarqube-26.9 in infra and platform
 # outage: SonarQube down while it migrates its database (production only)
 # abort: one-way: SonarQube's Postgres dump from Wave 0 (the postgres store) with 26.3
+# one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
+wave0 postgres
+image sonarqube 26.3.0.120487-community => image sonarqube 26.9.0.129388-community
 branch infra
 branch platform

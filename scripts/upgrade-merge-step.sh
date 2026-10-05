@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # upgrade-merge-step.sh <step> <infra|platform> - the GitOps half of one production upgrade step: the step's branch
-# (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD carries an infra change to production;
-# a platform change goes through CI first. `task deploy:upgrade:merge`, after the step's Vagrant proof and the
-# operator's approval.
+# (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so the push is
+# the production change (platform's CI lints the same commit alongside; it gates nothing). Called by
+# scripts/upgrade-production.py merge (`task deploy:upgrade:merge`) after its ledger, proof and merge-order checks.
 #
 # Refuses unless the step file declares that repo's branch, the repo's working tree is clean, main is origin/main,
 # the repo's previous step branch is in main already and this one contains main - so the merge adds this step's
@@ -20,7 +20,8 @@ git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet \
 git -C "$dir" fetch -q origin main
 [ "$(git -C "$dir" rev-parse main)" = "$(git -C "$dir" rev-parse origin/main)" ] \
   || { echo "REFUSED: $repo main is not origin/main" >&2; exit 1; }
-git -C "$dir" rev-parse -q --verify "refs/heads/$branch" > /dev/null || { echo "REFUSED: no $repo branch $branch" >&2; exit 1; }
+git -C "$dir" rev-parse -q --verify "refs/heads/$branch" > /dev/null \
+  || { echo "REFUSED: no $repo branch $branch" >&2; exit 1; }
 # stacked branches all contain main: what matters is that the repo's previous step branch is merged already, so this
 # one adds its own step's commits only
 prev=""

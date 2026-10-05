@@ -1,8 +1,14 @@
 # ClickHouse: compatibility 24.8 in the default profile (platform upgrade/58-clickhouse-compat-24.8), before the 25.8
 # image. Newer releases write parts, String and nested columns the previous one cannot read (25.8 #84171, 25.11
 # #89329, 26.3 #94859); the setting, read at startup, keeps the old defaults and formats, so a rollback stays possible.
-# No effect while 24.8 runs.
+# No effect while 24.8 runs. The same branch stops the image's entrypoint making a `default` user (open to ::/0, with
+# schnappy's password): CLICKHOUSE_SKIP_USER_SETUP, which 24.8's entrypoint honours - the environment change
+# restarts ClickHouse, and the setting (a subPath mount, read at startup) acts from that restart.
 # its change: the branch upgrade/58-clickhouse-compat-24.8 in platform
-# outage: ClickHouse restarts to read the setting - log ingestion waits (Fluent Bit retries)
+# outage: ClickHouse restarts (its environment changed) - log ingestion waits (Fluent Bit retries)
 # abort: revert the step's merge on main (Argo syncs back)
 branch platform
+# from this step's restart ClickHouse runs with compatibility 24.8
+clickhouse-compat 24.8
+# and has one user: the image's `default` is not made any more
+clickhouse-users schnappy

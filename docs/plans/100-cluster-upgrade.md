@@ -567,6 +567,103 @@ Second review (2026-10-05, the new work: Wave 0, the checks, the production comm
   the primary and waits until each base backup's end WAL is archived; production's Wave 0 base backup is
   restorable the moment the playbook ends.
 
+Full review (2026-10-05, three read-only reviewers over the whole work, during the stopped full run 7) - the
+verdict "not ready"; every item below to be fixed and proven before full run 7:
+- F1 (critical) The Argo CD steps pass the Vagrant copy's own arguments (Forgejo at 192.168.56.20:3000, plain http,
+  no certificate check, no Keycloak, no ingress) to production through deploy:upgrade:playbooks - ten's repo
+  credentials would point at the Vagrant Forgejo. They belong in inventory/vagrant.yml; --production allows only
+  each playbook's step variables.
+- F2 (critical) Nothing in production refuses step N before N-1 (Istio 1.30 before Gateway API v1.5, Strimzi 1.2
+  before the conversion, Kubernetes 1.36 before containerd 2): a production step ledger every deploy:upgrade:* task
+  checks and writes; upgrade-kubeadm.yml refuses a runtime below the target minor's floor.
+- F3 deploy:upgrade:check: the inventory has no namespace, so the test environment's and SonarQube's own changes
+  read as differences (steps 16, 19, 39, 46, 48, 57; the test schema Job's scylla:6.2); its settle runs --once
+  against whatever ~/.kube/config points at and without the pushed SHAs (green on the old commit). Production's
+  scope as Vagrant's (the test environment and SonarQube out, listed apart), the settle on ten with the merged SHAs
+  and stable polls.
+- F4 Step 50: Grafana's Recreate (platform) and its 13.2.3 image (infra) merge separately, in any order - infra
+  first runs Grafana 12 and 13 on one SQLite file. The step file's branch lines are the merge order and the merge
+  refuses another; Recreate first.
+- F5 Defaults: kept until the rollout's end, a rebuild between steps installs the old versions under a newer etcd -
+  each step moves its playbook defaults (machine-readable "default" lines; the defaults branch is generated from
+  them); an etcd snapshot store in Wave 0 before each kubeadm step.
+- F6 Step 47: recovery reads the PostgreSQL 17 archive by name (recoveryServerName follows the cluster name) - set
+  it with backupServerName; the DR drill hardcodes postgresql:17 and never recovered an 18 backup - driven by the
+  chart's values.
+- F7 Wave 0 of the test environment's ScyllaDB cannot work (no agent credentials there): the test environment's
+  ScyllaDB has no backup - said so in the test steps' abort lines, Wave 0 skips it by name.
+- F8 Wave 0 never runs inside the full run - the backups are proven only at the baseline versions: wave0 lines in
+  the step files before each one-way step run the backup and its rehearsal there. The abort lines' "rehearsed in
+  Vagrant" claimed a rollback to the previous version that never ran - restated (operator decision on real rollback
+  rehearsals pending).
+- F9 Wave 0 uploads are single PUTs of tars up to ~50 GB (ClickHouse 53G, the object store 45G on ten): split into
+  parts, each with its sha256; a free-space check before tarring; old local copies pruned.
+- F10 The object-store check passed on zero objects and on ETags under another name - fixed (unit test).
+- F11 argo-settled: no floor on the app set (a dropped child app goes green), a crash loop slower than 5 minutes
+  settles - the app names recorded at the build and required; a pod restarting in consecutive steps fails.
+- F12 Mimir's seed-time query is answered by the ingesters for 12 h - the Vagrant copy's query_store_after and
+  query_ingesters_within lowered so it is the store-gateway's.
+- F13 CRDs: only gateway-api and the Prometheus operator's are in the inventory - every CRD group's count and
+  version, the External Secrets CRDs' Prune/Delete annotations checked.
+- F14 Nothing ties what the full run proved to what gets merged: the full run records each step's infra/platform
+  SHAs and ops' commit (a dirty ops tree refuses), the merge refuses another SHA.
+- F15 Floating tags (postgresql:17, ...) checked against ten only at the build: their digests checked before each
+  step.
+- F16 Smaller: Kafka's metadataVersion unread (step 40's claim and abort); build-targets smoke-tests main's Job;
+  postgres-analyze with pg_namespaces matching nothing ends green (fail unless the inventory allows none);
+  strimzi-v1-conversion's "|| true" and its always without set -e; versitygw.yml compares versions by substring;
+  upgrade-kubeadm.yml installs the repo's newest kubernetes-cni/cri-tools (pinned per minor instead); the non-Argo
+  scylla-manager install is not pinned; lines over 120 in scripts.
+- F17 Claims: the plan's versions table (ScyllaDB 2026.3.2), old step numbers throughout, the wrong renumber table
+  (from row 12; the five test steps missing), the stateful table, the Wave 0 description, R4's "config migrate",
+  R29's SonarQube sidecar, the windows; steps 58/60 (ClickHouse does not restart there - the pin acts at 59/61),
+  46 (the test cluster's dump is in Wave 0), 41 (the when: is on main already), 57 (SonarQube waits for /setup -
+  a migrate playbook line), 21 (istiod rolls); R9's production Gluster fix in no step - step 00.
+- F18 The operator's procedure per step - Wave 0, preview, merge in order, the settle on the pushed SHAs,
+  playbooks, check, soak, stop criteria - written down and enforced by the tasks.
+- F19 (third reviewer) The state between a two-repo step's merges was never proven, and three steps' orders were
+  wrong: 47 platform first upgrades production to 18 by the chart default without the new archive name; 50 and 54
+  infra first run Grafana 13 beside 12 on one SQLite file / Tempo 3 on the 2.x config; 59 infra first runs 25.8 with
+  the image-made default user (found by the new check). Step 28 already runs two Grafanas (RollingUpdate).
+- F20 Four abort lines (11 and 32 Cilium, 26 local-path, 07's policy removal) are refused by the playbooks' own
+  no-downgrade guard (tasks/no-downgrade.yml): restated as one-way, or an explicit per-component override (refusing
+  by default) with one downgrade rehearsed.
+- F21 Step 21 is one-way for Scylla Manager's backend ScyllaDB (2026.1.3 -> 2026.2.5), no Wave 0 store covers it:
+  marked one-way, its backend snapshotted first or Manager's state rebuilt by a written procedure.
+- F22 Step 47's production undo has no procedure: restore-check recovers into a side cluster only. Going back means
+  replacing the live Cluster (its PVCs deleted - local-path, reclaim Delete) by a recovery under the old server name,
+  losing writes after the upgrade: written down and rehearsed in Vagrant against the production names.
+- F23 ACME issuance through the porkbun webhook is never exercised (steps 23, 35): after each in production a
+  throwaway staging Certificate through the porkbun solver, Ready, deleted.
+- F24 The ClickHouse pin's rollback is unproven (getSetting reads a session setting): rehearsed in Vagrant - 25.8
+  under the pin writes and merges parts, the image back to 24.8 reads them.
+- F25 Step 31 is ten's first setup-argocd run since 10-01: it installs the Application health check, after which
+  the root waits for each wave Healthy (about 50 minutes of retries) - said in step 31, every app Healthy before it.
+- F26 deploy:upgrade:check allowed no argo-out-of-sync app: red after step 37 by design.
+- F27 The Vagrant runner's barman-check, restore-check and cert-renew lines have no production counterpart - after
+  step 47 production needs a fresh base backup (its step file says so) that nothing takes.
+
+Fixed so far (2026-10-05, uncommitted where not said):
+- F1: the production runner allows only --tags and the step variables (`--lint` in CI: tests/ansible/unit/step-fence);
+  the Vagrant Argo CD settings in inventory/vagrant.yml; production runs carry -e @vars/vault.yml.
+- F10: the object-store check fails on zero objects, objects without an ETag, or under 90% unchanged (unit test).
+- F2, F4, F14, F18, F26: scripts/upgrade-production.py and the deploy:upgrade:* tasks - the ledger on ten, the
+  phases in order, the merge in the step file's order with the in-between state proven (F19's check), the full run's
+  proof (own change per repo, the ops commit; a dirty ops tree refuses the run), the soak with no restart, the
+  procedure written ("Production, step by step"); tests/ansible/unit/upgrade-ledger (seven mechanisms reverted, each
+  red). The upgrade-kubeadm containerd floor (F2's second half) still open.
+- F3: production's inventory leaves schnappy-test out and lists it apart (the baseline matches ten exactly: 98 lines,
+  2026-10-05); browserless (test-only) out of the baseline; step 57 carries SonarQube's line; Argo judged on ten
+  with ten's kubeconfig, on main's commits (green on ten 2026-10-05: 31 apps, every pod ready).
+- F19: scripts/upgrade-merge-order.py renders every platform-chart Argo application (helm template from the refs)
+  before, between and after the two merges and refuses unless the between state equals one of the others - run at the
+  full run's start and by the production merge. Orders now: 47 infra then platform; 54 platform then infra; Grafana's
+  Recreate moved to platform step 25 (no restart), so 28 and 50 run one Grafana and 50 is infra only; the ClickHouse
+  users fix moved to step 58 (24.8's entrypoint honours CLICKHOUSE_SKIP_USER_SETUP, read on ten): ClickHouse restarts
+  there, so its compatibility pin and one user start at 58. All 11 two-repo steps proven safe in their order.
+- wave0 lines on the one-way steps (17, 20 scylla; 38, 40 kafka; 46, 47, 57 postgres; 50 grafana; 51, 54 gateway;
+  59, 61 clickhouse): production's backup phase; the full run's side is F8.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
@@ -695,35 +792,37 @@ seeded data (Postgres 10,000 rows on both instances, 1,000 Kafka messages, 1,000
 Before 33-41 (Kafka, ScyllaDB): Velero holds no copy of their data (defect 20) - a backup first, or the operator
 accepts the risk. Before 42: CNPG base backup + `pg_dumpall` to the Pi. Before 44: Grafana's volume.
 
-## Production rollout (after all tests pass and approval)
+## Production, step by step (after the gate and the operator's approval)
 
-Gate: every step green in Vagrant on its own, then `task test:upgrade:full` green (built from nothing, steps 01-55 in
-one unattended run), then the operator's approval. Step 19 is already in production (2026-10-03, infra e89bbbb).
+Gate: full run 7 green (`task test:upgrade:full`: built from nothing, every step in one unattended run, each green
+step's proof recorded), then the full review of the whole upgrade work with its fixes proven (the full run repeated
+when a fix touches the steps or the harness), then the operator's approval.
 
-How a step goes to production: its `upgrade/NN-*` branches merge to main in step order (infra and platform are pushed
-straight to main; Argo syncs them), and its `playbook` lines run against `inventory/production.yml` - after which that
-playbook's default takes the step's `-e` value in the same change (setup-kubeadm.yml: k8s_version/k8s_package_version,
-containerd.io instead of Debian's containerd, cilium_version, gateway_api_version, local_path_provisioner_version, and
-the External Secrets Helm install `when: not platform_by_argo`; setup-argocd.yml: argocd_version). One step at a time,
-each verified as in Vagrant (Argo synced and healthy, data, backup, metrics, the k6 smoke) before the next.
+One step at a time, in the step files' order, only through the deploy:upgrade:* tasks: scripts/upgrade-production.py
+keeps a ledger on ten (ConfigMap kube-system/upgrade-ledger) and refuses a phase whose predecessors are missing.
+`task deploy:upgrade:ledger-init` once (step 02 recorded done: in production since 2026-10-03, infra e89bbbb); `task
+deploy:upgrade:status` names the next phase and what stands before it. Per step N:
 
-Waves in this order:
+1. `deploy:upgrade:begin STEP=N` - every earlier step done; N and every step before it proven by one full run; ten's
+   and the Pis' inventory as the done steps leave it (the test environment, schnappy-test, listed apart - the Vagrant
+   copy has none); Argo settled on main's commits, judged on ten (4 polls, no container restarted in 5 minutes; the step
+   before's argo-out-of-sync apps allowed).
+2. `deploy:upgrade:backup STEP=N STORE=s` - each wave0 line, before anything changes.
+3. `deploy:upgrade:preview STEP=N` - a step with playbook lines: check mode with diffs, read by the operator.
+4. `deploy:upgrade:merge STEP=N REPO=r` - each branch line in the file's order. The branch restacked on origin/main
+   first when main moved (the apps' CD pushes image tags to infra main): `scripts/upgrade-restack-in-place.sh ../infra`.
+   Refused unless its own change (changed lines and files) is the one the full run proved, deploy/ and the step file
+   are as that run had them, and the state between the step's two merges is one the run proved
+   (scripts/upgrade-merge-order.py: the first merge alone renders every platform-chart application as before, or the
+   second renders nothing new). Pushed; Argo settled on the pushed commits within 30 minutes, nothing out of sync.
+5. `deploy:upgrade:playbooks STEP=N` - after every merge settled and the preview.
+6. `deploy:upgrade:done STEP=N` - ten as the step leaves it (its argo-out-of-sync apps allowed). The first green call
+   starts the soak: 60 minutes after a wave0 step, 15 otherwise (a step's `soak` line overrides). Called again after it
+   - green, with no container restarted since the first green call - the step is done. A red call during the soak
+   restarts it.
+Each phase that changes production asks first (the task's prompt) - the operator approves each.
 
-0. Backups: CNPG base backup + `pg_dumpall` to the Pi, etcd snapshot, Grafana's volume (13 migrates it one way). Velero
-   holds no data volume (defect 20): Kafka and ScyllaDB need their own copy before steps 33-41 - a Scylla Manager
-   backup task (none exists) and a Kafka topic export - or the operator accepts their loss risk.
-1. Patches (01-12): apt-cacher-ng from CI (defect 9), cert-manager 1.20.4, CNPG 1.30.1, Velero 1.18.4 + plugin 1.14.4,
-   versitygw 1.8.0, local-path 0.0.37, kube-prometheus-stack 91.8.2, Alertmanager, blackbox, ksm, Grafana 12.4.12,
-   Mimir 2.17.11, Fluent Bit 4.2.8, Argo CD 3.3.14.
-2. Platform (13-26): Cilium 1.19.8 -> k8s 1.34.12 -> containerd.io 2.3.6 -> k8s 1.35.9 -> Cilium 1.20.2 -> Gateway API
-   v1.5.1 -> Istio 1.26 ... 1.31 in place, one minor each with every mesh workload restarted
-   (restart-mesh-workloads.yml) -> k8s 1.36.5.
-3. Operators and data (27-43): External Secrets CRDs under Argo, then 2.11; Argo CD 3.4, 3.5; cert-manager 1.21;
-   Strimzi v1 conversion, 1.2.0, Kafka 4.3.1; Scylla operator 1.20.3 -> 1.21 -> 1.22 with ScyllaDB 2025.1 -> 2026.1 ->
-   2026.3; PostgreSQL 18 in place (downtime; a fresh base backup after it - the old major's WAL cannot restore 18);
-   Valkey 9.1.
-4. Observability (44-55): Grafana 13, Mimir 3.0 -> 3.1 -> 3.2, Tempo 3, Fluent Bit 5, Centrifugo 6.9, SonarQube 26.9,
-   ClickHouse 25.8 -> 26.8 (the compatibility pin's removal is the operator's decision).
+Stop criteria: the rollout stops at the first of these - a phase refused or failed, Argo not settled after a merge,
+an inventory difference, a restart during the soak - and the step's abort line, with the operator, decides what
+follows. Nothing of the next step can start: its begin wants this one done.
 
-Rules: one component per change; check its history and live effect first; stateful steps (S in the table) shown to
-the operator with the exact change before they run.
