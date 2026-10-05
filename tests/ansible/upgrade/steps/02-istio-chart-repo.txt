@@ -3,3 +3,5 @@
 # Istio apps would stop syncing. In production since 2026-10-03 (infra main e89bbbb), so it has no step branch: the
 # infra stack is rebased on that main. Nothing else changes; this one can go to production on its own, before the first
 # outage.
+# outage: none (the same charts from another host) - in production since 2026-10-03
+# abort: not needed

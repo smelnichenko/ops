@@ -3,5 +3,7 @@
 # rest stays green; the upgrade itself is production-only. SonarQube migrates its database on first start (via /setup).
 # The inventory line is on the allowed-missing list, so no change is expected here.
 # its change: the branch upgrade/57-sonarqube-26.9 in infra and platform
+# outage: SonarQube down while it migrates its database (production only)
+# abort: one-way: SonarQube's Postgres dump from Wave 0 (the postgres store) with 26.3
 branch infra
 branch platform

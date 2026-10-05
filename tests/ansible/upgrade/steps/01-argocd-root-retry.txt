@@ -4,6 +4,8 @@
 # sync waves the Vagrant mirror used to add (cert-manager first, Scylla Manager after its operator, the environment
 # sets and observability after the infra they need). Annotations and the root's retry only: no version changes.
 # And the two charts that floated at "*" pinned to what production runs (nothing running changes):
+# outage: none - Argo CD settings, sync waves and pins; nothing restarts
+# abort: revert the step's merge on main (Argo syncs back)
 argo-chart metrics-server metrics-server@* => argo-chart metrics-server metrics-server@3.14.0
 argo-chart porkbun-webhook cert-manager-webhook-porkbun@* => argo-chart porkbun-webhook cert-manager-webhook-porkbun@1.0.0
 # its change: the branch upgrade/01-argocd-root-retry in infra

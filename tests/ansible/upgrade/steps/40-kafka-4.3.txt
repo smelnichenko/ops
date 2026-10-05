@@ -2,6 +2,9 @@
 # set strimzi.kafkaVersion (infra), the chart default follows (platform), both upgrade/40-kafka-4.3. A rolling broker
 # upgrade; with no metadataVersion set Strimzi then moves it to 4.3's default. Stateful: shown to the operator before
 # production.
+# outage: the broker restarts on 4.3 - Kafka unavailable for the restart (a minute)
+# abort: revert the step's merge on main (Argo syncs back) while the metadata version is still 4.2's; once Strimzi has
+# moved it: the Wave 0 Kafka backup (rehearsed in Vagrant)
 image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1
 # its change: the branch upgrade/40-kafka-4.3 in infra and platform
 branch infra

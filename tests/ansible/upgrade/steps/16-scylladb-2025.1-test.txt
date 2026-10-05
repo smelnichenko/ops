@@ -4,4 +4,6 @@
 # watched before the production step. infra upgrade/16-scylladb-2025.1-test (also: the test values' duplicate scylla
 # key, the second block's values kept). Stateful: shown to the operator before it runs.
 # its change: the branch upgrade/16-scylladb-2025.1-test in infra
+# outage: the test environment only: its ScyllaDB restarts
+# abort: the test cluster's Wave 0 backup (upgrade-backup.yml gives it one of its own)
 branch infra

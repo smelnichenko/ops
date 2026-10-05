@@ -3,6 +3,8 @@
 # backend worker), infra's values the image - both upgrade/54-tempo-3, in either order. One-way: Tempo 3 reads 2.x
 # blocks, not the reverse - in production the traces bucket is not touched, so 2.x could only be restored with older
 # blocks.
+# outage: Tempo restarts - spans sent meanwhile may be lost
+# abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup (rehearsed in Vagrant)
 image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0
 # its change: the branch upgrade/54-tempo-3 in infra and platform
 branch infra

@@ -1,6 +1,8 @@
 # Argo CD v3.4.6 -> v3.5.3: chart 10.2.2 -> 10.9.6 through setup-argocd.yml (host-side); Redis 8.2.3 -> 8.6.4. Argo CD
 # 3.5's notes checked: Helm 4.2 inside Argo (its break is plain-HTTP OCI registries - none here; any rendering change
 # shows as apps not Synced), UI/extension and GnuPG changes unused. At the rollout argocd_version becomes 10.9.6.
+# outage: Argo CD restarts - no sync meanwhile, the applications keep running
+# abort: setup-argocd.yml with the old chart version - its no-downgrade check refuses: by hand, not rehearsed
 helm argocd/argocd argo-cd-10.2.2 v3.4.6 => helm argocd/argocd argo-cd-10.9.6 v3.5.3
 image quay.io/argoproj/argocd v3.4.6 => image quay.io/argoproj/argocd v3.5.3
 image ecr-public.aws.com/docker/library/redis 8.2.3-alpine => image ecr-public.aws.com/docker/library/redis 8.6.4-alpine

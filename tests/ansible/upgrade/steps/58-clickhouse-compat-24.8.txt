@@ -3,4 +3,6 @@
 # #89329, 26.3 #94859); the setting, read at startup, keeps the old defaults and formats, so a rollback stays possible.
 # No effect while 24.8 runs.
 # its change: the branch upgrade/58-clickhouse-compat-24.8 in platform
+# outage: ClickHouse restarts to read the setting - log ingestion waits (Fluent Bit retries)
+# abort: revert the step's merge on main (Argo syncs back)
 branch platform

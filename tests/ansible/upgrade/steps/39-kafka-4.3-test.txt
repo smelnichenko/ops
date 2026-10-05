@@ -3,5 +3,7 @@
 # not set it), and the test values set 4.3.1 (infra). Not in the Vagrant copy: no inventory change here. Both
 # upgrade/39-kafka-4.3-test. Stateful: shown before it runs.
 # its change: the branch upgrade/39-kafka-4.3-test in infra and platform
+# outage: the test environment only: its broker restarts
+# abort: its values back while the metadata version is still 4.2's
 branch infra
 branch platform

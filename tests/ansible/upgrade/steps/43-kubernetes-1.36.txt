@@ -2,6 +2,9 @@
 # supports 1.37 yet): upgrade-kubeadm.yml. kubeadm 1.36.5 moves etcd to 3.6.8-0 and CoreDNS to v1.14.2 (its own image
 # list). At the rollout setup-kubeadm.yml's k8s_version becomes 1.36 and k8s_package_version 1.36.5-1.1. The etcd
 # backup CronJob follows to etcd 3.6.8-0 (infra upgrade/43-kubernetes-1.36).
+# outage: the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the
+# kubelet restarts
+# abort: one-way - kubeadm does not downgrade; back only by the etcd backup and a rebuild (task dr:drill's procedure)
 image registry.k8s.io/kube-apiserver v1.35.9 => image registry.k8s.io/kube-apiserver v1.36.5
 image registry.k8s.io/kube-controller-manager v1.35.9 => image registry.k8s.io/kube-controller-manager v1.36.5
 image registry.k8s.io/kube-scheduler v1.35.9 => image registry.k8s.io/kube-scheduler v1.36.5

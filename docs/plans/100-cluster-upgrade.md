@@ -441,8 +441,10 @@ Rollout behaviour
   repo's previous step branch is in main). setup-argocd keeps a working Forgejo token and makes a new one before
   deleting the old (it revoked Argo CD's access in between); "works" = it reads the root app's repository (its
   read:repository scope gets 403 from /api/v1/user, so the first version replaced it on every run) - kept and
-  replaced both proven on Vagrant 2026-10-04, Argo CD settled after. Abort/outage notes per step: with the
-  restructure.
+  replaced both proven on Vagrant 2026-10-04, Argo CD settled after. Abort/outage notes: DONE 2026-10-05 - every
+  step file has an "outage:" line (what stops, for how long) and an "abort:" line (the way back: a revert, a
+  playbook with the old version, or for a one-way step the Wave 0 restore / the etcd backup and a rebuild); each way
+  back says whether it was rehearsed in Vagrant (the Wave 0 restores and PostgreSQL 17's restore-undo were).
 - R19 (apt-cacher-ng's forgejo-registry pull secret on platform upgrade/01; local-path's node paths checked before
   and after the manifest - ten's are upstream's default; ScyllaCluster/Kafka and the Docker apt source: the
   pre-checks showed nothing to change; argocd's image pinned per chart version - DONE)

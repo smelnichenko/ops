@@ -3,6 +3,10 @@
 # sidecars. Upgrade notes checked against production 2026-10-03: Needs Gateway API v1.5 (step 07). Hostnames in several
 # namespaces now prefer a Service (our one ServiceEntry, auth.pmon.dev, has none). The 1.30 charts default to
 # registry.istio.io/release; global.hub keeps them on docker.io/istio like every other release.
+# outage: istiod and istio-cni roll, then every mesh workload restarts (the data tier first) - each one-replica service
+# is unreachable for its own restart, seconds to a minute
+# abort: revert the step's merge (istiod and istio-cni back one minor - Istio's in-place downgrade, not rehearsed here)
+# and restart the mesh workloads again
 argo-chart istio-base base@1.29.8 => argo-chart istio-base base@1.30.5
 argo-chart istio-cni cni@1.29.8 => argo-chart istio-cni cni@1.30.5
 argo-chart istiod istiod@1.29.8 => argo-chart istiod istiod@1.30.5

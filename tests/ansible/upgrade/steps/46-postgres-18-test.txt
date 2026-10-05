@@ -5,6 +5,8 @@
 # statistics playbook finds no test cluster. Both upgrade/46-postgres-18-test. Stateful, with downtime of the test
 # environment: shown before it runs.
 # its change: the branch upgrade/46-postgres-18-test in infra and platform
+# outage: the test environment only: its Postgres down for pg_upgrade (minutes)
+# abort: the test cluster has no backup: rebuilt from production's data if it ever must be
 branch infra
 branch platform
 # then fresh planner statistics in the test cluster (pg_upgrade carries none over)

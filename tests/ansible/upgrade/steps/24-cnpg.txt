@@ -1,5 +1,7 @@
 # CloudNativePG operator 1.29.0 -> 1.30.1 (chart 0.28.0 -> 0.29.1); restarts every Postgres instance in place.
 # infra upgrade/24-cnpg.
+# outage: every Postgres instance restarts, one at a time, the primary last - writes pause for its switchover
+# abort: revert the step's merge on main (Argo syncs back) - the operator's downgrade not rehearsed
 argo-chart cnpg cloudnative-pg@0.28.0 => argo-chart cnpg cloudnative-pg@0.29.1
 image ghcr.io/cloudnative-pg/cloudnative-pg 1.29.0 => image ghcr.io/cloudnative-pg/cloudnative-pg 1.30.1
 # A CNPG barman backup after it - WAL archiving and a fresh base backup: the CNPG operator that takes them.

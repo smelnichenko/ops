@@ -3,4 +3,6 @@
 # every upgrade would turn the grace off. upgrade-kubeadm.yml refuses to run until the ConfigMap has it, and checks the
 # kubelet's file after. No version changes; nothing restarts (the kubelet reads the ConfigMap only when kubeadm writes
 # its file).
+# outage: none - the ConfigMap only (the kubelet reads it at the next kubeadm upgrade)
+# abort: the ConfigMap's old values (0s/0s) - not wanted: they turn the graceful shutdown off
 playbook configure-node.yml -e kubelet_grace_in_kubelet_config_map=true

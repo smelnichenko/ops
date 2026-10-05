@@ -1,6 +1,8 @@
 # Alertmanager 0.31.1 -> 0.34.1, blackbox exporter 0.27.0 -> 0.28.0 (its config reloader to the operator's v0.94.1),
 # kube-state-metrics 2.18.0 -> 2.20.0 - the observability chart's defaults. platform
 # upgrade/45-alertmanager-blackbox-ksm.
+# outage: Alertmanager, the blackbox exporter and kube-state-metrics restart - alerts wait for them
+# abort: revert the step's merge on main (Argo syncs back)
 image prom/alertmanager v0.31.1 => image prom/alertmanager v0.34.1
 image prom/blackbox-exporter v0.27.0 => image prom/blackbox-exporter v0.28.0
 - image quay.io/prometheus-operator/prometheus-config-reloader v0.89.0

@@ -2,6 +2,9 @@
 # year apart, direct. 26.6 needs AVX2 (ten's i9-10900K has it). 25.8's formats kept by the pin; a rollback must first
 # drop or unlock the renamed system.*_log_N tables (26.7 #95079). Removing the pin later is the operator's decision -
 # the point of no return. Stateful: shown before production, its volume backed up first.
+# outage: ClickHouse restarts on 26.8 - log ingestion waits
+# abort: back to 25.8 while the pin keeps 25.8's formats (drop or unlock the renamed system.*_log_N tables first);
+# otherwise the Wave 0 ClickHouse backup
 image clickhouse/clickhouse-server 25.8.33.6-alpine => image clickhouse/clickhouse-server 26.8.15.10-alpine
 # its change: the branch upgrade/61-clickhouse-26.8 in infra and platform
 branch infra
