@@ -12,9 +12,17 @@
 #
 # Required vars:
 #   ns:  Kubernetes namespace
+# The PostgreSQL image: production's (scripts/production-cnpg-image.py - the chart as Argo renders it for production,
+# at infra's and platform's main), so the DR drill restores the major production runs; -e test_pg_image=<image>
+# names another.
 #
 # Usage:
 #   - ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
+
+- name: The PostgreSQL image production's Cluster runs (unless -e test_pg_image)
+  ansible.builtin.set_fact:
+    test_pg_image: >-
+      {{ test_pg_image | default(lookup('ansible.builtin.pipe', playbook_dir ~ '/../../scripts/production-cnpg-image.py')) }}
 
 - name: Per-service postgres credentials (inline; vagrant skips ESO/Vault)
   kubernetes.core.k8s:
@@ -94,7 +102,7 @@
           schnappy.io/ephemeral: "true"
       spec:
         instances: 1
-        imageName: ghcr.io/cloudnative-pg/postgresql:17
+        imageName: "{{ test_pg_image }}"
         enableSuperuserAccess: true
         superuserSecret:
           name: schnappy-postgres-superuser
