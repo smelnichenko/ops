@@ -228,7 +228,31 @@ image velero/velero-plugin-for-aws v1.11.1
 k8s server v1.34.6
 kafka-metadata schnappy-production/schnappy-production 4.2-IV1
 os debian 13.7
+pi pi1 caddy 2.10.0
+pi pi1 consul 1.20.6
+pi pi1 forgejo 15.0.3
+pi pi1 glusterfs-server 11.1-6
+pi pi1 haproxy 3.0.11-1+deb13u3
+pi pi1 keepalived 1:2.3.3-1
+pi pi1 keycloak 26.5.7
+pi pi1 nexus 3.90.1-01
+pi pi1 patroni 4.1.0
+pi pi1 pgbouncer 1.24.1-1+deb13u2
+pi pi1 postgresql-17 17.11-0+deb13u1
+pi pi1 vault 1.21.3
 pi pi1 versitygw 1.6.0
+pi pi2 caddy 2.10.0
+pi pi2 consul 1.20.6
+pi pi2 forgejo 15.0.3
+pi pi2 glusterfs-server 11.1-6
+pi pi2 haproxy 3.0.11-1+deb13u3
+pi pi2 keepalived 1:2.3.3-1
+pi pi2 keycloak 26.5.7
+pi pi2 nexus 3.90.1-01
+pi pi2 patroni 4.1.0
+pi pi2 pgbouncer 1.24.1-1+deb13u2
+pi pi2 postgresql-17 17.11-0+deb13u1
+pi pi2 vault 1.21.3
 pi pi2 versitygw 1.6.0
 pkg containerd 1.7.24~ds1-6+deb13u1
 pkg cri-tools 1.34.0-1.1

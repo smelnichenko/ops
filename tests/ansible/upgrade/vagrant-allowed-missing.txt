@@ -27,3 +27,6 @@ image git.pmon.dev/schnappy/hyperfoil latest
 # (ttlSecondsAfterFinished) - on ten when its inventory was taken
 image curlimages/curl 8.10.1
 image grafana/k6 1.7.1
+# Nexus runs on the Pis in production only (the Vagrant copy builds no Nexus)
+pi pi1 nexus 3.90.1-01
+pi pi2 nexus 3.90.1-01
