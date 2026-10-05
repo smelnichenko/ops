@@ -5,8 +5,9 @@
 #   passes on pi2 and leaves its database port (PgBouncer's) as it was; with PgBouncer stopped it is refused, the
 #   port kept.
 #   setup-consul with every config's key drifted from the one Consul runs (the old playbook's leftover): the live key
-#   written back, each server restarted one at a time (no two down together), Patroni paused around each (no
-#   failover) and resumed; then on the converged cluster: the same key, no server restarted.
+#   written back, each server restarted one at a time and Patroni paused around each - sampled every 0.2 s on each
+#   server: no two agents down together, Patroni paused whenever one is down - no failover, resumed; then on the
+#   converged cluster: the same key, no server restarted.
 #   setup-keepalived with a drifted router_id that keepalived already runs: rewritten and reloaded - the running
 #   router_id back, the PID kept, the VIP where it was.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
@@ -193,6 +194,36 @@
       register: _pg_before_consul
       when: inventory_hostname != 'target'
 
+    - name: The sampler's directory
+      ansible.builtin.file:
+        path: /var/lib/rerun-guards-test
+        state: directory
+        mode: '0700'
+
+    # every 0.2 s on each server: is its own agent up (it knows a leader), and is Patroni paused (its config key in
+    # Consul says "pause": true) - from these, the restarts' down windows and what the others saw meanwhile
+    - name: A sampler on each server (bounded; ends on its stop file)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          d=/var/lib/rerun-guards-test; rm -f $d/stop; : > $d/consul-samples
+          for i in $(seq 1 3000); do
+            [ -e $d/stop ] && exit 0
+            t=$(date +%s%3N)
+            if [[ "$(curl -sf --max-time 0.5 http://127.0.0.1:8500/v1/status/leader 2>/dev/null)" == *:* ]]; then up=up; else up=down; fi
+            if c=$(curl -sf --max-time 0.5 'http://127.0.0.1:8500/v1/kv/service/schnappy-postgres/config?raw' 2>/dev/null); then
+              if [[ "$c" == *'"pause":true'* ]]; then p=pause; else p=nopause; fi
+            else
+              p=unknown
+            fi
+            echo "$t $up $p" >> $d/consul-samples
+            sleep 0.2
+          done
+      async: 1200
+      poll: 0
+      register: _consul_sampler
+      changed_when: false
+
 - name: setup-consul re-run on the drifted keys
   hosts: localhost
   connection: local
@@ -242,17 +273,81 @@
         fail_msg: "{{ inventory_hostname }}: window+config {{ _consul_window.stdout }}, live {{ _live_before.stdout }} -> {{ _live_after.stdout }}"
         quiet: true
 
-    # a restart takes under a second, so "no overlap" alone cannot fail: each restart must come at least 5 s after
-    # the previous one - after the cluster's health was back (all at once, they come within the same second)
-    - name: One at a time - each restart at least 5 s after the previous
-      ansible.builtin.assert:
-        that: _gaps | min >= 5
-        fail_msg: "restarts (stopped at) {{ _stops }}: gaps {{ _gaps }} s"
-        quiet: true
+    - name: The samplers stopped
+      ansible.builtin.file:
+        path: /var/lib/rerun-guards-test/stop
+        state: touch
+        mode: '0600'
+
+    - name: Their end
+      ansible.builtin.async_status:
+        jid: "{{ _consul_sampler.ansible_job_id }}"
+      register: _consul_sampler_end
+      until: _consul_sampler_end.finished
+      retries: 10
+      delay: 1
+
+    - name: Their samples
+      ansible.builtin.slurp:
+        src: /var/lib/rerun-guards-test/consul-samples
+      register: _consul_samples
+
+    # a restart's stop, to the millisecond: systemd's monotonic stamp as wall-clock time (a restart can be shorter
+    # than one sample, so the samples alone can miss it)
+    - name: When each server's agent stopped
+      ansible.builtin.command:
+        cmd: >-
+          python3 -c "import subprocess, time; m = int(subprocess.check_output(['systemctl', 'show', '-p',
+          'ActiveExitTimestampMonotonic', '--value', 'consul'])); print(int((time.time() - (time.clock_gettime(time.CLOCK_MONOTONIC)
+          - m / 1e6)) * 1000))"
+      register: _consul_exit_ms
+      changed_when: false
+
+    # each server down from its agent's stop until its own samples see it up again: no two overlap, and the other
+    # servers saw Patroni paused just before and just after (the old handler restarted all three at once; without
+    # the pause, nothing held Patroni's leader while its agent was away)
+    - name: One at a time, Patroni paused around each - judged from the samples
+      ansible.builtin.command:
+        cmd: python3 -c "{{ judge }}"
+        stdin: >-
+          {{ dict(ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, ['_consul_samples', 'content'])
+             | map('b64decode') | zip(ansible_play_hosts | map('extract', hostvars, ['_consul_exit_ms', 'stdout']))
+             | map('list'))) | to_json }}
       vars:
-        _stops: "{{ ansible_play_hosts | map('extract', hostvars, ['_consul_window', 'stdout']) | map('split') | map('first') | map('int') | sort }}"
-        _gaps: >-
-          {% set out = [] -%}{% for k in range(1, _stops | length) %}{% set _ = out.append(_stops[k] - _stops[k - 1]) %}{% endfor %}{{ out }}
+        judge: |
+          import json, sys
+          d = json.load(sys.stdin)
+          samples = {h: [(int(t), up, p) for t, up, p in (l.split() for l in v[0].splitlines() if l.strip())] for h, v in d.items()}
+          problems, downs = [], {}
+          for h, (txt, stop) in d.items():
+              start = int(stop)
+              if not samples[h] or samples[h][0][0] >= start:
+                  problems.append('%s stopped before its sampler started' % h)
+                  continue
+              end = next((t for t, up, p in samples[h] if t > start and up == 'up'), None)
+              if end is None:
+                  problems.append('%s not up again after its stop' % h)
+                  end = samples[h][-1][0]
+              downs[h] = (start, end)
+          hs = sorted(downs)
+          for i, a in enumerate(hs):
+              for b in hs[i + 1:]:
+                  (s1, e1), (s2, e2) = downs[a], downs[b]
+                  if s1 < e2 and s2 < e1:
+                      problems.append('%s and %s down together' % (a, b))
+          for h in hs:
+              s, e = downs[h]
+              before = [max((x for x in samples[o] if x[0] <= s), default=(0, '', 'none'))[2] for o in hs if o != h]
+              after = [min((x for x in samples[o] if x[0] >= e), default=(0, '', 'none'))[2] for o in hs if o != h]
+              if 'pause' not in before or 'pause' not in after:
+                  problems.append('%s down without Patroni paused (others just before %s, just after %s)' % (h, before, after))
+          print(dict((h, '%d ms' % (downs[h][1] - downs[h][0])) for h in hs), '|', '; '.join(problems) or 'one at a time, Patroni paused around each')
+          sys.exit(1 if problems else 0)
+      register: _consul_judged
+      changed_when: false
+      failed_when: _consul_judged.rc != 0
+      delegate_to: localhost
+      become: false
       run_once: true
 
     - name: No failover - the same role and timeline, Postgres not restarted
@@ -280,8 +375,7 @@
     - name: Converged, one at a time
       ansible.builtin.debug:
         msg: >-
-          CONSUL KEY DRIFT RE-RUN: the live key written back; restart windows (stopped, started, key)
-          {{ ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, ['_consul_window', 'stdout'])) | list }};
+          CONSUL KEY DRIFT RE-RUN: the live key written back on each; down windows {{ _consul_judged.stdout }};
           no failover; resumed
       run_once: true
 
