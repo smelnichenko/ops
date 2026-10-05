@@ -178,9 +178,9 @@
     - name: Prove it - a pod cannot reach production's VIP, and can reach the Vagrant VIP
       ansible.builtin.shell: |
         set -uo pipefail
-        # one probe pod kept between steps (a new one each step cost its start, ~7 s) in its own namespace, which the
-        # step's version inventory leaves out (it is the test's, not production's); made again when gone (a node
-        # restart) - the probe itself runs fresh each time, through the pod network the policy governs
+        # one probe pod kept between steps (a new one each step cost about 7 s to start) in its own namespace, which
+        # the version inventory of a step leaves out (it belongs to the test, not to production); made again when gone
+        # (a node restart) - the probe itself runs fresh each time, through the pod network the policy governs
         N="-n isolation-probe"
         {{ kubectl }} create namespace isolation-probe --dry-run=client -o yaml | {{ kubectl }} apply -f - > /dev/null
         if [ "$({{ kubectl }} get pod isolation-probe $N -o jsonpath='{.status.phase}' 2> /dev/null)" != Running ]; then
