@@ -1,4 +1,0 @@
-# Mimir 2.17.8 -> 2.17.11 (patch releases; 3.x is a later step). infra upgrade/27-mimir.
-image grafana/mimir 2.17.8 => image grafana/mimir 2.17.11
-# its change: the branch upgrade/27-mimir in infra
-branch infra

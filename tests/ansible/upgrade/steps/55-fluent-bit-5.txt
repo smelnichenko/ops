@@ -1,0 +1,6 @@
+# Fluent Bit 4.2.8 -> 5.1.3 (infra upgrade/55-fluent-bit-5). 5.0's notes checked against our pipeline (tail ->
+# kubernetes, nest, modify, grep, lua -> http to ClickHouse): none applies. The metrics check now also wants fresh logs
+# in ClickHouse.
+image cr.fluentbit.io/fluent/fluent-bit 4.2.8 => image cr.fluentbit.io/fluent/fluent-bit 5.1.3
+# its change: the branch upgrade/55-fluent-bit-5 in infra
+branch infra

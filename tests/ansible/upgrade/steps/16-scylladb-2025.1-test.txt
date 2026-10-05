@@ -1,0 +1,7 @@
+# ScyllaDB 6.2.3 -> 2025.1.16 in the test environment, before production's (operator 2026-10-05: the test
+# environment first for every data version). Not in the Vagrant copy (it leaves schnappy-test out): here the step
+# changes nothing, so no inventory change; in production it is the test cluster's rolling restart by the operator,
+# watched before the production step. infra upgrade/16-scylladb-2025.1-test (also: the test values' duplicate scylla
+# key, the second block's values kept). Stateful: shown to the operator before it runs.
+# its change: the branch upgrade/16-scylladb-2025.1-test in infra
+branch infra

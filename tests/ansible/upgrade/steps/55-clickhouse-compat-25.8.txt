@@ -1,4 +1,0 @@
-# ClickHouse: compatibility 24.8 -> 25.8 (platform upgrade/55-clickhouse-compat-25.8), before the 26.8 image. From here
-# 24.8 can no longer read what is written; 25.8 can, while the pin stays.
-# its change: the branch upgrade/55-clickhouse-compat-25.8 in platform
-branch platform

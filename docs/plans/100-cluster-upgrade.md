@@ -406,6 +406,14 @@ Rollout behaviour
   DONE on infra upgrade/24 (istiod and cni values; docker.io/istio has 1.30.5; steps 24/25 expect docker.io images).
 - R14 Step order inside every support matrix (operator); test env before production for Postgres, Kafka, ScyllaDB
   (versions as values per environment).
+  DONE 2026-10-05: the order applied (renumbered, see the table under Support matrices); the test environment first -
+  each of ScyllaDB 2025.1 and 2026.1, Kafka 4.3, PostgreSQL 18 and Valkey 9.1 split into a test step and the
+  production step right after it (61 steps). Kafka's version (strimzi.kafkaVersion) and the cluster's image
+  (cnpg.imageName) became chart values, each environment moved by its own values; rendered as Argo does, every test
+  step changes only the test environment's manifests and every production step only production's, and the final
+  renders equal the ones before the split. The Vagrant copy has no test environment: there the test steps change
+  nothing (postgres-analyze -e pg_namespaces=schnappy-test finds no cluster and says so); in production each is shown
+  and watched before its production step. The old branches: upgrade-old2/*.
 - R15 Step 05: the Pis' versitygw upgrade never restarts the service; restart on version change, one Pi at a time;
   assert the running version. DONE: a restart wherever the running process is not the installed binary (a package
   upgrade leaves it on "(deleted)"; a run failing between install and restart is caught by the next), one Pi at a

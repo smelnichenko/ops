@@ -1,0 +1,7 @@
+# Strimzi 0.51.0 -> 1.2.0 (v1 API only), Argo's automated sync back (infra upgrade/38-strimzi-1.2). The operator rolls
+# the brokers onto its own 4.2.0 image. Stateful: shown to the operator before it runs in production.
+argo-chart strimzi strimzi-kafka-operator@0.51.0 => argo-chart strimzi strimzi-kafka-operator@1.2.0
+image quay.io/strimzi/operator 0.51.0 => image quay.io/strimzi/operator 1.2.0
+image quay.io/strimzi/kafka 0.51.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0
+# its change: the branch upgrade/38-strimzi-1.2 in infra
+branch infra

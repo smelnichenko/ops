@@ -1,0 +1,8 @@
+# Kafka 4.2.0 -> 4.3.1 under Strimzi 1.2.0 in production, after the test environment (step 39): the production values
+# set strimzi.kafkaVersion (infra), the chart default follows (platform), both upgrade/40-kafka-4.3. A rolling broker
+# upgrade; with no metadataVersion set Strimzi then moves it to 4.3's default. Stateful: shown to the operator before
+# production.
+image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1
+# its change: the branch upgrade/40-kafka-4.3 in infra and platform
+branch infra
+branch platform

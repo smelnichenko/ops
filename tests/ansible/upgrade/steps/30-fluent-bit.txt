@@ -1,0 +1,4 @@
+# Fluent Bit 4.2.3.1 -> 4.2.8 (patch releases; 5.x is a later step). infra upgrade/30-fluent-bit.
+image cr.fluentbit.io/fluent/fluent-bit 4.2.3.1 => image cr.fluentbit.io/fluent/fluent-bit 4.2.8
+# its change: the branch upgrade/30-fluent-bit in infra
+branch infra

@@ -1,12 +1,15 @@
 ---
 # After a PostgreSQL major upgrade: fresh planner statistics on every database (vacuumdb --all --analyze-in-stages, on
-# the primary) of every CNPG cluster - production's and the test environment's move together. pg_upgrade carries no
+# the primary) of every CNPG cluster, or of those in -e pg_namespaces (each environment's step). pg_upgrade carries no
 # statistics over, so until ANALYZE has run the planner guesses on every table - CloudNativePG's major-upgrade notes ask
 # for this. Waits first until each cluster is healthy with every instance on the major asked for; read-mostly (ANALYZE
 # writes statistics only).
 #
-# Usage: task deploy:upgrade:playbooks STEP=<the PostgreSQL 18 step>   (its playbook line)
-#        ansible-playbook -i inventory/<env>.yml playbooks/postgres-analyze.yml -e pg_major=18
+# With -e pg_namespaces=<ns>[,<ns>] only the clusters in those namespaces - the test environment's step, before
+# production's; where none of them has a cluster (the Vagrant copy has no test environment) it says so and does nothing.
+#
+# Usage: task deploy:upgrade:playbooks STEP=<a PostgreSQL 18 step>   (its playbook line)
+#        ansible-playbook -i inventory/<env>.yml playbooks/postgres-analyze.yml -e pg_major=18 [-e pg_namespaces=schnappy-test]
 - name: Planner statistics after a PostgreSQL major upgrade
   hosts: target
   become: true
@@ -20,13 +23,23 @@
         that: pg_major | default('') | string is match('^[0-9]+$')
         fail_msg: "-e pg_major=<major>, e.g. 18"
 
-    - name: The CNPG clusters
-      ansible.builtin.command: >-
-        {{ kubectl }} get clusters.postgresql.cnpg.io -A
-        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}'
+    - name: The CNPG clusters (in the namespaces given, if any)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get clusters.postgresql.cnpg.io -A \
+            -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' \
+            | awk -v ns='{{ pg_namespaces | default('') }}' 'BEGIN {n = split(ns, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1}
+                                                            NF == 2 && (n == 0 || $1 in want)'
       register: _clusters
       changed_when: false
-      failed_when: _clusters.rc != 0 or _clusters.stdout_lines | length == 0
+      failed_when: >-
+        _clusters.rc != 0 or (_clusters.stdout_lines | length == 0 and pg_namespaces | default('') | length == 0)
+
+    - name: Nothing to analyse - no CNPG cluster here in the namespaces given
+      ansible.builtin.meta: end_play
+      when: _clusters.stdout_lines | length == 0
 
     - name: Each cluster healthy, every instance ready, on that major
       ansible.builtin.shell:

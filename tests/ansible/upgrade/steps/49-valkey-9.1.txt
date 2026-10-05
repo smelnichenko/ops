@@ -1,0 +1,6 @@
+# Valkey 8.1 -> 9.1.2, pinned (was the floating 8.1-alpine), in production after the test environment and the chart
+# default (step 48): the production values (infra) upgrade/49-valkey-9.1. A cache on emptyDir: the restart empties it
+# either way.
+image valkey/valkey 8.1-alpine => image valkey/valkey 9.1.2-alpine
+# its change: the branch upgrade/49-valkey-9.1 in infra
+branch infra

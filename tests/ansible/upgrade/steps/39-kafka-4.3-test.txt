@@ -1,0 +1,7 @@
+# Kafka 4.2.0 -> 4.3.1 in the test environment, before production's (operator 2026-10-05). The version becomes a
+# value of the chart (platform: strimzi.kafkaVersion, default 4.2.0 - the same render for every environment that does
+# not set it), and the test values set 4.3.1 (infra). Not in the Vagrant copy: no inventory change here. Both
+# upgrade/39-kafka-4.3-test. Stateful: shown before it runs.
+# its change: the branch upgrade/39-kafka-4.3-test in infra and platform
+branch infra
+branch platform

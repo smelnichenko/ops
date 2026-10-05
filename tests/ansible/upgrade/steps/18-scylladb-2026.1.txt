@@ -1,8 +1,0 @@
-# ScyllaDB 2025.1.16 -> 2026.1.14 (production and test clusters): LTS to the next LTS, which ScyllaDB's upgrade
-# policy allows; operator 1.21 supports 2026.1 - the target (operator 2026-10-05: 2026.1 LTS, inside Scylla Manager
-# 3.12's list). The schema Job's cqlsh image leaves its floating 6.2 tag for the same release. infra
-# upgrade/18-scylladb-2026.1. Stateful: shown before production.
-image docker.io/scylladb/scylla 2025.1.16 => image docker.io/scylladb/scylla 2026.1.14
-image scylladb/scylla 6.2 => image scylladb/scylla 2026.1.14
-# its change: the branch upgrade/18-scylladb-2026.1 in infra
-branch infra

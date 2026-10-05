@@ -1,9 +1,0 @@
-# cert-manager v1.20.0 -> v1.20.4 (patch releases). infra upgrade/21-cert-manager.
-argo-chart cert-manager cert-manager@v1.20.0 => argo-chart cert-manager cert-manager@v1.20.4
-image quay.io/jetstack/cert-manager-cainjector v1.20.0 => image quay.io/jetstack/cert-manager-cainjector v1.20.4
-image quay.io/jetstack/cert-manager-controller v1.20.0 => image quay.io/jetstack/cert-manager-controller v1.20.4
-image quay.io/jetstack/cert-manager-webhook v1.20.0 => image quay.io/jetstack/cert-manager-webhook v1.20.4
-# its change: the branch upgrade/21-cert-manager in infra
-branch infra
-# every Certificate renewed after it (cert-manager issues, not just runs)
-cert-renew

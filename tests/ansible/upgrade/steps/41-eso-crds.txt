@@ -1,0 +1,7 @@
+# External Secrets' CRDs under Argo, same 2.2.0: installCRDs: true, applied server-side. Until now the CRDs were the
+# first Helm install's (2026-04-05) and no upgrade touched them. infra upgrade/41-eso-crds. Rollout, same change:
+# setup-kubeadm.yml's External Secrets Helm install gets `when: not platform_by_argo` (it is the second owner that made
+# that Helm release; a full run would roll Argo's ESO back to the playbook's version). The stale Helm release record
+# stays - never `helm uninstall` it: that deletes the CRDs and with them every ExternalSecret.
+# its change: the branch upgrade/41-eso-crds in infra
+branch infra

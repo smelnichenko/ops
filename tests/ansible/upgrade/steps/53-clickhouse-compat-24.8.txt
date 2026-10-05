@@ -1,6 +1,0 @@
-# ClickHouse: compatibility 24.8 in the default profile (platform upgrade/53-clickhouse-compat-24.8), before the 25.8
-# image. Newer releases write parts, String and nested columns the previous one cannot read (25.8 #84171, 25.11
-# #89329, 26.3 #94859); the setting, read at startup, keeps the old defaults and formats, so a rollback stays possible.
-# No effect while 24.8 runs.
-# its change: the branch upgrade/53-clickhouse-compat-24.8 in platform
-branch platform

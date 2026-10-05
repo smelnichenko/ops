@@ -1,6 +1,0 @@
-# Mimir 2.17.11 -> 3.0.8, one minor at a time (infra upgrade/46-mimir-3.0). 3.0's removals (Redis cache, downstream-url,
-# read-write mode, ...) are not in our config (target all, S3, memberlist, limits); the query-scheduler is now required
-# - the metrics check queries Mimir.
-image grafana/mimir 2.17.11 => image grafana/mimir 3.0.8
-# its change: the branch upgrade/46-mimir-3.0 in infra
-branch infra

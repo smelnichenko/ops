@@ -1,0 +1,11 @@
+# PostgreSQL 17 -> 18.6 in the test environment, before production's (operator 2026-10-05): CNPG's offline
+# in-place major upgrade of the test cluster. The cluster's image becomes a value of the chart (platform:
+# cnpg.imageName, default postgresql:17 - the same render where it is not set; PR environments' image moves to 18.6
+# with it) and the test values set 18.6 (infra). Not in the Vagrant copy: no inventory change here, and the
+# statistics playbook finds no test cluster. Both upgrade/46-postgres-18-test. Stateful, with downtime of the test
+# environment: shown before it runs.
+# its change: the branch upgrade/46-postgres-18-test in infra and platform
+branch infra
+branch platform
+# then fresh planner statistics in the test cluster (pg_upgrade carries none over)
+playbook postgres-analyze.yml -e pg_major=18 -e pg_namespaces=schnappy-test
