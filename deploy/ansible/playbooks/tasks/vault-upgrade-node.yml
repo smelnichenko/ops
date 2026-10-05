@@ -22,10 +22,11 @@
         name: vault
         state: started
 
-    - name: Unsealed by the Pi's own script
+    - name: Unsealed by the Pi's own script (bounded - the unit's own start limit is 360 s)
       ansible.builtin.systemd:
         name: vault-unseal
         state: restarted
+      timeout: 420
 
     - name: Unsealed, on the version
       ansible.builtin.uri:

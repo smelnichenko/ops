@@ -2,11 +2,14 @@
 # Vault on both Pis to vault_version (vars/vault.yml), its release checked against HashiCorp's SHA256SUMS - in
 # HashiCorp's HA order: the standby first, the active last, so the failover runs from the older server to the newer,
 # never back. Each: stopped (SIGTERM - the active steps down), its binary replaced, started, unsealed by the Pi's own
-# unseal script, on the new version before the next. Before anything: both unsealed, one active, each binary on disk
-# the one its process runs; a Consul snapshot (Vault's storage) into /var/backups/vault-upgrade on the active Pi; the
+# unseal script (rewritten first: its key shares go to the API on stdin, its waits are bounded), on the new version
+# before the next. Before anything: both unsealed, one active (also checked when nothing is to do), each binary on
+# disk the one its process runs; a Consul snapshot (Vault's storage) and an export of Vault's keys alone (vault/ -
+# restoring the whole snapshot would also roll Patroni back) into /var/backups/vault-upgrade on the active Pi; the
 # running binary kept beside the new (/usr/local/bin/vault-<ver>). The way back: that binary and, if the new version
-# wrote what the old cannot read, the snapshot - by hand. Never a downgrade; a Pi already on the version is not
-# restarted; nothing to do when both are. Any Pi failing stops the run on both (one Pi upgraded alone is no HA).
+# wrote what the old cannot read, the export (or the snapshot, Patroni paused) - by hand. Never a downgrade; a Pi
+# already on the version is not restarted; nothing to do when both are. Any Pi failing stops the run on both (one Pi
+# upgraded alone is no HA).
 #
 # Usage: task deploy:vault:upgrade   (production; Vagrant: task test:vault-upgrade)
 - name: Vault on both Pis to one version
@@ -37,11 +40,7 @@
         fail_msg: "REFUSED: {{ inventory_hostname }} runs Vault {{ _running }}, newer than {{ vault_version }}"
         quiet: true
 
-    - name: Nothing to do - every Pi runs {{ vault_version }}
-      ansible.builtin.meta: end_play
-      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [vault_version]
-
-    - name: Both unsealed, exactly one active
+    - name: Both unsealed, exactly one active (also when nothing is to do - a sealed one needs a look, not a pass)
       ansible.builtin.assert:
         that:
           - ansible_play_hosts | map('extract', hostvars, ['_health', 'status']) | reject('in', [200, 429]) | list | length == 0
@@ -51,6 +50,10 @@
           | map('extract', hostvars, ['_health', 'status'])) | list }} (200 active, 429 standby)
         quiet: true
       run_once: true
+
+    - name: Nothing to do - every Pi runs {{ vault_version }}
+      ansible.builtin.meta: end_play
+      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [vault_version]
 
     - name: The binary on disk
       ansible.builtin.command: /usr/local/bin/vault version
@@ -98,13 +101,20 @@
         cmd: |
           set -euo pipefail
           mkdir -p {{ upgrade_dir }} && chmod 0700 {{ upgrade_dir }}
-          out={{ upgrade_dir }}/consul-$(date -u +%Y%m%dT%H%M%SZ)-vault-{{ _running }}.snap
-          consul snapshot save "$out" > /dev/null
-          consul snapshot inspect "$out" > /dev/null
-          echo "$out"
+          out={{ upgrade_dir }}/consul-$(date -u +%Y%m%dT%H%M%SZ)-vault-{{ _running }}
+          consul snapshot save "$out.snap" > /dev/null
+          consul snapshot inspect "$out.snap" > /dev/null
+          # Vault's keys alone too: restoring the whole snapshot would also roll Patroni's state back
+          consul kv export vault/ > "$out.vault-kv.json"
+          python3 -c 'import json, sys; n = len(json.load(open(sys.argv[1]))); assert n > 0, "no vault/ keys"' "$out.vault-kv.json"
+          chmod 0600 "$out.snap" "$out.vault-kv.json"
+          echo "$out.snap"
       register: _snapshot
       changed_when: true
       when: _active | bool
+
+    - name: The Pi's own unseal - the current script and unit, before anything restarts
+      ansible.builtin.include_tasks: tasks/vault-unseal.yml
 
     - name: The standby first, then the active
       ansible.builtin.include_tasks: tasks/vault-upgrade-node.yml

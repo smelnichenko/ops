@@ -1,18 +1,57 @@
 ---
-# upgrade-vault.yml on the Vagrant Pis from production's version (1.21.3; on a re-run set back from the binary the
-# last run kept): a secret written before, then the upgrade - both on vars/vault.yml's version, unsealed, the active
-# moved to the Pi that was the standby (the failover ran older to newer), the secret read back, the old binary and the
-# Consul snapshot kept. Vagrant only. Usage: task test:vault-upgrade
+# upgrade-vault.yml on the Vagrant Pis from production's version, checked from outside the playbook:
+#   set back   both at production's 1.21.3 (this test's own download, its sha256) where they are not; the binaries
+#              and snapshots earlier runs kept removed - so what the run leaves is its own; a secret written
+#   refused    pi2's binary on disk swapped for another (a file replaced under its process): the run is refused on
+#              pi2 and stops on both - pi1 neither restarted nor upgraded alone; pi2's binary put back
+#   sampled    every 0.5 s from pi1, each Vault's health (200 active, 429 standby, else down) for the whole run
+#   after      both on the target (their sys/health); the active moved to the Pi that was the standby; the samples
+#              never show both Vaults down nor two actives; the secret read back; each Pi kept 1.21.3; the active's
+#              snapshot and Vault-key export are this run's, taken before the standby stopped
+#   again      a sealed Vault is refused even when both run the target, then unsealed by its own script - traced:
+#              no key share on any command line it starts; a downgrade is refused
+# Vagrant only. Usage: task test:vault-upgrade
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
 
-- name: Both at production's Vault (1.21.3)
+- name: Both at production's Vault (1.21.3), nothing kept from earlier runs
   hosts: pi1,pi2
   become: true
-  gather_facts: false
+  gather_facts: true
   vars:
     from_version: "1.21.3"
+    from_checksum: c945e90979a7b6e4b4846285587c35b25f8191f9f70cb879132bc118ae42c368   # its SHA256SUMS, linux_amd64
+    fixture: /var/lib/vault-upgrade-test
   tasks:
+    - name: The start of the test
+      ansible.builtin.set_fact:
+        _t0: "{{ lookup('pipe', 'date +%s') | int }}"
+      run_once: true
+
+    - name: The fixture's directory
+      ansible.builtin.file:
+        path: "{{ fixture }}"
+        state: directory
+        mode: '0700'
+
+    - name: Production's release, this test's own copy
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/vault/{{ from_version }}/vault_{{ from_version }}_linux_amd64.zip"
+        dest: "{{ fixture }}/vault_{{ from_version }}.zip"
+        checksum: "sha256:{{ from_checksum }}"
+        mode: '0644'
+
+    - name: Unpacked
+      ansible.builtin.unarchive:
+        src: "{{ fixture }}/vault_{{ from_version }}.zip"
+        dest: "{{ fixture }}"
+        remote_src: true
+        creates: "{{ fixture }}/vault"
+
+    - name: What earlier runs kept, gone (the run must leave its own)
+      ansible.builtin.shell: rm -rf /usr/local/bin/vault-[0-9]* /var/backups/vault-upgrade
+      changed_when: true
+
     - name: Its version now
       ansible.builtin.uri:
         url: https://127.0.0.1:8200/v1/sys/health
@@ -21,16 +60,16 @@
         return_content: true
       register: _now
 
-    - name: Set back from the binary the last run kept
+    - name: Set back from the test's copy
       when: ansible_play_hosts | map('extract', hostvars, ['_now', 'json', 'version']) | unique | list != [from_version]
       block:
         - name: Both stopped
           ansible.builtin.systemd:
             name: vault
             state: stopped
-        - name: The kept binary in place
+        - name: Production's binary in place
           ansible.builtin.copy:
-            src: "/usr/local/bin/vault-{{ from_version }}"
+            src: "{{ fixture }}/vault"
             dest: /usr/local/bin/vault
             remote_src: true
             mode: '0755'
@@ -63,12 +102,12 @@
       delay: 5
       until: _before.json.leader_address | length > 0
 
-- name: A secret written before
-  hosts: pi1
-  become: true
-  gather_facts: false
-  tasks:
-    - name: Written (secret/upgrade-rehearsal)
+    - name: Each Vault's start before the refused run
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value vault
+      register: _start_before_refused
+      changed_when: false
+
+    - name: A secret written (secret/upgrade-rehearsal)
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -79,29 +118,147 @@
           echo "$v"
       register: _written
       changed_when: true
+      when: inventory_hostname == 'pi1'
 
-- name: Production's upgrade playbook
-  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-vault.yml
-
-- name: After - the failover older to newer, the secret, what was kept
+- name: Refused on one Pi, stopped on both
   hosts: pi1,pi2
   become: true
   gather_facts: false
   vars:
     from_version: "1.21.3"
+    fixture: /var/lib/vault-upgrade-test
   tasks:
-    - name: The active moved to the Pi that was the standby
-      ansible.builtin.assert:
-        that:
-          - _leader.json.is_self != _before.json.is_self
-        fail_msg: "{{ inventory_hostname }}: active before {{ _before.json.is_self }}, after {{ _leader.json.is_self }}"
-        quiet: true
+    - name: Pi2's binary on disk swapped (as a file replaced under a running Vault)
+      ansible.builtin.copy:
+        dest: /usr/local/bin/vault
+        mode: '0755'
+        content: |
+          #!/bin/sh
+          echo "Vault v9.9.9 (swapped by test-vault-upgrade.yml)"
+      when: inventory_hostname == 'pi2'
 
-    - name: The old binary kept
-      ansible.builtin.command: "/usr/local/bin/vault-{{ from_version }} version"
-      register: _kept
+    - name: The run refused
+      ansible.builtin.command:
+        cmd: >-
+          env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+          venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+          playbooks/upgrade-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _refused_run
       changed_when: false
-      failed_when: from_version not in _kept.stdout
+      failed_when: >-
+        _refused_run.rc == 0 or
+        ('REFUSED: pi2 runs Vault ' ~ from_version ~ ', its binary on disk is Vault v9.9.9') not in _refused_run.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Pi2's binary put back
+      ansible.builtin.copy:
+        src: "{{ fixture }}/vault"
+        dest: /usr/local/bin/vault
+        remote_src: true
+        mode: '0755'
+      when: inventory_hostname == 'pi2'
+
+    - name: Neither restarted, neither upgraded
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value vault
+      register: _start_after_refused
+      changed_when: false
+      failed_when: _start_after_refused.stdout != _start_before_refused.stdout
+
+    - name: Both still on production's version
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        validate_certs: false
+        status_code: [200, 429]
+        return_content: true
+      register: _still
+      failed_when: _still.json.version != from_version
+
+    - name: The sampler - each Vault's health every 0.5 s (bounded; ends on its stop file)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          rm -f {{ fixture }}/sampler.stop; : > {{ fixture }}/samples
+          h() { curl -sk -o /dev/null -w '%{http_code}' --max-time 1 "https://$1:8200/v1/sys/health" || true; }
+          for i in $(seq 1 2400); do
+            [ -e {{ fixture }}/sampler.stop ] && exit 0
+            echo "$(date +%s.%N) $(h {{ hostvars['pi1'].ansible_eth1.ipv4.address }}) $(h {{ hostvars['pi2'].ansible_eth1.ipv4.address }})" \
+              >> {{ fixture }}/samples
+            sleep 0.5
+          done
+      async: 1800
+      poll: 0
+      register: _sampler
+      changed_when: false
+      run_once: true
+      delegate_to: pi1
+
+- name: Production's upgrade playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-vault.yml
+
+- name: After - from outside the playbook
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    from_version: "1.21.3"
+    fixture: /var/lib/vault-upgrade-test
+  tasks:
+    - name: The sampler stopped
+      ansible.builtin.file:
+        path: "{{ fixture }}/sampler.stop"
+        state: touch
+        mode: '0600'
+      run_once: true
+      delegate_to: pi1
+
+    - name: Its end
+      ansible.builtin.async_status:
+        jid: "{{ hostvars['pi1']._sampler.ansible_job_id }}"
+      register: _sampler_end
+      until: _sampler_end.finished
+      retries: 10
+      delay: 1
+      run_once: true
+      delegate_to: pi1
+
+    - name: The samples, judged - never both down, never two actives
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          awk '
+            function up(c) { return c == 200 || c == 429 }
+            { if (!up($2) && !up($3)) { down++; if (d == "") d = $0 }
+              if ($2 == 200 && $3 == 200) { two++; if (t == "") t = $0 }
+              if (!up($2) || !up($3)) one_down++ }
+            END {
+              printf "samples=%d one_down=%d both_down=%d two_active=%d first_both_down=[%s] first_two=[%s]\n", NR, one_down, down, two, d, t
+              exit !(NR > 20 && one_down > 0 && down == 0 && two == 0)
+            }' {{ fixture }}/samples
+      register: _judged
+      changed_when: false
+      failed_when: _judged.rc != 0
+      run_once: true
+      delegate_to: pi1
+
+    - name: Each on the target
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        validate_certs: false
+        status_code: [200, 429]
+        return_content: true
+      register: _health_after
+      failed_when: _health_after.json.version != vault_version
+
+    - name: The active moved to the Pi that was the standby
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/leader
+        validate_certs: false
+        return_content: true
+      register: _after_leader
+      failed_when: _after_leader.json.is_self == _before.json.is_self
 
     - name: The secret read back
       ansible.builtin.shell:
@@ -113,26 +270,144 @@
           vault kv metadata delete secret/upgrade-rehearsal > /dev/null
       register: _read
       changed_when: true
-      failed_when: _read.rc != 0 or _read.stdout != hostvars['pi1']._written.stdout
+      failed_when: _read.rc != 0 or _read.stdout_lines[0] != hostvars['pi1']._written.stdout
       when: inventory_hostname == 'pi1'
 
-    - name: The Consul snapshot kept, readable
+    - name: Production's binary kept on each
+      ansible.builtin.command: "/usr/local/bin/vault-{{ from_version }} version"
+      register: _kept
+      changed_when: false
+      failed_when: _kept.rc != 0 or from_version not in _kept.stdout
+
+    - name: When the standby stopped
+      ansible.builtin.command: systemctl show -p ActiveExitTimestamp --value vault
+      register: _stopped_at
+      changed_when: false
+
+    - name: The snapshot and the Vault-key export on the old active - this run's, before the standby stopped
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          f=$(ls -t /var/backups/vault-upgrade/consul-*-vault-{{ from_version }}.snap | head -1)
-          consul snapshot inspect "$f" > /dev/null
-          echo "$f"
+          snap=$(ls -1 /var/backups/vault-upgrade/consul-*-vault-{{ from_version }}.snap)
+          [ "$(echo "$snap" | wc -l)" = 1 ]
+          kv=${snap%.snap}.vault-kv.json
+          consul snapshot inspect "$snap" > /dev/null
+          python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d and all(e["key"].startswith("vault/") for e in d), "not vault/ keys"; print(len(d), "vault/ keys")' "$kv"
+          m=$(stat -c %Y "$snap")
+          [ "$m" -ge {{ hostvars['pi1']._t0 }} ]
+          [ "$m" -le "$(date -d '{{ hostvars[(ansible_play_hosts | reject('equalto', inventory_hostname) | first)]._stopped_at.stdout }}' +%s)" ]
+          echo "$snap"
       register: _snap
       changed_when: false
       when: _before.json.is_self
 
-    - name: Upgraded
+- name: A sealed Vault refused, even with nothing to do
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The standby restarted and left sealed (as after a reboot without its unseal), refused, unsealed again
+      block:
+        # stopped and started, not restarted: a restart of vault restarts vault-unseal too (its Requires=), which
+        # unseals in seconds; a stop stops it, a start of vault alone leaves it stopped
+        - name: Stopped
+          ansible.builtin.systemd:
+            name: vault
+            state: stopped
+          when: not _after_leader.json.is_self
+
+        - name: Started, not unsealed
+          ansible.builtin.systemd:
+            name: vault
+            state: started
+          when: not _after_leader.json.is_self
+
+        - name: Sealed
+          ansible.builtin.uri:
+            url: https://127.0.0.1:8200/v1/sys/health
+            validate_certs: false
+            status_code: [503]
+          register: _sealed
+          retries: 24
+          delay: 5
+          until: _sealed.status == 503
+          when: not _after_leader.json.is_self
+
+        - name: Refused
+          ansible.builtin.command:
+            cmd: >-
+              env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+              venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+              playbooks/upgrade-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+            chdir: "{{ playbook_dir }}/../../deploy/ansible"
+          register: _refused_sealed
+          changed_when: false
+          failed_when: >-
+            _refused_sealed.rc == 0 or 'REFUSED: Vault not as an upgrade needs it' not in _refused_sealed.stdout
+          delegate_to: localhost
+          become: false
+          run_once: true
+      always:
+        - name: Strace, to watch the unseal's processes
+          ansible.builtin.apt:
+            name: strace
+            state: present
+          when: not _after_leader.json.is_self
+
+        - name: Unsealed again by its script, every process it starts traced - no key share in any command line
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              t=$(mktemp); trap 'rm -f "$t"' EXIT
+              strace -f -qq -e trace=execve -s 4096 -o "$t" /etc/vault-unseal/unseal.sh
+              execs=$(grep -c 'execve(' "$t")
+              shares=0
+              while read -r k; do
+                [ -n "$k" ] || continue
+                if grep -F -- "$k" "$t" > /dev/null; then shares=$((shares + 1)); fi
+              done < /etc/vault-unseal/unseal-keys
+              echo "$execs processes started, $shares key shares in their command lines"
+              [ "$execs" -gt 5 ] && [ "$shares" = 0 ]
+          register: _unseal_traced
+          changed_when: true
+          when: not _after_leader.json.is_self
+
+        - name: Both unsealed
+          ansible.builtin.uri:
+            url: https://127.0.0.1:8200/v1/sys/health
+            validate_certs: false
+            status_code: [200, 429]
+          register: _unsealed
+          retries: 24
+          delay: 5
+          until: _unsealed.status in [200, 429]
+
+- name: A downgrade refused
+  hosts: pi1
+  gather_facts: false
+  vars:
+    from_version: "1.21.3"
+  tasks:
+    - name: Refused
+      ansible.builtin.command:
+        cmd: >-
+          env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+          venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+          playbooks/upgrade-vault.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e vault_version={{ from_version }}
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _downgrade
+      changed_when: false
+      failed_when: _downgrade.rc == 0 or ('newer than ' ~ from_version) not in _downgrade.stdout
+      delegate_to: localhost
+
+    - name: Rehearsed
       ansible.builtin.debug:
         msg: >-
-          VAULT UPGRADE REHEARSED: {{ from_version }} -> {{ vault_version }}; active
-          {{ _before.json.leader_address }} -> {{ _leader.json.leader_address }}; the secret read back; kept
-          /usr/local/bin/vault-{{ from_version }} and
-          {{ ansible_play_hosts | map('extract', hostvars, '_snap') | map(attribute='stdout', default='') | select | join('') }}
-      run_once: true
+          VAULT UPGRADE REHEARSED: {{ from_version }} -> {{ vault_version }}; refused on pi2 alone, pi1 untouched;
+          {{ _judged.stdout }}; active {{ _before.json.leader_address }} -> {{ _after_leader.json.leader_address }};
+          the secret read back; kept /usr/local/bin/vault-{{ from_version }} and
+          {{ ['pi1', 'pi2'] | map('extract', hostvars, '_snap') | map(attribute='stdout', default='') | select | join('') }};
+          a sealed standby refused, unsealed with {{ ['pi1', 'pi2'] | map('extract', hostvars, '_unseal_traced') | map(attribute='stdout', default='') | select | join('') }};
+          a downgrade refused

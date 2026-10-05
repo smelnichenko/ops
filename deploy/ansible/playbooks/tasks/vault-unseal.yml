@@ -1,0 +1,72 @@
+---
+# The Pi's own unseal: /etc/vault-unseal/unseal.sh and vault-unseal.service, which runs it after Vault starts (boot, or
+# upgrade-vault.yml's restart). Written by setup-vault-pi.yml and by upgrade-vault.yml before it restarts anything.
+# The key shares go to Vault's API on stdin (bash's printf builtin into curl --data @-): never on a command line,
+# where any local user reads them in /proc. Every wait is bounded and the unit has a start limit: a Vault that never
+# answers fails the unseal instead of hanging it (and a run waiting on it).
+- name: The unseal script
+  ansible.builtin.copy:
+    dest: /etc/vault-unseal/unseal.sh
+    owner: root
+    group: root
+    mode: '0700'
+    content: |
+      #!/bin/bash
+      # Unseals this Pi's Vault with two of its key shares (ops tasks/vault-unseal.yml). Exit 0 unsealed, 1 not.
+      set -uo pipefail
+      API=https://127.0.0.1:8200
+      KEYS=/etc/vault-unseal/unseal-keys
+      sealed() { python3 -c 'import json, sys; print(str(json.load(sys.stdin)["sealed"]).lower())'; }
+      # Consul (Vault's storage) with a leader first: before that, Vault is up but sealed and an unseal silently
+      # fails. At most 120 s.
+      for _ in $(seq 1 60); do
+        [[ "$(curl -sf --max-time 2 http://127.0.0.1:8500/v1/status/leader 2>/dev/null)" == *:* ]] && break
+        sleep 2
+      done
+      # Vault answering (seal-status answers sealed or not), at most 150 s
+      st=""
+      for _ in $(seq 1 150); do
+        st=$(curl -sk --max-time 2 "$API/v1/sys/seal-status" 2>/dev/null) && [ -n "$st" ] && break
+        st=""
+        sleep 1
+      done
+      [ -n "$st" ] || { echo "vault-unseal: Vault not answering on $API"; exit 1; }
+      if [ "$(sealed <<< "$st")" = true ]; then
+        for n in 1 2; do
+          key=$(sed -n "${n}p" "$KEYS")
+          printf '{"key":"%s"}' "$key" | curl -sk --max-time 10 --data @- "$API/v1/sys/unseal" \
+            | python3 -c 'import json, sys; d = json.load(sys.stdin)
+      print("vault-unseal: share", sys.argv[1], "sealed", d["sealed"], "progress", d["progress"])' "$n"
+        done
+      fi
+      st=$(curl -sk --max-time 2 "$API/v1/sys/seal-status")
+      [ "$(sealed <<< "$st")" = false ] || { echo "vault-unseal: still sealed"; exit 1; }
+      echo "vault-unseal: unsealed"
+  register: _unseal_script
+
+- name: Its unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/vault-unseal.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Auto-unseal Vault
+      After=vault.service
+      Requires=vault.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/etc/vault-unseal/unseal.sh
+      RemainAfterExit=true
+      # the script's own waits end by about 300 s
+      TimeoutStartSec=360
+
+      [Install]
+      WantedBy=multi-user.target
+  register: _unseal_unit
+
+# not a handler: this file is included by two playbooks, and the unit must be read before their next step uses it
+- name: Systemd reads the changed unit  # noqa: no-handler
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: _unseal_unit.changed
