@@ -2,7 +2,7 @@
 # Re-running the Pi playbooks on a live Vagrant Pi stack is safe:
 #   setup-patroni, Patroni stopped on pi2: refused, naming the reason, and pi2's data still there (the same files in
 #   its data directory but postmaster.pid, which a stopped Postgres removes); Patroni started again (whatever happened)
-#   and back to streaming, the same run passes on pi2.
+#   and back to streaming, the same run passes on pi2 and leaves its database port (PgBouncer's) as it was.
 #   setup-consul on an unchanged cluster: the same gossip key on every server, no server restarted.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
 - name: Vagrant VMs only
@@ -27,6 +27,17 @@
         cmd: "{{ list_data }}"
       register: _before
       changed_when: false
+
+    - name: The database port Forgejo and Keycloak use on pi2 (PgBouncer's, as on the Pis)
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep '^HOST = ' /var/lib/forgejo/custom/conf/app.ini
+        grep -o 'KC_DB_URL=[^ "]*' /etc/systemd/system/keycloak.service
+      args:
+        executable: /bin/bash
+      register: _db_before
+      changed_when: false
+      failed_when: _db_before.rc != 0 or ':6432' not in _db_before.stdout
 
     - name: Stopped, re-run, refused - Patroni started again whatever happens
       block:
@@ -81,11 +92,22 @@
       register: _passed
       changed_when: false
 
+    - name: The same database port after the re-run
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep '^HOST = ' /var/lib/forgejo/custom/conf/app.ini
+        grep -o 'KC_DB_URL=[^ "]*' /etc/systemd/system/keycloak.service
+      args:
+        executable: /bin/bash
+      register: _db_after
+      changed_when: false
+      failed_when: _db_after.stdout != _db_before.stdout
+
     - name: Guarded
       ansible.builtin.debug:
         msg: >-
           PATRONI RE-RUN GUARD: stopped -> refused ({{ _refused.stdout | regex_search('REFUSED on pi2[^"]*?not active') }}),
-          data untouched; running -> passed
+          data untouched; running -> passed, the database port kept ({{ _db_after.stdout_lines | join(', ') }})
 
 # setup-consul re-run on an unchanged cluster: the same gossip key on every server, and no server restarted (each
 # consul's start time as before) - it used to make a new key and restart all three at once

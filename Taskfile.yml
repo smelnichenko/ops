@@ -326,7 +326,17 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml
+      # PgBouncer in front of Patroni as on the Pis, and Forgejo and Keycloak moved onto it (setup-pi-services picks
+      # PgBouncer's port where it runs) - production's database path, :6432
+      - task: _vagrant:pi-pgbouncer
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
+  _vagrant:pi-pgbouncer:
+    internal: true
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pgbouncer.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-pi-services.yml
 
   _vagrant:k8s-stack:
     internal: true
@@ -884,9 +894,10 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml
 
   test:pi:rerun-guards:
-    desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched) and passes while it runs"
+    desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched), passes while it runs and keeps the database port; setup-consul keeps the key and restarts nothing (PgBouncer put in front first, as on the Pis, where missing)"
     deps: [deploy:install]
     cmds:
+      - task: _vagrant:pi-pgbouncer
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-rerun-guards.yml
 
   test:forgejo-upgrade:

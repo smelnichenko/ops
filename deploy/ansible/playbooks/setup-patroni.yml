@@ -385,25 +385,38 @@
 # same shared Postgres. Without this, both instances concurrently CREATE
 # TABLE on the fresh DB and hit duplicate-key / already-exists errors in an
 # Xorm migration loop that doesn't recover cleanly.
-- name: Reconfigure Forgejo + Keycloak to use HAProxy (localhost:5000)
+- name: Reconfigure Forgejo + Keycloak to the database port (PgBouncer, else HAProxy)
   hosts: pi1,pi2
   serial: 1
   become: true
   gather_facts: false
 
   tasks:
+    # the port setup-pi-services.yml picks too - PgBouncer (:6432) where it runs, else HAProxy (:5000): this play set
+    # :5000 always, so each re-run moved Forgejo and Keycloak off PgBouncer and the next setup-pi-services moved them
+    # back, a restart each time (production runs PgBouncer - read 2026-10-05)
+    - name: Is PgBouncer running here
+      ansible.builtin.systemd:
+        name: pgbouncer
+      register: _pgbouncer_state
+      failed_when: false
+
+    - name: The database port Forgejo and Keycloak use
+      ansible.builtin.set_fact:
+        _db_port: "{{ '6432' if _pgbouncer_state.status.ActiveState | default('') == 'active' else '5000' }}"
+
     - name: Update Forgejo HOST directive
       ansible.builtin.lineinfile:
         path: /var/lib/forgejo/custom/conf/app.ini
         regexp: '^HOST = '
-        line: "HOST = 127.0.0.1:5000"
+        line: "HOST = 127.0.0.1:{{ _db_port }}"
       register: _forgejo_cfg
 
     - name: Update Keycloak KC_DB_URL
       ansible.builtin.lineinfile:
         path: /etc/systemd/system/keycloak.service
         regexp: 'Environment=KC_DB_URL='
-        line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:5000/keycloak"
+        line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:{{ _db_port }}/keycloak"
       register: _keycloak_cfg
 
     # Wait for HAProxy to have a healthy Patroni leader backend BEFORE
