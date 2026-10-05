@@ -47,10 +47,15 @@ EOF
 python3 "$work/pick.py" "$work/rendered.yaml" > "$work/smoke.yaml"
 
 cd "$ops"
-vagrant ssh kubeadm -c 'cat > /tmp/vagrant-k6-smoke.yaml' < "$work/smoke.yaml" 2>/dev/null
+# plain ssh with the VMs' config when the caller has it (VAGRANT_SSH_CONFIG, scripts/upgrade-step-checks.sh): Vagrant
+# runs one action per machine at a time, so a `vagrant ssh` beside another one fails - and each costs its start-up
+vssh() {
+  if [ -n "${VAGRANT_SSH_CONFIG:-}" ]; then ssh -F "$VAGRANT_SSH_CONFIG" "$1" "$2"; else vagrant ssh "$1" -c "$2"; fi
+}
+vssh kubeadm 'cat > /tmp/vagrant-k6-smoke.yaml' < "$work/smoke.yaml" 2>/dev/null
 # One remote shell does the whole run: Complete and Failed are awaited side by side there and the loser killed, so no
 # waiter outlives the script (a local `vagrant ssh` waiter, killed by PID, left its ssh child holding the output open).
-vagrant ssh kubeadm -c 'sudo bash -s' 2>/dev/null <<'SH' | tr -d '\r'
+vssh kubeadm 'sudo bash -s' 2>/dev/null <<'SH' | tr -d '\r'
 set -u
 K="kubectl --kubeconfig /etc/kubernetes/admin.conf -n schnappy-production"
 $K delete job vagrant-k6-smoke --ignore-not-found --wait=true > /dev/null

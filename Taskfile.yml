@@ -494,10 +494,9 @@ tasks:
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}}
-      # the seeded rows on every Postgres instance, and a write on the primary
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
-      # the observability data the one-way steps must keep, and ClickHouse's compatibility setting as the step files say
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=verify -e clickhouse_compat='{{.CLICKHOUSE_COMPAT}}' -e clickhouse_users='{{.CLICKHOUSE_USERS}}'
+      # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke, the version
+      # inventory (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
+      - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}'
       # CNPG's WAL archiving and a fresh barman base backup - only after a step that changes CNPG or Postgres (the step
       # file's barman-check line): the backup production's data depends on
       - cmd: |
@@ -537,12 +536,6 @@ tasks:
           else
             echo "BACKUP CHECK: not after this step (no backup-check line)"
           fi
-      # a new local-path volume provisioned, written and read back
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/storage-check.yml
-      # Prometheus reconciled, every target up, Mimir receiving
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
-      - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt
       - cmd: scripts/inventory-diff.sh .upgrade/expected-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 

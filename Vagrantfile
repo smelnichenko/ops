@@ -150,7 +150,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     pi1.vm.hostname = "pi1"
     pi1.vm.network "private_network", ip: "192.168.56.20"
     pi1.vm.provider "libvirt" do |v|
-      v.memory = 4096
+      # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
+      # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step
+      v.memory = 2560
       v.cpus = 2
     end
     pi1.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
@@ -163,7 +165,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     pi2.vm.hostname = "pi2"
     pi2.vm.network "private_network", ip: "192.168.56.21"
     pi2.vm.provider "libvirt" do |v|
-      v.memory = 4096
+      # the Pi stack uses ~1.3 GB (measured 2026-10-06); 4 GB left qemu holding idle guest memory the host swapped -
+      # three VMs at 28 GB on the 30 GB workstation kept it in swap through every step
+      v.memory = 2560
       v.cpus = 2
     end
     pi2.vm.provision "shell", inline: OS_UPGRADE_SCRIPT, reboot: true
