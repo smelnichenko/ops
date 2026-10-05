@@ -62,11 +62,18 @@ middle of its rollout would stop it). Phase 2 after plan 100's rollout.
 4. keepalived's drop-in: a restart does not stop Nexus (only a real stop or a BACKUP transition).
 5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each:
    `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database, Keycloak realm export,
-   `forgejo dump` (stopped-consistent copy at the upgrade; the regular one from the replica), Nexus's H2 backup task
-   plus its blob stores. Alerts when one is late (as the etcd job's).
+   `forgejo dump` (stopped-consistent copy at the upgrade; the regular one from the replica). Alerts when one is
+   late (as the etcd job's).
+   Nexus gets no daily backup: read on production 2026-10-05, everything it holds is rebuilt by setup-nexus.yml
+   (repositories, realms, anonymous read, the cleanup policy, the admin password; users and roles are Nexus's
+   defaults, no content selectors or routing rules) or refilled from upstream (15 GB of proxy cache); its hosted
+   content is two torch wheels the playbook uploads and the retired common-1.0.0 jar nothing builds against. Its
+   blobs are on Gluster (replica 3). Its phase-2 upgrade copies the H2 database (db/, 37 MB) aside while stopped.
 6. The Pi version inventory (scripts/version-inventory-pi.sh) lists every service above by its running process;
    plan 100's checks then cover them too.
-7. The Vagrant upgrade copy builds the whole Pi stack as production runs it (PgBouncer, Nexus, Caddy included).
+7. The Vagrant upgrade copy builds the Pi stack plan 100's steps reach as production runs it - PgBouncer added.
+   Nexus and Caddy stay out of the full run (only CI pulls through Nexus; ten's containerd has no mirror, and no
+   cluster step reaches either): each gets its Vagrant proof with its phase-2 upgrade (test:nexus exists).
 
 ## Phase 1 - patches on the current lines (low risk, reversible)
 
