@@ -22,8 +22,15 @@
 # With expect_mirror it first asks Argo to refresh every app (argocd.argoproj.io/refresh=normal): otherwise Argo sees
 # the pushed commits only at its next 3-minute poll, and the wait averaged 3.8 min a step in full run 2 (2026-10-04).
 #
+# With -e record_apps=true (the build's Argo stage) the Applications' names go to .upgrade/argo-apps.txt; with -e
+# expect_apps=true (every step's waits) exactly those must exist - no step adds or removes one, and a child app gone
+# would otherwise settle by its absence. With -e restart_step=<step> (a step's deciding wait) a pod whose containers
+# restarted during this step and the one before fails it: a crash loop slower than 5 minutes settles between restarts
+# (the history in /var/lib/upgrade-test on the node).
+#
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml [-e settle_minutes=40]
-#        [-e expect_mirror=true] [-e allow_out_of_sync=strimzi] [-e stable_polls=1]
+#        [-e expect_mirror=true] [-e allow_out_of_sync=strimzi] [-e stable_polls=1] [-e record_apps=true]
+#        [-e expect_apps=true] [-e restart_step=<step>]
 - name: Argo CD settled (all apps Synced + Healthy, all pods ready)
   hosts: target
   become: true
@@ -35,6 +42,11 @@
     stable_polls: 4
     expect_mirror: false
     allow_out_of_sync: ""
+    record_apps: false
+    expect_apps: false
+    restart_step: ""
+    apps_file: "{{ playbook_dir }}/../../../.upgrade/argo-apps.txt"
+    restart_history: /var/lib/upgrade-test/restart-history.json
     mirror_revisions: >-
       {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../../.upgrade/mirror-revisions.json') | from_json
          if expect_mirror | bool else {} }}
@@ -50,11 +62,21 @@
       when: expect_mirror | bool
       changed_when: true
 
+    - name: The restart history's directory
+      ansible.builtin.file:
+        path: "{{ restart_history | dirname }}"
+        state: directory
+        mode: '0700'
+      when: restart_step | length > 0
+
     - name: Wait until every app is green and every pod is ready, held for stable_polls polls in a row
       ansible.builtin.script:
         cmd: >-
           files/argo-settled.py --kubeconfig {{ kubeconfig }} --minutes {{ settle_minutes }} --poll {{ poll_seconds }}
           --stable-polls {{ stable_polls }} --allow-out-of-sync '{{ allow_out_of_sync }}'
+          {{ '--print-apps' if record_apps | bool else '' }}
+          {{ ('--expect-apps ' ~ (lookup('ansible.builtin.file', apps_file).split() | join(','))) if expect_apps | bool else '' }}
+          {{ ('--restart-history ' ~ restart_history ~ ' --step ' ~ restart_step) if restart_step | length > 0 else '' }}
         executable: python3
       environment:
         MIRROR_REVISIONS: "{{ mirror_revisions | to_json }}"
@@ -67,6 +89,15 @@
         msg: "{{ _settled.stdout_lines[-60:] | join('\n') }}{{ _settled.stderr | default('') }}"
       when: _settled.rc != 0
 
+    - name: The Applications' names recorded for the steps' waits
+      ansible.builtin.copy:
+        content: "{{ (_settled.stdout_lines | select('match', '^APPS ') | last)[5:].split(',') | join('\n') }}\n"
+        dest: "{{ apps_file }}"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+      when: record_apps | bool
+
     - name: Settled
       ansible.builtin.debug:
-        msg: "{{ _settled.stdout_lines | last }}"
+        msg: "{{ _settled.stdout_lines | select('match', '^ARGO SETTLED') | last }}"

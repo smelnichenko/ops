@@ -407,7 +407,8 @@ tasks:
       # Before Argo: istiod fetches the realm's keys when it starts
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml
+      # the Applications' names recorded: every step's waits want exactly these
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
       # data of the one-way observability steps (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
@@ -464,14 +465,14 @@ tasks:
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1 -e expect_apps=true
       # host-side changes (this step's playbook lines), after the cluster side
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}}
       # the seeded rows on every Postgres instance, and a write on the primary
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=verify
       # the observability data the one-way steps must keep, and ClickHouse's compatibility setting as the step files say

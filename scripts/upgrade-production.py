@@ -38,6 +38,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -52,6 +53,10 @@ URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https:/
 # are listed, not compared
 TEST_NAMESPACES = "schnappy-test"
 SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
+# preview environments come and go (an Argo app per pull request): never part of the app set a step must keep
+PREVIEW_APPS = "^pr-[0-9]+-"
+# on ten, sm's: each done step's restart counts, so a pod restarting in two steps running fails the second
+RESTART_HISTORY = "$HOME/.upgrade-restart-history.json"
 PROVEN = os.path.join(OPS, ".upgrade", "proven")
 PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml")
 BEFORE_LEDGER = "02-istio-chart-repo"
@@ -231,16 +236,34 @@ def main_revisions():
     return revs
 
 
-def settled(minutes, stable, quiet, allow_out_of_sync):
+def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=None):
     """argo-settled.py on ten, with ten's own kubeconfig: every app Synced (or allowed) and Healthy on main's commits,
-    every pod ready, held for `stable` polls, no container restarted in the last `quiet` seconds."""
+    every pod ready, held for `stable` polls, no container restarted in the last `quiet` seconds; with `apps`, exactly
+    those apps (preview environments aside); with `restart_step`, no pod restarting in this step and the done one
+    before it. (green, main's revisions, the apps it saw - preview environments left out)."""
     revs = main_revisions()
     script = open(os.path.join(inv.UPGRADE, "files", "argo-settled.py")).read()
     cmd = (f"MIRROR_REVISIONS={shlex.quote(json.dumps(revs))} python3 - --kubeconfig \"$HOME/.kube/config\" "
            f"--minutes {minutes} --poll 10 --stable-polls {stable} --restart-quiet {int(quiet)} "
-           f"--allow-out-of-sync {shlex.quote(','.join(allow_out_of_sync))}")
+           f"--allow-out-of-sync {shlex.quote(','.join(allow_out_of_sync))} --print-apps "
+           f"--allow-extra-apps {shlex.quote(PREVIEW_APPS)}")
+    if apps:
+        cmd += f" --expect-apps {shlex.quote(','.join(apps))}"
+    if restart_step:
+        cmd += f" --restart-history {RESTART_HISTORY} --step {shlex.quote(restart_step)}"
     print(f"Argo on ten, on infra {revs[URLS['infra']][:10]} / platform {revs[URLS['platform']][:10]}:", flush=True)
-    return run(["ssh", TEN, cmd], input=script).returncode == 0, revs
+    out = run(["ssh", TEN, cmd], input=script, capture_output=True)
+    print(out.stdout + out.stderr, end="")
+    seen = next((l[5:].split(",") for l in reversed(out.stdout.splitlines()) if l.startswith("APPS ")), [])
+    return out.returncode == 0, revs, [a for a in seen if not re.search(PREVIEW_APPS, a)]
+
+
+def step_apps(events, step):
+    """The app set the step's begin recorded."""
+    found = [a for _, s, e, a in events if s == step and e == "apps"]
+    if not found:
+        sys.exit(f"REFUSED: {step} recorded no app set at its begin")
+    return found[-1][0].split(",")
 
 
 # ---- the proof (the full run) ---------------------------------------------------------------------------------------
@@ -370,9 +393,13 @@ def begin(step):
     names, events, _ = ledger_for(step, "begin")
     refuse(proof_problems(step, names))
     ok = inventory_check(applied_steps(events))
-    ok_settled, _ = settled(15, 4, 300, last_done_out_of_sync(events))
-    refuse([] if ok and ok_settled else ["production is not as the done steps leave it (above)"])
+    # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
+    before = [a for _, s, e, a in events if e == "apps" and s != step]
+    ok_settled, _, seen = settled(15, 4, 300, last_done_out_of_sync(events),
+                                  before[-1][0].split(",") if before else None)
+    refuse([] if ok and ok_settled and seen else ["production is not as the done steps leave it (above)"])
     record(step, "begun")
+    record(step, "apps", ",".join(seen))
 
 
 def backup(step, store):
@@ -403,7 +430,7 @@ def merge(step, repo):
         record(step, "merged", repo, sha)
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
-    ok, revs = settled(30, 4, 300, [])
+    ok, revs, _ = settled(30, 4, 300, [], step_apps(events, step))
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
 
@@ -419,13 +446,16 @@ def playbooks(step):
 CHECK_MINUTES = 15
 
 
-def check(step, since=None):
-    """ten as the done steps and this one leave it, Argo settled. With `since` (seconds): no container restarted in
-    that long - the restart window covers the whole wait, so a restart inside it cannot age out while it polls."""
+def check(step, since=None, deciding=False):
+    """ten as the done steps and this one leave it, Argo settled, the step's app set kept. With `since` (seconds): no
+    container restarted in that long - the restart window covers the whole wait, so a restart inside it cannot age out
+    while it polls. `deciding` (the call that ends a step): the restart history judged and recorded."""
     _, events = read_ledger()
     ok = inventory_check(sorted(set(applied_steps(events)) | {step}))
     quiet = 300 if since is None else since + CHECK_MINUTES * 60 + 60
-    ok_settled, _ = settled(CHECK_MINUTES, 4, quiet, step_info(step)["out_of_sync"])
+    apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
+    ok_settled, _, _ = settled(CHECK_MINUTES, 4, quiet, step_info(step)["out_of_sync"], apps,
+                               step if deciding else None)
     return ok and ok_settled
 
 
@@ -437,7 +467,7 @@ def done(step):
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
     # after the soak: no container may have restarted since the first green check
-    green = check(step, None if checked is None else (now - checked).total_seconds())
+    green = check(step, None if checked is None else (now - checked).total_seconds(), deciding=checked is not None)
     if checked is None:
         refuse([] if green else ["not green - nothing recorded (fix, or the step's abort line)"])
         record(step, "checked")
