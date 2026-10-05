@@ -62,8 +62,10 @@ middle of its rollout would stop it). Phase 2 after plan 100's rollout.
 4. keepalived's drop-in: a restart does not stop Nexus (only a real stop or a BACKUP transition).
 5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each:
    `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database, Keycloak realm export,
-   `forgejo dump` (stopped-consistent copy at the upgrade; the regular one from the replica). Alerts when one is
-   late (as the etcd job's).
+   `forgejo dump` (stopped-consistent copy at the upgrade; the regular one from the replica). setup-pi-backups.yml,
+   restored in Vagrant (task test:pi-backups). Late: infra's kube-system CronJob pi-backup-check reads the bucket's
+   last-success every 3 h - older than 26 h or missing fails it, KubeJobFailed fires (local branch
+   feat/pi-backup-check, pushed after the Pis' first production backup, or it fires at once).
    Nexus gets no daily backup: read on production 2026-10-05, everything it holds is rebuilt by setup-nexus.yml
    (repositories, realms, anonymous read, the cleanup policy, the admin password; users and roles are Nexus's
    defaults, no content selectors or routing rules) or refilled from upstream (15 GB of proxy cache); its hosted
