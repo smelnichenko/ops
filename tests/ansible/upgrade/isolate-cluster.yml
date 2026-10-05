@@ -194,6 +194,20 @@
         or 'vagrant-reachable' not in _pod_probe.stdout
 
     # ── 3. Vault (bootstrap.sh configure_eso, against the Vagrant Vault) ──
+    # External Secrets' namespace and service account, where Argo has not made them yet: the reviewer token below is that
+    # account's, and on a build at the targets no Helm install came first (Argo owns External Secrets there). Argo
+    # applies the chart's own over them later - the account, and so its token, stay.
+    - name: External Secrets' namespace and service account (made when absent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} get namespace external-secrets > /dev/null 2>&1 || {{ kubectl }} create namespace external-secrets
+        {{ kubectl }} -n external-secrets get serviceaccount external-secrets > /dev/null 2>&1 \
+          || {{ kubectl }} -n external-secrets create serviceaccount external-secrets
+      args:
+        executable: /bin/bash
+      register: _eso_sa
+      changed_when: "'created' in _eso_sa.stdout"
+
     - name: Create the vault-pi-ca Secret (ESO trusts the Vagrant Vault CA)
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
