@@ -1,0 +1,131 @@
+---
+# The Pis' tier-0 backup (setup-pi-backups.yml) taken on the Vagrant Pi stack and every piece restored:
+#   consul.snap      into a throwaway Consul dev agent on other ports - Vault's keys (vault/core/) and Patroni's
+#                    (service/) there
+#   pg-<db>.dump     into a scratch database on the Patroni primary - every table the dump lists is there, then
+#                    dropped
+#   keycloak-*.json  the realm's own name and its clients
+#   last-success     the run's time
+# all read back from the Pi store. Vagrant only (the guard play first). Usage: task test:pi-backups
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: Production's backup playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/setup-pi-backups.yml
+
+- name: A backup taken now (the VIP's Pi does it, the other finds it is not)
+  hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The service run on both
+      ansible.builtin.systemd:
+        name: pi-tier0-backup.service
+        state: started
+      register: _run
+
+    - name: Its result on each
+      ansible.builtin.command: journalctl -u pi-tier0-backup.service -n 3 --no-pager -o cat
+      register: _journal
+      changed_when: false
+
+    - name: Exactly one Pi backed up
+      ansible.builtin.assert:
+        that: >-
+          ansible_play_hosts | map('extract', hostvars, ['_journal', 'stdout']) | select('search', 'PI TIER-0 BACKUP')
+          | list | length == 1
+        fail_msg: "{{ ansible_play_hosts | map('extract', hostvars, ['_journal', 'stdout']) | list }}"
+        quiet: true
+      run_once: true
+
+- name: Every piece restored, read back from the store
+  hosts: pi1
+  become: true
+  gather_facts: false
+  vars:
+    work: /var/backups/pi-backup-rehearsal
+  tasks:
+    - name: The newest backup read back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          rm -rf {{ work }}; mkdir -p {{ work }}
+          last=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success")
+          rclone copy "store:$PI_BACKUP_BUCKET/$last" {{ work }}
+          echo "$last"; ls {{ work }}
+      register: _got
+      changed_when: false
+
+    - name: Consul's snapshot into a throwaway dev agent - Vault's and Patroni's keys there
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          consul agent -dev -node=restore-rehearsal -data-dir="$d" -bind=127.0.0.1 -client=127.0.0.1 \
+            -http-port=18500 -server-port=18300 -serf-lan-port=18301 -serf-wan-port=-1 -dns-port=-1 -grpc-port=-1 -grpc-tls-port=-1 \
+            > "$d/agent.log" 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null; wait $pid 2>/dev/null || true; rm -rf "$d"' EXIT
+          # up and its own leader (a restore before the election fails: "No cluster leader")
+          for i in $(seq 1 60); do
+            [ "$(curl -s http://127.0.0.1:18500/v1/status/leader)" = '"127.0.0.1:18300"' ] && break
+            sleep 1
+          done
+          consul snapshot restore -http-addr=127.0.0.1:18500 {{ work }}/consul.snap > /dev/null
+          vault=$(consul kv get -http-addr=127.0.0.1:18500 -recurse vault/core/ | wc -l)
+          patroni=$(consul kv get -http-addr=127.0.0.1:18500 -recurse service/ | grep -c '/leader:' || true)
+          echo "vault/core keys $vault, Patroni leader keys $patroni"
+          [ "$vault" -gt 0 ] && [ "$patroni" -gt 0 ]
+      register: _consul
+      changed_when: false
+
+    - name: Each database dump into a scratch database - every table it lists there
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          P=(-h 127.0.0.1 -p 5000 -U postgres)
+          # a dump for every database Patroni has, none missing
+          have=$(psql "${P[@]}" -d postgres -Atc "select datname from pg_database where not datistemplate and datname <> 'postgres' order by 1" | tr '\n' ' ')
+          dumped=$(ls {{ work }}/pg-*.dump | sed 's|.*/pg-||; s|[.]dump$||' | sort | tr '\n' ' ')
+          [ "$have" = "$dumped" ] || { echo "databases: $have; dumped: $dumped"; exit 1; }
+          [ -s {{ work }}/pg-globals.sql ] || { echo "no roles dump"; exit 1; }
+          for f in {{ work }}/pg-*.dump; do
+            db=$(basename "$f" .dump); db=${db#pg-}; scratch="restore_rehearsal_$db"
+            psql "${P[@]}" -d postgres -qc "drop database if exists $scratch" -c "create database $scratch"
+            pg_restore "${P[@]}" --no-owner --no-privileges -d "$scratch" "$f"
+            want=$(pg_restore --list "$f" | awk '$4 == "TABLE" && $5 != "DATA" {n++} END {print n + 0}')
+            got=$(psql "${P[@]}" -d "$scratch" -Atc "select count(*) from information_schema.tables where table_type = 'BASE TABLE' and table_schema not in ('pg_catalog', 'information_schema')")
+            psql "${P[@]}" -d postgres -qc "drop database $scratch"
+            echo "$db: $got of $want tables"
+            [ "$want" -gt 0 ] && [ "$got" = "$want" ]
+          done
+      register: _pg
+      changed_when: false
+
+    - name: Each realm export - its name and clients
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for f in {{ work }}/keycloak-*.json; do
+            python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); n = len(d.get("clients", []));
+          assert n > 0, "no clients"; print(d["realm"], n, "clients")' "$f"
+          done
+      register: _kc
+      changed_when: false
+
+    - name: The work directory gone
+      ansible.builtin.file:
+        path: "{{ work }}"
+        state: absent
+
+    - name: Restored
+      ansible.builtin.debug:
+        msg: >-
+          PI TIER-0 BACKUP {{ _got.stdout_lines[0] }} RESTORES: consul - {{ _consul.stdout }}; postgres -
+          {{ _pg.stdout_lines | join(', ') }}; keycloak - {{ _kc.stdout_lines | join(', ') }}

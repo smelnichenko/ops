@@ -1,0 +1,140 @@
+---
+# The Pis' tier-0 data backed up daily into the Pi backup store (bucket pi-backups, keys <UTC time>/<file>), from the
+# Pi holding the VIP (one copy a day; the other Pi's timer finds it is not the holder and stops):
+#   consul.snap        `consul snapshot save` - Vault's data lives in Consul, and Patroni's cluster state; checked
+#                      with `consul snapshot inspect`
+#   pg-<db>.dump       pg_dump --format=custom of every Patroni database (Forgejo's, Keycloak's, ...) through HAProxy
+#                      (the primary); each listed back with pg_restore --list
+#   pg-globals.sql     pg_dumpall --globals-only (roles)
+#   keycloak-<realm>.json  each realm's partial export (clients, groups, roles - users are in Keycloak's database dump):
+#                      portable across Keycloak versions
+#   last-success       the run's time, written last - a check in the cluster alerts when it is old
+# Uploaded with rclone and compared (rclone check); copies older than pi_backup_retention_days deleted.
+#
+# Until now nothing backed these up: replication was the only copy, and the Pis' nightly vault-backup tarred
+# /var/lib/vault, which holds no secrets (they are in Consul).
+#
+# The store is the Pis' own (versitygw on Gluster): this survives a lost Pi or a logical mistake, not both Pis lost -
+# an off-site copy is plan 071's open decision.
+#
+# Usage: task deploy:pi-backups   (production)   /   the Vagrant rehearsal: task test:pi-backups
+- name: The Pis' tier-0 backups
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    pi_backup_bucket: pi-backups
+    pi_backup_retention_days: 30
+    # after CNPG's (01:30) and Velero's (02:00), before the Scylla repair window
+    pi_backup_on_calendar: "*-*-* 02:40:00"
+    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
+  tasks:
+    - name: The S3 client - rclone, Debian's
+      ansible.builtin.apt:
+        name: rclone
+        state: present
+
+    - name: The backup's directory, root only
+      ansible.builtin.file:
+        path: /etc/pi-backup
+        state: directory
+        mode: '0700'
+
+    - name: Its credentials, root only (the store's, Postgres', Keycloak's admin)
+      ansible.builtin.copy:
+        dest: /etc/pi-backup/env
+        mode: '0600'
+        content: |
+          RCLONE_CONFIG_STORE_TYPE=s3
+          RCLONE_CONFIG_STORE_PROVIDER=Other
+          RCLONE_CONFIG_STORE_ENDPOINT=http://127.0.0.1:9000
+          RCLONE_CONFIG_STORE_ACCESS_KEY_ID={{ backup_root_user }}
+          RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY={{ backup_root_password }}
+          PGPASSWORD={{ postgres_admin_password }}
+          KC_ADMIN_PASSWORD={{ keycloak_admin_password }}
+          PI_BACKUP_BUCKET={{ pi_backup_bucket }}
+          PI_BACKUP_RETENTION_DAYS={{ pi_backup_retention_days }}
+          PI_BACKUP_VIP={{ vip }}
+      no_log: true
+
+    - name: The backup script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/pi-tier0-backup.sh
+        mode: '0700'
+        content: |
+          #!/bin/bash
+          # The Pis' tier-0 data into the Pi store - setup-pi-backups.yml (ops) explains it. Credentials from the unit's
+          # EnvironmentFile. Exit 0 also when this Pi does not hold the VIP (the other one backs up).
+          set -euo pipefail
+          ip -o -4 addr show | grep -q " ${PI_BACKUP_VIP}/" || { echo "not the VIP's Pi - the other backs up"; exit 0; }
+          ts=$(date -u +%Y%m%dT%H%M%SZ)
+          work=$(mktemp -d /var/backups/pi-tier0.XXXXXX)
+          trap 'rm -rf "$work"' EXIT
+          # Consul: Vault's data and Patroni's state
+          consul snapshot save "$work/consul.snap" > /dev/null
+          consul snapshot inspect "$work/consul.snap" > /dev/null
+          # every Patroni database through HAProxy (the primary), and the roles
+          P=(-h 127.0.0.1 -p 5000 -U postgres)
+          dbs=$(psql "${P[@]}" -d postgres -Atc "select datname from pg_database where not datistemplate and datname <> 'postgres'")
+          [ -n "$dbs" ] || { echo "no database to dump"; exit 1; }
+          for db in $dbs; do
+            pg_dump "${P[@]}" --format=custom --file "$work/pg-$db.dump" "$db"
+            pg_restore --list "$work/pg-$db.dump" > /dev/null
+          done
+          pg_dumpall "${P[@]}" --globals-only > "$work/pg-globals.sql"
+          # Keycloak's realms (users are in its database dump)
+          kc=http://127.0.0.1:8080
+          token=$(curl -fsS -d client_id=admin-cli -d username=admin --data-urlencode "password=$KC_ADMIN_PASSWORD" \
+            -d grant_type=password "$kc/realms/master/protocol/openid-connect/token" \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
+          realms=$(curl -fsS -H "Authorization: Bearer $token" "$kc/admin/realms" \
+            | python3 -c 'import json, sys; print(" ".join(r["realm"] for r in json.load(sys.stdin)))')
+          for realm in $realms; do
+            curl -fsS -X POST -H "Authorization: Bearer $token" \
+              "$kc/admin/realms/$realm/partial-export?exportClients=true&exportGroupsAndRoles=true" > "$work/keycloak-$realm.json"
+            python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["realm"] == sys.argv[2]' \
+              "$work/keycloak-$realm.json" "$realm"
+          done
+          # into the store, compared, the old ones gone, then the time of this success
+          rclone mkdir "store:$PI_BACKUP_BUCKET"
+          rclone copy "$work" "store:$PI_BACKUP_BUCKET/$ts"
+          rclone check "$work" "store:$PI_BACKUP_BUCKET/$ts" --one-way
+          rclone delete "store:$PI_BACKUP_BUCKET" --min-age "${PI_BACKUP_RETENTION_DAYS}d" --exclude last-success
+          rclone rmdirs "store:$PI_BACKUP_BUCKET" --leave-root
+          echo "$ts" | rclone rcat "store:$PI_BACKUP_BUCKET/last-success"
+          echo "PI TIER-0 BACKUP $ts: $(ls "$work" | tr '\n' ' ')"
+
+    - name: The service and its daily timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: pi-tier0-backup.service
+          content: |
+            [Unit]
+            Description=The Pis' tier-0 data into the Pi backup store
+            After=network-online.target consul.service patroni.service keycloak.service versitygw.service
+            [Service]
+            Type=oneshot
+            EnvironmentFile=/etc/pi-backup/env
+            ExecStart=/usr/local/sbin/pi-tier0-backup.sh
+        - name: pi-tier0-backup.timer
+          content: |
+            [Unit]
+            Description=The Pis' tier-0 backup, daily
+            [Timer]
+            OnCalendar={{ pi_backup_on_calendar }}
+            RandomizedDelaySec=300
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: The timer on
+      ansible.builtin.systemd:
+        name: pi-tier0-backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
