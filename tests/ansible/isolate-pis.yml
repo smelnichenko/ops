@@ -67,9 +67,9 @@
         for n in {{ pi_served_names | map('regex_replace', '$', '.pmon.dev') | join(' ') }}; do
           echo "$n $(getent hosts "$n" | awk '{print $1}')"
         done
-        # a dropped packet only ends at the timeout; the production VIP, were it reachable, answers in milliseconds
-        curl -sk -o /dev/null -m 1 https://{{ production_vip }}:8200/v1/sys/health && echo PRODUCTION-REACHABLE \
-          || echo production-blocked
+        # blocked = the connect timed out (curl exit 28, a dropped SYN); anything else is no proof of the drop
+        curl -sk -o /dev/null --connect-timeout 1 -m 5 https://{{ production_vip }}:8200/v1/sys/health; r=$?
+        if [ "$r" = 28 ]; then echo production-blocked; else echo "PRODUCTION-REACHABLE (curl exit $r)"; fi
       args:
         executable: /bin/bash
       register: _pi_probe

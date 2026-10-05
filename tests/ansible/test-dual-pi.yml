@@ -13,6 +13,10 @@
 #   task test:dual-pi-clean   # full destroy + deploy + this playbook
 
 # ─── Services are running ────────────────────────────────────────────────────
+# it stops services: on the Vagrant VMs only
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: All expected services active on both Pis
   hosts: pis
   become: true

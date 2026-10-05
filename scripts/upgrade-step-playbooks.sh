@@ -22,6 +22,10 @@ step_vars+="kubelet_grace_in_kubelet_config_map local_path_provisioner_version p
 # fence <playbook> <args...>: exit 1 naming the first argument outside the allow-list
 fence() {
   local playbook=$1 name; shift
+  # a playbook of deploy/ansible/playbooks by its plain name - never a path elsewhere (it would run any YAML with
+  # production's secrets)
+  [[ $playbook =~ ^[a-z0-9-]+\.yml$ && -f "$ops/deploy/ansible/playbooks/$playbook" ]] \
+    || { echo "REFUSED: playbook '$playbook' is not a playbook of deploy/ansible/playbooks" >&2; return 1; }
   while [ $# -gt 0 ]; do
     case "$1" in
       --tags) [[ ${2:-} =~ ^[a-z0-9,-]+$ ]] || { echo "REFUSED: $playbook: --tags '${2:-}'" >&2; return 1; }; shift 2;;

@@ -360,7 +360,12 @@ tasks:
       # setup-kubeadm's extra arguments (a build at the targets: its target state, not ten's history)
       BASE_ARGS: '{{.BASE_ARGS | default ""}}'
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       # the Pis at production's versions (the setup playbooks install their patch targets where a service is missing)
       - task: _vagrant:pi-stack
@@ -381,7 +386,7 @@ tasks:
     desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
     cmds:
       - task: _upgrade:base
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
+      - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:baseline:resume:
@@ -390,7 +395,7 @@ tasks:
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
+      - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:argo:
@@ -439,7 +444,7 @@ tasks:
       # Job of the refs mirrored (the targets build's are the last step's, not main's)
       - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
-      - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
+      - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt {{.ALLOWED_MISSING}}
 
   test:upgrade:step:
@@ -475,7 +480,7 @@ tasks:
       # host-side changes (playbook lines): only then a settle before them is needed - without, the deciding settle
       # below waits for the same sync on its own
       HAS_PLAYBOOKS:
-        sh: scripts/upgrade-expected-inventory.py --playbooks {{.STEP}} | grep -q . && echo yes || echo no
+        sh: p=$(scripts/upgrade-expected-inventory.py --playbooks {{.STEP}}) || exit 1; if [ -n "$p" ]; then echo yes; else echo no; fi
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       # Wave 0 first, as production takes it before a one-way step changes anything: each of the step's wave0 stores
@@ -492,10 +497,10 @@ tasks:
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them -
       # before a step's playbooks only (the cluster side first); a step without them is waited for once, below
       - cmd: |
-          if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1 -e expect_apps=true
+          if [ "{{.HAS_PLAYBOOKS}}" = yes ] || [ -n "{{.OUT_OF_SYNC}}" ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1 -e poll_seconds=3 -e expect_apps=true
           else
-            echo "SETTLE BEFORE PLAYBOOKS: none (no playbook lines)"
+            echo "SETTLE BEFORE PLAYBOOKS: none (no playbook or out-of-sync lines)"
           fi
       # host-side changes (this step's playbook lines), after the cluster side
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
@@ -504,8 +509,8 @@ tasks:
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}}
-      # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke, the version
-      # inventory (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
+      # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke
+      # (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
       - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}'
       # CNPG's WAL archiving and a fresh barman base backup - only after a step that changes CNPG or Postgres (the step
       # file's barman-check line): the backup production's data depends on
@@ -546,6 +551,8 @@ tasks:
           else
             echo "BACKUP CHECK: not after this step (no backup-check line)"
           fi
+      # the inventory last, after every check of the step (a check's leftovers show in its own step)
+      - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt
       - cmd: scripts/inventory-diff.sh .upgrade/expected-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
@@ -584,9 +591,15 @@ tasks:
           CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
 
   test:upgrade:build:
-    desc: Build the whole Vagrant copy of production from scratch - the baseline, then the Argo layer (VMs stay up)
+    desc: Build the whole Vagrant copy of production from scratch - the baseline, a cold boot of every VM, then the Argo layer (VMs stay up)
     cmds:
       - task: _upgrade:base
+      # every VM shut down and booted cold once, as a node and the Pis come back after an outage: the boot order of the
+      # Pi stack (Gluster mounts, Consul, Patroni, Vault's unseal) is part of what the run proves (defect 22 was found
+      # this way)
+      - cmd: vagrant halt
+      - cmd: vagrant up --no-provision
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       - task: test:upgrade:argo
 
   # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
@@ -614,7 +627,7 @@ tasks:
             # every line of the step stamped with its time: where a step's minutes go stays measurable
             task test:upgrade:step STEP="$step" 2>&1 \
               | python3 -u -c 'import sys, time
-          for line in sys.stdin: sys.stdout.write(time.strftime("%H:%M:%S ") + line)'
+          for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()'
             scripts/upgrade-production.py record-proof "$step" "$infra_sha" "$platform_sha"
             echo "=== STEP $step GREEN $(date +%T)"
           done
@@ -641,7 +654,12 @@ tasks:
     desc: Test ESO ↔ Pi Vault secret sync (ClusterSecretStore + ExternalSecret)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -651,7 +669,12 @@ tasks:
     desc: Test Istio Gateway + HTTPRoute routing (hostname/path/header/404)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -661,7 +684,12 @@ tasks:
     desc: Test ClickHouse + Fluent-bit log pipeline in Vagrant (Plan 065 — replaces test:elk)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -671,7 +699,12 @@ tasks:
     desc: Test Centrifugo + Kafka + Valkey realtime chart in Vagrant (Plan 066 Phase 1)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -681,7 +714,12 @@ tasks:
     desc: Test Keycloak SSO in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -691,7 +729,12 @@ tasks:
     desc: Test Hyperfoil report persistence + Nginx serving in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -701,7 +744,12 @@ tasks:
     desc: Test Grafana + Prometheus in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -711,7 +759,12 @@ tasks:
     desc: Test multi-environment (test + prod) isolation in Vagrant — full stack with ArgoCD
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -723,7 +776,12 @@ tasks:
     desc: Test Kafka + ScyllaDB infrastructure in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -733,7 +791,12 @@ tasks:
     desc: Test SonarQube in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -743,7 +806,12 @@ tasks:
     desc: Test Argo CD GitOps in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -753,7 +821,12 @@ tasks:
     desc: Test CI/CD pipeline with Forgejo container registry in Vagrant (image push/pull via registry)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -763,7 +836,12 @@ tasks:
     desc: Test Woodpecker CI pipeline execution in Vagrant (Forgejo + Woodpecker + Kubernetes backend)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -773,7 +851,12 @@ tasks:
     desc: Test Nexus HA (active-passive on pi1+pi2, Gluster-shared, Keepalived-controlled, ten arbiter)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       # Full Pi data-plane stack (consul → pi-services → patroni → vault-pi)
@@ -789,7 +872,12 @@ tasks:
     desc: Test pod recovery + disaster recovery in Vagrant - Postgres on the image production's Cluster runs (scripts/production-cnpg-image.py), or TEST_PG_IMAGE
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -822,7 +910,12 @@ tasks:
     desc: Test failure modes under load in Vagrant (pod kill, pool exhaustion, Kafka outage, memory pressure, rate limiting)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -832,7 +925,12 @@ tasks:
     desc: Test full microservice deployment in Vagrant
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
@@ -1155,20 +1253,27 @@ tasks:
     desc: Test ephemeral environment create/destroy lifecycle in Vagrant (assumes stack is up)
     deps: [deploy:install]
     cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml
+      # an empty environment with the copy's test values: ops/.env (loaded into every task) holds production's API and
+      # mail keys, which create-environment.yml would otherwise write into the Vagrant Vault
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml'
 
   test:ephemeral-env-clean:
     desc: Full clean ephemeral env test (destroy + up + full stack + test)
     deps: [deploy:install]
     cmds:
-      - cmd: vagrant destroy -f 2>/dev/null; true
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml
+      - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml'
 
   # ============== DUAL-PI HA TEST ==============
   # Clean two-phase chain: deploy each service (idempotent, final-state) then

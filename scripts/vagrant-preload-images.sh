@@ -59,6 +59,9 @@ cd "$ops"
 # image held under its tag is that image. Every step used to re-stream all of them - 2 min of each step (2026-10-06).
 held=$(vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images ls -q' 2>/dev/null | tr -d '\r')
 for img in "${images[@]}"; do
+  # an image reference only (registry/path:tag), never anything a remote shell would read as more than a word: it goes
+  # into commands run as root on ten
+  [[ $img =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$ ]] || { echo "REFUSED: '$img' is not an image reference"; exit 1; }
   if grep -qxF "$img" <<< "$held"; then
     echo "== $img (held)"
     continue

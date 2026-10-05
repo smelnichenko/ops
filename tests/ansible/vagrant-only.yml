@@ -5,11 +5,13 @@
 # Pis. The host's own addresses decide, not the inventory or any variable: a Vagrant VM has one in the Vagrant private
 # network 192.168.56.0/24 and none in production's LAN 192.168.11.0/24; ten and the Pis are the other way round.
 #
-# A failed host is dropped from every later play of the run, imported playbooks included.
+# A failed host is dropped from every later play of the run, imported playbooks included. Tagged `always`: a run with
+# --tags (a step's playbook lines pass theirs) skipped the guard and went on unguarded.
 - name: Vagrant VMs only - this host's addresses
   ansible.builtin.command: hostname -I
   register: _vagrant_only_addresses
   changed_when: false
+  tags: [always]
 
 - name: Vagrant VMs only - refuse anything else (production LAN 192.168.11.0/24, or no Vagrant address)
   ansible.builtin.assert:
@@ -20,3 +22,4 @@
       REFUSED on {{ inventory_hostname }} (addresses {{ _vagrant_only_addresses.stdout }}): the upgrade test playbooks
       run on the Vagrant VMs only (-i inventory/vagrant.yml)
     quiet: true
+  tags: [always]

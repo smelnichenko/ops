@@ -17,6 +17,10 @@
 # pi-services stack. Usage:
 #   ansible-playbook -i inventory/vagrant.yml tests/ansible/test-vault-unseal.yml
 
+# it stops services: on the Vagrant VMs only
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test vault auto-unseal after cold start
   hosts: pi1
   become: true

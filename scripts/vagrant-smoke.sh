@@ -49,17 +49,22 @@ python3 "$work/pick.py" "$work/rendered.yaml" > "$work/smoke.yaml"
 cd "$ops"
 # plain ssh with the VMs' config when the caller has it (VAGRANT_SSH_CONFIG, scripts/upgrade-step-checks.sh): Vagrant
 # runs one action per machine at a time, so a `vagrant ssh` beside another one fails - and each costs its start-up
+# (vagrant ssh's own "Connection ... closed." noise dropped; any other error is kept)
 vssh() {
-  if [ -n "${VAGRANT_SSH_CONFIG:-}" ]; then ssh -F "$VAGRANT_SSH_CONFIG" "$1" "$2"; else vagrant ssh "$1" -c "$2"; fi
+  if [ -n "${VAGRANT_SSH_CONFIG:-}" ]; then
+    ssh -F "$VAGRANT_SSH_CONFIG" "$1" "$2"
+  else
+    vagrant ssh "$1" -c "$2" 2> >(grep -v '^Connection to .* closed\.' >&2)
+  fi
 }
-vssh kubeadm 'cat > /tmp/vagrant-k6-smoke.yaml' < "$work/smoke.yaml" 2>/dev/null
+vssh kubeadm 'cat > /tmp/vagrant-k6-smoke.yaml' < "$work/smoke.yaml"
 # One remote shell does the whole run: Complete and Failed are awaited side by side there and the loser killed, so no
 # waiter outlives the script (a local `vagrant ssh` waiter, killed by PID, left its ssh child holding the output open).
-vssh kubeadm 'sudo bash -s' 2>/dev/null <<'SH' | tr -d '\r'
+vssh kubeadm 'sudo bash -s' <<'SH' | tr -d '\r'
 set -u
 K="kubectl --kubeconfig /etc/kubernetes/admin.conf -n schnappy-production"
-$K delete job vagrant-k6-smoke --ignore-not-found --wait=true > /dev/null
-$K apply -f /tmp/vagrant-k6-smoke.yaml
+$K delete job vagrant-k6-smoke --ignore-not-found --wait=true > /dev/null || { echo "SMOKE FAILED: old Job not deleted"; exit 1; }
+$K apply -f /tmp/vagrant-k6-smoke.yaml || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
 rm -f /tmp/vagrant-k6-smoke.yaml
 $K wait job/vagrant-k6-smoke --for=condition=Complete --timeout=900s > /dev/null 2>&1 & ok=$!
 $K wait job/vagrant-k6-smoke --for=condition=Failed --timeout=900s > /dev/null 2>&1 & failed=$!

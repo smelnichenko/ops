@@ -247,7 +247,8 @@
         - name: ClickHouse - a snapshot of every MergeTree table, tarred, then removed
           when: store == 'clickhouse'
           block:
-            # the snapshot's name in letters, digits and _ only: ClickHouse escapes anything else in the directory's name
+            # the snapshot's name in letters, digits and _ only: ClickHouse escapes anything else in the directory's name.
+            # The client takes the password from the container's CLICKHOUSE_PASSWORD (never on its command line)
             - name: ClickHouse - every MergeTree table frozen (a hard-linked snapshot in its volume)
               ansible.builtin.shell:
                 executable: /bin/bash
@@ -255,7 +256,7 @@
                   set -euo pipefail
                   q() {
                     {{ kubectl }} -n {{ _ch.stdout.split()[0] }} exec {{ _ch.stdout.split()[1] }} -c clickhouse -- sh -c \
-                      'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ "$1"
+                      'CLICKHOUSE_USER=schnappy clickhouse-client -q "$1"' _ "$1"
                   }
                   q "SELECT database || '.' || name FROM system.tables WHERE engine LIKE '%MergeTree%'
                      AND database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')" \
