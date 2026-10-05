@@ -47,6 +47,11 @@ all:
     forgejo_admin_user: "forgejo_admin"
     forgejo_admin_password: "vagrant-forgejo-pw"
     forgejo_admin_email: "admin@pmon.dev"
+    # pinned as production pins them (.env): both Pis share one set, and setup-pi-services no longer strips the ones
+    # each Forgejo generated (a rewrite and a restart every run). Vagrant-only values (forgejo generate secret)
+    forgejo_internal_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3OTEyMDYzNzZ9.za8fkb-2uen_bmUOJBN_Dq1V2LS93TQctL-k-CTA8hQ"
+    forgejo_jwt_secret: "TXXLXLM6p0RFNp0xcFVQiEbsQd7tcz8Dq5carUDyhQY"
+    forgejo_secret_key: "sDzwBlVnu-9Vofiq4-v8vbkGPa5JUvxbrdjGuHyIfpB"
     # Vagrant: Forgejo binds to a Pi static IP, no DNS / TLS in front.
     # Override the hardcoded prod URLs from setup-pi-services.yml so the
     # registry's WWW-Authenticate redirect points back at the same host.

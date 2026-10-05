@@ -93,6 +93,13 @@
       register: _pgbouncer_state
       failed_when: false
 
+    - name: PgBouncer installed here is running (else Forgejo and Keycloak would be moved to :5000 and restarted)
+      ansible.builtin.fail:
+        msg: "REFUSED on {{ inventory_hostname }}: PgBouncer is installed but {{ _pgbouncer_state.status.ActiveState }} - start it first"
+      when:
+        - _pgbouncer_state.status.LoadState | default('not-found') == 'loaded'
+        - _pgbouncer_state.status.ActiveState | default('') != 'active'
+
     - name: Pick effective DB port (pgbouncer if up, else haproxy direct)
       ansible.builtin.set_fact:
         _db_port: "{{ '6432' if _pgbouncer_state.status.ActiveState | default('') == 'active' else '5000' }}"
@@ -561,6 +568,24 @@
         group: keycloak
         recurse: true
 
+    # the passwords in a root-only file systemd reads before it drops to the keycloak user - a unit file is
+    # world-readable (and `systemctl show` prints its Environment= lines to anyone)
+    - name: Keycloak's secrets directory, root only
+      ansible.builtin.file:
+        path: /etc/keycloak
+        state: directory
+        mode: '0700'
+
+    - name: Keycloak's secrets, root only
+      ansible.builtin.copy:
+        dest: /etc/keycloak/secrets.env
+        mode: '0600'
+        content: |
+          KC_DB_PASSWORD={{ keycloak_db_password }}
+          KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
+      notify: Restart Keycloak
+      no_log: true
+
     - name: Install Keycloak systemd service
       ansible.builtin.copy:
         dest: /etc/systemd/system/keycloak.service
@@ -582,13 +607,12 @@
           Environment=KC_DB=postgres
           Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host_effective }}/keycloak
           Environment=KC_DB_USERNAME=postgres
-          Environment=KC_DB_PASSWORD={{ keycloak_db_password }}
+          EnvironmentFile=/etc/keycloak/secrets.env
           Environment=KC_HOSTNAME=auth.pmon.dev
           Environment=KC_PROXY_HEADERS=xforwarded
           Environment=KC_HTTP_ENABLED=true
           Environment=KC_HTTP_PORT=8080
           Environment=KC_BOOTSTRAP_ADMIN_USERNAME=admin
-          Environment=KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
           ExecStart=/opt/keycloak/bin/kc.sh start-dev
           Restart=always
           RestartSec=5
