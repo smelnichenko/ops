@@ -1,0 +1,109 @@
+---
+# Patroni on both Pis to patroni_version (vars/patroni.yml) - Patroni's own procedure: the cluster paused (Postgres
+# keeps running and serving; no failover meanwhile), the package upgraded and Patroni restarted on each node, the
+# cluster resumed - whatever happens, once paused. Before: every node's version from its REST API, never a downgrade,
+# a healthy cluster (a leader, every replica streaming). After: every node on the version, the cluster healthy and
+# not paused. A run where both already run the target changes nothing.
+#
+# Usage: task deploy:patroni:upgrade   (production; Vagrant: task test:patroni-upgrade)
+- name: Patroni on both Pis to one version
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../vars/patroni.yml
+  vars:
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+    # a leader, every other member streaming with no lag left
+    healthy_py: |
+      import json, sys
+      m = json.load(sys.stdin)
+      leaders = [x for x in m if x["Role"] == "Leader" and x["State"] == "running"]
+      others = [x for x in m if x["Role"] != "Leader"]
+      ok = len(leaders) == 1 and others and all(x["State"] == "streaming" and x.get("Replay Lag", 1) == 0 for x in others)
+      print(("HEALTHY " if ok else "NOT HEALTHY ") + ", ".join("%s %s %s" % (x["Member"], x["Role"], x["State"]) for x in m))
+      sys.exit(0 if ok else 1)
+  tasks:
+    - name: The version each node's Patroni runs
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _patroni_api
+
+    - name: Its version number
+      ansible.builtin.set_fact:
+        _running: "{{ _patroni_api.json.patroni.version }}"
+
+    - name: Never a downgrade
+      ansible.builtin.assert:
+        that: _running is version(patroni_version, '<=')
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Patroni {{ _running }}, newer than {{ patroni_version }}"
+        quiet: true
+
+    - name: Nothing to do - every node runs {{ patroni_version }}
+      ansible.builtin.meta: end_play
+      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [patroni_version]
+
+    - name: The cluster healthy first
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          {{ patronictl }} list -f json | python3 -c '{{ healthy_py }}'
+      register: _before
+      changed_when: false
+      run_once: true
+
+    - name: Paused, each node upgraded, resumed
+      block:
+        - name: Paused - Postgres keeps running, no failover meanwhile
+          ansible.builtin.command: "{{ patronictl }} pause --wait"
+          changed_when: true
+          run_once: true
+
+        - name: The package
+          ansible.builtin.pip:
+            name: "patroni[consul]=={{ patroni_version }}"
+            state: present
+            break_system_packages: true
+
+        - name: Patroni restarted, one node at a time (paused, Postgres is not touched)
+          ansible.builtin.systemd:
+            name: patroni
+            state: restarted
+          throttle: 1
+
+        - name: Each node's Patroni on the version
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8008/patroni
+            return_content: true
+          register: _after_api
+          retries: 30
+          delay: 5
+          until: _after_api.status | default(0) == 200 and _after_api.json.patroni.version == patroni_version
+      always:
+        - name: Resumed
+          ansible.builtin.command: "{{ patronictl }} resume --wait"
+          changed_when: true
+          run_once: true
+
+    - name: The cluster healthy and not paused after
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          {{ patronictl }} list -f json | python3 -c '{{ healthy_py }}'
+          ! {{ patronictl }} list | grep -q 'Maintenance mode'
+      register: _after
+      retries: 12
+      delay: 5
+      until: _after.rc == 0
+      changed_when: false
+      run_once: true
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          PATRONI {{ patroni_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
+          | map('extract', hostvars, '_running') | unique | join(', ') }}); {{ _after.stdout_lines[0] }}
+      run_once: true

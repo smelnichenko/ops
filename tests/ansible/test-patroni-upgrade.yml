@@ -1,0 +1,70 @@
+---
+# upgrade-patroni.yml on the Vagrant Pis from production's version: the cluster first set to 4.1.0 (as ten's Pis run;
+# paused, so Postgres keeps running), then the upgrade - every node on vars/patroni.yml's version, the cluster healthy
+# and not paused, Forgejo (on Patroni's database) still answering. Vagrant only. Usage: task test:patroni-upgrade
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: The cluster at production's Patroni (4.1.0)
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+    from_version: "4.1.0"
+  tasks:
+    - name: Its version now
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _now
+
+    - name: Set back to production's, paused
+      when: ansible_play_hosts | map('extract', hostvars, ['_now', 'json', 'patroni', 'version']) | unique | list != [from_version]
+      block:
+        - name: Paused
+          ansible.builtin.command: "{{ patronictl }} pause --wait"
+          changed_when: true
+          run_once: true
+        - name: The package
+          ansible.builtin.pip:
+            name: "patroni[consul]=={{ from_version }}"
+            state: present
+            break_system_packages: true
+        - name: Restarted
+          ansible.builtin.systemd:
+            name: patroni
+            state: restarted
+          throttle: 1
+        - name: On it
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8008/patroni
+            return_content: true
+          register: _set
+          retries: 30
+          delay: 5
+          until: _set.status | default(0) == 200 and _set.json.patroni.version == from_version
+      always:
+        - name: Resumed
+          ansible.builtin.command: "{{ patronictl }} resume --wait"
+          changed_when: true
+          run_once: true
+
+- name: Production's upgrade playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-patroni.yml
+
+- name: Forgejo still answering (its database on Patroni)
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Forgejo's API, which reads its database
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/repos/search?limit=1
+        return_content: true
+      register: _fj
+      failed_when: _fj.status != 200 or not _fj.json.ok
+
+    - name: Checked
+      ansible.builtin.debug:
+        msg: "PATRONI UPGRADE TEST: {{ inventory_hostname }} - Forgejo answers from the database"
