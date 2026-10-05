@@ -6,7 +6,8 @@
 # environment: shown before it runs.
 # its change: the branch upgrade/46-postgres-18-test in infra and platform
 # outage: the test environment only: its Postgres down for pg_upgrade (minutes)
-# abort: the test cluster has no backup: rebuilt from production's data if it ever must be
+# abort: the test cluster's Wave 0 dump (the postgres store dumps every CNPG primary, this step's wave0 line)
+# restored into a PostgreSQL 17 cluster - the test cluster has no base backups
 # one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
 wave0 postgres
 branch infra

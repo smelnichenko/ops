@@ -5,5 +5,6 @@
 # key, the second block's values kept). Stateful: shown to the operator before it runs.
 # its change: the branch upgrade/16-scylladb-2025.1-test in infra
 # outage: the test environment only: its ScyllaDB restarts
-# abort: the test cluster's Wave 0 backup (upgrade-backup.yml gives it one of its own)
+# abort: none for its data - the test environment's ScyllaDB has no backup (no Manager task, its agent no store
+# credentials; Wave 0 skips it by name): its keyspaces rebuilt by the test environment's schema Job, test data lost
 branch infra

@@ -161,7 +161,7 @@
                           --endpoint={{ _bsl_spec.config.s3Url | regex_replace('^https?://', '') }} \
                           {{ '--disable-tls' if _bsl_spec.config.s3Url.startswith('http://') else '' }} \
                           --config-file=/tmp/kopia.config --cache-directory=/tmp/kopia-cache
-                        if kopia repository status --config-file=/tmp/kopia.config | grep -q 'minimum 1h0m0s'; then
+                        if kopia repository status --config-file=/tmp/kopia.config | grep 'minimum 1h0m0s' > /dev/null; then
                           echo "EPOCH ALREADY HOURLY"
                         else
                           kopia repository set-parameters --epoch-min-duration=1h --config-file=/tmp/kopia.config

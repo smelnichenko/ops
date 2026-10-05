@@ -375,7 +375,8 @@
             | awk '$2 ~ /(^|\/)schnappy-production-scylla$/')
           read -r c name task loc tag <<< "$rec"
           [[ $tag =~ ^sm_[0-9]{14}UTC$ ]] || { echo "no snapshot recorded for schnappy-production-scylla: $rec"; exit 1; }
-          $M sctool backup list -c "$c" -L "$loc" | grep -q "$tag" || { echo "$tag not (yet) in $loc"; exit 1; }
+          # grep reads to the end: -q would close the pipe on the first match, and kubectl dying of SIGPIPE fails it
+          $M sctool backup list -c "$c" -L "$loc" | grep -F -- "$tag" > /dev/null || { echo "$tag not (yet) in $loc"; exit 1; }
           echo "$c $loc $tag"
       register: _scylla_snap
       changed_when: false

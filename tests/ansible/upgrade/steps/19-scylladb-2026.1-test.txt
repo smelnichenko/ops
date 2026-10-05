@@ -2,5 +2,6 @@
 # Vagrant copy: no inventory change here. infra upgrade/19-scylladb-2026.1-test. Stateful: shown before it runs.
 # its change: the branch upgrade/19-scylladb-2026.1-test in infra
 # outage: the test environment only: its ScyllaDB restarts
-# abort: the test cluster's Wave 0 backup
+# abort: none for its data - the test environment's ScyllaDB has no backup (as step 16): its keyspaces rebuilt by
+# its schema Job, test data lost
 branch infra

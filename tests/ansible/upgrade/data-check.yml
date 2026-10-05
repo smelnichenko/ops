@@ -245,7 +245,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         B="{{ kubectl }} exec {{ _broker.stdout }} -c kafka --"
-        if $B /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list | grep -qx '{{ topic }}'; then
+        if $B /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list | grep -x '{{ topic }}' > /dev/null; then
           echo exists; exit 0
         fi
         $B /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic {{ topic }} \

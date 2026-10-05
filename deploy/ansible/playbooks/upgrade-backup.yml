@@ -22,7 +22,10 @@
 #                        backend keeps ETags and bucket ACLs there) and Mimir's and Tempo's own, online: the archive
 #                        is checked against the objects listed before and after it (files/objectstore-manifest.py),
 #                        the list stored beside it for the restore; a WAL file appended while read is accepted
-#   -e store=scylla      a Scylla Manager backup of each ScyllaDB cluster now, to its usual location, waited for
+#   -e store=scylla      a Scylla Manager backup of each ScyllaDB cluster now, its own backup task started and
+#                        waited for. The test environment's cluster (schnappy-test/) has no task and its agent no
+#                        credentials for the store: it is not backed up, and said so. Any other cluster without a
+#                        backup task fails the run.
 #
 # Restores are rehearsed in Vagrant (task test:upgrade:wave0) against the seeded canaries.
 #
@@ -528,32 +531,36 @@
           when: store == 'kafka'
 
         # ── scylla ────────────────────────────────────────────────────────
-        # a cluster's own backup task started now; one without any (the test environment's) gets a backup of its own to
-        # the location the others use. "<cluster id> <cluster name> <task> <location>" per cluster
+        # each cluster's own backup task started now: "<cluster id> <cluster name> <task> <location>" per cluster on
+        # stdout. The test environment's cluster has none, and its agent no credentials for the store (production's
+        # agents mount scylla-agent-config-secret; read on ten 2026-10-05): skipped by name, on stderr. Any other
+        # cluster without a backup task fails.
         - name: Scylla - a Scylla Manager backup of each cluster now
           ansible.builtin.shell:
             executable: /bin/bash
             cmd: |
               set -euo pipefail
               M="{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
-              clusters=$($M sctool cluster list | awk -F'|' '$2 ~ /[0-9a-f]{8}-/ {gsub(/ /, "", $2); gsub(/ /, "", $3); print $2, $3}')
+              clusters=$($M sctool cluster list \
+                | awk -F'|' '$2 ~ /[0-9a-f]{8}-/ {gsub(/ /, "", $2); gsub(/ /, "", $3); print $2, $3}')
               [ -n "$clusters" ]
-              task_of() { $M sctool tasks -c "$1" | awk -F'|' '$2 ~ /backup\// {gsub(/ /, "", $2); print $2; exit}'; }
-              loc=""
+              # awk reads to the end (no exit): sctool still writing into a closed pipe dies of SIGPIPE, which pipefail
+              # makes the assignment's failure - on ten, `sctool info` did (2026-10-05)
+              task_of() {
+                $M sctool tasks -c "$1" | awk -F'|' '$2 ~ /backup\// && t == "" {t = $2; gsub(/ /, "", t)} END {print t}'
+              }
               while read -r c name; do
                 t=$(task_of "$c")
-                if [ -n "$t" ] && [ -z "$loc" ]; then
-                  loc=$($M sctool info -c "$c" "$t" | awk -F"'" '/- location:/ {print $2; exit}')
+                if [ -z "$t" ]; then
+                  case "$name" in
+                    schnappy-test/*) echo "SKIPPED $name: the test environment - no backup task, no store credentials" >&2
+                                     continue;;
+                    *) echo "$name has no backup task" >&2; exit 1;;
+                  esac
                 fi
-              done <<< "$clusters"
-              [ -n "$loc" ] || { echo "no backup location in any task"; exit 1; }
-              while read -r c name; do
-                t=$(task_of "$c")
-                if [ -n "$t" ]; then
-                  $M sctool start -c "$c" "$t" > /dev/null
-                else
-                  t=$($M sctool backup -c "$c" --location "$loc" --retention 2)
-                fi
+                loc=$($M sctool info -c "$c" "$t" | awk -F"'" '/- location:/ && l == "" {l = $2} END {print l}')
+                [ -n "$loc" ] || { echo "$name: no location in $t" >&2; exit 1; }
+                $M sctool start -c "$c" "$t" > /dev/null
                 echo "$c $name $t $loc"
               done <<< "$clusters"
           register: _scylla_tasks
@@ -625,7 +632,10 @@
                 {{ _pg_end_wal.results | default([]) | map(attribute='stdout') | join('; ') }}
               gateway: "{{ _gw_tar.stdout_lines | default([]) | join('; ') }}"
               kafka: "{{ _kafka_copy.stdout_lines | default([]) | join('; ') }}"
-              scylla: "snapshots (cluster, name, task, location, tag): {{ _scylla_snapshots.stdout_lines | default([]) | join('; ') }}"
+              scylla: >-
+                snapshots (cluster, name, task, location, tag): {{ _scylla_snapshots.stdout_lines | default([])
+                | join('; ') }}{{ ('; ' ~ (_scylla_tasks.stderr_lines | select('match', '^SKIPPED') | join('; ')))
+                if _scylla_tasks.stderr_lines | default([]) | select('match', '^SKIPPED') | list else '' }}
       always:
         - name: The credentials file removed
           ansible.builtin.file:
