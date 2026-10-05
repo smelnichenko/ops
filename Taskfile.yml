@@ -587,7 +587,6 @@ tasks:
     desc: Build the whole Vagrant copy of production from scratch - the baseline, then the Argo layer (VMs stay up)
     cmds:
       - task: _upgrade:base
-      - task: _upgrade:snapshot-base
       - task: test:upgrade:argo
 
   # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
@@ -638,44 +637,6 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml
 
   # the baseline before Argo, so the Argo stage can be re-run on a cluster that has never seen Argo, in minutes
-  _upgrade:snapshot-base:
-    internal: true
-    cmds:
-      - cmd: vagrant halt
-      - cmd: for vm in pi1 pi2 kubeadm; do vagrant snapshot save --force "$vm" base-ready; done
-      - cmd: vagrant up --no-provision
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-
-  test:upgrade:argo:fresh:
-    desc: Restore the baseline snapshot (base-ready, no Argo yet) and run the Argo stage on it
-    cmds:
-      - cmd: vagrant halt
-      - cmd: for vm in pi1 pi2 kubeadm; do vagrant snapshot restore --no-start "$vm" base-ready; done
-      - cmd: vagrant up --no-provision
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-      - task: test:upgrade:argo
-
-  test:upgrade:snapshot:
-    desc: Save the green Vagrant copy of production as snapshot baseline-green (all VMs halted first, so the three disks agree)
-    cmds:
-      - cmd: vagrant halt
-      - cmd: for vm in pi1 pi2 kubeadm; do vagrant snapshot save --force "$vm" baseline-green; done
-      - cmd: vagrant up --no-provision
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e settle_minutes=20
-
-  test:upgrade:restore:
-    desc: Restore the Vagrant copy of production to snapshot baseline-green and wait until it is green again
-    cmds:
-      - cmd: vagrant halt
-      - cmd: for vm in pi1 pi2 kubeadm; do vagrant snapshot restore --no-start "$vm" baseline-green; done
-      - cmd: vagrant up --no-provision
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e settle_minutes=20
-      # adds only missing rows: a snapshot taken before the data check existed has none
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
-
-  # ============== K8S-CLUSTER TESTS ==============
   test:eso:
     desc: Test ESO ↔ Pi Vault secret sync (ClusterSecretStore + ExternalSecret)
     deps: [deploy:install]
