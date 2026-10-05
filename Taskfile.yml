@@ -371,8 +371,13 @@ tasks:
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
 
   test:upgrade:argo:
-    desc: On the baseline VMs, add the Argo layer as on ten - seed Vault, mirror infra/platform, preload app images, install Argo CD - and wait until every app is green
+    desc: On the baseline VMs, add the Argo layer as on ten - seed Vault, mirror infra/platform (main, or INFRA_REF/PLATFORM_REF), preload app images, install Argo CD - and wait until every app is green
     deps: [deploy:install]
+    vars:
+      INFRA_REF: '{{.INFRA_REF | default "main"}}'
+      PLATFORM_REF: '{{.PLATFORM_REF | default "main"}}'
+      # the inventory the copy must show: production's (the baseline), or the one the last step leads to
+      EXPECTED: '{{.EXPECTED | default "tests/ansible/upgrade/prod-inventory.txt"}}'
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       # production's own seeding playbook, with test-only values (tests/ansible/upgrade/vagrant-secrets.env), in an
@@ -381,8 +386,8 @@ tasks:
       - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/seed-vault-secrets.yml'
       # production's scoped Vault token for the stale-PR-env sweeper (argocd/vault-cleanup-token), as on ten
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml
-      - cmd: scripts/vagrant-gitops-mirror.py
-      - cmd: scripts/vagrant-preload-images.sh
+      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
+      - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # production's floating tags (postgresql:17, ...) as ten runs them, not today's builds of those tags
       - cmd: scripts/vagrant-preload-floating.sh
       # isolate the cluster from production (DNS, network - proven by a probe) and connect ESO to the Vagrant Vault
@@ -406,7 +411,7 @@ tasks:
       - cmd: scripts/vagrant-smoke.sh
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
-      - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
+      - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
 
   test:upgrade:step:
     desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt, its upgrade/NN-* branches in ../infra and ../platform, its playbooks) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, the seeded data, a Velero backup, a new volume, every scrape target up, production's k6 smoke, the step's expected inventory
@@ -500,6 +505,26 @@ tasks:
       - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt
       - cmd: scripts/inventory-diff.sh .upgrade/expected-inventory.txt .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
+
+  # A rebuild after the rollout lands at the targets in one go: run with ops checked out on the branch whose playbook
+  # defaults are the targets (the change the rollout makes, step by step) - setup-kubeadm, setup-argocd and the Pis'
+  # services install those, Argo syncs infra and platform at the last step's branches - and its inventory must be the
+  # one the steps lead to.
+  test:upgrade:build-targets:
+    desc: Build the Vagrant copy straight at the upgrade's targets (ops on its defaults-at-targets branch; infra and platform at the last step's branches) and compare its inventory with the one the steps lead to
+    vars:
+      LAST_STEP:
+        sh: ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V | tail -1
+      INFRA_REF:
+        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.LAST_STEP}} | cut -d' ' -f1
+      PLATFORM_REF:
+        sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.LAST_STEP}} | cut -d' ' -f2
+    cmds:
+      - cmd: mkdir -p .upgrade && scripts/upgrade-expected-inventory.py {{.LAST_STEP}} > .upgrade/expected-targets.txt
+      - task: _upgrade:base
+      # the Argo stage's own inventory check, against the targets' expected inventory instead of production's
+      - task: test:upgrade:argo
+        vars: { INFRA_REF: '{{.INFRA_REF}}', PLATFORM_REF: '{{.PLATFORM_REF}}', EXPECTED: .upgrade/expected-targets.txt }
 
   test:upgrade:build:
     desc: Build the whole Vagrant copy of production from scratch - the baseline, then the Argo layer (VMs stay up)

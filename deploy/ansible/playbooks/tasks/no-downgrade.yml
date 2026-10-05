@@ -5,19 +5,24 @@
 # Each check applies only when the tasks it guards are about to run - an upgrade passes --tags
 # and -e for its own component. Included first by setup-kubeadm.yml, with tags: always.
 #
-# Uses: k8s_package_version, cilium_version, local_path_provisioner_version, gateway_api_version,
+# Uses: containerd_io_version, k8s_package_version, cilium_version, local_path_provisioner_version, gateway_api_version,
 #       external_secrets_chart_version, external_secrets_by_helm.
 - name: No downgrade - the installed packages
   ansible.builtin.package_facts:
     manager: apt
 
-- name: No downgrade - containerd.io is not replaced by Debian's containerd (a full run installs the latter)
+- name: No downgrade - containerd.io is not replaced by Debian's containerd, nor by an older containerd.io
   ansible.builtin.assert:
-    that: "'containerd.io' not in ansible_facts.packages"
+    that: >-
+      'containerd.io' not in ansible_facts.packages
+      or (containerd_io_version | default('') | length > 0
+          and (ansible_facts.packages['containerd.io'][0].version | regex_replace('-.*$', ''))
+              is version(containerd_io_version, '<='))
     fail_msg: >-
       REFUSED: this node runs containerd.io {{ ansible_facts.packages['containerd.io'][0].version
-      | default('') }}; a full run of this playbook installs Debian's containerd over it - make it install
-      containerd.io first (as upgrade-containerd.yml does)
+      | default('') }}; a full run of this playbook would install {{ ('containerd.io ' ~ containerd_io_version)
+      if containerd_io_version | default('') | length > 0 else "Debian's containerd" }} over it - set
+      containerd_io_version to it (or newer)
     quiet: true
   when: "'all' in ansible_run_tags"
 

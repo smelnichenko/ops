@@ -29,6 +29,10 @@
     install_nerdctl: "{{ install_nerdctl_override | default(false) }}"
     # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
     containerd_registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
+    # the container runtime: Debian's containerd (empty, as ten was built) or containerd.io at this version from
+    # Docker's apt repository - what ten runs after the containerd step (upgrade-containerd.yml); a rebuild after the
+    # rollout sets it, and the no-downgrade check refuses a full run on a containerd.io node without it
+    containerd_io_version: ""
     # On ten, Argo CD (infra clusters/production/argocd/apps) owns Istio, cert-manager, metrics-server, the Prometheus
     # stack and the data operators; this playbook installs them only where no Argo will (most Vagrant tests).
     platform_by_argo: "{{ platform_by_argo_override | default(false) }}"
@@ -100,10 +104,9 @@
     # Phase 1: Install containerd
     # ================================================================
 
-    - name: Install containerd and dependencies
+    - name: Install the dependencies
       ansible.builtin.apt:
         name:
-          - containerd
           - apt-transport-https
           - ca-certificates
           - curl
@@ -115,6 +118,49 @@
           - python3-kubernetes
         state: present
         update_cache: true
+
+    - name: Install Debian's containerd (containerd_io_version empty)
+      ansible.builtin.apt:
+        name: containerd
+        state: present
+      when: containerd_io_version | length == 0
+
+    - name: Install containerd.io from Docker's apt repository (containerd_io_version set)
+      when: containerd_io_version | length > 0
+      block:
+        - name: Docker's apt key
+          ansible.builtin.get_url:
+            url: https://download.docker.com/linux/debian/gpg
+            dest: /etc/apt/keyrings/docker.asc
+            mode: '0644'
+
+        - name: Docker's apt repository (as on ten - its docker.list)
+          ansible.builtin.copy:
+            dest: /etc/apt/sources.list.d/docker.list
+            content: |
+              deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts.distribution_release }} stable
+            mode: '0644'
+
+        - name: The version's package revision there
+          ansible.builtin.shell: |
+            set -o pipefail
+            apt-get update -qq
+            apt-cache madison containerd.io | awk '{print $3}' | grep -E '^{{ containerd_io_version | regex_escape }}-' | sort -V | tail -1
+          args:
+            executable: /bin/bash
+          register: _ctd_io_package
+          changed_when: false
+          failed_when: _ctd_io_package.stdout | length == 0
+
+        - name: Install containerd.io (it bundles runc; replaces Debian's containerd where present)
+          ansible.builtin.apt:
+            name: "containerd.io={{ _ctd_io_package.stdout }}"
+            state: present
+
+        - name: Hold containerd.io (an apt upgrade would restart the runtime under every pod)
+          ansible.builtin.dpkg_selections:
+            name: containerd.io
+            selection: hold
 
     - name: Check if nerdctl is installed
       ansible.builtin.stat:
