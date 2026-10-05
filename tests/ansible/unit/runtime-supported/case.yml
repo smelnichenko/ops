@@ -1,0 +1,22 @@
+---
+# one case: upgrade-kubeadm's own task file, its verdict compared with the case's
+- name: "{{ case.target_minor }} on {{ case.runtime_version }}"
+  block:
+    - name: The playbook's check
+      ansible.builtin.include_tasks: ../../../../deploy/ansible/playbooks/tasks/runtime-supported.yml
+      vars:
+        target_minor: "{{ case.target_minor }}"
+        runtime_version: "{{ case.runtime_version }}"
+    - name: Accepted
+      ansible.builtin.set_fact:
+        _verdict: accepted
+  rescue:
+    - name: Refused
+      ansible.builtin.set_fact:
+        _verdict: refused
+
+- name: "{{ case.target_minor }} on {{ case.runtime_version }}: {{ case.want }}"
+  ansible.builtin.assert:
+    that: _verdict == case.want
+    fail_msg: "FAIL {{ case.target_minor }} on {{ case.runtime_version }}: {{ _verdict }}, want {{ case.want }}"
+    success_msg: "PASS {{ case.target_minor }} on {{ case.runtime_version }}: {{ _verdict }}"

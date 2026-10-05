@@ -1,0 +1,23 @@
+---
+# A Kubernetes minor only on a container runtime it supports (containerd's release page, read 2026-10-04). Inputs:
+# target_minor ("1.35") and runtime_version (the node's containerRuntimeVersion, "containerd://2.3.6"). A minor not
+# listed here needs nothing newer than what runs (ten runs 1.34 on 1.7.24); a runtime that is not a containerd version
+# is refused. Included by upgrade-kubeadm.yml; tests/ansible/unit/runtime-supported runs the same file.
+- name: The target minor supports the node's container runtime
+  vars:
+    runtime_accepted:
+      "1.35": [["1.7.28", "1.8.0"], ["2.1.5", "2.2.0"], ["2.2.0", "99.0.0"]]
+      "1.36": [["2.2.0", "99.0.0"]]
+    runtime: "{{ runtime_version | regex_replace('^containerd://', '') }}"
+    ranges: "{{ runtime_accepted[target_minor] | default([]) }}"
+    supported: >-
+      {% set ns = namespace(ok=false) %}{% for r in ranges %}{% if runtime is version(r[0], '>=')
+      and runtime is version(r[1], '<') %}{% set ns.ok = true %}{% endif %}{% endfor %}{{ ns.ok }}
+  ansible.builtin.assert:
+    that:
+      - runtime_version is match('^containerd://[0-9]+\.[0-9]+\.[0-9]+')
+      - ranges | length == 0 or supported | bool
+    fail_msg: >-
+      REFUSED: Kubernetes {{ target_minor }} on {{ runtime_version }} - it wants containerd
+      {{ ranges | map('join', ' to below ') | join(', or ') }} (upgrade-containerd.yml first)
+    quiet: true

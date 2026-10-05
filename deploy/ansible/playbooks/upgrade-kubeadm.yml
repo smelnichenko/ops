@@ -68,6 +68,18 @@
       ansible.builtin.command: "{{ kubectl }} wait node --all --for=condition=Ready --timeout=120s"
       changed_when: false
 
+    # a new minor only on a container runtime it supports: the step order puts containerd.io 2.3 before 1.35, and this
+    # refuses a run that skipped it
+    - name: The container runtime the node runs
+      ansible.builtin.command: "{{ kubectl }} get node -o jsonpath={.items[0].status.nodeInfo.containerRuntimeVersion}"
+      register: _runtime
+      changed_when: false
+
+    - name: The target minor supports that runtime
+      ansible.builtin.include_tasks: tasks/runtime-supported.yml
+      vars:
+        runtime_version: "{{ _runtime.stdout }}"
+
     # kubeadm upgrade rewrites the kubelet's config.yaml from this ConfigMap: without them there, the upgrade turns the
     # graceful node shutdown off - configure-node.yml puts them there first
     - name: The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)

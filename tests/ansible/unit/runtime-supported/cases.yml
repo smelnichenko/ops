@@ -1,0 +1,26 @@
+---
+# Kubernetes minors on container runtimes: upgrade-kubeadm.yml refuses a new minor on a containerd it does not support
+- name: The runtime floor per Kubernetes minor
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cases:
+      - {target_minor: "1.34", runtime_version: "containerd://1.7.24", want: accepted}   # ten today
+      - {target_minor: "1.35", runtime_version: "containerd://1.7.24", want: refused}
+      - {target_minor: "1.35", runtime_version: "containerd://1.7.28", want: accepted}
+      - {target_minor: "1.35", runtime_version: "containerd://2.1.4", want: refused}
+      - {target_minor: "1.35", runtime_version: "containerd://2.1.5", want: accepted}
+      - {target_minor: "1.35", runtime_version: "containerd://2.3.6", want: accepted}
+      - {target_minor: "1.36", runtime_version: "containerd://1.7.28", want: refused}
+      - {target_minor: "1.36", runtime_version: "containerd://2.1.9", want: refused}
+      - {target_minor: "1.36", runtime_version: "containerd://2.2.0", want: accepted}
+      - {target_minor: "1.36", runtime_version: "containerd://2.3.6", want: accepted}
+      - {target_minor: "1.36", runtime_version: "cri-o://1.36.0", want: refused}
+      - {target_minor: "1.34", runtime_version: "", want: refused}
+  tasks:
+    - name: Each case
+      ansible.builtin.include_tasks: case.yml
+      loop: "{{ cases }}"
+      loop_control:
+        loop_var: case
+        label: "{{ case.target_minor }} {{ case.runtime_version }}"
