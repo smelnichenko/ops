@@ -64,7 +64,7 @@ PREVIEW_APPS = "^pr-[0-9]+-"
 # on ten, sm's: each done step's restart counts, so a pod restarting in two steps running fails the second
 RESTART_HISTORY = "$HOME/.upgrade-restart-history.json"
 PROVEN = os.path.join(OPS, ".upgrade", "proven")
-PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml")
+PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml", "Vagrantfile")
 BEFORE_LEDGER = "02-istio-chart-repo"
 
 
@@ -414,12 +414,30 @@ def proof_problems(step, names, repo=None, defaulted_steps=()):
         d = os.path.join(OPS, "..", repo)
         branch = "upgrade/" + step
         run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
-        if run(["git", "-C", d, "merge-base", "--is-ancestor", "origin/main", branch]).returncode:
+        base = merged_base(d, step)
+        if base:
+            # merged already (an interrupted run pushed, then did not record): the change it brought, base..tag
+            if run(["git", "-C", d, "merge-base", "--is-ancestor", "upgrade-merged/" + step, "origin/main"]).returncode:
+                out.append(f"{repo} upgrade-merged/{step} is not in origin/main")
+            elif own_change(d, base, "upgrade-merged/" + step) != proof["repos"][repo]["own"]:
+                out.append(f"{repo} upgrade-merged/{step} brought a change other than the one the full run proved")
+        elif run(["git", "-C", d, "merge-base", "--is-ancestor", "origin/main", branch]).returncode:
             out.append(f"{repo} {branch} does not contain origin/main - restack it "
                        f"(scripts/upgrade-restack-in-place.sh ../{repo})")
         elif own_change(d, "origin/main", branch) != proof["repos"][repo]["own"]:
             out.append(f"{repo} {branch} on origin/main is not the change the full run proved")
     return out
+
+
+def merged_base(repo_dir, step):
+    """The main a merged step went onto (its upgrade-merged/<step> tag's "base <sha>"), or None when not merged."""
+    tag = run(["git", "-C", repo_dir, "tag", "-l", "--format=%(contents:subject)", "upgrade-merged/" + step],
+              capture_output=True, check=True).stdout.strip()
+    if not tag:
+        return None
+    if not tag.startswith("base "):
+        sys.exit(f"{repo_dir}: upgrade-merged/{step} carries no base ({tag!r})")
+    return tag.split()[1]
 
 
 # ---- the phases -----------------------------------------------------------------------------------------------------
@@ -478,12 +496,20 @@ def merge(step, repo):
     names, events, _ = ledger_for(step, "merge", repo)
     merged = any(s == step and e == "merged" and a[:1] == [repo] for _, s, e, a in events)
     if not merged:
+        d = os.path.join(OPS, "..", repo)
         refuse(proof_problems(step, names, repo, defaulted(events)))
-        order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
-        refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven (above)"])
-        refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
-               else [f"the {repo} merge failed (above)"])
-        sha = run(["git", "-C", os.path.join(OPS, "..", repo), "rev-parse", "main"], capture_output=True,
+        if merged_base(d, step):
+            # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
+            print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
+        else:
+            # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
+            if not any(s == step and e == "merged" for _, s, e, _ in events):
+                order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
+                refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven "
+                                                         "(above)"])
+            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
+                   else [f"the {repo} merge failed (above)"])
+        sha = run(["git", "-C", d, "rev-parse", "upgrade-merged/" + step + "^{commit}"], capture_output=True,
                   check=True).stdout.strip()
         record(step, "merged", repo, sha)
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed

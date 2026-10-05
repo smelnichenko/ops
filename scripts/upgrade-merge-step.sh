@@ -7,6 +7,7 @@
 # Refuses unless the step file declares that repo's branch, the repo's working tree is clean, main is origin/main,
 # the repo's previous step branch is in main already and this one contains main - so the merge adds this step's
 # commits only (stacked branches carry every earlier step's: merged out of order they would bring unproven ones).
+# The merged step is tagged upgrade-merged/<step> (annotated: "base <main it went onto>").
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 step=${1:?step}; repo=${2:?infra or platform}
@@ -39,6 +40,12 @@ echo "$repo: main $(git -C "$dir" rev-parse --short main) -> $branch $(git -C "$
 git -C "$dir" log --oneline "main..$branch"
 current=$(git -C "$dir" rev-parse --abbrev-ref HEAD)
 [ "$current" = main ] || { echo "REFUSED: $repo is on $current - check out main first" >&2; exit 1; }
+base=$(git -C "$dir" rev-parse main)
+# pushed first, then local main moved: a push rejected (CD pushed meanwhile) leaves local main as origin's
+git -C "$dir" push -q origin "$branch:main"
 git -C "$dir" merge --ff-only -q "$branch"
-git -C "$dir" push -q origin main
-echo "$repo: main is $(git -C "$dir" rev-parse --short main), pushed"
+# the step marked merged, with the main it went onto: the refs check, the restack and the merge order skip merged steps
+# (their branches are in main now), and a re-run after an interrupted ledger record finds the step's own change
+# (base..tag) to compare with its proof
+git -C "$dir" tag -a -f -m "base $base" "upgrade-merged/$step" "$branch"
+echo "$repo: main is $(git -C "$dir" rev-parse --short main), pushed; tagged upgrade-merged/$step"

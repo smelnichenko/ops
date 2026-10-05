@@ -130,9 +130,21 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
     return changes
 
 
+def merged(repo, branch):
+    """Whether production merged this step branch already: tagged upgrade-merged/<step> by scripts/upgrade-merge-step.sh
+    (the tag, not "in main": an unmerged branch with no change of its own is in main too). The tag must be in main."""
+    tag = "refs/tags/upgrade-merged/" + branch.split("/", 1)[1]
+    if subprocess.run(["git", "-C", repo, "rev-parse", "-q", "--verify", tag], capture_output=True).returncode:
+        return False
+    if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", tag, "main"]).returncode:
+        sys.exit(f"{repo}: {tag} is not in main - main was reset below a merged step")
+    return True
+
+
 def ref(repo, step_no, names):
     """The repo's highest upgrade/NN-* branch with NN <= step_no, checked to stack on the one before; else main. The
-    branches up to the step must be exactly those the step files declare, by step name."""
+    branches up to the step must be exactly those the step files declare, by step name. Steps production merged already
+    (scripts/upgrade-merge-step.sh tagged them) are in main: they come first, and the rest stack on main."""
     out = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/"],
                          capture_output=True, text=True, check=True).stdout.split()
     branches = sorted((int(m.group(1)), b) for b in out if (m := re.fullmatch(r"upgrade/(\d\d)-.+", b)))
@@ -155,6 +167,10 @@ def ref(repo, step_no, names):
     for n, b in branches:
         if n > step_no:
             break
+        if merged(repo, b):
+            if prev != "main":
+                sys.exit(f"{repo}: {b} is merged, but {prev} before it is not - merged out of order")
+            continue
         if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", prev, b]).returncode != 0:
             sys.exit(f"{repo}: {b} does not contain {prev} - rebase it on the previous step's branch")
         # a branch pointing at its predecessor's commit stacks too, and carries no change: its step would go green

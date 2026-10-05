@@ -6,6 +6,8 @@
 # changed lines) is compared with what it was. The SHAs before the first run are kept in .git/restack-old-shas: on a
 # conflict the rebase is left in progress - resolve it, `git rebase --continue`, run this again. Afterwards check
 # every step: scripts/upgrade-expected-inventory.py --refs <step>. To change the order, scripts/upgrade-restack.py.
+# Steps production merged (tagged upgrade-merged/<step>) are skipped; the first unmerged one goes onto main - after a
+# CD commit moved main during the rollout, this puts the remaining steps back on it.
 #
 # Usage: scripts/upgrade-restack-in-place.sh <repo dir>    (clean, on main; e.g. ../infra)
 set -uo pipefail
@@ -25,6 +27,13 @@ while read -r b s; do old[$b]=$s; done < "$state"
 own() { git diff -U0 "$1" "$2" | grep -E '^[-+]' | grep -vE '^(---|\+\+\+) ' | sha256sum | cut -c1-16; }
 prev=main; moved=0
 for b in "${heads[@]}"; do
+  # a step production merged already (tagged by scripts/upgrade-merge-step.sh) is in main: nothing to put back, and
+  # the next one goes onto main
+  if git rev-parse -q --verify "refs/tags/upgrade-merged/${b#upgrade/}" > /dev/null; then
+    [ "$prev" = main ] || { echo "$repo: $b is merged, $prev before it is not - merged out of order"; exit 1; }
+    echo "$repo: $b merged - skipped"
+    continue
+  fi
   prev_old=${old[$prev]}; prev_new=$(git rev-parse "$prev"); cur=$(git rev-parse "$b")
   if git merge-base --is-ancestor "$prev_new" "$b" \
      && { [ "$cur" != "${old[$b]}" ] || [ "$prev_old" = "$prev_new" ]; }; then
