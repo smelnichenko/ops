@@ -164,11 +164,13 @@
               - toCIDR:
                   - "{{ production_lan }}"
 
+    # a dropped packet only ends at the timeout; production's VIP, were it reachable, answers in milliseconds - 1 s
+    # proves the drop as well as 5 s did, and the probes ran on every step
     - name: Prove it - the node cannot reach production's VIP
       ansible.builtin.uri:
         url: "https://{{ production_vip }}:8200/v1/sys/health"
         validate_certs: false
-        timeout: 5
+        timeout: 1
         status_code: [-1]
       register: _node_probe
       failed_when: _node_probe.status | default(-1) != -1
@@ -180,7 +182,7 @@
         {{ kubectl }} run isolation-probe -n default --restart=Never --image=curlimages/curl:8.12.1 \
           --overrides='{"metadata":{"labels":{"sidecar.istio.io/inject":"false"}}}' --command -- sh -c '
             p=https://{{ production_vip }}:8200/v1/sys/health; v=https://{{ vagrant_vip }}:8200/v1/sys/health
-            curl -sk -o /dev/null -m 5 "$p" && echo PRODUCTION-REACHABLE || echo production-blocked
+            curl -sk -o /dev/null -m 1 "$p" && echo PRODUCTION-REACHABLE || echo production-blocked
             curl -sk -o /dev/null -m 10 "$v" && echo vagrant-reachable || echo VAGRANT-UNREACHABLE' > /dev/null
         {{ kubectl }} wait pod/isolation-probe -n default --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s > /dev/null
         {{ kubectl }} logs isolation-probe -n default

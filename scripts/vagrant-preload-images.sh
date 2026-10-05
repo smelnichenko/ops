@@ -55,7 +55,14 @@ for doc in values: walk(doc)' | sort -u)
 [ "${#images[@]}" -gt 0 ] || { echo "no git.pmon.dev images found in the production values"; exit 1; }
 
 cd "$ops"
+# What the node holds already is not streamed again: the charts' tags are fixed commits (pullPolicy IfNotPresent), so an
+# image held under its tag is that image. Every step used to re-stream all of them - 2 min of each step (2026-10-06).
+held=$(vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images ls -q' 2>/dev/null | tr -d '\r')
 for img in "${images[@]}"; do
+  if grep -qxF "$img" <<< "$held"; then
+    echo "== $img (held)"
+    continue
+  fi
   echo "== $img"
   if ! docker pull -q "$img"; then
     # The registry lacks it but ten runs it from its image cache (2026-10-02: apt-cacher-ng:1.0, built by hand once,
