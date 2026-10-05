@@ -1,6 +1,7 @@
-# ClickHouse: compatibility 24.8 -> 25.8 (platform upgrade/60-clickhouse-compat-25.8), before the 26.8 image. From here
-# 24.8 can no longer read what is written; 25.8 can, while the pin stays.
+# ClickHouse: compatibility 24.8 -> 25.8 (platform upgrade/60-clickhouse-compat-25.8), before the 26.8 image. The
+# setting is a subPath file read at startup: it acts from the next restart (step 61's), and from then 24.8 can no
+# longer read what is written; 25.8 can, while the pin stays.
 # its change: the branch upgrade/60-clickhouse-compat-25.8 in platform
-# outage: ClickHouse restarts - log ingestion waits
-# abort: from here 24.8 cannot read what is written: the Wave 0 ClickHouse backup for 24.8
+# outage: none - ClickHouse does not restart (no checksum on its config; the setting waits for step 61)
+# abort: revert the step's merge on main (Argo syncs back) - nothing ran with the new setting yet
 branch platform
