@@ -29,11 +29,31 @@ if v=$(curl -fsS --max-time 5 http://127.0.0.1:3000/api/v1/version 2>/dev/null);
 else
   line forgejo not-running
 fi
-# Patroni's package (pip), Keycloak's and Nexus's installs (Nexus runs on the VIP's Pi only)
-line patroni "$(patroni --version 2>/dev/null | awk '{print $2}' || echo none)"
-line keycloak "$(readlink -f /opt/keycloak 2>/dev/null | sed -n 's|^/opt/keycloak-||p')"
-[ -f /opt/nexus/.version ] && line nexus "$(cat /opt/nexus/.version)"
-# Debian's
-dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' \
-  postgresql-17 postgresql-18 pgbouncer haproxy glusterfs-server keepalived 2>/dev/null \
-  | awk -v h="$host" '$1 ~ /^[ih]i/ {print "pi", h, $2, $3}'
+# Patroni by the version it serves (a pip upgrade without a restart still runs the old one)
+if v=$(curl -fsS --max-time 5 http://127.0.0.1:8008/patroni 2>/dev/null); then
+  line patroni "$(python3 -c 'import json, sys; print(json.load(sys.stdin)["patroni"]["version"])' <<< "$v")"
+else
+  line patroni not-running
+fi
+# Keycloak by the install its processes hold open (/opt/keycloak is a symlink a new install moves; the running
+# kc.sh and java keep the directory they started from)
+kc_pid=$(systemctl show -p MainPID --value keycloak)
+if [ "$kc_pid" = 0 ]; then
+  line keycloak not-running
+else
+  kc=$(for p in "$kc_pid" $(pgrep -P "$kc_pid" || true); do readlink /proc/"$p"/fd/* 2>/dev/null || true; done \
+    | sed -n 's|^/opt/keycloak-\([^/]*\)/.*|\1|p' | sort -u)
+  case "$kc" in
+    '') line keycloak unknown ;;
+    *[[:space:]]*) line keycloak stale ;;
+    *) line keycloak "$kc" ;;
+  esac
+fi
+# Nexus's install (it runs on the VIP's Pi only)
+if [ -f /opt/nexus/.version ]; then line nexus "$(cat /opt/nexus/.version)"; fi
+# Debian's, each installed one (dpkg-query fails for a package it has never seen: not installed)
+for pkg in postgresql-17 postgresql-18 pgbouncer haproxy glusterfs-server keepalived; do
+  if st=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}' "$pkg" 2>/dev/null); then
+    case "$st" in [ih]i*) line "$pkg" "${st##* }" ;; esac
+  fi
+done

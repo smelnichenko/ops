@@ -1,0 +1,336 @@
+---
+# upgrade-forgejo.yml on the Vagrant Pis from production's version, checked from outside the playbook:
+#   set back   both stopped, Forgejo's database dropped and created empty, production's 15.0.3 (this test's own
+#              download, its sha256) on both, the VIP's Pi started first, an admin and a marker repository made;
+#              the kept binaries and dumps of earlier runs removed - so what the run leaves is its own
+#   sampled    every 0.5 s from pi1, the version each Pi serves (or down), for the whole run
+#   after      both serve the target; the schema moved on (Forgejo's version tables); the marker clones from both
+#              at its commit; each Pi kept the 15.0.3 binary; the VIP's Pi holds this run's dump - whole, written
+#              before either Forgejo stopped; the samples never show the two Pis up on different versions, show
+#              both down at once, and the VIP's Pi up first
+#   again      a second run restarts nothing; a downgrade and a run without every Pi are refused
+# Vagrant only. Usage: task test:forgejo-upgrade
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: Production's Forgejo (15.0.3) on a fresh database, with a marker
+  hosts: pi1,pi2
+  become: true
+  gather_facts: true
+  vars:
+    from_version: "15.0.3"
+    from_checksum: 3218dc54b71a0fd822c3b15d326a245a9a3594dfadfa35f2bdae9809e81bd77e   # its release's .sha256, amd64
+    # what 15.0.9 adds to a 15.0.3 database (its startup table sync - Forgejo's version tables do not move)
+    migration_adds: action_run.workflow_source_commit
+    fixture: /var/lib/forgejo-upgrade-test
+    vip: "{{ keepalived_vip }}"
+  tasks:
+    - name: The start of the test
+      ansible.builtin.set_fact:
+        _t0: "{{ lookup('pipe', 'date +%s') | int }}"
+      run_once: true
+
+    - name: The fixture's directory
+      ansible.builtin.file:
+        path: "{{ fixture }}"
+        state: directory
+        mode: '0700'
+
+    - name: Production's binary, this test's own copy
+      ansible.builtin.get_url:
+        url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ from_version }}/forgejo-{{ from_version }}-linux-amd64"
+        dest: "{{ fixture }}/forgejo-{{ from_version }}"
+        checksum: "sha256:{{ from_checksum }}"
+        mode: '0755'
+
+    - name: Both stopped
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+
+    - name: What earlier runs kept, gone (the run must leave its own)
+      ansible.builtin.shell: rm -rf /usr/local/bin/forgejo-[0-9]* /var/backups/forgejo
+      changed_when: true
+
+    - name: Production's binary in place
+      ansible.builtin.copy:
+        src: "{{ fixture }}/forgejo-{{ from_version }}"
+        dest: /usr/local/bin/forgejo
+        remote_src: true
+        mode: '0755'
+
+    - name: Forgejo's database dropped and made empty
+      ansible.builtin.command: >-
+        psql -h 127.0.0.1 -p 5000 -U postgres -d postgres -v ON_ERROR_STOP=1
+        -c "DROP DATABASE IF EXISTS forgejo WITH (FORCE)" -c "CREATE DATABASE forgejo"
+      environment:
+        PGPASSWORD: "{{ postgres_admin_password }}"
+      changed_when: true
+      run_once: true
+
+    - name: The VIP's Pi
+      ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
+      register: _vip_addr
+      changed_when: false
+
+    - name: Which one
+      ansible.builtin.set_fact:
+        _vip_pi: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vip_addr.stdout', '!=', '') | map(attribute='inventory_hostname') | first }}"
+      run_once: true
+
+    - name: Started on the VIP's Pi first (15.0.3 builds its schema)
+      ansible.builtin.systemd:
+        name: forgejo
+        state: started
+      when: inventory_hostname == _vip_pi
+
+    - name: It serves 15.0.3
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _set
+      retries: 60
+      delay: 5
+      until: _set.status | default(0) == 200 and _set.json.version is search('^' ~ (from_version | regex_escape) ~ '([^0-9]|$)')
+      when: inventory_hostname == _vip_pi
+
+    - name: Then the other
+      ansible.builtin.systemd:
+        name: forgejo
+        state: started
+      when: inventory_hostname != _vip_pi
+
+    - name: Both serve 15.0.3
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _set_all
+      retries: 60
+      delay: 5
+      until: _set_all.status | default(0) == 200 and _set_all.json.version is search('^' ~ (from_version | regex_escape) ~ '([^0-9]|$)')
+
+    - name: Its admin (the fresh database has none)
+      ansible.builtin.command: >-
+        su - forgejo -s /bin/sh -c "forgejo admin user create --admin --username {{ forgejo_admin_user }}
+        --password '{{ forgejo_admin_password }}' --email '{{ forgejo_admin_email }}'
+        --config /var/lib/forgejo/custom/conf/app.ini"
+      changed_when: true
+      run_once: true
+      delegate_to: "{{ _vip_pi }}"
+      no_log: true
+
+    - name: A marker repository, one commit
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:3000/api/v1/user/repos"
+        method: POST
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body: {name: "upgrade-marker-{{ _t0 }}", auto_init: true, default_branch: main, private: false}
+        status_code: 201
+      register: _marker
+      run_once: true
+      delegate_to: "{{ _vip_pi }}"
+
+    - name: Its commit
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:3000/api/v1/repos/{{ forgejo_admin_user }}/upgrade-marker-{{ _t0 }}/branches/main"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+      register: _marker_branch
+      run_once: true
+      delegate_to: "{{ _vip_pi }}"
+
+    - name: The column the target's migration adds - not there yet
+      ansible.builtin.command: >-
+        psql -h 127.0.0.1 -p 5000 -U postgres -d forgejo -Atc
+        "select count(*) from information_schema.columns where table_name = '{{ migration_adds.split('.')[0] }}' and column_name = '{{ migration_adds.split('.')[1] }}'"
+      environment:
+        PGPASSWORD: "{{ postgres_admin_password }}"
+      register: _schema_before
+      changed_when: false
+      failed_when: _schema_before.stdout != '0'
+      run_once: true
+
+    - name: The sampler - each Pi's served version every 0.5 s (bounded; ends on its stop file)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          rm -f {{ fixture }}/sampler.stop; : > {{ fixture }}/samples
+          v() { curl -fsS --max-time 1 "http://$1:3000/api/v1/version" 2>/dev/null \
+                  | sed -n 's/.*"version":"\([0-9]*[.][0-9]*[.][0-9]*\).*/\1/p' | grep . || echo down; }
+          for i in $(seq 1 2400); do
+            [ -e {{ fixture }}/sampler.stop ] && exit 0
+            echo "$(date +%s.%N) $(v {{ hostvars['pi1'].ansible_eth1.ipv4.address }}) $(v {{ hostvars['pi2'].ansible_eth1.ipv4.address }})" \
+              >> {{ fixture }}/samples
+            sleep 0.5
+          done
+      async: 1800
+      poll: 0
+      register: _sampler
+      changed_when: false
+      run_once: true
+      delegate_to: pi1
+
+- name: Production's upgrade playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-forgejo.yml
+
+- name: After - from outside the playbook
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../deploy/ansible/vars/forgejo.yml
+  vars:
+    from_version: "15.0.3"
+    fixture: /var/lib/forgejo-upgrade-test
+    migration_adds: action_run.workflow_source_commit
+  tasks:
+    - name: The sampler stopped
+      ansible.builtin.file:
+        path: "{{ fixture }}/sampler.stop"
+        state: touch
+        mode: '0600'
+      run_once: true
+      delegate_to: pi1
+
+    - name: Its end
+      ansible.builtin.async_status:
+        jid: "{{ hostvars['pi1']._sampler.ansible_job_id }}"
+      register: _sampler_end
+      until: _sampler_end.finished
+      retries: 10
+      delay: 1
+      run_once: true
+      delegate_to: pi1
+
+    - name: The samples, judged - never two versions up at once, both down at once, the VIP's Pi up first
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          awk -v first={{ 1 if hostvars['pi1']._vip_pi == 'pi1' else 2 }} '
+            BEGIN { mixed = 0; both_down = 0; up_first = "" }
+            { a = $2; b = $3 }
+            a != "down" && b != "down" && a != b { mixed++; if (m == "") m = $0 }
+            a == "down" && b == "down" { both_down++; after = 1; next }
+            after && up_first == "" { up_first = (a != "down" && b != "down") ? "both" : (a != "down" ? 1 : 2) }
+            END {
+              printf "samples=%d mixed=%d both_down=%d up_first=pi%s first_mixed=[%s]\n", NR, mixed, both_down, up_first, m
+              exit !(NR > 20 && mixed == 0 && both_down > 0 && up_first == first)
+            }' {{ fixture }}/samples
+      register: _judged
+      changed_when: false
+      failed_when: _judged.rc != 0
+      run_once: true
+      delegate_to: pi1
+
+    - name: Each serves the target
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _served_after
+      failed_when: _served_after.json.version is not search('^' ~ (forgejo_version | regex_escape) ~ '([^0-9]|$)')
+
+    - name: The column there now (the migration ran)
+      ansible.builtin.command: >-
+        psql -h 127.0.0.1 -p 5000 -U postgres -d forgejo -Atc
+        "select count(*) from information_schema.columns where table_name = '{{ migration_adds.split('.')[0] }}' and column_name = '{{ migration_adds.split('.')[1] }}'"
+      environment:
+        PGPASSWORD: "{{ postgres_admin_password }}"
+      register: _schema_after
+      changed_when: false
+      failed_when: _schema_after.stdout != '1'
+      run_once: true
+
+    - name: The marker clones from each Pi, at its commit
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+          git clone -q "http://127.0.0.1:3000/{{ forgejo_admin_user }}/upgrade-marker-{{ hostvars['pi1']._t0 }}.git" "$d/m"
+          git -C "$d/m" rev-parse HEAD
+      register: _clone
+      changed_when: false
+      failed_when: _clone.rc != 0 or _clone.stdout != hostvars['pi1']._marker_branch.json.commit.id
+
+    - name: Production's binary kept on each
+      ansible.builtin.command: "/usr/local/bin/forgejo-{{ from_version }} --version"
+      register: _kept
+      changed_when: false
+      failed_when: _kept.rc != 0 or from_version not in _kept.stdout
+
+    - name: When each Forgejo last stopped (the run's stop)
+      ansible.builtin.command: systemctl show -p ActiveExitTimestamp --value forgejo
+      register: _stopped_at
+      changed_when: false
+
+    - name: The run's dump on the VIP's Pi - whole, from after the test began and before either Forgejo stopped
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          f=$(ls -1t /var/backups/forgejo/forgejo-*-{{ from_version }}.sql.gz | head -1)
+          gzip -t "$f"
+          ! ls /var/backups/forgejo/*.part > /dev/null 2>&1
+          m=$(stat -c %Y "$f")
+          echo "$f $m"
+          [ "$m" -ge {{ hostvars['pi1']._t0 }} ]
+          {% for h in ['pi1', 'pi2'] %}
+          [ "$m" -le "$(date -d '{{ hostvars[h]._stopped_at.stdout }}' +%s)" ]
+          {% endfor %}
+      register: _dump_check
+      changed_when: false
+      when: inventory_hostname == hostvars['pi1']._vip_pi
+
+    - name: Each Forgejo's start, before the second run
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value forgejo
+      register: _started_before
+
+- name: A second run - nothing to do
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-forgejo.yml
+
+- name: Nothing restarted; a downgrade and a partial run refused
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../../deploy/ansible/vars/forgejo.yml
+  vars:
+    migration_adds: action_run.workflow_source_commit
+  tasks:
+    - name: Each Forgejo's start, after
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value forgejo
+      register: _started_after
+      changed_when: false
+      failed_when: _started_after.stdout != _started_before.stdout
+
+    - name: Refused - a downgrade, and a run without every Pi
+      ansible.builtin.command:
+        cmd: >-
+          env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+          venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+          playbooks/upgrade-forgejo.yml {{ item.args }}
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      loop:
+        - {name: downgrade, args: "-e forgejo_version=15.0.3", expect: "serves Forgejo {{ forgejo_version }}, newer than 15.0.3"}
+        - {name: one Pi, args: "--limit pi1,target", expect: "REFUSED: the run has"}
+      loop_control:
+        label: "{{ item.name }}"
+      register: _refused
+      changed_when: false
+      failed_when: _refused.rc == 0 or item.expect not in _refused.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Rehearsed
+      ansible.builtin.debug:
+        msg: >-
+          FORGEJO UPGRADE REHEARSED: {{ migration_adds }} added; {{ hostvars['pi1']._judged.stdout }}; marker {{ hostvars['pi1']._marker_branch.json.commit.id[:12] }} cloned from both;
+          dump {{ hostvars[hostvars['pi1']._vip_pi]._dump_check.stdout_lines[0] }}; second run restarted nothing; downgrade and
+          one-Pi runs refused
+      run_once: true

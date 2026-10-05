@@ -66,7 +66,8 @@
           # The Pis' tier-0 data into the Pi store - setup-pi-backups.yml (ops) explains it. Credentials from the unit's
           # EnvironmentFile. Exit 0 also when this Pi does not hold the VIP (the other one backs up).
           set -euo pipefail
-          ip -o -4 addr show | grep -q " ${PI_BACKUP_VIP}/" || { echo "not the VIP's Pi - the other backs up"; exit 0; }
+          # the VIP's address on this Pi (no grep -q in a pipe: under pipefail its early exit can fail the pipe)
+          [ -n "$(ip -o -4 addr show to "${PI_BACKUP_VIP}/32")" ] || { echo "not the VIP's Pi - the other backs up"; exit 0; }
           ts=$(date -u +%Y%m%dT%H%M%SZ)
           work=$(mktemp -d /var/backups/pi-tier0.XXXXXX)
           trap 'rm -rf "$work"' EXIT

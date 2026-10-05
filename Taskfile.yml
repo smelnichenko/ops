@@ -945,10 +945,10 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-upgrade.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml {{.CLI_ARGS}}
 
   test:forgejo-upgrade:
-    desc: "Vagrant: Forgejo on the Vagrant Pis to vars/forgejo.yml's version, as deploy:forgejo:upgrade does in production (the Vagrant guard first)"
+    desc: "Vagrant: the Pis set to production's Forgejo (15.0.3) on a fresh database with a marker repository, then upgrade-forgejo.yml as in production, checked from outside (sampled versions, schema, marker, kept binary, dump), run again, a downgrade and a partial run refused"
     deps: [deploy:install]
     cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/upgrade-forgejo.yml {{.CLI_ARGS}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-forgejo-upgrade.yml {{.CLI_ARGS}}
 
   deploy:versitygw:
     desc: "Deploy only the versitygw gateway on the Pis (targeted, skips other services). Flags after --, e.g. `-- -e vgw_port=9001`"

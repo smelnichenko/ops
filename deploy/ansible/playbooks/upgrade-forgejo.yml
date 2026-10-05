@@ -1,22 +1,25 @@
 ---
 # Forgejo on both Pis to forgejo_version (vars/forgejo.yml), its binary checked against the release's sha256.
 #
-# Both stop, both binaries are replaced, one starts (it migrates the database), then the other: a release may add a
-# migration (15.0.9 does - action_run's workflow_source_commit, backported into the LTS line), and an older Forgejo
-# does not start on a database a newer one migrated - so the two never run different versions, and git.pmon.dev is
-# down for about a minute. The Pi holding the VIP starts first.
+# Both stop, both binaries are replaced, one starts (it migrates the database), then the other: a release may change
+# the schema (15.0.9 adds action_run's workflow_source_commit, backported into the LTS line), an older Forgejo is not
+# built for a database a newer one changed (a numbered migration makes it refuse to start) - so the two never run
+# different versions on one database, and git.pmon.dev is down for about a minute. The Pi holding the VIP starts first.
 #
 # Before anything stops: a pg_dump of Forgejo's database through HAProxy (Patroni's primary) into
 # /var/backups/forgejo on the first Pi (the last 3 kept), and the running binary kept beside the new one
 # (/usr/local/bin/forgejo-<version>). The way back from a migrated database is that dump and that binary - by hand.
 # After: every Pi serves the new version (its /api/v1/version, not the file on disk) and `forgejo doctor check`
 # passes. Running versions are compared, never downgraded; a run where both already serve the target changes nothing.
+# Every Pi or none: a run without all of them (one down, or --limit) is refused, and any Pi failing stops the run on
+# all - after the stop that leaves Forgejo down rather than two versions on one database (the way back is above).
 #
 # Usage: task deploy:forgejo:upgrade   (production; Vagrant: task test:forgejo-upgrade)
 - name: Forgejo on both Pis to one version
   hosts: pis
   become: true
   gather_facts: true
+  any_errors_fatal: true
   vars_files:
     - ../vars/forgejo.yml
   vars:
@@ -25,6 +28,13 @@
     vip: "{{ keepalived_vip | default('192.168.11.5') }}"
     dump_dir: /var/backups/forgejo
   tasks:
+    - name: Every Pi in the run (one left out would keep the old version on the migrated database)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | sort == groups['pis'] | sort
+        fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }}, Forgejo runs on {{ groups['pis'] | sort }}"
+        quiet: true
+      run_once: true
+
     - name: The binary for this Pi's architecture
       ansible.builtin.set_fact:
         _arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
@@ -53,14 +63,14 @@
       when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [forgejo_version]
 
     - name: The Pi that starts first (it holds the VIP)
-      ansible.builtin.command: ip -o -4 addr show
+      ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
       register: _addrs
       changed_when: false
 
     - name: The first Pi
       ansible.builtin.set_fact:
         _first: >-
-          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', 'search', (vip | regex_escape) ~ '/')
+          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', '!=', '')
               | map(attribute='inventory_hostname') | list + ansible_play_hosts) | first }}
       run_once: true
 
@@ -84,15 +94,18 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
+          # the password on stdin, not in the environment Ansible puts on the command line
+          read -r PGPASSWORD; export PGPASSWORD
           mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
           out={{ dump_dir }}/forgejo-$(date -u +%Y%m%dT%H%M%SZ)-{{ _running }}.sql.gz
-          pg_dump -h 127.0.0.1 -p 5000 -U postgres forgejo | gzip > "$out"
-          gzip -t "$out"
-          [ "$(gzip -dc "$out" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
+          # written aside and renamed once checked: a failed dump never counts among the 3 kept
+          pg_dump -h 127.0.0.1 -p 5000 -U postgres forgejo | gzip > "$out.part"
+          gzip -t "$out.part"
+          [ "$(gzip -dc "$out.part" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
+          mv "$out.part" "$out"
           ls -1t {{ dump_dir }}/forgejo-*.sql.gz | tail -n +4 | xargs -r rm -f
           echo "$out $(du -h "$out" | cut -f1)"
-      environment:
-        PGPASSWORD: "{{ forgejo_db_password }}"
+        stdin: "{{ forgejo_db_password }}"
       register: _dump
       changed_when: true
       delegate_to: "{{ _first }}"
