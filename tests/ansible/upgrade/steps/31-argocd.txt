@@ -2,7 +2,10 @@
 # with 3.4 - and it ships v3.3.9) with the image pinned to the 3.3 line's newest patch, through setup-argocd.yml as on
 # ten (host-side). At the rollout argocd_version becomes 9.5.11; the image v3.3.14 comes from the playbook's
 # argocd_image_pins for chart 9.5.11 (not an -e override, which the rollout would make the default under the later
-# charts too). The flags after argocd_version are the Vagrant copy's own (Taskfile test:upgrade:argo).
+# charts too). It is also ten's first setup-argocd.yml run since 2026-10-01, so it brings what the playbook gained
+# since: the Application health check (2026-10-02 - from then the root waits for each sync wave's apps to be Healthy,
+# retrying about 50 minutes, so one unhealthy app holds back every later wave), the root's sync retries and the
+# git-reading token (2026-10-04/05). Every app is Healthy before it (production's begin settles on that).
 # outage: Argo CD restarts - no sync meanwhile, the applications keep running
 # abort: setup-argocd.yml with the old chart version - its no-downgrade check refuses: by hand, not rehearsed
 helm argocd/argocd argo-cd-9.5.4 v3.3.8 => helm argocd/argocd argo-cd-9.5.11 v3.3.9

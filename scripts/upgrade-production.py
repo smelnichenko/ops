@@ -14,7 +14,11 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   playbooks  the step's playbook lines against production                                               -> playbooks
   defaults   the step's default lines (scripts/upgrade-defaults.py) committed to ops main and pushed: a playbook
              run from now on installs what production runs                                             -> defaults
-  done       ten's inventory as step N leaves it and Argo settled. The first green call records checked; a call at
+  done       ten's inventory as step N leaves it and Argo settled (after a step that changes cert-manager - its
+             cert-renew line - first a throwaway certificate issued through production's ACME solver: acme-check.yml;
+             after one that changes CNPG, PostgreSQL or their store - barman-check - a fresh base backup:
+             postgres-base-backup.yml).
+             The first green call records checked; a call at
              least the step's soak later (its soak line; else 60 minutes after a wave0 step, 15 otherwise) that is
              green again with no container restarted since records done. A red call after checked records
              check-failed: the soak starts again from the next green call.
@@ -80,12 +84,13 @@ def step_names():
 
 
 def step_info(name):
-    playbooks, wave0, soak, out_of_sync = [], [], [], []
+    playbooks, wave0, soak, out_of_sync, flags = [], [], [], [], set()
     inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak,
-              out_of_sync=out_of_sync)
+              out_of_sync=out_of_sync, flags=flags)
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
             "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
-            "defaults": bool(dflt.default_lines(name))}
+            "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
+            "base_backup": "barman-check" in flags}
 
 
 # ---- the ledger: rules (pure) ---------------------------------------------------------------------------------------
@@ -539,6 +544,10 @@ def done(step):
     if checked is not None and left > 0:
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
+    if checked is None and info["acme"]:
+        refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
+    if checked is None and info["base_backup"]:
+        refuse([] if ansible("playbooks/postgres-base-backup.yml") else ["no fresh Postgres base backup (above)"])
     # after the soak: no container may have restarted since the first green check
     green = check(step, None if checked is None else (now - checked).total_seconds(), deciding=checked is not None)
     if checked is None:

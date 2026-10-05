@@ -3,7 +3,8 @@
 # which ten has in cilium-config by hand and gets into its Helm values here). At the rollout cilium_version becomes
 # 1.19.8.
 # outage: the Cilium agent and operator restart on the node - established connections keep, new ones may wait seconds
-# abort: setup-kubeadm.yml --tags cilium with the old version (a downgrade within the minor; not rehearsed)
+# abort: `helm -n kube-system rollback cilium` to 1.19.1 (a downgrade within the minor) - setup-kubeadm.yml refuses an
+# older Cilium (tasks/no-downgrade.yml); not rehearsed
 helm kube-system/cilium cilium-1.19.1 1.19.1 => helm kube-system/cilium cilium-1.19.8 1.19.8
 image quay.io/cilium/cilium v1.19.1 => image quay.io/cilium/cilium v1.19.8
 image quay.io/cilium/cilium-envoy v1.35.9-1770979049-232ed4a26881e4ab4f766f251f258ed424fff663 => image quay.io/cilium/cilium-envoy v1.37.6-1789133542-cbec91f666af0bf742da986d43832932dbb26b82

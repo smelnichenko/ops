@@ -5,8 +5,8 @@
 # ONE-WAY: the safe-upgrades policy refuses any gateway.networking.k8s.io CRD of bundle v1.0-v1.4 - going back means
 # deleting that policy first, and a setup-kubeadm run with the old default (v1.2.1) fails until the default moves.
 # outage: none - CRDs only
-# abort: one-way: v1.5's safe-upgrades policy refuses the older CRDs; back only by removing that policy first (not
-# rehearsed)
+# abort: one-way: v1.5's safe-upgrades policy refuses the older CRDs, and setup-kubeadm.yml refuses an older bundle
+# (tasks/no-downgrade.yml); back only by hand, removing that policy first - not written down, not rehearsed
 crd gateway-api v1.2.1 => crd gateway-api v1.5.1
 playbook setup-kubeadm.yml --tags gateway-api -e gateway_api_version=v1.5.1
 # the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)

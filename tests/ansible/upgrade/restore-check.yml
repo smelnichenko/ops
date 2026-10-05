@@ -76,7 +76,7 @@
       changed_when: false
 
     - name: A fresh base backup
-      ansible.builtin.include_tasks: tasks/cnpg-backup.yml
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/cnpg-backup.yml"
       vars:
         cnpg_backup: "{{ _backup }}"
       when: _fresh | bool

@@ -2,7 +2,8 @@
 # at the rollout local_path_provisioner_version becomes v0.0.37). The manifest now names the image docker.io/... and
 # adds health probes.
 # outage: the provisioner restarts - no new volume meanwhile; the existing ones untouched
-# abort: setup-kubeadm.yml --tags local-path with the old version
+# abort: the old provisioner's manifest applied by hand - setup-kubeadm.yml refuses an older one
+# (tasks/no-downgrade.yml); not rehearsed. Existing volumes are not touched either way
 image rancher/local-path-provisioner v0.0.35 => image docker.io/rancher/local-path-provisioner v0.0.37
 playbook setup-kubeadm.yml --tags local-path -e local_path_provisioner_version=v0.0.37
 # the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)

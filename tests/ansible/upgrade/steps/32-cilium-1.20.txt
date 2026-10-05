@@ -5,7 +5,8 @@
 # cilium_values carry upgradeCompatibility 1.19 (Cilium's upgrade guide): ten's cilium-config then changes only by the
 # keys of 1.20's new features, all at their off/default values - envoy-xds-mode stays as 1.19 had it, not ads.
 # outage: as the 1.19.8 step: the agent and operator restart on the node
-# abort: setup-kubeadm.yml --tags cilium with 1.19.8 (upgradeCompatibility 1.19 kept; the downgrade not rehearsed)
+# abort: `helm -n kube-system rollback cilium` to 1.19.8 (upgradeCompatibility 1.19 kept) - setup-kubeadm.yml refuses an
+# older Cilium (tasks/no-downgrade.yml); not rehearsed
 helm kube-system/cilium cilium-1.19.8 1.19.8 => helm kube-system/cilium cilium-1.20.2 1.20.2
 image quay.io/cilium/cilium v1.19.8 => image quay.io/cilium/cilium v1.20.2
 image quay.io/cilium/hubble-relay v1.19.8 => image quay.io/cilium/hubble-relay v1.20.2

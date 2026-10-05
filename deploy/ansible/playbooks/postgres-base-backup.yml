@@ -1,0 +1,47 @@
+---
+# CNPG backs Postgres up after a change to CNPG, PostgreSQL or their store: the cluster's WAL archiving works (its
+# ContinuousArchiving condition) and a fresh base backup to its object store completes. This is the backup the data
+# depends on - Velero holds no data volume (local-path hostPath PVs). After a PostgreSQL major upgrade it is also the
+# first base backup the new major has: the old major's WAL cannot restore it, and the daily ScheduledBackup may be up
+# to a day away. The Backup object is removed afterwards; its data stays in the store.
+#
+# Production's done phase runs it after a step with a barman-check line (scripts/upgrade-production.py); the Vagrant
+# runner runs the same playbook after such steps (tests/ansible/upgrade/barman-check.yml).
+#
+# Usage: ansible-playbook -i inventory/<env>.yml playbooks/postgres-base-backup.yml
+#        [-e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres]
+- name: CNPG backs Postgres up to its object store
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    pg_namespace: schnappy-production
+    cluster: schnappy-production-postgres
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n {{ pg_namespace }}"
+  tasks:
+    - name: The backup's name (fixed once - a lookup in vars is re-run on every use)
+      ansible.builtin.set_fact:
+        cnpg_backup: "upgrade-base-backup-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+    # shell, not command: the command module strips the filter's double quotes
+    - name: WAL archiving works (the cluster's ContinuousArchiving condition)
+      ansible.builtin.shell: >-
+        {{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }}
+        -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}'
+      register: _archiving
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _archiving.stdout == 'True'
+
+    - name: A fresh base backup
+      ansible.builtin.include_tasks: tasks/cnpg-backup.yml
+
+    - name: Remove the backup object (its data stays in the store)
+      ansible.builtin.command: "{{ kubectl }} delete backups.postgresql.cnpg.io {{ cnpg_backup }}"
+      changed_when: true
+
+    - name: CNPG backs up
+      ansible.builtin.debug:
+        msg: "BASE BACKUP OK: WAL archiving True, base backup {{ cnpg_backup }} completed"

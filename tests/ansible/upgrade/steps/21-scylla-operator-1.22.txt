@@ -4,7 +4,12 @@
 # the targets one got a proxy and stayed Running for good (Vagrant 2026-10-05).
 # outage: the operator restarts; the ScyllaDB pod rolls when its sidecar image changes - ScyllaDB (one node) unavailable
 # for that restart; Scylla Manager restarts (no backup or repair meanwhile)
-# abort: revert the step's merge on main (Argo syncs back) - the operator's downgrade not rehearsed
+# abort: the operator - revert the step's merge on main (Argo syncs back), its downgrade not rehearsed. Scylla Manager's
+# own backend ScyllaDB moves 2026.1.3 -> 2026.2.5 and does not go back (a revert would start the old release on the
+# newer files): back by a fresh backend at the old version instead - its volume deleted (Manager's state only; with the
+# operator's approval) - after which the operator registers the clusters and their backup and repair tasks again from
+# their ScyllaDBManagerClusterRegistration and ScyllaDBManagerTask resources; the snapshots stay in the store, where
+# sctool lists them; the tasks' history is lost. Not rehearsed
 argo-chart scylla-manager scylla-manager@v1.21.1 => argo-chart scylla-manager scylla-manager@v1.22.0
 argo-chart scylla-operator scylla-operator@v1.21.1 => argo-chart scylla-operator scylla-operator@v1.22.0
 image scylladb/scylla-operator 1.21.1 => image scylladb/scylla-operator 1.22.0

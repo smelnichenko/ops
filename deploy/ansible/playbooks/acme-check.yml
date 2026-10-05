@@ -1,0 +1,82 @@
+---
+# ACME issuance through production's DNS-01 solver, end to end: a throwaway certificate for acme-check.pmon.dev from
+# Let's Encrypt's STAGING directory (no production rate limit, an untrusted chain nobody uses), solved by the same
+# solvers as letsencrypt-dns (the porkbun webhook: a TXT record at Porkbun, removed by cert-manager after). Ready within
+# 10 minutes, or the run fails with the order's and challenge's state. Everything it made is deleted whatever happens.
+#
+# Why: the Vagrant copy renews only self-signed and CA certificates (tests/ansible/upgrade/cert-check.yml); a
+# cert-manager upgrade that broke the webhook would show only at the wildcard's next renewal - weeks later, with no
+# one watching. Production's done phase runs it after a step that changes cert-manager (its cert-renew line).
+#
+# Usage: ansible-playbook -i inventory/production.yml playbooks/acme-check.yml
+- name: ACME issuance through production's DNS-01 solver (Let's Encrypt staging)
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    check_name: upgrade-acme-check
+    check_namespace: cert-manager
+    check_dns_name: acme-check.pmon.dev
+    staging: https://acme-staging-v02.api.letsencrypt.org/directory
+  tasks:
+    - name: The production issuer's solvers and email
+      ansible.builtin.command: "{{ kubectl }} get clusterissuer letsencrypt-dns -o json"
+      register: _issuer
+      changed_when: false
+
+    - name: A throwaway certificate issued, then everything removed
+      block:
+        - name: A staging issuer with the production issuer's solvers
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              {{ kubectl }} apply -f - <<'EOF'
+              {{ {'apiVersion': 'cert-manager.io/v1', 'kind': 'ClusterIssuer', 'metadata': {'name': check_name},
+                  'spec': {'acme': {'server': staging, 'email': (_issuer.stdout | from_json).spec.acme.email,
+                                    'privateKeySecretRef': {'name': check_name ~ '-account'},
+                                    'solvers': (_issuer.stdout | from_json).spec.acme.solvers}}} | to_json }}
+              EOF
+              {{ kubectl }} wait clusterissuer {{ check_name }} --for=condition=Ready --timeout=120s
+          changed_when: true
+
+        - name: The certificate, Ready within 10 minutes
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              {{ kubectl }} -n {{ check_namespace }} apply -f - <<'EOF'
+              {{ {'apiVersion': 'cert-manager.io/v1', 'kind': 'Certificate',
+                  'metadata': {'name': check_name, 'namespace': check_namespace},
+                  'spec': {'secretName': check_name ~ '-tls', 'dnsNames': [check_dns_name],
+                           'issuerRef': {'name': check_name, 'kind': 'ClusterIssuer'}}} | to_json }}
+              EOF
+              if ! {{ kubectl }} -n {{ check_namespace }} wait certificate {{ check_name }} --for=condition=Ready \
+                   --timeout=600s; then
+                {{ kubectl }} -n {{ check_namespace }} get certificaterequests,orders.acme.cert-manager.io,challenges.acme.cert-manager.io \
+                  -o wide || true
+                {{ kubectl }} -n {{ check_namespace }} describe challenges.acme.cert-manager.io | tail -30 || true
+                exit 1
+              fi
+              {{ kubectl }} -n {{ check_namespace }} get certificate {{ check_name }} \
+                -o jsonpath='{.status.notAfter} {.status.conditions[?(@.type=="Ready")].message}'
+          register: _acme
+          changed_when: true
+      always:
+        - name: The certificate, its secret, the staging issuer and its account key removed
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              rc=0
+              {{ kubectl }} -n {{ check_namespace }} delete certificate {{ check_name }} --ignore-not-found --wait=true || rc=1
+              {{ kubectl }} -n {{ check_namespace }} delete secret {{ check_name }}-tls --ignore-not-found || rc=1
+              {{ kubectl }} delete clusterissuer {{ check_name }} --ignore-not-found || rc=1
+              {{ kubectl }} -n {{ check_namespace }} delete secret {{ check_name }}-account --ignore-not-found || rc=1
+              exit $rc
+          changed_when: true
+
+    - name: Issued
+      ansible.builtin.debug:
+        msg: "ACME ISSUANCE: {{ check_dns_name }} from Let's Encrypt staging through letsencrypt-dns's solvers - {{ _acme.stdout }}"
