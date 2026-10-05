@@ -7,7 +7,7 @@
 # try). A failed kubectl call is not green. On timeout it prints every app and pod that is not green, then fails.
 #
 # One green poll ended the wait, a failed sync passed, restarts were not looked at, and a failed pod query counted as
-# every pod ready. stable_polls 4 holds green for 30 s; the step runner's first wait, before a
+# every pod ready. stable_polls 4 holds green for ~10 s (3 s polls); the step runner's first wait, before a
 # step's playbooks, takes 1 - the wait after them decides the step.
 #
 # With -e expect_mirror=true (after a mirror push) every app source from the mirrored repos must also be synced to the
@@ -38,7 +38,8 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     settle_minutes: 40
-    poll_seconds: 10
+    # 4 polls 3 s apart hold green ~10 s: a pod that flaps within that shows; a slower crash loop is the restart rule's
+    poll_seconds: 3
     stable_polls: 4
     expect_mirror: false
     allow_out_of_sync: ""

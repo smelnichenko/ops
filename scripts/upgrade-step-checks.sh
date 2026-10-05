@@ -25,20 +25,22 @@ vagrant ssh-config > "$logs/ssh-config" 2>/dev/null || { echo "vagrant ssh-confi
 export VAGRANT_SSH_CONFIG=$logs/ssh-config
 
 names=(data survival storage metrics smoke inventory)
+t0=$(date +%s)
 play ../../tests/ansible/upgrade/data-check.yml -e mode=verify > "$logs/data" 2>&1 & pids[0]=$!
 play ../../tests/ansible/upgrade/survival-check.yml -e mode=verify -e clickhouse_compat="$clickhouse_compat" \
   -e clickhouse_users="$clickhouse_users" > "$logs/survival" 2>&1 & pids[1]=$!
 play ../../tests/ansible/upgrade/storage-check.yml > "$logs/storage" 2>&1 & pids[2]=$!
 play ../../tests/ansible/upgrade/metrics-check.yml > "$logs/metrics" 2>&1 & pids[3]=$!
 scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref" > "$logs/smoke" 2>&1 & pids[4]=$!
-{ ssh -F "$VAGRANT_SSH_CONFIG" kubeadm 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt \
+# the isolation probe's namespace is the test's own (tests/ansible/upgrade/isolate-cluster.yml), not production's
+{ ssh -F "$VAGRANT_SSH_CONFIG" kubeadm 'sudo INVENTORY_EXCLUDE_NAMESPACES=isolation-probe bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt \
     && for p in pi1 pi2; do ssh -F "$VAGRANT_SSH_CONFIG" $p 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done \
        >> .upgrade/vagrant-inventory.txt; } > "$logs/inventory" 2>&1 & pids[5]=$!
 
 failed=()
 for i in "${!names[@]}"; do
   wait "${pids[$i]}"; rc=$?
-  echo "===== check ${names[$i]} (exit $rc)"
+  echo "===== check ${names[$i]} (exit $rc, done by $(( $(stat -c %Y "$logs/${names[$i]}") - t0 )) s)"
   cat "$logs/${names[$i]}"
   [ "$rc" = 0 ] || failed+=("${names[$i]}")
 done

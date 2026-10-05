@@ -472,6 +472,10 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --restore-undo {{.STEP}}
       WAVE0:
         sh: scripts/upgrade-expected-inventory.py --wave0 {{.STEP}}
+      # host-side changes (playbook lines): only then a settle before them is needed - without, the deciding settle
+      # below waits for the same sync on its own
+      HAS_PLAYBOOKS:
+        sh: scripts/upgrade-expected-inventory.py --playbooks {{.STEP}} | grep -q . && echo yes || echo no
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       # Wave 0 first, as production takes it before a one-way step changes anything: each of the step's wave0 stores
@@ -485,8 +489,14 @@ tasks:
           done
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
-      # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1 -e expect_apps=true
+      # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them -
+      # before a step's playbooks only (the cluster side first); a step without them is waited for once, below
+      - cmd: |
+          if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e stable_polls=1 -e expect_apps=true
+          else
+            echo "SETTLE BEFORE PLAYBOOKS: none (no playbook lines)"
+          fi
       # host-side changes (this step's playbook lines), after the cluster side
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
@@ -574,11 +584,33 @@ tasks:
           CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
 
   test:upgrade:build:
-    desc: Build the whole Vagrant copy of production from scratch - the baseline, then the Argo layer (VMs stay up)
+    desc: Build the whole Vagrant copy of production - the baseline (restored from its base-ready snapshot when its inputs are unchanged and it is under 3 days old, else built from scratch), then the Argo layer (VMs stay up)
+    cmds:
+      - task: _upgrade:base-restore
+      - task: _upgrade:base-fresh
+      - task: test:upgrade:argo
+
+  # the base-ready snapshot, when scripts/upgrade-base-fingerprint.py finds the base's inputs unchanged (an hour's build
+  # saved); one of these two runs, the other is up to date
+  _upgrade:base-restore:
+    internal: true
+    status:
+      - "! scripts/upgrade-base-fingerprint.py --check"
+    cmds:
+      - cmd: scripts/upgrade-base-fingerprint.py --check
+      - cmd: vagrant halt
+      - cmd: for vm in pi1 pi2 kubeadm; do vagrant snapshot restore --no-start "$vm" base-ready; done
+      - cmd: vagrant up --no-provision
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
+
+  _upgrade:base-fresh:
+    internal: true
+    status:
+      - scripts/upgrade-base-fingerprint.py --check
     cmds:
       - task: _upgrade:base
       - task: _upgrade:snapshot-base
-      - task: test:upgrade:argo
+      - cmd: scripts/upgrade-base-fingerprint.py --save
 
   # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
   # step, not the chain; this proves the chain, unattended, from nothing.

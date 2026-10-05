@@ -178,15 +178,21 @@
     - name: Prove it - a pod cannot reach production's VIP, and can reach the Vagrant VIP
       ansible.builtin.shell: |
         set -uo pipefail
-        {{ kubectl }} delete pod isolation-probe -n default --ignore-not-found --wait=true > /dev/null
-        {{ kubectl }} run isolation-probe -n default --restart=Never --image=curlimages/curl:8.12.1 \
-          --overrides='{"metadata":{"labels":{"sidecar.istio.io/inject":"false"}}}' --command -- sh -c '
-            p=https://{{ production_vip }}:8200/v1/sys/health; v=https://{{ vagrant_vip }}:8200/v1/sys/health
-            curl -sk -o /dev/null -m 1 "$p" && echo PRODUCTION-REACHABLE || echo production-blocked
-            curl -sk -o /dev/null -m 10 "$v" && echo vagrant-reachable || echo VAGRANT-UNREACHABLE' > /dev/null
-        {{ kubectl }} wait pod/isolation-probe -n default --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s > /dev/null
-        {{ kubectl }} logs isolation-probe -n default
-        {{ kubectl }} delete pod isolation-probe -n default --wait=false > /dev/null
+        # one probe pod kept between steps (a new one each step cost its start, ~7 s) in its own namespace, which the
+        # step's version inventory leaves out (it is the test's, not production's); made again when gone (a node
+        # restart) - the probe itself runs fresh each time, through the pod network the policy governs
+        N="-n isolation-probe"
+        {{ kubectl }} create namespace isolation-probe --dry-run=client -o yaml | {{ kubectl }} apply -f - > /dev/null
+        if [ "$({{ kubectl }} get pod isolation-probe $N -o jsonpath='{.status.phase}' 2> /dev/null)" != Running ]; then
+          {{ kubectl }} delete pod isolation-probe $N --ignore-not-found --wait=true > /dev/null
+          {{ kubectl }} run isolation-probe $N --restart=Never --image=curlimages/curl:8.12.1 \
+            --overrides='{"metadata":{"labels":{"sidecar.istio.io/inject":"false"}}}' --command -- sleep 2147483647 > /dev/null
+          {{ kubectl }} wait pod/isolation-probe $N --for=condition=Ready --timeout=120s > /dev/null
+        fi
+        {{ kubectl }} exec isolation-probe $N -- sh -c '
+          p=https://{{ production_vip }}:8200/v1/sys/health; v=https://{{ vagrant_vip }}:8200/v1/sys/health
+          curl -sk -o /dev/null -m 1 "$p" && echo PRODUCTION-REACHABLE || echo production-blocked
+          curl -sk -o /dev/null -m 10 "$v" && echo vagrant-reachable || echo VAGRANT-UNREACHABLE'
       args:
         executable: /bin/bash
       register: _pod_probe
