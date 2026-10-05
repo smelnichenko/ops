@@ -173,6 +173,25 @@
       ansible.builtin.set_fact:
         _patroni_first_install: "{{ not _patroni_unit_file.stat.exists and not _patroni_data_mark.stat.exists }}"
 
+    # a first install clears the data directory (Debian's own cluster, Keycloak's dumped first; a replica copies the
+    # leader's) - never on the node Consul names as the cluster's leader, whatever this Pi's files say
+    - name: Patroni's leader in Consul
+      ansible.builtin.command: consul kv get service/{{ patroni_scope }}/leader
+      register: _patroni_leader_key
+      changed_when: false
+      failed_when: false
+      when: _patroni_first_install | bool
+
+    - name: Never the leader's data
+      ansible.builtin.fail:
+        msg: >-
+          REFUSED on {{ inventory_hostname }}: no Patroni unit or file here, but Consul names it the leader of
+          {{ patroni_scope }} - its data directory would be cleared; repair it by hand
+      when:
+        - _patroni_first_install | bool
+        - _patroni_leader_key.rc | default(1) == 0
+        - _patroni_leader_key.stdout | trim == inventory_hostname
+
     - name: Patroni had this node but is not running - this playbook never clears its data
       ansible.builtin.fail:
         msg: >-
@@ -346,14 +365,15 @@
       loop: [forgejo, keycloak]
       changed_when: true
 
-    - name: Restore Keycloak dump if exists
+    # only the dump this run took (a first install): a leftover file replayed into a live database on a re-run would
+    # write old rows over new ones; restored, it is moved aside
+    - name: Restore the Keycloak dump this run took
       ansible.builtin.shell: |
-        if [ -f /tmp/keycloak-pre-patroni.sql ]; then
-          PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -d keycloak < /tmp/keycloak-pre-patroni.sql
-          echo "restored $(wc -l < /tmp/keycloak-pre-patroni.sql) lines"
-        else
-          echo "no dump to restore"
-        fi
+        set -eo pipefail
+        PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -d keycloak < /tmp/keycloak-pre-patroni.sql
+        echo "restored $(wc -l < /tmp/keycloak-pre-patroni.sql) lines"
+        mkdir -p /var/backups && mv /tmp/keycloak-pre-patroni.sql /var/backups/keycloak-pre-patroni-$(date -u +%Y%m%dT%H%M%SZ).sql
+      when: hostvars[inventory_hostname].pg_dump_result is defined and hostvars[inventory_hostname].pg_dump_result is changed
       changed_when: true
 
 # Wait for the replica to finish its pg_basebackup + join the cluster.
@@ -412,6 +432,13 @@
       register: _pgbouncer_state
       failed_when: false
 
+    - name: PgBouncer installed here is running (else a re-run would move Forgejo and Keycloak to :5000 and restart them)
+      ansible.builtin.fail:
+        msg: "REFUSED on {{ inventory_hostname }}: PgBouncer is installed but {{ _pgbouncer_state.status.ActiveState }} - start it first"
+      when:
+        - _pgbouncer_state.status.LoadState | default('not-found') == 'loaded'
+        - _pgbouncer_state.status.ActiveState | default('') != 'active'
+
     - name: The database port Forgejo and Keycloak use
       ansible.builtin.set_fact:
         _db_port: "{{ '6432' if _pgbouncer_state.status.ActiveState | default('') == 'active' else '5000' }}"
@@ -434,10 +461,10 @@
     # restarting Forgejo/Keycloak. HAProxy takes ~60–90s after first boot to
     # resolve Consul DNS + complete the L7 /primary check. Restarting Forgejo
     # before the backend is ready causes Forgejo's init to crash-loop.
-    - name: Wait for HAProxy to have a healthy postgres_primary backend
+    - name: Wait for HAProxy to have a healthy postgres_primary backend (through the port the apps use)
       ansible.builtin.shell: |
         set -o pipefail
-        psql postgresql://postgres@127.0.0.1:5000/postgres -c 'SELECT 1' 2>/dev/null
+        psql postgresql://postgres@127.0.0.1:{{ _db_port }}/postgres -c 'SELECT 1' 2>/dev/null
       environment:
         PGPASSWORD: "{{ postgres_admin_password }}"
       register: _haproxy_check

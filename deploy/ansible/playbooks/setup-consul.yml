@@ -51,37 +51,64 @@
         - /etc/consul.d
         - /var/lib/consul/data
 
-    # The gossip key the servers already share, kept: a new one each run changed every config, and the restart that
-    # followed took all three servers down at once (Vault and Patroni with their quorum). Generated only where none
-    # has one - a first install; two different keys refuse.
-    - name: The gossip key this server has
-      ansible.builtin.shell: |
-        set -o pipefail
-        sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl 2>/dev/null || true
-      args:
+    # The gossip key, kept - the one the running servers use: their keyring's primary key (Consul reads `encrypt` only
+    # on its first start; its keyring in the data directory wins after, so a config key it never loaded is a dead key,
+    # and a server rebuilt from an empty data directory with it could not join). Where none runs (a first install),
+    # the key the configs share; generated only where neither exists. A new key each run changed every config, and the
+    # restart that followed took all three servers down at once. Running servers on different keys - or, none
+    # running, configs with different keys - refuse.
+    - name: The key this server's running Consul uses, and the one its config has
+      ansible.builtin.shell:
         executable: /bin/bash
-      register: _consul_key_here
+        cmd: |
+          set -euo pipefail
+          if ring=$(curl -sf --max-time 5 http://127.0.0.1:8500/v1/operator/keyring); then
+            python3 -c '
+          import json, sys
+          lan = [p for p in json.load(sys.stdin) if not p["WAN"]]
+          print(" ".join(sorted({k for p in lan for k in p["PrimaryKeys"]})))' <<< "$ring"
+          else
+            echo
+          fi
+          sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl 2>/dev/null || true
+      register: _consul_keys_here
       changed_when: false
 
-    - name: One key among the servers that have one
+    - name: Its keys
+      ansible.builtin.set_fact:
+        _consul_key_live: "{{ (_consul_keys_here.stdout_lines + ['', ''])[0] }}"
+        _consul_key_conf: "{{ (_consul_keys_here.stdout_lines + ['', ''])[1] }}"
+
+    - name: One key among the running servers (or, none running, among the configs)
       ansible.builtin.assert:
-        that: ansible_play_hosts | map('extract', hostvars, ['_consul_key_here', 'stdout']) | select | unique | list | length <= 1
-        fail_msg: "REFUSED: the Consul servers have different gossip keys - fix that by hand first"
+        that:
+          - _live | select('search', ' ') | list | length == 0
+          - _live | unique | list | length <= 1
+          - _live | length > 0 or _conf | unique | list | length <= 1
+        fail_msg: >-
+          REFUSED: the Consul servers have different gossip keys (running: {{ _live | length }} servers on
+          {{ _live | unique | list | length }} keys; configs: {{ _conf | unique | list | length }} keys) - fix that
+          by hand first
         quiet: true
+      vars:
+        _live: "{{ ansible_play_hosts | map('extract', hostvars, '_consul_key_live') | select | list }}"
+        _conf: "{{ ansible_play_hosts | map('extract', hostvars, '_consul_key_conf') | select | list }}"
       run_once: true
 
-    - name: A key generated - only on a first install, where no server has one
+    - name: A key generated - only on a first install, where no server runs or has one
       ansible.builtin.command: consul keygen
       register: consul_key_gen
       when:
         - inventory_hostname == 'pi1'
-        - ansible_play_hosts | map('extract', hostvars, ['_consul_key_here', 'stdout']) | select | list | length == 0
+        - ansible_play_hosts | map('extract', hostvars, '_consul_key_live') | select | list | length == 0
+        - ansible_play_hosts | map('extract', hostvars, '_consul_key_conf') | select | list | length == 0
       changed_when: true
 
     - name: Set encryption key fact
       ansible.builtin.set_fact:
         consul_encrypt_key: >-
-          {{ (ansible_play_hosts | map('extract', hostvars, ['_consul_key_here', 'stdout']) | select | list
+          {{ (ansible_play_hosts | map('extract', hostvars, '_consul_key_live') | select | list
+              + ansible_play_hosts | map('extract', hostvars, '_consul_key_conf') | select | list
               + [hostvars['pi1']['consul_key_gen']['stdout'] | default('')]) | first }}
 
     - name: Consul running here before this run (a restart then waits for the others)
@@ -183,36 +210,72 @@
       delay: 5
 
 # ─── Changed servers restarted one at a time ─────────────────────────────────
-# each back in the cluster, with a leader and all three voters, before the next: two down at once is a lost quorum
+# Each back and caught up - autopilot: every server healthy (in contact, its log caught up), one loss tolerated -
+# before the next: two down at once is a lost quorum. Patroni is paused around each restart (from a Pi not being
+# restarted): its leader talks to its own Pi's Consul agent and, unpaused, demotes Postgres when that agent is gone
+# longer than its retry_timeout (10 s).
 - name: Restart the Consul servers whose config or unit changed, one at a time
   hosts: pi1,pi2,target
   become: true
   gather_facts: false
   serial: 1
+  vars:
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+    _other_pi: "{{ 'pi2' if inventory_hostname == 'pi1' else 'pi1' }}"
   tasks:
-    - name: Restarted
-      ansible.builtin.systemd_service:
-        name: consul
-        state: restarted
-        daemon_reload: true
+    - name: A restart here, and Patroni running to pause around it
       when:
         - _consul_config.changed or _consul_unit.changed
         - _consul_before.status.ActiveState | default('') == 'active'
+      block:
+        - name: Patroni running (a first install has none yet)
+          ansible.builtin.systemd:
+            name: patroni
+          register: _patroni_unit
+          failed_when: false
+          delegate_to: "{{ _other_pi }}"
 
-    - name: Back, with a leader and three voters
-      ansible.builtin.shell: |
-        set -o pipefail
-        consul operator raft list-peers | awk 'NR > 1 && $5 == "true" {v++} NR > 1 && $4 == "leader" {l++} END {print v + 0, l + 0}'
-      args:
-        executable: /bin/bash
-      register: _consul_peers
-      retries: 30
-      delay: 5
-      until: _consul_peers.rc == 0 and _consul_peers.stdout == '3 1'
-      changed_when: false
-      when:
-        - _consul_config.changed or _consul_unit.changed
-        - _consul_before.status.ActiveState | default('') == 'active'
+        - name: Whether to pause it
+          ansible.builtin.set_fact:
+            _patroni_active: "{{ _patroni_unit.status.ActiveState | default('') == 'active' }}"
+
+        - name: Restarted, Patroni paused meanwhile
+          block:
+            - name: Patroni paused - no demotion while this server's agent is away
+              ansible.builtin.command: "{{ patronictl }} pause --wait"
+              changed_when: true
+              delegate_to: "{{ _other_pi }}"
+              when: _patroni_active | bool
+
+            - name: Restarted
+              ansible.builtin.systemd_service:
+                name: consul
+                state: restarted
+                daemon_reload: true
+
+            - name: Back and caught up - every server healthy, one loss tolerated
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  curl -sf --max-time 5 http://127.0.0.1:8500/v1/operator/autopilot/health | python3 -c '
+                  import json, sys
+                  h = json.load(sys.stdin)
+                  s = h["Servers"]
+                  ok = h["Healthy"] and h["FailureTolerance"] >= 1 and len(s) == 3 and all(x["Healthy"] and x["Voter"] for x in s)
+                  print(("CAUGHT UP " if ok else "NOT YET ") + ", ".join("%s %s" % (x["Name"], "healthy" if x["Healthy"] else "unhealthy") for x in s))
+                  sys.exit(0 if ok else 1)'
+              register: _consul_health
+              retries: 30
+              delay: 5
+              until: _consul_health.rc == 0
+              changed_when: false
+          always:
+            - name: Patroni resumed
+              ansible.builtin.command: "{{ patronictl }} resume --wait"
+              changed_when: true
+              delegate_to: "{{ _other_pi }}"
+              when: _patroni_active | default(false) | bool
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Consul cluster

@@ -1,10 +1,14 @@
 ---
 # Re-running the Pi playbooks on a live Vagrant Pi stack is safe:
-#   setup-patroni, Patroni stopped on pi2: refused, naming the reason, and pi2's data still there (the same files in
-#   its data directory but postmaster.pid, which a stopped Postgres removes); Patroni started again (whatever happened)
-#   and back to streaming, the same run passes on pi2 and leaves its database port (PgBouncer's) as it was.
-#   setup-consul on an unchanged cluster: the same gossip key on every server, no server restarted.
-#   setup-keepalived with a drifted config: rewritten, keepalived reloaded (PID kept), the VIP where it was.
+#   setup-patroni, Patroni stopped on pi2: refused, naming the reason, and pi2's data untouched (every file's name,
+#   size and time as after the stop); Patroni started again (whatever happened) and back to streaming, the same run
+#   passes on pi2 and leaves its database port (PgBouncer's) as it was; with PgBouncer stopped it is refused, the
+#   port kept.
+#   setup-consul with every config's key drifted from the one Consul runs (the old playbook's leftover): the live key
+#   written back, each server restarted one at a time (no two down together), Patroni paused around each (no
+#   failover) and resumed; then on the converged cluster: the same key, no server restarted.
+#   setup-keepalived with a drifted router_id that keepalived already runs: rewritten and reloaded - the running
+#   router_id back, the PID kept, the VIP where it was.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
@@ -16,18 +20,13 @@
   vars:
     ansible_playbook: "{{ ansible_playbook_python | dirname }}/ansible-playbook"
     deploy_dir: "{{ playbook_dir }}/../../deploy/ansible"
-    list_data: |
+    # every file's name, size and modification time (Postgres stopped: nothing of its own changes them)
+    fingerprint: |
       set -euo pipefail
       d=$(ls -d /var/lib/postgresql/*/main | head -1)
-      echo "$d"
-      ls "$d" | grep -v '^postmaster.pid$' | sort | tr '\n' ' '
+      [ -f "$d/PG_VERSION" ] && [ -f "$d/patroni.dynamic.json" ]
+      echo "$d $(find "$d" -type f ! -name postmaster.pid -printf '%P %s %T@\n' | sort | sha256sum | cut -c1-16) $(find "$d" -type f | wc -l) files"
   tasks:
-    - name: Pi2's data directory and what is in it
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: "{{ list_data }}"
-      register: _before
-      changed_when: false
 
     - name: The database port Forgejo and Keycloak use on pi2 (PgBouncer's, as on the Pis)
       ansible.builtin.shell: |
@@ -47,6 +46,13 @@
             name: patroni
             state: stopped
 
+        - name: Pi2's data, stopped
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: "{{ fingerprint }}"
+          register: _before
+          changed_when: false
+
         - name: setup-patroni on pi2 while Patroni is stopped - refused
           ansible.builtin.command:
             cmd: "{{ ansible_playbook }} -i inventory/vagrant.yml playbooks/setup-patroni.yml --limit pi2"
@@ -57,15 +63,13 @@
           changed_when: false
           failed_when: _refused.rc == 0 or 'REFUSED on pi2' not in _refused.stdout
 
-        - name: The same files in its data directory
+        - name: Its data untouched
           ansible.builtin.shell:
             executable: /bin/bash
-            cmd: "{{ list_data }}"
+            cmd: "{{ fingerprint }}"
           register: _after
           changed_when: false
-          failed_when: >-
-            _after.stdout != _before.stdout or 'PG_VERSION' not in _after.stdout
-            or 'patroni.dynamic.json' not in _after.stdout
+          failed_when: _after.rc != 0 or _after.stdout != _before.stdout
       always:
         - name: Patroni started on pi2
           ansible.builtin.systemd:
@@ -104,20 +108,184 @@
       changed_when: false
       failed_when: _db_after.stdout != _db_before.stdout
 
+    - name: PgBouncer stopped, re-run, refused - PgBouncer started again whatever happens
+      block:
+        - name: PgBouncer stopped on pi2
+          ansible.builtin.systemd:
+            name: pgbouncer
+            state: stopped
+
+        - name: setup-patroni on pi2 while PgBouncer is stopped - refused
+          ansible.builtin.command:
+            cmd: "{{ ansible_playbook }} -i inventory/vagrant.yml playbooks/setup-patroni.yml --limit pi2"
+            chdir: "{{ deploy_dir }}"
+          delegate_to: localhost
+          become: false
+          register: _refused_pgbouncer
+          changed_when: false
+          failed_when: _refused_pgbouncer.rc == 0 or 'PgBouncer is installed but' not in _refused_pgbouncer.stdout
+      always:
+        - name: PgBouncer started on pi2
+          ansible.builtin.systemd:
+            name: pgbouncer
+            state: started
+
+    - name: The same database port after the refused run
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep '^HOST = ' /var/lib/forgejo/custom/conf/app.ini
+        grep -o 'KC_DB_URL=[^ "]*' /etc/systemd/system/keycloak.service
+      args:
+        executable: /bin/bash
+      register: _db_after_pgbouncer
+      changed_when: false
+      failed_when: _db_after_pgbouncer.stdout != _db_before.stdout
+
     - name: Guarded
       ansible.builtin.debug:
         msg: >-
           PATRONI RE-RUN GUARD: stopped -> refused ({{ _refused.stdout | regex_search('REFUSED on pi2[^"]*?not active') }}),
-          data untouched; running -> passed, the database port kept ({{ _db_after.stdout_lines | join(', ') }})
+          data untouched ({{ _after.stdout }}); running -> passed, the database port kept
+          ({{ _db_after.stdout_lines | join(', ') }}); PgBouncer stopped -> refused, the port kept
 
-# setup-consul re-run on an unchanged cluster: the same gossip key on every server, and no server restarted (each
-# consul's start time as before) - it used to make a new key and restart all three at once
-- name: Consul's key and start times before
+# setup-consul with every config's key drifted from the one Consul runs (as the old playbook left them: a new key
+# written each run, which Consul ignores after its first start): the live key written back, each server restarted
+# alone (no two down together), Patroni paused around each (no failover) and resumed. Then a re-run on the converged
+# cluster: nothing restarted, the key kept.
+- name: Consul - every config's key drifted; the live key and Patroni's state before
   hosts: pi1,pi2,target
   become: true
   gather_facts: false
+  vars:
+    live_key: |
+      set -euo pipefail
+      curl -sf --max-time 5 http://127.0.0.1:8500/v1/operator/keyring | python3 -c '
+      import json, sys
+      print(" ".join(sorted({k for p in json.load(sys.stdin) if not p["WAN"] for k in p["PrimaryKeys"]})))'
   tasks:
-    - name: Key and start time
+    - name: The time before the re-run
+      ansible.builtin.set_fact:
+        _t_drift: "{{ lookup('pipe', 'date +%s') | int }}"
+
+    - name: The key Consul runs with
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "{{ live_key }}"
+      register: _live_before
+      changed_when: false
+
+    - name: Another key, the same for all three (as the old playbook generated)
+      ansible.builtin.command: consul keygen
+      register: _drift_key
+      changed_when: false
+      run_once: true
+
+    - name: Written into each config
+      ansible.builtin.lineinfile:
+        path: /etc/consul.d/consul.hcl
+        regexp: '^encrypt = '
+        line: 'encrypt = "{{ _drift_key.stdout }}"'
+
+    - name: Each Patroni's Postgres before
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_before_consul
+      when: inventory_hostname != 'target'
+
+- name: setup-consul re-run on the drifted keys
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Consul after - the live key written back, each restarted alone; no failover; resumed
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  vars:
+    live_key: |
+      set -euo pipefail
+      curl -sf --max-time 5 http://127.0.0.1:8500/v1/operator/keyring | python3 -c '
+      import json, sys
+      print(" ".join(sorted({k for p in json.load(sys.stdin) if not p["WAN"] for k in p["PrimaryKeys"]})))'
+  tasks:
+    - name: Each server's restart window (stopped, started) and its config's key
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "$(date -d "$(systemctl show consul -p ActiveExitTimestamp --value)" +%s)" \
+             "$(date -d "$(systemctl show consul -p ActiveEnterTimestamp --value)" +%s)" \
+             "$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl)"
+      args:
+        executable: /bin/bash
+      register: _consul_window
+      changed_when: false
+
+    - name: The key Consul runs with, after
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "{{ live_key }}"
+      register: _live_after
+      changed_when: false
+
+    - name: Restarted in this run; the config holds the live key again; the live key unchanged
+      ansible.builtin.assert:
+        that:
+          - _consul_window.stdout.split()[0] | int >= _t_drift | int
+          - _consul_window.stdout.split()[2] == _live_before.stdout
+          - _live_after.stdout == _live_before.stdout
+        fail_msg: "{{ inventory_hostname }}: window+config {{ _consul_window.stdout }}, live {{ _live_before.stdout }} -> {{ _live_after.stdout }}"
+        quiet: true
+
+    # a restart takes under a second, so "no overlap" alone cannot fail: each restart must come at least 5 s after
+    # the previous one - after the cluster's health was back (all at once, they come within the same second)
+    - name: One at a time - each restart at least 5 s after the previous
+      ansible.builtin.assert:
+        that: _gaps | min >= 5
+        fail_msg: "restarts (stopped at) {{ _stops }}: gaps {{ _gaps }} s"
+        quiet: true
+      vars:
+        _stops: "{{ ansible_play_hosts | map('extract', hostvars, ['_consul_window', 'stdout']) | map('split') | map('first') | map('int') | sort }}"
+        _gaps: >-
+          {% set out = [] -%}{% for k in range(1, _stops | length) %}{% set _ = out.append(_stops[k] - _stops[k - 1]) %}{% endfor %}{{ out }}
+      run_once: true
+
+    - name: No failover - the same role and timeline, Postgres not restarted
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_after_consul
+      failed_when: >-
+        _pg_after_consul.json.postmaster_start_time != _pg_before_consul.json.postmaster_start_time
+        or _pg_after_consul.json.role != _pg_before_consul.json.role
+        or _pg_after_consul.json.timeline != _pg_before_consul.json.timeline
+      when: inventory_hostname != 'target'
+
+    - name: Patroni resumed
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out=$(patronictl -c /etc/patroni/patroni.yml list)
+          if grep 'Maintenance mode' <<< "$out" > /dev/null; then echo PAUSED; exit 1; fi
+      changed_when: false
+      run_once: true
+      delegate_to: pi1
+
+    - name: Converged, one at a time
+      ansible.builtin.debug:
+        msg: >-
+          CONSUL KEY DRIFT RE-RUN: the live key written back; restart windows (stopped, started, key)
+          {{ ansible_play_hosts | zip(ansible_play_hosts | map('extract', hostvars, ['_consul_window', 'stdout'])) | list }};
+          no failover; resumed
+      run_once: true
+
+    - name: Key and start time before the unchanged re-run
       ansible.builtin.shell: |
         set -o pipefail
         echo "$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl) $(systemctl show consul -p ActiveEnterTimestampMonotonic --value)"
@@ -126,7 +294,7 @@
       register: _consul_before_rerun
       changed_when: false
 
-- name: setup-consul re-run
+- name: setup-consul re-run on the converged cluster
   hosts: localhost
   connection: local
   gather_facts: false
@@ -158,22 +326,46 @@
         msg: "CONSUL RE-RUN: {{ inventory_hostname }} kept its key and was not restarted"
 
 # setup-keepalived with a changed config: keepalived reloaded, not restarted (its PID kept - a restart runs the stop
-# drop-in, releasing Nexus on the active Pi), the VIP where it was. The drift: a comment line appended on pi1.
-- name: Keepalived before, pi1's config drifted
+# drop-in, releasing Nexus on the active Pi), the VIP where it was, and the reload applied: pi1 runs a drifted
+# router_id (its config changed and reloaded by hand), the re-run writes the config back and the running one follows
+- name: Keepalived before - pi1 running a drifted router_id
   hosts: pi1,pi2
   become: true
   gather_facts: false
+  vars:
+    running_router_id: |
+      set -euo pipefail
+      pid=$(systemctl show keepalived -p MainPID --value)
+      rm -f /tmp/keepalived.data
+      kill -s "$(keepalived --signum=DATA)" "$pid"
+      for i in $(seq 1 20); do [ -s /tmp/keepalived.data ] && break; sleep 0.25; done
+      sed -n 's/^ *Router ID = //p' /tmp/keepalived.data
   tasks:
     - name: Keepalived's PID and whether this Pi holds the VIP
       ansible.builtin.shell: |
-        echo "$(systemctl show keepalived -p MainPID --value) $(ip -o -4 addr show | grep -c ' {{ keepalived_vip }}/')"
+        echo "$(systemctl show keepalived -p MainPID --value) $(ip -o -4 addr show to {{ keepalived_vip }}/32 | wc -l)"
       register: _ka_before
       changed_when: false
 
-    - name: A drift in pi1's config (setup-keepalived writes it back)
-      ansible.builtin.lineinfile:
-        path: /etc/keepalived/keepalived.conf
-        line: "# drift - the re-run guard test"
+    - name: Pi1's router_id drifted in its config and reloaded by hand
+      ansible.builtin.shell: |
+        set -o pipefail
+        sed -i 's/^  router_id .*/  router_id drift-pi1/' /etc/keepalived/keepalived.conf
+        systemctl reload keepalived
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: inventory_hostname == 'pi1'
+
+    - name: Pi1 runs it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "{{ running_router_id }}"
+      register: _ka_drifted
+      retries: 5
+      delay: 2
+      until: _ka_drifted.stdout == 'drift-pi1'
+      changed_when: false
       when: inventory_hostname == 'pi1'
 
 - name: setup-keepalived re-run
@@ -191,15 +383,34 @@
   hosts: pi1,pi2
   become: true
   gather_facts: false
+  vars:
+    running_router_id: |
+      set -euo pipefail
+      pid=$(systemctl show keepalived -p MainPID --value)
+      rm -f /tmp/keepalived.data
+      kill -s "$(keepalived --signum=DATA)" "$pid"
+      for i in $(seq 1 20); do [ -s /tmp/keepalived.data ] && break; sleep 0.25; done
+      sed -n 's/^ *Router ID = //p' /tmp/keepalived.data
   tasks:
-    - name: The same PID, the same VIP holder, the drift gone
+    - name: The same PID, the same VIP holder
       ansible.builtin.shell: |
-        echo "$(systemctl show keepalived -p MainPID --value) $(ip -o -4 addr show | grep -c ' {{ keepalived_vip }}/')"
-        grep -c '^# drift - the re-run guard test$' /etc/keepalived/keepalived.conf || true
+        echo "$(systemctl show keepalived -p MainPID --value) $(ip -o -4 addr show to {{ keepalived_vip }}/32 | wc -l)"
       register: _ka_after
       changed_when: false
-      failed_when: _ka_after.stdout_lines[0] != _ka_before.stdout or _ka_after.stdout_lines[1] != '0'
+      failed_when: _ka_after.stdout != _ka_before.stdout
+
+    - name: The running router_id the playbook's again (the reload applied the rewritten config)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "{{ running_router_id }}"
+      register: _ka_router
+      retries: 5
+      delay: 2
+      until: _ka_router.stdout == inventory_hostname
+      changed_when: false
 
     - name: Kept
       ansible.builtin.debug:
-        msg: "KEEPALIVED RE-RUN: {{ inventory_hostname }} kept PID and VIP ({{ _ka_after.stdout_lines[0] }}), config rewritten by a reload"
+        msg: >-
+          KEEPALIVED RE-RUN: {{ inventory_hostname }} kept PID and VIP ({{ _ka_after.stdout }}), runs router_id
+          {{ _ka_router.stdout }}{{ ' (was drift-pi1)' if inventory_hostname == 'pi1' else '' }}

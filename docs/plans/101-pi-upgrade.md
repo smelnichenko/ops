@@ -50,15 +50,23 @@ today's Pis (full run 7 builds them), and its rollout leans on the Pis for days 
 every secret, the Pi store for every backup). Before plan 100 goes live, only what makes the Pis safer without
 changing what plan 100 leans on: phases 0 and 1 below, folded into the fixes of plan 100's full review so the next
 full run proves them too (plan 100's production check freezes deploy/ from the proving run on - a Pi change in the
-middle of its rollout would stop it). Phase 2 after plan 100's rollout.
+middle of its rollout would stop it). The full run builds the Pis with phase 0's playbooks (their first-install
+path); each re-run guard and each phase-1 upgrade is proven by its own Vagrant test, checked from outside the
+playbook and revert-checked (task test:pi:rerun-guards, test:pi-backups, test:forgejo-upgrade,
+test:patroni-upgrade, test:vault-upgrade). Phase 2 after plan 100's rollout.
 
 ## Phase 0 - safe to re-run, backed up, inventoried (no version moves)
 
-1. setup-patroni: the data wipe only on a real first install (no PG_VERSION, no Patroni cluster in Consul), never
-   because the unit is stopped; refuse otherwise.
-2. setup-consul: the gossip key generated once and kept (Vault, as the other secrets), never regenerated; restarts
-   one server at a time with a leader check between (`consul operator raft list-peers`, commit index caught up).
-3. One database port for Forgejo and Keycloak (PgBouncer :6432), set by one playbook.
+1. setup-patroni: the data wipe only on a first install - no Patroni unit and no patroni.dynamic.json on the node
+   (Debian's own initial cluster has a PG_VERSION, so that cannot be the test), and never on the node Consul names
+   as the leader; never because the unit is stopped (refused). The Keycloak dump restored only in the run that took
+   it, then moved aside.
+2. setup-consul: the gossip key generated once and kept (Vault, as the other secrets), never regenerated; the kept
+   key must be in the running keyring; restarts one server at a time, Patroni paused around each (its leader
+   demotes after 10 s without its Pi's agent), each gated on autopilot health (every server healthy - log caught
+   up - and one loss tolerated).
+3. One database port for Forgejo and Keycloak (PgBouncer :6432), set by one playbook; PgBouncer installed but not
+   running is refused, not answered with :5000.
 4. keepalived's drop-in: a restart does not stop Nexus (only a real stop or a BACKUP transition).
 5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each:
    `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database, Keycloak realm export,
