@@ -90,7 +90,8 @@ ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY
 for k in json.load(sys.stdin)["items"]:
     m=k["metadata"]
     if m["namespace"] in ex or (only and m["namespace"] not in only): continue
-    print("kafka-metadata", m["namespace"] + "/" + m["name"], (k.get("status") or {}).get("kafkaMetadataVersion", "none"))'
+    status=k.get("status") or {}
+    print("kafka-metadata", m["namespace"] + "/" + m["name"], status.get("kafkaMetadataVersion", "none"))'
   fi
 
   # every CRD by name - one gone takes every resource of its kind with it (scripts/inventory-diff.sh allows a CRD more,

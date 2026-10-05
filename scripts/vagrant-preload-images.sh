@@ -48,6 +48,7 @@ for img in "${images[@]}"; do
       | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null | grep -v '^$' | tail -1
     continue
   fi
-  docker save "$img" | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null | grep -v '^$' | tail -1
+  docker save "$img" | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null \
+    | grep -v '^$' | tail -1
 done
 vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images ls -q | grep "^git.pmon.dev/schnappy/"' 2>/dev/null | tr -d '\r'

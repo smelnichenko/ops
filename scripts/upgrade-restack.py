@@ -14,8 +14,9 @@ and prints the git mv lines for the step files (tests/ansible/upgrade/steps/NN-<
 files are renamed by hand, with their text, in the same change.
 
 A branch whose step file is gone (a dropped step) is renamed with the others and not re-created: its commits go
-nowhere. The working trees must be clean and on main; the script checks out main again at the end. Run it on clones first
-(--repos <dir> <dir>). Same order, after a fix committed to an earlier step branch: scripts/upgrade-restack-in-place.sh.
+nowhere. The working trees must be clean and on main; the script checks out main again at the end. Run it on clones
+first (--repos <dir> <dir>). Same order, after a fix committed to an earlier step branch:
+scripts/upgrade-restack-in-place.sh.
 
 Usage: scripts/upgrade-restack.py --order <file with one step name per line, new order> [--repos ../infra ../platform]
        [--dry-run]
@@ -40,7 +41,8 @@ def git(repo, *args, check=True):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--order", required=True)
-    ap.add_argument("--repos", nargs="+", default=[os.path.join(OPS, "..", "infra"), os.path.join(OPS, "..", "platform")])
+    ap.add_argument("--repos", nargs="+",
+                    default=[os.path.join(OPS, "..", "infra"), os.path.join(OPS, "..", "platform")])
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 

@@ -14,21 +14,26 @@ cd "$dir" || exit 1
 state=.git/restack-old-shas
 mapfile -t heads < <(git for-each-ref --format='%(refname:short)' 'refs/heads/upgrade/*' | sort -t/ -k2 -n)
 if [ ! -f "$state" ]; then
-  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] && [ -z "$(git status --porcelain)" ] || { echo "$repo: not clean on main"; exit 1; }
+  [ "$(git rev-parse --abbrev-ref HEAD)" = main ] && [ -z "$(git status --porcelain)" ] \
+    || { echo "$repo: not clean on main"; exit 1; }
   { echo "main $(git rev-parse main)"; for b in "${heads[@]}"; do echo "$b $(git rev-parse "$b")"; done; } > "$state"
 fi
-[ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] && { echo "$repo: a rebase is in progress - finish it first"; exit 1; }
+[ -d .git/rebase-merge ] || [ -d .git/rebase-apply ] \
+  && { echo "$repo: a rebase is in progress - finish it first"; exit 1; }
 declare -A old
 while read -r b s; do old[$b]=$s; done < "$state"
 own() { git diff -U0 "$1" "$2" | grep -E '^[-+]' | grep -vE '^(---|\+\+\+) ' | sha256sum | cut -c1-16; }
 prev=main; moved=0
 for b in "${heads[@]}"; do
   prev_old=${old[$prev]}; prev_new=$(git rev-parse "$prev"); cur=$(git rev-parse "$b")
-  if git merge-base --is-ancestor "$prev_new" "$b" && { [ "$cur" != "${old[$b]}" ] || [ "$prev_old" = "$prev_new" ]; }; then
+  if git merge-base --is-ancestor "$prev_new" "$b" \
+     && { [ "$cur" != "${old[$b]}" ] || [ "$prev_old" = "$prev_new" ]; }; then
     :
   else
     if ! git rebase -q --onto "$prev_new" "$prev_old" "$b" > /dev/null 2>&1; then
-      echo "$repo: $b conflicts on its predecessor - left in progress:"; git status --short | grep -E '^(UU|AA|DU|UD) '; exit 2
+      echo "$repo: $b conflicts on its predecessor - left in progress:"
+      git status --short | grep -E '^(UU|AA|DU|UD) '
+      exit 2
     fi
     moved=$((moved + 1)); echo "$repo: $b moved (${old[$b]:0:7} -> $(git rev-parse --short "$b"))"
   fi
