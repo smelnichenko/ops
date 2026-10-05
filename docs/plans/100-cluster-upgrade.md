@@ -30,12 +30,12 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
 
 | Component | Now | Target | Path |
 |---|---|---|---|
-| Kubernetes (kubeadm) | 1.34.6 | 1.36.5 | 1.34.12 → 1.35.x → 1.36.5 (one minor per run) |
+| Kubernetes (kubeadm) | 1.34.6 | 1.36.5 | 1.34.12 → 1.35.9 → 1.36.5 (one minor per run) |
 | etcd / CoreDNS | 3.6.5 / 1.12.1 | 3.6.8 / 1.14.2 (kubeadm 1.36.5's) | with kubeadm; etcd ≥ 3.6.11 is etcd 3.7's prerequisite - k8s 1.37, not now |
 | containerd | 1.7.24 (Debian; nerdctl-full's 2.0.2 binaries in /usr/local run nothing - defect 4) | 2.3 LTS | one install, from Docker's apt repo |
 | Cilium (+ Hubble UI) | 1.19.1 (0.13.3) | 1.20.2 (0.13.6) | 1.19.8 → 1.20.2 |
 | Istio | 1.25.2 (EOL, unsupported on k8s 1.34) | 1.31.1 | in place, one minor per step (operator 2026-10-03): 1.26 → … → 1.31, mesh workloads restarted each step; charts from blob.istio.io first (defect 17) |
-| Gateway API CRDs | v1.2.1 | v1.5.x | before Istio 1.30 |
+| Gateway API CRDs | v1.2.1 | v1.5.1 (operator 2026-10-05: not v1.6) | before Istio 1.30 |
 | Argo CD | 3.3.8 (chart 9.5.4) | 3.5.3 (chart 10.9.6) | 3.3.14 → 3.4 → 3.5 |
 | cert-manager | 1.20.0 | 1.21.2 | 1.20.4 → 1.21.2 |
 | External Secrets | 2.2.0 (CRDs never upgraded) | 2.11.0 | CRDs under Argo first, then 2.2 -> 2.11 directly (only the newest minor is supported) |
@@ -43,7 +43,7 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
 | PostgreSQL | 17.9 (bullseye system image) | 18.6 | CNPG offline in-place upgrade |
 | Strimzi / Kafka | 0.51.0 / 4.2.0 | 1.2.0 / 4.3.1 | v1 CRD conversion on 0.51 → 1.2.0 → Kafka 4.3.1 |
 | Scylla Operator | 1.20.2 | 1.22.0 | 1.20.3 → 1.21.1 → 1.22.0 (N+1 only) |
-| ScyllaDB (prod, test) | 6.2.3 | 2026.3.2 | 2025.1 → (op 1.21) → 2026.1 → (op 1.22) → 2026.3.2 |
+| ScyllaDB (prod, test) | 6.2.3 | 2026.1.14 LTS (operator 2026-10-05) | 2025.1.16 → (op 1.21) → 2026.1.14 → (op 1.22); the test environment first each time |
 | ScyllaDB (manager backend) | 2026.1.0 | 2026.2.5 (the Manager chart v1.22.0's; Manager 3.12 lists 2026.2, not 2026.3) | with the operator steps |
 | Scylla Manager + agent | 3.9.0 | 3.12.1 | 3.10 → 3.12 with the operator (3.12.1 pinned; the chart ships 3.12.0) |
 | Valkey | 8.1 | 9.1 | direct (emptyDir: cache wiped) |
@@ -58,7 +58,7 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
 | Fluent Bit | 4.2.3.1 | 5.1.3 | 4.2.8 → 5.1.3 |
 | ClickHouse | 24.8 LTS | 26.8 LTS | 24.8 → 25.8 → 26.8 |
 | Centrifugo | 6.7.1 | 6.9.7 | direct (expired sub tokens now disconnect: 3006) |
-| SonarQube CE | 26.3.0 | 26.9.0 | direct; DB migration via `/setup` |
+| SonarQube CE | 26.3.0 | 26.9.0 | direct; the setup hook starts the DB migration (`/setup`'s call) |
 | Woodpecker | 3.18.1 | — | already latest |
 
 ## Defects to fix first (they break the upgrades)
@@ -243,54 +243,74 @@ pi2 found no velero bucket (defect 21). Full run 5 (19:24): stopped - new volume
 crawl). Full run 6 (20:02): failed in the build - the Gluster mounts did not come back after the snapshot reboot
 (defect 22). Next: full run 7, after the review's fixes and the reordering.
 
-**Gate before the production rollout** (operator, 2026-10-03): every step green on its own, then one full run green -
-`task test:upgrade:full`: the Vagrant copy built from nothing, then steps 01-55 in order, unattended, every check
-after each. Fixes made while steps run one at a time prove the step, not the chain.
+**Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
-| # | Step | Where | Vagrant |
-|---|---|---|---|
-| 01 | apt-cacher-ng from CI (defect 9) | platform | green |
-| 02 | cert-manager v1.20.4 | infra | green |
-| 03 | CNPG 1.30.1 | infra | green |
-| 04 | Velero 1.18.4 + AWS plugin 1.14.4 (defect 3) | infra | green |
-| 05 | versitygw 1.8.0 (cluster, Pis) | platform + playbook | green |
-| 06 | local-path 0.0.37 | playbook | green |
-| 07 | kube-prometheus-stack 91.8.2 (operator 0.94.1) | infra | green |
-| 08 | Alertmanager 0.34.1, blackbox 0.28.0, ksm 2.20.0 | platform | green |
-| 09 | Grafana 12.4.12 | infra | green |
-| 10 | Mimir 2.17.11 | infra | green |
-| 11 | Fluent Bit 4.2.8 | infra | green |
-| 12 | Argo CD 3.3.14 | playbook | green |
-| 13 | Cilium 1.19.8 | playbook | green |
-| 14 | Kubernetes 1.34.12 | playbook | green |
-| 15 | containerd.io 2.3.6 (replaces Debian's 1.7) | playbook | green |
-| 16 | Kubernetes 1.35.9 (+ etcd backup image) | infra + playbook | green |
-| 17 | Cilium 1.20.2 | playbook | green |
-| 18 | Gateway API v1.5.1 | playbook | green |
-| 19 | Istio charts from blob.istio.io (defect 17; can go early) | infra | green; IN PRODUCTION 2026-10-03 19:47 (infra e89bbbb, operator OK) |
-| 20-25 | Istio 1.26.8 ... 1.31.1 in place, mesh restarted each | infra + playbook | 20-25 green (mesh restarted each; 1.30 pulls from registry.istio.io) |
-| 26 | Kubernetes 1.36.5 (+ etcd backup image) | infra + playbook | green |
-| 27 | External Secrets CRDs under Argo (defect 2) | infra | green (argocd-controller applies the CRDs server-side) |
-| 28 | External Secrets 2.11.0 | infra | green (all 25 CRDs = chart 2.11.0, 2 new) |
-| 29-30 | Argo CD 3.4.6, 3.5.3 | playbook | green (root stayed Synced through both) |
-| 31 | cert-manager v1.21.2 | infra | green |
-| 32 | Strimzi templates on v1 (defect 7) | platform | green |
-| 33 | Strimzi v1 conversion (Argo automation off) | infra + playbook | S; green (10 CRDs store only v1, Kafka Ready, messages intact) |
-| 34 | Strimzi 1.2.0 (automation back) | infra | S; green (Kafka rolled onto 1.2.0, messages intact; ignoreDifferences for the CRD's dropped empty map) |
-| 35 | Kafka 4.3.1 | platform | S; green (metadata version moved with it, messages intact) |
-| 36-41 | Scylla Operator 1.20.3/1.21.1/1.22.0 with ScyllaDB 2025.1.16/2026.1.14/2026.3.2 | infra | S; green (ScyllaDB 2026.3.2 with the operator's node-exporter sidecar, rows intact) |
-| 42 | PostgreSQL 18.6 in place (defect 6) | platform | S; green (both instances 18.6, data major 18, rows intact) |
-| 43 | Valkey 9.1.2 | infra + platform | green |
-| 44 | Grafana 13.2.3 (one-way storage migration) | infra | S; green (database ok, 6 dashboards as on ten, 3 datasources) |
-| 45-47 | Mimir 3.0.8, 3.1.6, 3.2.1 | infra | green |
-| 48 | Tempo 3.1.0 (monolithic, one-way) | infra + platform | S; green (v3.1.0 receiving OTLP and Zipkin spans, search answers) |
-| 49 | Fluent Bit 5.1.3 | infra | green (logs still reach ClickHouse) |
-| 50 | Centrifugo 6.9.7 | infra + platform | green |
-| 51 | SonarQube 26.9.0 - not in the Vagrant copy: production-only | infra + platform | n/a (the step ran green: nothing else moved) |
-| 52 | ClickHouse compatibility 24.8 (keeps formats readable for a rollback) | platform | green (in effect from 53's restart) |
-| 53 | ClickHouse 25.8.33.6 | infra + platform | S; green (25.8.33.6 up with compatibility 24.8, logs flowing) |
-| 54 | ClickHouse compatibility 25.8 | platform | green (in effect from 55's restart) |
-| 55 | ClickHouse 26.8.15.10 (the pin's removal later: operator's call, no return) | infra + platform | S; green (26.8.15.10 with compatibility 25.8, logs flowing) |
+The steps (generated from tests/ansible/upgrade/steps - the step files are the source; Wave 0 = the stores backed up before the step, in production and in the full run):
+
+| # | Step | Changes | Where | Wave 0 |
+|---|---|---|---|---|
+| 00 | gluster-boot | The Pis' and ten's Gluster setup as ops main has it (setup-gluster.yml), before any upgrade | playbook | - |
+| 01 | argocd-root-retry | What a fresh install of the cluster needs from Argo CD, in git (infra) | infra | - |
+| 02 | istio-chart-repo | Istio's charts from blob.istio.io, same 1.25.2 | - | - |
+| 03 | istio-1.26 | Istio 1.25.2 -> 1.26.8, in place (one minor: Istio's in-place rule) | infra + playbook | - |
+| 04 | istio-1.27 | Istio 1.26.8 -> 1.27.9, in place (one minor: Istio's in-place rule) | infra + playbook | - |
+| 05 | istio-1.28 | Istio 1.27.9 -> 1.28.10, in place (one minor: Istio's in-place rule) | infra + playbook | - |
+| 06 | istio-1.29 | Istio 1.28.10 -> 1.29.8, in place (one minor: Istio's in-place rule) | infra + playbook | - |
+| 07 | gateway-api | Gateway API CRDs v1.2.1 -> v1.5.1 (before Istio 1.30) | playbook | - |
+| 08 | istio-1.30 | Istio 1.29.8 -> 1.30.5, in place (one minor: Istio's in-place rule) | infra + playbook | - |
+| 09 | istio-1.31 | Istio 1.30.5 -> 1.31.1, in place (one minor: Istio's in-place rule) | infra + playbook | - |
+| 10 | velero | Velero 1.18.0 -> 1.18.4 (chart 12.0.0 -> 12.2.0, image pinned to the newest patch) and the AWS plugin 1.11.1 -... | infra | - |
+| 11 | cilium | Cilium 1.19.1 -> 1.19.8 (Hubble UI 0.13.3 -> 0.13.6), the first platform step | playbook | - |
+| 12 | kubelet-shutdown-grace | The kubelet's graceful node shutdown (180 s, 30 s for critical pods) into the kubelet-config ConfigMap, before... | playbook | - |
+| 13 | kubernetes-1.34.12 | Kubernetes 1.34.6 -> 1.34.12 (patch) | playbook | etcd |
+| 14 | containerd | containerd: Debian's 1.7.24 (below Kubernetes 1.34's 1.7.28 floor, end of life 2026-09-30) -> containerd.io 2.... | playbook | - |
+| 15 | scylla-operator-1.20.3 | Scylla Operator + Manager charts v1.20.2 -> v1.20.3 | infra | - |
+| 16 | scylladb-2025.1-test | ScyllaDB 6.2.3 -> 2025.1.16 in the test environment, before production's (operator 2026-10-05: the test enviro... | infra | - |
+| 17 | scylladb-2025.1 | ScyllaDB 6.2.3 -> 2025.1.16 in production, after the test environment (step 16) | infra | scylla |
+| 18 | scylla-operator-1.21 | Scylla Operator + Manager charts v1.20.3 -> v1.21.1 | infra | - |
+| 19 | scylladb-2026.1-test | ScyllaDB 2025.1.16 -> 2026.1.14 in the test environment, before production's (operator 2026-10-05) | infra | - |
+| 20 | scylladb-2026.1 | ScyllaDB 2025.1.16 -> 2026.1.14 in production, after the test environment (step 19) | infra | scylla |
+| 21 | scylla-operator-1.22 | Scylla Operator + Manager charts v1.21.1 -> v1.22.0 | infra | - |
+| 22 | apt-cacher-ng | apt-cacher-ng from its CI build | platform | - |
+| 23 | cert-manager | cert-manager v1.20.0 -> v1.20.4 (patch releases) | infra | - |
+| 24 | cnpg | CloudNativePG operator 1.29.0 -> 1.30.1 (chart 0.28.0 -> 0.29.1); restarts every Postgres instance in place | infra | - |
+| 25 | versitygw | versitygw v1.6.0 -> v1.8.0 | platform + playbook | - |
+| 26 | local-path | local-path-provisioner v0.0.35 -> v0.0.37 | playbook | - |
+| 27 | kube-prometheus-stack | kube-prometheus-stack 82.16.0 -> 91.8.2 | infra | - |
+| 28 | grafana | Grafana 12.4.2 -> 12.4.12 (patch releases; 13.x is a later step) | infra | - |
+| 29 | mimir | Mimir 2.17.8 -> 2.17.11 (patch releases; 3.x is a later step) | infra | - |
+| 30 | fluent-bit | Fluent Bit 4.2.3.1 -> 4.2.8 (patch releases; 5.x is a later step) | infra | - |
+| 31 | argocd | Argo CD v3.3.8 -> v3.3.14 | playbook | - |
+| 32 | cilium-1.20 | Cilium 1.19.8 -> 1.20.2 (the next minor, from the latest patch of the previous one, as Cilium requires) | playbook | - |
+| 33 | argocd-3.4 | Argo CD v3.3.14 -> v3.4.6 | playbook | - |
+| 34 | argocd-3.5 | Argo CD v3.4.6 -> v3.5.3 | playbook | - |
+| 35 | cert-manager-1.21 | cert-manager v1.20.4 -> v1.21.2 | infra | - |
+| 36 | strimzi-v1-templates | The Strimzi templates still on v1beta2 - KafkaUsers (schnappy-data) and the realtime KafkaTopics - on the v1 API | platform | - |
+| 37 | strimzi-conversion | Every Strimzi resource and the CRDs' stored version to v1, before Strimzi 1.x (which serves v1 only) | infra + playbook | - |
+| 38 | strimzi-1.2 | Strimzi 0.51.0 -> 1.2.0 (v1 API only), Argo's automated sync back (infra upgrade/38-strimzi-1.2) | infra | kafka |
+| 39 | kafka-4.3-test | Kafka 4.2.0 -> 4.3.1 in the test environment, before production's (operator 2026-10-05) | infra + platform | - |
+| 40 | kafka-4.3 | Kafka 4.2.0 -> 4.3.1 under Strimzi 1.2.0 in production, after the test environment (step 39) | infra + platform | kafka |
+| 41 | eso-crds | External Secrets' CRDs under Argo, same 2.2.0 | infra | - |
+| 42 | kubernetes-1.35 | Kubernetes 1.34.12 -> 1.35.9 (the next minor; after containerd 2) | infra + playbook | etcd |
+| 43 | kubernetes-1.36 | Kubernetes 1.35.9 -> 1.36.5, the last platform step (Istio 1.31 and Cilium 1.20 support 1.36; nothing here sup... | infra + platform + playbook | etcd |
+| 44 | eso-2.11 | External Secrets 2.2.0 -> 2.11.0, CRDs with it through Argo (step 41) | infra | - |
+| 45 | alertmanager-blackbox-ksm | Alertmanager 0.31.1 -> 0.34.1, blackbox exporter 0.27.0 -> 0.28.0 (its config reloader to the operator's v0.94... | platform | - |
+| 46 | postgres-18-test | PostgreSQL 17 -> 18.6 in the test environment, before production's (operator 2026-10-05) | infra + platform + playbook | postgres |
+| 47 | postgres-18 | PostgreSQL 17 -> 18.6, CNPG's offline in-place major upgrade (operator 2026-10-01, option A) | infra + platform + playbook | postgres |
+| 48 | valkey-9.1-test | Valkey 8.1 -> 9.1.2, pinned, in the test environment (infra) and the chart default PR environments use (platfo... | infra + platform | - |
+| 49 | valkey-9.1 | Valkey 8.1 -> 9.1.2, pinned (was the floating 8.1-alpine), in production after the test environment and the ch... | infra | - |
+| 50 | grafana-13 | Grafana 12.4.12 -> 13.2.3 (infra upgrade/50-grafana-13) | infra | grafana |
+| 51 | mimir-3.0 | Mimir 2.17.11 -> 3.0.8, one minor at a time (infra upgrade/51-mimir-3.0) | infra | gateway |
+| 52 | mimir-3.1 | Mimir 3.0.8 -> 3.1.6, one minor at a time (infra upgrade/52-mimir-3.1) | infra | - |
+| 53 | mimir-3.2 | Mimir 3.1.6 -> 3.2.1, one minor at a time (infra upgrade/53-mimir-3.2) | infra | - |
+| 54 | tempo-3 | Tempo 2.7.2 -> 3.1.0 in monolithic mode (no Kafka) | platform + infra | gateway |
+| 55 | fluent-bit-5 | Fluent Bit 4.2.8 -> 5.1.3 (infra upgrade/55-fluent-bit-5) | infra | - |
+| 56 | centrifugo-6.9 | Centrifugo v6.7.1 -> v6.9.7 (infra values and platform's default, both upgrade/56-centrifugo-6.9) | infra + platform | - |
+| 57 | sonarqube-26.9 | SonarQube Community 26.3.0 -> 26.9.0 (infra values and platform's default, both upgrade/57-sonarqube-26.9) | infra + platform | postgres |
+| 58 | clickhouse-compat-24.8 | ClickHouse: compatibility 24.8 in the default profile (platform upgrade/58-clickhouse-compat-24.8), before the... | platform | - |
+| 59 | clickhouse-25.8 | ClickHouse 24.8 -> 25.8.33.6, pinned (was the floating 24.8-alpine) | infra + platform | clickhouse |
+| 60 | clickhouse-compat-25.8 | ClickHouse: compatibility 24.8 -> 25.8 (platform upgrade/60-clickhouse-compat-25.8), before the 26.8 image | platform | - |
+| 61 | clickhouse-26.8 | ClickHouse 25.8.33.6 -> 26.8.15.10 (infra values and platform's default, both upgrade/61-clickhouse-26.8) | infra + platform | clickhouse |
 
 ## Review 2026-10-04 - findings, decisions, fix list
 
@@ -357,9 +377,20 @@ Production / data
   Status: all six rehearsed green on Vagrant 2026-10-04 (gateway: 3 buckets, 80 objects with their ETags, the seeded
   trace back and the later one gone, 51 `up` series). The rehearsals found the backup's defects - ClickHouse's
   metadata links, the gateway's extended attributes (a restore without them proven to fail the check) - fixed.
+  Since the full review (2026-10-05): each step file names its stores (wave0 lines); production's backup phase
+  (deploy:upgrade:backup STEP= STORE=) takes only those, before the step's merge, and the full run takes and rehearses
+  them at the step itself, at the versions the step starts from. Files go up in parts (4 GiB; 4 MiB in Vagrant), each
+  read back, with a list of the parts and the whole file's sha256, and come back through one task file that checks
+  both (tasks/upgrade-backup-download.yml). The node must have room for the copy first; older local copies of the
+  store go after the upload. A seventh store, etcd: a snapshot by the static pod's own etcdctl, before each Kubernetes
+  step (production's hourly etcd copies keep 7 days), its rehearsal a restore into a scratch data directory. The test
+  environment's ScyllaDB is skipped by name (no backup task, its agent no store credentials).
 - R4 upgrade-containerd rebuilds config from defaults: read ten's live config.toml; migrate it (containerd config
   migrate) and fail on unknown settings; a guard that requires the new config + CRI + version; a rescue to the kept
-  config. DONE fed85ea (Vagrant: pre-check, swap with 16 containers kept, re-run, rescue).
+  config. DONE fed85ea (Vagrant: pre-check, swap with 16 containers kept, re-run, rescue). Corrected 2026-10-05: no
+  `containerd config migrate` runs - the playbook fails unless ten's live config is containerd 1.7's default plus only
+  SystemdCgroup and the registry config_path, then writes containerd 2's default with those two (checked with
+  `config dump` before it replaces the file).
 - R5 kubeadm upgrade resets the kubelet's graceful shutdown (config.yaml rewritten from the kubelet-config ConfigMap):
   the settings into the ConfigMap, re-asserted after each upgrade. DONE 3eb9a2d (the ConfigMap step for production
   comes with R14's restructure).
@@ -390,6 +421,8 @@ Production / data
   CLICKHOUSE_SKIP_USER_SETUP=1 (the image's entrypoint then writes no default-user.xml; clickhouse-client honours
   CLICKHOUSE_USER, so the runbooks' bare client works as schnappy) - DONE in the 25.8 step's platform branch, where
   ClickHouse restarts anyway (fbe7052); its clickhouse-users line makes survival-check want exactly schnappy from then.
+  Moved 2026-10-05 to step 58's branch (24.8's entrypoint honours CLICKHOUSE_SKIP_USER_SETUP): merged before the
+  25.8 image it would have been an unproven in-between state; 58 now restarts ClickHouse.
 
 Rollout behaviour
 - R25 Root app-of-apps on a cold start (Vagrant 2026-10-04, the Argo stage after a base-ready restore): a first-wave
@@ -446,6 +479,8 @@ Rollout behaviour
   step file has an "outage:" line (what stops, for how long) and an "abort:" line (the way back: a revert, a
   playbook with the old version, or for a one-way step the Wave 0 restore / the etcd backup and a rebuild); each way
   back says whether it was rehearsed in Vagrant (the Wave 0 restores and PostgreSQL 17's restore-undo were).
+  Corrected 2026-10-05 (full review): the restores were rehearsed, the ways back on them were not - each abort line
+  now says which; four named a playbook run its own no-downgrade check refuses (now: by hand, not rehearsed).
 - R19 (apt-cacher-ng's forgejo-registry pull secret on platform upgrade/01; local-path's node paths checked before
   and after the manifest - ten's are upstream's default; ScyllaCluster/Kafka and the Docker apt source: the
   pre-checks showed nothing to change; argocd's image pinned per chart version - DONE)
@@ -527,8 +562,9 @@ Plan and claims
   HAProxy, Gluster) are not in this plan - stated; metrics-server and porkbun-webhook float at targetRevision "*" and can
   move mid-rollout - pinned to what ten runs.
 - R29 Change freeze for the rollout: Woodpecker CD's infra commits, Hyperfoil at 03:00, the 02:00-04:00 backup
-  window, Scylla repair Sunday 04:00 - each step's time chosen around them; the Istio steps restart kagent, SonarQube
-  and its Postgres, the test environment and PR environments too (a read-only list before the first).
+  window, Scylla repair Sunday 04:00 - each step's time chosen around them; the Istio steps restart kagent's Postgres,
+  the test environment and PR environments too (a read-only list before the first). SonarQube and its Postgres run no
+  proxy (read on ten 2026-10-05: only SonarQube's setup Job has one) - the Istio steps do not restart them.
   Read on ten 2026-10-04 23:55 - the workloads with an istio-proxy, 30 (listed again right before the first Istio
   step): kagent - kagent-postgresql only (kagent itself runs none); schnappy-infra - fluentbit (DaemonSet),
   alertmanager, grafana, the gateway (schnappy-infra-gateway-istio), s3gw, reports, runbooks, clickhouse;
@@ -661,8 +697,37 @@ Fixed so far (2026-10-05, uncommitted where not said):
   Recreate moved to platform step 25 (no restart), so 28 and 50 run one Grafana and 50 is infra only; the ClickHouse
   users fix moved to step 58 (24.8's entrypoint honours CLICKHOUSE_SKIP_USER_SETUP, read on ten): ClickHouse restarts
   there, so its compatibility pin and one user start at 58. All 11 two-repo steps proven safe in their order.
-- wave0 lines on the one-way steps (17, 20 scylla; 38, 40 kafka; 46, 47, 57 postgres; 50 grafana; 51, 54 gateway;
-  59, 61 clickhouse): production's backup phase; the full run's side is F8.
+- wave0 lines on the one-way steps (13, 42, 43 etcd; 17, 20 scylla; 38, 40 kafka; 46, 47, 57 postgres; 50 grafana;
+  51, 54 gateway; 59, 61 clickhouse): production's backup phase, and the full run's (F8).
+- F2: upgrade-kubeadm.yml refuses a minor on a runtime below its floor (tests/ansible/unit/runtime-supported).
+- F5: per-step default lines (36 over 27 steps; scripts/upgrade-defaults.py), production's defaults phase commits each
+  step's; the defaults branch is generated from them (equal to the hand-made one but for the Manager's values form);
+  the etcd Wave 0 store before 13, 42, 43.
+- F6: infra's step 47 sets recoveryServerName (a DR recovery reads 18's archive); the DR drill's Postgres takes the
+  image production's Cluster renders to (scripts/production-cnpg-image.py) - its 18 run still to come (the final
+  proofs, task test:dr TEST_PG_IMAGE=).
+- F7: the test environment's ScyllaDB skipped by name (ten: its agent mounts no store credentials). Found with it:
+  `sctool info | awk exit` died of SIGPIPE on ten's larger output - production's Scylla backup would have failed;
+  fixed, and three test pipes with grep -q.
+- F8: the step runner runs each step's wave0 stores (backup and rehearsal) before the step; the abort lines say what
+  was rehearsed (the restore) and what not (the old version on it). Real rollback rehearsals: the operator's decision.
+- F9: uploads in parts with read-back, the download task, the space check, the pruning (tests/ansible/unit/backup-parts).
+- F11: argo-settled.py's app floor and two-steps restart rule (tests/ansible/unit/argo-settled).
+- F12: Vagrant's Mimir querier windows (4 h / 1 h) through platform step 22's mimir.extraArgs.
+- F13: every CRD in the inventory (none may go; new ones allowed), External Secrets' protection count
+  (tests/ansible/unit/inventory-diff); every target chart keeps production's 124 CRDs (rendered).
+- F15: floating-tag digests recorded by the preload and checked before each production phase.
+- F16: Kafka's metadata version in the inventory, the targets build's smoke refs, postgres-analyze fails on no
+  cluster, strimzi-v1-conversion's waits and cleanup, versitygw's whole-version compares, kubernetes-cni/cri-tools
+  pinned per minor, the non-Argo Scylla Manager pinned (defaults branch), scripts within 120 columns.
+- F17: the plan's step and stateful tables generated from the step files, the renumber table dropped, the versions
+  table, R3, R4, R10, R29, the windows; steps 21 (istiod does NOT restart - rendered), 41, 45/57 (SonarQube's hook
+  now starts its migration), 60 (no restart there); step 00 takes the Gluster fixes to the Pis.
+- F20, F21, F25: abort and comment lines as they are (no-downgrade refusals, the Manager backend, step 31's first
+  setup-argocd run since 10-01).
+- F23: acme-check.yml after the cert-manager steps (production; objects validated by a server dry run on ten).
+- F27: postgres-base-backup.yml after 24, 25, 47 in production (the Vagrant barman-check runs the same playbook).
+Open, the operator's: F22, F24 and an etcd restore - the rollback rehearsals (≈ +3-4 h of full run).
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
@@ -690,14 +755,17 @@ release: 1.25 v1.2.1, 1.26-1.27 v1.3.0, 1.28-1.29 v1.4.0, 1.30 v1.5.1 (install v
 1.31 v1.6.0. Gateway API v1.5 refuses a downgrade (step 18 is one-way). Strimzi 0.51 -> 1.2 directly: not yet
 checked against Strimzi's upgrade notes.
 
-The current order runs Argo CD 3.3, cert-manager 1.20, ESO 2.2, Strimzi 0.51 and Scylla Operator 1.20 on Kubernetes
-1.36 (steps 26-37), Istio 1.25-1.28 on 1.35 (16-22). Proposed order (each step's content unchanged):
+The order then (old numbers below, to "Unavoidable windows") ran Argo CD 3.3, cert-manager 1.20, ESO 2.2, Strimzi
+0.51 and Scylla Operator 1.20 on Kubernetes 1.36 (steps 26-37), Istio 1.25-1.28 on 1.35 (16-22). Proposed order (each
+step's content unchanged):
 A (at 1.34): 19, 20, 21, 22, 23 (Istio 1.29 before 1.35 - 1.28 ends at 1.34), 18, 24, 25, 04, 13, 14, 15, 36, 37,
 38, 39, 40; B: 01, 02, 03, 05, 06, 07, 09, 10, 11, 12; C (move to 1.36-capable versions, still on 1.34): 17, 29, 30,
 31, 32, 33, 34, 35, 27; D: 16, 26, 28 (right after 26: ESO 2.11 lists 1.36 only), 08 (ksm 2.20 pairs with 1.36);
 E: 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, then 41. Every moved step is re-proven by the full run.
-Unavoidable windows: Istio 1.26-1.27 on 1.34 (one minor at a time); containerd 2.3 is listed for 1.36 only (a direct
-1.7 -> 2.3 LTS hop is supported by containerd); ESO 2.2 on 1.36 between 26 and 28; ksm 2.18 on 1.35.
+Unavoidable windows (current numbers): Istio 1.26-1.27 on 1.34 (steps 03-04, one minor at a time); containerd 2.3
+under Kubernetes 1.34 and 1.35 (steps 14-42: 2.3 is listed for 1.36 only; the 1.7 -> 2.3 LTS hop is containerd's
+supported path); External Secrets 2.2 on 1.36 between steps 43 and 44 (operator 2026-10-05: accepted); kube-state-metrics
+2.18 on 1.35 (steps 42-45).
 Mine to fix: the kubectl images to 1.35.x before 26; step 25's comment (Istio 1.31: 1.32-1.36, not 1.37) - DONE;
 step 40 pins Scylla Manager and its agents to the target 3.12.1 (the chart's default is 3.12.0) - with the restructure.
 Operator's decisions (2026-10-05): ScyllaDB 2026.1 LTS - step 41 (2026.3) dropped, its branch kept as
@@ -707,90 +775,29 @@ containerd in one hop; ESO's window accepted (no 2.8 step); Gateway API stops at
 Applied 2026-10-05 (scripts/upgrade-restack.py; the old branches kept as upgrade-old/*): every branch re-created in the
 new order, each step's own commits cherry-picked without a conflict; platform's final tree identical to before,
 infra's differs exactly by the dropped 2026.3 (back to 2026.1.14). Every step's refs and inventory checks pass in
-the new order. The new numbers - the text of this plan written before 2026-10-05 uses the old ones:
-
-| New | Old | Step |
-|---|---|---|
-| 01 | 00 | argocd-root-retry |
-| 02 | 19 | istio-chart-repo |
-| 03 | 20 | istio-1.26 |
-| 04 | 21 | istio-1.27 |
-| 05 | 22 | istio-1.28 |
-| 06 | 23 | istio-1.29 |
-| 07 | 18 | gateway-api |
-| 08 | 24 | istio-1.30 |
-| 09 | 25 | istio-1.31 |
-| 10 | 04 | velero |
-| 11 | 13 | cilium |
-| 12 | 13 | kubelet-shutdown-grace |
-| 13 | 14 | kubernetes-1.34.12 |
-| 14 | 15 | containerd |
-| 15 | 36 | scylla-operator-1.20.3 |
-| 16 | 37 | scylladb-2025.1 |
-| 17 | 38 | scylla-operator-1.21 |
-| 18 | 39 | scylladb-2026.1 |
-| 19 | 40 | scylla-operator-1.22 |
-| 20 | 01 | apt-cacher-ng |
-| 21 | 02 | cert-manager |
-| 22 | 03 | cnpg |
-| 23 | 05 | versitygw |
-| 24 | 06 | local-path |
-| 25 | 07 | kube-prometheus-stack |
-| 26 | 09 | grafana |
-| 27 | 10 | mimir |
-| 28 | 11 | fluent-bit |
-| 29 | 12 | argocd |
-| 30 | 17 | cilium-1.20 |
-| 31 | 29 | argocd-3.4 |
-| 32 | 30 | argocd-3.5 |
-| 33 | 31 | cert-manager-1.21 |
-| 34 | 32 | strimzi-v1-templates |
-| 35 | 33 | strimzi-conversion |
-| 36 | 34 | strimzi-1.2 |
-| 37 | 35 | kafka-4.3 |
-| 38 | 27 | eso-crds |
-| 39 | 16 | kubernetes-1.35 |
-| 40 | 26 | kubernetes-1.36 |
-| 41 | 28 | eso-2.11 |
-| 42 | 08 | alertmanager-blackbox-ksm |
-| 43 | 42 | postgres-18 |
-| 44 | 43 | valkey-9.1 |
-| 45 | 44 | grafana-13 |
-| 46 | 45 | mimir-3.0 |
-| 47 | 46 | mimir-3.1 |
-| 48 | 47 | mimir-3.2 |
-| 49 | 48 | tempo-3 |
-| 50 | 49 | fluent-bit-5 |
-| 51 | 50 | centrifugo-6.9 |
-| 52 | 51 | sonarqube-26.9 |
-| 53 | 52 | clickhouse-compat-24.8 |
-| 54 | 53 | clickhouse-25.8 |
-| 55 | 54 | clickhouse-compat-25.8 |
-| 56 | 55 | clickhouse-26.8 |
+the new order. The text of this plan written before 2026-10-05 uses the old numbers (01-55); the same day the five test-environment steps were split from their production ones and step 00 added - the step table under "Upgrade steps" is the current list.
 
 ## Stateful steps - for the operator's approval
 
-Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first
-three is an outage of that service for the restart. Each row was proven in Vagrant on a copy of production with
-seeded data (Postgres 10,000 rows on both instances, 1,000 Kafka messages, 1,000 ScyllaDB rows, md5 each).
+Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first three is an outage of that service for the restart. The one-way steps (generated from the step files: each takes its Wave 0 backup first, in production and in the full run, where the backup's restore is rehearsed at the step's versions):
 
-| # | Change | Outage | Undo | Vagrant proof |
-|---|---|---|---|---|
-| 18 | Gateway API CRDs v1.2.1 -> v1.5.1 (with their safe-upgrades ValidatingAdmissionPolicy) | none | one-way: the policy refuses v1.0-v1.4 CRDs - delete it first to go back; setup-kubeadm's default moves to v1.5.1 with the step | v1.5.1 serves every version v1.2.1 did; Istio 1.25 reads on |
-| 33 | Argo stops auto-syncing Strimzi; Strimzi's own tool rewrites every Strimzi resource (ten's 13 KafkaTopics too, 5 of them made by hand) and the CRDs' stored version to v1 | none | 0.51 serves v1 too: staying on 0.51 works; v1beta2 storage does not come back | 10 CRDs store only v1, Kafka Ready, messages intact |
-| 34 | Strimzi 0.51.0 -> 1.2.0, auto-sync back; the broker rolls onto the 1.2.0 image (Kafka 4.2.0) | Kafka, one roll | chart back to 0.51 (reads v1) | operator 1.2.0 reconciles, messages intact |
-| 35 | Kafka 4.2.0 -> 4.3.1; Strimzi then moves the metadata version to 4.3-IV0 | Kafka, a rolling update | none once the metadata version moved | 4.3.1, 4.3-IV0, Ready, messages intact |
-| 37 | ScyllaDB 6.2.3 -> 2025.1.16 (source-available line) | ScyllaDB, one roll | none (new SSTables) | rows intact |
-| 39 | ScyllaDB 2025.1.16 -> 2026.1.14 (LTS to LTS) | ScyllaDB, one roll | none | rows intact |
-| 41 | ScyllaDB 2026.1.14 -> 2026.3.2; node-exporter becomes the operator's sidecar | ScyllaDB, one roll | none | rows intact, every scrape target up |
-| 42 | PostgreSQL 17 -> 18.6, CNPG offline in-place (pg_upgrade on the primary, replica re-cloned) | Postgres, minutes | none: restore from the pre-upgrade backup; take a fresh base backup after (17's WAL cannot restore 18) | both instances 18.6, data major 18, rows on both |
-| 44 | Grafana 12.4.12 -> 13.2.3, its storage migrated on start | Grafana, one restart | restore the volume backed up first | database ok, 6 dashboards as on ten, 3 datasources |
-| 48 | Tempo 2.7.2 -> 3.1.0 monolithic | Tempo, one restart | 2.x cannot read blocks 3.x wrote | v3.1.0 ingests OTLP and Zipkin, search answers |
-| 53 | ClickHouse 24.8 -> 25.8.33.6 with compatibility 24.8 (step 52) | ClickHouse, one restart (logs buffer in Fluent Bit) | image back to 24.8 while the pin stays | 25.8.33.6 under 24.8, logs flowing |
-| 55 | ClickHouse 25.8 -> 26.8.15.10 with compatibility 25.8 (step 54) | ClickHouse, one restart | image back to 25.8 while the pin stays; removing the pin is the point of no return (operator's call) | 26.8.15.10 under 25.8, logs flowing |
-
-Before 33-41 (Kafka, ScyllaDB): Velero holds no copy of their data (defect 20) - a backup first, or the operator
-accepts the risk. Before 42: CNPG base backup + `pg_dumpall` to the Pi. Before 44: Grafana's volume.
+| # | Step | Outage | Abort |
+|---|---|---|---|
+| 13 | kubernetes-1.34.12 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run) |
+| 17 | scylladb-2025.1 (Wave 0: scylla) | ScyllaDB restarts on the new version - one node, unavailable for the restart (a minute or two) | one-way once it runs (ScyllaDB does not downgrade across releases): the Wave 0 Scylla backup restored with sctool (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 20 | scylladb-2026.1 (Wave 0: scylla) | ScyllaDB restarts on the new version - one node, unavailable for the restart (a minute or two) | one-way once it runs (ScyllaDB does not downgrade across releases): the Wave 0 Scylla backup restored with sctool (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 38 | strimzi-1.2 (Wave 0: kafka) | the operator rolls Kafka - one broker, unavailable for its restart | one-way: Strimzi 1.x serves v1 only; back by the Wave 0 Kafka backup with 0.51 (not rehearsed) |
+| 40 | kafka-4.3 (Wave 0: kafka) | the broker restarts on 4.3 - Kafka unavailable for the restart (a minute) | revert the step's merge on main (Argo syncs back) while the metadata version is still 4.2's; once Strimzi has moved it: the Wave 0 Kafka backup (taken at step 38 and here; its restore rehearsed at this step in the full run; the old version on it is not) |
+| 42 | kubernetes-1.35 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run) |
+| 43 | kubernetes-1.36 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run) |
+| 46 | postgres-18-test (Wave 0: postgres) | the test environment only: its Postgres down for pg_upgrade (minutes) | the test cluster's Wave 0 dump (the postgres store dumps every CNPG primary, this step's wave0 line) restored into a PostgreSQL 17 cluster - the test cluster has no base backups |
+| 47 | postgres-18 (Wave 0: postgres) | Postgres down for pg_upgrade (minutes) - every app's writes fail; the replica re-cloned after | the step's restore-undo: PostgreSQL 17's latest backup recovered under the old server name (recovered into a side cluster in the full run; replacing production's cluster with it - its volumes deleted, writes since lost - is neither written down nor rehearsed), or the Wave 0 dump |
+| 50 | grafana-13 (Wave 0: grafana) | Grafana down while it migrates its database | one-way: the Wave 0 Grafana backup (grafana.db) with Grafana 12 (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 51 | mimir-3.0 (Wave 0: gateway) | Mimir restarts - Prometheus retries its remote write, queries fail briefly | one-way (3.x may write what 2.x cannot read): the Wave 0 gateway backup - the object store's and Mimir's volumes (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 54 | tempo-3 (Wave 0: gateway) | Tempo restarts - spans sent meanwhile may be lost | one-way (Tempo 3 blocks): the Wave 0 gateway backup (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 57 | sonarqube-26.9 (Wave 0: postgres) | SonarQube down while it migrates its database (production only) | one-way: SonarQube's Postgres dump from Wave 0 (the postgres store) with 26.3 |
+| 59 | clickhouse-25.8 (Wave 0: clickhouse) | ClickHouse restarts on 25.8 - log ingestion waits | back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)); otherwise the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 61 | clickhouse-26.8 (Wave 0: clickhouse) | ClickHouse restarts on 26.8 - log ingestion waits | back to 25.8 while the pin keeps 25.8's formats (drop or unlock the renamed system.*_log_N tables first); otherwise the Wave 0 ClickHouse backup |
 
 ## Production, step by step (after the gate and the operator's approval)
 
