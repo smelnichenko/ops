@@ -1,0 +1,9 @@
+# Velero 1.18.0 -> 1.18.4 (chart 12.0.0 -> 12.2.0, image pinned to the newest patch) and the AWS plugin 1.11.1 ->
+# 1.14.4, the line that pairs with Velero 1.18. infra upgrade/10-velero.
+argo-chart velero velero@12.0.0 => argo-chart velero velero@12.2.0
+image docker.io/velero/velero v1.18.0 => image docker.io/velero/velero v1.18.4
+image velero/velero-plugin-for-aws v1.11.1 => image velero/velero-plugin-for-aws v1.14.4
+# A Velero backup after it: Velero and its node agent.
+backup-check
+# its change: the branch upgrade/10-velero in infra
+branch infra

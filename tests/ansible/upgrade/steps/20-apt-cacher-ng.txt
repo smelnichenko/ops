@@ -1,0 +1,5 @@
+# apt-cacher-ng from its CI build: the hand-built 1.0 is gone from the registry, ten runs it only from its node cache.
+# platform upgrade/20-apt-cacher-ng.
+image git.pmon.dev/schnappy/apt-cacher-ng 1.0 => image git.pmon.dev/schnappy/apt-cacher-ng 7b46aea
+# its change: the branch upgrade/20-apt-cacher-ng in platform
+branch platform

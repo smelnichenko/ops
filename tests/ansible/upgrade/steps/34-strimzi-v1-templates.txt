@@ -1,0 +1,5 @@
+# The Strimzi templates still on v1beta2 - KafkaUsers (schnappy-data) and the realtime KafkaTopics - on the v1 API. Both
+# are switched off in production; under Strimzi 1.x they would fail to apply if switched on. Strimzi's conversion tool
+# gives the same objects (it only drops patternType: literal, the default). platform upgrade/34-strimzi-v1-templates.
+# its change: the branch upgrade/34-strimzi-v1-templates in platform
+branch platform

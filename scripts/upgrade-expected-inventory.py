@@ -49,7 +49,7 @@ the previous one or changes nothing on it, or if the branches up to the step are
 declare (branch lines): a missing or empty branch fell back to the previous step's, and the step went green without
 its change.
 
-Usage: scripts/upgrade-expected-inventory.py <step, e.g. 01-apt-cacher-ng>           (prints the inventory)
+Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>           (prints the inventory)
        scripts/upgrade-expected-inventory.py --refs <step>                          (prints "<infra-ref> <platform-ref>")
        scripts/upgrade-expected-inventory.py --playbooks <step>                     (prints "<playbook> <arguments>" lines)
        scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)

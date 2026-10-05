@@ -1,7 +1,0 @@
-# SonarQube Community 26.3.0 -> 26.9.0 (infra values and platform's default, both upgrade/51-sonarqube-26.9). SonarQube
-# is NOT in the Vagrant copy (left out with the operator's agreement, 2026-10-02), so this step proves only that the
-# rest stays green; the upgrade itself is production-only. SonarQube migrates its database on first start (via /setup).
-# The inventory line is on the allowed-missing list, so no change is expected here.
-# its change: the branch upgrade/51-sonarqube-26.9 in infra and platform
-branch infra
-branch platform

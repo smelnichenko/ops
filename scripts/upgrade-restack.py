@@ -13,7 +13,8 @@ Each step's change is the commits its branch upgrade/NN-<name> adds to the step 
 and prints the git mv lines for the step files (tests/ansible/upgrade/steps/NN-<name>.txt -> MM-<name>.txt) - the step
 files are renamed by hand, with their text, in the same change.
 
-The working trees must be clean and on main; the script checks out main again at the end. Run it on clones first
+A branch whose step file is gone (a dropped step) is renamed with the others and not re-created: its commits go
+nowhere. The working trees must be clean and on main; the script checks out main again at the end. Run it on clones first
 (--repos <dir> <dir>). Same order, after a fix committed to an earlier step branch: scripts/upgrade-restack-in-place.sh.
 
 Usage: scripts/upgrade-restack.py --order <file with one step name per line, new order> [--repos ../infra ../platform]
@@ -61,13 +62,15 @@ def main():
             sys.exit(f"{repo_name}: not on main")
         heads = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/").split()
         old = {b[len("upgrade/"):]: b for b in heads if re.fullmatch(r"upgrade/\d\d-.+", b)}
-        # each step's own commits: its branch minus the previous step branch (old order) in this repo
+        # each step's own commits: its branch minus the previous step branch (old order) in this repo - over every
+        # branch, a dropped step's too, or its commits would land in the next step's
         own, prev = {}, "main"
-        for name in names:
-            if name in old:
-                own[name] = git(repo, "rev-list", "--reverse", f"{prev}..{old[name]}").split()
-                prev = old[name]
-        print(f"== {repo_name}: {len(own)} step branches")
+        for name in sorted(old):
+            own[name] = git(repo, "rev-list", "--reverse", f"{prev}..{old[name]}").split()
+            prev = old[name]
+        dropped = sorted(n for n in own if n not in names)
+        print(f"== {repo_name}: {len(own)} step branches"
+              + (f"; dropped (no step file - kept as upgrade-old/ only): {', '.join(dropped)}" if dropped else ""))
         plan, base = [], "main"
         for o in order:
             name = by_bare[bare(o)]

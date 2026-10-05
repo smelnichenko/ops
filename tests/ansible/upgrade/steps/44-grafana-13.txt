@@ -1,8 +1,0 @@
-# Grafana 12.4.12 -> 13.2.3 (infra upgrade/44-grafana-13). One-way: 13 migrates folders and dashboards to unified
-# storage on startup, so in production the Grafana volume is backed up first. ten's SQLite database is 1.6 MB; nothing
-# here uses grafana-cli/grafana-server, the Image Renderer or numeric datasource ids (all gone or disabled in 13).
-image grafana/grafana 12.4.12 => image grafana/grafana 13.2.3
-# its change: the branch upgrade/44-grafana-13 in infra
-branch infra
-# and the branch upgrade/44-grafana-13 in platform (Recreate: one SQLite database, migrated on start)
-branch platform

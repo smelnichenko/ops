@@ -1,0 +1,5 @@
+# Mimir 3.0.8 -> 3.1.6, one minor at a time (infra upgrade/47-mimir-3.1). 3.1 removes only experimental options we do
+# not set.
+image grafana/mimir 3.0.8 => image grafana/mimir 3.1.6
+# its change: the branch upgrade/47-mimir-3.1 in infra
+branch infra

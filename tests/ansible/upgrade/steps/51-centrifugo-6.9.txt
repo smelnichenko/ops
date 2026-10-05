@@ -1,0 +1,7 @@
+# Centrifugo v6.7.1 -> v6.9.7 (infra values and platform's default, both upgrade/51-centrifugo-6.9). 6.9.0's break
+# (http_headers no longer fillable from header emulation) does not apply here; 6.9.6 disconnects (3006) a refresh with
+# an already-expired subscription token - the site mints a fresh one from admin on every refresh.
+image centrifugo/centrifugo v6.7.1 => image centrifugo/centrifugo v6.9.7
+# its change: the branch upgrade/51-centrifugo-6.9 in infra and platform
+branch infra
+branch platform

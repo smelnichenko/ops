@@ -1,4 +1,0 @@
-# Grafana 12.4.2 -> 12.4.12 (patch releases; 13.x is a later step). infra upgrade/09-grafana.
-image grafana/grafana 12.4.2 => image grafana/grafana 12.4.12
-# its change: the branch upgrade/09-grafana in infra
-branch infra

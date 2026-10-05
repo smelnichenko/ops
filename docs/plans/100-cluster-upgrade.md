@@ -572,9 +572,73 @@ Unavoidable windows: Istio 1.26-1.27 on 1.34 (one minor at a time); containerd 2
 1.7 -> 2.3 LTS hop is supported by containerd); ESO 2.2 on 1.36 between 26 and 28; ksm 2.18 on 1.35.
 Mine to fix: the kubectl images to 1.35.x before 26; step 25's comment (Istio 1.31: 1.32-1.36, not 1.37) - DONE;
 step 40 pins Scylla Manager and its agents to the target 3.12.1 (the chart's default is 3.12.0) - with the restructure.
-For the operator: ScyllaDB target 2026.3 (outside Manager 3.12's list) or 2026.1 LTS; containerd in one hop or three
-(1.7.29, 2.2.6, 2.3.6 - zero window, two more steps); ESO 2.8 before 26 (no window) or not; Gateway API v1.5.1 or
-on to v1.6 after Istio 1.31.
+Operator's decisions (2026-10-05): ScyllaDB 2026.1 LTS - step 41 (2026.3) dropped, its branch kept as
+upgrade-old/41-scylladb-2026.3 only, the schema Job's cqlsh image pinned to 2026.1.14 with step 39 instead;
+containerd in one hop; ESO's window accepted (no 2.8 step); Gateway API stops at v1.5.1.
+
+Applied 2026-10-05 (scripts/upgrade-restack.py; the old branches kept as upgrade-old/*): every branch re-created in the
+new order, each step's own commits cherry-picked without a conflict; platform's final tree identical to before,
+infra's differs exactly by the dropped 2026.3 (back to 2026.1.14). Every step's refs and inventory checks pass in
+the new order. The new numbers - the text of this plan written before 2026-10-05 uses the old ones:
+
+| New | Old | Step |
+|---|---|---|
+| 01 | 00 | argocd-root-retry |
+| 02 | 19 | istio-chart-repo |
+| 03 | 20 | istio-1.26 |
+| 04 | 21 | istio-1.27 |
+| 05 | 22 | istio-1.28 |
+| 06 | 23 | istio-1.29 |
+| 07 | 18 | gateway-api |
+| 08 | 24 | istio-1.30 |
+| 09 | 25 | istio-1.31 |
+| 10 | 04 | velero |
+| 11 | 13 | cilium |
+| 12 | 13 | kubelet-shutdown-grace |
+| 13 | 14 | kubernetes-1.34.12 |
+| 14 | 15 | containerd |
+| 15 | 36 | scylla-operator-1.20.3 |
+| 16 | 37 | scylladb-2025.1 |
+| 17 | 38 | scylla-operator-1.21 |
+| 18 | 39 | scylladb-2026.1 |
+| 19 | 40 | scylla-operator-1.22 |
+| 20 | 01 | apt-cacher-ng |
+| 21 | 02 | cert-manager |
+| 22 | 03 | cnpg |
+| 23 | 05 | versitygw |
+| 24 | 06 | local-path |
+| 25 | 07 | kube-prometheus-stack |
+| 26 | 09 | grafana |
+| 27 | 10 | mimir |
+| 28 | 11 | fluent-bit |
+| 29 | 12 | argocd |
+| 30 | 17 | cilium-1.20 |
+| 31 | 29 | argocd-3.4 |
+| 32 | 30 | argocd-3.5 |
+| 33 | 31 | cert-manager-1.21 |
+| 34 | 32 | strimzi-v1-templates |
+| 35 | 33 | strimzi-conversion |
+| 36 | 34 | strimzi-1.2 |
+| 37 | 35 | kafka-4.3 |
+| 38 | 27 | eso-crds |
+| 39 | 16 | kubernetes-1.35 |
+| 40 | 26 | kubernetes-1.36 |
+| 41 | 28 | eso-2.11 |
+| 42 | 08 | alertmanager-blackbox-ksm |
+| 43 | 42 | postgres-18 |
+| 44 | 43 | valkey-9.1 |
+| 45 | 44 | grafana-13 |
+| 46 | 45 | mimir-3.0 |
+| 47 | 46 | mimir-3.1 |
+| 48 | 47 | mimir-3.2 |
+| 49 | 48 | tempo-3 |
+| 50 | 49 | fluent-bit-5 |
+| 51 | 50 | centrifugo-6.9 |
+| 52 | 51 | sonarqube-26.9 |
+| 53 | 52 | clickhouse-compat-24.8 |
+| 54 | 53 | clickhouse-25.8 |
+| 55 | 54 | clickhouse-compat-25.8 |
+| 56 | 55 | clickhouse-26.8 |
 
 ## Stateful steps - for the operator's approval
 

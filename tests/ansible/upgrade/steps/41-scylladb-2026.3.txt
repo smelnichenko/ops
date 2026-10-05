@@ -1,9 +1,0 @@
-# ScyllaDB 2026.1.14 -> 2026.3.2 (production and test clusters; any minor within the 2026 major is allowed). 2026.3 no
-# longer bundles node-exporter: operator 1.22 runs it as its own sidecar (scylladb-node-exporter 1.12.1-1, the image
-# its config names). The schema Job's cqlsh image leaves its floating 6.2 tag. infra upgrade/41-scylladb-2026.3.
-# Stateful: shown before production.
-image docker.io/scylladb/scylla 2026.1.14 => image docker.io/scylladb/scylla 2026.3.2
-+ image docker.io/scylladb/scylladb-node-exporter 1.12.1-1
-image scylladb/scylla 6.2 => image scylladb/scylla 2026.3.2
-# its change: the branch upgrade/41-scylladb-2026.3 in infra
-branch infra
