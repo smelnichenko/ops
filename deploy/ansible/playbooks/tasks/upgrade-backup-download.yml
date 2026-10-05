@@ -1,0 +1,33 @@
+---
+# One file of a Wave 0 backup out of the Pi backup store, as tasks/upgrade-backup-upload.yml put it there: the parts
+# <key>.parts lists, in order (part-000, part-001, ... - a gap or a stranger refuses), each its sha256 and size, put
+# together, and the whole the sha256 in <key>.sha256. The restores use it - the Vagrant rehearsal
+# (tests/ansible/upgrade/wave0-rehearsal.yml) and a production restore alike.
+#
+# Expects: download_key, download_file (a path on this host), upgrade_backup_endpoint, upgrade_backup_bucket,
+# store_curl.
+- name: "Download - every part, each checked, the whole checked: {{ download_key }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      out={{ download_file | quote }}; key={{ download_key | quote }}
+      url="{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}"
+      get() { curl -fsS --retry 3 -K {{ store_curl }} "$url/$1"; }
+      parts=$(get "$key.parts")
+      [ -n "$parts" ] || { echo "$key: no parts listed"; exit 1; }
+      trap 'rm -f "$out.part"' EXIT
+      : > "$out"
+      i=0
+      while read -r pk s b; do
+        [ "$pk" = "$(printf '%s.part-%03d' "$key" "$i")" ] || { echo "$key: part $i is listed as $pk"; exit 1; }
+        get "$pk" > "$out.part"
+        [ "$(sha256sum "$out.part" | cut -d' ' -f1)" = "$s" ] || { echo "$pk: sha256 differs"; exit 1; }
+        [ "$(stat -c %s "$out.part")" = "$b" ] || { echo "$pk: size differs"; exit 1; }
+        cat "$out.part" >> "$out"
+        i=$((i + 1))
+      done <<< "$parts"
+      [ "$(sha256sum "$out" | cut -d' ' -f1)" = "$(get "$key.sha256")" ] || { echo "$key: the whole differs"; exit 1; }
+      echo "$key: $i part(s), $(stat -c %s "$out") bytes"
+  register: _download
+  changed_when: false

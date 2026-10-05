@@ -65,6 +65,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --restore-undo <step>        (prints "<serverName> <image>" or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-compat <step>             (prints the version or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
+       scripts/upgrade-expected-inventory.py --wave0 <step>               (prints its wave0 stores, space-separated)
 """
 import os
 import re
@@ -165,7 +166,8 @@ def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
                                    ["--barman-check"], ["--restore-check"], ["--cert-renew"],
-                                   ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"]) else None
+                                   ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
+                                   ["--wave0"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -200,6 +202,11 @@ def main():
         for name in names[:names.index(args[0]) + 1]:
             parse(os.path.join(STEPS, name + ".txt"), compat=compat)
         print(compat[-1] if compat else "")
+        return
+    if mode == "--wave0":
+        wave0 = []
+        parse(os.path.join(STEPS, args[0] + ".txt"), wave0=wave0)
+        print(" ".join(wave0))
         return
     if mode == "--out-of-sync":
         apps = []

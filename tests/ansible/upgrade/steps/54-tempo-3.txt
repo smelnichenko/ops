@@ -4,7 +4,8 @@
 # blocks, not the reverse - in production the traces bucket is not touched, so 2.x could only be restored with older
 # blocks.
 # outage: Tempo restarts - spans sent meanwhile may be lost
-# abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup (rehearsed in Vagrant)
+# abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup (its restore rehearsed at this step in the full run; the
+# old version on it is not)
 # one-way: the in-cluster object store (Mimir's and Tempo's blocks) backed up into the Pi store before the step changes anything
 wave0 gateway
 image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0

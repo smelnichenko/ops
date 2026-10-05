@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""A fake curl for the backup-parts harness: the store is the directory $FAKE_STORE. `-T <file> <url>` copies the file
+to the URL's path in it; a bare `<url>` prints the file there (exit 22, as curl -f, when there is none). With
+$FAKE_FLIP_GET set, a GET whose path ends with it returns its bytes with the last one flipped (a store that hands back
+something else). Every other flag (-fsS, --retry N, -K <file>) is accepted and ignored."""
+import os
+import shutil
+import sys
+import urllib.parse
+
+args, upload, url = sys.argv[1:], None, None
+i = 0
+while i < len(args):
+    a = args[i]
+    if a in ("-K", "--retry"):
+        i += 2
+        continue
+    if a == "-T":
+        upload, i = args[i + 1], i + 2
+        continue
+    if not a.startswith("-"):
+        url = a
+    i += 1
+path = os.path.join(os.environ["FAKE_STORE"], urllib.parse.urlparse(url).path.lstrip("/"))
+if upload:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    shutil.copyfile(upload, path)
+    sys.exit(0)
+if not os.path.exists(path):
+    sys.exit(22)
+data = open(path, "rb").read()
+flip = os.environ.get("FAKE_FLIP_GET")
+if flip and path.endswith(flip) and data:
+    data = data[:-1] + bytes([data[-1] ^ 1])
+sys.stdout.buffer.write(data)

@@ -1,0 +1,53 @@
+---
+# one round trip: the file uploaded in parts (the playbook's own task file), tampered with as the case says, downloaded
+# (the restores' task file) - the verdict is whether both succeeded and the file came back the same
+- name: "{{ case.name }}"
+  block:
+    - name: The file
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf {{ work }}/store; mkdir -p {{ work }}/store
+        head -c {{ case.size }} /dev/urandom > {{ work }}/file
+      changed_when: true
+    - name: Up
+      ansible.builtin.include_tasks: ../../../../deploy/ansible/playbooks/tasks/upgrade-backup-upload.yml
+      vars:
+        upload_file: "{{ work }}/file"
+        upload_key: "store/stamp/file.tar.gz"
+    - name: Tampered with
+      ansible.builtin.shell: "{{ case.tamper }}"
+      args:
+        chdir: "{{ work }}/store/bucket/store/stamp"
+      when: case.tamper | default('') | length > 0
+      changed_when: true
+    - name: Down
+      ansible.builtin.include_tasks: ../../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml
+      vars:
+        download_key: "store/stamp/file.tar.gz"
+        download_file: "{{ work }}/back"
+    - name: The same file, in the parts expected
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cmp {{ work }}/file {{ work }}/back
+        ls {{ work }}/store/bucket/store/stamp | grep -c '\.part-'
+      register: _same
+      changed_when: false
+      failed_when: _same.rc != 0 or _same.stdout | int != case.parts | default(-1) | int
+    - name: Round trip whole
+      ansible.builtin.set_fact:
+        _verdict: whole
+  rescue:
+    # refused for the reason the case names - the failed task and its output - or not counted as refused at all
+    - name: Refused
+      ansible.builtin.set_fact:
+        _verdict: >-
+          {{ 'refused' if (ansible_failed_task.name ~ ' | ' ~ (ansible_failed_result.stdout | default(''))
+          ~ ' | rc ' ~ (ansible_failed_result.rc | default(''))) is search(case.reason | default('^$')) else
+          'refused otherwise: ' ~ ansible_failed_task.name ~ ' - ' ~ (ansible_failed_result.stdout | default('')
+          | default(ansible_failed_result.msg | default(''), true)) }}
+
+- name: "{{ case.name }}: {{ case.want }}"
+  ansible.builtin.assert:
+    that: _verdict == case.want
+    fail_msg: "FAIL {{ case.name }}: {{ _verdict }}, want {{ case.want }}"
+    success_msg: "PASS {{ case.name }}: {{ _verdict }}"

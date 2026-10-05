@@ -5,7 +5,9 @@
 # (infra), then the chart default follows (platform), both upgrade/47-postgres-18. Stateful, with downtime: shown to the
 # operator before production; a fresh base backup follows it there (the old major's WAL archive cannot restore 18).
 # outage: Postgres down for pg_upgrade (minutes) - every app's writes fail; the replica re-cloned after
-# abort: the step's restore-undo: PostgreSQL 17's latest backup recovered (rehearsed in Vagrant), or the Wave 0 dump
+# abort: the step's restore-undo: PostgreSQL 17's latest backup recovered under the old server name (recovered into a
+# side cluster in the full run; replacing production's cluster with it - its volumes deleted, writes since lost - is
+# neither written down nor rehearsed), or the Wave 0 dump
 # one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
 wave0 postgres
 image ghcr.io/cloudnative-pg/postgresql 17 => image ghcr.io/cloudnative-pg/postgresql 18.6-system-bullseye

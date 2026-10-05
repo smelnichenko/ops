@@ -3,7 +3,7 @@
 # - the metrics check queries Mimir.
 # outage: Mimir restarts - Prometheus retries its remote write, queries fail briefly
 # abort: one-way (3.x may write what 2.x cannot read): the Wave 0 gateway backup - the object store's and Mimir's
-# volumes (rehearsed in Vagrant)
+# volumes (its restore rehearsed at this step in the full run; the old version on it is not)
 # one-way: the in-cluster object store (Mimir's and Tempo's blocks) backed up into the Pi store before the step changes anything
 wave0 gateway
 image grafana/mimir 2.17.11 => image grafana/mimir 3.0.8

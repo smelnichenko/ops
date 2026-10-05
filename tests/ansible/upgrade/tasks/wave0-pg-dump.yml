@@ -1,5 +1,5 @@
 ---
-# One pg_dumpall of a Wave 0 backup, read back from the Pi store (its sha256 the stored one) and replayed into an empty
+# One pg_dumpall of a Wave 0 backup, read back from the Pi store (its parts and the whole checked) and replayed into an empty
 # side CNPG cluster: the only errors allowed are the roles and databases the side cluster has already; every table of
 # every database must then hold the rows the dump has (files/pg-dump-verify.py), and the production cluster's dump the
 # seeded rows too (count and md5). The side cluster and its policies are removed whatever happens.
@@ -7,17 +7,13 @@
 # Expects: dump_name (a file of the backup's local directory), _stamp, _cluster (the production cluster, as JSON),
 #          kubectl, kubeconfig, pg_namespace, pg_cluster, restored, work_dir, local_dir, endpoint, bucket, store_curl,
 #          rows, expected_md5.
-- name: "Postgres - read back from the Pi store, its sha256 the stored one: {{ dump_name }}"
-  ansible.builtin.shell:
-    executable: /bin/bash
-    cmd: |
-      set -euo pipefail
-      key="postgres/{{ _stamp.stdout }}/{{ dump_name }}"
-      get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
-      get "$key" > {{ work_dir }}/dump.sql.gz
-      [ "$(get "$key.sha256")" = "$(sha256sum {{ work_dir }}/dump.sql.gz | cut -d' ' -f1)" ]
-      echo "$key"
-  changed_when: false
+- name: "Postgres - read back from the Pi store, its parts and the whole checked: {{ dump_name }}"
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml"
+  vars:
+    download_key: "postgres/{{ _stamp.stdout }}/{{ dump_name }}"
+    download_file: "{{ work_dir }}/dump.sql.gz"
+    upgrade_backup_endpoint: "{{ endpoint }}"
+    upgrade_backup_bucket: "{{ bucket }}"
 
 - name: "Postgres - no side cluster left from an earlier run: {{ dump_name }}"
   ansible.builtin.command: >-

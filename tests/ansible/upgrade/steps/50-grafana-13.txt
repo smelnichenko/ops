@@ -2,7 +2,8 @@
 # storage on startup, so in production the Grafana volume is backed up first. ten's SQLite database is 1.6 MB; nothing
 # here uses grafana-cli/grafana-server, the Image Renderer or numeric datasource ids (all gone or disabled in 13).
 # outage: Grafana down while it migrates its database
-# abort: one-way: the Wave 0 Grafana backup (grafana.db) with Grafana 12 (rehearsed in Vagrant)
+# abort: one-way: the Wave 0 Grafana backup (grafana.db) with Grafana 12 (its restore rehearsed at this step in the full
+# run; the old version on it is not)
 # one-way: Grafana's SQLite database backed up into the Pi store before the step changes anything
 wave0 grafana
 image grafana/grafana 12.4.12 => image grafana/grafana 13.2.3

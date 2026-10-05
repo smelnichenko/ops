@@ -3,7 +3,7 @@
 # infra upgrade/17-scylladb-2025.1. Stateful: shown to the operator before production.
 # outage: ScyllaDB restarts on the new version - one node, unavailable for the restart (a minute or two)
 # abort: one-way once it runs (ScyllaDB does not downgrade across releases): the Wave 0 Scylla backup restored with
-# sctool (rehearsed in Vagrant)
+# sctool (its restore rehearsed at this step in the full run; the old version on it is not)
 # one-way: ScyllaDB (Scylla Manager's snapshot) backed up into the Pi store before the step changes anything
 wave0 scylla
 image docker.io/scylladb/scylla 6.2.3 => image docker.io/scylladb/scylla 2025.1.16

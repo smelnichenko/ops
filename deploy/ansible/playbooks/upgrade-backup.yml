@@ -43,6 +43,9 @@
     # the store's credentials for curl, only root reads it: never on a command line or in the environment
     store_curl: "{{ local_dir }}/.store-credentials.curl"
     stores: [postgres, clickhouse, grafana, kafka, gateway, scylla]
+    # each file goes to the store in parts of at most this many bytes (tasks/upgrade-backup-upload.yml); the Vagrant
+    # copy's are small, so its rehearsal puts files together from several
+    upload_part_bytes: "{{ upgrade_backup_part_bytes | default(4294967296) }}"
   tasks:
     - name: The store is one this playbook backs up
       ansible.builtin.assert:
@@ -233,6 +236,12 @@
 
         # frozen parts are hard links: a snapshot left behind keeps every part it holds on the node's disk after merges
         # and TTL drops, so it goes whatever happens
+        - name: ClickHouse - room for its copy
+          ansible.builtin.include_tasks: tasks/upgrade-backup-space.yml
+          vars:
+            space_dirs: ["{{ _ch.stdout.split()[2] }}"]
+          when: store == 'clickhouse'
+
         - name: ClickHouse - a snapshot of every MergeTree table, tarred, then removed
           when: store == 'clickhouse'
           block:
@@ -362,6 +371,12 @@
         # exit 1 ("file changed as we read it", "file removed before we read it" - a WAL appended, an index replaced)
         # is accepted when those are its only complaints; the object store's archive is then checked against the
         # objects listed before and after it, and that list goes beside it - what a restore must give back
+        - name: Gateway - room for its copies
+          ansible.builtin.include_tasks: tasks/upgrade-backup-space.yml
+          vars:
+            space_dirs: "{{ _gw_dirs.stdout_lines | map('split') | map('last') | list }}"
+          when: store == 'gateway'
+
         - name: Gateway - each volume tarred with its extended attributes; the object store's archive checked
           ansible.builtin.shell:
             executable: /bin/bash
@@ -431,6 +446,12 @@
         # does not run when the run is interrupted. The StrimziPodSet controller recreates a deleted broker even while
         # the Kafka is paused: the cordon keeps the new pod Pending, and each broker is checked not running after its
         # copy. What the trap could not undo fails the run, naming it (header: by hand).
+        - name: Kafka - room for its copies (checked while the brokers still run)
+          ansible.builtin.include_tasks: tasks/upgrade-backup-space.yml
+          vars:
+            space_dirs: "{{ _kafka.stdout_lines | map('split') | map('last') | list }}"
+          when: store == 'kafka'
+
         - name: Kafka - every broker stopped, its volume tarred, the pause lifted (one detached script on the node)
           ansible.builtin.shell:
             executable: /bin/bash
@@ -636,6 +657,18 @@
                 snapshots (cluster, name, task, location, tag): {{ _scylla_snapshots.stdout_lines | default([])
                 | join('; ') }}{{ ('; ' ~ (_scylla_tasks.stderr_lines | select('match', '^SKIPPED') | join('; ')))
                 if _scylla_tasks.stderr_lines | default([]) | select('match', '^SKIPPED') | list else '' }}
+
+        # the Pi store holds every copy; ten's root keeps this run's only - two ClickHouse or object-store copies are
+        # ~100 GB of its free space
+        - name: This store's older local copies removed
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              find {{ local_dir }}/{{ store }} -mindepth 1 -maxdepth 1 -type d ! -name {{ _stamp }} -print \
+                -exec rm -rf {} +
+          register: _pruned
+          changed_when: _pruned.stdout | length > 0
       always:
         - name: The credentials file removed
           ansible.builtin.file:

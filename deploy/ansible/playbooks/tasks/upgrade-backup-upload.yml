@@ -1,34 +1,47 @@
 ---
-# One file of a Wave 0 backup into the Pi backup store: the object, its sha256 beside it (<key>.sha256), and the
-# object read back whole - its sha256 must be the file's. Signed with curl's own S3 signing (ten has no S3 client),
-# the credentials from the curl config store_curl (never on a command line or in the environment).
+# One file of a Wave 0 backup into the Pi backup store, in parts of at most upload_part_bytes: each part
+# <key>.part-NNN (a slice of the file) uploaded and read back whole, its sha256 the slice's; then <key>.parts (one line
+# per part: its key, sha256 and bytes - the parts' bytes must add up to the file's) and <key>.sha256 (the whole
+# file's). tasks/upgrade-backup-download.yml puts the file together again. A single PUT of a ~50 GB archive
+# (ClickHouse's or the object store's on ten) could only be retried whole, and was checked only after all of it.
 #
-# Expects: upload_file (a path on this host), upload_key, upgrade_backup_endpoint, upgrade_backup_bucket, store_curl.
-- name: "Upload - the sha256 of the file: {{ upload_key }}"
-  ansible.builtin.command: sha256sum {{ upload_file }}
-  register: _upload_sum
-  changed_when: false
-
-- name: "Upload - the object and its sha256: {{ upload_key }}"
+# Signed with curl's own S3 signing (ten has no S3 client), the credentials from the curl config store_curl (never on
+# a command line or in the environment). Only one part at a time is on disk beside the file.
+#
+# Expects: upload_file (a path on this host), upload_key, upload_part_bytes, upgrade_backup_endpoint,
+# upgrade_backup_bucket, store_curl.
+- name: "Upload - in parts, each read back, then their list and the whole file's sha256: {{ upload_key }}"
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      put() {
-        curl -fsS -K {{ store_curl }} -T "$1" "{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/$2"
-      }
-      echo "{{ _upload_sum.stdout.split()[0] }}" > {{ upload_file }}.sha256
-      put {{ upload_file }} {{ upload_key }}
-      put {{ upload_file }}.sha256 {{ upload_key }}.sha256
+      f={{ upload_file | quote }}; key={{ upload_key | quote }}; part={{ upload_part_bytes | int }}
+      url="{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}"
+      put() { curl -fsS --retry 3 -K {{ store_curl }} -T "$1" "$url/$2"; }
+      get() { curl -fsS --retry 3 -K {{ store_curl }} "$url/$1"; }
+      [ "$part" -gt 0 ] || { echo "upload_part_bytes: $part"; exit 1; }
+      size=$(stat -c %s "$f")
+      n=$(( size == 0 ? 1 : (size + part - 1) / part ))
+      tmp="$f.part"
+      trap 'rm -f "$tmp"' EXIT
+      : > "$f.parts"
+      total=0
+      for ((i = 0; i < n; i++)); do
+        pk=$(printf '%s.part-%03d' "$key" "$i")
+        dd if="$f" of="$tmp" bs=1M iflag=skip_bytes,count_bytes skip=$((i * part)) count="$part" status=none
+        s=$(sha256sum "$tmp" | cut -d' ' -f1)
+        b=$(stat -c %s "$tmp")
+        put "$tmp" "$pk"
+        [ "$(get "$pk" | sha256sum | cut -d' ' -f1)" = "$s" ] || { echo "$pk: read back differs"; exit 1; }
+        echo "$pk $s $b" >> "$f.parts"
+        total=$((total + b))
+      done
+      [ "$total" = "$size" ] || { echo "$key: the parts hold $total bytes of $size"; exit 1; }
+      sha256sum "$f" | cut -d' ' -f1 > "$f.sha256"
+      put "$f.parts" "$key.parts"
+      put "$f.sha256" "$key.sha256"
+      [ "$(get "$key.parts")" = "$(cat "$f.parts")" ] || { echo "$key.parts: read back differs"; exit 1; }
+      [ "$(get "$key.sha256")" = "$(cat "$f.sha256")" ] || { echo "$key.sha256: read back differs"; exit 1; }
+      echo "$key: $n part(s), $size bytes"
+  register: _upload
   changed_when: true
-
-- name: "Upload - read back, its sha256 the file's: {{ upload_key }}"
-  ansible.builtin.shell:
-    executable: /bin/bash
-    cmd: |
-      set -euo pipefail
-      curl -fsS -K {{ store_curl }} "{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}/{{ upload_key }}" \
-        | sha256sum | cut -d' ' -f1
-  register: _upload_back
-  changed_when: false
-  failed_when: _upload_back.rc != 0 or _upload_back.stdout != _upload_sum.stdout.split()[0]

@@ -4,7 +4,8 @@
 # production.
 # outage: the broker restarts on 4.3 - Kafka unavailable for the restart (a minute)
 # abort: revert the step's merge on main (Argo syncs back) while the metadata version is still 4.2's; once Strimzi has
-# moved it: the Wave 0 Kafka backup (rehearsed in Vagrant)
+# moved it: the Wave 0 Kafka backup (taken at step 38 and here; its restore rehearsed at this step in the full run; the
+# old version on it is not)
 # one-way: Kafka's volume (the broker stopped for the copy) backed up into the Pi store before the step changes anything
 wave0 kafka
 image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1

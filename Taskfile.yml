@@ -448,8 +448,19 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --cert-renew {{.STEP}}
       RESTORE_UNDO:
         sh: scripts/upgrade-expected-inventory.py --restore-undo {{.STEP}}
+      WAVE0:
+        sh: scripts/upgrade-expected-inventory.py --wave0 {{.STEP}}
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
+      # Wave 0 first, as production takes it before a one-way step changes anything: each of the step's wave0 stores
+      # backed up into the Pi store and its restore rehearsed - at the versions the step starts from, not only at the
+      # baseline
+      - cmd: |
+          set -euo pipefail
+          for store in {{.WAVE0}}; do
+            echo "=== WAVE 0 $store"
+            task test:upgrade:wave0 STORES="$store"
+          done
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them

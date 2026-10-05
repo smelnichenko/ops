@@ -1,0 +1,80 @@
+---
+# Wave 0's files through the Pi store in parts (1 KiB here): up and down whole, and every kind of damage refused
+- name: Wave 0 files in parts
+  hosts: localhost
+  gather_facts: false
+  environment:
+    PATH: "{{ playbook_dir }}:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_STORE: "{{ work }}/store"
+    FAKE_FLIP_GET: "{{ flip | default('') }}"
+  vars:
+    upload_part_bytes: 1024
+    upgrade_backup_endpoint: http://store.invalid:9000
+    upgrade_backup_bucket: bucket
+    store_curl: /dev/null
+    cases:
+      - {name: "an empty file", size: 0, parts: 1, want: whole}
+      - {name: "one byte", size: 1, parts: 1, want: whole}
+      - {name: "exactly one part", size: 1024, parts: 1, want: whole}
+      - {name: "a byte over one part", size: 1025, parts: 2, want: whole}
+      - {name: "three parts and some", size: 3077, parts: 4, want: whole}
+      - {name: "a part's byte changed in the store", size: 3077, want: refused,
+         reason: "part-001: sha256 differs",
+         tamper: "printf x | dd of=file.tar.gz.part-001 bs=1 seek=7 conv=notrunc status=none"}
+      - {name: "a part missing (listed)", size: 3077, want: refused, reason: "^Download .* rc 22$",
+         tamper: "rm file.tar.gz.part-002"}
+      - {name: "a part dropped from the list", size: 3077, want: refused,
+reason: "part 1 is listed as .*part-002",
+         tamper: "sed -i '/part-001/d' file.tar.gz.parts"}
+      - {name: "the whole's sha256 another", size: 3077, want: refused,
+reason: "the whole differs",
+         tamper: "echo 0000000000000000000000000000000000000000000000000000000000000000 > file.tar.gz.sha256"}
+  tasks:
+    - name: Each case
+      ansible.builtin.include_tasks: case.yml
+      loop: "{{ cases }}"
+      loop_control:
+        loop_var: case
+        label: "{{ case.name }}"
+
+# the upload itself refuses a store that reads back something else
+- name: A store that hands back other bytes
+  hosts: localhost
+  gather_facts: false
+  environment:
+    PATH: "{{ playbook_dir }}:{{ lookup('ansible.builtin.env', 'PATH') }}"
+    FAKE_STORE: "{{ work }}/store"
+    FAKE_FLIP_GET: ".part-001"
+  vars:
+    upload_part_bytes: 1024
+    upgrade_backup_endpoint: http://store.invalid:9000
+    upgrade_backup_bucket: bucket
+    store_curl: /dev/null
+  tasks:
+    - name: Upload against it
+      block:
+        - name: The file
+          ansible.builtin.shell: |
+            set -euo pipefail
+            rm -rf {{ work }}/store; mkdir -p {{ work }}/store
+            head -c 3077 /dev/urandom > {{ work }}/file
+          changed_when: true
+        - name: Up
+          ansible.builtin.include_tasks: ../../../../deploy/ansible/playbooks/tasks/upgrade-backup-upload.yml
+          vars:
+            upload_file: "{{ work }}/file"
+            upload_key: "store/stamp/file.tar.gz"
+        - name: Accepted
+          ansible.builtin.set_fact:
+            _verdict: whole
+      rescue:
+        - name: Refused
+          ansible.builtin.set_fact:
+            _verdict: >-
+              {{ 'refused' if ansible_failed_result.stdout | default('') is search('part-001: read back differs')
+              else 'refused otherwise: ' ~ ansible_failed_result.stdout | default(ansible_failed_result.msg | default('')) }}
+    - name: "a part read back other than it went up: refused"
+      ansible.builtin.assert:
+        that: _verdict == 'refused'
+        fail_msg: "FAIL a part read back other than it went up: {{ _verdict }}, want refused"
+        success_msg: "PASS a part read back other than it went up: {{ _verdict }}"

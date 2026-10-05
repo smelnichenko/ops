@@ -3,7 +3,7 @@
 # formats kept by the pin. Stateful: shown before production, its volume backed up first.
 # outage: ClickHouse restarts on 25.8 - log ingestion waits
 # abort: back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)); otherwise
-# the Wave 0 ClickHouse backup (rehearsed)
+# the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run; the old version on it is not)
 # one-way: ClickHouse's data backed up into the Pi store before the step changes anything
 wave0 clickhouse
 image clickhouse/clickhouse-server 24.8-alpine => image clickhouse/clickhouse-server 25.8.33.6-alpine

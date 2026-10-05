@@ -134,18 +134,13 @@
       when: store == 'postgres'
 
     # ── a file of the backup, read back from the store (clickhouse, grafana) ──
-    - name: The backup's file read back from the Pi store, its sha256 the stored one
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          key="{{ store }}/{{ _stamp.stdout }}/{{ {'clickhouse': 'clickhouse.tar.gz', 'grafana': 'grafana.db.gz'}[store] }}"
-          get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
-          get "$key" > {{ work_dir }}/backup
-          [ "$(get "$key.sha256")" = "$(sha256sum {{ work_dir }}/backup | cut -d' ' -f1)" ]
-          echo "$key"
-      register: _file
-      changed_when: false
+    - name: The backup's file read back from the Pi store, its parts and the whole checked
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml"
+      vars:
+        download_key: "{{ store }}/{{ _stamp.stdout }}/{{ {'clickhouse': 'clickhouse.tar.gz', 'grafana': 'grafana.db.gz'}[store] }}"
+        download_file: "{{ work_dir }}/backup"
+        upgrade_backup_endpoint: "{{ endpoint }}"
+        upgrade_backup_bucket: "{{ bucket }}"
       when: store in ['clickhouse', 'grafana']
 
     # ── clickhouse ────────────────────────────────────────────────────
@@ -261,15 +256,12 @@
       when: store == 'kafka'
 
     - name: Kafka - the backup's broker volume read back from the Pi store
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          key="kafka/{{ _stamp.stdout }}/schnappy-production-{{ _broker.stdout.split()[0] }}.tar.gz"
-          get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
-          get "$key" > {{ work_dir }}/broker.tar.gz
-          [ "$(get "$key.sha256")" = "$(sha256sum {{ work_dir }}/broker.tar.gz | cut -d' ' -f1)" ]
-      changed_when: false
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml"
+      vars:
+        download_key: "kafka/{{ _stamp.stdout }}/schnappy-production-{{ _broker.stdout.split()[0] }}.tar.gz"
+        download_file: "{{ work_dir }}/broker.tar.gz"
+        upgrade_backup_endpoint: "{{ endpoint }}"
+        upgrade_backup_bucket: "{{ bucket }}"
       when: store == 'kafka'
 
     - name: Kafka - the broker stopped, its volume replaced, started again
@@ -365,14 +357,22 @@
     # the snapshot the Wave 0 run took and recorded (snapshots.txt beside the backup: "<cluster id> <name> <task>
     # <location> <tag>") - every snapshot since the seed holds the same rows, so only the record ties the restore to
     # this backup. Scylla Manager lists a snapshot a little after its backup is done: waited for
+    - name: Scylla - the Wave 0 backup's snapshot record read back from the Pi store
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml"
+      vars:
+        download_key: "scylla/{{ _stamp.stdout }}/snapshots.txt"
+        download_file: "{{ work_dir }}/snapshots.txt"
+        upgrade_backup_endpoint: "{{ endpoint }}"
+        upgrade_backup_bucket: "{{ bucket }}"
+      when: store == 'scylla'
+
     - name: Scylla - the Wave 0 backup's own snapshot, recorded and listed in its location
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           M="{{ kubectl }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
-          rec=$(curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/scylla/{{ _stamp.stdout }}/snapshots.txt" \
-            | awk '$2 ~ /(^|\/)schnappy-production-scylla$/')
+          rec=$(awk '$2 ~ /(^|\/)schnappy-production-scylla$/' {{ work_dir }}/snapshots.txt)
           read -r c name task loc tag <<< "$rec"
           [[ $tag =~ ^sm_[0-9]{14}UTC$ ]] || { echo "no snapshot recorded for schnappy-production-scylla: $rec"; exit 1; }
           # grep reads to the end: -q would close the pipe on the first match, and kubectl dying of SIGPIPE fails it
@@ -442,24 +442,15 @@
       failed_when: _gw.rc != 0 or _gw.stdout_lines | length != 3 or _gw.stdout_lines | map('split') | map('length') | unique != [2]
       when: store == 'gateway'
 
-    - name: Gateway - each volume's backup read back from the Pi store, its sha256 the stored one
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          get() { curl -fsS -K {{ store_curl }} "{{ endpoint }}/{{ bucket }}/$1"; }
-          for pvc in {{ gateway_pvcs | join(' ') }}; do
-            key="gateway/{{ _stamp.stdout }}/$pvc.tar.gz"
-            get "$key" > "{{ work_dir }}/$pvc.tar.gz"
-            [ "$(get "$key.sha256")" = "$(sha256sum "{{ work_dir }}/$pvc.tar.gz" | cut -d' ' -f1)" ] || { echo "$key: sha256 differs"; exit 1; }
-            echo "$key"
-          done
-          # the objects the backup checked into the archive: what the restore must give back
-          key="gateway/{{ _stamp.stdout }}/schnappy-infra-s3gw.objects.json"
-          get "$key" > "{{ work_dir }}/objects.json"
-          [ "$(get "$key.sha256")" = "$(sha256sum "{{ work_dir }}/objects.json" | cut -d' ' -f1)" ] || { echo "$key: sha256 differs"; exit 1; }
-      register: _gw_files
-      changed_when: false
+    - name: Gateway - each volume's backup and the object list read back from the Pi store, parts and whole checked
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml"
+      vars:
+        download_key: "gateway/{{ _stamp.stdout }}/{{ item }}"
+        # the objects the backup checked into the archive: what the restore must give back
+        download_file: "{{ work_dir }}/{{ 'objects.json' if item.endswith('.objects.json') else item }}"
+        upgrade_backup_endpoint: "{{ endpoint }}"
+        upgrade_backup_bucket: "{{ bucket }}"
+      loop: "{{ (gateway_pvcs | map('regex_replace', '$', '.tar.gz') | list) + ['schnappy-infra-s3gw.objects.json'] }}"
       when: store == 'gateway'
 
     - name: Gateway - the object store's checker on the node
@@ -630,9 +621,9 @@
         _restored:
           postgres: "{{ _pg_restored | default(['?']) | join('; ') }}"
           clickhouse: >-
-            {{ _file.stdout | default('') }} -> upgrade_check.canary_restore, rows and md5
+            {{ _download.stdout | default('') }} -> upgrade_check.canary_restore, rows and md5
             {{ _ch_restore.stdout_lines[-1] | default('?') }}
-          grafana: "{{ _file.stdout | default('') }}: {{ _grafana_restore.stdout | default('?') }}"
+          grafana: "{{ _download.stdout | default('') }}: {{ _grafana_restore.stdout | default('?') }}"
           kafka: >-
             {{ _broker.stdout | default('') }} -> the topic upgrade-check holds
             {{ (_kafka_back.stdout_lines | default(['?', '?', '?']))[0] }} messages, md5
@@ -643,6 +634,6 @@
             upgrade_check.canary truncated, restored from {{ _scylla_restore.stdout.split()[-1] | default('?') }}:
             {{ _scylla_rows.stdout | default('?') }} (rows md5)
           gateway: >-
-            {{ _gw_files.stdout_lines | default([]) | join(', ') }} -> {{ _gw_replaced.stdout_lines | default([]) | join(', ') }};
+            {{ gateway_pvcs | join(', ') }} -> {{ _gw_replaced.stdout_lines | default([]) | join(', ') }};
             {{ _gw_xattrs.stdout | default('?') }}; Tempo: {{ _gw_tempo.stdout | default('?') }};
             Mimir {{ _gw_mimir.stdout | default('?') }} `up` series at the seed, {{ _mimir_block.stdout | default('?') }}
