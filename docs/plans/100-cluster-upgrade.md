@@ -4,7 +4,8 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
 2026-10-03; the steps are reordered (operator's decisions 2026-10-05). The gate before any other production change
 (operator 2026-10-05: "full run and full review at the end before live"):
 1. the open fixes done - R14 (test environment before production for the data versions), R18 (abort and outage
-   notes per step), R27 (the defaults at the targets, a fresh build at them, a green task dr:drill);
+   notes per step), R27 (the defaults at the targets, a fresh build at them, a green task dr:drill) - ALL DONE
+   2026-10-05;
 2. full run 7 green: task test:upgrade:full - a fresh Vagrant copy, all steps in order with every check, the
    restore checks at the end, unattended;
 3. a full review of the whole upgrade work after that run (not only what changed since the last one); its findings
@@ -504,6 +505,18 @@ Plan and claims
   (istio_version, cert_manager_version, external_secrets_chart_version, metrics_server_chart_version, vgw_version,
   gateway_api_version - v1.2.1 fails against v1.5's safe-upgrades policy): the default edits as one reviewed change, then
   a fresh build at the targets and a green task dr:drill before the production rollout.
+  DONE 2026-10-05: the defaults at the targets on the local ops branch upgrade/defaults-at-targets (merged at the
+  rollout's end); setup-kubeadm.yml installs containerd.io when containerd_io_version is set. task
+  test:upgrade:build-targets - a fresh build with those defaults, Argo at the last step's branches - green from
+  scratch: Argo settled (23 apps), the data, survival and metrics checks, and the inventory equal to the one the 61
+  steps lead to (the one allowed difference: External Secrets' stale Helm record, which only an upgraded ten keeps).
+  Its first runs found what the full run would have hit or a rebuild after the rollout would break on: the Scylla
+  operator's cleanup Job held Running by an Istio proxy (istiod neverInjectSelector, step 21); the Manager's backend
+  agent unpinned (step 21); the containerd step's inventory line without the hold; kubernetes-cni and cri-tools never
+  moved by upgrade-kubeadm.yml (now with each minor, steps 42/43); setup-argocd waiting for External Secrets' CRDs
+  before the root that installs them (the wait gone, the root bootstraps with retries); isolate-cluster needing
+  External Secrets' account before Argo makes it. task test:dr at the targets (platform at the last step's branch):
+  ALL DR TESTS PASSED, 259 tasks, every k6 check (the drill's skip list had lost masi - fixed).
   The playbook variables the steps set (their last value, from the step files 2026-10-05): argocd_version 10.9.6,
   cilium_version 1.20.2, containerd_upgrade_to 2.3.6 (setup-kubeadm then installs containerd.io 2.3.6, not Debian's),
   gateway_api_version v1.5.1, istio_version 1.31.1, local_path_provisioner_version v0.0.37, vgw_version 1.8.0,
