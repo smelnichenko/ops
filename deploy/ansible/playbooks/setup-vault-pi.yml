@@ -139,13 +139,16 @@
       failed_when: false
       changed_when: false
 
+    # only where Vault is missing: a running pair is moved by upgrade-vault.yml (standby first, restarted, unsealed) -
+    # a swap here replaced the binary under the running server and restarted nothing
     - name: Install Vault binary
-      when: vault_version not in (current_vault_version.stdout | default(''))
+      when: current_vault_version.rc != 0
       block:
-        - name: Download Vault
+        - name: Download Vault, its sha256 checked
           ansible.builtin.get_url:
             url: "https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_linux_{{ vault_arch }}.zip"
             dest: /tmp/vault.zip
+            checksum: "sha256:{{ vault_checksums[vault_arch] }}"
             mode: '0644'
         - name: Unzip Vault
           ansible.builtin.unarchive:

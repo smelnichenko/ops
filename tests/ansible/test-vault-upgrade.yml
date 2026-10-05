@@ -1,0 +1,138 @@
+---
+# upgrade-vault.yml on the Vagrant Pis from production's version (1.21.3; on a re-run set back from the binary the
+# last run kept): a secret written before, then the upgrade - both on vars/vault.yml's version, unsealed, the active
+# moved to the Pi that was the standby (the failover ran older to newer), the secret read back, the old binary and the
+# Consul snapshot kept. Vagrant only. Usage: task test:vault-upgrade
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: Both at production's Vault (1.21.3)
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    from_version: "1.21.3"
+  tasks:
+    - name: Its version now
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        validate_certs: false
+        status_code: [200, 429]
+        return_content: true
+      register: _now
+
+    - name: Set back from the binary the last run kept
+      when: ansible_play_hosts | map('extract', hostvars, ['_now', 'json', 'version']) | unique | list != [from_version]
+      block:
+        - name: Both stopped
+          ansible.builtin.systemd:
+            name: vault
+            state: stopped
+        - name: The kept binary in place
+          ansible.builtin.copy:
+            src: "/usr/local/bin/vault-{{ from_version }}"
+            dest: /usr/local/bin/vault
+            remote_src: true
+            mode: '0755'
+        - name: Started
+          ansible.builtin.systemd:
+            name: vault
+            state: started
+        - name: Unsealed
+          ansible.builtin.systemd:
+            name: vault-unseal
+            state: restarted
+        - name: On it
+          ansible.builtin.uri:
+            url: https://127.0.0.1:8200/v1/sys/health
+            validate_certs: false
+            status_code: [200, 429]
+            return_content: true
+          register: _set
+          retries: 24
+          delay: 5
+          until: _set.status in [200, 429] and _set.json.version == from_version
+
+    - name: The active before (sys/leader)
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/leader
+        validate_certs: false
+        return_content: true
+      register: _before
+      retries: 24
+      delay: 5
+      until: _before.json.leader_address | length > 0
+
+- name: A secret written before
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Written (secret/upgrade-rehearsal)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+          v=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          vault kv put secret/upgrade-rehearsal value="$v" > /dev/null
+          echo "$v"
+      register: _written
+      changed_when: true
+
+- name: Production's upgrade playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-vault.yml
+
+- name: After - the failover older to newer, the secret, what was kept
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    from_version: "1.21.3"
+  tasks:
+    - name: The active moved to the Pi that was the standby
+      ansible.builtin.assert:
+        that:
+          - _leader.json.is_self != _before.json.is_self
+        fail_msg: "{{ inventory_hostname }}: active before {{ _before.json.is_self }}, after {{ _leader.json.is_self }}"
+        quiet: true
+
+    - name: The old binary kept
+      ansible.builtin.command: "/usr/local/bin/vault-{{ from_version }} version"
+      register: _kept
+      changed_when: false
+      failed_when: from_version not in _kept.stdout
+
+    - name: The secret read back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1 VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+          vault kv get -field=value secret/upgrade-rehearsal
+          vault kv metadata delete secret/upgrade-rehearsal > /dev/null
+      register: _read
+      changed_when: true
+      failed_when: _read.rc != 0 or _read.stdout != hostvars['pi1']._written.stdout
+      when: inventory_hostname == 'pi1'
+
+    - name: The Consul snapshot kept, readable
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          f=$(ls -t /var/backups/vault-upgrade/consul-*-vault-{{ from_version }}.snap | head -1)
+          consul snapshot inspect "$f" > /dev/null
+          echo "$f"
+      register: _snap
+      changed_when: false
+      when: _before.json.is_self
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          VAULT UPGRADE REHEARSED: {{ from_version }} -> {{ vault_version }}; active
+          {{ _before.json.leader_address }} -> {{ _leader.json.leader_address }}; the secret read back; kept
+          /usr/local/bin/vault-{{ from_version }} and
+          {{ ansible_play_hosts | map('extract', hostvars, '_snap') | map(attribute='stdout', default='') | select | join('') }}
+      run_once: true

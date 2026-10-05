@@ -5,8 +5,14 @@
 #   -e vault_arch=amd64          (Vagrant x86_64)
 
 # ── Vault binary ────────────────────────────────────────────────────────────
-vault_version: "1.21.3"
+# setup-vault-pi.yml installs it where Vault is missing; upgrade-vault.yml moves a running pair to it. 1.21.4 is the
+# 1.21 line's last Community build (HashiCorp ships Community fixes on the newest line only; 2.x is plan 101's phase 2)
+vault_version: "1.21.4"
 vault_arch: "arm64"            # arm64 for Pi, amd64 for Vagrant/x86_64
+# the release's own SHA256SUMS (releases.hashicorp.com, read 2026-10-05)
+vault_checksums:
+  arm64: 1104ef701aad16e104e2e7b4d2a02a6ec993237559343f3097ac63a00b42e85d
+  amd64: 889b681990fe221b884b7932fa9c9dd0ee9811b9349554f1aa287ab63c9f3dae
 
 # ── Shared DNS (SAN + api_addr) ─────────────────────────────────────────────
 vault_pi_dns: "vault.schnappy.io"

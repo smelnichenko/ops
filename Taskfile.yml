@@ -930,6 +930,20 @@ tasks:
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-patroni-upgrade.yml {{.CLI_ARGS}}
 
+  deploy:vault:upgrade:
+    desc: "PRODUCTION: Vault on both Pis to vars/vault.yml's version - a Consul snapshot first, the standby, then the active (one failover, older to newer), each unsealed"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    prompt: "Upgrade Vault on PRODUCTION's Pis (one failover)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-vault.yml -e @vars/vault.yml
+
+  test:vault-upgrade:
+    desc: "Vagrant: the Pis at production's Vault (1.21.3), a secret written, then upgrade-vault.yml as in production - both on the version, the failover older to newer, the secret read back"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-vault-upgrade.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml {{.CLI_ARGS}}
+
   test:forgejo-upgrade:
     desc: "Vagrant: Forgejo on the Vagrant Pis to vars/forgejo.yml's version, as deploy:forgejo:upgrade does in production (the Vagrant guard first)"
     deps: [deploy:install]

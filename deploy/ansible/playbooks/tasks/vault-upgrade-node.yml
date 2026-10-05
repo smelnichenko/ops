@@ -1,0 +1,39 @@
+---
+# One turn of upgrade-vault.yml: the Pis whose role at the start (_active) is _turn_active and that are not on the
+# version yet - stopped, the new binary in place, started, unsealed by the Pi's own script, unsealed and on the
+# version before the turn ends. Stopping vault stops vault-unseal too (its Requires=), so it is started again here.
+- name: "One Pi's turn ({{ 'the active' if _turn_active else 'the standby' }})"
+  when: (_active | bool) == _turn_active and _running != vault_version
+  block:
+    - name: Stopped
+      ansible.builtin.systemd:
+        name: vault
+        state: stopped
+
+    - name: The new binary in place
+      ansible.builtin.copy:
+        src: "/usr/local/lib/vault-{{ vault_version }}/vault"
+        dest: /usr/local/bin/vault
+        remote_src: true
+        mode: '0755'
+
+    - name: Started
+      ansible.builtin.systemd:
+        name: vault
+        state: started
+
+    - name: Unsealed by the Pi's own script
+      ansible.builtin.systemd:
+        name: vault-unseal
+        state: restarted
+
+    - name: Unsealed, on the version
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/health"
+        validate_certs: false
+        status_code: [200, 429]
+        return_content: true
+      register: _node_health
+      retries: 24
+      delay: 5
+      until: _node_health.status in [200, 429] and _node_health.json.version == vault_version

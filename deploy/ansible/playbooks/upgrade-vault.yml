@@ -1,0 +1,153 @@
+---
+# Vault on both Pis to vault_version (vars/vault.yml), its release checked against HashiCorp's SHA256SUMS - in
+# HashiCorp's HA order: the standby first, the active last, so the failover runs from the older server to the newer,
+# never back. Each: stopped (SIGTERM - the active steps down), its binary replaced, started, unsealed by the Pi's own
+# unseal script, on the new version before the next. Before anything: both unsealed, one active, each binary on disk
+# the one its process runs; a Consul snapshot (Vault's storage) into /var/backups/vault-upgrade on the active Pi; the
+# running binary kept beside the new (/usr/local/bin/vault-<ver>). The way back: that binary and, if the new version
+# wrote what the old cannot read, the snapshot - by hand. Never a downgrade; a Pi already on the version is not
+# restarted; nothing to do when both are. Any Pi failing stops the run on both (one Pi upgraded alone is no HA).
+#
+# Usage: task deploy:vault:upgrade   (production; Vagrant: task test:vault-upgrade)
+- name: Vault on both Pis to one version
+  hosts: pis
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars:
+    vault_api: https://127.0.0.1:8200
+    upgrade_dir: /var/backups/vault-upgrade
+  tasks:
+    - name: Each Vault's state (200 active, 429 standby, 503 sealed)
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/health"
+        validate_certs: false
+        status_code: [200, 429, 503]
+        return_content: true
+      register: _health
+
+    - name: Its version and role
+      ansible.builtin.set_fact:
+        _running: "{{ _health.json.version }}"
+        _active: "{{ _health.status == 200 }}"
+
+    - name: Never a downgrade
+      ansible.builtin.assert:
+        that: _running is version(vault_version, '<=')
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Vault {{ _running }}, newer than {{ vault_version }}"
+        quiet: true
+
+    - name: Nothing to do - every Pi runs {{ vault_version }}
+      ansible.builtin.meta: end_play
+      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [vault_version]
+
+    - name: Both unsealed, exactly one active
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | map('extract', hostvars, ['_health', 'status']) | reject('in', [200, 429]) | list | length == 0
+          - ansible_play_hosts | map('extract', hostvars, '_active') | select | list | length == 1
+        fail_msg: >-
+          REFUSED: Vault not as an upgrade needs it - {{ ansible_play_hosts | zip(ansible_play_hosts
+          | map('extract', hostvars, ['_health', 'status'])) | list }} (200 active, 429 standby)
+        quiet: true
+      run_once: true
+
+    - name: The binary on disk
+      ansible.builtin.command: /usr/local/bin/vault version
+      register: _on_disk
+      changed_when: false
+
+    - name: The binary on disk is the one running (else it was replaced under the process - look first)
+      ansible.builtin.assert:
+        that: (_on_disk.stdout.split()[1] | regex_replace('^v', '')) == _running
+        fail_msg: "REFUSED: {{ inventory_hostname }} runs Vault {{ _running }}, its binary on disk is {{ _on_disk.stdout }}"
+        quiet: true
+
+    - name: The release, checked
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_linux_{{ vault_arch }}.zip"
+        dest: "/usr/local/lib/vault_{{ vault_version }}_linux_{{ vault_arch }}.zip"
+        checksum: "sha256:{{ vault_checksums[vault_arch] }}"
+        mode: '0644'
+
+    - name: Its directory
+      ansible.builtin.file:
+        path: "/usr/local/lib/vault-{{ vault_version }}"
+        state: directory
+        mode: '0755'
+
+    - name: Unpacked
+      ansible.builtin.unarchive:
+        src: "/usr/local/lib/vault_{{ vault_version }}_linux_{{ vault_arch }}.zip"
+        dest: "/usr/local/lib/vault-{{ vault_version }}"
+        remote_src: true
+        creates: "/usr/local/lib/vault-{{ vault_version }}/vault"
+
+    - name: The running binary kept (the way back)
+      ansible.builtin.copy:
+        src: /usr/local/bin/vault
+        dest: "/usr/local/bin/vault-{{ _running }}"
+        remote_src: true
+        mode: '0755'
+        force: false
+      when: _running != vault_version
+
+    - name: Consul's snapshot first (Vault's storage), on the active Pi
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mkdir -p {{ upgrade_dir }} && chmod 0700 {{ upgrade_dir }}
+          out={{ upgrade_dir }}/consul-$(date -u +%Y%m%dT%H%M%SZ)-vault-{{ _running }}.snap
+          consul snapshot save "$out" > /dev/null
+          consul snapshot inspect "$out" > /dev/null
+          echo "$out"
+      register: _snapshot
+      changed_when: true
+      when: _active | bool
+
+    - name: The standby first, then the active
+      ansible.builtin.include_tasks: tasks/vault-upgrade-node.yml
+      loop: "{{ [false, true] }}"
+      loop_control:
+        loop_var: _turn_active
+        label: "{{ 'the active' if _turn_active else 'the standby' }}"
+
+    - name: Each on the version, unsealed
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/health"
+        validate_certs: false
+        status_code: [200, 429]
+        return_content: true
+      register: _after
+      retries: 24
+      delay: 5
+      until: _after.status in [200, 429] and _after.json.version == vault_version
+
+    - name: Each sees a leader (the failover done)
+      ansible.builtin.uri:
+        url: "{{ vault_api }}/v1/sys/leader"
+        validate_certs: false
+        return_content: true
+      register: _leader
+      retries: 24
+      delay: 5
+      until: _leader.json.leader_address | length > 0
+
+    - name: Exactly one active, the same leader seen by both
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts | map('extract', hostvars, ['_leader', 'json', 'is_self']) | select | list | length == 1
+          - ansible_play_hosts | map('extract', hostvars, ['_leader', 'json', 'leader_address']) | unique | list | length == 1
+        fail_msg: "{{ ansible_play_hosts | map('extract', hostvars, ['_leader', 'json']) | list | to_json }}"
+        quiet: true
+      run_once: true
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          VAULT {{ vault_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
+          | map('extract', hostvars, '_running') | unique | join(', ') }}); active now
+          {{ _leader.json.leader_address }}; snapshot
+          {{ ansible_play_hosts | map('extract', hostvars, '_snapshot') | map(attribute='stdout', default='') | select | join('') }}
+      run_once: true

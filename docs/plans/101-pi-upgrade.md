@@ -72,9 +72,11 @@ middle of its rollout would stop it). Phase 2 after plan 100's rollout.
 
 - Forgejo 15.0.3 -> 15.0.9 (the RCE fix) - first, on its own (decision 2): upgrade-forgejo.yml - a pg_dump, both
   Pis stopped (15.0.9 migrates the database), the VIP's started first, the doctor after.
-- Vault 1.21.3 -> 1.21.4 (the line's last Community build): standbys first, active last (SIGTERM, no step-down),
-  a Consul snapshot first.
-- Patroni 4.1.0 -> 4.1.5 from PGDG: `patronictl pause --wait`, package on each node, restart patroni, `resume`.
+- Vault 1.21.3 -> 1.21.4 (the line's last Community build): upgrade-vault.yml - a Consul snapshot first, the
+  standby, then the active (SIGTERM steps it down: one failover, older to newer), each unsealed by its own script;
+  the old binary kept (task test:vault-upgrade, deploy:vault:upgrade).
+- Patroni 4.1.0 -> 4.1.5 (pip, pinned in vars/patroni.yml): upgrade-patroni.yml - `patronictl pause --wait`, the
+  package on each node, restart one at a time, `resume` (task test:patroni-upgrade, deploy:patroni:upgrade).
 Each with a Vagrant proof (the copy at today's versions, the patch applied, the checks green), then production one
 Pi at a time with the operator's approval.
 
