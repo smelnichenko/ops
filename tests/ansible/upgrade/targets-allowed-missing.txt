@@ -4,6 +4,15 @@
 # left out of the Vagrant copy (operator 2026-10-02: the VM has 20 GB; or production-only by nature)
 argo-chart kagent kagent@0.9.9
 argo-chart kagent-crds kagent-crds@0.9.9
+crd-name agentharnesses.kagent.dev
+crd-name agents.kagent.dev
+crd-name mcpservers.kagent.dev
+crd-name memories.kagent.dev
+crd-name modelconfigs.kagent.dev
+crd-name modelproviderconfigs.kagent.dev
+crd-name remotemcpservers.kagent.dev
+crd-name sandboxagents.kagent.dev
+crd-name toolservers.kagent.dev
 image docker.io/library/postgres 18.3-alpine
 argo-chart woodpecker woodpecker@3.7.3
 image docker.io/woodpeckerci/woodpecker-agent v3.18.1

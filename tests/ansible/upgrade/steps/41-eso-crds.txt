@@ -7,4 +7,6 @@
 # outage: none - the same version; Argo takes the CRDs over
 # abort: revert the step's merge on main (Argo syncs back) - never helm uninstall: that deletes every ExternalSecret and
 # its Secret
+# from here Argo CD never prunes or deletes them: every one carries Prune=false,Delete=false
+crd-protected external-secrets 0/23 => crd-protected external-secrets 23/23
 branch infra

@@ -82,6 +82,16 @@ for o in json.load(sys.stdin)["items"]:
     -o jsonpath='{"crd prometheus-operator "}{.metadata.annotations.operator\.prometheus\.io/version}{"\n"}' \
     2>/dev/null || true
 
+  # every CRD by name - one gone takes every resource of its kind with it (scripts/inventory-diff.sh allows a CRD more,
+  # never one missing); External Secrets' CRDs that carry Argo CD's Prune=false,Delete=false, of all of them
+  kubectl get crd -o json | python3 -c 'import json,sys
+items=json.load(sys.stdin)["items"]
+for c in items: print("crd-name", c["metadata"]["name"])
+eso=[c for c in items if c["spec"]["group"].endswith("external-secrets.io")]
+opts=lambda c: (c["metadata"].get("annotations") or {}).get("argocd.argoproj.io/sync-options","").split(",")
+kept=[c for c in eso if {"Prune=false","Delete=false"} <= set(opts(c))]
+print("crd-protected external-secrets %d/%d" % (len(kept), len(eso)))'
+
   echo "k8s server $(kubectl version -o json \
     | python3 -c 'import json,sys;print(json.load(sys.stdin)["serverVersion"]["gitVersion"])')"
 } | LC_ALL=C sort -u
