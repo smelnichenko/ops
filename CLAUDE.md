@@ -805,11 +805,15 @@ backup volume; replaced MinIO 2026-06-27, Plans 074/076).
 - **Velero chart:** `vmware-tanzu/velero` (v11.4.0) with `velero-plugin-for-aws`
 - **Node agent:** Enabled for PVC filesystem backups (`defaultVolumesToFsBackup: true`)
 - **Snapshots:** Disabled (no snapshot support on local-path-provisioner)
-- **pg_dump CronJob:** Runs at 1:30 AM UTC, dumps to postgres PVC `/backup/` dir, keeps last 3 dumps
-- **Scheduled backups:**
-  - `schnappy-daily`: 2 AM UTC, `schnappy` namespace, 7-day retention
-  - `full-weekly`: Sunday 3 AM UTC, all namespaces, 30-day retention
-- **Vault snapshots:** CronJob every 6h, uploaded to the backup store `vault-backups` bucket, 30 retained
+- **Postgres:** CNPG ScheduledBackup `schnappy-production-postgres-daily`, 01:30 UTC - a barman base backup plus the
+  continuous WAL archive, into the Pi backup store (production's cluster only; the test environment's has none)
+- **Velero schedules:**
+  - `velero-schnappy-daily`: 2 AM UTC, `schnappy-production` namespace, 7-day retention
+  - `velero-full-weekly`: Sunday 3 AM UTC, all namespaces, 30-day retention
+- **etcd:** CronJob `kube-system/etcd-backup`, hourly, to the Pi store's `etcd-backups` bucket, 7 days kept
+- **Vault: no snapshot job exists** (read 2026-10-05). Vault keeps its data in Consul on the Pis, and nothing takes a
+  Consul snapshot; the Pis' nightly `vault-backup` cron tars `/var/lib/vault`, which holds no secrets. Plan 101
+  (docs/plans/101-pi-upgrade.md) adds the Consul snapshot.
 - **Key files:** `deploy/ansible/playbooks/setup-velero.yml` (ops repo), Helm templates in platform repo
 
 The previous setup ran a local MinIO instance on ten's SATA SSD at
