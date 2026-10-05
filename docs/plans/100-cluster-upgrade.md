@@ -1,8 +1,16 @@
 # Plan 100 — upgrade the cluster to current releases
 
-Status: **IN PROGRESS** (2026-10-04): step 19 (Istio charts from blob.istio.io) is in production since 2026-10-03;
-every other step waits for the review's fixes (R1-R30 below), the reordered steps proven in one full Vagrant run, and
-the operator's approval of each production step.
+Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.istio.io) is in production since
+2026-10-03; the steps are reordered (operator's decisions 2026-10-05). The gate before any other production change
+(operator 2026-10-05: "full run and full review at the end before live"):
+1. the open fixes done - R14 (test environment before production for the data versions), R18 (abort and outage
+   notes per step), R27 (the defaults at the targets, a fresh build at them, a green task dr:drill);
+2. full run 7 green: task test:upgrade:full - a fresh Vagrant copy, all steps in order with every check, the
+   restore checks at the end, unattended;
+3. a full review of the whole upgrade work after that run (not only what changed since the last one); its findings
+   fixed and proven, and the full run repeated if a fix touches the steps or the harness;
+4. then production, step by step, each with the operator's approval - Wave 0 backup first for every one-way step,
+   every stateful step shown before it runs.
 
 ## Decisions (operator, 2026-10-01)
 
