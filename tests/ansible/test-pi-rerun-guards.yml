@@ -1,0 +1,87 @@
+---
+# Re-running the Pi playbooks on a live Vagrant Pi stack is safe:
+#   setup-patroni, Patroni stopped on pi2: refused, naming the reason, and pi2's data still there (the same files in
+#   its data directory but postmaster.pid, which a stopped Postgres removes); Patroni started again (whatever happened)
+#   and back to streaming, the same run passes on pi2.
+# Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: The Patroni re-run guard on pi2
+  hosts: pi2
+  become: true
+  gather_facts: false
+  vars:
+    ansible_playbook: "{{ ansible_playbook_python | dirname }}/ansible-playbook"
+    deploy_dir: "{{ playbook_dir }}/../../deploy/ansible"
+    list_data: |
+      set -euo pipefail
+      d=$(ls -d /var/lib/postgresql/*/main | head -1)
+      echo "$d"
+      ls "$d" | grep -v '^postmaster.pid$' | sort | tr '\n' ' '
+  tasks:
+    - name: Pi2's data directory and what is in it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "{{ list_data }}"
+      register: _before
+      changed_when: false
+
+    - name: Stopped, re-run, refused - Patroni started again whatever happens
+      block:
+        - name: Patroni stopped on pi2
+          ansible.builtin.systemd:
+            name: patroni
+            state: stopped
+
+        - name: setup-patroni on pi2 while Patroni is stopped - refused
+          ansible.builtin.command:
+            cmd: "{{ ansible_playbook }} -i inventory/vagrant.yml playbooks/setup-patroni.yml --limit pi2"
+            chdir: "{{ deploy_dir }}"
+          delegate_to: localhost
+          become: false
+          register: _refused
+          changed_when: false
+          failed_when: _refused.rc == 0 or 'REFUSED on pi2' not in _refused.stdout
+
+        - name: The same files in its data directory
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: "{{ list_data }}"
+          register: _after
+          changed_when: false
+          failed_when: >-
+            _after.stdout != _before.stdout or 'PG_VERSION' not in _after.stdout
+            or 'patroni.dynamic.json' not in _after.stdout
+      always:
+        - name: Patroni started on pi2
+          ansible.builtin.systemd:
+            name: patroni
+            state: started
+
+    - name: Pi2 streaming again
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8008/patroni | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["role"], d["state"])'
+      register: _back
+      retries: 30
+      delay: 5
+      until: _back.rc == 0 and _back.stdout in ['replica streaming', 'replica running', 'primary running']
+      changed_when: false
+
+    - name: setup-patroni on pi2 with Patroni running - passes
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook }} -i inventory/vagrant.yml playbooks/setup-patroni.yml --limit pi2"
+        chdir: "{{ deploy_dir }}"
+      delegate_to: localhost
+      become: false
+      register: _passed
+      changed_when: false
+
+    - name: Guarded
+      ansible.builtin.debug:
+        msg: >-
+          PATRONI RE-RUN GUARD: stopped -> refused ({{ _refused.stdout | regex_search('REFUSED on pi2[^"]*?not active') }}),
+          data untouched; running -> passed

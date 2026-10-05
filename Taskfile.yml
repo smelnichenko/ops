@@ -883,6 +883,12 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml
 
+  test:pi:rerun-guards:
+    desc: "Vagrant: re-running the Pi playbooks is safe - setup-patroni refuses while Patroni is stopped (its data untouched) and passes while it runs"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-rerun-guards.yml
+
   test:forgejo-upgrade:
     desc: "Vagrant: Forgejo on the Vagrant Pis to vars/forgejo.yml's version, as deploy:forgejo:upgrade does in production (the Vagrant guard first)"
     deps: [deploy:install]
