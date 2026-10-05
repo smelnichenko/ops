@@ -874,6 +874,21 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
 
+  deploy:forgejo:upgrade:
+    desc: "PRODUCTION: Forgejo on both Pis to vars/forgejo.yml's version - a pg_dump first, both stopped, the VIP's Pi started first (it migrates), then the other (git.pmon.dev down about a minute)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Upgrade Forgejo on PRODUCTION's Pis (git.pmon.dev down about a minute)?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-forgejo.yml
+
+  test:forgejo-upgrade:
+    desc: "Vagrant: Forgejo on the Vagrant Pis to vars/forgejo.yml's version, as deploy:forgejo:upgrade does in production (the Vagrant guard first)"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml playbooks/upgrade-forgejo.yml {{.CLI_ARGS}}
+
   deploy:versitygw:
     desc: "Deploy only the versitygw gateway on the Pis (targeted, skips other services). Flags after --, e.g. `-- -e vgw_port=9001`"
     dir: deploy/ansible

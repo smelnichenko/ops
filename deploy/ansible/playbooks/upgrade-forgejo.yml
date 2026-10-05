@@ -1,0 +1,158 @@
+---
+# Forgejo on both Pis to forgejo_version (vars/forgejo.yml), its binary checked against the release's sha256.
+#
+# Both stop, both binaries are replaced, one starts (it migrates the database), then the other: a release may add a
+# migration (15.0.9 does - action_run's workflow_source_commit, backported into the LTS line), and an older Forgejo
+# does not start on a database a newer one migrated - so the two never run different versions, and git.pmon.dev is
+# down for about a minute. The Pi holding the VIP starts first.
+#
+# Before anything stops: a pg_dump of Forgejo's database through HAProxy (Patroni's primary) into
+# /var/backups/forgejo on the first Pi (the last 3 kept), and the running binary kept beside the new one
+# (/usr/local/bin/forgejo-<version>). The way back from a migrated database is that dump and that binary - by hand.
+# After: every Pi serves the new version (its /api/v1/version, not the file on disk) and `forgejo doctor check`
+# passes. Running versions are compared, never downgraded; a run where both already serve the target changes nothing.
+#
+# Usage: task deploy:forgejo:upgrade   (production; Vagrant: task test:forgejo-upgrade)
+- name: Forgejo on both Pis to one version
+  hosts: pis
+  become: true
+  gather_facts: true
+  vars_files:
+    - ../vars/forgejo.yml
+  vars:
+    forgejo_db_password: "{{ postgres_admin_password }}"
+    forgejo_config: /var/lib/forgejo/custom/conf/app.ini
+    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
+    dump_dir: /var/backups/forgejo
+  tasks:
+    - name: The binary for this Pi's architecture
+      ansible.builtin.set_fact:
+        _arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+    - name: The version each Forgejo serves
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _served
+      retries: 12
+      delay: 5
+      until: _served.status | default(0) == 200
+
+    - name: Its version number
+      ansible.builtin.set_fact:
+        _running: "{{ _served.json.version | regex_search('^[0-9]+[.][0-9]+[.][0-9]+') }}"
+
+    - name: Never a downgrade
+      ansible.builtin.assert:
+        that: _running is version(forgejo_version, '<=')
+        fail_msg: "REFUSED: {{ inventory_hostname }} serves Forgejo {{ _running }}, newer than {{ forgejo_version }}"
+        quiet: true
+
+    - name: Nothing to do - every Pi serves {{ forgejo_version }}
+      ansible.builtin.meta: end_play
+      when: ansible_play_hosts | map('extract', hostvars, '_running') | unique | list == [forgejo_version]
+
+    - name: The Pi that starts first (it holds the VIP)
+      ansible.builtin.command: ip -o -4 addr show
+      register: _addrs
+      changed_when: false
+
+    - name: The first Pi
+      ansible.builtin.set_fact:
+        _first: >-
+          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', 'search', (vip | regex_escape) ~ '/')
+              | map(attribute='inventory_hostname') | list + ansible_play_hosts) | first }}
+      run_once: true
+
+    - name: The new binary beside the running one, its sha256 checked
+      ansible.builtin.get_url:
+        url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-{{ _arch }}"
+        dest: "/usr/local/bin/forgejo-{{ forgejo_version }}"
+        checksum: "sha256:{{ forgejo_checksums[_arch] }}"
+        mode: '0755'
+
+    - name: The running binary kept (the way back)
+      ansible.builtin.copy:
+        src: /usr/local/bin/forgejo
+        dest: "/usr/local/bin/forgejo-{{ _running }}"
+        remote_src: true
+        mode: '0755'
+        force: false
+
+    - name: Forgejo's database dumped, before anything stops
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
+          out={{ dump_dir }}/forgejo-$(date -u +%Y%m%dT%H%M%SZ)-{{ _running }}.sql.gz
+          pg_dump -h 127.0.0.1 -p 5000 -U postgres forgejo | gzip > "$out"
+          gzip -t "$out"
+          [ "$(gzip -dc "$out" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
+          ls -1t {{ dump_dir }}/forgejo-*.sql.gz | tail -n +4 | xargs -r rm -f
+          echo "$out $(du -h "$out" | cut -f1)"
+      environment:
+        PGPASSWORD: "{{ forgejo_db_password }}"
+      register: _dump
+      changed_when: true
+      delegate_to: "{{ _first }}"
+      run_once: true
+
+    - name: Forgejo stopped on every Pi
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+
+    - name: The new binary in place
+      ansible.builtin.copy:
+        src: "/usr/local/bin/forgejo-{{ forgejo_version }}"
+        dest: /usr/local/bin/forgejo
+        remote_src: true
+        mode: '0755'
+
+    - name: Started on the first Pi - it migrates the database
+      ansible.builtin.systemd:
+        name: forgejo
+        state: started
+      when: inventory_hostname == _first
+
+    - name: The first Pi serves the new version
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _first_up
+      retries: 60
+      delay: 5
+      until: _first_up.status | default(0) == 200 and _first_up.json.version is search('^' ~ (forgejo_version | regex_escape) ~ '([^0-9]|$)')
+      when: inventory_hostname == _first
+
+    - name: Then the others
+      ansible.builtin.systemd:
+        name: forgejo
+        state: started
+      when: inventory_hostname != _first
+
+    - name: Every Pi serves the new version
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _up
+      retries: 60
+      delay: 5
+      until: _up.status | default(0) == 200 and _up.json.version is search('^' ~ (forgejo_version | regex_escape) ~ '([^0-9]|$)')
+
+    - name: Forgejo's own checks
+      ansible.builtin.command: >-
+        su - forgejo -s /bin/sh -c "/usr/local/bin/forgejo doctor check --config {{ forgejo_config }}"
+      register: _doctor
+      changed_when: false
+      run_once: true
+      delegate_to: "{{ _first }}"
+
+    - name: Upgraded
+      ansible.builtin.debug:
+        msg: >-
+          FORGEJO {{ forgejo_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
+          | map('extract', hostvars, '_running') | unique | join(', ') }}); {{ _first }} started first; dump
+          {{ _dump.stdout }}; doctor: {{ _doctor.stdout_lines[-1] | default('') }}
+      run_once: true

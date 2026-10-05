@@ -1,0 +1,8 @@
+---
+# Forgejo's release on the Pis, and its binaries' sha256 per architecture (the release's own .sha256 files, read
+# 2026-10-05). setup-pi-services.yml installs it where Forgejo is missing; upgrade-forgejo.yml moves a running one to it.
+# 15 is the LTS line (to 2027-07-15): patches only until the next LTS (19, 2027-04) - operator 2026-10-05.
+forgejo_version: "15.0.9"
+forgejo_checksums:
+  arm64: be0aff7570c0b94722b4fee01429eabe9991082590556f127a916e6cc8c92464
+  amd64: 04bf4981241cd7a39554809686d3e1811e219073cbf9a6ce6ed3895adfd8d17a

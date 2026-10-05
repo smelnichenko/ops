@@ -1,6 +1,6 @@
 # Plan 101 - the Pis' tier-0 services: safe to re-run, backed up, then upgraded
 
-Status: DRAFT 2026-10-05 - for the operator's decisions below. Nothing on the Pis changes before them.
+Status: decided 2026-10-05 (below); Forgejo 15.0.9 in progress first. Nothing else on the Pis changes yet.
 
 ## Context
 
@@ -70,8 +70,8 @@ middle of its rollout would stop it). Phase 2 after plan 100's rollout.
 
 ## Phase 1 - patches on the current lines (low risk, reversible)
 
-- Forgejo 15.0.3 -> 15.0.9 (the RCE fix): the playbook made able to upgrade (download to a versioned path, checksum,
-  restart one Pi at a time behind keepalived, `forgejo doctor check --all` after); a pg_dump first.
+- Forgejo 15.0.3 -> 15.0.9 (the RCE fix) - first, on its own (decision 2): upgrade-forgejo.yml - a pg_dump, both
+  Pis stopped (15.0.9 migrates the database), the VIP's started first, the doctor after.
 - Vault 1.21.3 -> 1.21.4 (the line's last Community build): standbys first, active last (SIGTERM, no step-down),
   a Consul snapshot first.
 - Patroni 4.1.0 -> 4.1.5 from PGDG: `patronictl pause --wait`, package on each node, restart patroni, `resume`.
@@ -97,14 +97,19 @@ Each a step file of its own, through a Vagrant full run and plan 100's productio
    idle timeouts tested with a large git push/clone and a big Docker layer through Nexus.
 6. Forgejo: stay on 15 LTS (to 2027-07); 19 LTS (2027-04) is the next major - its own plan then.
 
-## Decisions for the operator
+## Decisions (operator, 2026-10-05)
 
-1. The order above: phases 0-1 before plan 100 goes live (folded into its review fixes and proven by its next full
-   run), phase 2 after plan 100's rollout?
-2. Forgejo 15.0.9 now-ish: an RCE fix on the LTS line - in phase 1, or sooner on its own?
-3. Vault and Consul to 2.x at all (BUSL, IBM's versioning; the Community lines get fixes only on the newest), or move
-   Vault's storage to integrated raft on the way (no Consul dependency; changes the dependency order)?
-4. Forgejo: stay on the 15 LTS until 19 (proposed), not 16/17 (short-lived)?
+1. Phases 0-1 before plan 100 goes live, folded into its review fixes and proven by its next full run; phase 2 after
+   plan 100's rollout - OK.
+2. Forgejo 15.0.9 sooner, on its own - full run 7 stopped (14:14, in its build) to free the Vagrant Pis; it restarts
+   with phases 0-1. 15.0.9 adds a database migration (forgejo_migrations: action_run.workflow_source_commit,
+   backported) - an older Forgejo does not start on a migrated database, so both Pis stop and the VIP's starts first
+   (upgrade-forgejo.yml: pg_dump first, the old binary kept, doctor after; `task deploy:forgejo:upgrade`).
+3. Vault's storage: asked whether raft gives HA with two instances - it does not tolerate a loss with two (raft needs
+   a majority: three voters, a third Vault on ten). Today two Vaults on Consul's three-server quorum already survive
+   one node, and Consul stays for Patroni and HAProxy anyway - recommended: keep Vault on Consul (supported in 2.x;
+   Vault on Consul 2.x proven in Vagrant in phase 2).
+4. Forgejo stays on the 15 LTS line, patch updates only, until the next LTS (19, 2027-04).
 
 ## Unconfirmed (to settle in phase 2's research)
 
