@@ -3,7 +3,13 @@
 # k8s_package_version becomes 1.34.12-1.1.
 # outage: the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the
 # kubelet restarts
-# abort: one-way - kubeadm does not downgrade; back only by the etcd backup and a rebuild (task dr:drill's procedure)
+# abort: one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full
+# rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that
+# no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at
+# this step in the full run)
+# one-way: etcd's snapshot backed up into the Pi store before the step changes anything (production's hourly copies
+# keep 7 days)
+wave0 etcd
 image registry.k8s.io/kube-apiserver v1.34.6 => image registry.k8s.io/kube-apiserver v1.34.12
 image registry.k8s.io/kube-controller-manager v1.34.6 => image registry.k8s.io/kube-controller-manager v1.34.12
 image registry.k8s.io/kube-scheduler v1.34.6 => image registry.k8s.io/kube-scheduler v1.34.12

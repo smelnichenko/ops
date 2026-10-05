@@ -78,7 +78,7 @@ UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
 
 
-WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla")
+WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla", "etcd")
 
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,

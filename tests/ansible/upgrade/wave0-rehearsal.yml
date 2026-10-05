@@ -19,6 +19,8 @@
 #                        the seeded messages and ends there, the extra one gone (so the data came from the backup)
 #   -e store=scylla      in place: data-check's canary table truncated, then restored with sctool from the snapshot
 #                        the Wave 0 run recorded (snapshots.txt beside it) - exactly the seeded rows
+#   -e store=etcd        the snapshot restored by the etcd pod's etcdutl into a scratch data directory (its hash
+#                        checked), removed after - a rebuild's start, not a rebuild
 #   -e store=gateway     in place: a Tempo trace pushed after the backup; the pods of the in-cluster object store,
 #                        Mimir and Tempo held off (their node cordoned), the three volumes replaced by the backup's -
 #                        before they start, every object the backup listed back with its ETag and every bucket with
@@ -71,7 +73,7 @@
 
     - name: The store is one this rehearsal restores
       ansible.builtin.assert:
-        that: store | default('') in ['postgres', 'clickhouse', 'grafana', 'kafka', 'scylla', 'gateway']
+        that: store | default('') in ['postgres', 'clickhouse', 'grafana', 'kafka', 'scylla', 'gateway', 'etcd']
         fail_msg: "-e store=postgres|clickhouse|grafana|kafka|scylla|gateway"
 
     - name: Its names are the fixed ones - what it deletes cannot be redirected with -e
@@ -609,6 +611,51 @@
         mimir_at: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../../.upgrade/survival.json') | from_json).mimir_at }}"
       when: store == 'gateway'
 
+    # ── etcd: the snapshot read back, restored by the static pod's etcdutl into a scratch data directory beside
+    # etcd's own (the snapshot's hash checked on the way) - what a rebuild would start from; both removed after ──
+    - name: Etcd - the snapshot read back from the Pi store
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../../deploy/ansible/playbooks/tasks/upgrade-backup-download.yml"
+      vars:
+        download_key: "etcd/{{ _stamp.stdout }}/etcd.db"
+        download_file: "{{ work_dir }}/etcd.db"
+        upgrade_backup_endpoint: "{{ endpoint }}"
+        upgrade_backup_bucket: "{{ bucket }}"
+      when: store == 'etcd'
+
+    - name: Etcd - restored into a scratch data directory
+      when: store == 'etcd'
+      block:
+        - name: Etcd - the static pod's etcdutl restores it
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              pod=$({{ kubectl }} -n kube-system get pod -l component=etcd -o jsonpath='{.items[0].metadata.name}')
+              host=$({{ kubectl }} -n kube-system get pod "$pod" \
+                -o jsonpath='{.spec.volumes[?(@.name=="etcd-data")].hostPath.path}')
+              mount=$({{ kubectl }} -n kube-system get pod "$pod" \
+                -o jsonpath='{.spec.containers[0].volumeMounts[?(@.name=="etcd-data")].mountPath}')
+              [ -n "$pod" ] && [ -d "$host" ] && [ -n "$mount" ]
+              echo "$host" > {{ work_dir }}/etcd-host
+              cp {{ work_dir }}/etcd.db "$host/wave0-rehearsal.db"
+              E="{{ kubectl }} -n kube-system exec $pod -c etcd --"
+              $E etcdutl snapshot status "$mount/wave0-rehearsal.db" -w json
+              $E etcdutl snapshot restore "$mount/wave0-rehearsal.db" --data-dir "$mount/wave0-rehearsal-restore" \
+                > /dev/null
+              [ -d "$host/wave0-rehearsal-restore/member/snap" ] || { echo "no member/snap restored"; exit 1; }
+              echo "restored into $mount/wave0-rehearsal-restore"
+          register: _etcd_restore
+          changed_when: true
+      always:
+        - name: Etcd - the snapshot copy and the restored directory removed
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              host=$(cat {{ work_dir }}/etcd-host 2>/dev/null || true)
+              [ -z "$host" ] || rm -rf "$host/wave0-rehearsal.db" "$host/wave0-rehearsal-restore"
+          changed_when: true
+
     - name: Remove the work directory
       ansible.builtin.file:
         path: "{{ work_dir }}"
@@ -633,6 +680,7 @@
           scylla: >-
             upgrade_check.canary truncated, restored from {{ _scylla_restore.stdout.split()[-1] | default('?') }}:
             {{ _scylla_rows.stdout | default('?') }} (rows md5)
+          etcd: "{{ _download.stdout | default('') }}: {{ _etcd_restore.stdout_lines | default(['?']) | join('; ') }}"
           gateway: >-
             {{ gateway_pvcs | join(', ') }} -> {{ _gw_replaced.stdout_lines | default([]) | join(', ') }};
             {{ _gw_xattrs.stdout | default('?') }}; Tempo: {{ _gw_tempo.stdout | default('?') }};

@@ -600,7 +600,7 @@ tasks:
     desc: On the Vagrant copy, the Wave 0 backups as production takes them, each restored from the Pi store and its seeded canaries checked (STORES limits the list)
     deps: [deploy:install]
     vars:
-      STORES: '{{.STORES | default "postgres clickhouse grafana kafka scylla gateway"}}'
+      STORES: '{{.STORES | default "postgres clickhouse grafana kafka scylla gateway etcd"}}'
     cmds:
       - for: { var: STORES, split: ' ' }
         cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-backup.yml -e store={{.ITEM}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/wave0-rehearsal.yml -e store={{.ITEM}}{{if eq .ITEM "postgres"}} && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/restore-check.yml --tags postgres -e restore_backup=wave0{{end}}

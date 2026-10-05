@@ -4,7 +4,13 @@
 # backup CronJob follows to etcd 3.6.8-0 (infra upgrade/43-kubernetes-1.36).
 # outage: the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the
 # kubelet restarts
-# abort: one-way - kubeadm does not downgrade; back only by the etcd backup and a rebuild (task dr:drill's procedure)
+# abort: one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full
+# rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that
+# no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at
+# this step in the full run)
+# one-way: etcd's snapshot backed up into the Pi store before the step changes anything (production's hourly copies
+# keep 7 days)
+wave0 etcd
 image registry.k8s.io/kube-apiserver v1.35.9 => image registry.k8s.io/kube-apiserver v1.36.5
 image registry.k8s.io/kube-controller-manager v1.35.9 => image registry.k8s.io/kube-controller-manager v1.36.5
 image registry.k8s.io/kube-scheduler v1.35.9 => image registry.k8s.io/kube-scheduler v1.36.5

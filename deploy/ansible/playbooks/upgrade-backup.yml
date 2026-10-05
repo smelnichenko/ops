@@ -22,6 +22,8 @@
 #                        backend keeps ETags and bucket ACLs there) and Mimir's and Tempo's own, online: the archive
 #                        is checked against the objects listed before and after it (files/objectstore-manifest.py),
 #                        the list stored beside it for the restore; a WAL file appended while read is accepted
+#   -e store=etcd        a snapshot by the etcd static pod's own etcdctl, checked with etcdutl - before a Kubernetes
+#                        step. Production's hourly etcd-backup CronJob keeps its copies 7 days; this one stays.
 #   -e store=scylla      a Scylla Manager backup of each ScyllaDB cluster now, its own backup task started and
 #                        waited for. The test environment's cluster (schnappy-test/) has no task and its agent no
 #                        credentials for the store: it is not backed up, and said so. Any other cluster without a
@@ -29,7 +31,7 @@
 #
 # Restores are rehearsed in Vagrant (task test:upgrade:wave0) against the seeded canaries.
 #
-# Usage: task deploy:upgrade:backup STORE=<store>   (production; the Vagrant rehearsal runs the same playbook)
+# Usage: task deploy:upgrade:backup STEP=<step> STORE=<store>   (production; the Vagrant rehearsal runs the same playbook)
 - name: Wave 0 - back one store up before its one-way step
   hosts: target
   become: true
@@ -42,7 +44,7 @@
     local_dir: /var/backups/upgrade
     # the store's credentials for curl, only root reads it: never on a command line or in the environment
     store_curl: "{{ local_dir }}/.store-credentials.curl"
-    stores: [postgres, clickhouse, grafana, kafka, gateway, scylla]
+    stores: [postgres, clickhouse, grafana, kafka, gateway, scylla, etcd]
     # each file goes to the store in parts of at most this many bytes (tasks/upgrade-backup-upload.yml); the Vagrant
     # copy's are small, so its rehearsal puts files together from several
     upload_part_bytes: "{{ upgrade_backup_part_bytes | default(4294967296) }}"
@@ -551,6 +553,62 @@
           loop: "{{ _kafka.stdout_lines | default([]) }}"
           when: store == 'kafka'
 
+        # ── etcd ──────────────────────────────────────────────────────────
+        # the static pod's etcdctl writes the snapshot into its data volume (a hostPath), its etcdutl checks it; then it
+        # moves to the local directory - the snapshot never stays beside etcd's own data
+        - name: Etcd - the static pod and its data volume on the node
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              pod=$({{ kubectl }} -n kube-system get pod -l component=etcd -o jsonpath='{.items[0].metadata.name}')
+              host=$({{ kubectl }} -n kube-system get pod "$pod" \
+                -o jsonpath='{.spec.volumes[?(@.name=="etcd-data")].hostPath.path}')
+              mount=$({{ kubectl }} -n kube-system get pod "$pod" \
+                -o jsonpath='{.spec.containers[0].volumeMounts[?(@.name=="etcd-data")].mountPath}')
+              [ -n "$pod" ] && [ -d "$host" ] && [ -n "$mount" ] || { echo "no etcd pod with its data volume"; exit 1; }
+              echo "$pod $host $mount"
+          register: _etcd
+          changed_when: false
+          when: store == 'etcd'
+
+        - name: Etcd - room for its copy
+          ansible.builtin.include_tasks: tasks/upgrade-backup-space.yml
+          vars:
+            space_dirs: ["{{ _etcd.stdout.split()[1] }}"]
+          when: store == 'etcd'
+
+        - name: Etcd - a snapshot, checked, into the local directory
+          when: store == 'etcd'
+          block:
+            - name: Etcd - snapshot saved and its status read by etcdutl
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  E="{{ kubectl }} -n kube-system exec {{ _etcd.stdout.split()[0] }} -c etcd --"
+                  in="{{ _etcd.stdout.split()[2] }}/wave0-{{ _stamp }}.db"
+                  $E etcdctl --endpoints=https://127.0.0.1:2379 --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+                    --cert=/etc/kubernetes/pki/etcd/server.crt --key=/etc/kubernetes/pki/etcd/server.key \
+                    snapshot save "$in" > /dev/null
+                  $E etcdutl snapshot status "$in" -w json
+                  mv "{{ _etcd.stdout.split()[1] }}/wave0-{{ _stamp }}.db" {{ local_dir }}/etcd/{{ _stamp }}/etcd.db
+                  chmod 0600 {{ local_dir }}/etcd/{{ _stamp }}/etcd.db
+              register: _etcd_snap
+              changed_when: true
+          always:
+            - name: Etcd - no snapshot left in its data volume
+              ansible.builtin.file:
+                path: "{{ _etcd.stdout.split()[1] }}/wave0-{{ _stamp }}.db"
+                state: absent
+
+        - name: Etcd - into the store
+          ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
+          vars:
+            upload_file: "{{ local_dir }}/etcd/{{ _stamp }}/etcd.db"
+            upload_key: "etcd/{{ _stamp }}/etcd.db"
+          when: store == 'etcd'
+
         # ── scylla ────────────────────────────────────────────────────────
         # each cluster's own backup task started now: "<cluster id> <cluster name> <task> <location>" per cluster on
         # stdout. The test environment's cluster has none, and its agent no credentials for the store (production's
@@ -653,6 +711,7 @@
                 {{ _pg_end_wal.results | default([]) | map(attribute='stdout') | join('; ') }}
               gateway: "{{ _gw_tar.stdout_lines | default([]) | join('; ') }}"
               kafka: "{{ _kafka_copy.stdout_lines | default([]) | join('; ') }}"
+              etcd: "snapshot status {{ _etcd_snap.stdout | default('') }}"
               scylla: >-
                 snapshots (cluster, name, task, location, tag): {{ _scylla_snapshots.stdout_lines | default([])
                 | join('; ') }}{{ ('; ' ~ (_scylla_tasks.stderr_lines | select('match', '^SKIPPED') | join('; ')))
