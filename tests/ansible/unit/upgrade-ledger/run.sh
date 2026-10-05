@@ -124,6 +124,12 @@ check("own: another file differs", m.own_hash(D("other.yaml", 10, ["-  image: a:
 check("own: a line more differs",
       m.own_hash(D("values.yaml", 10, ["-  image: a:1", "+  image: a:2", "+  pull: Always"])) != base, True)
 
+# image names as containerd lists them, so the inventory's floating tags meet the preload's digests
+check("full name: a library image", m.full_name("postgres"), "docker.io/library/postgres")
+check("full name: a Docker Hub image", m.full_name("valkey/valkey"), "docker.io/valkey/valkey")
+check("full name: a registry's", m.full_name("ghcr.io/cloudnative-pg/postgresql"), "ghcr.io/cloudnative-pg/postgresql")
+check("full name: a registry with a port", m.full_name("localhost:5000/x"), "localhost:5000/x")
+
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 EOF

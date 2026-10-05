@@ -322,7 +322,7 @@ def record_proof(step, infra_sha, platform_sha):
     prev = dict(zip(REPOS, run([os.path.join(OPS, "scripts", "upgrade-expected-inventory.py"), "--refs",
                                 names[names.index(step) - 1]], capture_output=True, check=True).stdout.split())) \
         if names.index(step) else {r: "main" for r in REPOS}
-    proof = {"step": step, "run": run_info["run"], "ops": run_info["ops"], "repos": {}}
+    proof = {"step": step, "run": run_info["run"], "ops": run_info["ops"], "repos": {}, "floating": floating_digests()}
     for repo in REPOS:
         now_sha = run(["git", "-C", os.path.join(OPS, "..", repo), "rev-parse", refs[repo]], capture_output=True,
                       check=True).stdout.strip()
@@ -334,6 +334,32 @@ def record_proof(step, infra_sha, platform_sha):
     with open(os.path.join(PROVEN, step + ".json"), "w") as f:
         json.dump(proof, f, indent=1)
     print(f"PROOF: {step} " + " ".join(f"{r}={p['sha'][:10]}" for r, p in proof["repos"].items()))
+
+
+def floating_digests():
+    """The floating-tag images the run copied from ten, by digest (scripts/vagrant-preload-floating.sh)."""
+    path = os.path.join(OPS, ".upgrade", "floating-digests.txt")
+    if not os.path.exists(path):
+        sys.exit("REFUSED: no .upgrade/floating-digests.txt - the run's build copies ten's floating-tag images")
+    return dict(l.split() for l in open(path) if l.strip())
+
+
+def full_name(name):
+    """An image name as containerd lists it (docker.io/library/... for a short one) - as the preload names them."""
+    first = name.split("/")[0]
+    if "." in first or ":" in first:
+        return name
+    return "docker.io/" + ("library/" + name if "/" not in name else name)
+
+
+def floating_problems(proven, inventory):
+    """Floating-tag images still in use (in `inventory`) whose tag on ten now names another build than the full run
+    ran. One no step uses any more may be gone (the kubelet collects unused images)."""
+    in_use = {full_name(l.split()[1]) + ":" + l.split()[2] for l in inventory if l.startswith("image ")}
+    listing = ten("sudo -n ctr -n k8s.io images ls").stdout.splitlines()[1:]
+    now = {l.split()[0]: l.split()[2] for l in listing if len(l.split()) > 2}
+    return [f"{img}: ten's tag is {now.get(img, 'gone')}, the full run ran {digest}"
+            for img, digest in sorted(proven.items()) if img in in_use and now.get(img) != digest]
 
 
 def proof_problems(step, names, repo=None):
@@ -348,6 +374,10 @@ def proof_problems(step, names, repo=None):
         if not os.path.exists(p) or json.load(open(p))["run"] != proof["run"]:
             out.append(f"{earlier} was not proven by the same full run as {step} ({proof['run']})")
             break
+    if not proof.get("floating"):
+        out.append(f"{step}'s proof records no floating-tag images")
+    else:
+        out += floating_problems(proof["floating"], inv.expected(names[:names.index(step)]))
     changed = ops_unchanged_since(proof["ops"], ("deploy", os.path.join("tests", "ansible", "upgrade", "steps",
                                                                         step + ".txt")))
     if changed:
