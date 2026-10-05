@@ -378,6 +378,9 @@ tasks:
       PLATFORM_REF: '{{.PLATFORM_REF | default "main"}}'
       # the inventory the copy must show: production's (the baseline), or the one the last step leads to
       EXPECTED: '{{.EXPECTED | default "tests/ansible/upgrade/prod-inventory.txt"}}'
+      # ClickHouse's compatibility setting and users at that state (survival-check's defaults: the baseline's)
+      CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT | default ""}}'
+      CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS | default ""}}'
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       # production's own seeding playbook, with test-only values (tests/ansible/upgrade/vagrant-secrets.env), in an
@@ -404,7 +407,7 @@ tasks:
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
       # data of the one-way observability steps (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=seed
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/survival-check.yml -e mode=seed{{if .CLICKHOUSE_COMPAT}} -e clickhouse_compat='{{.CLICKHOUSE_COMPAT}}'{{end}}{{if .CLICKHOUSE_USERS}} -e clickhouse_users='{{.CLICKHOUSE_USERS}}'{{end}}
       # the scrape pools and their target counts, the record every step's metrics check compares with
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml -e record_scrape_pools=true
       # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production)
@@ -519,12 +522,21 @@ tasks:
         sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.LAST_STEP}} | cut -d' ' -f1
       PLATFORM_REF:
         sh: set -o pipefail; scripts/upgrade-expected-inventory.py --refs {{.LAST_STEP}} | cut -d' ' -f2
+      CLICKHOUSE_COMPAT:
+        sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.LAST_STEP}}
+      CLICKHOUSE_USERS:
+        sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.LAST_STEP}}
     cmds:
       - cmd: mkdir -p .upgrade && scripts/upgrade-expected-inventory.py {{.LAST_STEP}} > .upgrade/expected-targets.txt
       - task: _upgrade:base
       # the Argo stage's own inventory check, against the targets' expected inventory instead of production's
       - task: test:upgrade:argo
-        vars: { INFRA_REF: '{{.INFRA_REF}}', PLATFORM_REF: '{{.PLATFORM_REF}}', EXPECTED: .upgrade/expected-targets.txt }
+        vars:
+          INFRA_REF: '{{.INFRA_REF}}'
+          PLATFORM_REF: '{{.PLATFORM_REF}}'
+          EXPECTED: .upgrade/expected-targets.txt
+          CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT}}'
+          CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
 
   test:upgrade:build:
     desc: Build the whole Vagrant copy of production from scratch - the baseline, then the Argo layer (VMs stay up)
