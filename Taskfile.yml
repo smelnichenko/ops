@@ -339,6 +339,9 @@ tasks:
   _upgrade:base:
     internal: true
     deps: [deploy:install]
+    vars:
+      # setup-kubeadm's extra arguments (a build at the targets: its target state, not ten's history)
+      BASE_ARGS: '{{.BASE_ARGS | default ""}}'
     cmds:
       - cmd: vagrant destroy -f 2>/dev/null; true
       - cmd: vagrant up
@@ -351,7 +354,7 @@ tasks:
       # the Pi VIP, as in production (Vault, Git and the backup store are reached through it)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-keepalived.yml
       # as on ten: Argo CD owns Istio, cert-manager, metrics-server, the Prometheus stack and the data operators
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true {{.BASE_ARGS}}
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
 
   test:upgrade:baseline:
@@ -378,6 +381,7 @@ tasks:
       PLATFORM_REF: '{{.PLATFORM_REF | default "main"}}'
       # the inventory the copy must show: production's (the baseline), or the one the last step leads to
       EXPECTED: '{{.EXPECTED | default "tests/ansible/upgrade/prod-inventory.txt"}}'
+      ALLOWED_MISSING: '{{.ALLOWED_MISSING | default "tests/ansible/upgrade/vagrant-allowed-missing.txt"}}'
       # ClickHouse's compatibility setting and users at that state (survival-check's defaults: the baseline's)
       CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT | default ""}}'
       CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS | default ""}}'
@@ -414,7 +418,7 @@ tasks:
       - cmd: scripts/vagrant-smoke.sh
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: set -o pipefail; mkdir -p .upgrade && vagrant ssh kubeadm -c 'sudo bash -s' < scripts/version-inventory.sh | tr -d '\r' > .upgrade/vagrant-inventory.txt && for p in pi1 pi2; do vagrant ssh $p -c 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r'; done >> .upgrade/vagrant-inventory.txt
-      - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt tests/ansible/upgrade/vagrant-allowed-missing.txt
+      - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt {{.ALLOWED_MISSING}}
 
   test:upgrade:step:
     desc: Apply one upgrade step (tests/ansible/upgrade/steps/<STEP>.txt, its upgrade/NN-* branches in ../infra and ../platform, its playbooks) to the running Vagrant copy and prove it - Argo synced to it, every pod ready, the seeded data, a Velero backup, a new volume, every scrape target up, production's k6 smoke, the step's expected inventory
@@ -528,13 +532,18 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.LAST_STEP}}
     cmds:
       - cmd: mkdir -p .upgrade && scripts/upgrade-expected-inventory.py {{.LAST_STEP}} > .upgrade/expected-targets.txt
+      # the Vagrant inventory reproduces ten's history (External Secrets by Helm, the kubelet's grace only in its file);
+      # at the targets Argo owns External Secrets and the grace is in the kubelet-config ConfigMap
       - task: _upgrade:base
+        vars:
+          BASE_ARGS: -e external_secrets_by_helm_override=false -e kubelet_grace_in_kubelet_config_map=true
       # the Argo stage's own inventory check, against the targets' expected inventory instead of production's
       - task: test:upgrade:argo
         vars:
           INFRA_REF: '{{.INFRA_REF}}'
           PLATFORM_REF: '{{.PLATFORM_REF}}'
           EXPECTED: .upgrade/expected-targets.txt
+          ALLOWED_MISSING: tests/ansible/upgrade/targets-allowed-missing.txt
           CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT}}'
           CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
 

@@ -9,7 +9,7 @@
 #   2. the apt repository of the target minor (pkgs.k8s.io has one per minor);
 #   3. kubeadm to the target, `kubeadm upgrade plan`, then `kubeadm upgrade apply` - without the kube-proxy addon
 #      (Cilium replaces kube-proxy; ten has none, and the upgrade must not install one);
-#   4. kubelet and kubectl to the target, kubelet restarted;
+#   4. kubelet and kubectl to the target, kubernetes-cni and cri-tools to the minor's newest, kubelet restarted;
 #   5. proof: node Ready on the new kubelet, every control-plane pod Ready on the new version.
 #
 # The packages stay held; setup-kubeadm.yml's k8s_version / k8s_package_version must follow (a rebuild installs what
@@ -146,6 +146,25 @@
           - "kubelet={{ _package.stdout }}"
           - "kubectl={{ _package.stdout }}"
         allow_change_held_packages: true
+        allow_downgrade: false
+
+    # the rest of the minor's own packages, as a fresh build gets them: kubeadm 1.36 no longer pulls cri-tools in, and
+    # an upgrade left kubernetes-cni and crictl at the first minor's (a build at the targets showed 1.9.1 against 1.7.1)
+    - name: The CNI plugins and crictl of the target minor (the newest in its repository)
+      ansible.builtin.shell: |
+        set -o pipefail
+        for p in kubernetes-cni cri-tools; do
+          echo "$p=$(apt-cache madison "$p" | awk '{print $3}' | sort -V | tail -1)"
+        done
+      args:
+        executable: /bin/bash
+      register: _minor_pkgs
+      changed_when: false
+      failed_when: _minor_pkgs.rc != 0 or _minor_pkgs.stdout_lines | select('match', '.*=$') | list | length > 0
+
+    - name: Install them
+      ansible.builtin.apt:
+        name: "{{ _minor_pkgs.stdout_lines }}"
         allow_downgrade: false
 
     - name: Keep the packages held

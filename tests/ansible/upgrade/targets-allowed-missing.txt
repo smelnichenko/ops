@@ -1,0 +1,26 @@
+# Inventory lines of production (tests/ansible/upgrade/prod-inventory.txt) the Vagrant copy does not have, and why.
+# scripts/inventory-diff.sh accepts these as missing (never as different); anything else missing or extra fails.
+#
+# left out of the Vagrant copy (operator 2026-10-02: the VM has 20 GB; or production-only by nature)
+argo-chart kagent kagent@0.9.9
+argo-chart kagent-crds kagent-crds@0.9.9
+image docker.io/library/postgres 18.3-alpine
+argo-chart woodpecker woodpecker@3.7.3
+image docker.io/woodpeckerci/woodpecker-agent v3.18.1
+image docker.io/woodpeckerci/woodpecker-server v3.18.1
+image sonarqube 26.3.0.120487-community
+image curlimages/curl 8.12.1
+image ghcr.io/browserless/chromium latest
+# the nightly Hyperfoil load test (off in Vagrant: its image is a floating :latest, so the kubelet pulls it from
+# production's registry on every run, and an isolated copy can never run it)
+image git.pmon.dev/schnappy/hyperfoil latest
+# the k6 smoke's PostSync Job (curl waits for the app, then k6), listed only for the 24 h it is kept after each sync
+# (ttlSecondsAfterFinished) - on ten when its inventory was taken
+image curlimages/curl 8.10.1
+image grafana/k6 1.7.1
+
+# A build at the targets (task test:upgrade:build-targets), besides the above:
+# External Secrets came to ten as a Helm release (2026-04-05) and Argo took it over at the eso-crds step; that release's
+# record stays on ten (never helm uninstall it: it deletes the CRDs and every ExternalSecret with them). A rebuild has
+# Argo's only - no Helm release.
+helm external-secrets/external-secrets external-secrets-2.2.0 v2.2.0

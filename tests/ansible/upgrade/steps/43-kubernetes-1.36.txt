@@ -13,6 +13,8 @@ image registry.k8s.io/coredns/coredns v1.13.1 => image registry.k8s.io/coredns/c
 pkg kubeadm 1.35.9-1.1 (held) => pkg kubeadm 1.36.5-1.1 (held)
 pkg kubectl 1.35.9-1.1 (held) => pkg kubectl 1.36.5-1.1 (held)
 pkg kubelet 1.35.9-1.1 (held) => pkg kubelet 1.36.5-1.1 (held)
+pkg cri-tools 1.35.0-1.1 => pkg cri-tools 1.36.0-1.1
+pkg kubernetes-cni 1.8.0-1.1 => pkg kubernetes-cni 1.9.1-1.1
 k8s server v1.35.9 => k8s server v1.36.5
 playbook upgrade-kubeadm.yml -e k8s_upgrade_to=1.36.5
 # its change: the branch upgrade/43-kubernetes-1.36 in infra

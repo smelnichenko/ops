@@ -5,5 +5,5 @@
 # abort: by hand, as upgrade-containerd.yml's header says: Debian's containerd and the kept config back (not rehearsed)
 - pkg containerd 1.7.24~ds1-6+deb13u1
 - pkg runc 1.1.15+ds1-2+b4
-+ pkg containerd.io 2.3.6-1~debian.13~trixie
++ pkg containerd.io 2.3.6-1~debian.13~trixie (held)
 playbook upgrade-containerd.yml -e containerd_upgrade_to=2.3.6
