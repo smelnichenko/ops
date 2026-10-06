@@ -11,13 +11,15 @@ AP=$(command -v ansible-playbook 2>/dev/null \
 unset ANSIBLE_CONFIG
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
-# the stub: LEADER=<node> answers it, LEADER= (empty) the missing key's error, DOWN=1 an unreachable agent
+# the stub: LEADER=<node> answers it, LEADER= (empty) the missing key's error, DOWN=1 an unreachable agent - for the
+# cluster's leader key only: any other key does not exist (a guard reading the wrong one would always go on)
 cat > "$W/consul" <<'STUB'
 #!/bin/sh
 if [ "${DOWN:-}" = 1 ]; then
   echo 'Error querying Consul agent: Get "http://127.0.0.1:8500/v1/kv/x": dial tcp 127.0.0.1:8500: connect: connection refused' >&2
   exit 1
 fi
+if [ "$*" != "kv get service/schnappy-postgres/leader" ]; then echo "Error! No key exists at: $3" >&2; exit 1; fi
 if [ -z "${LEADER:-}" ]; then echo "Error! No key exists at: $3" >&2; exit 1; fi
 echo "$LEADER"
 STUB
