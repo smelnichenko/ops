@@ -26,7 +26,9 @@
     # Argo CD's own values for istiod and istio-cni (infra checkout next to ops): a run here installs what Argo would -
     # its own copy of them drifted (no hub, CNI or pilot settings of production's)
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
-    istio_values_dir: "{{ infra_dir }}/clusters/production/istio"
+    # the values read from infra's main, not from whatever branch the checkout has (a feature branch's values went to
+    # production through it); a branch under test: -e infra_values_ref_override=<ref>
+    infra_values_ref: "{{ infra_values_ref_override | default('main') }}"
 
   tasks:
     # ================================================================
@@ -69,7 +71,9 @@
         release_namespace: istio-system
         wait: true
         wait_timeout: 120s
-        values: "{{ lookup('ansible.builtin.file', istio_values_dir ~ '/istiod-values.yaml') | from_yaml }}"
+        values: >-
+          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ infra_dir ~ ' show ' ~ infra_values_ref
+                    ~ ':clusters/production/istio/istiod-values.yaml') | from_yaml }}
       when: istio_exists.resources | length == 0
 
     - name: Install Istio CNI
@@ -81,7 +85,9 @@
         release_namespace: istio-system
         wait: true
         wait_timeout: 120s
-        values: "{{ lookup('ansible.builtin.file', istio_values_dir ~ '/cni-values.yaml') | from_yaml }}"
+        values: >-
+          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ infra_dir ~ ' show ' ~ infra_values_ref
+                    ~ ':clusters/production/istio/cni-values.yaml') | from_yaml }}
       when: istio_exists.resources | length == 0
 
     - name: Verify Istio pods

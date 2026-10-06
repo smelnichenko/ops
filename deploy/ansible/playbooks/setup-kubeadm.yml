@@ -42,6 +42,9 @@
     platform_by_argo: "{{ platform_by_argo_override | default(false) }}"
     # the infra checkout next to ops: Argo CD's own values for what this installs before Argo does (Istio)
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
+    # the values read from infra's main, not from whatever branch the checkout has (a feature branch's values went to
+    # production through it); a branch under test: -e infra_values_ref_override=<ref>
+    infra_values_ref: "{{ infra_values_ref_override | default('main') }}"
     # External Secrets by Helm: only where no Argo owns it - on ten Argo does, and a re-run would roll Argo's ESO back to
     # this chart. The Vagrant upgrade copy sets the override: its baseline has the CRDs from this install, as ten has
     # them from 2026-04-05, until the step that moves them under Argo.
@@ -696,8 +699,10 @@
         chart_ref: istio/istiod
         chart_version: "{{ istio_version }}"
         release_namespace: istio-system
-        # Argo CD's own values (infra checkout next to ops), so Argo's later sync of them changes nothing
-        values: "{{ lookup('ansible.builtin.file', infra_dir ~ '/clusters/production/istio/istiod-values.yaml') | from_yaml }}"
+        # Argo CD's own values (infra's main, next to ops), so Argo's later sync of them changes nothing
+        values: >-
+          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ infra_dir ~ ' show ' ~ infra_values_ref
+                    ~ ':clusters/production/istio/istiod-values.yaml') | from_yaml }}
         wait: true
         wait_timeout: 300s
 
@@ -709,7 +714,9 @@
         chart_ref: istio/cni
         chart_version: "{{ istio_version }}"
         release_namespace: istio-system
-        values: "{{ lookup('ansible.builtin.file', infra_dir ~ '/clusters/production/istio/cni-values.yaml') | from_yaml }}"
+        values: >-
+          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ infra_dir ~ ' show ' ~ infra_values_ref
+                    ~ ':clusters/production/istio/cni-values.yaml') | from_yaml }}
         wait: true
         wait_timeout: 300s
 
