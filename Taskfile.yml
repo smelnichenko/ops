@@ -662,6 +662,8 @@ tasks:
       # application as its old one did (helm-diff lines)
       - cmd: scripts/upgrade-production.py proof-start
       - cmd: scripts/upgrade-merge-order.py --all
+      # every step preview (check mode) reads no result check mode skips - step 37's crashed three hours in once
+      - cmd: scripts/check-mode-lint.py
       - cmd: scripts/argo-helm-diff.py --all
       # the build, and beside it (no wall time) the ClickHouse rollback pin of steps 59 and 61 with the real images, in
       # docker here: a failed pin stops the run when the build ends, not hours later at 59, whose proof (and 61's) wants
