@@ -90,6 +90,19 @@ got = flags_of("barman-after-merge")
 check("barman-after-merge alone: refused (no base backup to take early)", (got[:8], "without barman-check" in got),
       ("refused:", True))
 
+every = sorted(f[:-4] for f in os.listdir(inv.STEPS) if f.endswith(".txt"))
+flagged = {}
+for name in every:
+    found = set()
+    inv.parse(os.path.join(inv.STEPS, name + ".txt"), flags=found)
+    for f in found:
+        flagged.setdefault(f, []).append(name.split("-")[0])
+# restarts judged as expected only where the step upgrades the control plane: a wiring that marks more lets their
+# crash loops through
+check("restarts-control-plane: the three kubeadm steps exactly", flagged.get("restarts-control-plane"),
+      ["13", "42", "43"])
+check("barman-after-merge: step 47 only", flagged.get("barman-after-merge"), ["47"])
+
 for name in sorted(f[:-4] for f in os.listdir(inv.STEPS) if f.endswith(".txt")):
     found = []
     try:

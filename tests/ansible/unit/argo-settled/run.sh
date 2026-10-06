@@ -3,10 +3,14 @@
 # settled set; the app floor (--expect-apps: a missing or an unexpected app is not green, an allowed extra is); an app
 # compared against an older spec is not green, one whose spec only gained fields Go's omitempty drops is (false, 0,
 # a map left empty); the restart history (--restart-history: a pod restarting in two steps running fails, one step's
-# restart does not, the first call only records); preview environments' apps and pods left out; every gate.
+# restart does not, the first call only records); preview environments' apps and pods left out; every gate; the
+# playbook's check of the mode the script reports (restarts expected or judged) against the mode it asked for.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
-python3 - <<'PY'
+PY=python3
+"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import jinja2, yaml' || { echo "argo-settled: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" - <<'PY'
 import json
 import os
 import subprocess
@@ -261,6 +265,22 @@ H5 = os.path.join(work, "history-old.json")
 json.dump({"last_step": "30", "pods": {"x1": {"name": "ns/x", "count": 2, "last_restart_step": "30"}}}, open(H5, "w"))
 rc, out = run(A, [pod("x", "x1", 3)], "--restart-history", H5, "--step", "31")
 check("the earlier file's last restart step counts", (rc, "(30, 31)" in out), (1, True), out)
+
+# argo-settled.yml: the script's report of its restart mode checked against the mode the step asked for - both ways
+import jinja2, yaml
+tasks = {t.get("name"): t for t in yaml.safe_load(open("tests/ansible/upgrade/argo-settled.yml"))[0]["tasks"]}
+ansible_env = jinja2.Environment()
+# Ansible's bool filter: the runner passes the step's yes / no
+ansible_env.filters["bool"] = lambda v: v if isinstance(v, bool) else str(v).lower() in ("yes", "y", "on", "true", "1")
+MODE = ansible_env.compile_expression(next(t for n, t in tasks.items() if n and n.startswith(
+    "The restarts judged in the mode"))["ansible.builtin.assert"]["that"])
+for flag in (False, True):
+    rc, out = run(A, P, "--restart-history", os.path.join(work, f"mode-{flag}.json"), "--step", "20",
+                  *(["--restarts-expected"] if flag else []))
+    for asked in ("no", "yes"):
+        check(f"the playbook's mode check: script {'expected' if flag else 'judged'}, step asked "
+              f"{'expected' if asked == 'yes' else 'judged'}",
+              bool(MODE(_settled={"stdout": out}, restarts_expected=asked)), flag == (asked == "yes"))
 
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
