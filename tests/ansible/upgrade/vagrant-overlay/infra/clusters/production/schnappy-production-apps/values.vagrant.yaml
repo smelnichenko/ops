@@ -4,7 +4,8 @@
 # The candidate images of monitor, admin, chat and chess, ahead of production: Keycloak's keys fetched before readiness
 # and refreshed before they expire, the hot reads warmed (the full run's Istio 1.31 step failed its k6 smoke on cold
 # apps: first requests 0.5-3 s). The copy runs them so the full run and its review cover them; production keeps its
-# own tags until they are promoted after the review. Drop these tags once production's values carry them.
+# own tags until they are promoted after the review - every production phase refuses while production's tags differ
+# from these (scripts/upgrade-production.py app_tag_problems). Drop these tags once production's values carry them.
 app:
   image:
     tag: "cdb009f"

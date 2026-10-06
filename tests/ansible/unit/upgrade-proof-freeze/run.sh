@@ -93,7 +93,7 @@ G("remote", "add", "origin", ORIGIN)
 G("push", "-q", "origin", "main")
 recorded = []
 m.ledger_for = lambda st, ph, arg=None: (m.step_names(), [], None)
-m.proof_problems = lambda *a, **k: []
+proof_problems, m.proof_problems = m.proof_problems, (lambda *a, **k: [])
 m.record = lambda st, ev, *a: recorded.append((st, ev, *a))
 
 
@@ -127,6 +127,39 @@ edit("docs/n.md", "later\n")
 G("commit", "-qam", "later")
 after = phase("03-c")
 check("a commit after the step's: refused", after.startswith("refused") and "past the step's commit" in after, True)
+
+# the app tags the full run ran (the overlay's) against infra main's production values
+infra = os.path.join(os.path.dirname(o), "infra")
+I = lambda *a: subprocess.run(["git", "-C", infra, *a], capture_output=True, text=True, check=True).stdout.strip()
+os.makedirs(os.path.join(infra, os.path.dirname(m.APP_VALUES)))
+os.makedirs(os.path.join(o, os.path.dirname(m.APP_OVERLAY)), exist_ok=True)
+subprocess.run(["git", "init", "-q", "--bare", "-b", "main", infra + ".git"], check=True)
+I("init", "-q", "-b", "main")
+I("remote", "add", "origin", infra + ".git")
+
+
+def production_tags(app, chat):
+    with open(os.path.join(infra, m.APP_VALUES), "w") as f:
+        f.write(f'app:\n  image:\n    tag: "{app}"\n  replicas: 2\nchatService:\n  image:\n    tag: "{chat}"\n')
+    I("add", "-A")
+    I("commit", "-qm", "tags")
+    I("push", "-q", "origin", "main")
+
+
+edit(m.APP_OVERLAY, 'app:\n  image:\n    tag: "c1"\n  resources:\n    requests: { memory: 1Gi }\n'
+     'chatService:\n  resources:\n    requests: { memory: 768Mi }\n', "w")
+production_tags("p1", "p2")
+check("production runs another app tag: refused, naming it", m.app_tag_problems(),
+      ["app: production runs p1, the full run ran c1 - promote it first, or drop the overlay's tag and prove again"])
+os.makedirs(m.PROVEN, exist_ok=True)
+with open(os.path.join(m.PROVEN, "01-a.json"), "w") as f:
+    f.write('{"run": "r", "ops": "%s", "floating": ["x"]}' % proven)
+m.floating_problems, m.unproven_changes = (lambda *a: []), (lambda *a: [])
+check("every phase's proof check refuses it", any(p.startswith("app: production runs p1")
+                                                  for p in proof_problems("01-a", ["01-a"])), True)
+production_tags("c1", "p2")
+check("the same tag (an overlay key with no tag is not compared)", m.app_tag_problems(), [])
+check("every phase's proof check passes it", proof_problems("01-a", ["01-a"]), [])
 print("upgrade-proof-freeze: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

@@ -50,6 +50,8 @@ import shlex
 import subprocess
 import sys
 
+import yaml
+
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEN = "sm@192.168.11.2"
 PIS = ("sm@192.168.11.4", "sm@192.168.11.6")
@@ -66,6 +68,10 @@ PREVIEW_APPS = "^pr-[0-9]+-"
 RESTART_HISTORY = "$HOME/.upgrade-restart-history.json"
 PROVEN = os.path.join(OPS, ".upgrade", "proven")
 PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml", "Vagrantfile")
+# the app images the full run ran: production's values with these tags over them (the Vagrant overlay)
+APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
+APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "infra", APP_VALUES.replace(
+    "values.yaml", "values.vagrant.yaml"))
 BEFORE_LEDGER = "02-istio-chart-repo"
 
 
@@ -394,6 +400,20 @@ def unproven_changes(proof_ops, defaulted_steps):
             if not (p in expected and open(os.path.join(OPS, p)).read() == expected[p])]
 
 
+def app_tag_problems():
+    """The app tags the full run ran (the overlay's, over production's values) against infra main's: the proof covers
+    production's apps only when they are the same."""
+    tag = lambda values, key: (((values or {}).get(key) or {}).get("image") or {}).get("tag")
+    overlay = yaml.safe_load(open(os.path.join(OPS, APP_OVERLAY)))
+    infra = os.path.join(OPS, "..", "infra")
+    run(["git", "-C", infra, "fetch", "-q", "origin", "main"], check=True)
+    production = yaml.safe_load(run(["git", "-C", infra, "show", f"origin/main:{APP_VALUES}"], capture_output=True,
+                                    check=True).stdout)
+    return [f"{key}: production runs {tag(production, key)}, the full run ran {tag(overlay, key)} - promote it first, "
+            f"or drop the overlay's tag and prove again" for key in overlay
+            if tag(overlay, key) is not None and str(tag(production, key)) != str(tag(overlay, key))]
+
+
 def proof_problems(step, names, repo=None, defaulted_steps=()):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
     the run's commit only by the default lines of `defaulted_steps`."""
@@ -411,6 +431,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=()):
         out.append(f"{step}'s proof records no floating-tag images")
     else:
         out += floating_problems(proof["floating"], inv.expected(names[:names.index(step)]))
+    out += app_tag_problems()
     try:
         changed = unproven_changes(proof["ops"], defaulted_steps)
     except ValueError as e:

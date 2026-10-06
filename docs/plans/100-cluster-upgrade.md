@@ -836,7 +836,8 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a
    barman-check step's takes a Postgres base backup: that call asks first.
 Each phase that changes production asks first (the task's prompt, or the done call's own question) - the operator
-approves each.
+approves each. Every phase refuses while production's app tags (infra main) differ from those the full run ran (the
+Vagrant overlay's): the candidate images are promoted before the rollout's first step.
 
 Stop criteria: the rollout stops at the first of these - a phase refused or failed, Argo not settled after a merge,
 an inventory difference, a restart during the soak - and the step's abort line, with the operator, decides what
