@@ -199,20 +199,23 @@
         force: false
         mode: '0644'
 
-    - name: Generate the Pi's key and CSR (node IP, VIP, loopback)
-      ansible.builtin.command: >-
-        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes
-        -keyout /etc/vault.d/tls/vault-key.pem -out /etc/vault.d/tls/vault.csr -subj "/CN={{ vault_pi_dns }}"
-        -addext "subjectAltName={{ _sans | join(',') }}"
-      args:
-        creates: /etc/vault.d/tls/vault.csr
-      vars:
+    # the names the certificate is for - the CSR asks for them, and the CA signs exactly these (below)
+    - name: The Pi's certificate names (node IP, VIP, loopback)
+      ansible.builtin.set_fact:
         _sans:
           - "DNS:{{ vault_pi_dns }}"
           - "DNS:{{ inventory_hostname }}.schnappy.io"
           - "IP:{{ node_ip }}"
           - "IP:{{ keepalived_vip }}"
           - "IP:127.0.0.1"
+
+    - name: Generate the Pi's key and CSR
+      ansible.builtin.command: >-
+        openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes
+        -keyout /etc/vault.d/tls/vault-key.pem -out /etc/vault.d/tls/vault.csr -subj "/CN={{ vault_pi_dns }}"
+        -addext "subjectAltName={{ _sans | join(',') }}"
+      args:
+        creates: /etc/vault.d/tls/vault.csr
       when: not _vault_cert.stat.exists
 
     - name: Read the CSR
@@ -221,16 +224,19 @@
       register: _vault_csr
       when: not _vault_cert.stat.exists
 
-    - name: Sign the CSR with the CA on pi1
+    # the CSR on stdin (it was templated into the CA host's root shell), and its extensions the playbook's, never the
+    # request's: copied, a CSR asking CA:TRUE got a CA certificate from the CA External Secrets trusts
+    - name: Sign the CSR with the CA on pi1 - a server certificate for the playbook's names only
       ansible.builtin.shell: |
-        set -o pipefail
-        printf '%s' "{{ _vault_csr.content | b64decode }}" > /tmp/{{ inventory_hostname }}-vault.csr
-        openssl x509 -req -in /tmp/{{ inventory_hostname }}-vault.csr \
-          -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault.d/tls/ca-key.pem -CAcreateserial \
-          -copy_extensions copyall -days 3650
-        rm -f /tmp/{{ inventory_hostname }}-vault.csr
+        set -euo pipefail
+        ext=$(mktemp); trap 'rm -f "$ext"' EXIT
+        printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" \
+          "extendedKeyUsage=serverAuth" "subjectAltName={{ _sans | join(',') }}" > "$ext"
+        openssl x509 -req -in /dev/stdin -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault.d/tls/ca-key.pem \
+          -CAcreateserial -extfile "$ext" -days 3650
       args:
         executable: /bin/bash
+        stdin: "{{ _vault_csr.content | b64decode }}"
       register: _vault_signed
       delegate_to: pi1
       changed_when: true
