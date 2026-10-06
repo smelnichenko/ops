@@ -332,22 +332,23 @@ def step_apps(events, step):
 # ---- the proof (the full run) ---------------------------------------------------------------------------------------
 
 def own_change(repo_dir, base, tip):
-    """sha256 of a branch's own change: every changed line with its file, no line numbers - the same change rebased
-    onto a moved main hashes the same."""
-    return own_hash(run(["git", "-C", repo_dir, "diff", "-U0", base, tip], capture_output=True, check=True).stdout)
+    """sha256 of a branch's own change: every changed line with its file, a mode or a binary file's new content too,
+    no line numbers - the same change rebased onto a moved main hashes the same."""
+    return own_hash(run(["git", "-C", repo_dir, "diff", "-U0", "--binary", base, tip], capture_output=True,
+                        check=True).stdout)
 
 
 def own_hash(diff):
-    """own_change's hash of a `git diff -U0`: the file headers and the changed lines, not the hunk positions."""
-    h, in_hunk = hashlib.sha256(), False
+    """own_change's hash of a `git diff -U0 --binary`: every line but the hunks' positions (@@) and the files' blob
+    names (index ...), which a moved main changes for the same change - the file headers, modes, renames, the changed
+    lines and a binary file's patch all count."""
+    h = hashlib.sha256()
     for line in diff.splitlines():
-        if line.startswith("diff --git"):
-            in_hunk = False
-            h.update(line.encode() + b"\n")
-        elif line.startswith("@@"):
-            in_hunk = True
-        elif in_hunk and line[:1] in ("+", "-"):
-            h.update(line.encode() + b"\n")
+        if line.startswith("@@"):
+            line = "@@"
+        elif line.startswith("index "):
+            continue
+        h.update(line.encode() + b"\n")
     return h.hexdigest()
 
 
@@ -434,8 +435,10 @@ def unproven_changes(proof_ops, defaulted_steps):
     """The paths the proof covers (PROVEN_PATHS: the playbooks, every step file, the scripts and data that judge a
     step green) changed since the run's ops commit, beyond the default lines of `defaulted_steps` - a ValueError when
     those do not apply to it. Only the playbooks moved: an edited inventory, allow-list or judge proves nothing."""
-    expected = dflt.applied(lambda p: run(["git", "-C", OPS, "show", f"{proof_ops}:{p}"], capture_output=True,
-                                          check=True).stdout, list(defaulted_steps))
+    read = lambda p: run(["git", "-C", OPS, "show", f"{proof_ops}:{p}"], capture_output=True, check=True).stdout
+    # a run proven after some steps' defaults were committed has them already: only the later ones apply on top
+    have = {l.strip() for l in read(dflt.COMMITTED).splitlines() if l.strip() and not l.startswith("#")}
+    expected = dflt.applied(read, [s for s in defaulted_steps if s not in have])
     return [p for p in ops_unchanged_since(proof_ops, PROVEN_PATHS)
             if not (p in expected and open(os.path.join(OPS, p)).read() == expected[p])]
 
@@ -454,9 +457,15 @@ def app_tag_problems():
             if tag(overlay, key) is not None and str(tag(production, key)) != str(tag(overlay, key))]
 
 
-def proof_problems(step, names, repo=None, defaulted_steps=()):
+def proof_inventory(names, step, merged):
+    """Production's inventory the floating-image check reads: as the done steps leave it - or, once the step's merges
+    settled (`merged`), as the step leaves it: an image the step replaced may be gone then (the kubelet collects it)."""
+    return inv.expected(names[:names.index(step) + (1 if merged else 0)])
+
+
+def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
-    the run's commit only by the default lines of `defaulted_steps`."""
+    the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled."""
     path = os.path.join(PROVEN, step + ".json")
     if not os.path.exists(path):
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
@@ -470,7 +479,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=()):
     if not proof.get("floating"):
         out.append(f"{step}'s proof records no floating-tag images")
     else:
-        out += floating_problems(proof["floating"], inv.expected(names[:names.index(step)]))
+        out += floating_problems(proof["floating"], proof_inventory(names, step, merged))
     out += app_tag_problems()
     try:
         changed = unproven_changes(proof["ops"], defaulted_steps)
@@ -615,7 +624,7 @@ def backup(step, store):
 
 def preview(step):
     names, events, _ = ledger_for(step, "preview")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if run([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
@@ -659,7 +668,7 @@ def merge(step, repo):
 
 def playbooks(step):
     names, events, _ = ledger_for(step, "playbooks")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if run([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")
@@ -682,7 +691,7 @@ def defaults(step):
     last = git("log", "-1", "--format=%H %s", "--", dflt.COMMITTED).split(" ", 1)
     if len(last) == 2 and last[1] == message:
         sha = last[0]
-        refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step])
+        refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True)
                + ([] if git("rev-parse", "HEAD") == sha else [f"ops main is past the step's commit {sha[:10]}"]))
         if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, "origin/main"]).returncode:
             refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", "origin/main")
@@ -691,7 +700,7 @@ def defaults(step):
         print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
         record(step, "defaults", sha)
         return
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True)
            + ([] if git("rev-parse", "HEAD") == git("rev-parse", "origin/main") else ["ops is not at origin/main"]))
     refuse([] if run([os.path.join(OPS, "scripts", "upgrade-defaults.py"), "--apply", step]).returncode == 0
            else ["the default lines did not apply (above)"])
@@ -719,7 +728,7 @@ def check(step, since=None, deciding=False):
 def done(step):
     names, events, info = ledger_for(step, "done")
     # what it checks and what its first call runs (an ACME issuance, a base backup) must be what the full run proved
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
     now = datetime.datetime.now(datetime.timezone.utc)
     checked, left = soak_state(events, step, info["soak"], now)
     if checked is not None and left > 0:

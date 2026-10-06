@@ -83,6 +83,12 @@ check("the proof check excuses both steps", m.unproven_changes(proven, ["01-a", 
 check("but not with one step fewer", m.unproven_changes(proven, ["01-a"]),
       ["deploy/ansible/playbooks/x.yml", "tests/ansible/upgrade/defaults-committed.txt"])
 check("lint after both", defaults("--lint").returncode, 0)
+# a run proven after 01-a's defaults were committed (its commit carries them): only the later committed steps apply
+subprocess.run(["git", "-C", o, "commit", "-q", "-am", "01-a and 03-c committed"], check=True)
+reproven = subprocess.run(["git", "-C", o, "rev-parse", "HEAD"], capture_output=True, text=True,
+                          check=True).stdout.strip()
+check("a re-proof carrying the committed steps: nothing to excuse, nothing refused",
+      m.unproven_changes(reproven, ["01-a", "03-c"]), [])
 
 # the defaults phase cut short and run again: after a failed push, after a push whose ledger write failed
 reset()

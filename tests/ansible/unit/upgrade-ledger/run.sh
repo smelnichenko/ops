@@ -166,6 +166,19 @@ check("own: another value differs", m.own_hash(D("values.yaml", 10, ["-  image: 
 check("own: another file differs", m.own_hash(D("other.yaml", 10, ["-  image: a:1", "+  image: a:2"])) != base, True)
 check("own: a line more differs",
       m.own_hash(D("values.yaml", 10, ["-  image: a:1", "+  image: a:2", "+  pull: Always"])) != base, True)
+check("own: other blob names (a moved main) - the same", m.own_hash(D("values.yaml", 10, ["-  image: a:1",
+      "+  image: a:2"]).replace("index 1..2", "index 7..9")), base)
+mode = lambda new: f"diff --git a/s.sh b/s.sh\nold mode 100644\nnew mode {new}\n"
+check("own: a mode change counts", m.own_hash(mode("100755")) != m.own_hash(mode("100644")), True)
+binary = lambda data: (f"diff --git a/i.png b/i.png\nindex 1..2 100644\nGIT binary patch\nliteral 4\n{data}\n\n"
+                       "literal 0\nHcmV?d00001\n")
+check("own: a binary file's content counts", m.own_hash(binary("LcmZQzWMT")) != m.own_hash(binary("LcmZQzWMU")), True)
+
+# the floating-image check reads production as the done steps leave it, and after the step's merges as it leaves it
+# (step 47 replaces the floating postgresql:17: after its merge the kubelet may collect it)
+pg17 = "image ghcr.io/cloudnative-pg/postgresql 17"
+check("floating images before 47's merges: postgresql:17 in use", pg17 in m.proof_inventory(names, S47, False), True)
+check("after them: not any more", pg17 in m.proof_inventory(names, S47, True), False)
 
 # the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
 # a no - or no terminal - runs nothing and records nothing
