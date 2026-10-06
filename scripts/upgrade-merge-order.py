@@ -5,7 +5,11 @@ A step that changes both infra and platform reaches production in two pushes, in
 lines; Argo CD syncs after each. The Vagrant run mirrors both at once, so it proves the state before the step and the
 state after it, never the one in between. That state is safe only when it IS one of the two: the first repo's merge
 alone renders every Argo application that reads a platform chart exactly as before (it waits for the second), or the
-second merge renders nothing the first had not (the first did the whole step).
+second merge renders nothing the first had not (the first did the whole step) - and the merge that changes nothing
+rendered changes nothing else either: an infra merge whose diff reaches past the value files these applications read
+(a raw manifest, another chart's values, an application's definition) puts that live with platform at the other state.
+Production reads platform only through these charts, so a platform merge has no effect past them. Nothing rendered in
+any of the three states proves nothing and is refused.
 
 Renders, with helm template from the git refs (no cluster), every Application and ApplicationSet in infra's
 clusters/production/argocd/apps that takes a chart from platform: the per-environment ApplicationSets (one per
@@ -62,8 +66,9 @@ def evaluate(template, ctx, where):
     return re.sub(r"\{\{(.*?)\}\}", one, template)
 
 
-def renders(infra_ref, platform_ref, work):
-    """{application name: rendered manifests} for every application that reads a platform chart."""
+def renders(infra_ref, platform_ref, work, read=None):
+    """{application name: rendered manifests} for every application that reads a platform chart; the infra value
+    files they read added to `read`."""
     out = {}
     charts = {}
 
@@ -81,6 +86,8 @@ def renders(infra_ref, platform_ref, work):
             with open(f, "w") as fh:
                 fh.write(git("infra", "show", f"{infra_ref}:{path}"))
             args += ["-f", f]
+            if read is not None:
+                read.add(path)
         if inline is not None:
             f = os.path.join(work, f"inline-{len(out)}.yaml")
             with open(f, "w") as fh:
@@ -147,6 +154,13 @@ def renders(infra_ref, platform_ref, work):
     return out
 
 
+def outside(repo, before_ref, after_ref, read):
+    """The repo's changed files whose effect the renders do not show (none for platform: see the top)."""
+    if repo == "platform":
+        return []
+    return [f for f in git("infra", "diff", "--name-only", before_ref, after_ref).split() if f not in read]
+
+
 def check(step):
     order = inv.branch_order(step)
     if len(order) < 2:
@@ -157,22 +171,36 @@ def check(step):
     before = refs(names[names.index(step) - 1]) if names.index(step) else {"infra": "main", "platform": "main"}
     first, second = order
     between = dict(before, **{first: after[first]})
+    read = set()
     with tempfile.TemporaryDirectory(dir=os.path.join(OPS, ".upgrade")) as work:
-        a, m, b = (renders(s["infra"], s["platform"], os.path.join(work, k))
+        a, m, b = (renders(s["infra"], s["platform"], os.path.join(work, k), read)
                    for k, s in (("before", before), ("between", between), ("after", after)))
-    if m == a:
+    if not (a and m and b):
+        print(f"{step}: REFUSED - an application reading a platform chart rendered in none of the states (before "
+              f"{len(a)}, between {len(m)}, after {len(b)}): nothing proven")
+        return False
+    first_rest = outside(first, before[first], after[first], read) if m == a else []
+    second_rest = outside(second, before[second], after[second], read) if m == b else []
+    if m == a and not first_rest:
         print(f"{step}: safe - {first} alone renders every platform-chart application as before; {second} makes the "
               f"step")
         return True
-    if m == b:
+    if m == b and not second_rest:
         print(f"{step}: safe - {first} makes the whole step; {second} renders nothing new")
         return True
-    print(f"{step}: UNSAFE in this order ({first} then {second}) - with {first} alone these applications render "
-          f"neither as before nor as after:")
+    print(f"{step}: UNSAFE in this order ({first} then {second}):")
+    if first_rest:
+        print(f"  {first} alone renders the applications as before, but its merge also changes "
+              f"{', '.join(first_rest)} - live with {second} still before the step")
+    if second_rest:
+        print(f"  {second} renders nothing new, but its merge also changes {', '.join(second_rest)} - not live "
+              f"while {first} is already the step")
+    if m != a and m != b:
+        print(f"  with {first} alone these applications render neither as before nor as after:")
     for app in sorted(set(a) | set(m) | set(b)):
-        if not (m.get(app) == a.get(app) and m.get(app) == b.get(app)):
+        if m != a and m != b and not (m.get(app) == a.get(app) and m.get(app) == b.get(app)):
             state = "as before" if m.get(app) == a.get(app) else "as after" if m.get(app) == b.get(app) else "NEITHER"
-            print(f"  {app}: {state}")
+            print(f"    {app}: {state}")
     return False
 
 

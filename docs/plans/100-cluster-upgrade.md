@@ -328,7 +328,7 @@ The steps (generated from tests/ansible/upgrade/steps - the step files are the s
 | 40 | kafka-4.3 | Kafka 4.2.0 -> 4.3.1 under Strimzi 1.2.0 in production, after the test environment (step 39) | infra + platform | kafka |
 | 41 | eso-crds | External Secrets' CRDs under Argo, same 2.2.0 | infra | - |
 | 42 | kubernetes-1.35 | Kubernetes 1.34.12 -> 1.35.9 (the next minor; after containerd 2) | infra + playbook | etcd |
-| 43 | kubernetes-1.36 | Kubernetes 1.35.9 -> 1.36.5, the last platform step (Istio 1.31 and Cilium 1.20 support 1.36; nothing here sup... | infra + platform + playbook | etcd |
+| 43 | kubernetes-1.36 | Kubernetes 1.35.9 -> 1.36.5, the last platform step (Istio 1.31 and Cilium 1.20 support 1.36; nothing here sup... | infra + playbook | etcd |
 | 44 | eso-2.11 | External Secrets 2.2.0 -> 2.11.0, CRDs with it through Argo (step 41) | infra | - |
 | 45 | alertmanager-blackbox-ksm | Alertmanager 0.31.1 -> 0.34.1, blackbox exporter 0.27.0 -> 0.28.0 (its config reloader to the operator's v0.94... | platform | - |
 | 46 | postgres-18-test | PostgreSQL 17 -> 18.6 in the test environment, before production's (operator 2026-10-05) | infra + platform + playbook | postgres |
