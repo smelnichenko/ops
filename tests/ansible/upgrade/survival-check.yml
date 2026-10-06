@@ -9,11 +9,13 @@
 #                   series Mimir holds for it. The UIDs, the time and the count go to .upgrade/survival.json.
 #   -e mode=verify  after each step: the rows (count and md5 computed here), ClickHouse's compatibility setting as the
 #                   step files say (-e clickhouse_compat, the runner passes the latest clickhouse-compat line up to the
-#                   step; empty = not set), its users (-e clickhouse_users, from the clickhouse-users lines: an
-#                   image-made `default` goes with the 25.8 step), every dashboard UID of the seed and the seeded
-#                   dashboard's content, the trace by its ID, Mimir's `up` series at the seed's time - as many as
-#                   then - and, from 4 h after the seed, a stored block covering that time in the store-gateway's
-#                   list (before that the ingester answers the query from its own data: tasks/mimir-blocks.yml).
+#                   step; empty = not set), its users (-e clickhouse_users, from the clickhouse-users lines: the
+#                   image-made `default` goes at step 58, before the 25.8 image), every dashboard UID of the seed and
+#                   the seeded dashboard's content, every Grafana datasource healthy (a plugin Grafana 13 failed to
+#                   load broke the Mimir one), the trace by its ID, a fresh span counted in Mimir's span metrics
+#                   (Tempo's metrics generator), Mimir's `up` series at the seed's time - as many as then - and,
+#                   from 4 h after the seed, a stored block covering that time in the store-gateway's list (before
+#                   that the ingester answers the query from its own data: tasks/mimir-blocks.yml).
 #
 # Why: these steps were green on "new data arrives" alone (the metrics check counts ClickHouse rows of the last two
 # minutes): losing or detaching every old part, the dashboards, the old blocks or the pin would all have passed.
@@ -210,15 +212,16 @@
     # (step 54) rebuilt the generator
     # a span name of its own for each run (fixed once - a lookup in a variable runs again at each use): its span-metrics
     # series is new, so a count proves this run's span
-    - name: Tempo - this run's span name
+    - name: Tempo - this run's span name and trace ID
       ansible.builtin.set_fact:
         _span_name: "upgrade-check-{{ lookup('ansible.builtin.pipe', 'date +%s%N') }}"
+        _span_trace: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-32') }}"
 
     - name: Tempo - a fresh span for the metrics generator
       ansible.builtin.include_tasks: tasks/tempo-push.yml
       vars:
-        push_trace_id: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-32') }}"
-        push_span_id: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-16') }}"
+        push_trace_id: "{{ _span_trace }}"
+        push_span_id: "{{ _span_trace[:16] }}"
         push_name: "{{ _span_name }}"
 
     - name: Tempo - the fresh span counted in Mimir's span metrics

@@ -26,11 +26,14 @@
 # expect_apps=true (every step's waits) exactly those must exist - no step adds or removes one, and a child app gone
 # would otherwise settle by its absence. With -e restart_step=<step> (a step's deciding wait) a pod whose containers
 # restarted during this step and the one before fails it: a crash loop slower than 5 minutes settles between restarts
-# (the history in /var/lib/upgrade-test on the node).
+# (the history in /var/lib/upgrade-test on the node). With -e restarts_expected=true as well (a step's
+# restarts-control-plane line: the Kubernetes upgrades restart the controllers holding leader leases with the API
+# server) the step's restarts are recorded, not judged; the next step judges its own against them (a pod restarting
+# there too is a crash loop, caught a step later).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml [-e settle_minutes=40]
 #        [-e expect_mirror=true] [-e allow_out_of_sync=strimzi] [-e stable_polls=1] [-e record_apps=true]
-#        [-e expect_apps=true] [-e restart_step=<step>]
+#        [-e expect_apps=true] [-e restart_step=<step> [-e restarts_expected=true]]
 - name: Argo CD settled (all apps Synced + Healthy, all pods ready)
   hosts: target
   become: true
