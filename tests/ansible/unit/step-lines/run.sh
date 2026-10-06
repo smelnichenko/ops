@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/upgrade-expected-inventory.py's step lines: a restore-undo image CNPG can take - name:tag, or
 # name:tag@sha256:<digest> - and a bare digest refused (CNPG's webhook refuses it: it reads the major from the tag);
-# barman-after-merge only with barman-check; every step file parses with the rules.
+# a restore-undo image is the one the step starts from; barman-after-merge only with barman-check; every step file parses with the rules.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PY'
@@ -27,8 +27,12 @@ def check(name, got, want):
 
 
 def undo(line):
+    """A step of `line` alone, but for the image change it starts from (when the image has a tag to start from)."""
     path = os.path.join(work, "99-x.txt")
-    open(path, "w").write(line + "\n")
+    ref = line.split()[2].split("@")[0]
+    name, _, tag = ref.rpartition(":") if "/" not in ref.rpartition(":")[2] else (ref, "", "")
+    start = f"image {name} {tag} => image {name} new\n" if tag else ""
+    open(path, "w").write(start + line + "\n")
     found = []
     try:
         inv.parse(path, undo=found)
@@ -59,6 +63,25 @@ def flags_of(*lines):
     except SystemExit as e:
         return "refused: " + str(e)
     return sorted(found)
+
+
+def undo_in_step(image):
+    """A step moving postgresql 17 -> 18.6 whose restore-undo names `image`."""
+    path = os.path.join(work, "97-z.txt")
+    open(path, "w").write("image ghcr.io/cloudnative-pg/postgresql 17 => image ghcr.io/cloudnative-pg/postgresql 18.6\n"
+                          f"restore-undo srv {image}\n")
+    try:
+        inv.parse(path)
+        return "parsed"
+    except SystemExit as e:
+        return "refused: " + str(e)
+
+
+check("restore-undo: the image the step starts from", undo_in_step(f"ghcr.io/cloudnative-pg/postgresql:17@{D}"), "parsed")
+got = undo_in_step("ghcr.io/cloudnative-pg/postgresql:18.6")
+check("restore-undo: the image the step moves to - refused", (got[:8], "starts from" in got), ("refused:", True))
+got = undo_in_step("ghcr.io/cloudnative-pg/postgresql:16")
+check("restore-undo: another tag - refused", got[:8], "refused:")
 
 
 check("barman-after-merge with barman-check", flags_of("barman-check", "barman-after-merge"),

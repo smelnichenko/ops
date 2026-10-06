@@ -100,7 +100,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
           wave0=None, soak=None, settle=None, tempo_flush=None):
-    changes, seen = [], set()
+    changes, seen, undos = [], set(), []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
         where = f"{os.path.basename(path)}:{n}"
@@ -120,6 +120,7 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
             # can't detect upgrades"): a pinned digest goes after the tag
             if ":" not in image.split("@")[0].rsplit("/", 1)[-1]:
                 sys.exit(f"{where}: restore-undo image {image} has no tag - CNPG refuses it; name:tag@sha256:<digest>")
+            undos.append((image, where))
             if undo is not None:
                 undo.append(line[len("restore-undo "):])
         elif re.fullmatch(r"clickhouse-users [a-z0-9_]+(,[a-z0-9_]+)*", line):
@@ -161,6 +162,13 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
             sys.exit(f"{where}: not a step line: {line}")
     if "barman-after-merge" in seen and "barman-check" not in seen:
         sys.exit(f"{os.path.basename(path)}: barman-after-merge without barman-check")
+    # the undo recovers the old major with the image the step starts from - not the one it moves to, nor another
+    starts = {before for before, _, _ in changes if before}
+    for image, where in undos:
+        name, tag = image.split("@")[0].rsplit(":", 1)
+        if f"image {name} {tag}" not in starts:
+            sys.exit(f"{where}: restore-undo image {name}:{tag} is not the image the step starts from "
+                     f"(no 'image {name} {tag} =>' line)")
     return changes
 
 
