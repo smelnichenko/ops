@@ -134,6 +134,10 @@ def check(step):
     with tempfile.TemporaryDirectory(dir=os.path.join(OPS, ".upgrade")) as work:
         a = renders(helm_binary(old), refs, os.path.join(work, old))
         b = renders(helm_binary(new), refs, os.path.join(work, new))
+    if not a or not b:
+        print(f"{step}: REFUSED - Helm {old} rendered {len(a)} applications, Helm {new} {len(b)} at infra "
+              f"{refs['infra']}, platform {refs['platform']}: nothing proven")
+        return False
     differ = []
     for app in sorted(set(a) | set(b)):
         oa, ob = objects(a.get(app, "")), objects(b.get(app, ""))
