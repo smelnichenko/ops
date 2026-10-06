@@ -9,7 +9,8 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
 2. full run 7 green: task test:upgrade:full - a fresh Vagrant copy, all steps in order with every check, the
    restore checks at the end, unattended;
 3. a full review of the whole upgrade work after that run (not only what changed since the last one); its findings
-   fixed and proven, and the full run repeated if a fix touches the steps or the harness;
+   fixed and proven, and the full run repeated if a fix touches the steps or the harness - the review of 2026-10-06
+   (below) is done and its fixes in; the full run that proves them is next, then another full review;
 4. then production, step by step, each with the operator's approval - Wave 0 backup first for every one-way step,
    every stateful step shown before it runs.
 
@@ -734,6 +735,49 @@ Fixed so far (2026-10-05, uncommitted where not said):
 - F23: acme-check.yml after the cert-manager steps (production; objects validated by a server dry run on ten).
 - F27: postgres-base-backup.yml after 24, 25, 47 in production (the Vagrant barman-check runs the same playbook).
 Open, the operator's: F22 and an etcd restore - the rollback rehearsals in the full run.
+
+## Full review 2026-10-06 - what it fixed, what is the operator's
+
+Ten passes (code, security, architecture, steps 00-21, steps 22-61, Pi playbooks twice, harness speed, concurrency,
+test quality) over everything of plans 100 and 101. Fixed, each with a test that fails when its mechanism is reverted
+(ops 75e5451..; the commits name them):
+- The procedure: the preview after the step's merges, read-only probes running in check mode, previewed by the full
+  run at every step; merged steps tagged (a restack and the proof skip them); the whole proven tree frozen against
+  the proof, not only deploy/; production's app tags must be the ones the full run ran; a done phase that changes
+  production (ACME, base backup) asks first; the committed default lines recorded (CI lint through the rollout) and
+  the defaults phase resumed after a cut-short run; a step's own-registry images checked before its merge; `settle`
+  per step (57: 50 minutes); Argo CD 3.5's Helm 4.2.1 renders all 33 applications as 3.4's 3.19.4 did
+  (argo-helm-diff.py, before the full run boots).
+- The steps: ClickHouse's rollback pin rehearsed with the real images (F24 - test:clickhouse-pin) and asserted on the
+  MergeTree format settings; Strimzi 0.51 -> 1.2 checked against its own notes; an etcd Wave 0 before 37; abort lines
+  that hold (00, 27, 39, 40, 44, 59, 61) and outage lines that tell (18, 21, 22, 54 - Tempo 2 flushed first); the
+  copy on production's runc; containerd's swap without the kubelet; the Gluster boot wait bounded; Grafana's
+  datasources and Tempo's span metrics checked after every step.
+- The Pis (plan 101): no service restarted on both Pis at once (Patroni reloaded or restarted paused one node at a
+  time, Vault, Forgejo, Keycloak, HAProxy); restarts pending from a cut-short run done by the next; pauses resumed
+  only by their own run; the Consul key read from every server; backups that survive Keycloak failing and a wrong
+  clock; Forgejo taken forward after a cut-short upgrade; Vault's certificate checked by the unseal; secrets off
+  command lines and the controller; app.ini and keepalived.conf root/owner only; the DR procedure's Postgres
+  recovery.
+
+The operator's - decisions this review does not make:
+1. The candidate app images (monitor, admin, chat, chess: Keycloak keys warmed and kept through an outage) promoted
+   to production before the rollout - every production phase refuses until production's tags are the full run's;
+   their review PRs (fix/warm-up-review) pushed and merged first (a merge deploys to schnappy-test).
+2. platform fix/runbooks-prometheus-distroless pushed (seven runbooks exec'd wget in Prometheus, which step 27's
+   distroless image lacks; the events schema's TTL 24.8 refuses) - it changes production's runbooks ConfigMap, and
+   the platform step branches are restacked and proven again.
+3. Kafka's metadataVersion pinned in a step of its own (step 40's revert window does not exist without it).
+4. The next full run's Pis at plan 101's targets (one full run) or at production's versions (another full run once
+   plan 101's steps are in production).
+5. Prune protection of the CRD-owning apps (Strimzi, CNPG, Prometheus, cert-manager - deleting a CRD deletes every
+   resource of it: KafkaTopics with their topics, Clusters with their volumes) - per chart, or no resources finalizer.
+6. A backup of Forgejo's repositories (none exists - the Gluster volume is replicated, not backed up).
+7. Security (pre-existing): Consul and Patroni APIs without authentication on the LAN; Forgejo and Keycloak as the
+   Postgres superuser; one store key for every backup consumer, unencrypted; Keycloak in dev mode on the LAN; UFW
+   opening 8200 to all; the Vault root token in .env and on both Pis; production secrets in local Claude Code
+   permission rules (remove and rotate); production's wildcard key in the Vagrant copy.
+8. F22 and an etcd restore rehearsed in the full run (longer run).
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 

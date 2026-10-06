@@ -19,6 +19,8 @@
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
     ten_ip: "{{ hostvars['target']['ansible_host'] | default('192.168.11.2') }}"
     node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
+    # the three servers (bootstrap_expect 3), whatever hosts a run is limited to
+    consul_servers: [pi1, pi2, target]
 
   tasks:
     - name: Determine architecture
@@ -57,59 +59,73 @@
     # the key the configs share; generated only where neither exists. A new key each run changed every config, and the
     # restart that followed took all three servers down at once. Running servers on different keys - or, none
     # running, configs with different keys - refuse.
-    - name: The key this server's running Consul uses, and the one its config has
+    # read on every server, whatever the run's --limit: a server rebuilt alone (--limit pi2) found no key among the
+    # play's hosts and wrote `encrypt = ""` - gossip unencrypted, never joining - and still passed
+    - name: The key each server's running Consul uses, and the one its config has
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
+          live=
           if ring=$(curl -sf --max-time 5 http://127.0.0.1:8500/v1/operator/keyring); then
-            python3 -c '
+            live=$(python3 -c '
           import json, sys
           lan = [p for p in json.load(sys.stdin) if not p["WAN"]]
-          print(" ".join(sorted({k for p in lan for k in p["PrimaryKeys"]})))' <<< "$ring"
-          else
-            echo
+          print(" ".join(sorted({k for p in lan for k in p["PrimaryKeys"]})))' <<< "$ring")
           fi
-          sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl 2>/dev/null || true
-      register: _consul_keys_here
+          echo "live=$live"
+          echo "conf=$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl 2>/dev/null || true)"
+      register: _consul_keys_all
       changed_when: false
+      delegate_to: "{{ item }}"
+      loop: "{{ consul_servers }}"
+      run_once: true
+      ignore_unreachable: true
 
-    - name: Its keys
+    - name: Their keys (the servers that answered)
       ansible.builtin.set_fact:
-        _consul_key_live: "{{ (_consul_keys_here.stdout_lines + ['', ''])[0] }}"
-        _consul_key_conf: "{{ (_consul_keys_here.stdout_lines + ['', ''])[1] }}"
+        _consul_live_keys: "{{ _answered | map('regex_search', '(?m)^live=(.*)$', '\\1') | map('first') | select | list }}"
+        _consul_conf_keys: "{{ _answered | map('regex_search', '(?m)^conf=(.*)$', '\\1') | map('first') | select | list }}"
+      vars:
+        _answered: "{{ _consul_keys_all.results | rejectattr('unreachable', 'defined') | map(attribute='stdout') | list }}"
+      run_once: true
 
     - name: One key among the running servers (or, none running, among the configs)
       ansible.builtin.assert:
         that:
-          - _live | select('search', ' ') | list | length == 0
-          - _live | unique | list | length <= 1
-          - _live | length > 0 or _conf | unique | list | length <= 1
+          - _consul_live_keys | select('search', ' ') | list | length == 0
+          - _consul_live_keys | unique | list | length <= 1
+          - _consul_live_keys | length > 0 or _consul_conf_keys | unique | list | length <= 1
         fail_msg: >-
-          REFUSED: the Consul servers have different gossip keys (running: {{ _live | length }} servers on
-          {{ _live | unique | list | length }} keys; configs: {{ _conf | unique | list | length }} keys) - fix that
-          by hand first
+          REFUSED: the Consul servers have different gossip keys (running: {{ _consul_live_keys | length }} servers on
+          {{ _consul_live_keys | unique | list | length }} keys; configs: {{ _consul_conf_keys | unique | list | length }}
+          keys) - fix that by hand first
         quiet: true
-      vars:
-        _live: "{{ ansible_play_hosts | map('extract', hostvars, '_consul_key_live') | select | list }}"
-        _conf: "{{ ansible_play_hosts | map('extract', hostvars, '_consul_key_conf') | select | list }}"
       run_once: true
 
-    - name: A key generated - only on a first install, where no server runs or has one
+    - name: A key generated - only on a first install with every server in the run, none running or having one
       ansible.builtin.command: consul keygen
       register: consul_key_gen
       when:
         - inventory_hostname == 'pi1'
-        - ansible_play_hosts | map('extract', hostvars, '_consul_key_live') | select | list | length == 0
-        - ansible_play_hosts | map('extract', hostvars, '_consul_key_conf') | select | list | length == 0
+        - consul_servers | difference(ansible_play_hosts) | length == 0
+        - _consul_live_keys | length == 0
+        - _consul_conf_keys | length == 0
       changed_when: true
 
     - name: Set encryption key fact
       ansible.builtin.set_fact:
         consul_encrypt_key: >-
-          {{ (ansible_play_hosts | map('extract', hostvars, '_consul_key_live') | select | list
-              + ansible_play_hosts | map('extract', hostvars, '_consul_key_conf') | select | list
-              + [hostvars['pi1']['consul_key_gen']['stdout'] | default('')]) | first }}
+          {{ (_consul_live_keys + _consul_conf_keys + [hostvars['pi1']['consul_key_gen']['stdout'] | default('')])
+             | select | first | default('') }}
+
+    - name: A key to write (none found and none generated - a server alone in the run, the others unreachable)
+      ansible.builtin.assert:
+        that: consul_encrypt_key | length > 0
+        fail_msg: >-
+          REFUSED: no gossip key - no server runs or has one, and a new one is made only with every server in the run
+          ({{ consul_servers | join(', ') }})
+        quiet: true
 
     - name: Consul running here before this run (a restart then waits for the others)
       ansible.builtin.systemd_service:
@@ -209,6 +225,22 @@
       retries: 3
       delay: 5
 
+    # pending, not just changed by this run: a run that failed after writing them and before the restart left the new
+    # config on disk and the old one running - the next run changed nothing and restarted nothing
+    - name: A restart pending here - the config or unit newer than the running agent
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          started=$(date -d "$(systemctl show consul -p ActiveEnterTimestamp --value)" +%s)
+          for f in /etc/consul.d/consul.hcl /etc/systemd/system/consul.service; do
+            if [ "$(stat -c %Y "$f")" -gt "$started" ]; then echo pending; exit 0; fi
+          done
+          echo current
+      register: _consul_pending
+      changed_when: false
+      check_mode: false
+
 # ─── Changed servers restarted one at a time ─────────────────────────────────
 # Each back and caught up - autopilot: every server healthy (in contact, its log caught up), one loss tolerated -
 # before the next: two down at once is a lost quorum. Patroni is paused around each restart (from a Pi not being
@@ -225,7 +257,7 @@
   tasks:
     - name: A restart here, and Patroni running to pause around it
       when:
-        - _consul_config.changed or _consul_unit.changed
+        - _consul_pending.stdout == 'pending'
         - _consul_before.status.ActiveState | default('') == 'active'
       block:
         - name: Patroni running (a first install has none yet)

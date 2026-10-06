@@ -337,7 +337,7 @@
     - name: Write Keepalived config
       ansible.builtin.copy:
         dest: /etc/keepalived/keepalived.conf
-        mode: '0644'
+        mode: '0600'  # the VRRP auth_pass is in it
         content: |
           global_defs {
             router_id {{ inventory_hostname }}

@@ -197,6 +197,14 @@
       register: _pg_before_consul
       when: inventory_hostname != 'target'
 
+    - name: Each Vault before (200 active, 429 standby)
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        validate_certs: false
+        status_code: [200, 429, 473, 501, 503]
+      register: _vault_before_consul
+      when: inventory_hostname != 'target'
+
     - name: The sampler's directory
       ansible.builtin.file:
         path: /var/lib/rerun-guards-test
@@ -375,11 +383,49 @@
       run_once: true
       delegate_to: pi1
 
+    # what the restarts did beyond Patroni: HAProxy's /primary check (a primary marked down cuts its sessions), and
+    # Vault, whose lock is a Consul session of the active node's agent
+    - name: HAProxy never marked the primary down
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          leader={{ (['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_pg_before_consul.json.role', 'in', ['primary', 'master'])
+                     | map(attribute='inventory_hostname') | first) }}
+          n=$(journalctl -u haproxy --since @{{ _t_drift }} --no-pager -o cat | grep -c "postgres_primary/$leader is DOWN" || true)
+          echo "$leader marked down $n times"
+          [ "$n" = 0 ]
+      register: _haproxy_consul
+      changed_when: false
+      when: inventory_hostname != 'target'
+
+    - name: Vault after - one active, none sealed; whether the active one moved
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        validate_certs: false
+        status_code: [200, 429, 473, 501, 503]
+      register: _vault_after_consul
+      retries: 12
+      delay: 5
+      until: _vault_after_consul.status in [200, 429]
+      when: inventory_hostname != 'target'
+
+    - name: One Vault active
+      ansible.builtin.assert:
+        that: _active_after | length == 1
+        fail_msg: "Vault active after the restarts: {{ _active_after }}"
+        quiet: true
+      vars:
+        _active_after: "{{ ['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_vault_after_consul.status', 'equalto', 200) | map(attribute='inventory_hostname') | list }}"
+      run_once: true
+
     - name: Converged, one at a time
       ansible.builtin.debug:
         msg: >-
           CONSUL KEY DRIFT RE-RUN: the live key written back on each; down windows {{ _consul_judged.stdout }};
-          no failover; resumed
+          no failover; resumed; HAProxy {{ ['pi1', 'pi2'] | map('extract', hostvars, ['_haproxy_consul', 'stdout']) | join(', ') }};
+          Vault active {{ ['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_vault_before_consul.status', 'equalto', 200) | map(attribute='inventory_hostname') | join(',') }}
+          -> {{ ['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_vault_after_consul.status', 'equalto', 200) | map(attribute='inventory_hostname') | join(',') }}
       run_once: true
 
     - name: Key and start time before the unchanged re-run

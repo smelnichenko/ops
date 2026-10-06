@@ -287,7 +287,6 @@
 
           api_addr     = "https://{{ node_ip }}:8200"
           cluster_addr = "https://{{ node_ip }}:8201"
-      register: _vault_config_written
 
     # ── vault.service ──────────────────────────────────────────────────
     # Wants= (soft) not Requires= (hard): vault retries consul backend
@@ -315,7 +314,6 @@
 
           [Install]
           WantedBy=multi-user.target
-      register: _vault_unit_written
 
     # ── unseal.sh + vault-unseal.service (shared with upgrade-vault.yml) ──
     - name: The Pi's own unseal
@@ -350,10 +348,27 @@
   gather_facts: false
   serial: 1
   tasks:
+    # pending, not just changed by this run: a run that failed between writing and restarting left the new config on
+    # disk and the old one running
+    - name: A restart pending here - the config or unit newer than the running Vault
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          started=$(date -d "$(systemctl show vault -p ActiveEnterTimestamp --value)" +%s)
+          for f in /etc/vault.d/vault.hcl /etc/systemd/system/vault.service; do
+            if [ "$(stat -c %Y "$f")" -gt "$started" ]; then echo pending; exit 0; fi
+          done
+          echo current
+      register: _vault_pending
+      changed_when: false
+      check_mode: false
+      when: _vault_before.status.ActiveState | default('') == 'active'
+
     - name: Restarted, unsealed before the next
       when:
-        - _vault_config_written is changed or _vault_unit_written is changed
         - _vault_before.status.ActiveState | default('') == 'active'
+        - _vault_pending.stdout | default('') == 'pending'
       block:
         - name: Restarted
           ansible.builtin.systemd:

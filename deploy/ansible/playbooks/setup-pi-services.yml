@@ -17,6 +17,9 @@
   become: true
   gather_facts: true
   strategy: linear
+  # a restart notified before a later task failed still happens: a re-run would find nothing changed and leave the new
+  # config unloaded
+  force_handlers: true
   # Forgejo's version and checksums (shared with upgrade-forgejo.yml, which moves a running Forgejo)
   vars_files:
     - ../vars/forgejo.yml
@@ -115,9 +118,11 @@
              if _patroni_state.status.ActiveState | default('') == 'active'
              else (keycloak_db_host | default('127.0.0.1:' ~ _db_port)) }}
 
+    # the SQL (and the password in it) on psql's stdin, not its command line
     - name: Set Postgres password (first install only — Patroni owns the DB afterwards)
-      ansible.builtin.shell: |
-        sudo -u postgres psql -c "ALTER USER postgres PASSWORD '{{ postgres_admin_password }}';" 2>/dev/null || true
+      ansible.builtin.shell:
+        cmd: sudo -u postgres psql -q 2>/dev/null || true
+        stdin: "ALTER USER postgres PASSWORD '{{ postgres_admin_password }}';"
       changed_when: true
       no_log: true
       when: _patroni_state.status.ActiveState | default('') != 'active'
@@ -449,6 +454,9 @@
       until: _forgejo_admin_create.rc == 0
       when: forgejo_admin_user not in (_forgejo_users.stdout_lines | default([]))
       changed_when: true
+      # Forgejo's CLI takes the password only as an argument (no stdin, no file) - kept out of Ansible's output at
+      # least; it runs only while the admin is missing (a first install)
+      no_log: true
 
     # ================================================================
     # Phase 4: Backup object store — versitygw (MinIO retired 2026-06-27)

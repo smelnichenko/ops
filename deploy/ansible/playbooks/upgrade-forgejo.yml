@@ -199,6 +199,7 @@
       ansible.builtin.debug:
         msg: >-
           FORGEJO {{ forgejo_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
-          | map('extract', hostvars, '_running') | unique | join(', ') }}); {{ _first }} started first; dump
+          | map('extract', hostvars, '_running') | map('default', 'down', true) | unique | join(', ') }}); {{ _first }}
+          started first; dump
           {{ _dump.stdout | default('none - a run taken forward') }}; doctor: {{ _doctor.stdout_lines[-1] | default('') }}
       run_once: true

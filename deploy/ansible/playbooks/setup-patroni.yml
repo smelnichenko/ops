@@ -28,6 +28,17 @@
     pg_repl_password: "{{ postgres_replication_password }}"
 
   tasks:
+    # an empty one (a key missing from .env - POSTGRES_REPLICATION_PASSWORD was) would be written into patroni.yml and
+    # reloaded: replication, or every login, broken
+    - name: The credentials are all there
+      ansible.builtin.assert:
+        that:
+          - pg_password | length > 0
+          - pg_repl_password | length > 0
+        fail_msg: "REFUSED: an empty credential (KEYCLOAK_DB_PASSWORD or POSTGRES_REPLICATION_PASSWORD in .env)"
+        quiet: true
+      no_log: true
+
     - name: Install Patroni via pip
       ansible.builtin.apt:
         name:
@@ -206,14 +217,22 @@
         - not _patroni_first_install | bool
         - patroni_unit_state.status.ActiveState | default('') != 'active'
 
-    - name: Dump Keycloak DB before Patroni takes over (primary only)
+    # on disk, not in /tmp (tmpfs: a reboot before the restore lost it); written aside and kept only when complete
+    - name: Dump Keycloak DB before Patroni takes over (pi1)
       ansible.builtin.shell: |
-        if sudo -u postgres psql -c "SELECT 1" 2>/dev/null; then
-          sudo -u postgres pg_dump keycloak > /tmp/keycloak-pre-patroni.sql
-          echo "dumped $(wc -l < /tmp/keycloak-pre-patroni.sql) lines"
+        set -euo pipefail
+        if sudo -u postgres psql -qAtc "SELECT 1" > /dev/null 2>&1; then
+          d=/var/backups/patroni-first-install
+          install -d -m 0700 "$d"
+          sudo -u postgres pg_dump keycloak > "$d/keycloak.sql.part"
+          tail -n 5 "$d/keycloak.sql.part" | grep -q 'PostgreSQL database dump complete'
+          mv "$d/keycloak.sql.part" "$d/keycloak.sql"
+          echo "dumped $(wc -l < "$d/keycloak.sql") lines"
         else
           echo "postgres not running, skip dump"
         fi
+      args:
+        executable: /bin/bash
       when:
         - inventory_hostname == 'pi1'
         - _patroni_first_install | bool
@@ -254,7 +273,6 @@
           RestartSec=5
           [Install]
           WantedBy=multi-user.target
-      register: _patroni_service_written
 
     - name: Allow Patroni REST API through UFW
       community.general.ufw:
@@ -297,10 +315,23 @@
   vars:
     patronictl: patronictl -c /etc/patroni/patroni.yml
   tasks:
+    # the unit's restart pending, not just changed by this run: a run that failed before it left the new unit on disk
+    - name: The unit newer than the running Patroni
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          started=$(date -d "$(systemctl show patroni -p ActiveEnterTimestamp --value)" +%s)
+          if [ "$(stat -c %Y /etc/systemd/system/patroni.service)" -gt "$started" ]; then echo pending; else echo current; fi
+      register: _patroni_unit_pending
+      changed_when: false
+      check_mode: false
+      when: not _patroni_first_install | bool
+
     - name: What this run changed here
       ansible.builtin.set_fact:
         _patroni_reload: "{{ not _patroni_first_install | bool and _patroni_config_written is changed }}"
-        _patroni_restart: "{{ not _patroni_first_install | bool and _patroni_service_written is changed }}"
+        _patroni_restart: "{{ not _patroni_first_install | bool and _patroni_unit_pending.stdout | default('') == 'pending' }}"
 
     - name: Reloaded - a config change (unless a restart follows)
       ansible.builtin.systemd:
@@ -426,36 +457,53 @@
     # pg_basebackup with 'Role "replicator" does not exist'. Create it
     # explicitly on the leader; the replica will then succeed on its
     # next pg_basebackup retry (~5s).
+    # the SQL (and the password in it) on psql's stdin, not its command line
     - name: Create replicator role on leader
-      ansible.builtin.shell: |
-        sudo -u postgres psql -c "DO \$\$ BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='replicator') THEN
-            CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '{{ pg_repl_password }}';
-          END IF;
-        END \$\$;"
+      ansible.builtin.command:
+        cmd: sudo -u postgres psql -v ON_ERROR_STOP=1 -q
+        stdin: |
+          DO $$ BEGIN
+            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='replicator') THEN
+              CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '{{ pg_repl_password }}';
+            END IF;
+          END $$;
       changed_when: true
+      no_log: true
 
+    # the leader's own socket: no password needed, none on a command line
     - name: Create forgejo + keycloak databases
       ansible.builtin.shell: |
-        set -eo pipefail
-        EXISTS=$(PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -tAc \
-          "SELECT 1 FROM pg_database WHERE datname='{{ item }}'")
-        if [ "$EXISTS" != "1" ]; then
-          PGPASSWORD={{ pg_password }} psql -h localhost -U postgres \
-            -c "CREATE DATABASE {{ item }}"
+        set -euo pipefail
+        if [ "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='{{ item }}'")" != 1 ]; then
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -qc "CREATE DATABASE {{ item }}"
         fi
+      args:
+        executable: /bin/bash
       loop: [forgejo, keycloak]
       changed_when: true
 
-    # only the dump this run took (a first install): a leftover file replayed into a live database on a re-run would
-    # write old rows over new ones; restored, it is moved aside
+    # only the dump this run took (a first install), from pi1 where it was taken into whichever Pi leads (through
+    # HAProxy - the restore looked on the leader, and pi2 wins the first election about half the time), stopped at
+    # the first error; restored, it is moved aside. A leftover file replayed into a live database on a re-run would
+    # write old rows over new ones.
     - name: Restore the Keycloak dump this run took
       ansible.builtin.shell: |
-        set -eo pipefail
-        PGPASSWORD={{ pg_password }} psql -h localhost -U postgres -d keycloak < /tmp/keycloak-pre-patroni.sql
-        echo "restored $(wc -l < /tmp/keycloak-pre-patroni.sql) lines"
-        mkdir -p /var/backups && mv /tmp/keycloak-pre-patroni.sql /var/backups/keycloak-pre-patroni-$(date -u +%Y%m%dT%H%M%SZ).sql
-      when: hostvars[inventory_hostname].pg_dump_result is defined and hostvars[inventory_hostname].pg_dump_result is changed
+        set -euo pipefail
+        f=/var/backups/patroni-first-install/keycloak.sql
+        pass=$(mktemp); trap 'rm -f "$pass"' EXIT
+        read -r pw; printf '127.0.0.1:5000:*:postgres:%s\n' "$pw" > "$pass"
+        PGPASSFILE=$pass psql -h 127.0.0.1 -p 5000 -U postgres -d keycloak -v ON_ERROR_STOP=1 -q -f "$f" > /dev/null
+        echo "restored $(wc -l < "$f") lines"
+        mv "$f" "/var/backups/keycloak-pre-patroni-$(date -u +%Y%m%dT%H%M%SZ).sql"
+      args:
+        executable: /bin/bash
+        stdin: "{{ pg_password }}"
+      delegate_to: pi1
+      run_once: true
+      when:
+        - hostvars['pi1'].pg_dump_result is defined
+        - hostvars['pi1'].pg_dump_result is changed
+        - "'dumped' in hostvars['pi1'].pg_dump_result.stdout"
       changed_when: true
 
 # Wait for the replica to finish its pg_basebackup + join the cluster.
@@ -546,9 +594,12 @@
     - name: Wait for HAProxy to have a healthy postgres_primary backend (through the port the apps use)
       ansible.builtin.shell: |
         set -o pipefail
+        # the password on stdin, not in the environment Ansible puts on the command line
+        read -r PGPASSWORD; export PGPASSWORD
         psql postgresql://postgres@127.0.0.1:{{ _db_port }}/postgres -c 'SELECT 1' 2>/dev/null
-      environment:
-        PGPASSWORD: "{{ postgres_admin_password }}"
+      args:
+        executable: /bin/bash
+        stdin: "{{ postgres_admin_password }}"
       register: _haproxy_check
       retries: 30
       delay: 5
@@ -621,6 +672,9 @@
       run_once: true
       delegate_to: pi1
       changed_when: true
+      # Forgejo's CLI takes the password only as an argument (no stdin, no file) - kept out of Ansible's output at
+      # least; it runs only while the admin is missing (a first install)
+      no_log: true
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Patroni cluster
