@@ -633,6 +633,15 @@
         # stdout. The test environment's cluster has none, and its agent no credentials for the store (production's
         # agents mount scylla-agent-config-secret; read on ten 2026-10-05): skipped by name, on stderr. Any other
         # cluster without a backup task fails.
+        # the clock the snapshots are named by - the node's (Scylla Manager's container shares it): the controller's
+        # (_stamp) can run seconds ahead, and a fresh snapshot then read as older than its backup
+        - name: Scylla - the node's clock, before the backups
+          ansible.builtin.command: date -u +%Y%m%d%H%M%S
+          register: _scylla_t0
+          changed_when: false
+          check_mode: false
+          when: store == 'scylla'
+
         - name: Scylla - a Scylla Manager backup of each cluster now
           ansible.builtin.shell:
             executable: /bin/bash
@@ -694,8 +703,8 @@
         - name: Scylla - every snapshot taken by this run
           ansible.builtin.assert:
             that: >-
-              (r.stdout | regex_findall('sm_[0-9]{14}UTC') | first)[3:17] >= (_stamp | regex_replace('[^0-9]', ''))
-            fail_msg: "{{ r.item }}: its snapshot is older than this backup ({{ _stamp }})"
+              (r.stdout | regex_findall('sm_[0-9]{14}UTC') | first)[3:17] >= _scylla_t0.stdout
+            fail_msg: "{{ r.item }}: its snapshot is older than this backup (started {{ _scylla_t0.stdout }} UTC)"
             quiet: true
           loop: "{{ _scylla_progress.results | default([]) }}"
           loop_control:
