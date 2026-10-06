@@ -28,7 +28,8 @@ the ledger: init records it done.
 The proof (record-proof, run by test:upgrade:full after each green step; proof-start at the run's start): each repo's
 branch SHA and own change (its changed lines and files against the repo's ref at the step before), the ops commit the
 run ran from - refused if deploy/, scripts/, tests/ or Taskfile.yml differ from it. Production's merge wants the same
-own change and every step up to N proven by one run; its phases want deploy/ and the step file as that run had them.
+own change and every step up to N proven by one run; its phases want the same tree (deploy/, scripts/, tests/,
+Taskfile.yml, Vagrantfile) as that run had it, but for the committed steps' playbook defaults.
 
 Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py begin|preview|playbooks|defaults|done <step>
@@ -383,9 +384,19 @@ def defaulted(events):
     return sorted({s for _, s, e, _ in events if e == "defaults"})
 
 
+def unproven_changes(proof_ops, defaulted_steps):
+    """The paths the proof covers (PROVEN_PATHS: the playbooks, every step file, the scripts and data that judge a
+    step green) changed since the run's ops commit, beyond the default lines of `defaulted_steps` - a ValueError when
+    those do not apply to it. Only the playbooks moved: an edited inventory, allow-list or judge proves nothing."""
+    expected = dflt.applied(lambda p: run(["git", "-C", OPS, "show", f"{proof_ops}:{p}"], capture_output=True,
+                                          check=True).stdout, list(defaulted_steps))
+    return [p for p in ops_unchanged_since(proof_ops, PROVEN_PATHS)
+            if not (p in expected and open(os.path.join(OPS, p)).read() == expected[p])]
+
+
 def proof_problems(step, names, repo=None, defaulted_steps=()):
-    """What the full run's proof says against running `step` (and merging `repo`) now. deploy/ may differ from the
-    run's ops commit only by the default lines of `defaulted_steps`."""
+    """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
+    the run's commit only by the default lines of `defaulted_steps`."""
     path = os.path.join(PROVEN, step + ".json")
     if not os.path.exists(path):
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
@@ -400,14 +411,10 @@ def proof_problems(step, names, repo=None, defaulted_steps=()):
         out.append(f"{step}'s proof records no floating-tag images")
     else:
         out += floating_problems(proof["floating"], inv.expected(names[:names.index(step)]))
-    changed = ops_unchanged_since(proof["ops"], ("deploy", os.path.join("tests", "ansible", "upgrade", "steps",
-                                                                        step + ".txt")))
     try:
-        expected = dflt.applied(lambda p: run(["git", "-C", OPS, "show", f"{proof['ops']}:{p}"], capture_output=True,
-                                              check=True).stdout, list(defaulted_steps))
+        changed = unproven_changes(proof["ops"], defaulted_steps)
     except ValueError as e:
         return out + [f"the committed steps' default lines do not apply to the run's ops commit: {e}"]
-    changed = [p for p in changed if not (p in expected and open(os.path.join(OPS, p)).read() == expected[p])]
     if changed:
         out.append(f"changed since the full run proved {step} (ops {proof['ops'][:10]}), beyond the committed "
                    f"steps' playbook defaults: {', '.join(changed)}")
