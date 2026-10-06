@@ -16,18 +16,28 @@ def check(name, got, want):
 pb = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))
 tasks = {t.get("name"): t for t in pb[0]["tasks"]}
 WANT = "shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s"
+import os, tempfile
+work = tempfile.mkdtemp()
+kubelet_file = os.path.join(work, "config.yaml")
+stub = os.path.join(work, "kubectl")  # answers `get configmap kubelet-config -o jsonpath=...` with the test's text
+with open(stub, "w") as f:
+    f.write("#!/bin/sh\ncat %s\n" % kubelet_file)
+os.chmod(stub, 0o755)
 for name in ("The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)",
              "The kubelet runs with the shutdown grace after the upgrade (180s / 30s)"):
-    cmd = tasks[name]["ansible.builtin.shell"]
-    normalizer = cmd[cmd.index("python3 -c"):]
+    # the whole command as the playbook holds it, its inputs replaced: the ConfigMap by the stub, the file by ours
+    cmd = tasks[name]["ansible.builtin.shell"].replace("{{ kubectl }}", stub).replace(
+        "/var/lib/kubelet/config.yaml", kubelet_file)
     for text, ok in (("shutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\n", True),
                      ("shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n", True),
                      ("shutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\n", False)):
-        out = subprocess.run(["bash", "-c", normalizer], input=text, capture_output=True, text=True).stdout.strip()
+        with open(kubelet_file, "w") as f:
+            f.write("a: 1\n" + text)
+        out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True).stdout.strip()
         check(f"{name[:40]}: {text.split()[1]}", out == WANT, ok)
 t = yaml.safe_load(open("deploy/ansible/playbooks/tasks/node-config.yml"))
 cmd = next(x for x in t if "ConfigMap" in x.get("name", ""))["ansible.builtin.shell"]
-patcher = cmd[cmd.index("python3 -c '") + len("python3 -c '"):cmd.index("' > \"$patch\"")]
+patcher = cmd[cmd.index("python3 -c '") + len("python3 -c '"):cmd.index("' > \"$patch\"")]  # its python, fed JSON
 def patch(kubelet):
     r = subprocess.run([sys.executable, "-c", patcher], input=json.dumps({"data": {"kubelet": kubelet}}),
                        capture_output=True, text=True)
