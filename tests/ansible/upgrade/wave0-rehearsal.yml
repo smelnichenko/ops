@@ -74,7 +74,7 @@
     - name: The store is one this rehearsal restores
       ansible.builtin.assert:
         that: store | default('') in ['postgres', 'clickhouse', 'grafana', 'kafka', 'scylla', 'gateway', 'etcd']
-        fail_msg: "-e store=postgres|clickhouse|grafana|kafka|scylla|gateway"
+        fail_msg: "-e store=postgres|clickhouse|grafana|kafka|scylla|gateway|etcd"
 
     - name: Its names are the fixed ones - what it deletes cannot be redirected with -e
       ansible.builtin.assert:
@@ -112,7 +112,10 @@
         paths: "{{ local_dir }}/postgres/{{ _stamp.stdout }}"
         patterns: "*.sql.gz"
       register: _dumps
-      failed_when: _dumps.matched == 0
+      # production's own cluster among them - the dump the rehearsal exists for (others: the test environment, SonarQube)
+      failed_when: >-
+        (pg_namespace ~ '-' ~ pg_cluster ~ '.sql.gz')
+        not in (_dumps.files | default([]) | map(attribute='path') | map('basename') | list)
       when: store == 'postgres'
 
     - name: Postgres - the production cluster's spec (the side cluster's image and storage)
@@ -309,7 +312,7 @@
             cmd: |
               set -euo pipefail
               dir="{{ _broker.stdout.split()[1] }}"
-              [ -d "$dir" ] && [ "$dir" != / ]
+              [ -d "$dir" ] && [ "$dir" != / ] || { echo "REFUSED: the broker's volume '$dir' is no directory to empty"; exit 1; }
               find "$dir" -mindepth 1 -delete
               tar --numeric-owner -C "$dir" -xzf {{ work_dir }}/broker.tar.gz
               # stopped throughout: a recreated pod waited Pending on the cordoned node while its files were replaced
@@ -530,7 +533,8 @@
             cmd: |
               set -euo pipefail
               while read -r pvc dir; do
-                [ -d "$dir" ] && [ -s "{{ work_dir }}/$pvc.tar.gz" ]
+                [ -d "$dir" ] && [ "$dir" != / ] && [ -s "{{ work_dir }}/$pvc.tar.gz" ] \
+                  || { echo "REFUSED: $pvc's volume '$dir' is no directory to empty, or its archive is empty"; exit 1; }
                 find "$dir" -mindepth 1 -delete
                 tar --numeric-owner --xattrs --xattrs-include='user.*' -C "$dir" -xzf "{{ work_dir }}/$pvc.tar.gz"
                 echo "$pvc $(du -sh "$dir" | cut -f1)"
@@ -635,7 +639,8 @@
                 -o jsonpath='{.spec.volumes[?(@.name=="etcd-data")].hostPath.path}')
               mount=$({{ kubectl }} -n kube-system get pod "$pod" \
                 -o jsonpath='{.spec.containers[0].volumeMounts[?(@.name=="etcd-data")].mountPath}')
-              [ -n "$pod" ] && [ -d "$host" ] && [ -n "$mount" ]
+              [ -n "$pod" ] && [ -d "$host" ] && [ "$host" != / ] && [ -n "$mount" ] \
+                || { echo "REFUSED: the etcd pod '$pod', its data hostPath '$host' or its mount '$mount' not found"; exit 1; }
               echo "$host" > {{ work_dir }}/etcd-host
               cp {{ work_dir }}/etcd.db "$host/wave0-rehearsal.db"
               E="{{ kubectl }} -n kube-system exec $pod -c etcd --"
