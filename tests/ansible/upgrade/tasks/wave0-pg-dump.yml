@@ -17,7 +17,7 @@
 
 - name: "Postgres - no side cluster left from an earlier run: {{ dump_name }}"
   ansible.builtin.command: >-
-    {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
+    {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true --cascade=foreground
   changed_when: false
 
 - name: "Postgres - the side cluster, replayed and checked, removed whatever happens: {{ dump_name }}"
@@ -96,7 +96,7 @@
   always:
     - name: "Postgres - remove the side cluster (its volume goes with it): {{ dump_name }}"
       ansible.builtin.command: >-
-        {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
+        {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true --cascade=foreground
       changed_when: true
 
     - name: "Postgres - remove the side cluster's policies: {{ dump_name }}"
