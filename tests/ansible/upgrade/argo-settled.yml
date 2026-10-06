@@ -12,8 +12,8 @@
 #
 # With -e expect_mirror=true (after a mirror push) every app source from the mirrored repos must also be synced to the
 # commit the mirror pushed (.upgrade/mirror-revisions.json): until Argo has fetched it, an app still shows the old
-# commit as Synced + Healthy and the wait would pass before the step was even applied. Off after a snapshot restore,
-# whose Forgejo holds older commits than that file.
+# commit as Synced + Healthy and the wait would pass before the step was even applied. Off before any mirror push
+# (the base's own wait).
 #
 # With -e allow_out_of_sync=<app>,<app> those apps may be OutOfSync (still Healthy, nothing running, on the pushed
 # commit): a step that turns an app's automated sync off and then changes what its chart would put back (Strimzi's v1

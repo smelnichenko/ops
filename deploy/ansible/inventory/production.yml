@@ -33,6 +33,9 @@ all:
     nexus_admin_password: "{{ lookup('env', 'NEXUS_ADMIN_PASSWORD') }}"
     keepalived_vrrp_password: "{{ lookup('env', 'KEEPALIVED_PASSWORD') }}"
     argocd_keycloak_client_secret: "{{ lookup('env', 'KEYCLOAK_ARGOCD_CLIENT_SECRET') }}"
+    # the Pis' floating address (keepalived): stated here, no playbook falls back to it - a run against another
+    # inventory without it fails instead of reaching production's
+    keepalived_vip: "192.168.11.5"
 
   hosts:
     target:

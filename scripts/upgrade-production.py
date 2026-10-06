@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """upgrade-production.py - the upgrade steps on production: one step at a time, in order, each phase only after the
 phases it needs. A ledger on ten (ConfigMap kube-system/upgrade-ledger, one line per event) is checked and written by
-every phase; the Taskfile's deploy:upgrade:* tasks call this. The procedure: docs/plans/100-cluster-upgrade.md,
-"Production, step by step".
+every phase; the Taskfile's deploy:upgrade:* tasks call this, and `task deploy:upgrade:status` names the next phase.
 
 Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   begin      every earlier step done; ten's inventory as the done steps leave it and Argo settled on main   -> begun

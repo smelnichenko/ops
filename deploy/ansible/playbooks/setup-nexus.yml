@@ -777,7 +777,7 @@
   tags: [converge]  # task deploy:nexus -- --tags converge: this play alone
 
   vars:
-    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
+    vip: "{{ keepalived_vip }}"
     nexus_port: 8081
 
   tasks:

@@ -211,7 +211,7 @@
           - "DNS:{{ vault_pi_dns }}"
           - "DNS:{{ inventory_hostname }}.schnappy.io"
           - "IP:{{ node_ip }}"
-          - "IP:{{ keepalived_vip | default('192.168.11.5') }}"
+          - "IP:{{ keepalived_vip }}"
           - "IP:127.0.0.1"
       when: not _vault_cert.stat.exists
 

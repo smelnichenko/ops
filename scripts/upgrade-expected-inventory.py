@@ -41,9 +41,8 @@ stale, and applying it anyway would check nothing.
 Playbooks (--playbooks): the playbook lines of the given step only. Unlike the refs they are not replayed: a Helm
 install is not an "at least" operation, so replaying the Cilium 1.19.8 step after the Cilium 1.20 one would downgrade
 Cilium.
-A copy restored to an earlier snapshot is brought forward by running the steps in order - the inventory check fails
-otherwise, since a skipped step's versions are missing. A version a playbook line sets with -e becomes the
-playbook's default at the production rollout, not before.
+The steps run in order - a skipped one fails the next inventory check, its versions missing. A version a playbook
+line sets with -e becomes the playbook's default at the production rollout, not before.
 
 Out-of-sync apps (--out-of-sync): the given step's argo-out-of-sync apps, comma-separated (empty for most steps).
 After the step's playbooks the settle check lets them be OutOfSync - still Healthy, on the pushed commit; the next

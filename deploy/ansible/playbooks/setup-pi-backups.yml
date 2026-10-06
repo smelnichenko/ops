@@ -32,7 +32,7 @@
     pi_backup_retention_days: 30
     # after CNPG's (01:30) and Velero's (02:00), before the Scylla repair window
     pi_backup_on_calendar: "*-*-* 02:40:00"
-    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
+    vip: "{{ keepalived_vip }}"
   tasks:
     - name: The S3 client - rclone, Debian's
       ansible.builtin.apt:

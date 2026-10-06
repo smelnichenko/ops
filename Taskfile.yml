@@ -1052,9 +1052,9 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
 
   # ── the upgrade steps in production: one at a time, in order, each phase after the ones it needs - the ledger on ten
-  # (scripts/upgrade-production.py) refuses anything else. The procedure: docs/plans/100-cluster-upgrade.md,
-  # "Production, step by step". A step's phases: begin, backup (its wave0 lines), preview (playbook lines), merge (its
-  # branch lines, in the file's order), playbooks, done (twice: the soak between).
+  # (scripts/upgrade-production.py) refuses anything else; deploy:upgrade:status names the next phase. A step's phases:
+  # begin, backup (its wave0 lines), merge (its branch lines, in the file's order), preview and playbooks (its playbook
+  # lines), defaults (its default lines), done (twice: the soak between).
   deploy:upgrade:ledger-init:
     desc: "PRODUCTION: the upgrade ledger on ten (ConfigMap kube-system/upgrade-ledger), once - step 02 recorded done (in production since 2026-10-03)"
     prompt: "Create the upgrade ledger on PRODUCTION (ten, kube-system/upgrade-ledger)?"

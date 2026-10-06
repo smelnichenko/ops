@@ -3,7 +3,7 @@
 # Pi VIP and the kubeadm node Ready.
 # After a cold start of both Pis, Vault is unsealed but takes ~45 s to elect an active node (Consul lock); in between
 # every request bounces between standbys (health 474, "Exceeded 30 redirects") and the Vault seeding refuses to run
-# (2026-10-02, after the first base-ready snapshot).
+# (seen 2026-10-02).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
 - name: The VMs answer SSH (a freshly started VM's private interface comes up a while after `vagrant up` returns)
@@ -17,7 +17,7 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
-# isolated from production before anything else runs (a snapshot taken before the Pi fence existed lacks it)
+# isolated from production before anything else runs
 - name: The Pi VMs are isolated from production
   ansible.builtin.import_playbook: ../isolate-pis.yml
 

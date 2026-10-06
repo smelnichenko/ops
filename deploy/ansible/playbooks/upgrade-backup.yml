@@ -39,7 +39,7 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
-    upgrade_backup_endpoint: "{{ upgrade_backup_endpoint_override | default('http://' ~ (keepalived_vip | default('192.168.11.5')) ~ ':9000') }}"
+    upgrade_backup_endpoint: "{{ upgrade_backup_endpoint_override | default('http://' ~ keepalived_vip ~ ':9000') }}"
     upgrade_backup_bucket: upgrade-backups
     local_dir: /var/backups/upgrade
     # the store's credentials for curl, only root reads it: never on a command line or in the environment

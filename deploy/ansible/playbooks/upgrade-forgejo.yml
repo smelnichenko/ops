@@ -25,7 +25,7 @@
   vars:
     forgejo_db_password: "{{ postgres_admin_password }}"
     forgejo_config: /var/lib/forgejo/custom/conf/app.ini
-    vip: "{{ keepalived_vip | default('192.168.11.5') }}"
+    vip: "{{ keepalived_vip }}"
     dump_dir: /var/backups/forgejo
   tasks:
     - name: Every Pi in the run (one left out would keep the old version on the migrated database)
