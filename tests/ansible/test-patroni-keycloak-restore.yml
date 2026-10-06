@@ -1,0 +1,129 @@
+---
+# setup-patroni.yml's restore of the Keycloak dump a first install took (tasks/patroni-keycloak-restore.yml), on the
+# Vagrant Pis' running cluster: a small dump on pi1, HAProxy on pi1 stopped (as on a fresh cluster before HAProxy
+# marks the new leader up), the restore run against the leader - its rows in the leader's keycloak database, the dump
+# moved aside. Then HAProxy started again and the test's table and file removed; a dump already there is put back.
+# Vagrant only. Usage: task test:patroni-keycloak-restore
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: The leader, a dump to restore, no HAProxy
+  hosts: pi1
+  become: true
+  gather_facts: false
+  vars:
+    dump: /var/backups/patroni-first-install/keycloak.sql
+  tasks:
+    - name: The Patroni leader
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sf http://localhost:8008/cluster | python3 -c 'import json, sys
+        print(next(m["name"] for m in json.load(sys.stdin)["members"] if m["role"] in ("leader", "master", "primary")))'
+      args:
+        executable: /bin/bash
+      register: _leader
+      changed_when: false
+
+    - name: Its play's host
+      ansible.builtin.add_host:
+        name: "{{ _leader.stdout | trim }}"
+        groups: restore_leader
+      changed_when: false
+
+    - name: A dump already there kept aside
+      ansible.builtin.command: mv {{ dump }} {{ dump }}.kept-by-test
+      args:
+        removes: "{{ dump }}"
+
+    - name: The dump's directory
+      ansible.builtin.file:
+        path: "{{ dump | dirname }}"
+        state: directory
+        mode: '0700'
+
+    - name: The dump - one table, one row
+      ansible.builtin.copy:
+        dest: "{{ dump }}"
+        mode: '0644'
+        content: |
+          CREATE TABLE restore_probe (x int);
+          INSERT INTO restore_probe VALUES (42);
+
+    - name: HAProxy stopped
+      ansible.builtin.systemd:
+        name: haproxy
+        state: stopped
+
+    - name: Nothing behind :5000
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 5000
+        state: stopped
+        timeout: 5
+
+- name: The restore, into the leader
+  hosts: restore_leader
+  become: true
+  gather_facts: false
+  vars:
+    pg_password: "{{ postgres_admin_password }}"
+  tasks:
+    - name: The restore
+      block:
+        - name: Run it
+          ansible.builtin.include_tasks: ../../deploy/ansible/playbooks/tasks/patroni-keycloak-restore.yml
+      rescue:
+        - name: It failed
+          ansible.builtin.set_fact:
+            _restore_failed: "{{ ansible_failed_result.stderr | default(ansible_failed_result.msg) }}"
+      always:
+        - name: HAProxy started again
+          ansible.builtin.systemd:
+            name: haproxy
+            state: started
+          delegate_to: pi1
+
+    - name: The restore ran without HAProxy
+      ansible.builtin.assert:
+        that: _restore_failed is not defined
+        fail_msg: "the restore failed with HAProxy stopped: {{ _restore_failed | default('') }}"
+
+    - name: The leader's keycloak database has the dump's row
+      ansible.builtin.command: sudo -u postgres psql -d keycloak -tAc "SELECT x FROM restore_probe"
+      register: _row
+      changed_when: false
+      failed_when: _row.stdout | trim != '42'
+
+    - name: The dump moved aside
+      ansible.builtin.stat:
+        path: /var/backups/patroni-first-install/keycloak.sql
+      register: _left
+      delegate_to: pi1
+      failed_when: _left.stat.exists
+
+- name: Clean up
+  hosts: pi1
+  become: true
+  gather_facts: false
+  vars:
+    dump: /var/backups/patroni-first-install/keycloak.sql
+  tasks:
+    - name: The test's table gone
+      ansible.builtin.command: sudo -u postgres psql -d keycloak -qc "DROP TABLE IF EXISTS restore_probe"
+      delegate_to: "{{ groups['restore_leader'] | first }}"
+      changed_when: true
+
+    - name: The test's dump gone (moved aside by the restore, or left by a failed one)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for f in /var/backups/keycloak-pre-patroni-*.sql {{ dump }}; do
+          if [ -f "$f" ] && grep -q '^CREATE TABLE restore_probe' "$f"; then rm -f "$f"; fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: A dump that was there put back
+      ansible.builtin.command: mv {{ dump }}.kept-by-test {{ dump }}
+      args:
+        removes: "{{ dump }}.kept-by-test"

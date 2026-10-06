@@ -464,29 +464,13 @@
       loop: [forgejo, keycloak]
       changed_when: true
 
-    # only the dump this run took (a first install), from pi1 where it was taken into whichever Pi leads (through
-    # HAProxy - the restore looked on the leader, and pi2 wins the first election about half the time), stopped at
-    # the first error; restored, it is moved aside. A leftover file replayed into a live database on a re-run would
-    # write old rows over new ones.
+    # only the dump this run took (a first install) - straight to this leader's Postgres, not through HAProxy
     - name: Restore the Keycloak dump this run took
-      ansible.builtin.shell: |
-        set -euo pipefail
-        f=/var/backups/patroni-first-install/keycloak.sql
-        pass=$(mktemp); trap 'rm -f "$pass"' EXIT
-        read -r pw; printf '127.0.0.1:5000:*:postgres:%s\n' "$pw" > "$pass"
-        PGPASSFILE=$pass psql -h 127.0.0.1 -p 5000 -U postgres -d keycloak -v ON_ERROR_STOP=1 -q -f "$f" > /dev/null
-        echo "restored $(wc -l < "$f") lines"
-        mv "$f" "/var/backups/keycloak-pre-patroni-$(date -u +%Y%m%dT%H%M%SZ).sql"
-      args:
-        executable: /bin/bash
-        stdin: "{{ pg_password }}"
-      delegate_to: pi1
-      run_once: true
+      ansible.builtin.include_tasks: tasks/patroni-keycloak-restore.yml
       when:
         - hostvars['pi1'].pg_dump_result is defined
         - hostvars['pi1'].pg_dump_result is changed
         - "'dumped' in hostvars['pi1'].pg_dump_result.stdout"
-      changed_when: true
 
 # Wait for the replica to finish its pg_basebackup + join the cluster.
 # Without this, downstream playbooks (vault, gluster, keepalived) race

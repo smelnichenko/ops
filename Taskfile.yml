@@ -1010,6 +1010,12 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml
 
+  test:patroni-keycloak-restore:
+    desc: "Vagrant: setup-patroni's restore of a first install's Keycloak dump, run with HAProxy stopped on pi1 - the rows in the leader's keycloak database, the dump moved aside; HAProxy started again, the test's table and dump removed"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-patroni-keycloak-restore.yml {{.CLI_ARGS}}
+
   test:patroni-upgrade:
     desc: "Vagrant: the Pis set to production's Patroni (4.1.0), then upgrade-patroni.yml as in production, checked from outside (version, no failover, HAProxy kept the leader, not paused, Forgejo answering); run again; refused: a downgrade, one node, a paused cluster; a failed install still resumes"
     deps: [deploy:install]

@@ -1,0 +1,24 @@
+---
+# The Keycloak dump a first install took on pi1 (setup-patroni.yml), restored from pi1 into the Patroni leader the
+# including play runs on (pi2 wins the first election about half the time) - straight to its Postgres, not through
+# HAProxy, which marks a new leader up only after two checks 3 s apart: a restore sooner found no server behind :5000
+# (a full run's build, 2026-10-06). Stopped at the first error; restored, the dump is moved aside - a leftover file
+# replayed into a live database on a re-run would write old rows over new ones.
+# Expects: pg_password (Postgres' superuser). Tested: tests/ansible/test-patroni-keycloak-restore.yml.
+- name: Restore the Keycloak dump this run took
+  ansible.builtin.shell: |
+    set -euo pipefail
+    f=/var/backups/patroni-first-install/keycloak.sql
+    pass=$(mktemp); trap 'rm -f "$pass"' EXIT
+    read -r pw; printf '%s:5432:*:postgres:%s\n' "$PGHOST" "$pw" > "$pass"
+    PGPASSFILE=$pass psql -p 5432 -U postgres -d keycloak -v ON_ERROR_STOP=1 -q -f "$f" > /dev/null
+    echo "restored $(wc -l < "$f") lines into $PGHOST"
+    mv "$f" "/var/backups/keycloak-pre-patroni-$(date -u +%Y%m%dT%H%M%SZ).sql"
+  args:
+    executable: /bin/bash
+    stdin: "{{ pg_password }}"
+  environment:
+    PGHOST: "{{ hostvars[inventory_hostname].ansible_host }}"
+  delegate_to: pi1
+  run_once: true
+  changed_when: true
