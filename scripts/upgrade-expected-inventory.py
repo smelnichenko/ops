@@ -162,9 +162,14 @@ def merged(repo, branch):
 def ref(repo, step_no, names):
     """The repo's highest upgrade/NN-* branch with NN <= step_no, checked to stack on the one before; else main. The
     branches up to the step must be exactly those the step files declare, by step name. Steps production merged already
-    (scripts/upgrade-merge-step.sh tagged them) are in main: they come first, and the rest stack on main."""
+    (scripts/upgrade-merge-step.sh tagged them) are in main: they come first, and the rest stack on main; a merged
+    step's branch deleted after its merge counts by its tag."""
     out = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/"],
                          capture_output=True, text=True, check=True).stdout.split()
+    # a merged step whose branch was deleted after its merge is still there by its tag (merged() reads the tag)
+    tags = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/tags/upgrade-merged/"],
+                          capture_output=True, text=True, check=True).stdout.split()
+    out += [b for t in tags if (b := "upgrade/" + t.split("/", 1)[1]) not in out]
     branches = sorted((int(m.group(1)), b) for b in out if (m := re.fullmatch(r"upgrade/(\d\d)-.+", b)))
     repo_name = os.path.basename(os.path.normpath(repo))
     declared = set()

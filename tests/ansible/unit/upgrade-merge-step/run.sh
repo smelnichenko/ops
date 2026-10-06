@@ -45,6 +45,13 @@ g push -q origin upgrade/03-c:main; g merge -q --ff-only upgrade/03-c
 check "pushed and fast-forwarded, not tagged: taken up" 0 "pushed already" "$M" 03-c infra
 check "tagged with main before the fast-forward (its reflog)" 0 "base $main2" base_of 03-c
 
+# a merged step's branch deleted after its merge: the next step's predecessor check reads its tag
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/03b-x.txt"
+g branch -q -D upgrade/03-c
+g checkout -q -b upgrade/03b-x; echo x >> "$W/infra/f"; g commit -q -am x; g checkout -q main
+check "the step before deleted after its merge: merged, its tag read" 0 "tagged upgrade-merged/03b-x" "$M" 03b-x infra
+rm "$W/ops/tests/ansible/upgrade/steps/03b-x.txt"
+
 # someone else moved origin's main: refused
 git clone -q "$W/origin.git" "$W/other" 2> /dev/null
 echo cd >> "$W/other/g"; git -C "$W/other" add g; git -C "$W/other" commit -q -m cd; git -C "$W/other" push -q origin main

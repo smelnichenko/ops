@@ -41,6 +41,9 @@ check "a CD commit on main: 03 refused until restacked" 1 "does not contain main
 check "the restack skips the merged steps and puts 03 on main" 0 "02-b merged - skipped" \
   bash -c "cd '$W/infra' && '$W/ops/scripts/upgrade-restack-in-place.sh' '$W/infra'"
 check "after the restack: 03 resolves" 0 "upgrade/03-c main" refs 03-c
+g infra branch -q -D upgrade/01-a
+check "a merged step's branch deleted after its merge: still resolved (its tag)" 0 "upgrade/03-c main" refs 03-c
+g infra branch -q upgrade/01-a upgrade-merged/01-a
 check "after the restack: 03 carries its own change and the CD commit" 0 "+c" \
   bash -c "git -C '$W/infra' diff main upgrade/03-c -- f | grep -x '+c' && git -C '$W/infra' merge-base --is-ancestor main upgrade/03-c"
 # an unmerged step with no change of its own is in main too: still refused (the tag, not ancestry, marks merged)

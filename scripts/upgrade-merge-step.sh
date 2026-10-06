@@ -53,6 +53,8 @@ for f in $(ls "$ops/tests/ansible/upgrade/steps" | sed -n 's/\.txt$//p' | sort -
   grep -qx "branch $repo" "$ops/tests/ansible/upgrade/steps/$f.txt" && prev="upgrade/$f"
 done
 if [ -n "$prev" ]; then
+  # a merged step's branch deleted after its merge: its tag
+  git -C "$dir" rev-parse -q --verify "refs/heads/$prev" > /dev/null || prev="refs/tags/upgrade-merged/${prev#upgrade/}"
   git -C "$dir" merge-base --is-ancestor "$prev" main \
     || { echo "REFUSED: $repo $prev (the step before) is not merged into main yet" >&2; exit 1; }
 fi
