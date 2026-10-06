@@ -100,8 +100,13 @@
           leader={{ (['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_pg_before.json.role', 'in', ['primary', 'master'])
                      | map(attribute='inventory_hostname') | first) }}
           n=$(journalctl -u haproxy --since @{{ hostvars['pi1']._t_up }} --no-pager -o cat | grep -cE "postgres_primary/$leader( \\('[^']*'\\))? is DOWN" || true)
-          echo "$leader marked down $n times"
-          [ "$n" = 0 ]
+          # the pattern's control: the replica fails /primary at every HAProxy start, so this boot's log has it DOWN -
+          # a log line the pattern no longer matches would read 0 above for ever
+          replica={{ (['pi1', 'pi2'] | map('extract', hostvars) | rejectattr('_pg_before.json.role', 'in', ['primary', 'master'])
+                      | map(attribute='inventory_hostname') | first) }}
+          r=$(journalctl -u haproxy -b --no-pager -o cat | grep -cE "postgres_primary/$replica( \\('[^']*'\\))? is DOWN" || true)
+          echo "$leader marked down $n times (the control: $replica, a replica, marked down $r times this boot)"
+          [ "$n" = 0 ] && [ "$r" -ge 1 ]
       register: _haproxy
       changed_when: false
 
