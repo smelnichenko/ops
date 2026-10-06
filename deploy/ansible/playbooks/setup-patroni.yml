@@ -8,8 +8,7 @@
 #   - Consul cluster running (setup-consul.yml)
 #   - Postgres installed on both Pis (setup-pi-services.yml)
 #
-# Usage:
-#   ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml
+# Usage: task deploy:patroni   (production; Vagrant: task test:dual-pi)
 
 - name: Install Patroni
   hosts: pi1,pi2

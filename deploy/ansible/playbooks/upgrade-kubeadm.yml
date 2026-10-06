@@ -17,7 +17,8 @@
 # The packages stay held; setup-kubeadm.yml's k8s_version / k8s_package_version must follow (a rebuild installs what
 # they say) - at the production rollout, in the same change.
 #
-# Usage: ansible-playbook -i inventory/<env>.yml playbooks/upgrade-kubeadm.yml -e k8s_upgrade_to=1.34.12
+# Usage: only through the upgrade step whose playbook line names it - task deploy:upgrade:playbooks STEP=<step> in
+# production (after its preview), task test:upgrade:step STEP=<step> on the Vagrant copy
 - name: Upgrade the kubeadm cluster by one version
   hosts: target
   become: true

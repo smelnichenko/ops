@@ -8,8 +8,7 @@
 # Prerequisites:
 #   - Both Pis running with services installed
 #
-# Usage:
-#   ansible-playbook -i inventory/production.yml playbooks/setup-keepalived.yml
+# Usage: task deploy:keepalived   (production; Vagrant: task test:dual-pi)
 
 - name: Setup Keepalived
   hosts: pi1,pi2

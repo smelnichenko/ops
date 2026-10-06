@@ -13,7 +13,8 @@
 #
 # Proof: every Strimzi CRD stores only v1; the Kafka clusters are Ready. A cluster already converted is left alone.
 #
-# Usage: ansible-playbook -i inventory/<env>.yml playbooks/strimzi-v1-conversion.yml
+# Usage: only through the upgrade step whose playbook line names it - task deploy:upgrade:playbooks STEP=<step> in
+# production (after its preview), task test:upgrade:step STEP=<step> on the Vagrant copy
 - name: Strimzi custom resources and CRDs to the v1 API
   hosts: target
   become: true

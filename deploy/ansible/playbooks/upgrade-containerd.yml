@@ -33,7 +33,8 @@
 # setup-kubeadm.yml installs Debian's containerd: it must install containerd.io at this version for a rebuild to match
 # - at the production rollout, in the same change (until then its no-downgrade check refuses a full run here).
 #
-# Usage: ansible-playbook -i inventory/<env>.yml playbooks/upgrade-containerd.yml -e containerd_upgrade_to=2.3.6
+# Usage: only through the upgrade step whose playbook line names it - task deploy:upgrade:playbooks STEP=<step> in
+# production (after its preview), task test:upgrade:step STEP=<step> on the Vagrant copy
 - name: Replace containerd with containerd.io
   hosts: target
   become: true

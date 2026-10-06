@@ -4,13 +4,7 @@
 # Installs the shared service stack on a Pi. Run on pi1 or pi2.
 # Vault and Nexus are set up separately (existing playbooks).
 #
-# Usage:
-#   ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml \
-#     --limit pi2 -e @vars/pi-services.yml
-#
-# For both Pis:
-#   ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml \
-#     -e @vars/pi-services.yml
+# Usage: task deploy:pi-services   (production, both Pis; Vagrant: task test:dual-pi)
 
 - name: Setup Pi Services
   hosts: pis

@@ -4,8 +4,7 @@
 # Provides distributed consensus for Patroni Postgres failover.
 # All 3 nodes are servers — any 2 form quorum.
 #
-# Usage:
-#   ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml
+# Usage: task deploy:consul   (production; Vagrant: task test:dual-pi)
 
 - name: Install Consul
   hosts: pi1,pi2,target
