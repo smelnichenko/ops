@@ -20,7 +20,8 @@
       - {name: "three parts and some", size: 3077, parts: 4, want: whole}
       - {name: "a part's byte changed in the store", size: 3077, want: refused,
          reason: "part-001: sha256 differs",
-         tamper: "printf x | dd of=file.tar.gz.part-001 bs=1 seek=7 conv=notrunc status=none"}
+         # a bit flipped, not a byte written: random data held the written byte 1 time in 256 - nothing changed
+         tamper: "python3 -c \"p = 'file.tar.gz.part-001'; b = bytearray(open(p, 'rb').read()); b[7] ^= 1; open(p, 'wb').write(b)\""}
       - {name: "a part missing (listed)", size: 3077, want: refused, reason: "^Download .* rc 22$",
          tamper: "rm file.tar.gz.part-002"}
       - {name: "a part dropped from the list", size: 3077, want: refused,
