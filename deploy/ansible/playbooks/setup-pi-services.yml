@@ -38,6 +38,23 @@
     peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
 
   tasks:
+    # a key missing from .env wrote empty passwords and secrets (Forgejo's PASSWD, KC_DB_PASSWORD, SECRET_KEY, the
+    # gateway's root key) and restarted the services on them
+    - name: Its credentials are all there
+      ansible.builtin.assert:
+        that:
+          - postgres_admin_password | default('') | length > 0
+          - keycloak_admin_password | default('') | length > 0
+          - forgejo_secret_key | default('') | length > 0
+          - forgejo_internal_token | default('') | length > 0
+          - forgejo_admin_user | default('') | length > 0
+          - forgejo_admin_password | default('') | length > 0
+          - backup_root_user | default('') | length > 0
+          - backup_root_password | default('') | length > 0
+        fail_msg: "REFUSED: an empty credential in the inventory (.env) - nothing written"
+        quiet: true
+      no_log: true
+
     # ================================================================
     # Phase 1: System dependencies
     # ================================================================
@@ -86,17 +103,22 @@
     # (:6432) which proxies to HAProxy (:5000) → Patroni leader.
     # PgBouncer optional: if not installed, fall back to HAProxy direct.
 
+    # (the module reports a unit that does not exist as not-found - it fails only on a real error, which must show)
     - name: Detect Patroni state (drives Forgejo DB-host resolution below)
       ansible.builtin.systemd:
         name: patroni
       register: _patroni_state
-      failed_when: false
 
     - name: Detect PgBouncer state
       ansible.builtin.systemd:
         name: pgbouncer
       register: _pgbouncer_state
-      failed_when: false
+
+    # a first install is a Pi without Patroni - not one whose Patroni is stopped for a moment: Debian's own cluster is
+    # set up only then, and never restarted under Patroni
+    - name: Is Patroni installed here
+      ansible.builtin.set_fact:
+        _patroni_installed: "{{ _patroni_state.status.LoadState | default('') == 'loaded' }}"
 
     - name: PgBouncer installed here is running (else Forgejo and Keycloak would be moved to :5000 and restarted)
       ansible.builtin.fail:
@@ -113,28 +135,35 @@
       ansible.builtin.set_fact:
         forgejo_db_host_effective: >-
           {{ ('127.0.0.1:' ~ _db_port)
-             if _patroni_state.status.ActiveState | default('') == 'active'
+             if _patroni_installed | bool
              else (forgejo_db_host | default('127.0.0.1:' ~ _db_port)) }}
         keycloak_db_host_effective: >-
           {{ ('127.0.0.1:' ~ _db_port)
-             if _patroni_state.status.ActiveState | default('') == 'active'
+             if _patroni_installed | bool
              else (keycloak_db_host | default('127.0.0.1:' ~ _db_port)) }}
 
     # the SQL (and the password in it) on psql's stdin, not its command line
     - name: Set Postgres password (first install only — Patroni owns the DB afterwards)
-      ansible.builtin.shell:
-        cmd: sudo -u postgres psql -q 2>/dev/null || true
+      ansible.builtin.command:
+        cmd: sudo -u postgres psql -v ON_ERROR_STOP=1 -q
         stdin: "ALTER USER postgres PASSWORD '{{ postgres_admin_password }}';"
       changed_when: true
       no_log: true
-      when: _patroni_state.status.ActiveState | default('') != 'active'
+      when: not _patroni_installed | bool
 
+    # each only where it is missing - any other failure shows
     - name: Create Forgejo and Keycloak databases (first install only)
-      ansible.builtin.shell: |
-        sudo -u postgres createdb forgejo 2>/dev/null || true
-        sudo -u postgres createdb keycloak 2>/dev/null || true
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for db in forgejo keycloak; do
+            if [ "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'")" != 1 ]; then
+              sudo -u postgres createdb "$db"
+            fi
+          done
       changed_when: true
-      when: _patroni_state.status.ActiveState | default('') != 'active'
+      when: not _patroni_installed | bool
 
     - name: Find Postgres config directory
       ansible.builtin.shell: |
@@ -393,6 +422,7 @@
           # on both Pis or tokens issued by one are rejected after a failover.
           JWT_SECRET = {{ forgejo_jwt_secret }}
           {% endif %}
+      diff: false  # the database password and Forgejo's secrets - a --check --diff preview would print them
       notify: Restart Forgejo
 
     - name: Install Forgejo systemd service
@@ -680,7 +710,7 @@
         executable: /bin/bash
       throttle: 1
       changed_when: true
-      when: _patroni_state.status.ActiveState | default('') != 'active'
+      when: not _patroni_installed | bool
 
     - name: Restart Forgejo
       ansible.builtin.shell: |
