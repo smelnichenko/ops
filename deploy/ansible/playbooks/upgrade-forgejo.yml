@@ -13,6 +13,9 @@
 # passes. Running versions are compared, never downgraded; a run where both already serve the target changes nothing.
 # Every Pi or none: a run without all of them (one down, or --limit) is refused, and any Pi failing stops the run on
 # all - after the stop that leaves Forgejo down rather than two versions on one database (the way back is above).
+# A run cut short after the swap is taken forward: when every Pi either serves the target or is down with the
+# target's binary installed, the down ones are started (the VIP's first) - no download, no dump, nothing stopped. Any
+# other Pi not serving (down on an older binary) is refused: by hand.
 #
 # Usage: task deploy:forgejo:upgrade   (production; Vagrant: task test:forgejo-upgrade)
 - name: Forgejo on both Pis to one version
@@ -39,7 +42,7 @@
       ansible.builtin.set_fact:
         _arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
 
-    - name: The version each Forgejo serves
+    - name: The version each Forgejo serves (none when it is down)
       ansible.builtin.uri:
         url: http://127.0.0.1:3000/api/v1/version
         return_content: true
@@ -47,14 +50,39 @@
       retries: 12
       delay: 5
       until: _served.status | default(0) == 200
+      failed_when: false
 
-    - name: Its version number
+    - name: The version of the binary installed
+      ansible.builtin.command: /usr/local/bin/forgejo --version
+      register: _installed
+      changed_when: false
+
+    - name: Its version numbers - served and installed
       ansible.builtin.set_fact:
-        _running: "{{ _served.json.version | regex_search('^[0-9]+[.][0-9]+[.][0-9]+') }}"
+        _running: "{{ (_served.json.version | regex_search('^[0-9]+[.][0-9]+[.][0-9]+')) if _served.status | default(0) == 200 else '' }}"
+        _installed_version: "{{ _installed.stdout | regex_search('[0-9]+[.][0-9]+[.][0-9]+') }}"
+
+    # a run cut short after the swap: every Pi serves the target or is down on its binary - taken forward
+    - name: A run to take forward, or every Pi serving
+      ansible.builtin.set_fact:
+        _forward: "{{ _down | length > 0 and _down | map('extract', hostvars, '_installed_version') | unique | list == [forgejo_version]
+                      and _up | map('extract', hostvars, '_running') | reject('equalto', forgejo_version) | list | length == 0 }}"
+      vars:
+        _down: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_running', 'equalto', '') | map(attribute='inventory_hostname') | list }}"
+        _up: "{{ ansible_play_hosts | map('extract', hostvars) | rejectattr('_running', 'equalto', '') | map(attribute='inventory_hostname') | list }}"
+      run_once: true
+
+    - name: Every Pi serving, unless taken forward
+      ansible.builtin.assert:
+        that: _forward | bool or _running != ''
+        fail_msg: >-
+          REFUSED: {{ inventory_hostname }}'s Forgejo is down on binary {{ _installed_version }} - not a run to take
+          forward to {{ forgejo_version }} (every Pi on it or serving it): by hand
+        quiet: true
 
     - name: Never a downgrade
       ansible.builtin.assert:
-        that: _running is version(forgejo_version, '<=')
+        that: _forward | bool or _running is version(forgejo_version, '<=')
         fail_msg: "REFUSED: {{ inventory_hostname }} serves Forgejo {{ _running }}, newer than {{ forgejo_version }}"
         quiet: true
 
@@ -75,6 +103,7 @@
       run_once: true
 
     - name: The new binary beside the running one, its sha256 checked
+      when: not _forward | bool
       ansible.builtin.get_url:
         url: "https://code.forgejo.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-{{ _arch }}"
         dest: "/usr/local/bin/forgejo-{{ forgejo_version }}"
@@ -82,6 +111,7 @@
         mode: '0755'
 
     - name: The running binary kept (the way back)
+      when: not _forward | bool
       ansible.builtin.copy:
         src: /usr/local/bin/forgejo
         dest: "/usr/local/bin/forgejo-{{ _running }}"
@@ -90,6 +120,7 @@
         force: false
 
     - name: Forgejo's database dumped, before anything stops
+      when: not _forward | bool
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -112,11 +143,13 @@
       run_once: true
 
     - name: Forgejo stopped on every Pi
+      when: not _forward | bool
       ansible.builtin.systemd:
         name: forgejo
         state: stopped
 
     - name: The new binary in place
+      when: not _forward | bool
       ansible.builtin.copy:
         src: "/usr/local/bin/forgejo-{{ forgejo_version }}"
         dest: /usr/local/bin/forgejo
@@ -167,5 +200,5 @@
         msg: >-
           FORGEJO {{ forgejo_version }} on {{ ansible_play_hosts | join(', ') }} (was {{ ansible_play_hosts
           | map('extract', hostvars, '_running') | unique | join(', ') }}); {{ _first }} started first; dump
-          {{ _dump.stdout }}; doctor: {{ _doctor.stdout_lines[-1] | default('') }}
+          {{ _dump.stdout | default('none - a run taken forward') }}; doctor: {{ _doctor.stdout_lines[-1] | default('') }}
       run_once: true

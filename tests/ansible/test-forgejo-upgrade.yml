@@ -327,10 +327,94 @@
       become: false
       run_once: true
 
+    # a run cut short after the swap: both down on the target's binary - taken forward
+    # (the dumps are on the VIP's Pi only: none elsewhere is a count of 0, not an error)
+    - name: The dumps so far
+      ansible.builtin.shell: "{ ls -1 /var/backups/forgejo/forgejo-*.sql.gz 2> /dev/null || true; } | wc -l"
+      register: _dumps_before_forward
+      changed_when: false
+
+    - name: Both stopped, on the target's binary (as after a run cut short past the swap)
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+
+    - name: Taken forward - both started, nothing downloaded, dumped or stopped
+      ansible.builtin.command:
+        cmd: >-
+          env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+          venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+          playbooks/upgrade-forgejo.yml
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _forward
+      changed_when: true
+      failed_when: _forward.rc != 0 or 'a run taken forward' not in _forward.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Each serves the target again, no new dump
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sf http://127.0.0.1:3000/api/v1/version
+        echo
+        { ls -1 /var/backups/forgejo/forgejo-*.sql.gz 2> /dev/null || true; } | wc -l
+      args:
+        executable: /bin/bash
+      register: _after_forward
+      changed_when: false
+      failed_when: >-
+        _after_forward.rc != 0 or forgejo_version not in _after_forward.stdout_lines[0]
+        or _after_forward.stdout_lines[-1] != _dumps_before_forward.stdout
+
+    # one Pi down on an older binary while the other serves the target: not a run to take forward
+    - name: pi2 down on production's old binary
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl stop forgejo
+        cp /usr/local/bin/forgejo-15.0.3 /usr/local/bin/forgejo
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: inventory_hostname == 'pi2'
+
+    - name: Refused - pi2 is down on an older binary
+      ansible.builtin.command:
+        cmd: >-
+          env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+          venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+          playbooks/upgrade-forgejo.yml
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _mixed
+      changed_when: false
+      failed_when: _mixed.rc == 0 or 'not a run to take forward' not in _mixed.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: pi2 back on the target, serving
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cp /usr/local/bin/forgejo-{{ forgejo_version }} /usr/local/bin/forgejo
+        systemctl start forgejo
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: inventory_hostname == 'pi2'
+
+    - name: Both serve the target
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3000/api/v1/version
+        return_content: true
+      register: _final
+      retries: 30
+      delay: 5
+      until: _final.status | default(0) == 200 and forgejo_version in _final.json.version
+
     - name: Rehearsed
       ansible.builtin.debug:
         msg: >-
           FORGEJO UPGRADE REHEARSED: {{ migration_adds }} added; {{ hostvars['pi1']._judged.stdout }}; marker {{ hostvars['pi1']._marker_branch.json.commit.id[:12] }} cloned from both;
           dump {{ hostvars[hostvars['pi1']._vip_pi]._dump_check.stdout_lines[0] }}; second run restarted nothing; downgrade and
-          one-Pi runs refused
+          one-Pi runs refused; both down on the target taken forward (no dump); one down on an older binary refused
       run_once: true
