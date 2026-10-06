@@ -24,6 +24,10 @@
     k8s_version: "1.34"
     # the exact package version: an unpinned install takes the repo's newest patch, not what ten runs
     k8s_package_version: "1.34.6-1.1"
+    # the minor's CNI plugins and crictl, as upgrade-kubeadm.yml's minor_packages pins them: unpinned, a rebuild took
+    # the repository's newest, which no run tested
+    k8s_cni_version: "1.7.1-1.1"
+    k8s_cri_tools_version: "1.34.0-1.1"
     # nerdctl-full (CLI + buildkit) only where images are built on the node (Vagrant tests); ten has none.
     # Play vars outrank inventory vars, so an inventory sets the *_override names (as with node_ip).
     install_nerdctl: "{{ install_nerdctl_override | default(false) }}"
@@ -331,14 +335,15 @@
           deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /
         mode: '0644'
 
-    - name: Install kubeadm, kubelet, kubectl, cri-tools
+    - name: Install kubeadm, kubelet, kubectl, kubernetes-cni, cri-tools
       ansible.builtin.apt:
         name:
           - "kubeadm={{ k8s_package_version }}"
           - "kubelet={{ k8s_package_version }}"
           - "kubectl={{ k8s_package_version }}"
+          - "kubernetes-cni={{ k8s_cni_version }}"
           # crictl: kubeadm pulled it in up to 1.35, not from 1.36 (the minor's, as upgrade-kubeadm.yml leaves a node)
-          - cri-tools
+          - "cri-tools={{ k8s_cri_tools_version }}"
         state: present
         update_cache: true
         allow_change_held_packages: true

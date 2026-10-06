@@ -43,6 +43,21 @@ seq = d.applied(tree, [s for s in d.pending(tree) if s in K8S])
 k = seq.get(KUBEADM, tree(KUBEADM))
 check("13, 42, 43 in order end at 1.36.5 (the committed ones in the tree already)",
       ('k8s_version: "1.36"' in k, 'k8s_package_version: "1.36.5-1.1"' in k, "1.34.6-1.1" not in k), (True, True, True))
+# a rebuild installs the minor's CNI plugins and crictl as upgrade-kubeadm.yml leaves a node: setup-kubeadm's pins equal
+# its minor_packages for k8s_version - in the tree, and after each Kubernetes step's default lines
+import re, yaml
+minor = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))[0]["vars"]["minor_packages"]
+def pins(text):
+    v = lambda k: re.search(rf'^\s*{k}: "([^"]*)"', text, re.M)
+    got = [f"kubernetes-cni={v('k8s_cni_version') and v('k8s_cni_version')[1]}",
+           f"cri-tools={v('k8s_cri_tools_version') and v('k8s_cri_tools_version')[1]}"]
+    return v("k8s_version")[1], got
+for upto in ((), K8S[:2], K8S):
+    text = d.applied(tree, [s for s in d.pending(tree) if s in upto]).get(KUBEADM, tree(KUBEADM)) if upto else tree(KUBEADM)
+    ver, got = pins(text)
+    check(f"setup-kubeadm's CNI and crictl pins at {ver} (after {upto[-1] if upto else 'the tree'}): the minor's",
+          got, minor[ver])
+
 after13 = "\n".join(new for path, _, new in d.default_lines(K8S[0]) if path == KUBEADM) + "\n"
 try:
     d.applied(lambda p: after13, [K8S[2]])
