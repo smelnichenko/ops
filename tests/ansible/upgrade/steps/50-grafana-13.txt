@@ -9,4 +9,9 @@ wave0 grafana
 image grafana/grafana 12.4.12 => image grafana/grafana 13.2.3
 # its change: the branch upgrade/50-grafana-13 in infra (Grafana's Recreate is in since step 25: one SQLite
 # database, migrated on start by the one pod)
+# Grafana 13 updates the datasources it ships beside its binary at every start, the image's copy removed first - on
+# its read-only root filesystem the Mimir datasource was left unregistered (2026-10-06): its preinstalled plugins not
+# auto-updated. Platform first (pluginsPreinstallAutoUpdate in the chart: nothing renders anew while unset), then
+# infra (the Grafana 13 image and the value, together)
+branch platform
 branch infra

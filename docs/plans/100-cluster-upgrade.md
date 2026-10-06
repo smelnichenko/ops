@@ -266,7 +266,14 @@ seed's block every query over it failed the consistency check (the overlay switc
 keeps Mimir's 12 h / 10 h); 43 failed its settle - the controllers holding leader leases (cert-manager, CNPG,
 Cilium's and Scylla's operators) restart with the API server in both Kubernetes upgrades, read as a crash loop "in
 two steps running" (a restarts-control-plane line on 13, 42 and 43 records them without judging, production's settle
-too). Next: the rest from 43 on that copy, then the full run again.
+too); 47's undo rehearsal refused by CNPG's webhook - its image a bare digest (now postgresql:17@sha256:..., a
+restore-undo image without a tag refused by the parser) - and then its inventory caught the side cluster's pod still
+terminating (side clusters deleted in the foreground since); 50 - Grafana 13 updated its bundled Prometheus plugin at
+start, the image's copy removed first, which the read-only root filesystem refused with the plugin unregistered: the
+Mimir datasource answered "Plugin not registered", and every Mimir dashboard would have broken in production. A
+platform branch for 50 now (the chart's pluginsPreinstallAutoUpdate, merged first, rendering nothing alone; infra sets
+it with the image), platform 54-61 and infra 51-61 restacked on it. Next: the rest from 50 on that copy, then the full
+run again.
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
@@ -324,7 +331,7 @@ The steps (generated from tests/ansible/upgrade/steps - the step files are the s
 | 47 | postgres-18 | PostgreSQL 17 -> 18.6, CNPG's offline in-place major upgrade (operator 2026-10-01, option A) | infra + platform + playbook | postgres |
 | 48 | valkey-9.1-test | Valkey 8.1 -> 9.1.2, pinned, in the test environment (infra) and the chart default PR environments use (platfo... | infra + platform | - |
 | 49 | valkey-9.1 | Valkey 8.1 -> 9.1.2, pinned (was the floating 8.1-alpine), in production after the test environment and the ch... | infra | - |
-| 50 | grafana-13 | Grafana 12.4.12 -> 13.2.3 (infra upgrade/50-grafana-13) | infra | grafana |
+| 50 | grafana-13 | Grafana 12.4.12 -> 13.2.3, its preinstalled plugins not auto-updated (platform, then infra upgrade/50-grafana-13) | platform + infra | grafana |
 | 51 | mimir-3.0 | Mimir 2.17.11 -> 3.0.8, one minor at a time (infra upgrade/51-mimir-3.0) | infra | gateway |
 | 52 | mimir-3.1 | Mimir 3.0.8 -> 3.1.6, one minor at a time (infra upgrade/52-mimir-3.1) | infra | - |
 | 53 | mimir-3.2 | Mimir 3.1.6 -> 3.2.1, one minor at a time (infra upgrade/53-mimir-3.2) | infra | - |
