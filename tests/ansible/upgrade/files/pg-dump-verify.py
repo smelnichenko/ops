@@ -4,7 +4,8 @@
 Reads the gzipped dump (its \\connect lines name the database, each COPY ... FROM stdin block's data lines up to \\. are
 its table's rows), then counts each table in the cluster through the psql command given (it gets -d <database> -c
 <query> appended, and must print unaligned tuples: psql -qAt). Prints the totals; exit 1 naming every table whose
-count differs, and every database missing.
+count differs, and every database missing. A table name is read as pg_dump writes it (schema-qualified, quoted when it
+needs quotes - spaces, capitals, "" for a quote); a COPY line it cannot read stops it rather than skipping the table.
 
 Usage: pg-dump-verify.py <dump.sql.gz> <psql command...>
 """
@@ -14,7 +15,9 @@ import subprocess
 import sys
 
 CONNECT = re.compile(r'^\\connect (?:-reuse-previous=on )?(?:"dbname=\'(?P<q>[^\']+)\'"|(?P<p>\S+))\s*$')
-COPY = re.compile(r"^COPY (?P<table>\S+) \(.*\) FROM stdin;$")
+IDENT = r'(?:"(?:[^"]|"")*"|[^\s."(]+)'
+# pg_dump: COPY <table> (<columns>) FROM stdin; - a table without columns: COPY <table>  FROM stdin;
+COPY = re.compile(rf"^COPY (?P<table>{IDENT}(?:\.{IDENT})?) (?:\(.*\) | )FROM stdin;$")
 
 
 def dump_counts(path):
@@ -34,9 +37,13 @@ def dump_counts(path):
                 counts.setdefault(db, {})
                 continue
             m = COPY.match(line)
-            if m and db is not None:
+            if m:
+                if db is None:
+                    sys.exit(f"a COPY before any \\connect - not a pg_dumpall: {line}")
                 table = m.group("table")
                 counts[db][table] = 0
+            elif line.startswith("COPY ") and line.endswith(" FROM stdin;"):
+                sys.exit(f"a COPY line this cannot read (its table would go unchecked): {line}")
     return counts
 
 
