@@ -47,6 +47,19 @@
       register: _stored
       changed_when: false
 
+    # a run cut short after crd-upgrade ended "already on v1" below and left the tool's cluster-wide RBAC
+    - name: An earlier run's Jobs and RBAC removed
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n {{ operator_namespace }} delete job strimzi-v1-convertresource strimzi-v1-crdupgrade \
+          --ignore-not-found --cascade=foreground --wait=true --timeout=300s
+        {{ kubectl }} delete clusterrolebinding strimzi-v1-api-conversion --ignore-not-found
+        {{ kubectl }} delete clusterrole strimzi-v1-api-conversion --ignore-not-found
+        {{ kubectl }} -n {{ operator_namespace }} delete serviceaccount strimzi-v1-api-conversion --ignore-not-found
+      args:
+        executable: /bin/bash
+      changed_when: true
+
     - name: Nothing to do when every Strimzi CRD already stores only v1
       when: _stored.stdout_lines | reject('match', '^\S+ \["v1"\]$') | list | length == 0
       block:
@@ -116,7 +129,7 @@
             set -euo pipefail
             K="{{ kubectl }} -n {{ operator_namespace }}"
             job=strimzi-v1-{{ item | replace('-', '') }}
-            $K delete job $job --ignore-not-found --wait=true > /dev/null
+            $K delete job $job --ignore-not-found --cascade=foreground --wait=true --timeout=300s > /dev/null
             cat <<EOF | $K apply -f - > /dev/null
             apiVersion: batch/v1
             kind: Job
@@ -163,10 +176,21 @@
           changed_when: false
           failed_when: _after.stdout_lines | reject('match', '^\S+ \["v1"\]$') | list | length > 0
 
-        - name: The Kafka clusters are Ready
+        # Ready for the resource as rewritten: the condition of the version before can stand a moment after the rewrite
+        - name: The Kafka clusters are Ready, at their current generation
           when: not ansible_check_mode
-          ansible.builtin.command: >-
-            {{ kubectl }} wait kafkas.kafka.strimzi.io --all -A --for=condition=Ready --timeout=600s
+          ansible.builtin.shell: |
+            set -euo pipefail
+            {{ kubectl }} wait kafkas.kafka.strimzi.io --all -A --for=condition=Ready --timeout=600s > /dev/null
+            {{ kubectl }} get kafkas.kafka.strimzi.io -A \
+              -o jsonpath='{range .items[*]}{.metadata.generation} {.status.observedGeneration}{"\n"}{end}' \
+              | awk '$1 != $2 {bad = 1} END {exit bad}'
+          args:
+            executable: /bin/bash
+          register: _kafka_ready
+          retries: 30
+          delay: 10
+          until: _kafka_ready.rc == 0
           changed_when: false
 
       always:

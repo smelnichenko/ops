@@ -20,17 +20,23 @@
     _after_api.status | default(0) == 200 and _after_api.json.patroni.version == (restart_version | default(patroni_version))
   when: (_leader | bool) == _turn_leader
 
-- name: The primary answering through HAProxy, on every Pi
+# through HAProxy (:5000) and, where it runs, PgBouncer (:6432) - the port Forgejo and Keycloak use
+- name: The primary answering through HAProxy and PgBouncer, on every Pi
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
       set -euo pipefail
       # the password on stdin, not in the environment Ansible puts on the command line
       read -r PGPASSWORD; export PGPASSWORD
-      [ "$(psql -h 127.0.0.1 -p 5000 -U postgres -d postgres -Atc 'select not pg_is_in_recovery()')" = t ]
+      ports=5000
+      [ "$(systemctl is-active pgbouncer 2>/dev/null || true)" = active ] && ports="5000 6432"
+      for p in $ports; do
+        [ "$(psql -h 127.0.0.1 -p "$p" -U postgres -d postgres -Atc 'select not pg_is_in_recovery()')" = t ]
+      done
     stdin: "{{ postgres_admin_password }}"
   register: _primary
   retries: 12
   delay: 5
   until: _primary.rc == 0
   changed_when: false
+  no_log: true  # the password went in on stdin
