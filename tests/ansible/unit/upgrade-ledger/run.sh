@@ -291,7 +291,7 @@ check("full name: a registry with a port", m.full_name("localhost:5000/x"), "loc
 
 # a step that restarts the control plane (its restarts-control-plane line): the deciding check records its restarts
 # without judging them - production's 42 and 43 restart every leader-elected controller in a row
-import inspect
+import inspect, json
 SETTLED = inspect.signature(m.settled)
 
 
@@ -404,6 +404,65 @@ try:
 except SystemExit as e:
     got = str(e)
 check("check of an unknown step: refused", got, "REFUSED: no step 99-nothing")
+
+# a phase claims the step: a start without an end refuses every other phase until it ends (or is released)
+base47 = done_upto("46-postgres-18-test") + [f"{S47} apps app", f"{S47} begun"]
+refused("a phase while another's start is open: refused, naming release",
+        P(S47, "backup", ev(*base47, f"{S47} start backup postgres host:1"), "postgres"), ["has not ended", "release"])
+check("its end: the next phase may run",
+      P(S47, "backup", ev(*base47, f"{S47} start backup postgres host:1", f"{S47} end backup failed"), "postgres"), [])
+check("a released start: the next phase may run",
+      P(S47, "backup", ev(*base47, f"{S47} start backup postgres host:1", f"{S47} end backup released"), "postgres"),
+      [])
+# the claim is written against the read the checks were made on: a concurrent change refuses it
+class _Rc:
+    def __init__(self, rc, err=""):
+        self.returncode, self.stdout, self.stderr = rc, "", err
+def claim(replace_rc):
+    sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten")}
+    reads = iter(range(7, 99))  # each read a newer resourceVersion: a claim that re-read would send another
+    m.read_ledger = lambda: ({"metadata": {"resourceVersion": str(next(reads))}, "data": {"events": ""}}, ev(*base47))
+    m.ten = lambda command, stdin=None, check=True: sent.append(json.loads(stdin)) or _Rc(replace_rc, "Conflict")
+    m.CLAIMED.clear()
+    try:
+        m.ledger_for(S47, "backup", "postgres")
+        got = "claimed"
+    except SystemExit as e:
+        got = str(e)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return got, sent, list(m.CLAIMED)
+got, sent, claimed = claim(0)
+check("the claim: start written with the read's resourceVersion",
+      (got, sent[0]["metadata"]["resourceVersion"], sent[0]["data"]["events"].split()[2:4], claimed),
+      ("claimed", "7", ["start", "backup"], [(S47, "backup")]))
+got, _, claimed = claim(1)
+check("a concurrent change: the claim refused, nothing claimed", (got.startswith("REFUSED: the ledger changed"), claimed),
+      (True, []))
+# main records the claimed phase's end, passed or failed
+def main_ends(code):
+    ends, saved = [], {k: getattr(m, k) for k in ("record", "begin")}
+    m.record = lambda st, e, *a, **k: ends.append((st, e, *a))
+    def fake_begin(step):
+        m.CLAIMED.append((step, "begin"))
+        if code:
+            sys.exit(code)
+    m.begin = fake_begin
+    m.CLAIMED.clear()
+    argv = sys.argv
+    sys.argv = ["x", "begin", S47]
+    try:
+        m.main()
+    except SystemExit:
+        pass
+    finally:
+        sys.argv = argv
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return ends
+check("a phase that passes: its end recorded passed", main_ends(0), [(S47, "end", "begin", "passed")])
+check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"), [(S47, "end", "begin", "failed")])
 
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)

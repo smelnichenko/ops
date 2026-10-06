@@ -21,8 +21,11 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
              least the step's soak later (its soak line; else 60 minutes after a wave0 step, 15 otherwise) that is
              green again with no container restarted since records done. A red call after checked records
              check-failed: the soak starts again from the next green call.
-A phase that fails records nothing. Step 02 (the Istio chart repository) went to production on 2026-10-03, before
-the ledger: init records it done.
+A phase that fails records nothing of its own. Every phase claims the step first - start <phase> <host:pid>, written
+against the same read of the ledger that cleared it, so a second run of any phase of the step refuses until the first
+records its end (passed or failed, Ctrl-C included); a run killed outright leaves its start open: release <step>
+closes it, once nothing runs. Step 02 (the Istio chart repository) went to production on 2026-10-03, before the
+ledger: init records it done.
 
 The proof (record-proof, run by test:upgrade:full after each green step; proof-start at the run's start): each repo's
 branch SHA and own change (its changed lines and files against the repo's ref at the step before), the ops commit the
@@ -31,6 +34,7 @@ own change and every step up to N proven by one run; its phases want the same tr
 Taskfile.yml, Vagrantfile) as that run had it, but for the committed steps' playbook defaults.
 
 Usage: scripts/upgrade-production.py init | status
+       scripts/upgrade-production.py release <step>         (a phase's open start closed - only when nothing runs)
        scripts/upgrade-production.py begin|preview|playbooks|defaults|done <step>
        scripts/upgrade-production.py backup <step> <store>
        scripts/upgrade-production.py merge <step> <infra|platform>
@@ -48,7 +52,9 @@ import os
 import re
 import shlex
 import subprocess
+import socket
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -124,6 +130,10 @@ def problems(names, step, phase, events, info, arg=None):
     kinds = [e for _, e, _ in mine]
     if "done" in kinds:
         return [f"{step} is done"]
+    started = open_start(mine)
+    if started:
+        return [f"{step}: {' '.join(started[1])} started at {started[0]:%Y-%m-%d %H:%M} UTC and has not ended - if "
+                f"nothing runs it any more: task deploy:upgrade:release STEP={step}"]
     if phase == "begin":
         missing = [n for n in names[:names.index(step)] if (n, "done") not in {(s, e) for _, s, e, _ in events}]
         return ([f"earlier steps not done: {', '.join(missing)}"] if missing else []) \
@@ -163,6 +173,17 @@ def problems(names, step, phase, events, info, arg=None):
         return out + played + (["its playbook defaults are not committed (deploy:upgrade:defaults)"]
                                if info["defaults"] and "defaults" not in kinds else [])
     raise ValueError(phase)
+
+
+def open_start(mine):
+    """The step's last phase start (time, its arguments) that no end followed, else None. `mine`: (time, event, args)."""
+    started = None
+    for at, e, a in mine:
+        if e == "start":
+            started = (at, a)
+        elif e == "end":
+            started = None
+    return started
 
 
 def soak_state(events, step, soak_minutes, now):
@@ -206,13 +227,16 @@ def read_ledger():
     return obj, parse_events(obj.get("data", {}).get("events", ""))
 
 
-def record(step, event, *args):
-    """Append one event - kubectl replace with the read resourceVersion: a concurrent change refuses."""
-    obj, _ = read_ledger()
+def record(step, event, *args, obj=None):
+    """Append one event - kubectl replace with the read resourceVersion (`obj`'s, when given: the read a decision was
+    made on): a concurrent change refuses."""
+    obj = obj if obj is not None else read_ledger()[0]
     at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = " ".join((at, step, event, *args))
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
-    ten("kubectl replace -f -", stdin=json.dumps(obj))
+    out = ten("kubectl replace -f -", stdin=json.dumps(obj), check=False)
+    if out.returncode:
+        sys.exit(f"REFUSED: the ledger changed since it was read (another phase at work?): {out.stderr.strip()}")
     print(f"LEDGER: {line}")
 
 
@@ -232,8 +256,9 @@ def inventory_check(applied):
     """ten's and the Pis' inventory (the test environment left out, listed apart) against production's with the
     given steps applied."""
     os.makedirs(os.path.join(OPS, ".upgrade"), exist_ok=True)
-    expected = os.path.join(OPS, ".upgrade", "prod-expected.txt")
-    now = os.path.join(OPS, ".upgrade", "prod-inventory-now.txt")
+    # this run's own files: a check beside a phase must not diff the other one's
+    expected = tempfile.mkstemp(prefix="prod-expected.", suffix=".txt", dir=os.path.join(OPS, ".upgrade"))[1]
+    now = tempfile.mkstemp(prefix="prod-inventory-now.", suffix=".txt", dir=os.path.join(OPS, ".upgrade"))[1]
     with open(expected, "w") as f:
         f.write("\n".join(sorted(inv.expected(applied))) + "\n")
     script = open(os.path.join(OPS, "scripts", "version-inventory.sh")).read()
@@ -532,12 +557,29 @@ def refuse(lines):
         sys.exit("REFUSED:\n" + "\n".join("  " + l for l in lines))
 
 
+CLAIMED = []  # the step this process claimed (its start recorded): main() records its end
+
+
 def ledger_for(step, phase, arg=None):
+    """The phase's checks, then its claim on the step - start, written against the read the checks were made on."""
     names = step_names()
-    _, events = read_ledger()
+    obj, events = read_ledger()
     info = step_info(step) if step in names else None
     refuse(problems(names, step, phase, events, info, arg))
+    record(step, "start", phase, *([arg] if arg else []), f"{socket.gethostname()}:{os.getpid()}", obj=obj)
+    CLAIMED.append((step, phase))
     return names, events, info
+
+
+def release(step):
+    """A phase's open start closed by hand: its run was killed and cannot record its end."""
+    obj, events = read_ledger()
+    started = open_start([(at, e, a) for at, s, e, a in events if s == step])
+    if not started:
+        sys.exit(f"{step} has no open start")
+    refuse([] if confirm(f"Nothing runs {step}'s {' '.join(started[1])} (started {started[0]:%Y-%m-%d %H:%M} UTC) "
+                         f"any more - close it?") else ["not confirmed"])
+    record(step, "end", started[1][0], "released", obj=obj)
 
 
 def ansible(*args):
@@ -734,7 +776,7 @@ def status():
 
 def main():
     a = sys.argv[1:]
-    actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start,
+    actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start, ("release", 1): release,
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof}
@@ -745,7 +787,16 @@ def main():
         sys.exit(__doc__)
     if a[0] == "merge" and a[2] not in REPOS:
         sys.exit("merge <step> <infra|platform>")
-    fn(*a[1:])
+    result = "failed"
+    try:
+        fn(*a[1:])
+        result = "passed"
+    except SystemExit as e:
+        result = "passed" if e.code in (None, 0) else "failed"
+        raise
+    finally:
+        for step, phase in CLAIMED:
+            record(step, "end", phase, result)
 
 
 if __name__ == "__main__":

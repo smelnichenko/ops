@@ -1081,6 +1081,13 @@ tasks:
     cmds:
       - cmd: scripts/upgrade-production.py status
 
+  deploy:upgrade:release:
+    desc: "The upgrade ledger: step STEP's open phase start closed - only when its run was killed and nothing runs it (every phase claims the step first; a second one refuses while a start is open)"
+    requires:
+      vars: [STEP]
+    cmds:
+      - cmd: scripts/upgrade-production.py release {{.STEP}}
+
   deploy:upgrade:check:
     desc: "Read-only: ten's and the Pis' version inventory against what the done steps and STEP leave (the test environment listed apart), and Argo CD settled on main's commits, judged on ten - nothing recorded"
     requires:
@@ -1139,6 +1146,7 @@ tasks:
 
   deploy:upgrade:done:
     desc: "Step STEP's last phase (records it in the ledger): production as the step leaves it - the first green call starts the soak, a green call after it with no container restarted since ends the step. Read-only, but a cert-renew or barman-check step's first call issues a throwaway certificate / takes a Postgres base backup: it asks first"
+    deps: [deploy:install]
     requires:
       vars: [STEP]
     cmds:
