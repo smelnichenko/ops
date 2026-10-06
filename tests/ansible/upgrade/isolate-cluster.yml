@@ -6,9 +6,11 @@
 # Vault. The mirror now rewrites every production address (scripts/vagrant-gitops-mirror.py); this playbook closes
 # the remaining paths and PROVES it:
 #   1. DNS     - CoreDNS answers every *.pmon.dev with Vagrant addresses (apps call auth.pmon.dev and friends);
-#   2. network - the node drops all traffic to the production LAN (nftables, for the node's own traffic) and a
-#                CiliumClusterwideNetworkPolicy denies it to every pod; a probe pod must FAIL to reach production's
-#                VIP and SUCCEED to reach the Vagrant VIP, or the run aborts;
+#   2. network - the node drops all traffic to the production LAN and to production's public address (pmon.dev from a
+#                public resolver: through NAT and the router it reaches production too) - nftables, for the node's
+#                own traffic - and a CiliumClusterwideNetworkPolicy denies both to every pod; the node and a probe
+#                pod must FAIL to reach production's VIP and its public address and the pod SUCCEED to reach the
+#                Vagrant VIP, or the run aborts;
 #   3. Vault   - ESO trusts the Vagrant Vault CA and logs in with Kubernetes auth (role eso-role), as on ten.
 #
 # The Pi VMs are isolated before anything is installed on them, in every Vagrant flow (../isolate-pis.yml).
@@ -41,6 +43,17 @@
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    # read once, from a public resolver - the LAN's resolves pmon.dev to production's LAN address
+    - name: Production's public address
+      ansible.builtin.set_fact:
+        production_public: "{{ lookup('ansible.builtin.pipe', 'dig +short @1.1.1.1 pmon.dev A | tail -n 1') }}"
+
+    - name: It is an address (an empty or failed lookup would drop nothing)
+      ansible.builtin.assert:
+        that: production_public is match('^[0-9]{1,3}([.][0-9]{1,3}){3}$')
+        fail_msg: "REFUSED: pmon.dev's public address read as '{{ production_public }}'"
+        quiet: true
 
     # ── 1. DNS ─────────────────────────────────────────────────────────
     - name: CoreDNS answers *.pmon.dev as production resolves it, with Vagrant addresses
@@ -135,8 +148,8 @@
           table inet vagrant_isolation
           delete table inet vagrant_isolation
           table inet vagrant_isolation {
-            chain output { type filter hook output priority 0; ip daddr {{ production_lan }} drop; }
-            chain forward { type filter hook forward priority 0; ip daddr {{ production_lan }} drop; }
+            chain output { type filter hook output priority 0; ip daddr { {{ production_lan }}, {{ production_public }} } drop; }
+            chain forward { type filter hook forward priority 0; ip daddr { {{ production_lan }}, {{ production_public }} } drop; }
           }
     - name: Apply the node guard now and at boot
       ansible.builtin.systemd_service:
@@ -163,20 +176,23 @@
             egressDeny:
               - toCIDR:
                   - "{{ production_lan }}"
+                  - "{{ production_public }}/32"
 
     # blocked means the TCP connect never completed - a dropped SYN: curl exit 28 with no connect made. Exit 28 alone
     # is no proof: the connect timeout also covers the TLS handshake, and -m the rest, so a VIP that took the connect
     # and then stalled timed out the same way. Any other result (an answer, a refusal, a reset) fails too. Production's
     # VIP, were it reachable, accepts the connect in milliseconds, so 1 s for the connect proves the drop
-    - name: Prove it - the node cannot reach production's VIP
+    - name: Prove it - the node cannot reach production's VIP nor its public address
       ansible.builtin.shell: |
-        n=$(curl -sk -o /dev/null -w '%{num_connects}' --connect-timeout 1 -m 5 https://{{ production_vip }}:8200/v1/sys/health)
-        echo "curl exit $?, connects $n"
+        for u in https://{{ production_vip }}:8200/v1/sys/health https://{{ production_public }}:443/; do
+          n=$(curl -sk -o /dev/null -w '%{num_connects}' --connect-timeout 1 -m 5 "$u")
+          echo "curl exit $?, connects $n"
+        done
       args:
         executable: /bin/bash
       register: _node_probe
       changed_when: false
-      failed_when: _node_probe.stdout != 'curl exit 28, connects 0'
+      failed_when: _node_probe.stdout_lines != ['curl exit 28, connects 0', 'curl exit 28, connects 0']
 
     - name: Prove it - a pod cannot reach production's VIP, and can reach the Vagrant VIP
       ansible.builtin.shell: |
@@ -193,19 +209,22 @@
           {{ kubectl }} wait pod/isolation-probe $N --for=condition=Ready --timeout=120s > /dev/null
         fi
         {{ kubectl }} exec isolation-probe $N -- sh -c '
-          p=https://{{ production_vip }}:8200/v1/sys/health; v=https://{{ vagrant_vip }}:8200/v1/sys/health
+          v=https://{{ vagrant_vip }}:8200/v1/sys/health
           # blocked = no connect made and timed out (a dropped SYN); anything else is no proof of the drop
-          n=$(curl -sk -o /dev/null -w "%{num_connects}" --connect-timeout 1 -m 5 "$p"); r=$?
-          if [ "$r" = 28 ] && [ "$n" = 0 ]; then echo production-blocked
-          else echo "PRODUCTION-REACHABLE (curl exit $r, $n connects)"; fi
+          blocked() {
+            n=$(curl -sk -o /dev/null -w "%{num_connects}" --connect-timeout 1 -m 5 "$1"); r=$?
+            if [ "$r" = 28 ] && [ "$n" = 0 ]; then echo "$2-blocked"; else echo "$2-REACHABLE (curl exit $r, $n connects)"; fi
+          }
+          blocked https://{{ production_vip }}:8200/v1/sys/health production
+          blocked https://{{ production_public }}:443/ public
           curl -sk -o /dev/null -m 10 "$v" && echo vagrant-reachable || echo VAGRANT-UNREACHABLE'
       args:
         executable: /bin/bash
       register: _pod_probe
       changed_when: false
       failed_when: >-
-        _pod_probe.rc != 0 or 'production-blocked' not in _pod_probe.stdout
-        or 'vagrant-reachable' not in _pod_probe.stdout
+        _pod_probe.rc != 0 or 'production-blocked' not in _pod_probe.stdout_lines
+        or 'public-blocked' not in _pod_probe.stdout_lines or 'vagrant-reachable' not in _pod_probe.stdout_lines
 
     # ── 3. Vault (bootstrap.sh configure_eso, against the Vagrant Vault) ──
     # External Secrets' namespace and service account, where Argo has not made them yet: the reviewer token below is that

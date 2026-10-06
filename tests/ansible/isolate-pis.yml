@@ -7,9 +7,11 @@
 # upgrade-test copy; nothing had used those names yet: no webhooks, no connections, no log lines). Now:
 #   1. DNS     - the names the Pis serve (pi_served_names, inventory) resolve to the Vagrant VIP (/etc/hosts);
 #                every other pmon.dev name still resolves to production, and 2. drops it;
-#   2. network - nftables drops all traffic to the production LAN (an own table, re-applied at boot);
-#   3. proof   - each Pi must resolve its names to the Vagrant VIP and FAIL to reach production's VIP, or the run
-#                aborts.
+#   2. network - nftables drops all traffic to the production LAN, and to production's public address (pmon.dev, read
+#                from a public resolver: through the VMs' NAT and the router it reaches production too) - an own
+#                table, re-applied at boot;
+#   3. proof   - each Pi must resolve its names to the Vagrant VIP and FAIL to reach production's VIP and its public
+#                address (no connect made: a connect that stalled is no proof), or the run aborts.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
 - name: Isolate the Vagrant Pis from production
@@ -22,6 +24,17 @@
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: vagrant-only.yml
+
+    # read once, from a public resolver - the LAN's resolves pmon.dev to production's LAN address
+    - name: Production's public address
+      ansible.builtin.set_fact:
+        production_public: "{{ lookup('ansible.builtin.pipe', 'dig +short @1.1.1.1 pmon.dev A | tail -n 1') }}"
+
+    - name: It is an address (an empty or failed lookup would drop nothing)
+      ansible.builtin.assert:
+        that: production_public is match('^[0-9]{1,3}([.][0-9]{1,3}){3}$')
+        fail_msg: "REFUSED: pmon.dev's public address read as '{{ production_public }}'"
+        quiet: true
 
     - name: The names the Pis serve resolve to the Vagrant VIP (any other pmon.dev name goes to production and is dropped)
       ansible.builtin.blockinfile:
@@ -51,7 +64,7 @@
           table inet vagrant_isolation
           delete table inet vagrant_isolation
           table inet vagrant_isolation {
-            chain output { type filter hook output priority 0; ip daddr {{ production_lan }} drop; }
+            chain output { type filter hook output priority 0; ip daddr { {{ production_lan }}, {{ production_public }} } drop; }
           }
     - name: Apply the Pi guard now and at boot
       ansible.builtin.systemd_service:
@@ -67,14 +80,18 @@
         for n in {{ pi_served_names | map('regex_replace', '$', '.pmon.dev') | join(' ') }}; do
           echo "$n $(getent hosts "$n" | awk '{print $1}')"
         done
-        # blocked = the connect timed out (curl exit 28, a dropped SYN); anything else is no proof of the drop
-        curl -sk -o /dev/null --connect-timeout 1 -m 5 https://{{ production_vip }}:8200/v1/sys/health; r=$?
-        if [ "$r" = 28 ]; then echo production-blocked; else echo "PRODUCTION-REACHABLE (curl exit $r)"; fi
+        # blocked = no connect made and timed out (a dropped SYN); a connect that stalled, a refusal, an answer - no proof
+        blocked() {
+          n=$(curl -sk -o /dev/null -w '%{num_connects}' --connect-timeout 1 -m 5 "$1"); r=$?
+          if [ "$r" = 28 ] && [ "$n" = 0 ]; then echo "$2-blocked"; else echo "$2-REACHABLE (curl exit $r, $n connects)"; fi
+        }
+        blocked https://{{ production_vip }}:8200/v1/sys/health production
+        blocked https://{{ production_public }}:443/ public
       args:
         executable: /bin/bash
       register: _pi_probe
       changed_when: false
       failed_when: >-
-        _pi_probe.rc != 0 or 'production-blocked' not in _pi_probe.stdout
+        _pi_probe.rc != 0 or 'production-blocked' not in _pi_probe.stdout_lines or 'public-blocked' not in _pi_probe.stdout_lines
         or (_pi_probe.stdout_lines | select('match', '^[^ ]+\\.pmon\\.dev ')
             | reject('match', '^[^ ]+ ' ~ (keepalived_vip | regex_escape) ~ '$') | list | length) > 0
