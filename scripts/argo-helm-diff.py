@@ -76,7 +76,7 @@ def upstream(helm, infra_ref, work):
                 else:  # an OCI registry (Argo CD takes it without the scheme)
                     chart = [f"oci://{repo.removeprefix('oci://')}/{src['chart']}"]
                 args = [helm, "template", h.get("releaseName", name), *chart, "--version", str(src["targetRevision"]),
-                        "-n", spec["destination"]["namespace"], "--include-crds"]
+                        "-n", spec["destination"]["namespace"], "--include-crds", *mo.CAPABILITIES]
                 for i, v in enumerate(h.get("valueFiles", [])):
                     if not v.startswith("$values/"):
                         sys.exit(f"{name}: value file {v} is not from infra ($values)")
@@ -131,6 +131,7 @@ def check(step):
         return True
     old, new = lines[0][1], lines[0][2]
     refs = mo.refs(step)
+    mo.CAPABILITIES[:] = mo.capabilities(step)  # the cluster's version and API versions, as Argo CD passes them
     with tempfile.TemporaryDirectory(dir=os.path.join(OPS, ".upgrade")) as work:
         a = renders(helm_binary(old), refs, os.path.join(work, old))
         b = renders(helm_binary(new), refs, os.path.join(work, new))

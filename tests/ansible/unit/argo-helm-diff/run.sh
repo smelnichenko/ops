@@ -15,6 +15,8 @@ open(os.path.join(work, "34-x.txt"), "w").write("helm-diff 3.19.4 4.2.1\n")
 hd.STEPS, hd.OPS = work, work
 hd.mo.refs = lambda step: {"infra": "i", "platform": "p"}
 hd.helm_binary = lambda version: version
+CAPS = ["--kube-version", "1.34.12", "--api-versions", "v1"]
+hd.mo.capabilities = lambda step: CAPS
 CM = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c, namespace: n}\ndata: {k: %s}\n"
 fails = 0
 def check(name, renders, want, words):
@@ -31,6 +33,9 @@ check("the same objects: passes", {"3.19.4": {"a": CM % 1}, "4.2.1": {"a": CM % 
 check("an object rendered otherwise: fails, named", {"3.19.4": {"a": CM % 1}, "4.2.1": {"a": CM % 2}}, False,
       ["a: ConfigMap/n/c (differs)"])
 check("nothing rendered: fails", {"3.19.4": {}, "4.2.1": {}}, False, ["nothing proven"])
+check_caps = hd.mo.CAPABILITIES == CAPS
+fails += not check_caps
+print(f"{'PASS' if check_caps else 'FAIL'} the step's --kube-version and --api-versions set for both renders")
 print("argo-helm-diff: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

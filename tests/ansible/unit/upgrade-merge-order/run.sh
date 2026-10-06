@@ -25,6 +25,7 @@ with open(helm, "w") as f:
 import glob, os, re, sys
 import yaml
 args, values = sys.argv[1:], {}
+open(os.environ["HELM_ARGS"], "a").write(" ".join(args) + "\\n")
 for i, a in enumerate(args):
     if a == "-f":
         values.update(yaml.safe_load(open(args[i + 1])) or {})
@@ -38,6 +39,8 @@ for s in ("01-before", "02-step"):
 os.makedirs(os.path.join(W, ".upgrade"))
 mo.HELM, mo.STEPS, mo.OPS = helm, os.path.join(W, "steps"), W
 mo.refs = lambda step: dict.fromkeys(("infra", "platform"), "main" if step == "01-before" else "upgrade/02-step")
+mo.capabilities = lambda step: ["--kube-version", "1.34.12", "--api-versions", "monitoring.coreos.com/v1,v1"]
+os.environ["HELM_ARGS"] = os.path.join(W, "helm-args")
 
 APP = """apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -110,6 +113,18 @@ case_("no application reads a platform chart: refused", ["infra", "platform"],
       {"values/demo.yaml": "x: 2\n"}, {"charts/demo/templates/cm.yaml": "x: {{ .Values.x }}\nz: 1\n"}, False,
       ["REFUSED", "nothing proven"], url="https://git.pmon.dev/schnappy/platform")
 case_("one repo: nothing between", ["infra"], {"values/demo.yaml": "x: 2\n"}, {}, True, ["one repo"])
+# as Argo CD renders: the cluster's Kubernetes version and API versions passed to every helm template
+calls = open(os.environ["HELM_ARGS"]).read().splitlines()
+check_ = lambda name, ok: (print(f"{'PASS' if ok else 'FAIL'} {name}"), ok)[1]
+fails += not check_("every render with the step's --kube-version and --api-versions",
+                    calls and all("--kube-version 1.34.12 --api-versions monitoring.coreos.com/v1,v1" in c for c in calls))
+loader2 = importlib.machinery.SourceFileLoader("mo2", os.path.join(ROOT, "scripts", "upgrade-merge-order.py"))
+real = importlib.util.module_from_spec(importlib.util.spec_from_loader("mo2", loader2))
+loader2.exec_module(real)
+caps = real.capabilities("34-argocd-3.5")
+fails += not check_("step 34's capabilities: Kubernetes 1.34.12 (after 13), production's API list",
+                    caps[:2] == ["--kube-version", "1.34.12"] and "monitoring.coreos.com/v1" in caps[3].split(","))
+fails += not check_("step 43's: 1.36.5", real.capabilities("43-kubernetes-1.36")[:2] == ["--kube-version", "1.36.5"])
 print("upgrade-merge-order: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 raise SystemExit(1 if fails else 0)
 PY

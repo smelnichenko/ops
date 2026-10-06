@@ -35,6 +35,8 @@ REPOS = {r: os.path.normpath(os.path.join(OPS, "..", r)) for r in ("infra", "pla
 APPS = "clusters/production/argocd/apps"
 PLATFORM_URL = "https://git.pmon.dev/schnappy/platform.git"
 HELM = "helm"  # the binary renders() runs (scripts/argo-helm-diff.py sets one per Helm version)
+API_VERSIONS = os.path.join(OPS, "tests", "ansible", "upgrade", "api-versions.txt")
+CAPABILITIES = []  # helm template's --kube-version and --api-versions for the step being rendered (capabilities())
 INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
 _loader = importlib.machinery.SourceFileLoader("upgrade_expected_inventory", INVENTORY)
 inv = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_expected_inventory", _loader))
@@ -50,6 +52,16 @@ def refs(step):
     if out.returncode:
         sys.exit(out.stderr.strip() or out.stdout.strip())
     return dict(zip(("infra", "platform"), out.stdout.split()))
+
+
+def capabilities(step):
+    """As Argo CD renders, with the cluster's: the Kubernetes version at the step (its expected inventory) and
+    production's API versions (api-versions.txt) - without them a template gated on .Capabilities.APIVersions (a
+    ServiceMonitor) rendered in neither state, and the comparison never saw it."""
+    names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
+    server = next(l.split()[2] for l in inv.expected(names[:names.index(step) + 1]) if l.startswith("k8s server "))
+    apis = [l.strip() for l in open(API_VERSIONS) if l.strip() and not l.startswith("#")]
+    return ["--kube-version", server.lstrip("v"), "--api-versions", ",".join(apis)]
 
 
 def evaluate(template, ctx, where):
@@ -80,7 +92,7 @@ def renders(infra_ref, platform_ref, work, read=None):
                                      capture_output=True, check=True).stdout
             subprocess.run(["tar", "-x", "-C", dest], input=archive, check=True)
             charts[chart] = os.path.join(dest, chart)
-        args = [HELM, "template", release, charts[chart], "-n", namespace]
+        args = [HELM, "template", release, charts[chart], "-n", namespace, *CAPABILITIES]
         for i, path in enumerate(value_files):
             f = os.path.join(work, f"values-{len(out)}-{i}.yaml")
             with open(f, "w") as fh:
@@ -171,6 +183,7 @@ def check(step):
     before = refs(names[names.index(step) - 1]) if names.index(step) else {"infra": "main", "platform": "main"}
     first, second = order
     between = dict(before, **{first: after[first]})
+    CAPABILITIES[:] = capabilities(step)
     read = set()
     with tempfile.TemporaryDirectory(dir=os.path.join(OPS, ".upgrade")) as work:
         a, m, b = (renders(s["infra"], s["platform"], os.path.join(work, k), read)
