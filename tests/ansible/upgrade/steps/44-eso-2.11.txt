@@ -1,7 +1,10 @@
 # External Secrets 2.2.0 -> 2.11.0, CRDs with it through Argo (step 41). Release notes 2.3-2.11: no breaking change.
 # infra upgrade/44-eso-2.11.
 # outage: External Secrets restarts - no Secret refreshed meanwhile, the existing ones stay
-# abort: revert the step's merge on main (Argo syncs back) - the newer CRDs stay (not rehearsed)
+# abort: revert the step's merge on main (Argo syncs back) - not rehearsed. The CRDs do not stay: the app's automated
+# sync applies 2.2.0's over 2.11's (server-side; only the CRDs 2.2.0 lacks stay, Prune=false). The API server refuses
+# one whose stored versions the older one does not serve (the sync fails half-way); otherwise fields only the newer
+# schema knows are dropped
 argo-chart external-secrets external-secrets@2.2.0 => argo-chart external-secrets external-secrets@2.11.0
 image ghcr.io/external-secrets/external-secrets v2.2.0 => image ghcr.io/external-secrets/external-secrets v2.11.0
 # two generators more (25 CRDs, the chart rendered with production's values), each kept from Argo CD's prune

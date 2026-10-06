@@ -98,6 +98,18 @@ check("playbooks 47 after the preview", P(S47, "playbooks", ev(*ball, f"{S47} pr
 refused("preview 47 before its merges", P(S47, "preview", ev(*bb)), ["not merged and settled yet"])
 refused("preview 47 with only infra settled", P(S47, "preview", ev(*bs)), ["platform"])
 check("preview 47 after both merges settled", P(S47, "preview", ev(*ball)), [])
+# Argo's settle after a merge: a step's settle line, else 30 minutes (SonarQube's migration hook allows 45 at 57)
+check("57 settles 50 minutes, 42 the default 30",
+      (info["57-sonarqube-26.9"]["settle"], info["42-kubernetes-1.35"]["settle"]), (50, 30))
+# the step's new images from production's own registry, there before the merge (asked of Forgejo)
+asked = []
+check("22's apt-cacher-ng tag there", m.registry_problems("22-apt-cacher-ng", lambda n, v: asked.append((n, v)) or 200),
+      [])
+check("22 asks for the new tag, not the old", asked, [("apt-cacher-ng", "7b46aea")])
+check("22's tag missing: refused, naming it", m.registry_problems("22-apt-cacher-ng", lambda n, v: 404),
+      ["git.pmon.dev/schnappy/apt-cacher-ng:7b46aea is not in the registry (Forgejo's package API: 404)"])
+check("a step without own-registry images asks nothing",
+      m.registry_problems("42-kubernetes-1.35", lambda n, v: (_ for _ in ()).throw(AssertionError(n))), [])
 # the order `deploy:upgrade:status` names the next phase in: step 47's pinned, every step's preview after its merges
 check("47's phases in order", [(p, a) for p, a, _ in m.phases(info[S47])],
       [("begin", None), ("backup", "postgres"), ("merge", "infra"), ("merge", "platform"), ("preview", None),
@@ -175,7 +187,8 @@ def done_calls(step, answer):
 S23 = "23-cert-manager"
 check("done 23 (cert-renew), no", done_calls(S23, False), ["asked", "refused"])
 check("done 23 (cert-renew), yes", done_calls(S23, True), ["asked", "playbooks/acme-check.yml", "checked"])
-check("done 24 (barman-check), yes", done_calls("24-cnpg", True), ["asked", "playbooks/postgres-base-backup.yml", "checked"])
+check("done 24 (barman-check), yes", done_calls("24-cnpg", True),
+      ["asked", "playbooks/postgres-base-backup.yml", "checked"])
 check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
 check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
 

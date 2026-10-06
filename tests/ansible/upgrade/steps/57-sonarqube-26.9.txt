@@ -6,6 +6,8 @@
 # list.
 # its change: the branch upgrade/57-sonarqube-26.9 in infra and platform
 # outage: SonarQube down while it migrates its database (production only)
+# production waits up to 50 minutes for Argo after each merge (the migration hook's own deadline is 45)
+settle 50
 # abort: one-way: SonarQube's Postgres dump from Wave 0 (the postgres store) with 26.3
 # one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
 wave0 postgres

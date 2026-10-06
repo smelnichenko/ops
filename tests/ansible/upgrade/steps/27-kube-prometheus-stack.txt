@@ -2,7 +2,9 @@
 # chart's), Prometheus v3.10.0 -> v3.15.0 (distroless). infra upgrade/27-kube-prometheus-stack. At the rollout the
 # kubeadm playbook's prometheus_operator_crds_chart_version (non-Argo installs only) becomes 32.0.1.
 # outage: Prometheus and the operator roll - a minute's gap in the metrics
-# abort: revert the step's merge on main (Argo syncs back) - the newer CRDs stay (not rehearsed)
+# abort: revert the step's merge on main (Argo syncs back) - not rehearsed. The CRDs do not stay: the app's automated
+# sync applies 82.16's over 0.94's (server-side). The API server refuses one whose stored versions the older one does
+# not serve (the sync fails half-way, the newer CRD kept); otherwise fields only the newer schema knows are dropped
 argo-chart prometheus kube-prometheus-stack@82.16.0 => argo-chart prometheus kube-prometheus-stack@91.8.2
 crd prometheus-operator 0.89.0 => crd prometheus-operator 0.94.1
 # the operator's reloader moves to v0.94.1; v0.89.0 stays, pinned by the blackbox exporter's own chart (its step)

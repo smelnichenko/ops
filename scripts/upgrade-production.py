@@ -38,6 +38,7 @@ Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py proof-start
        scripts/upgrade-production.py record-proof <step> <infra sha> <platform sha>
 """
+import base64
 import datetime
 import hashlib
 import importlib.machinery
@@ -48,6 +49,8 @@ import re
 import shlex
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 import yaml
 
@@ -61,6 +64,7 @@ URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https:/
 # are listed, not compared
 TEST_NAMESPACES = "schnappy-test"
 SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
+SETTLE_MINUTES = 30
 # preview environments come and go (an Argo app per pull request): never part of the app set a step must keep
 PREVIEW_APPS = "^pr-[0-9]+-"
 # on ten, sm's: each done step's restart counts, so a pod restarting in two steps running fails the second
@@ -90,11 +94,12 @@ def step_names():
 
 
 def step_info(name):
-    playbooks, wave0, soak, out_of_sync, flags = [], [], [], [], set()
-    inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak,
+    playbooks, wave0, soak, settle, out_of_sync, flags = [], [], [], [], [], set()
+    inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak, settle=settle,
               out_of_sync=out_of_sync, flags=flags)
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
             "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
+            "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
             "base_backup": "barman-check" in flags}
 
@@ -457,6 +462,36 @@ def proof_problems(step, names, repo=None, defaulted_steps=()):
     return out
 
 
+def registry_problems(step, status=None):
+    """The step's new images from production's own registry (git.pmon.dev/schnappy), each there before the merge: the
+    full run never pulls them (the copy preloads them; production's registry is beyond its fence), so a missing tag
+    would first show as production's pod failing to pull - after a Recreate rollout removed the old one."""
+    own, out = r"git\.pmon\.dev/schnappy/", []
+    for line in open(os.path.join(inv.STEPS, step + ".txt")):
+        m = re.fullmatch(rf"image {own}(\S+) \S+ => image {own}\1 (\S+)", line.strip())
+        if m:
+            code = (status or package_status)(m[1], m[2])
+            if code != 200:
+                out.append(f"git.pmon.dev/schnappy/{m[1]}:{m[2]} is not in the registry (Forgejo's package API: "
+                           f"{code})")
+    return out
+
+
+def package_status(name, version):
+    """Forgejo's answer for a container package version of schnappy (200: there), read with git's credentials."""
+    cred = run(["git", "credential", "fill"], input="protocol=https\nhost=git.pmon.dev\n\n", capture_output=True,
+               check=True).stdout
+    fields = dict(l.split("=", 1) for l in cred.splitlines() if "=" in l)
+    request = urllib.request.Request(f"https://git.pmon.dev/api/v1/packages/schnappy/container/{name}/{version}")
+    request.add_header("Authorization", "Basic " + base64.b64encode(
+        f"{fields['username']}:{fields['password']}".encode()).decode())
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def merged_base(repo_dir, step):
     """The main a merged step went onto (its upgrade-merged/<step> tag's "base <sha>"), or None when not merged."""
     tag = run(["git", "-C", repo_dir, "tag", "-l", "--format=%(contents:subject)", "upgrade-merged/" + step],
@@ -536,7 +571,7 @@ def merge(step, repo):
     merged = any(s == step and e == "merged" and a[:1] == [repo] for _, s, e, a in events)
     if not merged:
         d = os.path.join(OPS, "..", repo)
-        refuse(proof_problems(step, names, repo, defaulted(events)))
+        refuse(proof_problems(step, names, repo, defaulted(events)) + registry_problems(step))
         if merged_base(d, step):
             # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
             print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
@@ -553,7 +588,7 @@ def merge(step, repo):
         record(step, "merged", repo, sha)
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
-    ok, revs, _ = settled(30, 4, 300, [], step_apps(events, step))
+    ok, revs, _ = settled(step_info(step)["settle"], 4, 300, [], step_apps(events, step))
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
 

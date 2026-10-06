@@ -3,9 +3,10 @@
 # upgrade; with no metadataVersion set Strimzi then moves it to 4.3's default. Stateful: shown to the operator before
 # production.
 # outage: the broker restarts on 4.3 - Kafka unavailable for the restart (a minute)
-# abort: revert the step's merge on main (Argo syncs back) while the metadata version is still 4.2's; once Strimzi has
-# moved it: the Wave 0 Kafka backup (taken at step 38 and here; its restore rehearsed at this step in the full run; the
-# old version on it is not)
+# abort: the Wave 0 Kafka backup (taken at step 38 and here; its restore rehearsed at this step in the full run; the old
+# version on it is not). A revert of the merge does not help: Strimzi moves the metadata version seconds after the one
+# broker has rolled, and 4.2 cannot start on 4.3's - a window kept open only by a metadataVersion pinned in the chart
+# (none is rendered; pinning it is the operator's decision)
 # one-way: Kafka's volume (the broker stopped for the copy) backed up into the Pi store before the step changes anything
 wave0 kafka
 image quay.io/strimzi/kafka 1.2.0-kafka-4.2.0 => image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1

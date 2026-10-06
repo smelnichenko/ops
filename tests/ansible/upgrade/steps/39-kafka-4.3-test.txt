@@ -4,6 +4,7 @@
 # upgrade/39-kafka-4.3-test. Stateful: shown before it runs.
 # its change: the branch upgrade/39-kafka-4.3-test in infra and platform
 # outage: the test environment only: its broker restarts
-# abort: its values back while the metadata version is still 4.2's
+# abort: the test environment's Kafka rebuilt (its data is the test environment's) - a revert of its values does not
+# help: Strimzi moves the metadata version seconds after the broker rolled (no metadataVersion is rendered)
 branch infra
 branch platform

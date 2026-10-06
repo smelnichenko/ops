@@ -29,6 +29,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                before the step changes anything, and the backup rehearsed)
     soak <minutes>                            (production waits this long between the step's first green check and
                                                the next step - scripts/upgrade-production.py; default 15)
+    settle <minutes>                          (production waits this long for Argo to settle after each of the step's
+                                               merges - scripts/upgrade-production.py; default 30)
     default <file>: <line> => <line>          (a playbook default the step moves - scripts/upgrade-defaults.py)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
@@ -81,7 +83,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
-          wave0=None, soak=None):
+          wave0=None, soak=None, settle=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -112,6 +114,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         elif re.fullmatch(r"soak [1-9]\d*", line):
             if soak is not None:
                 soak.append(int(line.split()[1]))
+        elif re.fullmatch(r"settle [1-9]\d*", line):
+            if settle is not None:
+                settle.append(int(line.split()[1]))
         elif line.startswith("default "):
             pass  # scripts/upgrade-defaults.py
         elif line.startswith("argo-out-of-sync "):
