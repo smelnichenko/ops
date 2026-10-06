@@ -1,8 +1,9 @@
 #!/bin/bash
 # tests/ansible/upgrade/files/argo-settled.py on saved apps and pods (its --apps-json/--pods-json mode): green on a
 # settled set; the app floor (--expect-apps: a missing or an unexpected app is not green, an allowed extra is); an app
-# compared against an older spec is not green, one whose spec only gained empty fields is; the restart history (--restart-history: a pod restarting in two steps running fails, one step's restart does not, the
-# first call only records).
+# compared against an older spec is not green, one whose spec only gained fields Go's omitempty drops is (false, 0,
+# a map left empty); the restart history (--restart-history: a pod restarting in two steps running fails, one step's
+# restart does not, the first call only records); preview environments' apps and pods left out; every gate.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PY'
@@ -99,6 +100,16 @@ emptied["status"]["sync"]["comparedTo"]["source"] = dict(emptied["status"]["sync
 rc, out = run([emptied, app("b")], P)
 check("compared against an older spec with a field the spec dropped: not green",
       (rc, "compared against an older spec" in out), (1, True), out)
+# Go's omitempty drops false, 0 and a map left empty once its own empty fields are gone; a true is kept
+for name, extra, want in (("a map emptied by its own empty field (directory: {jsonnet: {}})",
+                           {"directory": {"jsonnet": {}}}, 0),
+                          ("recurse: false", {"directory": {"recurse": False}}, 0),
+                          ("a 0", {"limit": 0}, 0),
+                          ("recurse: true, which comparedTo has not", {"directory": {"recurse": True}}, 1)):
+    x = app("a")
+    x["spec"]["source"] = dict(x["spec"]["source"], **extra)
+    rc, out = run([x, app("b")], P)
+    check(f"spec with {name}, comparedTo without it: {'green' if want == 0 else 'not green'}", rc, want, out)
 
 # every gate, red when it should be and green beside it
 import copy
