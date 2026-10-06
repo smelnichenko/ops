@@ -1,12 +1,16 @@
 #!/bin/bash
 # The kubelet's shutdown grace compared by value, not text: kubeadm writes 180s back as 3m0s (the full run's step 13
 # failed on it, 2026-10-06). upgrade-kubeadm's two checks (the ConfigMap before, the kubelet's file after) and
-# node-config's ConfigMap patch, each run as the playbook holds it, on both spellings and on 0s.
+# node-config's ConfigMap patch, each run as the playbook holds it, on both spellings and on 0s - the two checks judged
+# by their own failed_when, evaluated as Ansible evaluates it (a Jinja expression over the registered result).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
-PY=$(command -v python3)
+PY=python3
+"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import jinja2, yaml' || { echo "kubelet-grace: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
 "$PY" - <<'PY'
 import json, subprocess, sys
+import jinja2
 import yaml
 fails = 0
 def check(name, got, want):
@@ -15,13 +19,15 @@ def check(name, got, want):
     print(f"{'PASS' if got == want else 'FAIL'} {name}" + ("" if got == want else f"\n  got  {got}\n  want {want}"))
 pb = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))
 tasks = {t.get("name"): t for t in pb[0]["tasks"]}
-WANT = "shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s"
+def failed(task, result):
+    """The task's failed_when over its registered result, as Ansible evaluates a conditional."""
+    return bool(jinja2.Environment().compile_expression(task["failed_when"])(**{task["register"]: result}))
 import os, tempfile
 work = tempfile.mkdtemp()
 kubelet_file = os.path.join(work, "config.yaml")
 stub = os.path.join(work, "kubectl")  # answers `get configmap kubelet-config -o jsonpath=...` with the test's text
-with open(stub, "w") as f:
-    f.write("#!/bin/sh\ncat %s\n" % kubelet_file)
+with open(stub, "w") as f:  # ...and exits with STUB_RC: a kubectl that printed, then failed
+    f.write("#!/bin/sh\ncat %s\nexit ${STUB_RC:-0}\n" % kubelet_file)
 os.chmod(stub, 0o755)
 for name in ("The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)",
              "The kubelet runs with the shutdown grace after the upgrade (180s / 30s)"):
@@ -30,11 +36,22 @@ for name in ("The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)
         "/var/lib/kubelet/config.yaml", kubelet_file)
     for text, ok in (("shutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\n", True),
                      ("shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n", True),
-                     ("shutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\n", False)):
+                     ("shutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\n", False),
+                     ("", False)):
         with open(kubelet_file, "w") as f:
             f.write("a: 1\n" + text)
-        out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True).stdout.strip()
-        check(f"{name[:40]}: {text.split()[1]}", out == WANT, ok)
+        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+        result = {"rc": r.returncode, "stdout_lines": r.stdout.splitlines()}
+        check(f"{name[:40]}: {(text.split() or ["none"])[1 if text else 0]}", not failed(tasks[name], result), ok)
+# the ConfigMap read: the right text, but kubectl failed - not a proof (the file check's rc adds nothing: any failure
+# there leaves no complete output to compare)
+name = "The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)"
+with open(kubelet_file, "w") as f:
+    f.write("shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
+r = subprocess.run(["bash", "-c", tasks[name]["ansible.builtin.shell"].replace("{{ kubectl }}", stub)],
+                   capture_output=True, text=True, env=dict(os.environ, STUB_RC="1"))
+check("The kubelet-config ConfigMap read failed", not failed(tasks[name], {"rc": r.returncode,
+                                                                           "stdout_lines": r.stdout.splitlines()}), False)
 t = yaml.safe_load(open("deploy/ansible/playbooks/tasks/node-config.yml"))
 cmd = next(x for x in t if "ConfigMap" in x.get("name", ""))["ansible.builtin.shell"]
 patcher = cmd[cmd.index("python3 -c '") + len("python3 -c '"):cmd.index("' > \"$patch\"")]  # its python, fed JSON
