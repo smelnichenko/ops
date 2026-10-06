@@ -1,0 +1,74 @@
+---
+# A step that replaces Tempo's major (its tempo-flush line): Tempo 3 does not replay Tempo 2's WAL, so the spans Tempo
+# 2 still holds are lost unless they are flushed first - production's merge flushes right before the repo the line
+# names (scripts/upgrade-production.py merge). In the Vagrant copy, before the step's mirror push:
+#
+#   -e mode=flush   a fresh trace pushed and found (Tempo 2 holds it), then Tempo flushed - the same call production
+#                   makes; its ID kept in .upgrade/tempo-preflush.txt
+#   -e mode=verify  after the step: that trace by its ID - on Tempo 3, from the store (the flush put it there)
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=flush|verify
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: ../vagrant-only-play.yml
+
+- name: Tempo flushed before its major changes, the spans it held kept
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    proxy: /api/v1/namespaces/schnappy-infra/services
+    id_file: "{{ playbook_dir }}/../../../.upgrade/tempo-preflush.txt"
+  tasks:
+    - name: The mode is flush or verify
+      ansible.builtin.assert:
+        that: mode | default('') in ['flush', 'verify']
+        fail_msg: "-e mode=flush|verify"
+        quiet: true
+
+    - name: Flush
+      when: mode == 'flush'
+      block:
+        - name: A trace ID of this run's own
+          ansible.builtin.set_fact:
+            _trace: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-32') }}"
+
+        - name: The trace, pushed while Tempo 2 holds it
+          ansible.builtin.include_tasks: tasks/tempo-push.yml
+          vars:
+            push_trace_id: "{{ _trace }}"
+            push_span_id: "{{ _trace[:16] }}"
+            push_name: upgrade-preflush
+
+        - name: Tempo has it (in its ingester, not yet in a block)
+          ansible.builtin.command: >-
+            kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-tempo:3200/proxy/api/traces/{{ _trace }}'
+          register: _held
+          changed_when: false
+          retries: 30
+          delay: 5
+          until: _held.rc == 0 and 'upgrade-preflush' in _held.stdout
+
+        - name: Tempo flushed - production's merge makes the same call
+          ansible.builtin.command: >-
+            kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-tempo:3200/proxy/flush'
+          changed_when: true
+
+        - name: Its ID kept for the check after the step
+          ansible.builtin.copy:
+            content: "{{ _trace }}\n"
+            dest: "{{ id_file }}"
+            mode: '0644'
+          delegate_to: localhost
+          become: false
+
+    - name: The trace pushed before the flush, after the step
+      when: mode == 'verify'
+      ansible.builtin.command: >-
+        kubectl --kubeconfig {{ kubeconfig }} get --raw
+        '{{ proxy }}/schnappy-tempo:3200/proxy/api/traces/{{ lookup('ansible.builtin.file', id_file) | trim }}'
+      register: _kept
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _kept.rc == 0 and 'upgrade-preflush' in _kept.stdout

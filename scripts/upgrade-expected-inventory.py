@@ -18,6 +18,10 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                copy of Postgres from a fresh backup and its WAL after it)
     cert-renew                                (the step changes cert-manager: the runner renews every Certificate
                                                after it and wants each Ready at a higher revision)
+    tempo-flush <infra|platform>              (the step replaces Tempo's major, which does not replay the old one's WAL:
+                                               production's merge flushes Tempo right before merging that repo; the
+                                               runner flushes before the step's push and wants a trace it pushed
+                                               before the flush back after the step)
     restarts-control-plane                    (the step's own change restarts the control plane - a kubeadm upgrade:
                                                the controllers holding a leader lease restart with the API server, so
                                                the settle after it records their restarts without judging them)
@@ -71,6 +75,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --cert-renew <step>                    (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restarts-control-plane <step>        (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --tempo-flush <step>             (prints the repo before which, or nothing)
        scripts/upgrade-expected-inventory.py --restore-undo <step>        (prints "<serverName> <image>" or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-compat <step>             (prints the version or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
@@ -90,7 +95,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
-          wave0=None, soak=None, settle=None):
+          wave0=None, soak=None, settle=None, tempo_flush=None):
     changes = []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -133,6 +138,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
                 settle.append(int(line.split()[1]))
         elif line.startswith("default "):
             pass  # scripts/upgrade-defaults.py
+        elif re.fullmatch(r"tempo-flush (infra|platform)", line):
+            if tempo_flush is not None:
+                tempo_flush.append(line.split()[1])
         elif line.startswith("argo-out-of-sync "):
             if out_of_sync is not None:
                 out_of_sync.append(line[len("argo-out-of-sync "):].strip())
@@ -208,7 +216,7 @@ def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
                                    ["--barman-check"], ["--restore-check"], ["--cert-renew"],
-                                   ["--restarts-control-plane"],
+                                   ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
                                    ["--wave0"]) else None
     if mode:
@@ -228,6 +236,11 @@ def main():
         flags = set()
         parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
         print("yes" if mode[2:] in flags else "no")
+        return
+    if mode == "--tempo-flush":
+        before = []
+        parse(os.path.join(STEPS, args[0] + ".txt"), tempo_flush=before)
+        print(before[0] if before else "")
         return
     if mode == "--restore-undo":
         undo = []

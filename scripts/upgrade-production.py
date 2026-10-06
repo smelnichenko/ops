@@ -100,14 +100,15 @@ def step_names():
 
 
 def step_info(name):
-    playbooks, wave0, soak, settle, out_of_sync, flags = [], [], [], [], [], set()
+    playbooks, wave0, soak, settle, out_of_sync, flags, tempo_flush = [], [], [], [], [], set(), []
     inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak, settle=settle,
-              out_of_sync=out_of_sync, flags=flags)
+              out_of_sync=out_of_sync, flags=flags, tempo_flush=tempo_flush)
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
             "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
-            "base_backup": "barman-check" in flags, "restarts_expected": "restarts-control-plane" in flags}
+            "base_backup": "barman-check" in flags, "restarts_expected": "restarts-control-plane" in flags,
+            "tempo_flush": tempo_flush}
 
 
 # ---- the ledger: rules (pure) ---------------------------------------------------------------------------------------
@@ -654,6 +655,11 @@ def merge(step, repo):
                 run(["git", "-C", d, "--no-pager", *args, f"main..upgrade/{step}"])
             refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
                    else ["not confirmed - nothing merged, nothing recorded"])
+            # a step that replaces Tempo's major: what Tempo still holds in its WAL flushed to the store first (the
+            # next major does not replay it)
+            if repo in step_info(step)["tempo_flush"]:
+                ten("kubectl get --raw /api/v1/namespaces/schnappy-infra/services/schnappy-tempo:3200/proxy/flush")
+                print("TEMPO FLUSHED (its WAL into the store) before the merge")
             refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
                    else [f"the {repo} merge failed (above)"])
         sha = run(["git", "-C", d, "rev-parse", "upgrade-merged/" + step + "^{commit}"], capture_output=True,

@@ -246,7 +246,7 @@ class _Done:
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
-                       "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info")
+                       "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info", "ten")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: list(proof)
@@ -258,6 +258,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
                                                                                 ["app"])
     m.inventory_check = lambda *a: calls.append(("inventory",)) or True
     m.confirm = lambda q: calls.append(("asked",)) or answer
+    m.ten = lambda command, **k: calls.append(("ten", command.split("/")[-1])) or _Done()
     m.check = lambda *a, **k: True
     m.soak_state = lambda *a: (None, 0)
     m.merged_base = lambda *a: None
@@ -290,6 +291,16 @@ got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube
 check("merge 57, not confirmed: refused after the change was shown - nothing merged, nothing recorded",
       ([c for c in got if c[0] == "run" and c[1] == "upgrade-merge-step.sh" or c[0] == "record"], got[-1][0]),
       ([], "refused"))
+
+# step 54 replaces Tempo's major: its WAL flushed right before the infra merge (after the yes), not before platform's
+S54 = "54-tempo-3"
+check("54 flushes Tempo before its infra merge", info[S54]["tempo_flush"], ["infra"])
+got = [c for c in phase_calls(m.merge, S54, "infra", events=ev(f"{S54} apps app")) if c[0] in ("ten", "asked", "run")]
+check("merge 54 infra: asked, Tempo flushed, then merged",
+      [c for c in got if c[0] != "run" or c[1] == "upgrade-merge-step.sh"],
+      [("asked",), ("ten", "flush"), ("run", "upgrade-merge-step.sh")])
+got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
+check("merge 54 platform: no flush", [c for c in got if c[0] == "ten"], [])
 
 # the terminal question fails closed: no terminal (a cron, a pipe) is a no
 import subprocess as _sp

@@ -3,9 +3,9 @@
 # backend worker), infra's values the image - both upgrade/54-tempo-3, platform first. One-way: Tempo 3 reads 2.x
 # blocks, not the reverse - in production the traces bucket is not touched, so 2.x could only be restored with older
 # blocks.
-# outage: Tempo restarts - spans sent meanwhile are lost, and so are the ones Tempo 2 still holds in its WAL (Tempo 3
-# does not replay it): flush them to the store just before the infra merge -
-# `kubectl get --raw /api/v1/namespaces/schnappy-infra/services/schnappy-tempo:3200/proxy/flush` (tried on the copy)
+# outage: Tempo restarts - spans sent meanwhile are lost; the ones Tempo 2 still holds in its WAL (Tempo 3 does not
+# replay it) are flushed to the store first: the tempo-flush line below - production's merge calls Tempo's /flush right
+# before the infra merge, the full run before the step's push, and wants a trace pushed before the flush back after it
 # abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup (its restore rehearsed at this step in the full run; the
 # old version on it is not)
 # one-way: the in-cluster object store (Mimir's and Tempo's blocks) backed up into the Pi store before the step changes anything
@@ -15,3 +15,4 @@ image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0
 # infra's - infra first would start Tempo 3 on the 2.x config
 branch platform
 branch infra
+tempo-flush infra

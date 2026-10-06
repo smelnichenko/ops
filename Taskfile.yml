@@ -475,6 +475,8 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --cert-renew {{.STEP}}
       RESTARTS_CONTROL_PLANE:
         sh: scripts/upgrade-expected-inventory.py --restarts-control-plane {{.STEP}}
+      TEMPO_FLUSH:
+        sh: scripts/upgrade-expected-inventory.py --tempo-flush {{.STEP}}
       RESTORE_UNDO:
         sh: scripts/upgrade-expected-inventory.py --restore-undo {{.STEP}}
       WAVE0:
@@ -494,6 +496,12 @@ tasks:
             echo "=== WAVE 0 $store"
             task test:upgrade:wave0 STORES="$store"
           done
+      # a step that replaces Tempo's major (tempo-flush line): a trace pushed and Tempo flushed before the push, as
+      # production's merge flushes - the trace wanted back after the step (below)
+      - cmd: |
+          if [ -n "{{.TEMPO_FLUSH}}" ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=flush
+          fi
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them -
@@ -518,6 +526,10 @@ tasks:
       # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke
       # (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
       - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}'
+      - cmd: |
+          if [ -n "{{.TEMPO_FLUSH}}" ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=verify
+          fi
       # CNPG's WAL archiving and a fresh barman base backup - only after a step that changes CNPG or Postgres (the step
       # file's barman-check line): the backup production's data depends on
       - cmd: |
