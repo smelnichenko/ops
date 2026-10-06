@@ -36,7 +36,8 @@
 # upgrade`: edited only in the file, both settings went back to 0s - the next reboot then gave Kafka, ClickHouse and
 # Postgres no time to flush (ten 2026-10-04: file 180s/30s, ConfigMap 0s/0s). So they go into the
 # ConfigMap too. A switch, so the Vagrant copy's baseline can stay as ten is until the upgrade step that sets it.
-- name: Keep the shutdown grace across kubeadm upgrades - in the kubelet-config ConfigMap
+- name: The kubelet-config ConfigMap's shutdown grace - the patch it needs, if any (read-only, so the preview shows it)
+  check_mode: false
   ansible.builtin.shell: |
     set -euo pipefail
     k="kubectl --kubeconfig /etc/kubernetes/admin.conf -n kube-system"
@@ -59,12 +60,23 @@
     if new != data:
         print(json.dumps({"data": {"kubelet": new}}))
     ' > "$patch"
-    if [ -s "$patch" ]; then
-      $k patch configmap kubelet-config --type merge --patch-file "$patch" > /dev/null
-      echo patched
-    fi
+    cat "$patch"
   args:
     executable: /bin/bash
-  register: _kubelet_config_map
-  changed_when: "'patched' in _kubelet_config_map.stdout"
+  register: _kubelet_config_patch
+  changed_when: false
   when: kubelet_grace_in_kubelet_config_map | default(true) | bool
+
+- name: Keep the shutdown grace across kubeadm upgrades - in the kubelet-config ConfigMap
+  ansible.builtin.command:
+    argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, -n, kube-system, patch, configmap, kubelet-config,
+           --type, merge, -p, "{{ _kubelet_config_patch.stdout }}"]
+  changed_when: true
+  when: kubelet_grace_in_kubelet_config_map | default(true) | bool and _kubelet_config_patch.stdout | length > 0
+
+- name: The preview - what the ConfigMap would get
+  ansible.builtin.debug:
+    msg: >-
+      PREVIEW: {{ ('kubelet-config would be patched: ' ~ _kubelet_config_patch.stdout)
+      if _kubelet_config_patch.stdout | length > 0 else 'kubelet-config holds the shutdown grace already' }}
+  when: ansible_check_mode and kubelet_grace_in_kubelet_config_map | default(true) | bool
