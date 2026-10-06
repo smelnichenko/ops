@@ -34,6 +34,8 @@
     # inventory vars — no per-play defaults.
     forgejo_db_password: "{{ postgres_admin_password }}"
     keycloak_db_password: "{{ postgres_admin_password }}"
+    # the other Pi of the pair: a restart here never takes the last serving copy of a service down (the handlers)
+    peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
 
   tasks:
     # ================================================================
@@ -663,7 +665,10 @@
         daemon_reload: true
 
     # Each restart one Pi at a time (throttle), the service answering again before the next Pi's: both at once took
-    # Forgejo, or Keycloak (every login, Istio's key fetch), down on both Pis together. Bounded waits.
+    # Forgejo, or Keycloak (every login, Istio's key fetch), down on both Pis together. Bounded waits. throttle does not
+    # stop the second Pi when the first one's restart failed - a change that breaks one breaks both - so each restart
+    # first refuses to take down the last serving copy: it runs only while the other Pi serves, or this one does not
+    # (a first install, a service down already).
     # Debian's own cluster, before Patroni takes over - never under Patroni (it would start a second Postgres)
     - name: Restart Postgres
       ansible.builtin.shell: |
@@ -680,6 +685,10 @@
     - name: Restart Forgejo
       ansible.builtin.shell: |
         set -euo pipefail
+        up() { curl -sf -o /dev/null --max-time 10 "http://$1:3000/api/v1/version"; }
+        if up 127.0.0.1 && ! up {{ peer_ip }}; then
+          echo "REFUSED on {{ inventory_hostname }}: Forgejo serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
+        fi
         systemctl restart forgejo
         for _ in $(seq 90); do curl -sf -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0; sleep 2; done
         echo "Forgejo on {{ inventory_hostname }} not serving 180 s after its restart" >&2; exit 1
@@ -691,6 +700,10 @@
     - name: Restart Keycloak
       ansible.builtin.shell: |
         set -euo pipefail
+        up() { curl -sf -o /dev/null --max-time 10 "http://$1:8080/realms/master"; }
+        if up 127.0.0.1 && ! up {{ peer_ip }}; then
+          echo "REFUSED on {{ inventory_hostname }}: Keycloak serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
+        fi
         systemctl daemon-reload
         systemctl restart keycloak
         for _ in $(seq 120); do curl -sf -o /dev/null http://127.0.0.1:8080/realms/master && exit 0; sleep 2; done
@@ -704,6 +717,11 @@
     - name: Restart HAProxy
       ansible.builtin.shell: |
         set -euo pipefail
+        up() { curl -sf -o /dev/null --max-time 10 "http://$1:3000/api/v1/version"; }
+        if up 127.0.0.1 && ! up {{ peer_ip }}; then
+          echo "REFUSED on {{ inventory_hostname }}: Forgejo (restarted with HAProxy) serves here but not on the other Pi ({{ peer_ip }})" >&2
+          exit 1
+        fi
         systemctl restart haproxy
         for _ in $(seq 90); do
           systemctl is-active --quiet haproxy \

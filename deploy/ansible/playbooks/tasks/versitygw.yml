@@ -148,10 +148,16 @@
   ansible.builtin.set_fact:
     _vgw_restart: "{{ _vgw_unit is changed or _vgw_env is changed or _vgw_running_exe.stdout != '/usr/bin/versitygw' }}"
 
-# one Pi at a time, each serving again before the next: both gateways down at once is the backup store down
+# one Pi at a time, each serving again before the next: both gateways down at once is the backup store down. A failed
+# item does not stop the loop, so each restart first refuses to take down the last serving gateway: only while the
+# other Pi's serves, or this one's does not
 - name: Restart versitygw where needed - one Pi at a time, each healthy before the next  # noqa: command-instead-of-module
   ansible.builtin.shell: |
     set -euo pipefail
+    up() { curl -fsS -o /dev/null --max-time 10 "http://$1:{{ vgw_port }}/health"; }
+    if up localhost && ! up {{ _peer }}; then
+      echo "REFUSED on {{ item }}: versitygw serves here but not on the other Pi ({{ _peer }})" >&2; exit 1
+    fi
     systemctl restart versitygw
     for _ in $(seq 30); do
       if curl -fsS -o /dev/null http://localhost:{{ vgw_port }}/health; then
@@ -163,6 +169,8 @@
     exit 1
   args:
     executable: /bin/bash
+  vars:
+    _peer: "{{ hostvars[groups['pis'] | difference([item]) | first]['ansible_host'] }}"
   delegate_to: "{{ item }}"
   loop: >-
     {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vgw_restart', 'defined') | selectattr('_vgw_restart')
