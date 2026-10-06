@@ -1,6 +1,7 @@
 # Plan 101 - the Pis' tier-0 services: safe to re-run, backed up, then upgraded
 
-Status: decided 2026-10-05 (below); Forgejo 15.0.9 in progress first. Nothing else on the Pis changes yet.
+Status: phases 0-1 built and reviewed (2026-10-05/06); nothing on production's Pis changes before plan 100's full run
+and the full review of plans 100 and 101 are done, and then each step only with the operator's go (below).
 
 ## Context
 
@@ -67,10 +68,13 @@ test:patroni-upgrade, test:vault-upgrade). Phase 2 after plan 100's rollout.
    up - and one loss tolerated).
 3. One database port for Forgejo and Keycloak (PgBouncer :6432), set by one playbook; PgBouncer installed but not
    running is refused, not answered with :5000.
-4. keepalived's drop-in: a restart does not stop Nexus (only a real stop or a BACKUP transition).
+4. keepalived: a config change reloads (the VIP and Nexus stay). A restart - a drop-in change, keepalived's package
+   upgrade - still stops Nexus through the drop-in's ExecStopPost and moves the VIP.
 5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each:
-   `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database, Keycloak realm export,
-   `forgejo dump` (stopped-consistent copy at the upgrade; the regular one from the replica). setup-pi-backups.yml,
+   `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database (Forgejo's among them),
+   Keycloak realm export. NOT backed up: Forgejo's repositories (/var/lib/forgejo/repos on the Gluster volume
+   forgejo-repos - replicated, not backed up; the upgrade's pg_dump is taken with Forgejo still serving) - no
+   `forgejo dump` exists; one is the operator's decision. setup-pi-backups.yml,
    restored in Vagrant (task test:pi-backups). Late: infra's kube-system CronJob pi-backup-check reads the bucket's
    last-success every 3 h - older than 26 h or missing fails it, KubeJobFailed fires (local branch
    feat/pi-backup-check, pushed after the Pis' first production backup, or it fires at once).
@@ -94,8 +98,8 @@ test:patroni-upgrade, test:vault-upgrade). Phase 2 after plan 100's rollout.
   the old binary kept (task test:vault-upgrade, deploy:vault:upgrade).
 - Patroni 4.1.0 -> 4.1.5 (pip, pinned in vars/patroni.yml): upgrade-patroni.yml - `patronictl pause --wait`, the
   package on each node, restart one at a time, `resume` (task test:patroni-upgrade, deploy:patroni:upgrade).
-Each with a Vagrant proof (the copy at today's versions, the patch applied, the checks green), then production one
-Pi at a time with the operator's approval.
+Each with a Vagrant proof (the copy at today's versions, the patch applied, the checks green), then production with
+the operator's approval - each playbook takes the Pis one at a time itself, in one run (none takes --limit).
 
 ## Review (2026-10-05) and the production order
 
@@ -109,13 +113,17 @@ age out every bucket on an empty name. The tests behind each were rebuilt to che
 (sampled versions and health, Postgres start times and timelines, traced processes, marker rows) and every guard
 revert-checked red.
 
-Production order (each step the operator's go):
+Production order - nothing of it before plan 100's full run is green (its Pis pinned to production's versions by
+tests/ansible/upgrade/pi-baseline.yml) and the full review of plans 100 and 101 is done with its fixes proven; then
+each step with the operator's go:
 1. task deploy:forgejo:upgrade (15.0.9).
 2. task deploy:pi-backups, then one run of pi-tier0-backup.service.
 3. infra branch feat/pi-backup-check pushed (the late-backup check; before the first backup it fires at once).
 4. task deploy:patroni:upgrade (4.1.5).
 5. task deploy:vault:upgrade (1.21.4; also installs the stdin unseal script).
-6. prod-inventory.txt's Pi lines refreshed from production, then plan 100's full run 7.
+6. prod-inventory.txt's Pi lines and pi-baseline.yml moved to what production then runs - plan 100's proof covered
+   the Pis at the old versions, so a full run proves plan 100 again before its first production step (unless that
+   full run already pinned the Pis to these targets: the operator's choice).
 Keycloak's root-only secrets file reaches production with the next setup-pi-services run (it restarts Keycloak):
 with phase 2's Keycloak upgrade.
 

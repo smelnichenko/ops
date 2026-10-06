@@ -286,7 +286,8 @@
         dest: /var/lib/forgejo/custom/conf/app.ini
         owner: forgejo
         group: forgejo
-        mode: '0644'
+        # forgejo's alone: it holds the database password, SECRET_KEY, INTERNAL_TOKEN and JWT_SECRET (it was 0644)
+        mode: '0600'
         content: |
           APP_NAME = Forgejo
           RUN_USER = forgejo

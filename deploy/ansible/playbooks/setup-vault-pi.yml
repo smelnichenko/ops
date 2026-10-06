@@ -412,11 +412,12 @@
           ============================================================
       when: _init is changed
 
-    - name: Fetch unseal-keys to controller (for distribution to pi2)
-      ansible.builtin.fetch:
+    # read into memory for pi2, never written on the controller (a fetch left every share in its /tmp)
+    - name: The unseal keys, for pi2
+      ansible.builtin.slurp:
         src: /etc/vault-unseal/unseal-keys
-        dest: /tmp/vault-unseal-keys
-        flat: true
+      register: _unseal_keys
+      no_log: true
 
     - name: Unseal pi1 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh
@@ -463,11 +464,12 @@
   tasks:
     - name: Copy unseal-keys to pi2
       ansible.builtin.copy:
-        src: /tmp/vault-unseal-keys
+        content: "{{ hostvars['pi1']._unseal_keys.content | b64decode }}"
         dest: /etc/vault-unseal/unseal-keys
         owner: root
         group: root
         mode: '0400'
+      no_log: true
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh

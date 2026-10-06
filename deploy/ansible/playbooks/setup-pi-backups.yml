@@ -11,8 +11,10 @@
 #                      versions, not a restore source: Keycloak masks client and identity-provider secrets in it
 #                      (**********) and leaves users out; Keycloak's restore is its database dump
 #   last-success       the run's time, written last - a check in the cluster alerts when it is old
-# Uploaded with rclone and compared (rclone check); copies older than pi_backup_retention_days deleted - in this
-# bucket only (the store's key is its root key: an empty bucket name would reach every bucket, so it stops the run).
+# Uploaded with rclone and compared (rclone check); copies older than pi_backup_retention_days deleted by their names,
+# the newest pi_backup_keep kept whatever the clock says - in this bucket only (the store's key is its root key: an
+# empty bucket name would reach every bucket, so it stops the run). A failed Keycloak export still uploads the rest,
+# then fails the run without a new last-success.
 # Secrets stay off command lines (any local user reads those in /proc): the Keycloak password and token go to curl
 # on stdin and through a config read from a pipe. A run is bounded (its unit's start limit; curl's own).
 #
@@ -30,6 +32,8 @@
   vars:
     pi_backup_bucket: pi-backups
     pi_backup_retention_days: 30
+    # the newest backups kept whatever their age - retention reads the Pi's clock
+    pi_backup_keep: 7
     # after CNPG's (01:30) and Velero's (02:00), before the Scylla repair window
     pi_backup_on_calendar: "*-*-* 02:40:00"
     vip: "{{ keepalived_vip }}"
@@ -45,6 +49,19 @@
         state: directory
         mode: '0700'
 
+    # an empty one (a key missing from .env) would overwrite the working file, and the backups stop until the late
+    # check fires a day later
+    - name: Its credentials are all there
+      ansible.builtin.assert:
+        that:
+          - backup_root_user | length > 0
+          - backup_root_password | length > 0
+          - postgres_admin_password | length > 0
+          - keycloak_admin_password | length > 0
+        fail_msg: "REFUSED: an empty credential (BACKUP_ACCESS_KEY, BACKUP_SECRET_KEY, KEYCLOAK_DB_PASSWORD or KEYCLOAK_ADMIN_PASSWORD in .env)"
+        quiet: true
+      no_log: true
+
     - name: Its credentials, root only (the store's, Postgres', Keycloak's admin)
       ansible.builtin.copy:
         dest: /etc/pi-backup/env
@@ -59,6 +76,7 @@
           KC_ADMIN_PASSWORD={{ keycloak_admin_password }}
           PI_BACKUP_BUCKET={{ pi_backup_bucket }}
           PI_BACKUP_RETENTION_DAYS={{ pi_backup_retention_days }}
+          PI_BACKUP_KEEP={{ pi_backup_keep }}
           PI_BACKUP_VIP={{ vip }}
       no_log: true
 
@@ -72,6 +90,7 @@
           # EnvironmentFile. Exit 0 also when this Pi does not hold the VIP (the other one backs up).
           set -euo pipefail
           : "${PI_BACKUP_BUCKET:?no bucket}" "${PI_BACKUP_RETENTION_DAYS:?no retention}" "${PI_BACKUP_VIP:?no VIP}"
+          : "${PI_BACKUP_KEEP:?no count of backups to keep}"
           # the VIP's address on this Pi (no grep -q in a pipe: under pipefail its early exit can fail the pipe)
           [ -n "$(ip -o -4 addr show to "${PI_BACKUP_VIP}/32")" ] || { echo "not the VIP's Pi - the other backs up"; exit 0; }
           ts=$(date -u +%Y%m%dT%H%M%SZ)
@@ -89,27 +108,49 @@
             pg_restore --list "$work/pg-$db.dump" > /dev/null
           done
           pg_dumpall "${P[@]}" --globals-only > "$work/pg-globals.sql"
-          # Keycloak's realms (users are in its database dump)
-          kc=http://127.0.0.1:8080
-          # the password on curl's stdin, the token in a config curl reads from a pipe (printf is bash's own)
-          token=$(printf '%s' "$KC_ADMIN_PASSWORD" | curl -fsS --max-time 30 -d client_id=admin-cli -d username=admin \
-            --data-urlencode password@- -d grant_type=password "$kc/realms/master/protocol/openid-connect/token" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')
-          kc_auth() { printf 'header = "Authorization: Bearer %s"\n' "$token"; }
-          realms=$(curl -fsS --max-time 30 -K <(kc_auth) "$kc/admin/realms" \
-            | python3 -c 'import json, sys; print(" ".join(r["realm"] for r in json.load(sys.stdin)))')
-          for realm in $realms; do
-            curl -fsS --max-time 120 -X POST -K <(kc_auth) \
-              "$kc/admin/realms/$realm/partial-export?exportClients=true&exportGroupsAndRoles=true" > "$work/keycloak-$realm.json"
-            python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["realm"] == sys.argv[2]' \
-              "$work/keycloak-$realm.json" "$realm"
-          done
-          # into the store, compared, the old ones gone, then the time of this success
+          # Keycloak's realms (users are in its database dump). Best effort: Keycloak down, or its admin's password
+          # changed, must not throw away the Consul and Postgres backups above - they are uploaded, and the run then
+          # fails without a new last-success (the late check reports it)
+          keycloak() {
+            local kc=http://127.0.0.1:8080 token realms realm
+            # the password on curl's stdin, the token in a config curl reads from a pipe (printf is bash's own)
+            token=$(printf '%s' "$KC_ADMIN_PASSWORD" | curl -fsS --max-time 30 -d client_id=admin-cli -d username=admin \
+              --data-urlencode password@- -d grant_type=password "$kc/realms/master/protocol/openid-connect/token" \
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])') || return 1
+            kc_auth() { printf 'header = "Authorization: Bearer %s"\n' "$token"; }
+            realms=$(curl -fsS --max-time 30 -K <(kc_auth) "$kc/admin/realms" \
+              | python3 -c 'import json, sys; print(" ".join(r["realm"] for r in json.load(sys.stdin)))') || return 1
+            [ -n "$realms" ] || return 1
+            for realm in $realms; do
+              curl -fsS --max-time 120 -X POST -K <(kc_auth) \
+                "$kc/admin/realms/$realm/partial-export?exportClients=true&exportGroupsAndRoles=true" \
+                > "$work/keycloak-$realm.json" || return 1
+              python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["realm"] == sys.argv[2]' \
+                "$work/keycloak-$realm.json" "$realm" || return 1
+            done
+          }
+          kc_ok=yes
+          if ! keycloak; then
+            kc_ok=no
+            rm -f "$work"/keycloak-*.json
+            echo "the Keycloak realm export failed - the rest is backed up, no last-success" > "$work/KEYCLOAK-EXPORT-FAILED"
+          fi
+          # into the store, compared
           rclone mkdir "store:$PI_BACKUP_BUCKET"
           rclone copy "$work" "store:$PI_BACKUP_BUCKET/$ts"
           rclone check "$work" "store:$PI_BACKUP_BUCKET/$ts" --one-way
-          rclone delete "store:$PI_BACKUP_BUCKET" --min-age "${PI_BACKUP_RETENTION_DAYS}d" --exclude last-success
-          rclone rmdirs "store:$PI_BACKUP_BUCKET" --leave-root
+          [ "$kc_ok" = yes ] || { echo "PI TIER-0 BACKUP $ts PARTIAL: Keycloak's realms missing"; exit 1; }
+          # the old ones gone - by their own names (UTC), the newest $PI_BACKUP_KEEP kept whatever the clock says
+          cutoff=$(date -u -d "-${PI_BACKUP_RETENTION_DAYS} days" +%Y%m%dT%H%M%SZ)
+          mapfile -t backups < <(rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET" | sed 's#/$##' \
+            | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort)
+          total=$(printf '%s\n' "${backups[@]}" | grep -c .)  # (not the array's length operator: Jinja reads it)
+          for i in "${!backups[@]}"; do
+            if [ $(( total - i )) -gt "$PI_BACKUP_KEEP" ] && [[ "${backups[$i]}" < "$cutoff" ]]; then
+              rclone purge "store:$PI_BACKUP_BUCKET/${backups[$i]}"
+            fi
+          done
+          # then the time of this success
           echo "$ts" | rclone rcat "store:$PI_BACKUP_BUCKET/last-success"
           echo "PI TIER-0 BACKUP $ts: $(ls "$work" | tr '\n' ' ')"
 

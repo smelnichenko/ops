@@ -53,6 +53,9 @@
       Description=Auto-unseal Vault
       After=vault.service
       Requires=vault.service
+      # tried again until it unseals: a boot where Consul has no leader within the script's wait (a Pi dead, ten slow)
+      # left Vault sealed for good
+      StartLimitIntervalSec=0
 
       [Service]
       Type=oneshot
@@ -60,6 +63,8 @@
       RemainAfterExit=true
       # the script's own waits end by about 300 s
       TimeoutStartSec=360
+      Restart=on-failure
+      RestartSec=30
 
       [Install]
       WantedBy=multi-user.target

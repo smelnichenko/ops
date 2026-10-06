@@ -1,7 +1,7 @@
 ---
 # The Pis' tier-0 backup (setup-pi-backups.yml) taken on the Vagrant Pi stack and every piece restored, all read back
 # from the Pi store:
-#   before     a marker database with a random row; two probe objects in the bucket, 31 and 29 days old
+#   before     a marker database with a random row; two probe backups in the bucket, named 31 and 29 days back
 #   the run    started on both Pis: exactly one backs up and it is the VIP's Pi; the daily timer on, on both
 #   consul.snap      into a throwaway Consul dev agent on other ports - Vault's keys (vault/core/) and Patroni's
 #                    (service/) there
@@ -9,13 +9,18 @@
 #                    row there, Forgejo's and Keycloak's users as many as live
 #   keycloak-*.json  one per realm Keycloak has, each with clients
 #   last-success     this run's time
-#   retention        the 31-day probe gone, the 29-day one kept
+#   retention        by the backups' names (pi_backup_keep 1 here): the 31-day probe gone, the 29-day one kept
+#   a clock ahead    retention 0 - every backup older than the cutoff: the newest pi_backup_keep (2) stay, no other
+#   Keycloak down    the rest uploaded with a failure marker, the run failed, last-success not moved
 # Vagrant only (the guard play first). Usage: task test:pi-backups
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
 
 - name: Production's backup playbook
   ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/setup-pi-backups.yml
+  vars:
+    # only this run's backup kept by count: the 31-day probe then goes by its name
+    pi_backup_keep: 1
 
 - name: Before - a marker row, retention probes
   hosts: pi1
@@ -36,7 +41,7 @@
       register: _marker
       changed_when: true
 
-    - name: Two probe objects in the bucket, 31 and 29 days old
+    - name: Two probe backups in the bucket, named 31 and 29 days back
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -44,12 +49,12 @@
           set -a; . /etc/pi-backup/env; set +a
           d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
           for age in 31 29; do
-            mkdir -p "$d/retention-probe-${age}d"; echo probe > "$d/retention-probe-${age}d/probe"
-            touch -d "$age days ago" "$d/retention-probe-${age}d/probe"
+            n=$(date -u -d "-$age days" +%Y%m%dT%H%M%SZ)
+            mkdir -p "$d/$n"; echo probe > "$d/$n/probe"; echo "$n" >> "$d/names"
           done
           rclone mkdir "store:$PI_BACKUP_BUCKET"
-          rclone copy "$d" "store:$PI_BACKUP_BUCKET"
-          rclone lsl "store:$PI_BACKUP_BUCKET" --include 'retention-probe-*/**'
+          rclone copy "$d" "store:$PI_BACKUP_BUCKET" --exclude names > /dev/null
+          cat "$d/names"
       register: _probes
       changed_when: true
 
@@ -130,10 +135,12 @@
         cmd: |
           set -euo pipefail
           set -a; . /etc/pi-backup/env; set +a
-          left=$(rclone lsf -R "store:$PI_BACKUP_BUCKET" --include 'retention-probe-*/**' --files-only)
-          rclone purge "store:$PI_BACKUP_BUCKET/retention-probe-29d" 2>/dev/null || true
-          echo "left: $left"
-          [ "$left" = "retention-probe-29d/probe" ]
+          dirs=$(rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET" | sed 's#/$##')
+          old={{ hostvars['pi1']._probes.stdout_lines[0] }} young={{ hostvars['pi1']._probes.stdout_lines[1] }}
+          rclone purge "store:$PI_BACKUP_BUCKET/$young" 2> /dev/null || true
+          ! grep -qx "$old" <<< "$dirs" || { echo "the 31-day probe $old is still there"; exit 1; }
+          grep -qx "$young" <<< "$dirs" || { echo "the 29-day probe $young is gone"; exit 1; }
+          echo "the 31-day probe gone, the 29-day one kept"
       register: _retention
       changed_when: false
 
@@ -233,3 +240,62 @@
           PI TIER-0 BACKUP {{ _got.stdout_lines[0] }} RESTORES: consul - {{ _consul.stdout }}; postgres -
           {{ _pg.stdout_lines | join(', ') }}; keycloak - {{ _kc.stdout_lines | join(', ') }}; retention -
           {{ _retention.stdout }}
+
+# the cases a normal day does not reach, on the VIP's Pi (the other exits at once)
+- name: A clock ahead keeps the newest; Keycloak down still backs up the rest
+  hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Whether this Pi holds the VIP
+      ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
+      register: _vip_now
+      changed_when: false
+
+    - name: The VIP's Pi
+      when: _vip_now.stdout | length > 0
+      block:
+        - name: Retention 0 (the cutoff now - every backup "old", as under a clock gone ahead), keep 2
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              set -a; . /etc/pi-backup/env; set +a
+              PI_BACKUP_RETENTION_DAYS=0 PI_BACKUP_KEEP=2 /usr/local/sbin/pi-tier0-backup.sh > /dev/null
+              rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort
+          register: _kept
+          changed_when: true
+          failed_when: _kept.rc != 0 or _kept.stdout_lines | length != 2
+
+        - name: Keycloak down - the run fails, the rest uploaded with the failure marker, last-success not moved
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -uo pipefail
+              set -a; . /etc/pi-backup/env; set +a
+              before=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success")
+              systemctl stop keycloak
+              trap 'systemctl start keycloak' EXIT
+              out=$(/usr/local/sbin/pi-tier0-backup.sh 2>&1); rc=$?
+              newest=$(rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET" | sed 's#/$##' | grep -E '^[0-9]{8}T' | sort | tail -1)
+              files=$(rclone lsf "store:$PI_BACKUP_BUCKET/$newest" | sort | tr '\n' ' ')
+              after=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success")
+              echo "rc=$rc newest=$newest files=$files last-success $before -> $after ($(tail -1 <<< "$out"))"
+              [ "$rc" != 0 ] && [ "$after" = "$before" ] && [ "$newest" != "$before" ] \
+                && grep -q KEYCLOAK-EXPORT-FAILED <<< "$files" && grep -q consul.snap <<< "$files" \
+                && grep -q 'pg-keycloak.dump' <<< "$files" && ! grep -q 'keycloak-.*json' <<< "$files"
+          register: _kc_down
+          changed_when: true
+
+        - name: Keycloak serving again
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8080/realms/master
+          register: _kc_back
+          retries: 30
+          delay: 10
+          until: _kc_back.status == 200
+
+        - name: The two cases
+          ansible.builtin.debug:
+            msg: "kept under a clock ahead: {{ _kept.stdout_lines | join(', ') }}; Keycloak down: {{ _kc_down.stdout }}"
+
