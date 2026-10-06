@@ -46,8 +46,13 @@
     import json, re, sys
     data = json.load(sys.stdin)["data"]["kubelet"]
     new = data
+    # by value: kubeadm writes 180s back as 3m0s, which is the same
+    secs = lambda d: sum(float(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"([0-9.]+)(h|m|s)", d))
     for key, value in (("shutdownGracePeriod", "180s"), ("shutdownGracePeriodCriticalPods", "30s")):
-        if re.search(r"(?m)^" + key + r":", new):
+        held = re.search(r"(?m)^" + key + r":\s*(\S+)\s*$", new)
+        if held and secs(held.group(1)) == secs(value):
+            continue
+        if held:
             new = re.sub(r"(?m)^" + key + r":.*$", key + ": " + value, new)
         else:
             new = new.rstrip("\n") + "\n" + key + ": " + value + "\n"

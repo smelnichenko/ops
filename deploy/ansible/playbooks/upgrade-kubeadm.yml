@@ -96,7 +96,11 @@
       ansible.builtin.shell: |
         set -euo pipefail
         {{ kubectl }} -n kube-system get configmap kubelet-config -o jsonpath='{.data.kubelet}' \
-          | grep -E '^shutdownGracePeriod(CriticalPods)?:' | sort
+          | grep -E '^shutdownGracePeriod(CriticalPods)?:' | sort \
+          | python3 -c 'import re, sys
+        for line in sys.stdin:  # a duration in seconds: kubeadm writes 180s back as 3m0s
+            key, value = line.split(":", 1)
+            print("%s: %gs" % (key, sum(float(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"([0-9.]+)(h|m|s)", value))))'
       args:
         executable: /bin/bash
       register: _grace_in_map
@@ -227,7 +231,11 @@
     - name: The kubelet runs with the shutdown grace after the upgrade (180s / 30s)
       ansible.builtin.shell: |
         set -euo pipefail
-        grep -E '^shutdownGracePeriod(CriticalPods)?:' /var/lib/kubelet/config.yaml | sort
+        grep -E '^shutdownGracePeriod(CriticalPods)?:' /var/lib/kubelet/config.yaml | sort \
+        | python3 -c 'import re, sys
+        for line in sys.stdin:  # a duration in seconds: kubeadm writes 180s back as 3m0s
+            key, value = line.split(":", 1)
+            print("%s: %gs" % (key, sum(float(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"([0-9.]+)(h|m|s)", value))))'
       args:
         executable: /bin/bash
       register: _grace_in_file
