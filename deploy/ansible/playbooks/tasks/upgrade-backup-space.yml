@@ -1,7 +1,9 @@
 ---
 # Room for a Wave 0 copy before it is made: local_dir's filesystem must have free at least the sources' size (an upper
-# bound - the archives are gzipped), one upload part (written beside the archive while it uploads) and 1 GiB. A tar
-# that fills ten's root filesystem fails the backup and every write on the node with it.
+# bound - the archives are gzipped), one upload part (written beside the archive while it uploads) and 1 GiB - and keep
+# above the kubelet's eviction floor after it (imagefs.available<15%, the higher of its two defaults: under it the
+# node's pods are evicted, long before the disk is full). A tar that fills ten's root filesystem fails the backup and
+# every write on the node with it.
 #
 # Expects: space_dirs (one or more directories on this host), local_dir, upload_part_bytes.
 - name: "Space - room in the local directory for a copy of: {{ space_dirs | join(', ') }}"
@@ -12,8 +14,12 @@
       src=$(du -sbc {{ space_dirs | map('quote') | join(' ') }} | tail -n 1 | cut -f1)
       need=$(( src + {{ upload_part_bytes | int }} + 1073741824 ))
       free=$(df --output=avail -B1 {{ local_dir | quote }} | tail -n 1 | tr -d ' ')
-      echo "sources $src bytes, need $need, free $free"
+      size=$(df --output=size -B1 {{ local_dir | quote }} | tail -n 1 | tr -d ' ')
+      floor=$(( size * 15 / 100 ))
+      echo "sources $src bytes, need $need, free $free, the kubelet's eviction floor $floor"
       [ "$free" -ge "$need" ] || { echo "not enough room in {{ local_dir }}"; exit 1; }
+      [ $(( free - need )) -ge "$floor" ] \
+        || { echo "the copy would leave $(( free - need )) bytes free, under the kubelet's eviction floor $floor"; exit 1; }
   register: _space
   changed_when: false
   failed_when: _space.rc != 0 or space_dirs | length == 0

@@ -287,10 +287,24 @@
               changed_when: true
           always:
             # what UNFREEZE does - its hard links dropped (SYSTEM UNFREEZE is off by default: enable_system_unfreeze)
-            - name: ClickHouse - the snapshot released
-              ansible.builtin.file:
-                path: "{{ _ch.stdout.split()[2] }}/shadow/wave0_{{ _stamp }}"
-                state: absent
+            - name: ClickHouse - the snapshot released (and any an interrupted run left)
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  d={{ _ch.stdout.split()[2] | quote }}/shadow
+                  [ -n {{ _ch.stdout.split()[2] | quote }} ] && [ {{ _ch.stdout.split()[2] | quote }} != / ]
+                  [ -d "$d" ] || exit 0
+                  find "$d" -mindepth 1 -maxdepth 1 -name 'wave0_*' -exec rm -rf {} +
+              changed_when: true
+
+            - name: ClickHouse - no snapshot left
+              ansible.builtin.find:
+                paths: "{{ _ch.stdout.split()[2] }}/shadow"
+                patterns: "wave0_*"
+                file_type: directory
+              register: _ch_left
+              failed_when: _ch_left.matched > 0
 
         - name: ClickHouse - into the store
           ansible.builtin.include_tasks: tasks/upgrade-backup-upload.yml
@@ -509,9 +523,13 @@
               while read -r ns k pod dir; do
                 $K -n "$ns" delete pod "$pod" --wait=true --timeout=300s > /dev/null
               done <<< "$brokers"
-              # stopped: no broker container runs (a recreated pod waits Pending on the cordoned node)
-              stopped() { [ "$($K -n "$1" get pod "$2" --ignore-not-found -o jsonpath='{.status.phase}/{.spec.nodeName}')" \
-                            != Running/"$node" ]; }
+              # stopped: no broker container runs (a recreated pod waits Pending on the cordoned node); kubectl failing
+              # is not stopped - its empty answer read as "not Running"
+              stopped() {
+                local s
+                s=$($K -n "$1" get pod "$2" --ignore-not-found -o jsonpath='{.status.phase}/{.spec.nodeName}') || return 2
+                [ "$s" != Running/"$node" ]
+              }
               while read -r ns k pod dir; do
                 stopped "$ns" "$pod" || { echo "$ns/$pod running before its copy"; exit 1; }
                 tar --numeric-owner -C "$dir" -czf "{{ local_dir }}/kafka/{{ _stamp }}/$ns-$pod.tar.gz" .
