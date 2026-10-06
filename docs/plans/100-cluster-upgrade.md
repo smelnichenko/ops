@@ -195,7 +195,7 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   restarted both instances a minute later, while the checks ran. The data check now first waits for every instance
   to run under the new operator version. Each operator step (Strimzi, Scylla) needs the same wait for its own
   rollout before its checks count.
-- **The isolation's CoreDNS `template` blocks stop `kubeadm upgrade`** when it bumps CoreDNS (step 16, v1.12.1 -> v1.13.1):
+- **The isolation's CoreDNS `template` blocks stop `kubeadm upgrade`** when it bumps CoreDNS (step 42, v1.12.1 -> v1.13.1):
   preflight CoreDNSUnsupportedPlugins refuses a Corefile plugin its migration does not know. Ten's Corefile has none,
   so only the Vagrant inventory passes over that one check (`k8s_upgrade_ignore_preflight_errors_override`); kubeadm
   migrates the rest and leaves the blocks as they are.
@@ -210,14 +210,14 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   with its emptyDir's random token intact. Production's namespace is never replaced; its names are fixed and refuse
   an `-e` override. The plan's end-of-test restore, which the runner lacked until 2026-10-04.
 - **Backup checks only where a step touches a backup** (operator, 2026-10-04). The Velero check (production's schedule,
-  ~8 min) runs after 04 and 05 only - Velero and its store: it holds no data volume (defect 20), so after any other
+  ~8 min) runs after 10 and 25 only - Velero and its store: it holds no data volume (defect 20), so after any other
   step it guarded the least valuable backup at half a step's time; it ran after every step until full run 2. The
-  backup production's data depends on, CNPG's barman backup of Postgres, is checked after 03 (the CNPG operator) and
-  42 (PostgreSQL 18): WAL archiving working and a fresh base backup completed (`barman-check.yml`). Step files mark
-  them (`backup-check`, `barman-check`); the restore check closes the run.
+  backup production's data depends on, CNPG's barman backup of Postgres, is checked after 24 (the CNPG operator), 25
+  (its store) and 47 (PostgreSQL 18): WAL archiving working and a fresh base backup completed (`barman-check.yml`).
+  Step files mark them (`backup-check`, `barman-check`); the restore check closes the run.
 - **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
-  ConfigMap change, so steps 52 and 54 change nothing in the running server; the image bumps right after them (53,
-  55) restart it with the pin in place before the new version writes a part - the order that matters. Checked with
+  ConfigMap change, so steps 58 and 60 change nothing in the running server; the image bumps right after them (59,
+  61) restart it with the pin in place before the new version writes a part - the order that matters. Checked with
   `getSetting('compatibility')` after each step.
 - **A step that goes to production early leaves the stack**: it is cherry-picked onto main, the repo's step branches
   are rebased on that main (`git rebase --update-refs main <last step branch>`; git drops the now-duplicate commit),
@@ -247,7 +247,9 @@ crawl). Full run 6 (20:02): failed in the build - the Gluster mounts did not com
 (kubeadm writes "3m0s", the step expects "180s"; compared in seconds since). Full run 08:10: steps 00-12 green, step
 13 failed - `kubeadm upgrade apply` restarted etcd, the kubelet brought it back only after 2 min 2 s (its volume
 manager sat on PVC reads the API server held for its 60 s request timeout while etcd was down, until the API server's
-liveness probe restarted it), kubeadm's etcd client had given up at its default 2 m and rolled the upgrade back. Fixed
+liveness probe restarted it), kubeadm's etcd client had given up at its default 2 m. Not rolled back: kubeadm had
+reported etcd upgraded, and it returns only a component whose own restart fails - the node was half-applied (etcd on
+its new manifest, the rest 1.34.6), and the re-run finished it; the abort lines of 13, 42 and 43 say so since. Fixed
 in upgrade-kubeadm.yml (f76c27b): an UpgradeConfiguration whose etcdAPICall equals upgradeManifests, kubeadm's 5 m
 for any static pod; step 13 green again on that copy (etcd down 26 s that time). Full run 10:44: failed in its build
 - setup-patroni's restore of the Keycloak dump connected through HAProxy in the same second HAProxy marked the new
@@ -867,27 +869,28 @@ the new order. The text of this plan written before 2026-10-05 uses the old numb
 
 ## Stateful steps - for the operator's approval
 
-Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first three is an outage of that service for the restart. The one-way steps (from the step files: each with a wave0 line takes its Wave 0 backup first, in production and in the full run, where the backup's restore is rehearsed at the step's versions):
+Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Postgres instances: a roll of the first three is an outage of that service for the restart. The one-way steps - each with a wave0 line takes its Wave 0 backup first, in production and in the full run, where the backup's restore is rehearsed at the step's versions - and 14 and 21, whose way back is by hand. The rows are the step files' outage and abort lines (the step files are the source):
 
 | # | Step | Outage | Abort |
 |---|---|---|---|
-| 13 | kubernetes-1.34.12 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run) |
+| 13 | kubernetes-1.34.12 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run). A failed apply is not rolled back: kubeadm returns a component only when that component's own restart fails, so the ones it upgraded stay upgraded and the node is half-applied (full run 2026-10-06 08:10: etcd's new manifest running, the rest still the old version) - deploy:upgrade:playbooks run again finishes it |
+| 14 | containerd (no Wave 0) | containerd swapped under the running containers (they keep running: KillMode=process) with the kubelet stopped for the install (the package downloaded before): past some 50 s without the kubelet the node goes NotReady and every Service loses its endpoints (CoreDNS, the gateway, the webhooks) until it is back | by hand, as upgrade-containerd.yml's header says: Debian's containerd and the kept config back (not rehearsed) |
 | 17 | scylladb-2025.1 (Wave 0: scylla) | ScyllaDB restarts on the new version - one node, unavailable for the restart (a minute or two) | one-way once it runs (ScyllaDB does not downgrade across releases): the Wave 0 Scylla backup restored with sctool (its restore rehearsed at this step in the full run; the old version on it is not) |
 | 20 | scylladb-2026.1 (Wave 0: scylla) | ScyllaDB restarts on the new version - one node, unavailable for the restart (a minute or two) | one-way once it runs (ScyllaDB does not downgrade across releases): the Wave 0 Scylla backup restored with sctool (its restore rehearsed at this step in the full run; the old version on it is not) |
-| 21 | scylla-operator-1.22 (no Wave 0: Manager's state only) | the operator and Scylla Manager restart; ScyllaDB rolls for the agent version and the operator's sidecar - possibly twice (two apps sync apart) | the operator: revert the step's merge on main; Scylla Manager's backend ScyllaDB (2026.1.3 -> 2026.2.5) does not go back - a fresh backend at the old version, its volume deleted with the operator's approval, the clusters and tasks registered again from their resources (not rehearsed) |
-| 37 | strimzi-conversion (Wave 0: etcd) | none - Kafka runs on; Strimzi's Argo sync is off while its tool converts the resources | one-way: the CRDs store v1 afterwards (not rehearsed back); the resources as they were are in the Wave 0 etcd snapshot (5 KafkaTopics exist nowhere else) - restoring it is not rehearsed |
+| 21 | scylla-operator-1.22 (no Wave 0) | the operator restarts; the ScyllaDB pod rolls for its agent version (the data app) and for the operator's sidecar image (the operator app) - two apps that sync apart, so possibly twice: ScyllaDB (one node) unavailable for each restart; Scylla Manager restarts (no backup or repair meanwhile); istiod reloads its injector's config for the new selector (its pod template is unchanged - rendered 2026-10-05: no restart) | the operator - revert the step's merge on main (Argo syncs back), its downgrade not rehearsed. Scylla Manager's own backend ScyllaDB moves 2026.1.3 -> 2026.2.5 and does not go back (a revert would start the old release on the newer files): back by a fresh backend at the old version instead - its volume deleted (Manager's state only; with the operator's approval) - after which the operator registers the clusters and their backup and repair tasks again from their ScyllaDBManagerClusterRegistration and ScyllaDBManagerTask resources; the snapshots stay in the store, where sctool lists them; the tasks' history is lost. Not rehearsed |
+| 37 | strimzi-conversion (Wave 0: etcd) | none - Kafka runs on; Strimzi's Argo sync is off and its tool converts the resources | one-way: the CRDs' stored version is v1 afterwards (not rehearsed back); the resources as they were are in the Wave 0 etcd snapshot (5 of the KafkaTopics exist nowhere else) |
 | 38 | strimzi-1.2 (Wave 0: kafka) | the operator rolls Kafka - one broker, unavailable for its restart | one-way: Strimzi 1.x serves v1 only; back by the Wave 0 Kafka backup with 0.51 (not rehearsed) |
-| 40 | kafka-4.3 (Wave 0: kafka) | the broker restarts on 4.3 - Kafka unavailable for the restart (a minute) | the Wave 0 Kafka backup (taken at step 38 and here; its restore rehearsed at this step in the full run; the old version on it is not) - a revert of the merge does not help: Strimzi moves the metadata version seconds after the broker rolled (no metadataVersion pinned: the operator's decision) |
-| 42 | kubernetes-1.35 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run) |
-| 43 | kubernetes-1.36 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run) |
+| 40 | kafka-4.3 (Wave 0: kafka) | the broker restarts on 4.3 - Kafka unavailable for the restart (a minute) | the Wave 0 Kafka backup (taken at step 38 and here; its restore rehearsed at this step in the full run; the old version on it is not). A revert of the merge does not help: Strimzi moves the metadata version seconds after the one broker has rolled, and 4.2 cannot start on 4.3's - a window kept open only by a metadataVersion pinned in the chart (none is rendered; pinning it is the operator's decision) |
+| 42 | kubernetes-1.35 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run). A failed apply is not rolled back: kubeadm returns a component only when that component's own restart fails, so the ones it upgraded stay upgraded and the node is half-applied (full run 2026-10-06 08:10: etcd's new manifest running, the rest still the old version) - deploy:upgrade:playbooks run again finishes it |
+| 43 | kubernetes-1.36 (Wave 0: etcd) | the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the kubelet restarts | one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at this step in the full run). A failed apply is not rolled back: kubeadm returns a component only when that component's own restart fails, so the ones it upgraded stay upgraded and the node is half-applied (full run 2026-10-06 08:10: etcd's new manifest running, the rest still the old version) - deploy:upgrade:playbooks run again finishes it |
 | 46 | postgres-18-test (Wave 0: postgres) | the test environment only: its Postgres down for pg_upgrade (minutes) | the test cluster's Wave 0 dump (the postgres store dumps every CNPG primary, this step's wave0 line) restored into a PostgreSQL 17 cluster - the test cluster has no base backups |
 | 47 | postgres-18 (Wave 0: postgres) | Postgres down for pg_upgrade (minutes) - every app's writes fail; the replica re-cloned after | the step's restore-undo: PostgreSQL 17's latest backup recovered under the old server name (recovered into a side cluster in the full run; replacing production's cluster with it - its volumes deleted, writes since lost - is neither written down nor rehearsed), or the Wave 0 dump |
 | 50 | grafana-13 (Wave 0: grafana) | Grafana down while it migrates its database | one-way: the Wave 0 Grafana backup (grafana.db) with Grafana 12 (its restore rehearsed at this step in the full run; the old version on it is not) |
 | 51 | mimir-3.0 (Wave 0: gateway) | Mimir restarts - Prometheus retries its remote write, queries fail briefly | one-way (3.x may write what 2.x cannot read): the Wave 0 gateway backup - the object store's and Mimir's volumes (its restore rehearsed at this step in the full run; the old version on it is not) |
-| 54 | tempo-3 (Wave 0: gateway) | Tempo restarts - spans sent meanwhile may be lost | one-way (Tempo 3 blocks): the Wave 0 gateway backup (its restore rehearsed at this step in the full run; the old version on it is not) |
-| 57 | sonarqube-26.9 (Wave 0: postgres) | SonarQube down while it migrates its database (production only) | one-way: SonarQube's Postgres dump from Wave 0 (the postgres store) with 26.3 |
-| 59 | clickhouse-25.8 (Wave 0: clickhouse) | ClickHouse restarts on 25.8 - log ingestion waits | back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)); otherwise the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run; the old version on it is not) |
-| 61 | clickhouse-26.8 (Wave 0: clickhouse) | ClickHouse restarts on 26.8 - log ingestion waits | back to 25.8 while the pin keeps 25.8's formats (drop or unlock the renamed system.*_log_N tables first); otherwise the Wave 0 ClickHouse backup |
+| 54 | tempo-3 (Wave 0: gateway) | Tempo restarts - spans sent meanwhile are lost; the ones Tempo 2 still holds in its WAL (Tempo 3 does not replay it) are flushed to the store first: the tempo-flush line below - production's merge calls Tempo's /flush right before the infra merge, the full run before the step's push, and wants a trace pushed before the flush back after it | one-way (Tempo 3 blocks): the Wave 0 gateway backup (its restore rehearsed at this step in the full run; the old version on it is not) |
+| 57 | sonarqube-26.9 (Wave 0: postgres) | SonarQube down while it migrates its database (production only); production waits up to 50 minutes for Argo after each merge (the migration hook's own deadline is 45) | one-way: SonarQube's Postgres dump from Wave 0 (the postgres store) with 26.3 |
+| 59 | clickhouse-25.8 (Wave 0: clickhouse) | ClickHouse restarts on 25.8 - log ingestion waits | back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)) - 24.8 reads what 25.8 wrote and merged under the pin (rehearsed with the real images: task test:clickhouse-pin; the revert through Argo is not); otherwise the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run) |
+| 61 | clickhouse-26.8 (Wave 0: clickhouse) | ClickHouse restarts on 26.8 - log ingestion waits | back to 25.8 while the pin keeps 25.8's formats (drop or unlock the renamed system.*_log_N tables first) - 25.8 starts on the data and reads what 26.8 wrote and merged under the pin (rehearsed with the real images: task test:clickhouse-pin - the system log tables not looked at, the revert through Argo not rehearsed); otherwise the Wave 0 ClickHouse backup |
 
 ## Production, step by step (after the gate and the operator's approval)
 
@@ -908,11 +911,13 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
 3. `deploy:upgrade:merge STEP=N REPO=r` - each branch line in the file's order. The branch restacked on origin/main
    first when main moved (the apps' CD pushes image tags to infra main): `scripts/upgrade-restack-in-place.sh ../infra`
    (merged steps, tagged upgrade-merged/<step>, are skipped).
-   Refused unless its own change (changed lines and files) is the one the full run proved, deploy/ and the step file
-   are as that run had them, and the state between the step's two merges is one the run proved
-   (scripts/upgrade-merge-order.py: the first merge alone renders every platform-chart application as before, or the
-   second renders nothing new). Pushed; Argo settled on the pushed commits within 30 minutes (a step's `settle` line
-   overrides: 57, SonarQube's migration), nothing out of sync.
+   Refused unless its own change (changed lines, files, modes and binaries) is the one the full run proved, the
+   step's new images from production's own registry are there, and the state between the step's two merges is one the
+   run proved (scripts/upgrade-merge-order.py: the first merge alone renders every platform-chart application as
+   before, or the second renders nothing new). Then the change is shown (log, stat, diff) and the operator answers;
+   a step with a tempo-flush line (54) flushes Tempo's WAL to the store right before that repo's merge. Pushed and
+   tagged upgrade-merged/<step> (a run cut short between the two is taken up); Argo settled on the pushed commits
+   within 30 minutes (a step's `settle` line overrides: 57, SonarQube's migration), nothing out of sync.
 4. `deploy:upgrade:preview STEP=N` - a step with playbook lines, after its merges settled: check mode with diffs
    (read-only probes run, waits on changes the preview does not make are skipped), read by the operator. The full run
    runs the same preview on the Vagrant copy at every such step, so it is proven to pass.
@@ -926,9 +931,13 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    - green, with no container restarted since the first green call - the step is done. A red call during the soak
    restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a
    barman-check step's takes a Postgres base backup: that call asks first.
-Each phase that changes production asks first (the task's prompt, or the done call's own question) - the operator
-approves each. Every phase refuses while production's app tags (infra main) differ from those the full run ran (the
-Vagrant overlay's): the candidate images are promoted before the rollout's first step.
+Each phase that changes production asks first (the phase's own question, after showing what it will change) - the
+operator approves each. Every phase first checks the full run's proof: the step and every step before it proven by
+that one run; the ops paths it ran (deploy/, scripts/, tests/, Taskfile.yml, Vagrantfile) as it had them, but for the
+committed steps' default lines; production's app tags (infra main) those it ran (the Vagrant overlay's: the candidate
+images are promoted before the rollout's first step); the floating-tag images at the digests it ran. A phase claims
+the step in the ledger (a start event, then its end): another phase of the step is refused while one runs, and a run
+killed before its end is closed by `task deploy:upgrade:release STEP=N` (it asks first).
 
 Stop criteria: the rollout stops at the first of these - a phase refused or failed, Argo not settled after a merge,
 an inventory difference, a restart during the soak - and the step's abort line, with the operator, decides what

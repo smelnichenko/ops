@@ -6,7 +6,10 @@
 # abort: one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full
 # rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that
 # no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at
-# this step in the full run)
+# this step in the full run). A failed apply is not rolled back: kubeadm returns a component only when that
+# component's own restart fails, so the ones it upgraded stay upgraded and the node is half-applied (full run
+# 2026-10-06 08:10: etcd's new manifest running, the rest still the old version) - deploy:upgrade:playbooks run
+# again finishes it
 # one-way: etcd's snapshot backed up into the Pi store before the step changes anything (production's hourly copies
 # keep 7 days)
 wave0 etcd
