@@ -25,11 +25,11 @@ def app(name):
                        "health": {"status": "Healthy"}, "operationState": {"phase": "Succeeded"}}}
 
 
-def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z"):
-    c = {"ready": True, "restartCount": restarts}
+def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True):
+    c = {"ready": ready, "restartCount": restarts}
     if restarts:
         c["lastState"] = {"terminated": {"finishedAt": finished}}
-    return {"metadata": {"namespace": "ns", "name": name, "uid": uid},
+    return {"metadata": {"namespace": ns, "name": name, "uid": uid},
             "status": {"phase": "Running", "containerStatuses": [c]}}
 
 
@@ -61,6 +61,20 @@ rc, out = run(A + [app("c")], P, "--expect-apps", "a,b")
 check("an unexpected app: not green", (rc, "app c: not expected" in out), (1, True), out)
 rc, out = run(A + [app("pr-7-monitor")], P, "--expect-apps", "a,b", "--allow-extra-apps", "^pr-[0-9]+-")
 check("an extra app the pattern allows: green", rc, 0, out)
+# a preview environment comes and goes with its pull request: its app's state and its pods are not production's
+starting = app("pr-7-monitor")
+starting["status"]["health"]["status"] = "Progressing"
+rc, out = run(A + [starting], P, "--expect-apps", "a,b", "--allow-extra-apps", "^pr-[0-9]+-")
+check("an extra app the pattern allows, still progressing: green", rc, 0, out)
+rc, out = run([app("a"), starting], P, "--expect-apps", "a,b", "--allow-extra-apps", "^pr-[0-9]+-")
+check("an expected app missing beside an allowed extra: not green", (rc, "app b: missing" in out), (1, True), out)
+PR = "^schnappy-pr-[0-9]+$"
+rc, out = run(A, P + [pod("pr-api", "u9", ns="schnappy-pr-7", ready=False)], "--ignore-namespaces", PR)
+check("a preview environment's pod not ready, its namespace ignored: green", rc, 0, out)
+rc, out = run(A, P + [pod("pr-api", "u9", ns="schnappy-pr-7", ready=False)])
+check("the same pod, no namespace ignored: not green", rc, 1, out)
+rc, out = run(A, P + [pod("api", "u9", ns="schnappy-production", ready=False)], "--ignore-namespaces", PR)
+check("production's pod not ready, the preview namespaces ignored: not green", rc, 1, out)
 open(os.path.join(work, "apps.txt"), "w").write("a\nb\n")
 rc, out = run([app("a")], P, "--expect-apps", "@" + os.path.join(work, "apps.txt"))
 check("the expected apps from a file, one missing: not green", rc, 1, out)

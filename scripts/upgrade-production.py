@@ -73,6 +73,7 @@ SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
 SETTLE_MINUTES = 30
 # preview environments come and go (an Argo app per pull request): never part of the app set a step must keep
 PREVIEW_APPS = "^pr-[0-9]+-"
+PREVIEW_NAMESPACES = "^schnappy-pr-[0-9]+$"  # ...and their pods
 # on ten, sm's: each done step's restart counts, so a pod restarting in two steps running fails the second
 RESTART_HISTORY = "$HOME/.upgrade-restart-history.json"
 PROVEN = os.path.join(OPS, ".upgrade", "proven")
@@ -305,7 +306,7 @@ def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=N
     cmd = (f"MIRROR_REVISIONS={shlex.quote(json.dumps(revs))} python3 - --kubeconfig \"$HOME/.kube/config\" "
            f"--minutes {minutes} --poll 10 --stable-polls {stable} --restart-quiet {int(quiet)} "
            f"--allow-out-of-sync {shlex.quote(','.join(allow_out_of_sync))} --print-apps "
-           f"--allow-extra-apps {shlex.quote(PREVIEW_APPS)}")
+           f"--allow-extra-apps {shlex.quote(PREVIEW_APPS)} --ignore-namespaces {shlex.quote(PREVIEW_NAMESPACES)}")
     if apps:
         cmd += f" --expect-apps {shlex.quote(','.join(apps))}"
     if restarted_since is not None:

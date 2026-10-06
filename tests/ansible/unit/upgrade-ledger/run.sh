@@ -367,6 +367,13 @@ def settled_cmd(**kw):
 check("settled: --restarts-expected when expected", "--restarts-expected" in settled_cmd(restart_step=S42,
                                                                                          restarts_expected=True), True)
 check("settled: none otherwise", "--restarts-expected" in settled_cmd(restart_step=S47), False)
+# a preview environment opened during a settle: its app and its pods left out, production's namespaces not
+import re, shlex
+words = shlex.split(settled_cmd())
+ignored = words[words.index("--ignore-namespaces") + 1] if "--ignore-namespaces" in words else None
+check("settled: the preview environments' namespaces left out, production's and the test environment's not",
+      [bool(ignored and re.search(ignored, ns)) for ns in ("schnappy-pr-7", "schnappy-production", "schnappy-test",
+                                                           "schnappy-infra")], [True, False, False, False])
 
 # status names the phase after the defaults one (its event carries the commit)
 import contextlib, io

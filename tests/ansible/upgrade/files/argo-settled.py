@@ -16,8 +16,10 @@ deciding check: nothing restarted since its first green check, however long ago)
 
 --expect-apps <name,...|@file>: exactly these Applications must exist - one missing is not green (a dropped child
 app otherwise "settles" by its absence), one more is not green unless its name matches --allow-extra-apps <regex>
-(production's preview environments, pr-<N>-<repo>, come and go). --print-apps prints the Applications' names on a
-last line, APPS <a,b>.
+(production's preview environments, pr-<N>-<repo>, come and go with their pull requests: such an app's state is not
+looked at either). --ignore-namespaces <regex>: the pods there are not looked at (the preview environments'
+schnappy-pr-<N>: one starting during a production settle is no part of production). --print-apps prints the
+Applications' names on a last line, APPS <a,b>.
 
 --restart-history <file> --step <label>: once settled, a pod (by uid) whose containers restarted during this step and
 during the step before it fails the wait - a crash loop slower than --restart-quiet settles between two restarts, and
@@ -168,10 +170,18 @@ def pod_state(pod, now=None, quiet=0, replaced=frozenset(), since=None, complete
     return True, restarts, ""
 
 
+def without(pods, namespaces):
+    """The pods outside the namespaces matching the regex `namespaces` (all of them without one)."""
+    if not namespaces:
+        return pods
+    return {**pods, "items": [p for p in pods["items"] if not re.search(namespaces, p["metadata"]["namespace"])]}
+
+
 def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extra=None, since=None):
     """One poll: (green, app problems by name, pods not ready, restart counts by pod uid). With `expected` (a set of
     names) every one of them must exist, and no other app unless its name matches the regex `extra`."""
-    problems = {a["metadata"]["name"]: p for a in apps["items"] if (p := app_problems(a, allowed, mirror))}
+    problems = {a["metadata"]["name"]: p for a in apps["items"]
+                if not (extra and re.search(extra, a["metadata"]["name"])) and (p := app_problems(a, allowed, mirror))}
     if expected is not None:
         names = {a["metadata"]["name"] for a in apps["items"]}
         for name in sorted(expected - names):
@@ -258,6 +268,7 @@ def main():
     ap.add_argument("--pods-json")
     ap.add_argument("--expect-apps")
     ap.add_argument("--allow-extra-apps")
+    ap.add_argument("--ignore-namespaces")
     ap.add_argument("--print-apps", action="store_true")
     ap.add_argument("--restart-history")
     ap.add_argument("--step")
@@ -295,7 +306,7 @@ def main():
 
     if a.apps_json:
         with open(a.apps_json) as f_apps, open(a.pods_json) as f_pods:
-            apps, pods = json.load(f_apps), json.load(f_pods)
+            apps, pods = json.load(f_apps), without(json.load(f_pods), a.ignore_namespaces)
         now = iso(a.now) if a.now else None
         green, problems, not_ready, _ = evaluate(apps, pods, allowed, mirror, now, a.restart_quiet, expected,
                                                  a.allow_extra_apps, since)
@@ -308,7 +319,7 @@ def main():
     while True:
         try:
             apps = kubectl(a.kubeconfig, "-n", "argocd", "get", "applications.argoproj.io", "-o", "json")
-            pods = kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json")
+            pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json"), a.ignore_namespaces)
             green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror, None, a.restart_quiet,
                                                             expected, a.allow_extra_apps, since)
             line = summary(apps, problems, not_ready, allowed)
