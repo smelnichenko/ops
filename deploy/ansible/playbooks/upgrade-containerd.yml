@@ -152,7 +152,9 @@
       block:
         - name: Would replace
           ansible.builtin.debug:
-            msg: "PREVIEW: would replace {{ _runtime_line }} with containerd.io {{ _package.stdout }} under {{ _before.stdout_lines | length }} running containers"
+            msg: >-
+              PREVIEW: would replace {{ _runtime_line }} with containerd.io {{ _package.stdout }} under
+              {{ _before.stdout_lines | length }} running containers
         - name: End the preview here
           ansible.builtin.meta: end_host
 
