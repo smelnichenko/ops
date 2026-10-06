@@ -22,7 +22,7 @@ restore-check
 branch infra
 branch platform
 # its undo, rehearsed after it: PostgreSQL 17's latest backup (under the old server name) recovered with the image
-# production runs now
-restore-undo schnappy-production-postgres ghcr.io/cloudnative-pg/postgresql@sha256:b1885e2c8224bab6d75ce5fb7dfad339b4acf8976158d2dd561ab7458dee4f2b
+# production runs now (its :17 is this digest, read from its pods 2026-10-06)
+restore-undo schnappy-production-postgres ghcr.io/cloudnative-pg/postgresql:17@sha256:b1885e2c8224bab6d75ce5fb7dfad339b4acf8976158d2dd561ab7458dee4f2b
 # then fresh planner statistics on every database (pg_upgrade carries none over; CNPG's major-upgrade notes)
 playbook postgres-analyze.yml -e pg_major=18

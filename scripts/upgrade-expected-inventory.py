@@ -22,7 +22,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                the controllers holding a leader lease restart with the API server, so
                                                the settle after it records their restarts without judging them)
     restore-undo <serverName> <image>         (the step's undo: the runner recovers that server's latest backup with
-                                               that image into a side cluster after it - the seeded rows must be there)
+                                               that image into a side cluster after it - the seeded rows must be there;
+                                               the image with its tag, CNPG reads the major from it: name:tag[@digest])
     branch <infra|platform>                   (the step's change is the branch upgrade/NN-<name> in that repo)
     clickhouse-compat <version>               (from this step on ClickHouse runs with that compatibility setting;
                                                before the first such line it has none)
@@ -103,6 +104,11 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
             if flags is not None:
                 flags.add(line)
         elif re.fullmatch(r"restore-undo [a-z0-9-]+ \S+", line):
+            image = line.split()[2]
+            # CNPG reads the major from the tag and refuses an image without one ("Can't use just the image sha as we
+            # can't detect upgrades"): a pinned digest goes after the tag
+            if ":" not in image.split("@")[0].rsplit("/", 1)[-1]:
+                sys.exit(f"{where}: restore-undo image {image} has no tag - CNPG refuses it; name:tag@sha256:<digest>")
             if undo is not None:
                 undo.append(line[len("restore-undo "):])
         elif re.fullmatch(r"clickhouse-users [a-z0-9_]+(,[a-z0-9_]+)*", line):
