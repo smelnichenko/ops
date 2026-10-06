@@ -177,7 +177,9 @@ def problems(names, step, phase, events, info, arg=None):
 
 
 def open_start(mine):
-    """The step's last phase start (time, its arguments) that no end followed, else None. `mine`: (time, event, args)."""
+    """The step's last phase start (time, its arguments) that no end followed, else None.
+
+    `mine`: (time, event, args)."""
     started = None
     for at, e, a in mine:
         if e == "start":

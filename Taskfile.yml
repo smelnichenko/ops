@@ -706,7 +706,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-gateway.yml
 
   test:logs:
-    desc: Test ClickHouse + Fluent-bit log pipeline in Vagrant (Plan 065 — replaces test:elk)
+    desc: Test ClickHouse + Fluent-bit log pipeline in Vagrant (replaced test:elk)
     deps: [deploy:install]
     cmds:
       # from nothing: every VM destroyed, and proven gone, before the build
@@ -721,7 +721,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-logs.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
   test:realtime:
-    desc: Test Centrifugo + Kafka + Valkey realtime chart in Vagrant (Plan 066 Phase 1)
+    desc: Test Centrifugo + Kafka + Valkey realtime chart in Vagrant
     deps: [deploy:install]
     cmds:
       # from nothing: every VM destroyed, and proven gone, before the build

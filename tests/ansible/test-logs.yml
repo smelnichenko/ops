@@ -1,6 +1,6 @@
 ---
 # Test ClickHouse log pipeline in Vagrant against Pi Vault + schnappy namespace.
-# Plan 065: replaces the ELK stack. Verifies:
+# It replaced the ELK stack. Verifies:
 #   - clickhouse-server StatefulSet rolls out
 #   - clickhouse-init Job creates the logs.podlogs table
 #   - Fluent-bit DaemonSet rolls out and ships kube logs to ClickHouse

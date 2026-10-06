@@ -264,8 +264,8 @@
       ansible.builtin.meta: flush_handlers
 
     # ================================================================
-    # Cleanup: zombie forgejo-runner left behind by Plan 017
-    # (Woodpecker CI migration). Unit references a wrapper script that
+    # Cleanup: zombie forgejo-runner left behind by the move to
+    # Woodpecker CI. Unit references a wrapper script that
     # was deleted; systemd has been crash-looping it every 10s ever
     # since (~10k restarts/day, ~56k+ counter). Pure noise that makes
     # the journal hard to read post-crash.

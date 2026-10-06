@@ -15,9 +15,9 @@
 # deploy:upgrade:playbooks`, after the step's Vagrant proof and the operator's approval. The allow-list holds there too.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-# --check <step> (with --production: on ten and the Pis): the same, read-only - ansible's check mode with diffs: what the
-# step would change, before it runs (`task deploy:upgrade:preview`; the full run previews every such step on the copy).
-# Only read-only probes override it (check_mode: false), so the checks see the real state.
+# --check <step> (with --production: on ten and the Pis): the same, read-only - ansible's check mode with diffs: what
+# the step would change, before it runs (`task deploy:upgrade:preview`; the full run previews every such step on the
+# copy). Only read-only probes override it (check_mode: false), so the checks see the real state.
 step_vars=" argocd_version cilium_version containerd_upgrade_to gateway_api_version istio_version k8s_upgrade_to "
 step_vars+="kubelet_grace_in_kubelet_config_map local_path_provisioner_version pg_major pg_namespaces vgw_version "
 # fence <playbook> <args...>: exit 1 naming the first argument outside the allow-list

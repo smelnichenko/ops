@@ -22,7 +22,8 @@ overlay=$ops/tests/ansible/upgrade/vagrant-overlay/infra/clusters/production
 mapfile -t images < <({ for f in schnappy-production-apps schnappy-infra-data; do
                           git -C "$infra" show "$infra_ref:clusters/production/$f/values.yaml"
                           if [ -f "$overlay/$f/values.vagrant.yaml" ]; then
-                            echo "---"; echo "__vagrant_overlay_follows__: true"; echo "---"; cat "$overlay/$f/values.vagrant.yaml"
+                            echo "---"; echo "__vagrant_overlay_follows__: true"; echo "---"
+                            cat "$overlay/$f/values.vagrant.yaml"
                           fi
                           echo "---"; done
                         git -C "$platform" show "$platform_ref:helm/schnappy-data/values.yaml"; } \
@@ -41,7 +42,8 @@ def walk(n):
 def merge(base, top):
     # as Helm merges a later value file: maps key by key, anything else replaced
     if isinstance(base, dict) and isinstance(top, dict):
-        return {k: merge(base[k], v) if k in base else v for k, v in top.items()} | {k: v for k, v in base.items() if k not in top}
+        merged = {k: merge(base[k], v) if k in base else v for k, v in top.items()}
+        return merged | {k: v for k, v in base.items() if k not in top}
     return top
 values, overlay_next = [], False
 for doc in yaml.safe_load_all(sys.stdin):
@@ -61,7 +63,9 @@ held=$(vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images ls -q' 2>/dev/null | tr
 for img in "${images[@]}"; do
   # an image reference only (registry/path:tag), never anything a remote shell would read as more than a word: it goes
   # into commands run as root on ten
-  [[ $img =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$ ]] || { echo "REFUSED: '$img' is not an image reference"; exit 1; }
+  if ! [[ $img =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$ ]]; then
+    echo "REFUSED: '$img' is not an image reference"; exit 1
+  fi
   if grep -qxF "$img" <<< "$held"; then
     echo "== $img (held)"
     continue

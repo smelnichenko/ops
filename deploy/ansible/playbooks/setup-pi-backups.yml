@@ -22,7 +22,7 @@
 # /var/lib/vault, which holds no secrets (they are in Consul).
 #
 # The store is the Pis' own (versitygw on Gluster): this survives a lost Pi or a logical mistake, not both Pis lost -
-# an off-site copy is plan 071's open decision.
+# an off-site copy is still an open decision.
 #
 # Usage: task deploy:pi-backups   (production)   /   the Vagrant rehearsal: task test:pi-backups
 - name: The Pis' tier-0 backups

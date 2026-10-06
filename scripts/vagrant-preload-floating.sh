@@ -35,7 +35,9 @@ missing=0
 for img in "${images[@]}"; do
   # an image reference only (registry/path:tag), never anything a remote shell would read as more than a word: it goes
   # into commands run as root on ten
-  [[ $img =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$ ]] || { echo "REFUSED: '$img' is not an image reference"; exit 1; }
+  if ! [[ $img =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?$ ]]; then
+    echo "REFUSED: '$img' is not an image reference"; exit 1
+  fi
   # shellcheck disable=SC2029  # $img is meant to expand here, into the remote command
   ten=$(ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images ls name=='$img'" \
     | awk -v i="$img" '$1 == i {print $3}')

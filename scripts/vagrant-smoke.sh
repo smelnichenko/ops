@@ -63,7 +63,8 @@ vssh kubeadm 'cat > /tmp/vagrant-k6-smoke.yaml' < "$work/smoke.yaml"
 vssh kubeadm 'sudo bash -s' <<'SH' | tr -d '\r'
 set -u
 K="kubectl --kubeconfig /etc/kubernetes/admin.conf -n schnappy-production"
-$K delete job vagrant-k6-smoke --ignore-not-found --wait=true > /dev/null || { echo "SMOKE FAILED: old Job not deleted"; exit 1; }
+$K delete job vagrant-k6-smoke --ignore-not-found --wait=true > /dev/null \
+  || { echo "SMOKE FAILED: old Job not deleted"; exit 1; }
 $K apply -f /tmp/vagrant-k6-smoke.yaml || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
 rm -f /tmp/vagrant-k6-smoke.yaml
 $K wait job/vagrant-k6-smoke --for=condition=Complete --timeout=900s > /dev/null 2>&1 & ok=$!

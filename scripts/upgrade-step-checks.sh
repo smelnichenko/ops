@@ -17,7 +17,7 @@
 set -uo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 infra_ref=$1 platform_ref=$2 clickhouse_compat=$3 clickhouse_users=$4
-cd "$ops"
+cd "$ops" || exit 1
 mkdir -p .upgrade
 logs=$(mktemp -d "$ops/.upgrade/step-checks.XXXX")
 names=() pids=() done_=()
@@ -37,7 +37,8 @@ set -m
 # the VMs' ssh config, read once: Vagrant runs one action per machine at a time, so parallel `vagrant ssh` calls fail;
 # keepalives so a dead connection ends
 vagrant ssh-config > "$logs/ssh-config" 2> /dev/null || { echo "vagrant ssh-config failed"; exit 1; }
-printf '\nHost *\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ConnectTimeout 30\n  LogLevel ERROR\n' >> "$logs/ssh-config"
+printf '\nHost *\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ConnectTimeout 30\n  LogLevel ERROR\n' \
+  >> "$logs/ssh-config"
 export VAGRANT_SSH_CONFIG=$logs/ssh-config
 
 play() { (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml "$@"); }

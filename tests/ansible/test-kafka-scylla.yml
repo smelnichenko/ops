@@ -76,7 +76,7 @@
             enabled: true
           scyllaOperator:
             enabled: true
-            # Plan 069 — register the cluster with ScyllaDB Manager
+            # Register the cluster with ScyllaDB Manager
             # so the operator emits a ScyllaDBManagerClusterRegistration
             # CR. Vagrant has install_scylla_manager=false; the CR is
             # expected to sit at NotApplicable status, which the test
@@ -273,7 +273,7 @@
       ansible.builtin.debug:
         msg: "ScyllaDB is accepting CQL connections on port 9042"
 
-    # Plan 069 — operator emits a ScyllaDBManagerClusterRegistration CR.
+    # The operator emits a ScyllaDBManagerClusterRegistration CR.
     # In vagrant the Manager component itself is off
     # (install_scylla_manager=false), so the registration sits at
     # NotApplicable. Accept either Synchronized=True OR

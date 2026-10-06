@@ -1,6 +1,6 @@
 ---
 # Provisions the scoped Vault token used by the stale-pr-envs-sweeper
-# CronJob (Plan 067 §"Vault GC").
+# CronJob (it deletes the Vault secrets of preview environments that are gone).
 #
 # - Creates a Vault policy that allows LIST on `secret/metadata/` and
 #   DELETE on `secret/metadata/schnappy-pr-*` (no other paths, no

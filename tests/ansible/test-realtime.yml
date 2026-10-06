@@ -1,5 +1,5 @@
 ---
-# Plan 066 — vagrant test for the Centrifugo realtime chart.
+# Vagrant test for the Centrifugo realtime chart.
 # Deploys: Strimzi Kafka cluster + KafkaTopics + Valkey (CR via operator)
 # + Centrifugo Deployment. Verifies:
 #   - Centrifugo Deployment Ready
@@ -7,8 +7,8 @@
 #   - All three KafkaTopics CRs reach Ready
 #   - Anonymous WS connect is rejected (auth required)
 #
-# Phase 2 of Plan 066 (gateway webhook endpoints + dual-publish + frontend
-# migration) lives in separate PRs — this test gates Phase 1 only.
+# The gateway webhook endpoints, dual-publish and the frontend migration
+# are not covered here.
 #
 # Prereqs: `_vagrant:k8s-stack` (Pi stack + kubeadm + ESO).
 
@@ -204,7 +204,7 @@
       ansible.builtin.debug:
         msg: |
           ====================================================
-          Realtime Test (Plan 066 Phase 1): {{ 'PASS' if all_pass else 'FAIL' }}
+          Realtime Test: {{ 'PASS' if all_pass else 'FAIL' }}
 
           [{{ 'PASS' if (cf_rollout.resources[0].status.readyReplicas | default(0)) >= 1 else 'FAIL' }}] Centrifugo Deployment Ready
           [{{ 'PASS' if '200' in cf_health.stdout else 'FAIL' }}] /health responding

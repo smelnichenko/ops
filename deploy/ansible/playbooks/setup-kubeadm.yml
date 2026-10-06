@@ -1078,7 +1078,7 @@
         wait_timeout: 15m
       when: not platform_by_argo | bool and install_scylla_manager | default(true) | bool
 
-    # Plan 064 — Valkey operator (replaces hand-rolled redis Deployment).
+    # Valkey operator (replaces the hand-rolled redis Deployment).
     # The chart still renders a hand-rolled Deployment when
     # valkey.operator.enabled=false, so installing the operator here is
     # safe even if no Valkey CR is applied yet.

@@ -3,7 +3,8 @@
 
 The posix backend keeps each object as a file under <buckets>/<bucket>/<key> with its ETag in the user.etag extended
 attribute, and each bucket's owner and ACL in the bucket directory's user.acl; uploads in flight live under
-<bucket>/.sgwtmp, versitygw's own state in dot directories beside the buckets (1.8: .vgwlocks). A copy without those attributes restores files no client may read.
+<bucket>/.sgwtmp, versitygw's own state in dot directories beside the buckets (1.8: .vgwlocks). A copy without
+those attributes restores files no client may read.
 
   manifest <buckets dir>                         print {"buckets": [...], "objects": {"<bucket>/<key>": "<etag>"}}
   verify-tar <tar.gz> <before> <after> <out>     the archive (GNU tar --xattrs, entries ./buckets/...) against the

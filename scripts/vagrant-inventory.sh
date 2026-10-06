@@ -12,7 +12,8 @@ on() {
 }
 out=$(mktemp .upgrade/vagrant-inventory.XXXX)
 trap 'rm -f "$out"' EXIT
-on kubeadm 'sudo INVENTORY_EXCLUDE_NAMESPACES=isolation-probe bash -s' < scripts/version-inventory.sh | tr -d '\r' > "$out"
+on kubeadm 'sudo INVENTORY_EXCLUDE_NAMESPACES=isolation-probe bash -s' < scripts/version-inventory.sh \
+  | tr -d '\r' > "$out"
 for p in pi1 pi2; do
   on "$p" 'sudo bash -s' < scripts/version-inventory-pi.sh | tr -d '\r' >> "$out"
 done
