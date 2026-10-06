@@ -36,6 +36,7 @@ APPS = "clusters/production/argocd/apps"
 PLATFORM_URL = "https://git.pmon.dev/schnappy/platform.git"
 HELM = "helm"  # the binary renders() runs (scripts/argo-helm-diff.py sets one per Helm version)
 API_VERSIONS = os.path.join(OPS, "tests", "ansible", "upgrade", "api-versions.txt")
+WORK = os.path.join(OPS, ".upgrade")
 CAPABILITIES = []  # helm template's --kube-version and --api-versions for the step being rendered (capabilities())
 INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
 _loader = importlib.machinery.SourceFileLoader("upgrade_expected_inventory", INVENTORY)
@@ -166,6 +167,15 @@ def renders(infra_ref, platform_ref, work, read=None):
     return out
 
 
+def between_state(app, a, m, b):
+    """How an application renders with the first merge alone: as before, as after, or neither."""
+    if m.get(app) == a.get(app):
+        return "as before"
+    if m.get(app) == b.get(app):
+        return "as after"
+    return "NEITHER"
+
+
 def outside(repo, before_ref, after_ref, read):
     """The repo's changed files whose effect the renders do not show (none for platform: see the top)."""
     if repo == "platform":
@@ -185,7 +195,7 @@ def check(step):
     between = dict(before, **{first: after[first]})
     CAPABILITIES[:] = capabilities(step)
     read = set()
-    with tempfile.TemporaryDirectory(dir=os.path.join(OPS, ".upgrade")) as work:
+    with tempfile.TemporaryDirectory(dir=WORK) as work:
         a, m, b = (renders(s["infra"], s["platform"], os.path.join(work, k), read)
                    for k, s in (("before", before), ("between", between), ("after", after)))
     if not (a and m and b):
@@ -212,8 +222,7 @@ def check(step):
         print(f"  with {first} alone these applications render neither as before nor as after:")
     for app in sorted(set(a) | set(m) | set(b)):
         if m != a and m != b and not (m.get(app) == a.get(app) and m.get(app) == b.get(app)):
-            state = "as before" if m.get(app) == a.get(app) else "as after" if m.get(app) == b.get(app) else "NEITHER"
-            print(f"    {app}: {state}")
+            print(f"    {app}: {between_state(app, a, m, b)}")
     return False
 
 
@@ -221,13 +230,15 @@ def main():
     args = sys.argv[1:]
     if len(args) != 1:
         sys.exit(__doc__)
-    os.makedirs(os.path.join(OPS, ".upgrade"), exist_ok=True)
+    os.makedirs(WORK, exist_ok=True)
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     steps = names if args[0] == "--all" else [args[0]]
     if steps[0] not in names:
         sys.exit(f"no step {steps[0]}")
-    ok = [check(s) for s in steps]
-    sys.exit(0 if all(ok) else 1)
+    failed = 0
+    for s in steps:  # every step judged, each printing its verdict - not stopped at the first
+        failed += not check(s)
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,9 @@ import sys
 
 import yaml
 
+KV2_WRITE, SET_FACT = "community.hashi_vault.vault_kv2_write", "ansible.builtin.set_fact"
+FAIL, ASSERT = "ansible.builtin.fail", "ansible.builtin.assert"
+
 src, out_dir, vault_port = sys.argv[1], sys.argv[2], sys.argv[3]
 play_src = yaml.safe_load(open(src))[0]
 
@@ -51,10 +54,10 @@ write_task = find("seed masi ai secret")
 notice = dict(find("masi ai secret not seeded"))
 summary = dict(find("secrets seeded"))
 write_when = write_task.get("when")  # None if the gate was removed
-data = write_task["community.hashi_vault.vault_kv2_write"]["data"]
+data = write_task[KV2_WRITE]["data"]
 stand_in = {
     "name": write_task["name"],
-    "ansible.builtin.set_fact": {"masi_written": data},
+    SET_FACT: {"masi_written": data},
     "no_log": True,
     "register": "write_result",
 }
@@ -70,7 +73,7 @@ dump("gate.yml", {
     "vars": carried,
     "tasks": [
         stand_in, notice, summary,
-        {"name": "Verdict", "ansible.builtin.assert": {
+        {"name": "Verdict", ASSERT: {
             "that": [
                 "(write_result is not skipped) == (expect_write | bool)",
                 "(notice_result is skipped) == (expect_write | bool)",
@@ -109,14 +112,14 @@ fw_tasks = []
 if not isinstance(read_failed_when, str):
     # None (Ansible default: any failure aborts, so a first run dies on the 404) or a bare
     # boolean (`false` swallows every failure and lets an outage rotate passwords).
-    fw_tasks.append({"name": "Verdict on read failed_when", "ansible.builtin.fail": {
+    fw_tasks.append({"name": "Verdict on read failed_when", FAIL: {
         "msg": f"the existing-secret read needs a failed_when EXPRESSION that tolerates only a missing path; got {read_failed_when!r}"}})
 else:
     fw_tasks.append({"name": "Evaluate the exact read failed_when against the module's real messages",
-                     "ansible.builtin.set_fact": {"fw_results": "{{ (fw_results | default([])) + [ ((" + read_failed_when.strip() + ") | bool) ] }}"},
+                     SET_FACT: {"fw_results": "{{ (fw_results | default([])) + [ ((" + read_failed_when.strip() + ") | bool) ] }}"},
                      "vars": {"_existing_secrets": "{{ item.result }}"},
                      "loop": failed_when_cases, "loop_control": {"label": "{{ item.label }}"}})
-    fw_tasks.append({"name": "Verdict on read failed_when", "ansible.builtin.assert": {
+    fw_tasks.append({"name": "Verdict on read failed_when", ASSERT: {
         "that": ["fw_results[idx] == item.expected"],
         "fail_msg": "failed_when for '{{ item.label }}' evaluated {{ fw_results[idx] }}, expected {{ item.expected }}",
         "success_msg": "failed_when: {{ item.label }}"},
@@ -138,7 +141,7 @@ dump("resolve.yml", {
     "hosts": "localhost", "connection": "local", "gather_facts": False,
     "vars": {"generatable_secrets": generatable, "_existing_secrets": {"results": fake_results}},
     "tasks": fw_tasks + [index_task, resolve_task,
-        {"name": "Verdict on resolve", "ansible.builtin.assert": {
+        {"name": "Verdict on resolve", ASSERT: {
             "that": [
                 "resolved_secrets.keep.password == 'KEEP-ME-32-CHARS-EXISTING-VALUE!'",
                 "resolved_secrets.keep.database == 'keep' and resolved_secrets.keep.username == 'keep'",
@@ -163,10 +166,10 @@ def rescue_msg(block_sub):
     blk = [t for t in play_src["tasks"] if block_sub in (t.get("name") or "").lower()]
     if len(blk) != 1 or not blk[0].get("rescue"):
         sys.exit(f"HARNESS: expected one block matching {block_sub!r} with a rescue, found {len(blk)}")
-    fails = [t for t in blk[0]["rescue"] if "ansible.builtin.fail" in t]
+    fails = [t for t in blk[0]["rescue"] if FAIL in t]
     if len(fails) != 1:
         sys.exit(f"HARNESS: expected one fail task in the rescue of {block_sub!r}")
-    return fails[0]["ansible.builtin.fail"]["msg"]
+    return fails[0][FAIL]["msg"]
 
 mixed = {"results": [
     {"failed": True, "msg": "Forbidden: Permission Denied to path ['schnappy/a']."},
@@ -179,12 +182,12 @@ dump("rescue.yml", {
     "hosts": "localhost", "connection": "local", "gather_facts": False,
     "vars": {"_existing_secrets": mixed, "_written_secrets": mixed},
     "tasks": [
-        {"name": "Render the read rescue message", "ansible.builtin.set_fact": {"read_msg": rescue_msg("existing generatable secrets, read")}},
-        {"name": "Render the write rescue message", "ansible.builtin.set_fact": {"write_msg": rescue_msg("generatable secrets, written")}},
+        {"name": "Render the read rescue message", SET_FACT: {"read_msg": rescue_msg("existing generatable secrets, read")}},
+        {"name": "Render the write rescue message", SET_FACT: {"write_msg": rescue_msg("generatable secrets, written")}},
         {"name": "Render the read rescue message for a non-loop failure",
-         "ansible.builtin.set_fact": {"read_msg_single": rescue_msg("existing generatable secrets, read")},
+         SET_FACT: {"read_msg_single": rescue_msg("existing generatable secrets, read")},
          "vars": {"_existing_secrets": single}},
-        {"name": "Verdict on rescue", "ansible.builtin.assert": {
+        {"name": "Verdict on rescue", ASSERT: {
             "that": [
                 "'Permission Denied' in read_msg and '(no message)' in read_msg",
                 "'Permission Denied' in write_msg and '(no message)' in write_msg",
@@ -203,8 +206,8 @@ dump("rescue.yml", {
 write_block = [t for t in play_src["tasks"] if "generatable secrets, written" in (t.get("name") or "").lower()]
 if len(write_block) != 1:
     sys.exit("HARNESS: expected one write block")
-write_task = [t for t in write_block[0]["block"] if "community.hashi_vault.vault_kv2_write" in t][0]
-cas_expr = write_task["community.hashi_vault.vault_kv2_write"].get("cas")
+write_task = [t for t in write_block[0]["block"] if KV2_WRITE in t][0]
+cas_expr = write_task[KV2_WRITE].get("cas")
 if cas_expr is None:
     sys.exit("HARNESS: the generatable write has no cas expression (fresh entries must be create-only)")
 print("write:   cas =", json.dumps(cas_expr))
@@ -217,9 +220,9 @@ dump("write.yml", {
         # One fact per entry: an OMITTED module argument leaves the fact undefined,
         # which is exactly what omit does to the module's `cas` parameter.
         # (a second, constant pair keeps set_fact valid when cas is the omitted argument)
-        {"name": "Render cas per entry", "ansible.builtin.set_fact": {"cas_probe_{{ idx }}": cas_expr, "cas_probe_marker_{{ idx }}": "seen"},
+        {"name": "Render cas per entry", SET_FACT: {"cas_probe_{{ idx }}": cas_expr, "cas_probe_marker_{{ idx }}": "seen"},
          "loop": write_task["loop"], "loop_control": {"index_var": "idx", "label": "{{ item.0.path }}"}},
-        {"name": "Verdict on write", "ansible.builtin.assert": {
+        {"name": "Verdict on write", ASSERT: {
             "that": ["cas_probe_0 is not defined", "cas_probe_1 is defined and (cas_probe_1 | int) == 0"],
             "fail_msg": "cas: existing={{ cas_probe_0 | default('OMITTED') }} fresh={{ cas_probe_1 | default('OMITTED') }}",
             "success_msg": "write: existing entry omits cas, fresh entry writes with cas=0 (create-only)",
@@ -247,7 +250,7 @@ dump("oracle.yml", {
     "hosts": "localhost", "connection": "local", "gather_facts": False,
     "vars": {"vault_prefix": "schnappy", "vault_token_value": "dummy"},
     "tasks": [reach, refused,
-        {"name": "Verdict on oracle", "ansible.builtin.assert": {
+        {"name": "Verdict on oracle", ASSERT: {
             "that": [
                 "_existing_secrets.results | map(attribute='failed_when_result') | list == [false, false, true, true]",
                 "_existing_secrets.results[0].secret.password == 'KEEP-REAL'",

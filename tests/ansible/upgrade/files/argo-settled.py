@@ -328,7 +328,10 @@ def main():
         first = first if first is not None else restarts
         churn = restarted(last, restarts) if last is not None else []
         last = restarts
-        streak = streak + 1 if green and not churn else (1 if green else 0)
+        if not green:
+            streak = 0
+        else:
+            streak = 1 if churn else streak + 1
         print(f"{time.strftime('%H:%M:%S')} {line} green_polls={streak}/{a.stable_polls}"
               + (f" restarted={','.join(churn)}" if churn else ""), flush=True)
         if a.once:

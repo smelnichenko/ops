@@ -75,11 +75,15 @@ TEST_NAMESPACES = "schnappy-test"
 SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
 SETTLE_MINUTES = 30
 # preview environments come and go (an Argo app per pull request): never part of the app set a step must keep
-PREVIEW_APPS = "^pr-[0-9]+-"
-PREVIEW_NAMESPACES = "^schnappy-pr-[0-9]+$"  # ...and their pods
+PREVIEW_APPS = r"^pr-\d+-"
+PREVIEW_NAMESPACES = r"^schnappy-pr-\d+$"  # ...and their pods
 # on ten, sm's: each done step's restart counts, so a pod restarting in two steps running fails the second
 RESTART_HISTORY = "$HOME/.upgrade-restart-history.json"
-PROVEN = os.path.join(OPS, ".upgrade", "proven")
+WORK = os.path.join(OPS, ".upgrade")  # the runs' own files, git-ignored
+PROVEN = os.path.join(WORK, "proven")
+INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
+ORIGIN_MAIN = "origin/main"
+MERGED_TAG = "upgrade-merged/"  # + step: the tag a production merge leaves (scripts/upgrade-merge-step.sh)
 PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml", "Vagrantfile")
 # the app images the full run ran: production's values with these tags over them (the Vagrant overlay)
 APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
@@ -95,8 +99,12 @@ def _load(name, path):
     return module
 
 
-inv = _load("upgrade_expected_inventory", os.path.join(OPS, "scripts", "upgrade-expected-inventory.py"))
+inv = _load("upgrade_expected_inventory", INVENTORY)
 dflt = _load("upgrade_defaults", os.path.join(OPS, "scripts", "upgrade-defaults.py"))
+
+
+def proof_path(step):
+    return os.path.join(PROVEN, step + ".json")
 
 
 def step_names():
@@ -107,8 +115,9 @@ def step_info(name):
     playbooks, wave0, soak, settle, out_of_sync, flags, tempo_flush = [], [], [], [], [], set(), []
     inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak, settle=settle,
               out_of_sync=out_of_sync, flags=flags, tempo_flush=tempo_flush)
+    default_soak = SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
-            "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
+            "soak": soak[-1] if soak else default_soak,
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
             "base_backup": "barman-check" in flags, "base_backup_after_merge": "barman-after-merge" in flags,
@@ -263,10 +272,10 @@ def init():
 def inventory_check(applied):
     """ten's and the Pis' inventory (the test environment left out, listed apart) against production's with the
     given steps applied."""
-    os.makedirs(os.path.join(OPS, ".upgrade"), exist_ok=True)
+    os.makedirs(WORK, exist_ok=True)
     # this run's own files: a check beside a phase must not diff the other one's
-    expected = tempfile.mkstemp(prefix="prod-expected.", suffix=".txt", dir=os.path.join(OPS, ".upgrade"))[1]
-    now = tempfile.mkstemp(prefix="prod-inventory-now.", suffix=".txt", dir=os.path.join(OPS, ".upgrade"))[1]
+    expected = tempfile.mkstemp(prefix="prod-expected.", suffix=".txt", dir=WORK)[1]
+    now = tempfile.mkstemp(prefix="prod-inventory-now.", suffix=".txt", dir=WORK)[1]
     with open(expected, "w") as f:
         f.write("\n".join(sorted(inv.expected(applied))) + "\n")
     script = open(os.path.join(OPS, "scripts", "version-inventory.sh")).read()
@@ -291,7 +300,7 @@ def main_revisions():
     for repo in REPOS:
         d = os.path.join(OPS, "..", repo)
         run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
-        revs[URLS[repo]] = run(["git", "-C", d, "rev-parse", "origin/main"], capture_output=True,
+        revs[URLS[repo]] = run(["git", "-C", d, "rev-parse", ORIGIN_MAIN], capture_output=True,
                                check=True).stdout.strip()
     return revs
 
@@ -382,7 +391,7 @@ def proof_start():
     print(f"PROOF: run {started} of ops {head[:10]}")
 
 
-PIN_RESULT = os.path.join(OPS, ".upgrade", "clickhouse-pin.json")
+PIN_RESULT = os.path.join(WORK, "clickhouse-pin.json")
 
 
 def pin_problems(step, platform_sha, path=None):
@@ -412,12 +421,12 @@ def record_proof(step, infra_sha, platform_sha):
     if changed:
         sys.exit(f"REFUSED: the ops tree changed during the run ({', '.join(changed)}) - the run proves nothing")
     names = step_names()
-    refs = dict(zip(REPOS, run([os.path.join(OPS, "scripts", "upgrade-expected-inventory.py"), "--refs", step],
+    refs = dict(zip(REPOS, run([INVENTORY, "--refs", step],
                                capture_output=True, check=True).stdout.split()))
     shas = {"infra": infra_sha, "platform": platform_sha}
-    prev = dict(zip(REPOS, run([os.path.join(OPS, "scripts", "upgrade-expected-inventory.py"), "--refs",
+    prev = dict(zip(REPOS, run([INVENTORY, "--refs",
                                 names[names.index(step) - 1]], capture_output=True, check=True).stdout.split())) \
-        if names.index(step) else {r: "main" for r in REPOS}
+        if names.index(step) else dict.fromkeys(REPOS, "main")
     proof = {"step": step, "run": run_info["run"], "ops": run_info["ops"], "repos": {}, "floating": floating_digests()}
     for repo in REPOS:
         now_sha = run(["git", "-C", os.path.join(OPS, "..", repo), "rev-parse", refs[repo]], capture_output=True,
@@ -430,17 +439,17 @@ def record_proof(step, infra_sha, platform_sha):
     pin = pin_problems(step, shas["platform"])
     if pin:
         sys.exit("REFUSED: " + "; ".join(pin))
-    with open(os.path.join(PROVEN, step + ".json"), "w") as f:
+    with open(proof_path(step), "w") as f:
         json.dump(proof, f, indent=1)
     print(f"PROOF: {step} " + " ".join(f"{r}={p['sha'][:10]}" for r, p in proof["repos"].items()))
 
 
 def floating_digests():
     """The floating-tag images the run copied from ten, by digest (scripts/vagrant-preload-floating.sh)."""
-    path = os.path.join(OPS, ".upgrade", "floating-digests.txt")
+    path = os.path.join(WORK, "floating-digests.txt")
     if not os.path.exists(path):
         sys.exit("REFUSED: no .upgrade/floating-digests.txt - the run's build copies ten's floating-tag images")
-    return dict(l.split() for l in open(path) if l.strip())
+    return {name: digest for name, digest in (l.split() for l in open(path) if l.strip())}
 
 
 def full_name(name):
@@ -501,13 +510,13 @@ def proof_inventory(names, step, merged):
 def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
     the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled."""
-    path = os.path.join(PROVEN, step + ".json")
+    path = proof_path(step)
     if not os.path.exists(path):
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
     proof = json.load(open(path))
     out = []
     for earlier in names[:names.index(step)]:
-        p = os.path.join(PROVEN, earlier + ".json")
+        p = proof_path(earlier)
         if not os.path.exists(p) or json.load(open(p))["run"] != proof["run"]:
             out.append(f"{earlier} was not proven by the same full run as {step} ({proof['run']})")
             break
@@ -530,14 +539,14 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False):
         base = merged_base(d, step)
         if base:
             # merged already (an interrupted run pushed, then did not record): the change it brought, base..tag
-            if run(["git", "-C", d, "merge-base", "--is-ancestor", "upgrade-merged/" + step, "origin/main"]).returncode:
+            if run(["git", "-C", d, "merge-base", "--is-ancestor", MERGED_TAG + step, ORIGIN_MAIN]).returncode:
                 out.append(f"{repo} upgrade-merged/{step} is not in origin/main")
-            elif own_change(d, base, "upgrade-merged/" + step) != proof["repos"][repo]["own"]:
+            elif own_change(d, base, MERGED_TAG + step) != proof["repos"][repo]["own"]:
                 out.append(f"{repo} upgrade-merged/{step} brought a change other than the one the full run proved")
-        elif run(["git", "-C", d, "merge-base", "--is-ancestor", "origin/main", branch]).returncode:
+        elif run(["git", "-C", d, "merge-base", "--is-ancestor", ORIGIN_MAIN, branch]).returncode:
             out.append(f"{repo} {branch} does not contain origin/main - restack it "
                        f"(scripts/upgrade-restack-in-place.sh ../{repo})")
-        elif own_change(d, "origin/main", branch) != proof["repos"][repo]["own"]:
+        elif own_change(d, ORIGIN_MAIN, branch) != proof["repos"][repo]["own"]:
             out.append(f"{repo} {branch} on origin/main is not the change the full run proved")
     return out
 
@@ -572,7 +581,7 @@ def package_status(name, version):
     """Forgejo's answer for a container package version of schnappy (200: there), read with git's credentials."""
     cred = run(["git", "credential", "fill"], input="protocol=https\nhost=git.pmon.dev\n\n", capture_output=True,
                check=True).stdout
-    fields = dict(l.split("=", 1) for l in cred.splitlines() if "=" in l)
+    fields = {k: v for k, v in (l.split("=", 1) for l in cred.splitlines() if "=" in l)}
     request = urllib.request.Request(f"https://git.pmon.dev/api/v1/packages/schnappy/container/{name}/{version}")
     request.add_header("Authorization", "Basic " + base64.b64encode(
         f"{fields['username']}:{fields['password']}".encode()).decode())
@@ -585,7 +594,7 @@ def package_status(name, version):
 
 def merged_base(repo_dir, step):
     """The main a merged step went onto (its upgrade-merged/<step> tag's "base <sha>"), or None when not merged."""
-    tag = run(["git", "-C", repo_dir, "tag", "-l", "--format=%(contents:subject)", "upgrade-merged/" + step],
+    tag = run(["git", "-C", repo_dir, "tag", "-l", "--format=%(contents:subject)", MERGED_TAG + step],
               capture_output=True, check=True).stdout.strip()
     if not tag:
         return None
@@ -714,7 +723,7 @@ def merge(step, repo):
                 print("TEMPO FLUSHED (its WAL into the store) before the merge")
             refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
                    else [f"the {repo} merge failed (above)"])
-        sha = run(["git", "-C", d, "rev-parse", "upgrade-merged/" + step + "^{commit}"], capture_output=True,
+        sha = run(["git", "-C", d, "rev-parse", MERGED_TAG + step + "^{commit}"], capture_output=True,
                   check=True).stdout.strip()
         record(step, "merged", repo, sha)
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
@@ -763,15 +772,15 @@ def defaults(step):
         sha = last[0]
         refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True)
                + ([] if git("rev-parse", "HEAD") == sha else [f"ops main is past the step's commit {sha[:10]}"]))
-        if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, "origin/main"]).returncode:
-            refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", "origin/main")
+        if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode:
+            refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
                    else [f"the step's commit {sha[:10]} is not on origin/main's head"])
             run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
         print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
         record(step, "defaults", sha)
         return
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True)
-           + ([] if git("rev-parse", "HEAD") == git("rev-parse", "origin/main") else ["ops is not at origin/main"]))
+           + ([] if git("rev-parse", "HEAD") == git("rev-parse", ORIGIN_MAIN) else ["ops is not at origin/main"]))
     refuse([] if run([os.path.join(OPS, "scripts", "upgrade-defaults.py"), "--apply", step]).returncode == 0
            else ["the default lines did not apply (above)"])
     paths = sorted({p for p, _, _ in dflt.default_lines(step)} | {dflt.COMMITTED})

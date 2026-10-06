@@ -296,7 +296,7 @@ def main():
 
 def expected(applied):
     """Production's inventory with the changes of the given steps applied, in their order."""
-    inventory = set(l.rstrip("\n") for l in open(os.path.join(UPGRADE, "prod-inventory.txt")) if l.strip())
+    inventory = {l.rstrip("\n") for l in open(os.path.join(UPGRADE, "prod-inventory.txt")) if l.strip()}
     for name in sorted(applied):
         for before, after, where in parse(os.path.join(STEPS, name + ".txt")):
             if before is not None:

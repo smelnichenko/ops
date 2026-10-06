@@ -30,7 +30,8 @@ import yaml
 
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STEPS = os.path.join(OPS, "tests", "ansible", "upgrade", "steps")
-BIN = os.path.join(OPS, ".upgrade", "helm")
+WORK = os.path.join(OPS, ".upgrade")
+BIN = os.path.join(WORK, "helm")
 _loader = importlib.machinery.SourceFileLoader("upgrade_merge_order",
                                                os.path.join(OPS, "scripts", "upgrade-merge-order.py"))
 mo = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_merge_order", _loader))
@@ -125,6 +126,15 @@ def renders(helm, refs, work):
     return out
 
 
+def where(key, oa, ob, old, new):
+    """Which Helm renders the object: only the old one, only the new one, or both, otherwise."""
+    if key not in ob:
+        return "only " + old
+    if key not in oa:
+        return "only " + new
+    return "differs"
+
+
 def check(step):
     lines = [l.split() for l in open(os.path.join(STEPS, step + ".txt")) if l.startswith("helm-diff ")]
     if not lines:
@@ -132,7 +142,7 @@ def check(step):
     old, new = lines[0][1], lines[0][2]
     refs = mo.refs(step)
     mo.CAPABILITIES[:] = mo.capabilities(step)  # the cluster's version and API versions, as Argo CD passes them
-    with tempfile.TemporaryDirectory(dir=os.path.join(OPS, ".upgrade")) as work:
+    with tempfile.TemporaryDirectory(dir=WORK) as work:
         a = renders(helm_binary(old), refs, os.path.join(work, old))
         b = renders(helm_binary(new), refs, os.path.join(work, new))
     if not a or not b:
@@ -145,7 +155,7 @@ def check(step):
         for key in sorted(set(oa) | set(ob), key=str):
             if oa.get(key) != ob.get(key):
                 differ.append(f"  {app}: {'/'.join(str(k) for k in key[1:] if k)} "
-                              f"({'only ' + old if key not in ob else 'only ' + new if key not in oa else 'differs'})")
+                              f"({where(key, oa, ob, old, new)})")
     if differ:
         print(f"{step}: Helm {new} renders other objects than Helm {old} at infra {refs['infra']}, platform "
               f"{refs['platform']}:")
@@ -160,12 +170,15 @@ def main():
     args = sys.argv[1:]
     if len(args) != 1:
         sys.exit(__doc__)
-    os.makedirs(os.path.join(OPS, ".upgrade"), exist_ok=True)
+    os.makedirs(WORK, exist_ok=True)
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     steps = names if args[0] == "--all" else [args[0]]
     if steps[0] not in names:
         sys.exit(f"no step {steps[0]}")
-    sys.exit(0 if all([check(s) for s in steps]) else 1)
+    failed = 0
+    for s in steps:  # every step judged, each printing its verdict - not stopped at the first
+        failed += not check(s)
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

@@ -46,6 +46,7 @@ import urllib.error
 import urllib.request
 
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+WORK = os.path.join(OPS, ".upgrade")
 OVERLAY = os.path.join(OPS, "tests", "ansible", "upgrade", "vagrant-overlay")
 PROD_GIT = "https://git.pmon.dev/schnappy/"
 
@@ -160,8 +161,9 @@ def overlay_infra(repo, forgejo):
         if "argocd.argoproj.io/sync-wave" in text:
             new = re.sub(r'(argocd\.argoproj\.io/sync-wave: )"[-0-9]+"', rf'\g<1>"{wave}"', text, count=1)
         else:
-            new = re.sub(r"^(metadata:\n(?:  .*\n)*?  name: [^\n]+\n)",
-                         lambda m: m.group(1) + f'  annotations:\n    argocd.argoproj.io/sync-wave: "{wave}"\n',
+            new = re.sub(r"^(metadata:\n(?: {2}.*\n)*? {2}name: [^\n]+\n)",
+                         lambda m, wave=wave:
+                         m.group(1) + f'  annotations:\n    argocd.argoproj.io/sync-wave: "{wave}"\n',
                          text, count=1, flags=re.M)
         if new == text:
             sys.exit(f"infra overlay: could not add the sync wave to {rel}")
@@ -249,8 +251,8 @@ def main():
     password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", "vagrant-forgejo-pw")
 
     api(a.forgejo, user, password, "POST", "/orgs", {"username": "schnappy", "visibility": "public"}, ok=(201, 422))
-    os.makedirs(os.path.join(OPS, ".upgrade"), exist_ok=True)
-    work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=os.path.join(OPS, ".upgrade"))
+    os.makedirs(WORK, exist_ok=True)
+    work = tempfile.mkdtemp(prefix="gitops-mirror-", dir=WORK)
     pushed = {}
     try:
         for name, src, ref in (("infra", a.infra, a.infra_ref), ("platform", a.platform, a.platform_ref)):
@@ -277,7 +279,7 @@ def main():
     finally:
         shutil.rmtree(work, ignore_errors=True)
     # the commits Argo must sync to before the copy counts as settled (tests/ansible/upgrade/argo-settled.yml)
-    with open(os.path.join(OPS, ".upgrade", "mirror-revisions.json"), "w") as f:
+    with open(os.path.join(WORK, "mirror-revisions.json"), "w") as f:
         json.dump(pushed, f, indent=2)
 
 

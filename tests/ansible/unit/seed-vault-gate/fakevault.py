@@ -15,7 +15,7 @@ ANSWERS = {
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
-        pass
+        pass  # quiet: the harness judges the playbook's results, not this server's request log
 
     def do_GET(self):
         if self.path.endswith("/auth/token/lookup-self"):
