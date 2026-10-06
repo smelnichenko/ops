@@ -23,6 +23,10 @@
   vars:
     istio_version: "1.25.2"
     ns: schnappy
+    # Argo CD's own values for istiod and istio-cni (infra checkout next to ops): a run here installs what Argo would -
+    # its own copy of them drifted (no hub, CNI or pilot settings of production's)
+    infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
+    istio_values_dir: "{{ infra_dir }}/clusters/production/istio"
 
   tasks:
     # ================================================================
@@ -65,11 +69,7 @@
         release_namespace: istio-system
         wait: true
         wait_timeout: 120s
-        values:
-          meshConfig:
-            accessLogFile: /dev/stdout
-            defaultConfig:
-              holdApplicationUntilProxyStarts: true
+        values: "{{ lookup('ansible.builtin.file', istio_values_dir ~ '/istiod-values.yaml') | from_yaml }}"
       when: istio_exists.resources | length == 0
 
     - name: Install Istio CNI
@@ -81,10 +81,7 @@
         release_namespace: istio-system
         wait: true
         wait_timeout: 120s
-        values:
-          cni:
-            cniConfDir: /etc/cni/net.d
-            cniBinDir: /opt/cni/bin
+        values: "{{ lookup('ansible.builtin.file', istio_values_dir ~ '/cni-values.yaml') | from_yaml }}"
       when: istio_exists.resources | length == 0
 
     - name: Verify Istio pods

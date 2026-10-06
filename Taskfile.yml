@@ -1192,7 +1192,7 @@ tasks:
 
 
   deploy:velero:
-    desc: Deploy Velero + Backup MinIO
+    desc: "The offsite git mirror of the monitor repo to the Pis (daily timer on ten); Velero and its in-cluster MinIO only where Argo CD does not own Velero (production: it does)"
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:

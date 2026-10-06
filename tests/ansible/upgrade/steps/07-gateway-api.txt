@@ -1,7 +1,7 @@
 # Gateway API CRDs v1.2.1 -> v1.5.1 (before Istio 1.30). v1.5.1 still serves every version v1.2.1 did (v1, and v1beta1
-# of GatewayClass/Gateway/HTTPRoute/ReferenceGrant), so Istio 1.25 keeps what it reads; it adds BackendTLSPolicy,
-# ListenerSet, TLSRoute and a safe-upgrades ValidatingAdmissionPolicy. Applied server-side by the kubeadm playbook's
-# task (host-side). At the rollout gateway_api_version becomes v1.5.1.
+# of GatewayClass/Gateway/HTTPRoute/ReferenceGrant), so the Istio running at this point (1.29.8, which pins v1.4.0)
+# keeps what it reads; it adds BackendTLSPolicy, ListenerSet, TLSRoute and a safe-upgrades ValidatingAdmissionPolicy.
+# Applied server-side by the kubeadm playbook's task (host-side). At the rollout gateway_api_version becomes v1.5.1.
 # ONE-WAY: the safe-upgrades policy refuses any gateway.networking.k8s.io CRD of bundle v1.0-v1.4 - going back means
 # deleting that policy first, and a setup-kubeadm run with the old default (v1.2.1) fails until the default moves.
 # outage: none - CRDs only

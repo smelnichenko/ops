@@ -2,8 +2,10 @@
 # its backend ScyllaDB 2026.2.5, the clusters' agents 3.12.1. infra upgrade/21-scylla-operator-1.22.
 # With it, istiod never injects a proxy in the operator's cleanup Jobs (pod-type cleanup-job): on a fresh cluster at
 # the targets one got a proxy and stayed Running for good (Vagrant 2026-10-05).
-# outage: the operator restarts; the ScyllaDB pod rolls when its sidecar image changes - ScyllaDB (one node) unavailable
-# for that restart; Scylla Manager restarts (no backup or repair meanwhile); istiod reloads its injector's config for the
+# Stateful (Scylla Manager's backend, one-way): shown to the operator before production.
+# outage: the operator restarts; the ScyllaDB pod rolls for its agent version (the data app) and for the operator's
+# sidecar image (the operator app) - two apps that sync apart, so possibly twice: ScyllaDB (one node) unavailable for
+# each restart; Scylla Manager restarts (no backup or repair meanwhile); istiod reloads its injector's config for the
 # new selector (its pod template is unchanged - rendered 2026-10-05: no restart)
 # abort: the operator - revert the step's merge on main (Argo syncs back), its downgrade not rehearsed. Scylla Manager's
 # own backend ScyllaDB moves 2026.1.3 -> 2026.2.5 and does not go back (a revert would start the old release on the

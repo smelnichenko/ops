@@ -1,5 +1,8 @@
 ---
-# Setup Velero + Backup MinIO for k8s cluster backups
+# Setup Velero + Backup MinIO for k8s cluster backups - the install from before Argo CD owned Velero (infra's velero
+# app; the backup store is the Pis'). Where that Application exists the first play ends at once: its pinned chart and
+# in-cluster MinIO would roll Velero back under Argo and bring back a retired store. The second play, the offsite git
+# mirror of the monitor repo to the Pis (a daily timer on ten), runs either way.
 #
 # Prerequisites:
 #   - kubeadm cluster running (setup-kubeadm.yml)
@@ -25,15 +28,24 @@
     velero_minio_access_key: "{{ backup_root_user }}"
     velero_minio_secret_key: "{{ backup_root_password }}"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
-    # Git mirror: push repo to Pi as additional backup
-    git_mirror_enabled: true
-    git_mirror_host: "git.pmon.dev"
-    git_mirror_repo: "{{ forgejo_admin_user | default('forgejo_admin') }}/monitor"
-    git_mirror_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
-    git_mirror_password: "{{ forgejo_admin_password }}"
-    git_mirror_local_path: "/var/lib/git-mirror/monitor.git"
 
   tasks:
+    - name: Does Argo CD own Velero (its Application)
+      ansible.builtin.command: >-
+        kubectl --kubeconfig /etc/kubernetes/admin.conf -n argocd get application velero --ignore-not-found -o name
+      register: _velero_by_argo
+      changed_when: false
+      check_mode: false
+
+    - name: Argo CD owns Velero - nothing here to install
+      when: _velero_by_argo.stdout | length > 0
+      block:
+        - name: Skipped
+          ansible.builtin.debug:
+            msg: "VELERO IS ARGO CD'S (infra's velero app): its install and the in-cluster MinIO skipped"
+        - name: End this play
+          ansible.builtin.meta: end_play
+
     # ================================================================
     # Phase 1: Create namespace and backup directory
     # ================================================================
@@ -415,13 +427,21 @@
                   - protocol: TCP
                     port: 9000
 
-    # ================================================================
-    # Phase 5: Git mirror replication to Pi
-    # Velero's BackupStorageLocation is the in-cluster minio-backup
-    # (bucket: velero); offsite protection is this separate rsync.
-    # Git mirror pushes to Pi for offsite code backup.
-    # ================================================================
+# The monitor repo mirrored from Forgejo and pushed to the Pis daily (offsite-backup.timer), an extra copy of the code
+- name: Offsite git mirror to the Pis
+  hosts: target
+  become: true
+  gather_facts: false
 
+  vars:
+    git_mirror_enabled: true
+    git_mirror_host: "git.pmon.dev"
+    git_mirror_repo: "{{ forgejo_admin_user | default('forgejo_admin') }}/monitor"
+    git_mirror_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
+    git_mirror_password: "{{ forgejo_admin_password }}"
+    git_mirror_local_path: "/var/lib/git-mirror/monitor.git"
+
+  tasks:
     - name: Install git
       ansible.builtin.apt:
         name: git
@@ -522,23 +542,8 @@
         daemon_reload: true
       when: offsite_backup_enabled | default(true) | bool
 
-    - name: Display Velero status
+    - name: The mirror
       ansible.builtin.debug:
-        msg: |
-          Velero deployed successfully!
-
-          Backup storage: in-cluster minio-backup (bucket: velero).
-          Offsite copy: separate rsync / git mirror to Pi (192.168.11.5).
-
-          Scheduled backups:
-            - schnappy-daily: 2 AM UTC, schnappy namespace, 7-day retention
-            - full-weekly: Sunday 3 AM UTC, all namespaces, 30-day retention
-
-          Git mirror:
-            - Target: {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git
-            - Schedule: 4 AM daily (systemd timer)
-
-          Commands:
-            velero backup get
-            velero backup create manual-test --include-namespaces schnappy
-            velero restore create --from-backup manual-test
+        msg: >-
+          Git mirror of {{ git_mirror_repo }}: {{ git_mirror_local_path }}, pushed daily at 4 AM (offsite-backup.timer)
+          to {{ offsite_backup_host | default('192.168.11.5') }}:/mnt/backups/git-mirror/monitor.git

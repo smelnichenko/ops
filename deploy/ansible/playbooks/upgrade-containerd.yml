@@ -10,15 +10,16 @@
 #      config is built from containerd 2's defaults, so any other setting would be lost (ten 2026-10-04: default
 #      plus SystemdCgroup only);
 #   2. Docker's apt repository (ten has it since docker-ce was installed, 2026-02);
-#   3. the live config kept as config.toml.pre-containerd-io, then containerd.io installed - keeping that config
+#   3. the live config kept as config.toml.pre-containerd-io, the kubelet stopped (it must not act on the runtime
+#      during the swap), then containerd.io installed - keeping that config
 #      (force-confold): the package's own default disables the CRI, the kubelet's runtime. containerd.io conflicts
 #      with and replaces Debian's containerd and runc (it bundles runc). It is held: an `apt upgrade` would otherwise
 #      move it, and restart the runtime under every pod;
 #   4. a new config from containerd 2's own defaults (schema 4 from 2.3) with those settings;
 #   5. containerd restarted on it; if the CRI does not answer, the kept config is put back and containerd restarted
-#      on it (containerd 2 reads the 1.7 schema), and the run fails - the node keeps a working runtime;
-#   6. the kubelet restarted; proof: the server's version is the target, every container running before still runs,
-#      the node Ready.
+#      on it (containerd 2 reads the 1.7 schema), and the run fails - the node keeps a working runtime; either way the
+#      kubelet starts again only when the runtime knows every container that ran before (else it stays stopped);
+#   6. proof: the server's version is the target, every container running before still runs, the node Ready.
 #
 # Back to Debian's containerd, by hand: apt-mark unhold containerd.io; apt-get install containerd=<the version the
 # run printed> runc=<its version>; cp config.toml.pre-containerd-io config.toml; systemctl restart containerd kubelet.
@@ -167,6 +168,15 @@
         mode: '0644'
         force: false
 
+    # the kubelet stays out of the swap: a container the new containerd lost track of would otherwise be started again
+    # next to the one still running (two Postgres writers on one data directory - its interlocks do not cross pod
+    # namespaces). It starts again only once the runtime knows every container that ran before (step 5). Down a minute
+    # or two: the node goes NotReady, pods are evicted only after 5 minutes unreachable.
+    - name: Stop the kubelet for the swap
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: stopped
+
     - name: Install containerd.io (replaces Debian's containerd and runc; keeps the live config while it starts)
       ansible.builtin.apt:
         name: "containerd.io={{ _package.stdout }}"
@@ -235,17 +245,46 @@
           delay: 2
           until: _cri_back.rc == 0
 
-        - name: Failed - the runtime runs on the kept config
-          ansible.builtin.fail:
-            msg: >-
-              containerd.io {{ _package.stdout }} did not serve the CRI on containerd 2's config; the kept 1.7 config is
-              back and the CRI answers on it. Fix the config and run again - or go back to Debian's containerd (the
-              playbook's header says how; it was {{ _runtime_line }}).
+        - name: On the kept config (failed after the kubelet is back)
+          ansible.builtin.set_fact:
+            _on_kept_config: true
 
-    - name: Restart the kubelet
+    # lost: neither running nor exited - the runtime no longer knows a container it ran (a container that finished,
+    # a Job's, is not lost: the kubelet only cleans it up)
+    - name: Every container that ran before is known to the runtime, before the kubelet starts again
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ crictl }} ps -q --state running
+        {{ crictl }} ps -a -q --state exited
+      args:
+        executable: /bin/bash
+      register: _known
+      changed_when: false
+      failed_when: false
+
+    - name: Containers lost - the kubelet stays stopped
+      vars:
+        _lost: "{{ _before.stdout_lines | difference(_known.stdout_lines) }}"
+      ansible.builtin.fail:
+        msg: >-
+          CONTAINERS LOST: {{ _lost | join(', ') }} ran before the swap and the runtime knows them no more
+          ({{ _known.stderr | default('') }}). The kubelet stays stopped - it would start them again beside whatever
+          still holds their data. Decide with the operator (the step's abort line); pods are evicted 5 minutes after
+          the node went unreachable.
+      when: _known.rc != 0 or (_lost | length) > 0
+
+    - name: Start the kubelet
       ansible.builtin.systemd_service:
         name: kubelet
-        state: restarted
+        state: started
+
+    - name: Failed - the runtime runs on the kept config
+      ansible.builtin.fail:
+        msg: >-
+          containerd.io {{ _package.stdout }} did not serve the CRI on containerd 2's config; the kept 1.7 config is
+          back and the CRI answers on it, every container still running, the kubelet started. Fix the config and run
+          again - or go back to Debian's containerd (the playbook's header says how; it was {{ _runtime_line }}).
+      when: _on_kept_config | default(false)
 
     # ── 6. proof ─────────────────────────────────────────────────────
     - name: The runtime is the target

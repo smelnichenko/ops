@@ -36,6 +36,8 @@
     # On ten, Argo CD (infra clusters/production/argocd/apps) owns Istio, cert-manager, metrics-server, the Prometheus
     # stack and the data operators; this playbook installs them only where no Argo will (most Vagrant tests).
     platform_by_argo: "{{ platform_by_argo_override | default(false) }}"
+    # the infra checkout next to ops: Argo CD's own values for what this installs before Argo does (Istio)
+    infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
     # External Secrets by Helm: only where no Argo owns it - on ten Argo does, and a re-run would roll Argo's ESO back to
     # this chart. The Vagrant upgrade copy sets the override: its baseline has the CRDs from this install, as ten has
     # them from 2026-04-05, until the step that moves them under Argo.
@@ -181,18 +183,21 @@
           "https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
         tar -C /usr/local -xzf /tmp/nerdctl-full.tar.gz
         rm -f /tmp/nerdctl-full.tar.gz
-        # its bundled containerd must never start: the node runs the apt one, as production does (see below)
+        # its bundled containerd must never start and its runc never run: the node runs the apt ones, as production
+        # does (see below)
         rm -f /usr/local/lib/systemd/system/containerd.service /usr/local/bin/containerd \
-          /usr/local/bin/containerd-shim-runc-v2 /usr/local/bin/containerd-stress /usr/local/bin/ctr
+          /usr/local/bin/containerd-shim-runc-v2 /usr/local/bin/containerd-stress /usr/local/bin/ctr /usr/local/bin/runc
         systemctl daemon-reload
         systemctl enable --now buildkit
       when: install_nerdctl | bool and not _nerdctl_stat.stat.exists
       changed_when: true
 
-    - name: Keep the node's containerd the apt one (drop nerdctl-full's bundled containerd)
+    - name: Keep the node's containerd and runc the apt ones (drop nerdctl-full's bundled ones)
       # nerdctl-full also ships containerd (2.x) with a unit in /usr/local/lib/systemd/system that outranks the apt
-      # package's, so the node would run a different containerd than production. Only its CLI and buildkit are wanted.
-      # The install above removes them before anything starts; this covers a node installed before that.
+      # package's, and runc 1.2.4 in /usr/local/bin, first on containerd's PATH - the node would run a different
+      # containerd and runc than production (Debian's runc 1.1.15, then containerd.io's). Only its CLI and buildkit
+      # are wanted (buildkit's worker finds the apt runc). The install above removes them before anything starts;
+      # this covers a node installed before that.
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -202,6 +207,7 @@
         - /usr/local/bin/containerd-shim-runc-v2
         - /usr/local/bin/containerd-stress
         - /usr/local/bin/ctr
+        - /usr/local/bin/runc
       when: install_nerdctl | bool
       notify: Reload systemd units
 
@@ -685,12 +691,8 @@
         chart_ref: istio/istiod
         chart_version: "{{ istio_version }}"
         release_namespace: istio-system
-        values:
-          global:
-            proxy:
-              holdApplicationUntilProxyStarts: true
-          meshConfig:
-            accessLogFile: /dev/stdout
+        # Argo CD's own values (infra checkout next to ops), so Argo's later sync of them changes nothing
+        values: "{{ lookup('ansible.builtin.file', infra_dir ~ '/clusters/production/istio/istiod-values.yaml') | from_yaml }}"
         wait: true
         wait_timeout: 300s
 
@@ -702,10 +704,7 @@
         chart_ref: istio/cni
         chart_version: "{{ istio_version }}"
         release_namespace: istio-system
-        values:
-          cni:
-            cniConfDir: /etc/cni/net.d
-            cniBinDir: /opt/cni/bin
+        values: "{{ lookup('ansible.builtin.file', infra_dir ~ '/clusters/production/istio/cni-values.yaml') | from_yaml }}"
         wait: true
         wait_timeout: 300s
 

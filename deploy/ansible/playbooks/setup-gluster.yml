@@ -178,6 +178,25 @@
     # A new volume is marked before its first write and unmarked once it is replicated in full ('Verify backup
     # volumes'): a run that fails half-way finds the mark and carries on - copy again, look up, compare, heal - where
     # it would otherwise take the half-done volume for an existing one
+    # as the backup volumes' bricks below: a new volume never goes over a brick with anything in it - Forgejo's copy and
+    # its chown would land on whatever is there (glusterd having lost its volume list, a brick left from another
+    # volume). pi1's may hold this playbook's own copy (marked: a run that failed half-way); nothing writes pi2's or
+    # ten's before the volume exists.
+    - name: The forgejo-repos bricks are empty, or pi1's holds this playbook's own copy (new install)
+      ansible.builtin.shell: |
+        set -eu
+        brick={{ gluster_arbiter_brick if item == 'target' else gluster_brick }}
+        if [ -n "$(ls -A "$brick" 2> /dev/null)" ] \
+           && ! { [ "{{ item }}" = pi1 ] && [ -e /var/lib/gluster/forgejo-repos.seeding ]; }; then
+          echo "REFUSED: $brick on {{ item }} is not empty, and not marked new by this playbook" >&2
+          exit 1
+        fi
+      delegate_to: "{{ item }}"
+      loop: [pi1, pi2, target]
+      changed_when: false
+      check_mode: false
+      when: brick_count.stdout | trim | int == 0
+
     - name: Mark forgejo-repos as new (new install)
       ansible.builtin.file:
         path: /var/lib/gluster/forgejo-repos.seeding
@@ -256,7 +275,10 @@
 # again; Forgejo and versitygw failed on their missing mounts and stayed down (Vagrant,
 # 2026-10-04). gluster-volumes-ready returns once every volume in fstab mounts (a trial mount); the volumes' mount
 # units are ordered after it (x-systemd.after in their fstab options, the plays below), the services after their
-# mounts (RequiresMountsFor) - all of them wait, however long the bricks take.
+# mounts (RequiresMountsFor). Bounded: each trial mount 30 s, the whole wait 15 minutes - remote-fs.target waits on it,
+# and logins wait on remote-fs.target (pam_nologin until systemd-user-sessions starts), so a volume that never mounts
+# (glusterd down, a volume removed but still in fstab) must not lock everyone out of the Pi. After the wait gives up,
+# the mounts are tried anyway (they are only ordered after it), each failing on its own as before the wait existed.
 - name: Mounts at boot wait for the volumes' bricks
   hosts: pi1,pi2
   become: true
@@ -271,11 +293,13 @@
           #!/bin/bash
           # Installed by setup-gluster.yml: returns once every GlusterFS volume in /etc/fstab can be mounted - a trial
           # mount of each succeeds. A volume mounted before any of its bricks is up fails, and is not tried again.
+          # Each trial is cut after 30 s (a hung mount), the unit after 15 minutes (TimeoutStartSec).
           set -uo pipefail
           trial=/run/gluster-volumes-ready
           mkdir -p "$trial"
           awk '$1 !~ /^#/ && $3 == "glusterfs" {print $1, $4}' /etc/fstab | while read -r source options; do
-            until mount -t glusterfs -o "$options" "$source" "$trial"; do
+            until timeout 30 mount -t glusterfs -o "$options" "$source" "$trial"; do
+              umount -l "$trial" 2> /dev/null  # a trial cut short may have left its mount behind
               echo "$source: not mountable yet (its bricks are not up), again in 5 s"
               sleep 5
             done
@@ -296,7 +320,7 @@
           [Service]
           Type=oneshot
           ExecStart=/usr/local/sbin/gluster-volumes-ready
-          TimeoutStartSec=infinity
+          TimeoutStartSec=15min
 
           [Install]
           WantedBy=remote-fs.target

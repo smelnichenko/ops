@@ -29,5 +29,11 @@ case_ "another line more fails" 1 "$base
 image docker.io/library/redis 8.4.0" "" "+image docker.io/library/redis 8.4.0"
 case_ "the CRD bundle's version line is not a CRD: a new one fails" 1 "$(sed 's/v1.2.1/v1.5.1/' <<< "$base")"
 case_ "an allowed-missing line there but different fails" 1 "$(sed 's/8.2.3/8.4.0/' <<< "$base")" "image docker.io/library/redis 8.2.3"
+case_ "the copy's image-build tools are ignored" 0 "$base
+binary /usr/local/bin/nerdctl 2.0.3
+binary /usr/local/bin/buildkitd 3637d1b"
+case_ "a runc outside the packages fails (it runs instead of the package's)" 1 "$base
+binary /usr/local/bin/nerdctl 2.0.3
+binary /usr/local/bin/runc 1.2.4" "" "+binary /usr/local/bin/runc 1.2.4"
 echo "inventory-diff: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

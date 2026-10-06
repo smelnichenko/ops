@@ -4,6 +4,8 @@
 # to root behind Gluster's back. Proven in Vagrant (all three VMs halted and started together: every mount up, Forgejo
 # and versitygw answering; a re-run changed nothing); production's Pis have run the older playbook since before it.
 # outage: none expected - fstab entries of mounted volumes are rewritten without a remount, the boot unit is added for
-# the next boot; the preview shows each change first
-# abort: revert the playbook's commits and run it again - not rehearsed
+# the next boot; the preview runs the playbook's reads (peers, volumes), not its gluster commands
+# abort: not by the older playbook - its re-run stops and unmounts every service and volume (defect 21). By hand on
+# each Pi: `systemctl disable gluster-volumes-ready`, `,x-systemd.after=gluster-volumes-ready.service` taken out of the
+# glusterfs lines' options in /etc/fstab, `systemctl daemon-reload` - not rehearsed
 playbook setup-gluster.yml
