@@ -4,6 +4,19 @@
 # The key shares go to Vault's API on stdin (bash's printf builtin into curl --data @-): never on a command line,
 # where any local user reads them in /proc. Every wait is bounded and the unit has a start limit: a Vault that never
 # answers fails the unseal instead of hanging it (and a run waiting on it).
+# the script checks Vault's certificate at 127.0.0.1 against the CA: a certificate that does not name 127.0.0.1 or
+# chain to it would fail every unseal for good - both Pis sealed after a power cut. Checked offline (Vault may not run
+# yet on a first install)
+- name: Vault's certificate verifies against the CA and names 127.0.0.1
+  check_mode: false
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      openssl verify -CAfile /etc/vault.d/tls/ca-cert.pem /etc/vault.d/tls/vault-cert.pem > /dev/null
+      openssl x509 -in /etc/vault.d/tls/vault-cert.pem -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
+  changed_when: false
+
 - name: The unseal script
   ansible.builtin.copy:
     dest: /etc/vault-unseal/unseal.sh

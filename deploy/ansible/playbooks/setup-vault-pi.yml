@@ -252,7 +252,14 @@
       loop:
         - { path: /etc/vault.d/tls/vault-cert.pem, mode: '0644' }
         - { path: /etc/vault.d/tls/vault-key.pem, mode: '0640' }
-        - { path: /etc/vault.d/tls/ca-cert.pem, mode: '0644' }
+
+    # root's: the unseal script trusts it - Vault's own user must not be able to swap it
+    - name: The CA certificate, root's
+      ansible.builtin.file:
+        path: /etc/vault.d/tls/ca-cert.pem
+        owner: root
+        group: vault
+        mode: '0644'
 
     # ── vault.hcl ──────────────────────────────────────────────────────
     # a running Vault takes a changed config or unit by a restart - one Pi at a time, after this play (both at once
@@ -341,9 +348,36 @@
 
 
 # ─── A changed config or unit: restarted one Pi at a time ──────────────────
-# Each back unsealed (its unseal unit restarts with it: Requires=) or, not initialised yet, answering - before the next
-- name: Vault restarted where its config or unit changed - one Pi at a time
+# The standby first (the active one's restart is then the only failover), each back unsealed - its unseal unit
+# restarted with it explicitly: Requires= passes a restart on as try-restart, which leaves an inactive unseal unit be -
+# or, not initialised yet, answering, before the next; and a restart only while the other Pi's Vault is unsealed
+- name: The order - the standby Vault first
   hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: This Pi's Vault - active (200), standby (429), or neither
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        ca_path: /etc/vault.d/tls/ca-cert.pem
+        status_code: [200, 429, 472, 473, 501, 503]
+      register: _vault_role
+      failed_when: false
+
+    - name: The restart order
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: vault_restart_order
+      loop: >-
+        {{ ansible_play_hosts | map('extract', hostvars) | rejectattr('_vault_role.status', 'equalto', 200)
+           | map(attribute='inventory_hostname') | list
+           + ansible_play_hosts | map('extract', hostvars) | selectattr('_vault_role.status', 'equalto', 200)
+           | map(attribute='inventory_hostname') | list }}
+      run_once: true
+      changed_when: false
+
+- name: Vault restarted where its config or unit changed - one Pi at a time
+  hosts: vault_restart_order
   become: true
   gather_facts: false
   serial: 1
@@ -370,16 +404,29 @@
         - _vault_before.status.ActiveState | default('') == 'active'
         - _vault_pending.stdout | default('') == 'pending'
       block:
+        # this one sealed for its restart while the other is sealed too is Vault down: refused
+        - name: The other Pi's Vault unsealed (or neither initialised yet)
+          ansible.builtin.uri:
+            url: https://127.0.0.1:8200/v1/sys/health
+            ca_path: /etc/vault.d/tls/ca-cert.pem
+            status_code: [200, 429, 501]
+          delegate_to: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+
         - name: Restarted
           ansible.builtin.systemd:
             name: vault
             state: restarted
             daemon_reload: true
 
+        - name: Its unseal run again
+          ansible.builtin.systemd:
+            name: vault-unseal
+            state: restarted
+
         - name: Unsealed again (or not initialised yet)
           ansible.builtin.uri:
             url: https://127.0.0.1:8200/v1/sys/health
-            validate_certs: false
+            ca_path: /etc/vault.d/tls/ca-cert.pem
             status_code: [200, 429, 473, 501, 503]
           register: _vault_back
           retries: 36
@@ -536,10 +583,12 @@
         group: root
         content: |
           #!/bin/bash
-          HEALTH=$(curl -s --cacert /etc/vault.d/tls/vault-cert.pem \
+          # its own file: a fixed /tmp path a local user created first would have answered for Vault
+          out=$(mktemp); trap 'rm -f "$out"' EXIT
+          HEALTH=$(curl -s --cacert /etc/vault.d/tls/ca-cert.pem \
             https://127.0.0.1:8200/v1/sys/health \
-            -o /tmp/vault-health.json -w "%{http_code}" 2>/dev/null)
-          SEALED=$(jq -r '.sealed // true' /tmp/vault-health.json 2>/dev/null)
+            -o "$out" -w "%{http_code}" 2>/dev/null)
+          SEALED=$(jq -r '.sealed // true' "$out" 2>/dev/null)
           if [ "$SEALED" != "false" ]; then
             logger -t vault-unseal "ALERT: Vault sealed or unreachable, HTTP $HEALTH"
           fi
