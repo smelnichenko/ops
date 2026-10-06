@@ -87,8 +87,13 @@ check("lint after both", defaults("--lint").returncode, 0)
 subprocess.run(["git", "-C", o, "commit", "-q", "-am", "01-a and 03-c committed"], check=True)
 reproven = subprocess.run(["git", "-C", o, "rev-parse", "HEAD"], capture_output=True, text=True,
                           check=True).stdout.strip()
+def unproven_or_error(*a):
+    try:
+        return m.unproven_changes(*a)
+    except ValueError as e:
+        return f"refused: {e}"
 check("a re-proof carrying the committed steps: nothing to excuse, nothing refused",
-      m.unproven_changes(reproven, ["01-a", "03-c"]), [])
+      unproven_or_error(reproven, ["01-a", "03-c"]), [])
 
 # the defaults phase cut short and run again: after a failed push, after a push whose ledger write failed
 reset()
