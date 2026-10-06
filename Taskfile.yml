@@ -1024,6 +1024,12 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/upgrade-patroni.yml
 
+  test:containerd-takeup:
+    desc: "Vagrant (after the containerd step): the kubelet stopped by hand, upgrade-containerd.yml run again - it checks the containers the first run kept against the runtime and starts the kubelet (it used to end 'already there' with the node NotReady)"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-containerd-takeup.yml {{.CLI_ARGS}}
+
   test:patroni-keycloak-restore:
     desc: "Vagrant: setup-patroni's restore of a first install's Keycloak dump, run with HAProxy stopped on pi1 - the rows in the leader's keycloak database, the dump moved aside; HAProxy started again, the test's table and dump removed"
     deps: [deploy:install]

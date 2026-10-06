@@ -4,22 +4,28 @@
 # KillMode=process leaves their shims running while containerd is swapped, and the new containerd reattaches to them.
 #
 #   1. checks: a version; the node done already (containerd.io at the target or newer, a containerd 2 config - schema
-#      3 or newer; 2.3 writes 4 - the CRI answering on that version) ends here - anything less, a run that failed half-way included, carries on;
+#      3 or newer; 2.3 writes 4 - the CRI answering on that version, the kubelet running) ends here; the same with the
+#      kubelet stopped (a run that failed or was cut short after the swap) checks the containers the first run kept
+#      against the runtime and starts the kubelet - anything less carries on;
 #      while still on Debian's containerd, its live config must be 1.7's default plus exactly the settings carried
 #      over (SystemdCgroup, the CRI registry config_path where an inventory sets one), or the run refuses: the new
 #      config is built from containerd 2's defaults, so any other setting would be lost (ten 2026-10-04: default
 #      plus SystemdCgroup only);
 #   2. Docker's apt repository (ten has it since docker-ce was installed, 2026-02);
-#   3. the live config kept as config.toml.pre-containerd-io, the kubelet stopped (it must not act on the runtime
-#      during the swap), then containerd.io installed - keeping that config
+#   3. the package downloaded (apt's lists refreshed while the kubelet still runs), the live config kept as
+#      config.toml.pre-containerd-io, the kubelet stopped (it must not act on the runtime during the swap), the
+#      containers running then kept on the node (the first run's list - never overwritten), then containerd.io
+#      installed from the download - keeping that config
 #      (force-confold): the package's own default disables the CRI, the kubelet's runtime. containerd.io conflicts
 #      with and replaces Debian's containerd and runc (it bundles runc). It is held: an `apt upgrade` would otherwise
 #      move it, and restart the runtime under every pod;
 #   4. a new config from containerd 2's own defaults (schema 4 from 2.3) with those settings;
 #   5. containerd restarted on it; if the CRI does not answer, the kept config is put back and containerd restarted
 #      on it (containerd 2 reads the 1.7 schema), and the run fails - the node keeps a working runtime; either way the
-#      kubelet starts again only when the runtime knows every container that ran before (else it stays stopped);
-#   6. proof: the server's version is the target, every container running before still runs, the node Ready.
+#      kubelet starts again only when the runtime knows every container that ran before (else it stays stopped); a
+#      failure anywhere between the kubelet's stop and here (apt, the config) does the same, then fails;
+#   6. proof: the server's version is the target, every container running before still runs (or finished: a Job),
+#      the node Ready on that runtime.
 #
 # Back to Debian's containerd, by hand: apt-mark unhold containerd.io; apt-get install containerd=<the version the
 # run printed> runc=<its version>; cp config.toml.pre-containerd-io config.toml; systemctl restart containerd kubelet.
@@ -38,6 +44,8 @@
     crictl: crictl --runtime-endpoint unix:///run/containerd/containerd.sock
     # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
     registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
+    # the containers running when the kubelet stopped, kept by the first run (a re-run checks against them)
+    before_file: /etc/containerd/containers-before-containerd-io
 
   tasks:
     # ── 1. checks ────────────────────────────────────────────────────
@@ -74,18 +82,54 @@
       register: _now
       changed_when: false
 
-    - name: Nothing to do when the node is done - containerd.io at the target or newer, a containerd 2 config, the CRI on it
+    - name: Is the kubelet running
+      check_mode: false
+      ansible.builtin.systemd_service:
+        name: kubelet
+      register: _kubelet_now
+
+    - name: Facts - is the swap done (containerd.io at the target or newer, a containerd 2 config, the CRI on it)
       vars:
         _state: "{{ dict(_now.stdout_lines | map('split', ' ', 1) | map('list') | list) }}"
-      when: >-
-        _runtime_line.split()[0] == 'containerd.io'
-        and (_runtime_line.split()[1] | regex_replace('-.*$', '')) is version(target, '>=')
-        and (_state.schema | default('0') | int) >= 3
-        and (_state.runtime | default('') | regex_replace('^v', '')) is version(target, '>=')
+        _runtime: "{{ _state.runtime | default('') | regex_replace('^v', '') }}"
+      ansible.builtin.set_fact:
+        _swapped: >-
+          {{ _runtime_line.split()[0] == 'containerd.io'
+             and (_runtime_line.split()[1] | regex_replace('-.*$', '')) is version(target, '>=')
+             and (_state.schema | default('0') | int) >= 3
+             and _runtime | length > 0 and _runtime is version(target, '>=') }}
+
+    - name: Nothing to do when the node is done - the swap, and the kubelet running
+      when: _swapped | bool and _kubelet_now.status.ActiveState == 'active'
       block:
         - name: Already there
           ansible.builtin.debug:
-            msg: "CONTAINERD ALREADY {{ _runtime_line }}, config schema {{ _state.schema }}, runtime {{ _state.runtime }} (target {{ target }})"
+            msg: "CONTAINERD ALREADY {{ _runtime_line }}, runtime {{ _now.stdout_lines | join(', ') }} (target {{ target }})"
+        - name: End here
+          ansible.builtin.meta: end_host
+
+    # a run that failed (containers lost) or was cut short after the swap left the kubelet stopped: the first run's
+    # list against the runtime, then the kubelet - never started on a guess
+    - name: The swap done, the kubelet stopped - taken up where the run stopped
+      when: _swapped | bool and _kubelet_now.status.ActiveState != 'active' and not ansible_check_mode
+      block:
+        - name: The containers the first run found running
+          ansible.builtin.command: cat {{ before_file }}
+          register: _before
+          changed_when: false
+
+        - name: Every one of them known to the runtime
+          ansible.builtin.include_tasks: tasks/containerd-known-containers.yml
+
+        - name: Start the kubelet
+          ansible.builtin.systemd_service:
+            name: kubelet
+            state: started
+
+        - name: Taken up
+          ansible.builtin.debug:
+            msg: "CONTAINERD SWAPPED BEFORE ({{ _runtime_line }}) - the kubelet was stopped; every container known, started"
+
         - name: End here
           ansible.builtin.meta: end_host
 
@@ -136,15 +180,14 @@
         executable: /bin/bash
       register: _package
       changed_when: false
-      failed_when: _package.stdout | length == 0
+      failed_when: _package.rc != 0 or _package.stdout | length == 0
 
-    # ── what runs now, to compare after ──────────────────────────────
-    - name: The containers running now
+    - name: The containers running now (the preview's count)
       check_mode: false
       ansible.builtin.shell: "set -o pipefail; {{ crictl }} ps -q --state running | sort"
       args:
         executable: /bin/bash
-      register: _before
+      register: _running_now
       changed_when: false
 
     # a preview (--check) ends here: the checks above ran for real, and everything below acts on the installed package
@@ -155,11 +198,19 @@
           ansible.builtin.debug:
             msg: >-
               PREVIEW: would replace {{ _runtime_line }} with containerd.io {{ _package.stdout }} under
-              {{ _before.stdout_lines | length }} running containers
+              {{ _running_now.stdout_lines | length }} running containers
         - name: End the preview here
           ansible.builtin.meta: end_host
 
     # ── 3. the package ───────────────────────────────────────────────
+    # with the kubelet still running: apt's lists and the download on the network take as long as they take - past
+    # some 50 s without the kubelet the node is NotReady and every Service loses its endpoints
+    - name: Download containerd.io (installed from the download once the kubelet is stopped)
+      ansible.builtin.apt:
+        name: "containerd.io={{ _package.stdout }}"
+        update_cache: true
+        download_only: true
+
     - name: Keep the live config (the first run's - never overwritten by a re-run)
       ansible.builtin.copy:
         src: /etc/containerd/config.toml
@@ -177,35 +228,72 @@
         name: kubelet
         state: stopped
 
-    - name: Install containerd.io (replaces Debian's containerd and runc; keeps the live config while it starts)
-      ansible.builtin.apt:
-        name: "containerd.io={{ _package.stdout }}"
-        update_cache: true
-        dpkg_options: force-confold,force-confdef
-        allow_downgrade: false
-        allow_change_held_packages: true
-
-    - name: Hold containerd.io (an apt upgrade would restart the runtime under every pod)
-      ansible.builtin.dpkg_selections:
-        name: containerd.io
-        selection: hold
-
-    # ── 4. containerd 2's config ─────────────────────────────────────
-    - name: Containerd 2's default config, with the node's settings
+    # with the kubelet stopped the set only shrinks (a Job finishing, which the check below accepts): taken before the
+    # stop, a CI pod deleted meanwhile counted as lost, one started meanwhile went unguarded. The first run's list is
+    # kept - a re-run of a cut-short swap checks against it
+    - name: The containers running now, kept on the node (the first run's)
       ansible.builtin.shell: |
-        set -euo pipefail
-        containerd config default > /etc/containerd/config.toml.new
-        grep -q "SystemdCgroup = false" /etc/containerd/config.toml.new
-        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml.new
-        {% if registry_config_path | length > 0 %}
-        grep -q "^\s*config_path = ''$" /etc/containerd/config.toml.new
-        sed -i "s|^\(\s*\)config_path = ''$|\1config_path = '{{ registry_config_path }}'|" /etc/containerd/config.toml.new
-        {% endif %}
-        containerd --config /etc/containerd/config.toml.new config dump > /dev/null
-        mv /etc/containerd/config.toml.new /etc/containerd/config.toml
+        set -o pipefail
+        [ -e {{ before_file }} ] || {{ crictl }} ps -q --state running | sort > {{ before_file }}
+        cat {{ before_file }}
       args:
         executable: /bin/bash
+      register: _before
       changed_when: true
+
+    - name: The package and containerd 2's config - on any failure the kubelet comes back once the runtime knows its
+        containers, and the run fails
+      block:
+        - name: Install containerd.io (replaces Debian's containerd and runc; keeps the live config while it starts)
+          ansible.builtin.apt:
+            name: "containerd.io={{ _package.stdout }}"
+            dpkg_options: force-confold,force-confdef
+            allow_downgrade: false
+            allow_change_held_packages: true
+
+        - name: Hold containerd.io (an apt upgrade would restart the runtime under every pod)
+          ansible.builtin.dpkg_selections:
+            name: containerd.io
+            selection: hold
+
+        # ── 4. containerd 2's config ─────────────────────────────────
+        - name: Containerd 2's default config, with the node's settings
+          ansible.builtin.shell: |
+            set -euo pipefail
+            containerd config default > /etc/containerd/config.toml.new
+            grep -q "SystemdCgroup = false" /etc/containerd/config.toml.new
+            sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml.new
+            {% if registry_config_path | length > 0 %}
+            grep -q "^\s*config_path = ''$" /etc/containerd/config.toml.new
+            sed -i "s|^\(\s*\)config_path = ''$|\1config_path = \"{{ registry_config_path }}\"|" /etc/containerd/config.toml.new
+            {% endif %}
+            containerd --config /etc/containerd/config.toml.new config dump > /dev/null
+            mv /etc/containerd/config.toml.new /etc/containerd/config.toml
+          args:
+            executable: /bin/bash
+          changed_when: true
+      rescue:
+        - name: The runtime answers (whichever containerd is installed now)
+          ansible.builtin.command: "{{ crictl }} info"
+          register: _cri_after_failure
+          changed_when: false
+          retries: 30
+          delay: 2
+          until: _cri_after_failure.rc == 0
+
+        - name: Every container that ran before known to the runtime, before the kubelet starts again
+          ansible.builtin.include_tasks: tasks/containerd-known-containers.yml
+
+        - name: Start the kubelet
+          ansible.builtin.systemd_service:
+            name: kubelet
+            state: started
+
+        - name: Failed before the restart - the kubelet is back
+          ansible.builtin.fail:
+            msg: >-
+              {{ ansible_failed_task.name }} failed: {{ ansible_failed_result.msg | default('') }} - the runtime
+              answers, every container that ran before is known to it, the kubelet started. Fix it and run again.
 
     # ── 5. restart; back to the kept config if the CRI does not come up ──
     - name: Containerd on the new config, its CRI answering
@@ -276,21 +364,29 @@
       changed_when: false
       failed_when: (_version.stdout | regex_replace('^v', '')) != target
 
-    - name: The node is Ready
-      ansible.builtin.command: >-
-        kubectl --kubeconfig {{ kubeconfig }} wait node --all --for=condition=Ready --timeout=300s
-      changed_when: false
-
-    - name: Every container that ran before still runs
-      ansible.builtin.shell: "set -o pipefail; {{ crictl }} ps -q --state running | sort"
+    # Ready on the new runtime: a swap quicker than the node monitor's grace leaves the old Ready condition standing
+    - name: The node is Ready, on the target's runtime
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ kubectl_node }} wait node --all --for=condition=Ready --timeout=300s > /dev/null
+        {{ kubectl_node }} get node -o jsonpath='{.items[*].status.nodeInfo.containerRuntimeVersion}'
       args:
         executable: /bin/bash
-      register: _after
+      vars:
+        kubectl_node: kubectl --kubeconfig {{ kubeconfig }}
+      register: _node_runtime
       changed_when: false
-      failed_when: (_before.stdout_lines | difference(_after.stdout_lines) | length) > 0
+      retries: 30
+      delay: 10
+      until: _node_runtime.rc == 0 and _node_runtime.stdout == 'containerd://' ~ target
+
+    # the guard's rule: running, or exited (a Job's container that finished during the swap) - a good swap is not
+    # failed for a CronJob that ended meanwhile
+    - name: Every container that ran before still runs, or finished
+      ansible.builtin.include_tasks: tasks/containerd-known-containers.yml
 
     - name: Replaced
       ansible.builtin.debug:
         msg: >-
           CONTAINERD REPLACED: {{ _runtime_line }} -> containerd.io {{ _package.stdout }} (runtime
-          {{ _version.stdout }}, held); {{ _before.stdout_lines | length }} containers kept running
+          {{ _version.stdout }}, held); {{ _before.stdout_lines | length }} containers kept

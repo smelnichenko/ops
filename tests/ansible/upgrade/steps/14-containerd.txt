@@ -1,7 +1,9 @@
 # containerd: Debian's 1.7.24 (below Kubernetes 1.34's 1.7.28 floor, end of life 2026-09-30) -> containerd.io 2.3.6
 # from Docker's apt repository, one install (upgrade-containerd.yml); it replaces Debian's runc with its own. Running
 # containers must survive. At the rollout setup-kubeadm.yml installs containerd.io at this version.
-# outage: containerd swapped under the running containers (they keep running: KillMode=process), the kubelet restarts
+# outage: containerd swapped under the running containers (they keep running: KillMode=process) with the kubelet
+# stopped for the install (the package downloaded before): past some 50 s without the kubelet the node goes
+# NotReady and every Service loses its endpoints (CoreDNS, the gateway, the webhooks) until it is back
 # abort: by hand, as upgrade-containerd.yml's header says: Debian's containerd and the kept config back (not rehearsed)
 - pkg containerd 1.7.24~ds1-6+deb13u1
 - pkg runc 1.1.15+ds1-2+b4

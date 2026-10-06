@@ -1,0 +1,45 @@
+---
+# upgrade-containerd.yml run again after a swap that left the kubelet stopped (a run cut short, or one that failed on
+# lost containers and was then fixed): on the Vagrant copy after its containerd step - the kubelet stopped by hand,
+# the playbook run as the step runs it. It must check the containers the first run kept against the runtime and start
+# the kubelet (it ended "already there" with the kubelet down, the node NotReady); a second run with the kubelet up
+# ends "already there".
+# Vagrant only, after step 14. Usage: task test:containerd-takeup
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: The kubelet stopped after the swap
+  hosts: target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The swap's list of containers is on the node (the step ran)
+      ansible.builtin.stat:
+        path: /etc/containerd/containers-before-containerd-io
+      register: _list
+      failed_when: not _list.stat.exists
+
+    - name: Kubelet stopped
+      ansible.builtin.systemd_service:
+        name: kubelet
+        state: stopped
+
+- name: The playbook again, as the step runs it
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/upgrade-containerd.yml
+  vars:
+    containerd_upgrade_to: "2.3.6"
+
+- name: The kubelet back, the node Ready
+  hosts: target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The kubelet runs
+      ansible.builtin.systemd_service:
+        name: kubelet
+      register: _kubelet
+      failed_when: _kubelet.status.ActiveState != 'active'
+
+    - name: The node is Ready
+      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait node --all --for=condition=Ready --timeout=300s
+      changed_when: false
