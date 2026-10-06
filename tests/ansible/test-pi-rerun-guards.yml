@@ -11,6 +11,9 @@
 #   setup-patroni with its config, then its unit, hand-edited on both Pis: the config reloaded (Patroni's PID kept),
 #   the unit restarted one node at a time paused (PIDs new) - Postgres never restarted, roles and timelines unchanged,
 #   not paused after.
+#   setup-consul on pi2 rebuilt (agent stopped, key blanked) alone: the others' key written; refused while someone else
+#   paused Patroni, the pause left; setup-patroni the same; the unit restart one node at a time, the replica first.
+#   setup-vault-pi with vault.hcl touched: each Vault restarted alone, unsealed, one active; no shares on the controller.
 #   setup-keepalived with a drifted router_id that keepalived already runs: rewritten and reloaded - the running
 #   router_id back, the PID kept, the VIP where it was.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
@@ -526,6 +529,148 @@
           CONSUL LIMITED RE-RUN: {{ inventory_hostname }} kept the key,
           {{ 'restarted (its pending config)' if inventory_hostname == 'pi2' else 'not restarted (outside the run)' }}
 
+# a server rebuilt alone (its agent stopped, its config without a key) gets the key the others run - read from them,
+# not generated (it wrote "" before); Patroni paused meanwhile (pi2's own agent away)
+- name: Consul on pi2 rebuilt - Patroni paused first
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Patroni pause
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml pause --wait
+      changed_when: true
+
+- name: Consul on pi2 rebuilt - its agent stopped, its config's key gone
+  hosts: pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stopped, the key blanked
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl stop consul
+        sed -i 's/^encrypt = .*/encrypt = ""/' /etc/consul.d/consul.hcl
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+- name: setup-consul on the rebuilt pi2 alone
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml --limit pi2"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: The rebuilt pi2 has the others' key and runs
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: pi2's agent
+      ansible.builtin.command: systemctl is-active consul
+      register: _pi2_consul_active
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == 'pi2'
+
+    - name: Its config's key
+      ansible.builtin.command: sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl
+      register: _key_rebuilt
+      changed_when: false
+
+    - name: The same key on all three, none empty; pi2's agent running
+      ansible.builtin.assert:
+        that:
+          - _keys | unique | length == 1
+          - _keys | first | length > 0
+          - hostvars['pi2']._pi2_consul_active.stdout | default('') == 'active'
+        fail_msg: "keys {{ _keys }}"
+        quiet: true
+      vars:
+        _keys: "{{ ['pi1', 'pi2', 'target'] | map('extract', hostvars, ['_key_rebuilt', 'stdout']) | list }}"
+      run_once: true
+      delegate_to: pi2
+      delegate_facts: false
+
+- name: Consul on pi2 rebuilt - Patroni resumed
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Patroni resume
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml resume --wait
+      changed_when: true
+
+# Patroni paused by someone else (an operator's maintenance) and a Consul restart pending on pi2: refused - the run's
+# resume would have ended that pause - and left paused
+- name: Someone else's pause - Patroni paused
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Patroni pause
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml pause --wait
+      changed_when: true
+
+- name: Someone else's pause - a Consul restart pending on pi2
+  hosts: pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: pi2's config touched (newer than its agent)
+      ansible.builtin.command: touch /etc/consul.d/consul.hcl
+      changed_when: true
+
+- name: setup-consul refused while Patroni is paused by someone else
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook, refused
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml --limit pi2"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _refused_run
+      changed_when: false
+      failed_when: _refused_run.rc == 0 or 'Patroni is paused' not in _refused_run.stdout
+
+- name: Still paused - the run left someone else's pause alone
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Paused
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "set -o pipefail; patronictl -c /etc/patroni/patroni.yml list | grep -c 'Maintenance mode'"
+      register: _still_paused
+      changed_when: false
+      failed_when: _still_paused.stdout | int < 1
+
+- name: Someone else's pause - over
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Patroni resume
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml resume --wait
+      changed_when: true
+
+- name: setup-consul does pi2's pending restart now
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml --limit pi2"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
 # setup-keepalived with a changed config: keepalived reloaded, not restarted (its PID kept - a restart runs the stop
 # drop-in, releasing Nexus on the active Pi), the VIP where it was, and the reload applied: pi1 runs a drifted
 # router_id (its config changed and reloaded by hand), the re-run writes the config back and the running one follows
@@ -602,6 +747,51 @@
         return_content: true
       register: _pg_before_unit
 
+# the unit edited and Patroni paused by someone else: setup-patroni refuses and leaves the pause; then the re-run
+- name: Someone else's pause before the unit's re-run
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Patroni pause
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml pause --wait
+      changed_when: true
+
+- name: setup-patroni refused while Patroni is paused by someone else
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook, refused
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _refused_run
+      changed_when: false
+      failed_when: _refused_run.rc == 0 or 'the cluster is paused' not in _refused_run.stdout
+
+- name: Patroni still paused - the run left someone else's pause alone
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Paused
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "set -o pipefail; patronictl -c /etc/patroni/patroni.yml list | grep -c 'Maintenance mode'"
+      register: _still_paused
+      changed_when: false
+      failed_when: _still_paused.stdout | int < 1
+
+- name: That pause over
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Patroni resume
+      ansible.builtin.command: patronictl -c /etc/patroni/patroni.yml resume --wait
+      changed_when: true
+
 - name: setup-patroni re-run on the edited unit
   hosts: localhost
   connection: local
@@ -639,6 +829,33 @@
       register: _pid_after_unit
       changed_when: false
       failed_when: _pid_after_unit.stdout == _pid_after_config.stdout
+
+    # one node at a time, the replica first: each node's restart window (its stop to its start, systemd's monotonic
+    # stamps as wall-clock time - a restart can be shorter than any sample) - the replica's ends before the leader's
+    # begins (paused, both at once would also have kept Postgres up)
+    - name: This node's restart window
+      ansible.builtin.command:
+        cmd: >-
+          python3 -c "import subprocess, time; m = lambda p: int(subprocess.check_output(['systemctl', 'show',
+          'patroni', '-p', p, '--value']).strip() or 0) / 1e6; w, n = time.time(), time.monotonic();
+          print('%.3f %.3f' % (w - (n - m('ActiveExitTimestampMonotonic')), w - (n - m('ActiveEnterTimestampMonotonic'))))"
+      register: _restart_window
+      changed_when: false
+
+    - name: One at a time, the replica first
+      ansible.builtin.assert:
+        that:
+          - _replica | length == 1
+          - (hostvars[_replica[0]]._restart_window.stdout.split()[1] | float)
+            <= (hostvars[_leader[0]]._restart_window.stdout.split()[0] | float)
+        fail_msg: >-
+          windows {{ ['pi1', 'pi2'] | map('extract', hostvars, ['_restart_window', 'stdout']) | list }} (stop, start),
+          replica {{ _replica }}, leader {{ _leader }}
+        quiet: true
+      vars:
+        _replica: "{{ ['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_pg_before_unit.json.role', 'equalto', 'replica') | map(attribute='inventory_hostname') | list }}"
+        _leader: "{{ ['pi1', 'pi2'] | map('extract', hostvars) | rejectattr('_pg_before_unit.json.role', 'equalto', 'replica') | map(attribute='inventory_hostname') | list }}"
+      run_once: true
 
     - name: Not paused
       ansible.builtin.shell:
@@ -743,3 +960,96 @@
         msg: >-
           KEEPALIVED RE-RUN: {{ inventory_hostname }} kept PID and VIP ({{ _ka_after.stdout }}), runs router_id
           {{ _ka_router.stdout }}{{ ' (was drift-pi1)' if inventory_hostname == 'pi1' else '' }}
+
+# setup-vault-pi with a change to apply on both Pis (vault.hcl newer than Vault): each Vault restarted one at a time,
+# unsealed before the next (both at once sealed both), one active after; and no unseal shares left on the controller
+# (a fetch left every share in its /tmp)
+- name: Vault before - its config touched on both Pis
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: No unseal shares on the controller before the run
+      ansible.builtin.file:
+        path: /tmp/vault-unseal-keys
+        state: absent
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Vault's start before
+      ansible.builtin.command: systemctl show vault -p ActiveEnterTimestampMonotonic --value
+      register: _vault_start_before
+      changed_when: false
+
+    - name: Its config touched (newer than the running Vault)
+      ansible.builtin.command: touch /etc/vault.d/vault.hcl
+      changed_when: true
+
+- name: setup-vault-pi re-run with the change to apply
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Vault after - each restarted alone, unsealed, one active; nothing left on the controller
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Restarted here
+      ansible.builtin.command: systemctl show vault -p ActiveEnterTimestampMonotonic --value
+      register: _vault_start_after
+      changed_when: false
+      failed_when: _vault_start_after.stdout == _vault_start_before.stdout
+
+    - name: Its restart window (stop, start - monotonic stamps as wall-clock time)
+      ansible.builtin.command:
+        cmd: >-
+          python3 -c "import subprocess, time; m = lambda p: int(subprocess.check_output(['systemctl', 'show',
+          'vault', '-p', p, '--value']).strip() or 0) / 1e6; w, n = time.time(), time.monotonic();
+          print('%.3f %.3f' % (w - (n - m('ActiveExitTimestampMonotonic')), w - (n - m('ActiveEnterTimestampMonotonic'))))"
+      register: _vault_window
+      changed_when: false
+
+    - name: Unsealed (200 active, 429 standby)
+      ansible.builtin.uri:
+        url: https://127.0.0.1:8200/v1/sys/health
+        validate_certs: false
+        status_code: [200, 429, 473, 501, 503]
+      register: _vault_health
+      retries: 12
+      delay: 5
+      until: _vault_health.status in [200, 429]
+
+    - name: One at a time (one's window ends before the other's begins), one active
+      ansible.builtin.assert:
+        that:
+          - (_w[0][1] <= _w[1][0]) or (_w[1][1] <= _w[0][0])
+          - (['pi1', 'pi2'] | map('extract', hostvars, ['_vault_health', 'status']) | select('equalto', 200) | list | length) == 1
+        fail_msg: "windows {{ _w }}, health {{ ['pi1', 'pi2'] | map('extract', hostvars, ['_vault_health', 'status']) | list }}"
+        quiet: true
+      vars:
+        _w: "{{ ['pi1', 'pi2'] | map('extract', hostvars, ['_vault_window', 'stdout']) | map('split') | map('map', 'float') | map('list') | list }}"
+      run_once: true
+
+    - name: No unseal shares on the controller after
+      ansible.builtin.stat:
+        path: /tmp/vault-unseal-keys
+      register: _shares_left
+      delegate_to: localhost
+      become: false
+      run_once: true
+      failed_when: _shares_left.stat.exists
+
+    - name: Applied one at a time
+      ansible.builtin.debug:
+        msg: >-
+          VAULT RE-RUN: each restarted alone ({{ ['pi1', 'pi2'] | map('extract', hostvars, ['_vault_window', 'stdout']) | list }}),
+          unsealed, one active; no shares on the controller
+      run_once: true

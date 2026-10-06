@@ -367,6 +367,48 @@
         _after_forward.rc != 0 or forgejo_version not in _after_forward.stdout_lines[0]
         or _after_forward.stdout_lines[-1] != _dumps_before_forward.stdout
 
+    # the realistic cut short: the VIP's Pi up on the target, the other down - taken forward without touching the
+    # serving one (a stop there would be an outage)
+    - name: pi2 alone down, pi1 serving the target
+      ansible.builtin.systemd:
+        name: forgejo
+        state: stopped
+      when: inventory_hostname == 'pi2'
+
+    - name: pi1's Forgejo start, before
+      ansible.builtin.command: systemctl show -p ActiveEnterTimestampMonotonic --value forgejo
+      register: _pi1_start_before
+      changed_when: false
+      when: inventory_hostname == 'pi1'
+
+    - name: Taken forward - pi2 started, pi1 not touched
+      ansible.builtin.command:
+        cmd: >-
+          env -i HOME={{ lookup('env', 'HOME') }} PATH={{ lookup('env', 'PATH') }}
+          venv/bin/ansible-playbook -i inventory/vagrant.yml {{ playbook_dir }}/vagrant-only-play.yml
+          playbooks/upgrade-forgejo.yml
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      register: _forward_one
+      changed_when: true
+      failed_when: _forward_one.rc != 0 or 'a run taken forward' not in _forward_one.stdout
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: pi1 never restarted, both serve the target
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sf http://127.0.0.1:3000/api/v1/version
+        echo
+        systemctl show -p ActiveEnterTimestampMonotonic --value forgejo
+      args:
+        executable: /bin/bash
+      register: _after_forward_one
+      changed_when: false
+      failed_when: >-
+        _after_forward_one.rc != 0 or forgejo_version not in _after_forward_one.stdout_lines[0]
+        or (inventory_hostname == 'pi1' and _after_forward_one.stdout_lines[-1] != _pi1_start_before.stdout)
+
     # one Pi down on an older binary while the other serves the target: not a run to take forward
     - name: pi2 down on production's old binary
       ansible.builtin.shell: |
@@ -416,5 +458,6 @@
         msg: >-
           FORGEJO UPGRADE REHEARSED: {{ migration_adds }} added; {{ hostvars['pi1']._judged.stdout }}; marker {{ hostvars['pi1']._marker_branch.json.commit.id[:12] }} cloned from both;
           dump {{ hostvars[hostvars['pi1']._vip_pi]._dump_check.stdout_lines[0] }}; second run restarted nothing; downgrade and
-          one-Pi runs refused; both down on the target taken forward (no dump); one down on an older binary refused
+          one-Pi runs refused; both down on the target taken forward (no dump); pi2 alone down taken forward without
+          touching pi1; one down on an older binary refused
       run_once: true
