@@ -30,6 +30,14 @@
     peer_other_ip: "{{ hostvars['pi2']['ansible_host'] if inventory_hostname == 'pi1' else hostvars['pi1']['ansible_host'] }}"
 
   tasks:
+    # an empty one (a key missing from .env) wrote `auth_pass` empty
+    - name: The VRRP password is there
+      ansible.builtin.assert:
+        that: vrrp_password | default('') | length > 0
+        fail_msg: "REFUSED: no VRRP password (KEEPALIVED_VRRP_PASSWORD in .env)"
+        quiet: true
+      no_log: true
+
     - name: Discover VRRP interface (the one carrying ansible_host)
       ansible.builtin.shell: |
         set -eo pipefail
@@ -320,9 +328,7 @@
         content: |
           [Service]
           ExecStopPost=/etc/keepalived/active_services_backup.sh --force
-      notify:
-        - Reload systemd
-        - Restart Keepalived
+      notify: Reload systemd
 
     # Remove the old Nexus-only drop-in if it's still around — replaced
     # by release-active-services.conf above.
@@ -330,9 +336,7 @@
       ansible.builtin.file:
         path: /etc/systemd/system/keepalived.service.d/stop-nexus.conf
         state: absent
-      notify:
-        - Reload systemd
-        - Restart Keepalived
+      notify: Reload systemd
 
     - name: Write Keepalived config
       ansible.builtin.copy:
@@ -387,6 +391,7 @@
             notify_backup "/etc/keepalived/active_services_backup.sh"
             notify_fault "/etc/keepalived/active_services_backup.sh"
           }
+      diff: false  # the VRRP auth_pass - a --check --diff preview would print it
       # a reload re-reads the config and keeps the VRRP state: a restart would run the stop drop-in (releasing Nexus on
       # the active Pi) and move the VIP
       notify: Reload Keepalived
@@ -499,15 +504,83 @@
       ansible.builtin.systemd:
         daemon_reload: true
 
-    - name: Restart Keepalived
-      ansible.builtin.systemd:
-        name: keepalived
-        state: restarted
-
     - name: Reload Keepalived
       ansible.builtin.systemd:
         name: keepalived
         state: reloaded
+
+# ─── A restart pending (its drop-ins changed): one Pi at a time, the VIP's holder last ─────────────────
+# both at once left the VIP on neither Pi; pending, not "changed by this run": a run that failed after writing a
+# drop-in and before its restart left the new one unloaded, and the next run changed nothing
+- name: Keepalived's restart order - the VIP's holder last
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    vip: "{{ keepalived_vip }}"
+  tasks:
+    - name: Does this Pi hold the VIP
+      ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
+      register: _vip_here
+      changed_when: false
+
+    - name: A restart pending here - a drop-in newer than the running keepalived
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          [ "$(systemctl is-active keepalived)" = active ] || { echo current; exit 0; }
+          started=$(date -d "$(systemctl show keepalived -p ActiveEnterTimestamp --value)" +%s)
+          for f in /etc/systemd/system/keepalived.service.d /etc/systemd/system/keepalived.service.d/*.conf; do
+            if [ -e "$f" ] && [ "$(stat -c %Y "$f")" -gt "$started" ]; then echo pending; exit 0; fi
+          done
+          echo current
+      register: _keepalived_pending
+      changed_when: false
+      check_mode: false
+
+    - name: The order
+      ansible.builtin.add_host:
+        name: "{{ item }}"
+        groups: keepalived_restart_order
+      loop: "{{ (ansible_play_hosts | difference(_holders)) + _holders }}"
+      vars:
+        _holders: >-
+          {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vip_here.stdout', 'ne', '')
+             | map(attribute='inventory_hostname') | list }}
+      run_once: true
+      changed_when: false
+
+- name: Keepalived restarted where pending, one Pi at a time
+  hosts: keepalived_restart_order
+  become: true
+  gather_facts: false
+  serial: 1
+  vars:
+    vip: "{{ keepalived_vip }}"
+  tasks:
+    - name: Restarted, the VIP held again before the next
+      when: _keepalived_pending.stdout == 'pending'
+      block:
+        - name: The other Pi's keepalived running - the VIP has somewhere to be meanwhile
+          ansible.builtin.systemd:
+            name: keepalived
+          register: _peer_keepalived
+          delegate_to: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
+          failed_when: _peer_keepalived.status.ActiveState != 'active'
+
+        - name: Restarted
+          ansible.builtin.systemd:
+            name: keepalived
+            state: restarted
+
+        - name: The VIP answers again (on whichever Pi holds it)
+          ansible.builtin.command: ping -c 1 -W 2 {{ vip }}
+          register: _vip_back
+          changed_when: false
+          retries: 30
+          delay: 2
+          until: _vip_back.rc == 0
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify Keepalived
