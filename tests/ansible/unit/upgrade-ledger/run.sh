@@ -519,6 +519,62 @@ def main_ends(code):
 check("a phase that passes: its end recorded passed", main_ends(0), [(S47, "end", "begin", "passed")])
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"), [(S47, "end", "begin", "failed")])
 
+# a step that moves ClickHouse's image (59, 61) is proven only with its rollback pin proven on the same platform commit
+# and images (tests/clickhouse-pin's result; the full run starts it beside the build)
+import json, tempfile
+S59, S61 = "59-clickhouse-25.8", "61-clickhouse-26.8"
+pin_file = os.path.join(tempfile.mkdtemp(), "clickhouse-pin.json")
+img = {S59: ["24.8-alpine", "25.8.33.6-alpine"], S61: ["25.8.33.6-alpine", "26.8.15.10-alpine"]}
+json.dump({"59": {"platform": "p59", "images": img[S59]}, "61": {"platform": "p61", "images": img[S61]}},
+          open(pin_file, "w"))
+check("pin: 59 on the commit and images it proved", m.pin_problems(S59, "p59", pin_file), [])
+check("pin: 61 on the commit and images it proved", m.pin_problems(S61, "p61", pin_file), [])
+check("pin: 59 on another platform commit - refused", len(m.pin_problems(S59, "other", pin_file)), 1)
+json.dump({"61": {"platform": "p61", "images": img[S61]}}, open(pin_file, "w"))
+check("pin: 59 with no result of its own (the run failed it) - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
+json.dump({"59": {"platform": "p59", "images": ["24.8-alpine", "25.3-alpine"]}}, open(pin_file, "w"))
+check("pin: 59 proven for other images - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
+os.remove(pin_file)
+check("pin: no result at all - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
+check("pin: a step that does not move ClickHouse wants none", m.pin_problems(S47, "x", pin_file), [])
+check("pin: exactly 59 and 61 move ClickHouse's image",
+      [n for n in names if m.pin_problems(n, "x", pin_file)], [S59, S61])
+
+
+def record_59(pin):
+    """record-proof of 59 with git and the tree stubbed; `pin` the rollback pin's result (None: no file)."""
+    work = tempfile.mkdtemp()
+    json.dump({"run": "r", "ops": "o"}, open(os.path.join(work, "run.json"), "w"))
+    if pin is not None:
+        json.dump(pin, open(os.path.join(work, "pin.json"), "w"))
+
+    class _Out:
+        def __init__(self, out):
+            self.stdout, self.returncode = out, 0
+
+    def run(cmd, **k):
+        if cmd[-2:-1] == ["--refs"]:
+            return _Out("upgrade/59-x upgrade/59-y")
+        return _Out({"upgrade/59-x": "i59", "upgrade/59-y": "p59"}.get(cmd[-1], "z"))
+    keep = ("PROVEN", "PIN_RESULT", "run", "ops_unchanged_since", "floating_digests", "own_change")
+    saved = {k: getattr(m, k) for k in keep}
+    m.PROVEN, m.PIN_RESULT, m.run = work, os.path.join(work, "pin.json"), run
+    m.ops_unchanged_since, m.floating_digests, m.own_change = (lambda *a: []), (lambda: {}), (lambda *a: "own")
+    try:
+        m.record_proof(S59, "i59", "p59")
+        return "recorded" if os.path.exists(os.path.join(work, S59 + ".json")) else "nothing"
+    except SystemExit as e:
+        return f"refused, nothing recorded: {not os.path.exists(os.path.join(work, S59 + '.json'))}"
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+
+
+check("record-proof 59 with its pin proven: recorded",
+      record_59({"59": {"platform": "p59", "images": img[S59]}}), "recorded")
+check("record-proof 59 without a pin result: refused, nothing recorded", record_59(None),
+      "refused, nothing recorded: True")
+
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 EOF

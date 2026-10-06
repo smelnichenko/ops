@@ -8,26 +8,35 @@
 # Measured 2026-10-06: both pins hold (602500 rows back on the older image); unpinned, 24.8 does not start on 25.8's
 # parts, and 25.8 detaches 26.8's (half the rows gone).
 #
+# A pass writes .upgrade/clickhouse-pin.json - per step, the platform commit and the two images it proved; the full
+# run starts this beside its build, and its proof of 59 and 61 wants that result for the commits and images they run.
+#
 # Usage: tests/clickhouse-pin/run.sh      (task test:clickhouse-pin)
 set -uo pipefail
 ops=$(cd "$(dirname "$0")/../.." && pwd)
 schema=$ops/../platform/helm/schnappy-observability/files/clickhouse-logs-schema.sql
 [ -r "$schema" ] || { echo "clickhouse-pin: no platform checkout next to ops ($schema)"; exit 2; }
+result=$ops/.upgrade/clickhouse-pin.json
+rm -f "$result"  # a failed run leaves no earlier pass behind
 W=$(mktemp -d "$ops/.upgrade/clickhouse-pin.XXXX")
 container=clickhouse-pin-$$
-cleanup() { docker rm -f "$container" > /dev/null 2>&1; docker volume rm -f "$container" > /dev/null 2>&1; rm -rf "$W"; }
+cleanup() {
+  docker rm -f "$container" > /dev/null 2>&1; docker volume rm -f "$container" > /dev/null 2>&1; rm -rf "$W"
+}
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 sed 's/__TTL_DAYS__/3650/' "$schema" > "$W/logs.sql"
 # each step's pin as its platform branch renders it (clickhouse-users.xml's default profile), not restated here
+branch() { echo "upgrade/$(basename "$ops"/tests/ansible/upgrade/steps/"$1"-*.txt .txt)"; }
 pin() {  # step -> the compatibility value of platform's upgrade/<step file's name>
-  local branch
-  branch=upgrade/$(basename "$ops"/tests/ansible/upgrade/steps/"$1"-*.txt .txt)
-  git -C "$ops/../platform" show "$branch:helm/schnappy-observability/files/clickhouse-users.xml" \
+  git -C "$ops/../platform" show "$(branch "$1"):helm/schnappy-observability/files/clickhouse-users.xml" \
     | sed -n 's|.*<compatibility>\([0-9.]*\)</compatibility>.*|\1|p'
 }
+# the commits read, before anything runs: the result names what was proven, not what the branch became since
+sha59=$(git -C "$ops/../platform" rev-parse "$(branch 59)") sha61=$(git -C "$ops/../platform" rev-parse "$(branch 61)")
 pin59=$(pin 59) pin61=$(pin 61)
-[ -n "$pin59" ] && [ -n "$pin61" ] || { echo "clickhouse-pin: no compatibility in steps 59/61's clickhouse-users.xml"; exit 2; }
+[ -n "$pin59" ] && [ -n "$pin61" ] \
+  || { echo "clickhouse-pin: no compatibility in steps 59/61's clickhouse-users.xml"; exit 2; }
 for v in "$pin59" "$pin61"; do
   printf '<clickhouse><profiles><default><compatibility>%s</compatibility></default></profiles></clickhouse>\n' "$v" \
     > "$W/compat-$v.xml"
@@ -81,7 +90,8 @@ images() { awk '$1 == "image" && $2 == "clickhouse/clickhouse-server" && $4 == "
   "$ops"/tests/ansible/upgrade/steps/"$1"-*.txt; }
 read -r old59 new59 < <(images 59)
 read -r old61 new61 < <(images 61)
-[ -n "${new59:-}" ] && [ -n "${new61:-}" ] || { echo "clickhouse-pin: no ClickHouse image line in steps 59 and 61"; exit 2; }
+[ -n "${new59:-}" ] && [ -n "${new61:-}" ] \
+  || { echo "clickhouse-pin: no ClickHouse image line in steps 59 and 61"; exit 2; }
 
 fails=0
 check() {  # name, want (0 read back / 1 not), old, new, compat file
@@ -94,4 +104,7 @@ check "59: $new59 unpinned - $old59 does not (the run sees the fault)" 1 "$old59
 check "61: $new61 pinned to $pin61 - $old61 reads its parts" 0 "$old61" "$new61" "compat-$pin61.xml"
 check "61: $new61 unpinned - $old61 does not (the run sees the fault)" 1 "$old61" "$new61" ""
 echo "clickhouse-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
-[ $fails = 0 ]
+[ $fails = 0 ] || exit 1
+{ printf '{"59": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s"},\n' "$sha59" "$old59" "$new59" "$pin59"
+  printf ' "61": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s"}}\n' "$sha61" "$old61" "$new61" "$pin61"
+} > "$result"

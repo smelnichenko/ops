@@ -380,6 +380,30 @@ def proof_start():
     print(f"PROOF: run {started} of ops {head[:10]}")
 
 
+PIN_RESULT = os.path.join(OPS, ".upgrade", "clickhouse-pin.json")
+
+
+def pin_problems(step, platform_sha, path=None):
+    """A step that moves ClickHouse's image (its abort line goes back while the compatibility pin holds) is proven only
+    with that pin proven for it: tests/clickhouse-pin on the same platform commit and the same two images, its result
+    in .upgrade/clickhouse-pin.json - the full run starts it beside the build."""
+    lines = [l.split() for l in open(os.path.join(inv.STEPS, step + ".txt"))
+             if l.startswith("image clickhouse/clickhouse-server ")]
+    if not lines:
+        return []
+    want, path = {"platform": platform_sha, "images": [lines[0][2], lines[0][6]]}, path or PIN_RESULT
+    try:
+        got = json.load(open(path)).get(step.split("-")[0])
+    except (OSError, ValueError):
+        got = None
+    if got is None:
+        return [f"{step} moves ClickHouse's image, and its rollback pin has no passing result ({path}; "
+                f"tests/clickhouse-pin/run.sh, its log .upgrade/clickhouse-pin.log)"]
+    if {k: got.get(k) for k in want} != want:
+        return [f"{step}'s rollback pin was proven for {got}, not this step's {want}"]
+    return []
+
+
 def record_proof(step, infra_sha, platform_sha):
     run_info = json.load(open(os.path.join(PROVEN, "run.json")))
     changed = ops_unchanged_since(run_info["ops"], PROVEN_PATHS)
@@ -401,6 +425,9 @@ def record_proof(step, infra_sha, platform_sha):
         if repo in step_info(step)["branches"]:
             proof["repos"][repo] = {"sha": now_sha, "own": own_change(os.path.join(OPS, "..", repo), prev[repo],
                                                                       refs[repo])}
+    pin = pin_problems(step, shas["platform"])
+    if pin:
+        sys.exit("REFUSED: " + "; ".join(pin))
     with open(os.path.join(PROVEN, step + ".json"), "w") as f:
         json.dump(proof, f, indent=1)
     print(f"PROOF: {step} " + " ".join(f"{r}={p['sha'][:10]}" for r, p in proof["repos"].items()))
