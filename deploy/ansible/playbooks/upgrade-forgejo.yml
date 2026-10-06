@@ -57,10 +57,27 @@
       register: _installed
       changed_when: false
 
+    # silent for a minute is not "down": a Forgejo a cut-short run started may still be migrating the database
+    - name: Its unit - active or activating while the API is silent means starting (migrating), not down
+      ansible.builtin.systemd:
+        name: forgejo
+      register: _unit
+      check_mode: false
+
     - name: Its version numbers - served and installed
       ansible.builtin.set_fact:
         _running: "{{ (_served.json.version | regex_search('^[0-9]+[.][0-9]+[.][0-9]+')) if _served.status | default(0) == 200 else '' }}"
         _installed_version: "{{ _installed.stdout | regex_search('[0-9]+[.][0-9]+[.][0-9]+') }}"
+        _starting: "{{ _served.status | default(0) != 200 and _unit.status.ActiveState in ['active', 'activating'] }}"
+
+    - name: At most one Forgejo starting (two would be migrating one database)
+      ansible.builtin.assert:
+        that: ansible_play_hosts | map('extract', hostvars) | selectattr('_starting') | list | length <= 1
+        fail_msg: >-
+          REFUSED: Forgejo is starting on {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_starting')
+          | map(attribute='inventory_hostname') | list }} at once - two migrations of one database: by hand
+        quiet: true
+      run_once: true
 
     # a run cut short after the swap: every Pi serves the target or is down on its binary - taken forward
     - name: A run to take forward, or every Pi serving
@@ -95,10 +112,13 @@
       register: _addrs
       changed_when: false
 
+    # the Pi already starting (a cut-short run's, maybe migrating) is the first whatever holds the VIP now - another
+    # started beside it would migrate the same database; else the VIP's holder
     - name: The first Pi
       ansible.builtin.set_fact:
         _first: >-
-          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', '!=', '')
+          {{ (ansible_play_hosts | map('extract', hostvars) | selectattr('_starting') | map(attribute='inventory_hostname')
+              | list + ansible_play_hosts | map('extract', hostvars) | selectattr('_addrs.stdout', '!=', '')
               | map(attribute='inventory_hostname') | list + ansible_play_hosts) | first }}
       run_once: true
 
