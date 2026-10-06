@@ -20,7 +20,10 @@ last line, APPS <a,b>.
 --restart-history <file> --step <label>: once settled, a pod (by uid) whose containers restarted during this step and
 during the step before it fails the wait - a crash loop slower than --restart-quiet settles between two restarts, and
 only its next step sees it again. The file (on the host this runs on) keeps each pod's restart count and the last step
-it restarted in; the first call records without judging.
+it restarted in; the first call records without judging. --restarts-expected: this step's own change restarts the
+control plane (a kubeadm upgrade - every controller holding a leader lease restarts with the API server): its restarts
+are recorded, not judged, and are no pod's restart step - two such steps in a row are no crash loop, and a real one is
+caught a step later.
 
 Exit 0 settled, 1 not settled in --minutes (the state of everything not green is printed), 2 bad arguments.
 --once evaluates one poll and exits; --apps-json/--pods-json evaluate saved `kubectl get -o json` output instead of
@@ -171,9 +174,10 @@ def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extr
     return green, problems, not_ready, restarts
 
 
-def restart_history(path, step, pods):
+def restart_history(path, step, pods, expected=False):
     """Pods (by uid) that restarted during `step` and during the step recorded before it, by name; records this step.
-    The first call (no file) records only."""
+    The first call (no file) records only; with `expected` (the step restarts the control plane) its restarts are
+    recorded, not judged, and leave each pod's last restart step as it was."""
     try:
         with open(path) as f:
             hist = json.load(f)
@@ -186,7 +190,7 @@ def restart_history(path, step, pods):
         meta = pod["metadata"]
         count = sum(c.get("restartCount", 0) for c in pod.get("status", {}).get("containerStatuses") or [])
         rec = old.get(meta["uid"])
-        restarted_now = hist is not None and count > (rec["count"] if rec else 0)
+        restarted_now = hist is not None and count > (rec["count"] if rec else 0) and not expected
         last = step if restarted_now else (rec or {}).get("last_restart_step")
         if restarted_now and prev is not None and (rec or {}).get("last_restart_step") == prev:
             twice.append(f"{meta['namespace']}/{meta['name']}")
@@ -232,6 +236,7 @@ def main():
     ap.add_argument("--print-apps", action="store_true")
     ap.add_argument("--restart-history")
     ap.add_argument("--step")
+    ap.add_argument("--restarts-expected", action="store_true")
     a = ap.parse_args()
     if a.stable_polls < 1 or bool(a.apps_json) != bool(a.pods_json) or bool(a.restart_history) != bool(a.step):
         print("bad arguments", file=sys.stderr)
@@ -251,7 +256,7 @@ def main():
         restarted in two steps running."""
         rc = 0
         if a.restart_history:
-            twice, prev = restart_history(a.restart_history, a.step, pods)
+            twice, prev = restart_history(a.restart_history, a.step, pods, a.restarts_expected)
             if twice:
                 print(f"RESTARTED IN TWO STEPS RUNNING ({prev}, {a.step}): {', '.join(twice)}")
                 rc = 1

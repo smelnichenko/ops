@@ -101,7 +101,7 @@ def step_info(name):
             "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
-            "base_backup": "barman-check" in flags}
+            "base_backup": "barman-check" in flags, "restarts_expected": "restarts-control-plane" in flags}
 
 
 # ---- the ledger: rules (pure) ---------------------------------------------------------------------------------------
@@ -263,11 +263,12 @@ def main_revisions():
     return revs
 
 
-def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=None):
+def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=None, restarts_expected=False):
     """argo-settled.py on ten, with ten's own kubeconfig: every app Synced (or allowed) and Healthy on main's commits,
     every pod ready, held for `stable` polls, no container restarted in the last `quiet` seconds; with `apps`, exactly
     those apps (preview environments aside); with `restart_step`, no pod restarting in this step and the done one
-    before it. (green, main's revisions, the apps it saw - preview environments left out)."""
+    before it - unless `restarts_expected` (the step restarts the control plane: recorded, not judged). (green, main's
+    revisions, the apps it saw - preview environments left out)."""
     revs = main_revisions()
     script = open(os.path.join(inv.UPGRADE, "files", "argo-settled.py")).read()
     cmd = (f"MIRROR_REVISIONS={shlex.quote(json.dumps(revs))} python3 - --kubeconfig \"$HOME/.kube/config\" "
@@ -278,6 +279,8 @@ def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=N
         cmd += f" --expect-apps {shlex.quote(','.join(apps))}"
     if restart_step:
         cmd += f" --restart-history {RESTART_HISTORY} --step {shlex.quote(restart_step)}"
+        if restarts_expected:
+            cmd += " --restarts-expected"
     print(f"Argo on ten, on infra {revs[URLS['infra']][:10]} / platform {revs[URLS['platform']][:10]}:", flush=True)
     out = run(["ssh", TEN, cmd], input=script, capture_output=True)
     print(out.stdout + out.stderr, end="")
@@ -646,8 +649,9 @@ def check(step, since=None, deciding=False):
     ok = inventory_check(sorted(set(applied_steps(events)) | {step}))
     quiet = 300 if since is None else since + CHECK_MINUTES * 60 + 60
     apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
-    ok_settled, _, _ = settled(CHECK_MINUTES, 4, quiet, step_info(step)["out_of_sync"], apps,
-                               step if deciding else None)
+    info = step_info(step)
+    ok_settled, _, _ = settled(CHECK_MINUTES, 4, quiet, info["out_of_sync"], apps, step if deciding else None,
+                               info["restarts_expected"])
     return ok and ok_settled
 
 

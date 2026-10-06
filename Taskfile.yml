@@ -473,6 +473,8 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.STEP}}
       CERT_RENEW:
         sh: scripts/upgrade-expected-inventory.py --cert-renew {{.STEP}}
+      RESTARTS_CONTROL_PLANE:
+        sh: scripts/upgrade-expected-inventory.py --restarts-control-plane {{.STEP}}
       RESTORE_UNDO:
         sh: scripts/upgrade-expected-inventory.py --restore-undo {{.STEP}}
       WAVE0:
@@ -512,7 +514,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}}
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}} -e restarts_expected={{.RESTARTS_CONTROL_PLANE}}
       # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke
       # (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
       - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}'

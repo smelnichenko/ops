@@ -102,6 +102,20 @@ check("a new pod (another uid) with a restart: one step only, green", rc, 0, out
 rc, out = run(A, [pod("p1", "u1", 0)], "--restart-history", H)
 check("--restart-history without --step: bad arguments", rc, 2, out)
 
+# control-plane upgrades in a row (steps 42 and 43): every leader-elected controller restarts in both
+H2 = os.path.join(work, "history-control-plane.json")
+run(A, [pod("op", "o1", 0)], "--restart-history", H2, "--step", "41")
+rc, out = run(A, [pod("op", "o1", 1)], "--restart-history", H2, "--step", "42", "--restarts-expected")
+check("a restart in a control-plane step: green", rc, 0, out)
+rc, out = run(A, [pod("op", "o1", 2)], "--restart-history", H2, "--step", "43", "--restarts-expected")
+check("a restart in the next control-plane step: green (both expected)", rc, 0, out)
+rc, out = run(A, [pod("op", "o1", 3)], "--restart-history", H2, "--step", "44")
+check("a restart in the step after them: green (theirs were no pod's restart step)", rc, 0, out)
+rc, out = run(A, [pod("op", "o1", 4)], "--restart-history", H2, "--step", "45")
+check("and again in the next: a crash loop, caught", (rc, "ns/op" in out and "(44, 45)" in out), (1, True), out)
+rc, out = run(A, [pod("op", "o1", 5)], "--restart-history", H2, "--step", "46", "--restarts-expected")
+check("a crash loop into a control-plane step: green there, recorded", rc, 0, out)
+
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

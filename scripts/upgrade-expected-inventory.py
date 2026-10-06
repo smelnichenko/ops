@@ -18,6 +18,9 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                copy of Postgres from a fresh backup and its WAL after it)
     cert-renew                                (the step changes cert-manager: the runner renews every Certificate
                                                after it and wants each Ready at a higher revision)
+    restarts-control-plane                    (the step's own change restarts the control plane - a kubeadm upgrade:
+                                               the controllers holding a leader lease restart with the API server, so
+                                               the settle after it records their restarts without judging them)
     restore-undo <serverName> <image>         (the step's undo: the runner recovers that server's latest backup with
                                                that image into a side cluster after it - the seeded rows must be there)
     branch <infra|platform>                   (the step's change is the branch upgrade/NN-<name> in that repo)
@@ -66,6 +69,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --barman-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --cert-renew <step>                    (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --restarts-control-plane <step>        (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restore-undo <step>        (prints "<serverName> <image>" or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-compat <step>             (prints the version or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
@@ -95,7 +99,7 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         if line.startswith("playbook "):
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
-        elif line in ("backup-check", "barman-check", "restore-check", "cert-renew"):
+        elif line in ("backup-check", "barman-check", "restore-check", "cert-renew", "restarts-control-plane"):
             if flags is not None:
                 flags.add(line)
         elif re.fullmatch(r"restore-undo [a-z0-9-]+ \S+", line):
@@ -193,6 +197,7 @@ def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
                                    ["--barman-check"], ["--restore-check"], ["--cert-renew"],
+                                   ["--restarts-control-plane"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
                                    ["--wave0"]) else None
     if mode:
@@ -208,7 +213,7 @@ def main():
         if playbooks:
             print("\n".join(playbooks))
         return
-    if mode in ("--backup-check", "--barman-check", "--restore-check", "--cert-renew"):
+    if mode in ("--backup-check", "--barman-check", "--restore-check", "--cert-renew", "--restarts-control-plane"):
         flags = set()
         parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
         print("yes" if mode[2:] in flags else "no")

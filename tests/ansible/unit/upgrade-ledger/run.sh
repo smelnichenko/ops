@@ -258,6 +258,45 @@ check("full name: a Docker Hub image", m.full_name("valkey/valkey"), "docker.io/
 check("full name: a registry's", m.full_name("ghcr.io/cloudnative-pg/postgresql"), "ghcr.io/cloudnative-pg/postgresql")
 check("full name: a registry with a port", m.full_name("localhost:5000/x"), "localhost:5000/x")
 
+# a step that restarts the control plane (its restarts-control-plane line): the deciding check records its restarts
+# without judging them - production's 42 and 43 restart every leader-elected controller in a row
+def deciding_settle(step):
+    seen, saved = [], {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled")}
+    m.read_ledger = lambda: (None, [])
+    m.inventory_check = lambda *a: True
+    m.settled = lambda *a, **k: seen.append(a) or (True, {}, [])
+    try:
+        m.check(step, deciding=True)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return seen[0][5:]
+
+
+check("the deciding check of 42: its restarts expected", deciding_settle(S42), (S42, True))
+check("the deciding check of 47: its restarts judged", deciding_settle(S47), (S47, False))
+
+
+def settled_cmd(**kw):
+    seen, saved = [], {k: getattr(m, k) for k in ("main_revisions", "run")}
+
+    class _Out:
+        returncode, stdout, stderr = 0, "", ""
+
+    m.main_revisions = lambda: dict.fromkeys(m.URLS.values(), "r")
+    m.run = lambda cmd, **k: seen.append(cmd[-1]) or _Out()
+    try:
+        m.settled(1, 4, 300, [], **kw)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return seen[0]
+
+
+check("settled: --restarts-expected when expected", "--restarts-expected" in settled_cmd(restart_step=S42,
+                                                                                         restarts_expected=True), True)
+check("settled: none otherwise", "--restarts-expected" in settled_cmd(restart_step=S47), False)
+
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 EOF

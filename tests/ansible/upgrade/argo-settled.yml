@@ -45,6 +45,8 @@
     record_apps: false
     expect_apps: false
     restart_step: ""
+    # the step restarts the control plane (its restarts recorded, not judged - argo-settled.py --restarts-expected)
+    restarts_expected: false
     apps_file: "{{ playbook_dir }}/../../../.upgrade/argo-apps.txt"
     restart_history: /var/lib/upgrade-test/restart-history.json
     mirror_revisions: >-
@@ -77,6 +79,7 @@
           {{ '--print-apps' if record_apps | bool else '' }}
           {{ ('--expect-apps ' ~ (lookup('ansible.builtin.file', apps_file).split() | join(','))) if expect_apps | bool else '' }}
           {{ ('--restart-history ' ~ restart_history ~ ' --step ' ~ restart_step) if restart_step | length > 0 else '' }}
+          {{ '--restarts-expected' if restarts_expected | bool else '' }}
         executable: python3
       environment:
         MIRROR_REVISIONS: "{{ mirror_revisions | to_json }}"
