@@ -231,7 +231,7 @@ class _Done:
     returncode, stdout = 0, "abc1234"
 
 
-def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=()):
+def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info")
     saved = {k: getattr(m, k) for k in keep}
@@ -244,7 +244,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=()):
     m.settled = lambda minutes, *a, **k: calls.append(("settled", minutes)) or (True, dict.fromkeys(m.URLS.values(), "r"),
                                                                                 ["app"])
     m.inventory_check = lambda *a: calls.append(("inventory",)) or True
-    m.confirm = lambda q: calls.append(("asked",)) or True
+    m.confirm = lambda q: calls.append(("asked",)) or answer
     m.check = lambda *a, **k: True
     m.soak_state = lambda *a: (None, 0)
     m.merged_base = lambda *a: None
@@ -269,10 +269,14 @@ for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "p
 got = phase_calls(m.merge, "22-apt-cacher-ng", "platform", registry=["REGISTRY-X"])
 check("merge: refused by the registry check, nothing merged", (len(got), "REGISTRY-X" in got[-1][1]), (1, True))
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"))
-check("merge 57: merged, then Argo given its settle line's 50 minutes",
-      [c for c in got if c[0] in ("run", "settled", "record")],
-      [("run", "upgrade-merge-order.py"), ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"),
-       ("settled", 50), ("record", "settled")])
+check("merge 57: the change shown (log, stat, diff) and asked about, merged, then Argo given its settle line's 50 "
+      "minutes", [c for c in got if c[0] in ("run", "settled", "record", "asked")],
+      [("run", "upgrade-merge-order.py"), ("run", "git"), ("run", "git"), ("run", "git"), ("asked",),
+       ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("settled", 50), ("record", "settled")])
+got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), answer=False)
+check("merge 57, not confirmed: refused after the change was shown - nothing merged, nothing recorded",
+      ([c for c in got if c[0] == "run" and c[1] == "upgrade-merge-step.sh" or c[0] == "record"], got[-1][0]),
+      ([], "refused"))
 
 # the terminal question fails closed: no terminal (a cron, a pipe) is a no
 import subprocess as _sp

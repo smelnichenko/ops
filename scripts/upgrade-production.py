@@ -638,6 +638,13 @@ def merge(step, repo):
                 order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
                 refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven "
                                                          "(above)"])
+            # what goes to production, shown before the yes: a step without playbook lines (PostgreSQL 18, a Scylla
+            # major, Kafka) has no preview, its one-way change starts when Argo syncs this push
+            print(f"{repo}: what the merge puts on production's main (upgrade/{step}):", flush=True)
+            for args in (["log", "--oneline"], ["diff", "--stat"], ["diff"]):
+                run(["git", "-C", d, "--no-pager", *args, f"main..upgrade/{step}"])
+            refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
+                   else ["not confirmed - nothing merged, nothing recorded"])
             refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
                    else [f"the {repo} merge failed (above)"])
         sha = run(["git", "-C", d, "rev-parse", "upgrade-merged/" + step + "^{commit}"], capture_output=True,

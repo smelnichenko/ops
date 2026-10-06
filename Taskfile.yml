@@ -1120,10 +1120,9 @@ tasks:
       - cmd: scripts/upgrade-production.py preview {{.STEP}}
 
   deploy:upgrade:merge:
-    desc: "PRODUCTION: the GitOps half of step STEP in REPO (infra or platform) - its branch, the change the full run proved, fast-forwarded onto main and pushed; then Argo settled on the pushed commits"
+    desc: "PRODUCTION: the GitOps half of step STEP in REPO (infra or platform) - its branch, the change the full run proved, shown and asked about, then fast-forwarded onto main and pushed; then Argo settled on the pushed commits"
     requires:
       vars: [STEP, REPO]
-    prompt: "Merge and push {{.REPO}} branch upgrade/{{.STEP}} to main - into PRODUCTION?"
     cmds:
       - cmd: scripts/upgrade-production.py merge {{.STEP}} {{.REPO}}
 
