@@ -259,8 +259,14 @@ settle too, upgrade-production.py) compared the two literally: "compared against
 them without empty fields since. Full run 15:01: build 53 min, steps 00-36 green, step 37 failed in its preview (the
 full review's --check before every step's playbooks; no run had reached a step after 35 with it): the conversion is
 skipped in check mode and the closing message read its proof. The preview now says what it would do (postgres-analyze's
-too); step 37's preview green on that copy. Next: steps 37-61 on that copy (no step after 35 has run with the preview
-and the settle as they are), then the full run again.
+too); step 37's preview green on that copy. Steps 37-61 on that copy (no step after 35 had run with the preview and
+the settle as they are): 37-41 green; 42 failed its survival check - the Vagrant Mimir overlay sends queries older
+than 1 h to the store-gateway, which skipped blocks with samples from the last 10 h, so once the querier expected the
+seed's block every query over it failed the consistency check (the overlay switches that filter off since; production
+keeps Mimir's 12 h / 10 h); 43 failed its settle - the controllers holding leader leases (cert-manager, CNPG,
+Cilium's and Scylla's operators) restart with the API server in both Kubernetes upgrades, read as a crash loop "in
+two steps running" (a restarts-control-plane line on 13, 42 and 43 records them without judging, production's settle
+too). Next: the rest from 43 on that copy, then the full run again.
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
