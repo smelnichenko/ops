@@ -8,8 +8,9 @@
 #
 # Targets that vanish are not "down": a ServiceMonitor whose selector stops matching drops its targets, and the rest
 # stay up. So the scrape pools and their target counts are kept in .upgrade/scrape-pools.json - recorded on a green
-# copy (-e record_scrape_pools=true, the build's Argo stage), then after each step no pool may be gone or smaller, and
-# the file takes the counts that passed (a new pool is fine).
+# copy (-e record_scrape_pools=true, the build's Argo stage), then after each step no pool may be gone or smaller than
+# that baseline (a new pool is fine). A step's counts do not become the record: with the k6 smoke running beside this
+# check, a transient extra target became a minimum and the next step failed "smaller".
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/metrics-check.yml
 #        [-e record_scrape_pools=true]
@@ -112,13 +113,14 @@
       delay: 15
       until: _pools.rc == 0
 
-    - name: The pools that passed become the record
+    - name: The baseline recorded (the build's Argo stage only)
       ansible.builtin.copy:
         content: "{{ _pools.stdout_lines[-1] | from_json | to_nice_json }}\n"
         dest: "{{ scrape_pools_file }}"
         mode: '0644'
       delegate_to: localhost
       become: false
+      when: record_scrape_pools | bool
 
     - name: Mimir holds samples remote-written in the last two minutes
       ansible.builtin.shell: |
