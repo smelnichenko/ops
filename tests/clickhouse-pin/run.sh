@@ -19,7 +19,16 @@ cleanup() { docker rm -f "$container" > /dev/null 2>&1; docker volume rm -f "$co
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 sed 's/__TTL_DAYS__/3650/' "$schema" > "$W/logs.sql"
-for v in 24.8 25.8; do
+# each step's pin as its platform branch renders it (clickhouse-users.xml's default profile), not restated here
+pin() {  # step -> the compatibility value of platform's upgrade/<step file's name>
+  local branch
+  branch=upgrade/$(basename "$ops"/tests/ansible/upgrade/steps/"$1"-*.txt .txt)
+  git -C "$ops/../platform" show "$branch:helm/schnappy-observability/files/clickhouse-users.xml" \
+    | sed -n 's|.*<compatibility>\([0-9.]*\)</compatibility>.*|\1|p'
+}
+pin59=$(pin 59) pin61=$(pin 61)
+[ -n "$pin59" ] && [ -n "$pin61" ] || { echo "clickhouse-pin: no compatibility in steps 59/61's clickhouse-users.xml"; exit 2; }
+for v in "$pin59" "$pin61"; do
   printf '<clickhouse><profiles><default><compatibility>%s</compatibility></default></profiles></clickhouse>\n' "$v" \
     > "$W/compat-$v.xml"
 done
@@ -80,9 +89,9 @@ check() {  # name, want (0 read back / 1 not), old, new, compat file
   case_ "$@"; local rc=$?
   if [ "$rc" = "$want" ]; then echo "PASS $name"; else echo "FAIL $name (exit $rc)"; fails=$((fails + 1)); fi
 }
-check "59: $new59 pinned to 24.8 - $old59 reads its parts" 0 "$old59" "$new59" compat-24.8.xml
+check "59: $new59 pinned to $pin59 - $old59 reads its parts" 0 "$old59" "$new59" "compat-$pin59.xml"
 check "59: $new59 unpinned - $old59 does not (the run sees the fault)" 1 "$old59" "$new59" ""
-check "61: $new61 pinned to 25.8 - $old61 reads its parts" 0 "$old61" "$new61" compat-25.8.xml
+check "61: $new61 pinned to $pin61 - $old61 reads its parts" 0 "$old61" "$new61" "compat-$pin61.xml"
 check "61: $new61 unpinned - $old61 does not (the run sees the fault)" 1 "$old61" "$new61" ""
 echo "clickhouse-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

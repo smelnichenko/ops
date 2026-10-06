@@ -184,27 +184,9 @@
       ansible.builtin.set_fact:
         _patroni_first_install: "{{ not _patroni_unit_file.stat.exists and not _patroni_data_mark.stat.exists }}"
 
-    # a first install clears the data directory (Debian's own cluster, Keycloak's dumped first; a replica copies the
-    # leader's) - never on the node Consul names as the cluster's leader, whatever this Pi's files say
-    # fails closed: only Consul's own answer that there is no such key counts as no leader - Consul unreachable (the
-    # incident a re-run comes in) refuses instead of clearing the data
-    - name: Patroni's leader in Consul
-      ansible.builtin.command: consul kv get service/{{ patroni_scope }}/leader
-      register: _patroni_leader_key
-      changed_when: false
-      failed_when: >-
-        _patroni_leader_key.rc != 0 and 'No key exists at' not in _patroni_leader_key.stderr
+    - name: Never the leader's data (a first install clears the data directory)
+      ansible.builtin.include_tasks: tasks/patroni-leader-guard.yml
       when: _patroni_first_install | bool
-
-    - name: Never the leader's data
-      ansible.builtin.fail:
-        msg: >-
-          REFUSED on {{ inventory_hostname }}: no Patroni unit or file here, but Consul names it the leader of
-          {{ patroni_scope }} - its data directory would be cleared; repair it by hand
-      when:
-        - _patroni_first_install | bool
-        - _patroni_leader_key.rc | default(1) == 0
-        - _patroni_leader_key.stdout | trim == inventory_hostname
 
     - name: Patroni had this node but is not running - this playbook never clears its data
       ansible.builtin.fail:

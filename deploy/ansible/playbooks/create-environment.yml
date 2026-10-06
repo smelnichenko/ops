@@ -525,7 +525,7 @@
                   - { protocol: TCP, port: 6443 }
               - to:
                   - ipBlock:
-                      cidr: 192.168.11.5/32
+                      cidr: "{{ keepalived_vip }}/32"
                 ports:
                   - { protocol: TCP, port: 8200 }
               - to:

@@ -1,0 +1,28 @@
+---
+# Before the kubelet starts again after containerd's swap (upgrade-containerd.yml): every container that ran before
+# (_before: crictl ps -q --state running, before the swap) must be known to the runtime - running, or exited (a Job
+# that finished meanwhile). One it knows no more would be started again by the kubelet beside the one still running:
+# the run fails, the kubelet stays stopped. Expects: crictl, _before. Tested: tests/ansible/unit/containerd-lost.
+# lost: neither running nor exited - the runtime no longer knows a container it ran (a container that finished,
+# a Job's, is not lost: the kubelet only cleans it up)
+- name: Every container that ran before is known to the runtime, before the kubelet starts again
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ crictl }} ps -q --state running
+    {{ crictl }} ps -a -q --state exited
+  args:
+    executable: /bin/bash
+  register: _known
+  changed_when: false
+  failed_when: false
+
+- name: Containers lost - the kubelet stays stopped
+  vars:
+    _lost: "{{ _before.stdout_lines | difference(_known.stdout_lines) }}"
+  ansible.builtin.fail:
+    msg: >-
+      CONTAINERS LOST: {{ _lost | join(', ') }} ran before the swap and the runtime knows them no more
+      ({{ _known.stderr | default('') }}). The kubelet stays stopped - it would start them again beside whatever
+      still holds their data. Decide with the operator (the step's abort line); pods are evicted 5 minutes after
+      the node went unreachable.
+  when: _known.rc != 0 or (_lost | length) > 0

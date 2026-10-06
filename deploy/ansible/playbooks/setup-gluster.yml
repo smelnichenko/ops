@@ -99,6 +99,13 @@
     gluster_brick: /var/lib/gluster/forgejo-brick
     gluster_arbiter_brick: /var/lib/gluster/forgejo-arbiter-brick
     gluster_mount: /var/lib/forgejo/repos
+    # a new volume's mark (pi1): set before its first write, cleared once replicated in full
+    forgejo_repos_mark: /var/lib/gluster/forgejo-repos.seeding
+    # the bricks a new forgejo-repos volume is made of - each must be empty, but pi1's may hold this playbook's own copy
+    forgejo_repos_bricks:
+      - {host: pi1, brick: "{{ gluster_brick }}", may_hold_copy: true}
+      - {host: pi2, brick: "{{ gluster_brick }}", may_hold_copy: false}
+      - {host: target, brick: "{{ gluster_arbiter_brick }}", may_hold_copy: false}
     forgejo_uid: 900
     forgejo_gid: 900
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] }}"
@@ -182,24 +189,13 @@
     # its chown would land on whatever is there (glusterd having lost its volume list, a brick left from another
     # volume). pi1's may hold this playbook's own copy (marked: a run that failed half-way); nothing writes pi2's or
     # ten's before the volume exists.
-    - name: The forgejo-repos bricks are empty, or pi1's holds this playbook's own copy (new install)
-      ansible.builtin.shell: |
-        set -eu
-        brick={{ gluster_arbiter_brick if item == 'target' else gluster_brick }}
-        if [ -n "$(ls -A "$brick" 2> /dev/null)" ] \
-           && ! { [ "{{ item }}" = pi1 ] && [ -e /var/lib/gluster/forgejo-repos.seeding ]; }; then
-          echo "REFUSED: $brick on {{ item }} is not empty, and not marked new by this playbook" >&2
-          exit 1
-        fi
-      delegate_to: "{{ item }}"
-      loop: [pi1, pi2, target]
-      changed_when: false
-      check_mode: false
+    - name: The forgejo-repos bricks empty, or pi1's holding this playbook's own copy (new install)
+      ansible.builtin.include_tasks: tasks/forgejo-repos-bricks-empty.yml
       when: brick_count.stdout | trim | int == 0
 
     - name: Mark forgejo-repos as new (new install)
       ansible.builtin.file:
-        path: /var/lib/gluster/forgejo-repos.seeding
+        path: "{{ forgejo_repos_mark }}"
         state: touch
         mode: '0600'
         modification_time: preserve

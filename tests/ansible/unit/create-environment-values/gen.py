@@ -31,6 +31,8 @@ play_vars.update({
     "env_name": "harness", "playbook_dir": "/nonexistent",
     "gen_db_password": "db-pass", "gen_valkey_password": "valkey-pass",
     "gen_minio_password": "minio-pass", "gen_kafka_cluster_id": "kafka-id",
+    # the inventory's (every host has it): the Pis' floating address
+    "keepalived_vip": "192.0.2.5",
 })
 tasks = []
 for i, t in enumerate(copies):

@@ -249,29 +249,8 @@
           ansible.builtin.set_fact:
             _on_kept_config: true
 
-    # lost: neither running nor exited - the runtime no longer knows a container it ran (a container that finished,
-    # a Job's, is not lost: the kubelet only cleans it up)
-    - name: Every container that ran before is known to the runtime, before the kubelet starts again
-      ansible.builtin.shell: |
-        set -o pipefail
-        {{ crictl }} ps -q --state running
-        {{ crictl }} ps -a -q --state exited
-      args:
-        executable: /bin/bash
-      register: _known
-      changed_when: false
-      failed_when: false
-
-    - name: Containers lost - the kubelet stays stopped
-      vars:
-        _lost: "{{ _before.stdout_lines | difference(_known.stdout_lines) }}"
-      ansible.builtin.fail:
-        msg: >-
-          CONTAINERS LOST: {{ _lost | join(', ') }} ran before the swap and the runtime knows them no more
-          ({{ _known.stderr | default('') }}). The kubelet stays stopped - it would start them again beside whatever
-          still holds their data. Decide with the operator (the step's abort line); pods are evicted 5 minutes after
-          the node went unreachable.
-      when: _known.rc != 0 or (_lost | length) > 0
+    - name: Every container that ran before known to the runtime, before the kubelet starts again
+      ansible.builtin.include_tasks: tasks/containerd-known-containers.yml
 
     - name: Start the kubelet
       ansible.builtin.systemd_service:

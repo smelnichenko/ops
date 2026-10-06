@@ -560,7 +560,8 @@ def backup(step, store):
 
 
 def preview(step):
-    ledger_for(step, "preview")
+    names, events, _ = ledger_for(step, "preview")
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if run([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
@@ -651,7 +652,9 @@ def check(step, since=None, deciding=False):
 
 
 def done(step):
-    _, events, info = ledger_for(step, "done")
+    names, events, info = ledger_for(step, "done")
+    # what it checks and what its first call runs (an ACME issuance, a base backup) must be what the full run proved
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
     now = datetime.datetime.now(datetime.timezone.utc)
     checked, left = soak_state(events, step, info["soak"], now)
     if checked is not None and left > 0:

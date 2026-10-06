@@ -8,6 +8,7 @@ python3 - <<'EOF'
 import datetime
 import importlib.machinery
 import importlib.util
+import os
 import sys
 
 loader = importlib.machinery.SourceFileLoader("upgrade_production", "scripts/upgrade-production.py")
@@ -169,8 +170,10 @@ check("own: a line more differs",
 # the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
 # a no - or no terminal - runs nothing and records nothing
 def done_calls(step, answer):
-    calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record")}
-    m.ledger_for = lambda st, ph, arg=None: (None, [], info[st])
+    calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record",
+                                                   "proof_problems")}
+    m.ledger_for = lambda st, ph, arg=None: (names, [], info[st])
+    m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: (None, 0)
     m.confirm = lambda q: calls.append("asked") or answer
     m.ansible = lambda *a: calls.append(a[0]) or True
@@ -191,6 +194,63 @@ check("done 24 (barman-check), yes", done_calls("24-cnpg", True),
       ["asked", "playbooks/postgres-base-backup.yml", "checked"])
 check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
 check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
+
+# every phase consults the proof first: refused by it, a phase runs, merges, records and asks nothing
+class _Done:
+    returncode, stdout = 0, "abc1234"
+
+
+def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=()):
+    calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
+                       "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info")
+    saved = {k: getattr(m, k) for k in keep}
+    m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
+    m.proof_problems = lambda *a, **k: list(proof)
+    m.registry_problems = lambda *a, **k: list(registry)
+    m.run = lambda cmd, **k: calls.append(("run", os.path.basename(cmd[0]))) or _Done()
+    m.ansible = lambda *a: calls.append(("ansible", a[0])) or True
+    m.record = lambda st, ev, *a: calls.append(("record", ev))
+    m.settled = lambda minutes, *a, **k: calls.append(("settled", minutes)) or (True, dict.fromkeys(m.URLS.values(), "r"),
+                                                                                ["app"])
+    m.inventory_check = lambda *a: calls.append(("inventory",)) or True
+    m.confirm = lambda q: calls.append(("asked",)) or True
+    m.check = lambda *a, **k: True
+    m.soak_state = lambda *a: (None, 0)
+    m.merged_base = lambda *a: None
+    if step_info:
+        m.step_info = step_info
+    try:
+        fn(*args)
+    except SystemExit as e:
+        calls.append(("refused", str(e)))
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return calls
+
+
+for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "postgres")),
+                       ("preview", m.preview, (S47,)), ("playbooks", m.playbooks, (S47,)), ("done", m.done, (S23,)),
+                       ("merge", m.merge, (S47, "infra"))):
+    got = phase_calls(fn, *args, proof=["PROOF-X"])
+    check(f"{name}: refused by the proof, nothing done", (len(got), got[-1][0], "PROOF-X" in got[-1][1]),
+          (1, "refused", True))
+got = phase_calls(m.merge, "22-apt-cacher-ng", "platform", registry=["REGISTRY-X"])
+check("merge: refused by the registry check, nothing merged", (len(got), "REGISTRY-X" in got[-1][1]), (1, True))
+got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"))
+check("merge 57: merged, then Argo given its settle line's 50 minutes",
+      [c for c in got if c[0] in ("run", "settled", "record")],
+      [("run", "upgrade-merge-order.py"), ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"),
+       ("settled", 50), ("record", "settled")])
+
+# the terminal question fails closed: no terminal (a cron, a pipe) is a no
+import subprocess as _sp
+r = _sp.run(["setsid", "-w", sys.executable, "-c",
+             "import importlib.machinery, importlib.util\n"
+             "l = importlib.machinery.SourceFileLoader('u', 'scripts/upgrade-production.py')\n"
+             "m = importlib.util.module_from_spec(importlib.util.spec_from_loader('u', l)); l.exec_module(m)\n"
+             "print(m.confirm('x?'))"], capture_output=True, text=True, stdin=_sp.DEVNULL)
+check("confirm without a terminal is a no", r.stdout.strip(), "False")
 
 # image names as containerd lists them, so the inventory's floating tags meet the preload's digests
 check("full name: a library image", m.full_name("postgres"), "docker.io/library/postgres")

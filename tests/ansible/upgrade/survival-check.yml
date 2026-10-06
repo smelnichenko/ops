@@ -105,6 +105,11 @@
         # name:value of each pinned setting the server has
         _formats: "{{ (_ch.stdout_lines[3] | default('formats=')) | regex_replace('^formats=', '') | split(',')
                       | reject('equalto', '') | list }}"
+        # a server newer than its pin must have every pinned setting (one renamed or misspelled, or a query returning
+        # nothing, made the check vacuous); at the pin's own version none of them exists yet
+        _newer: >-
+          {{ clickhouse_compat | length > 0 and _pins | length > 0
+             and ((_ch.stdout_lines[1] | default('')).split() | last | default('0')) is version(clickhouse_compat ~ '.999', '>') }}
       register: _ch
       changed_when: false
       retries: 10
@@ -117,6 +122,7 @@
         or _ch.stdout_lines[2] != 'users=' ~ clickhouse_users
         or (_formats | map('regex_replace', ':.*$', '') | map('extract', _pins) | list)
            != (_formats | map('regex_replace', '^[^:]*:', '') | list)
+        or (_newer and _formats | length != _pins | length)
 
     # ── Grafana ───────────────────────────────────────────────────────
     - name: Grafana - the canary dashboard (seed)

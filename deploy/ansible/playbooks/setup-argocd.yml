@@ -48,7 +48,9 @@
     keycloak_enabled: "{{ argocd_keycloak_enabled | default(true) }}"
     ingress_enabled: "{{ argocd_ingress_enabled | default(false) }}"
     # where Argo reaches Forgejo: the VIP and both Pi statics (any Pi may own the VIP); the Vagrant inventory names its own
-    argocd_forgejo_cidrs: "{{ forgejo_cidrs | default(['192.168.11.5/32', '192.168.11.4/32', '192.168.11.6/32']) }}"
+    argocd_forgejo_cidrs: >-
+      {{ forgejo_cidrs | default([keepalived_vip ~ '/32'] + (groups['pis'] | map('extract', hostvars, 'ansible_host')
+         | map('regex_replace', '$', '/32') | list)) }}
 
   tasks:
     # Never backwards: the chart default stays what ten ran until each Argo CD upgrade moves it, so a re-run

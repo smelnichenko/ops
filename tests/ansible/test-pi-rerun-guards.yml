@@ -392,7 +392,7 @@
           set -euo pipefail
           leader={{ (['pi1', 'pi2'] | map('extract', hostvars) | selectattr('_pg_before_consul.json.role', 'in', ['primary', 'master'])
                      | map(attribute='inventory_hostname') | first) }}
-          n=$(journalctl -u haproxy --since @{{ _t_drift }} --no-pager -o cat | grep -c "postgres_primary/$leader is DOWN" || true)
+          n=$(journalctl -u haproxy --since @{{ _t_drift }} --no-pager -o cat | grep -cE "postgres_primary/$leader( \\('[^']*'\\))? is DOWN" || true)
           echo "$leader marked down $n times"
           [ "$n" = 0 ]
       register: _haproxy_consul

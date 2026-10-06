@@ -28,7 +28,8 @@ export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
     containerd containerd.io runc cri-tools kubeadm kubelet kubectl kubernetes-cni 2>/dev/null \
     | awk '$1=="ii" {print "pkg", $2, $3} $1=="hi" {print "pkg", $2, $3, "(held)"}' || true
   # binaries outside the packages: a runc or containerd here runs instead of the package's (first on their PATH)
-  for bin in /usr/local/bin/containerd /usr/local/bin/runc /usr/local/bin/nerdctl /usr/local/bin/buildkitd; do
+  bindir=${INVENTORY_BIN_DIR:-/usr/local/bin}  # (another only in its unit test)
+  for bin in "$bindir/containerd" "$bindir/runc" "$bindir/nerdctl" "$bindir/buildkitd"; do
     [ -x "$bin" ] && echo "binary $bin $("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}')"
   done
   echo "containerd-unit $(systemctl show containerd -p FragmentPath --value)"

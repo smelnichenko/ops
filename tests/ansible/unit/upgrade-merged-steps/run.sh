@@ -41,10 +41,22 @@ check "a CD commit on main: 03 refused until restacked" 1 "does not contain main
 check "the restack skips the merged steps and puts 03 on main" 0 "02-b merged - skipped" \
   bash -c "cd '$W/infra' && '$W/ops/scripts/upgrade-restack-in-place.sh' '$W/infra'"
 check "after the restack: 03 resolves" 0 "upgrade/03-c main" refs 03-c
-check "after the restack: 03 carries its own change and the CD commit" 0 "c" \
-  bash -c "git -C '$W/infra' diff main upgrade/03-c -- f && git -C '$W/infra' merge-base --is-ancestor main upgrade/03-c"
+check "after the restack: 03 carries its own change and the CD commit" 0 "+c" \
+  bash -c "git -C '$W/infra' diff main upgrade/03-c -- f | grep -x '+c' && git -C '$W/infra' merge-base --is-ancestor main upgrade/03-c"
 # an unmerged step with no change of its own is in main too: still refused (the tag, not ancestry, marks merged)
 g infra branch -f upgrade/03-c main
 check "an unmerged empty step: refused" 1 "changes nothing" refs 03-c
+# merged out of order (a later step tagged, an earlier one not) and main reset below a merged step: refused
+g infra tag -d upgrade-merged/01-a > /dev/null
+# 01-a unmerged but on main with a change of its own, 02-b tagged merged
+g infra branch -f upgrade/01-a main; g infra checkout -q upgrade/01-a; echo a2 >> "$W/infra/f"; g infra commit -q -am a2
+g infra checkout -q main
+check "a step merged before the one ahead of it: the refs refuse" 1 "merged out of order" refs 03-c
+check "the same: the restack refuses" 1 "merged out of order" \
+  bash -c "cd '$W/infra' && '$W/ops/scripts/upgrade-restack-in-place.sh' '$W/infra'"
+rm -f "$W/infra/.git/restack-old-shas"
+g infra tag -a -m "base x" upgrade-merged/01-a upgrade/01-a
+g infra checkout -q --detach; g infra branch -f main upgrade/01-a~1; g infra checkout -q main
+check "main reset below a merged step: refused" 1 "is not in main" refs 03-c
 echo "upgrade-merged-steps: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
