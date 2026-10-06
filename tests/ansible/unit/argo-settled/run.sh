@@ -1,7 +1,7 @@
 #!/bin/bash
 # tests/ansible/upgrade/files/argo-settled.py on saved apps and pods (its --apps-json/--pods-json mode): green on a
-# settled set; the app floor (--expect-apps: a missing or an unexpected app is not green, an allowed extra is); the
-# restart history (--restart-history: a pod restarting in two steps running fails, one step's restart does not, the
+# settled set; the app floor (--expect-apps: a missing or an unexpected app is not green, an allowed extra is); an app
+# compared against an older spec is not green, one whose spec only gained empty fields is; the restart history (--restart-history: a pod restarting in two steps running fails, one step's restart does not, the
 # first call only records).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
@@ -66,6 +66,25 @@ rc, out = run([app("a")], P, "--expect-apps", "@" + os.path.join(work, "apps.txt
 check("the expected apps from a file, one missing: not green", rc, 1, out)
 rc, out = run(A, P, "--print-apps")
 check("--print-apps names them", out.strip().splitlines()[-1], "APPS a,b", out)
+
+# the spec Argo CD 3.5 keeps carries empty fields its comparedTo leaves out (directory.jsonnet: {}) - the same spec
+fresh = app("a")
+fresh["spec"]["source"] = dict(fresh["spec"]["source"], directory={"recurse": True, "jsonnet": {}})
+fresh["status"]["sync"]["comparedTo"]["source"] = dict(fresh["status"]["sync"]["comparedTo"]["source"],
+                                                       directory={"recurse": True})
+rc, out = run([fresh, app("b")], P)
+check("a spec with an empty field comparedTo omits: green", rc, 0, out)
+stale = app("a")
+stale["status"]["sync"]["comparedTo"]["source"] = dict(stale["status"]["sync"]["comparedTo"]["source"], path="old")
+rc, out = run([stale, app("b")], P)
+check("compared against an older spec (another path): not green", (rc, "compared against an older spec" in out),
+      (1, True), out)
+emptied = app("a")
+emptied["status"]["sync"]["comparedTo"]["source"] = dict(emptied["status"]["sync"]["comparedTo"]["source"],
+                                                         directory={"recurse": True})
+rc, out = run([emptied, app("b")], P)
+check("compared against an older spec with a field the spec dropped: not green",
+      (rc, "compared against an older spec" in out), (1, True), out)
 
 H = os.path.join(work, "history.json")
 rc, out = run(A, [pod("p1", "u1", 3)], "--restart-history", H, "--step", "10")

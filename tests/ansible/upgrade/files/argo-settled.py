@@ -51,6 +51,25 @@ def sources(obj):
     return obj.get("sources") or ([obj["source"]] if obj.get("source") else [])
 
 
+def without_empty(value):
+    """A spec without the empty fields Go's omitempty leaves out of comparedTo ({}, [], "", None, false, 0): Argo CD
+    3.5's spec keeps directory.jsonnet: {}, its comparedTo has none - the same spec, compared literally never equal."""
+    if isinstance(value, dict):
+        kept = {k: without_empty(v) for k, v in value.items()}
+        return {k: v for k, v in kept.items() if not empty(v)}
+    if isinstance(value, list):
+        return [without_empty(v) for v in value]
+    return value
+
+
+def empty(value):
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, (int, float)):
+        return value == 0
+    return value is None or (isinstance(value, (dict, list, str)) and len(value) == 0)
+
+
 def app_problems(app, allowed, mirror):
     name = app["metadata"]["name"]
     spec, status = app.get("spec", {}), app.get("status", {})
@@ -64,7 +83,7 @@ def app_problems(app, allowed, mirror):
         problems.append(f"operation {op['phase']}")
     if op.get("phase") in FAILED_PHASES:
         problems.append(f"last sync {op['phase']}: {op.get('message', '')[:200]}")
-    if sources(sync.get("comparedTo", {})) != sources(spec):
+    if without_empty(sources(sync.get("comparedTo", {}))) != without_empty(sources(spec)):
         problems.append("compared against an older spec")
     if mirror:
         revisions = sync.get("revisions") or [sync.get("revision")]

@@ -252,7 +252,11 @@ in upgrade-kubeadm.yml (f76c27b): an UpgradeConfiguration whose etcdAPICall equa
 for any static pod; step 13 green again on that copy (etcd down 26 s that time). Full run 10:44: failed in its build
 - setup-patroni's restore of the Keycloak dump connected through HAProxy in the same second HAProxy marked the new
 leader up (two checks 3 s apart), and found no server; the restore goes straight to the leader's Postgres since
-(test:patroni-keycloak-restore runs it with HAProxy stopped). Next: the full run again.
+(test:patroni-keycloak-restore runs it with HAProxy stopped). Full run 11:00: build 48 min, steps 00-34 green in
+2 h 56 min (13: the apply 1 min 55 s), stopped in step 35's first settle - after Argo CD 3.5 (step 34) cluster-config's
+spec keeps an empty `directory.jsonnet: {}` its status.sync.comparedTo leaves out, and argo-settled.py (production's
+settle too, upgrade-production.py) compared the two literally: "compared against an older spec" for ever. It compares
+them without empty fields since. Next: the full run again.
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
