@@ -85,6 +85,13 @@
       changed_when: true
       when: mode == 'seed'
 
+    # a compatibility version without its table would assert no pin at all (it was masked by a default, nothing said)
+    - name: ClickHouse - the step files' compatibility version has its format pins here
+      ansible.builtin.assert:
+        that: clickhouse_compat | length == 0 or clickhouse_compat in clickhouse_format_pins
+        fail_msg: "no clickhouse_format_pins entry for compatibility {{ clickhouse_compat }} - add the settings it pins"
+        quiet: true
+
     - name: ClickHouse - exactly the seeded rows, the compatibility setting as the step files say, the version
       ansible.builtin.shell:
         executable: /bin/bash
@@ -101,7 +108,7 @@
           q "SELECT concat('formats=', arrayStringConcat(arraySort(groupArray(concat(name, ':', value))), ','))
              FROM system.merge_tree_settings WHERE name IN ('{{ _pins.keys() | join("', '") }}')"
       vars:
-        _pins: "{{ clickhouse_format_pins[clickhouse_compat] | default({}) }}"
+        _pins: "{{ clickhouse_format_pins[clickhouse_compat] if clickhouse_compat | length > 0 else {} }}"
         # name:value of each pinned setting the server has
         _formats: "{{ (_ch.stdout_lines[3] | default('formats=')) | regex_replace('^formats=', '') | split(',')
                       | reject('equalto', '') | list }}"

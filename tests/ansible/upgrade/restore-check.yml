@@ -72,7 +72,9 @@
         fail_msg: "{{ cluster }} has no spec.backup.barmanObjectStore"
 
     - name: No side cluster left from an earlier run
-      ansible.builtin.command: "{{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true --cascade=foreground"
+      ansible.builtin.command: >-
+        {{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true
+        --cascade=foreground --timeout=600s
       changed_when: false
 
     - name: A fresh base backup
@@ -213,7 +215,8 @@
         - name: Remove the side cluster (its volume goes with it) and the backup object (its data stays in the store)
           ansible.builtin.shell: |
             set -eu
-            {{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true --cascade=foreground
+            {{ kubectl }} delete clusters.postgresql.cnpg.io {{ recovered }} --ignore-not-found --wait=true \
+              --cascade=foreground --timeout=600s
             {{ kubectl }} delete backups.postgresql.cnpg.io {{ _backup }} --ignore-not-found
           changed_when: true
 
