@@ -468,6 +468,64 @@
       ansible.builtin.debug:
         msg: "CONSUL RE-RUN: {{ inventory_hostname }} kept its key and was not restarted"
 
+# a run limited to one server (pi2) keeps the key the others run - it found none among the run's hosts and wrote an
+# empty one - and a restart left pending there (its config newer than its agent, as after a run cut short between
+# writing and restarting) is done; the servers outside the run are not touched
+- name: Consul before the limited run - pi2's config newer than its agent
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Start time and key before
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl) $(systemctl show consul -p ActiveEnterTimestampMonotonic --value)"
+      args:
+        executable: /bin/bash
+      register: _consul_before_limited
+      changed_when: false
+
+    - name: pi2's config touched (its content as it is)
+      ansible.builtin.command: touch /etc/consul.d/consul.hcl
+      changed_when: true
+      when: inventory_hostname == 'pi2'
+
+- name: setup-consul limited to pi2
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook, --limit pi2
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-consul.yml --limit pi2"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Consul after the limited run - the same key everywhere; pi2 restarted, the others not
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Key and start time after
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl) $(systemctl show consul -p ActiveEnterTimestampMonotonic --value)"
+      args:
+        executable: /bin/bash
+      register: _consul_after_limited
+      changed_when: false
+      failed_when: >-
+        _consul_after_limited.stdout.split() | length != 2
+        or _consul_after_limited.stdout.split()[0] != _consul_before_limited.stdout.split()[0]
+        or (_consul_after_limited.stdout.split()[1] != _consul_before_limited.stdout.split()[1])
+           != (inventory_hostname == 'pi2')
+
+    - name: The limited run
+      ansible.builtin.debug:
+        msg: >-
+          CONSUL LIMITED RE-RUN: {{ inventory_hostname }} kept the key,
+          {{ 'restarted (its pending config)' if inventory_hostname == 'pi2' else 'not restarted (outside the run)' }}
+
 # setup-keepalived with a changed config: keepalived reloaded, not restarted (its PID kept - a restart runs the stop
 # drop-in, releasing Nexus on the active Pi), the VIP where it was, and the reload applied: pi1 runs a drifted
 # router_id (its config changed and reloaded by hand), the re-run writes the config back and the running one follows
