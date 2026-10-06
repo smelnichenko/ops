@@ -263,12 +263,15 @@ def main_revisions():
     return revs
 
 
-def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=None, restarts_expected=False):
+def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=None, restarts_expected=False,
+            restarted_since=None):
     """argo-settled.py on ten, with ten's own kubeconfig: every app Synced (or allowed) and Healthy on main's commits,
-    every pod ready, held for `stable` polls, no container restarted in the last `quiet` seconds; with `apps`, exactly
-    those apps (preview environments aside); with `restart_step`, no pod restarting in this step and the done one
-    before it - unless `restarts_expected` (the step restarts the control plane: recorded, not judged). (green, main's
-    revisions, the apps it saw - preview environments left out)."""
+    every pod ready, held for `stable` polls, no container restarted in the last `quiet` seconds nor at or after
+    `restarted_since`; with `apps`, exactly those apps (preview environments aside); with `restart_step`, no pod
+    restarting in this step and the done one before it - unless `restarts_expected` (the step restarts the control
+    plane: recorded, not judged). (green, main's revisions, the apps it saw - preview environments left out). Red with
+    main moved meanwhile (a CD push to infra main during the wait: every app then reports another commit) says so: it
+    proves nothing about the step."""
     revs = main_revisions()
     script = open(os.path.join(inv.UPGRADE, "files", "argo-settled.py")).read()
     cmd = (f"MIRROR_REVISIONS={shlex.quote(json.dumps(revs))} python3 - --kubeconfig \"$HOME/.kube/config\" "
@@ -277,6 +280,8 @@ def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=N
            f"--allow-extra-apps {shlex.quote(PREVIEW_APPS)}")
     if apps:
         cmd += f" --expect-apps {shlex.quote(','.join(apps))}"
+    if restarted_since is not None:
+        cmd += f" --restarted-since {restarted_since:%Y-%m-%dT%H:%M:%SZ}"
     if restart_step:
         cmd += f" --restart-history {RESTART_HISTORY} --step {shlex.quote(restart_step)}"
         if restarts_expected:
@@ -285,6 +290,9 @@ def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=N
     out = run(["ssh", TEN, cmd], input=script, capture_output=True)
     print(out.stdout + out.stderr, end="")
     seen = next((l[5:].split(",") for l in reversed(out.stdout.splitlines()) if l.startswith("APPS ")), [])
+    if out.returncode and main_revisions() != revs:
+        sys.exit("INCONCLUSIVE: main moved during the wait (a CD push?) - Argo was judged against the old commits; "
+                 "nothing recorded - run it again (and keep CD off infra main during the rollout)")
     return out.returncode == 0, revs, [a for a in seen if not re.search(PREVIEW_APPS, a)]
 
 
@@ -551,8 +559,9 @@ def begin(step):
     ok_settled, _, seen = settled(15, 4, 300, last_done_out_of_sync(events),
                                   before[-1][0].split(",") if before else None)
     refuse([] if ok and ok_settled and seen else ["production is not as the done steps leave it (above)"])
-    record(step, "begun")
+    # the app set first: a begin cut short between the two writes runs again (not begun), it is not stranded
     record(step, "apps", ",".join(seen))
+    record(step, "begun")
 
 
 def backup(step, store):
@@ -576,6 +585,8 @@ def merge(step, repo):
     if not merged:
         d = os.path.join(OPS, "..", repo)
         refuse(proof_problems(step, names, repo, defaulted(events)) + registry_problems(step))
+    apps = step_apps(events, step)  # before any push: a step without its app set must not merge
+    if not merged:
         if merged_base(d, step):
             # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
             print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
@@ -592,7 +603,7 @@ def merge(step, repo):
         record(step, "merged", repo, sha)
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
-    ok, revs, _ = settled(step_info(step)["settle"], 4, 300, [], step_apps(events, step))
+    ok, revs, _ = settled(step_info(step)["settle"], 4, 300, [], apps)
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
 
@@ -642,16 +653,17 @@ def defaults(step):
 
 
 def check(step, since=None, deciding=False):
-    """ten as the done steps and this one leave it, Argo settled, the step's app set kept. With `since` (seconds): no
-    container restarted in that long - the restart window covers the whole wait, so a restart inside it cannot age out
-    while it polls. `deciding` (the call that ends a step): the restart history judged and recorded."""
+    """ten as the done steps and this one leave it, Argo settled, the step's app set kept. With `since` (a time - the
+    first green check's): no container restarted at or after it, however long ago that was. `deciding` (the call that
+    ends a step): the restart history judged and recorded."""
+    if step not in step_names():
+        sys.exit(f"REFUSED: no step {step}")
     _, events = read_ledger()
     ok = inventory_check(sorted(set(applied_steps(events)) | {step}))
-    quiet = 300 if since is None else since + CHECK_MINUTES * 60 + 60
     apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
     info = step_info(step)
-    ok_settled, _, _ = settled(CHECK_MINUTES, 4, quiet, info["out_of_sync"], apps, step if deciding else None,
-                               info["restarts_expected"])
+    ok_settled, _, _ = settled(CHECK_MINUTES, 4, 300, info["out_of_sync"], apps, step if deciding else None,
+                               info["restarts_expected"], since)
     return ok and ok_settled
 
 
@@ -675,7 +687,7 @@ def done(step):
     if checked is None and info["base_backup"]:
         refuse([] if ansible("playbooks/postgres-base-backup.yml") else ["no fresh Postgres base backup (above)"])
     # after the soak: no container may have restarted since the first green check
-    green = check(step, None if checked is None else (now - checked).total_seconds(), deciding=checked is not None)
+    green = check(step, checked, deciding=checked is not None)
     if checked is None:
         refuse([] if green else ["not green - nothing recorded (fix, or the step's abort line)"])
         record(step, "checked")
@@ -708,7 +720,7 @@ def status():
         print("every step done")
         return
     info = step_info(pending)
-    have = {(e, a[0] if a else None) for _, s, e, a in events if s == pending}
+    have = {(e, a[0] if a and e in ("backup", "settled") else None) for _, s, e, a in events if s == pending}
     for phase, arg, mark in phases(info):
         if mark not in have:
             p = problems(names, pending, phase, events, info, arg)

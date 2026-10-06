@@ -260,21 +260,33 @@ check("full name: a registry with a port", m.full_name("localhost:5000/x"), "loc
 
 # a step that restarts the control plane (its restarts-control-plane line): the deciding check records its restarts
 # without judging them - production's 42 and 43 restart every leader-elected controller in a row
-def deciding_settle(step):
+import inspect
+SETTLED = inspect.signature(m.settled)
+
+
+def settle_args(step, since=None, deciding=True):
+    """settled()'s arguments, by name, as check() calls it."""
     seen, saved = [], {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled")}
     m.read_ledger = lambda: (None, [])
     m.inventory_check = lambda *a: True
-    m.settled = lambda *a, **k: seen.append(a) or (True, {}, [])
+    m.settled = lambda *a, **k: seen.append(SETTLED.bind(*a, **k).arguments) or (True, {}, [])
     try:
-        m.check(step, deciding=True)
+        m.check(step, since, deciding=deciding)
     finally:
         for k, v in saved.items():
             setattr(m, k, v)
-    return seen[0][5:]
+    return seen[0]
 
 
-check("the deciding check of 42: its restarts expected", deciding_settle(S42), (S42, True))
-check("the deciding check of 47: its restarts judged", deciding_settle(S47), (S47, False))
+a42, a47 = settle_args(S42), settle_args(S47)
+check("the deciding check of 42: its restarts expected", (a42["restart_step"], a42["restarts_expected"]), (S42, True))
+check("the deciding check of 47: its restarts judged", (a47["restart_step"], a47["restarts_expected"]), (S47, False))
+first = settle_args(S47, deciding=False)
+check("the first check: no restart history, the 300 s window, no since",
+      (first.get("restart_step"), first["quiet"], first.get("restarted_since")), (None, 300, None))
+at = T0 + datetime.timedelta(minutes=20)
+check("the deciding check: restarts judged since the first green check's time, not a window before it",
+      (settle_args(S47, at)["restarted_since"], settle_args(S47, at)["quiet"]), (at, 300))
 
 
 def settled_cmd(**kw):
@@ -296,6 +308,71 @@ def settled_cmd(**kw):
 check("settled: --restarts-expected when expected", "--restarts-expected" in settled_cmd(restart_step=S42,
                                                                                          restarts_expected=True), True)
 check("settled: none otherwise", "--restarts-expected" in settled_cmd(restart_step=S47), False)
+
+# status names the phase after the defaults one (its event carries the commit)
+import contextlib, io
+def status_of(lines):
+    saved = m.read_ledger
+    m.read_ledger = lambda: (None, ev(*lines))
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            m.status()
+    finally:
+        m.read_ledger = saved
+    return [l for l in buf.getvalue().splitlines() if l.startswith("next: ")]
+S13 = "13-kubernetes-1.34.12"
+mid13 = done_upto("12-kubelet-shutdown-grace") + [f"{S13} apps app", f"{S13} begun", f"{S13} backup etcd",
+                                                  f"{S13} previewed", f"{S13} playbooks"]
+check("status after 13's playbooks: its defaults next", status_of(mid13), [f"next: {S13} defaults"])
+check("status after 13's defaults (the event carries the commit): done next",
+      [l.split(" - ")[0] for l in status_of(mid13 + [f"{S13} defaults deadbeef"])], [f"next: {S13} done"])
+
+# begin records the app set before begun: cut short between them, it runs again rather than stranding the step
+got = phase_calls(m.begin, S47, events=ev(*done_upto("46-postgres-18-test")))
+check("begin: the app set recorded before begun", [c for c in got if c[0] == "record"],
+      [("record", "apps"), ("record", "begun")])
+check("begin with apps but no begun (cut short): may run again",
+      P(S47, "begin", ev(*done_upto("46-postgres-18-test"), f"{S47} apps app")), [])
+
+# merge without the step's app set: refused before anything is pushed
+got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} begun"))
+check("merge without an app set: refused, nothing run", ([c for c in got if c[0] == "run"], got[-1][0],
+                                                          "no app set" in got[-1][1]), ([], "refused", True))
+
+# a red settle while main moved (a CD push during the wait) is inconclusive: refused, nothing recorded
+class _Out:
+    returncode, stdout, stderr = 1, "NOT SETTLED", ""
+saved = {k: getattr(m, k) for k in ("main_revisions", "run")}
+revs = iter([dict.fromkeys(m.URLS.values(), "a"), dict.fromkeys(m.URLS.values(), "b")])
+m.main_revisions = lambda: next(revs)
+m.run = lambda cmd, **k: _Out()
+try:
+    m.settled(1, 4, 300, [])
+    got = "returned"
+except SystemExit as e:
+    got = str(e)
+finally:
+    for k, v in saved.items():
+        setattr(m, k, v)
+check("a red settle with main moved meanwhile: INCONCLUSIVE, not red", got.startswith("INCONCLUSIVE"), True)
+saved = {k: getattr(m, k) for k in ("main_revisions", "run")}
+m.main_revisions = lambda: dict.fromkeys(m.URLS.values(), "a")
+m.run = lambda cmd, **k: _Out()
+try:
+    got = m.settled(1, 4, 300, [])[0]
+finally:
+    for k, v in saved.items():
+        setattr(m, k, v)
+check("a red settle with main unmoved: red", got, False)
+
+# check of a step that does not exist: refused by name, not a traceback
+try:
+    m.check("99-nothing")
+    got = "ran"
+except SystemExit as e:
+    got = str(e)
+check("check of an unknown step: refused", got, "REFUSED: no step 99-nothing")
 
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
