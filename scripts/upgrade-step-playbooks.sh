@@ -42,11 +42,13 @@ fence() {
 if [ "${1:-}" = --lint ]; then
   for f in "$ops"/tests/ansible/upgrade/steps/*.txt; do
     step=$(basename "$f" .txt)
+    # read first: a here-string's own substitution failing is invisible to set -e
+    lines=$("$ops/scripts/upgrade-expected-inventory.py" --playbooks "$step")
     while read -r playbook args; do
       [ -n "$playbook" ] || continue
       # shellcheck disable=SC2086  # the step file's arguments are meant to split into words
       fence "$playbook" $args || { echo "  in step $step" >&2; exit 1; }
-    done <<< "$("$ops/scripts/upgrade-expected-inventory.py" --playbooks "$step")"
+    done <<< "$lines"
   done
   echo "every step's playbook lines within the allow-list"
   exit 0
