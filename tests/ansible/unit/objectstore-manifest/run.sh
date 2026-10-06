@@ -1,6 +1,6 @@
 #!/bin/bash
-# objectstore-manifest.py on a synthetic versitygw posix store (ETags and ACLs in user.* extended attributes): a good
-# archive and its restore pass; an archive missing an object, one without the attributes, an object whose content is
+# objectstore-manifest.py on a synthetic versitygw posix store (ETags and ACLs in user.* extended attributes, versitygw
+# 1.8's .vgwlocks beside the buckets): a good archive and its restore pass; an archive missing an object, one without the attributes, an object whose content is
 # not its ETag, a restore without the attributes or without a bucket - each fails, naming it.
 set -u
 M=$(cd "$(dirname "$0")/../../../../deploy/ansible/playbooks/files" && pwd)/objectstore-manifest.py
@@ -26,6 +26,9 @@ for i in (1, 2, 3):
     os.setxattr(p, "user.etag", ('"%s"' % hashlib.md5(open(p, "rb").read(), usedforsecurity=False).hexdigest()).encode())
 open("store/buckets/b2/multi", "w").write("mp\n"); os.setxattr("store/buckets/b2/multi", "user.etag", b'"abc-2"')
 open("store/buckets/b1/k/.sgwtmp/t", "w").write("in flight\n")
+# versitygw 1.8's lock directory beside the buckets - no bucket (no S3 bucket name starts with a dot), no ACL
+os.makedirs("store/buckets/.vgwlocks/1fb50d05/ab")
+open("store/buckets/.vgwlocks/1fb50d05/ab/lock", "w").write("")
 PY
 X=(--xattrs --xattrs-include='user.*')
 python3 "$M" manifest store/buckets > before.json

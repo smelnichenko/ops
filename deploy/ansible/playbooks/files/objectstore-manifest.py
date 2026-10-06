@@ -3,7 +3,7 @@
 
 The posix backend keeps each object as a file under <buckets>/<bucket>/<key> with its ETag in the user.etag extended
 attribute, and each bucket's owner and ACL in the bucket directory's user.acl; uploads in flight live under
-<bucket>/.sgwtmp. A copy without those attributes restores files no client may read.
+<bucket>/.sgwtmp, versitygw's own state in dot directories beside the buckets (1.8: .vgwlocks). A copy without those attributes restores files no client may read.
 
   manifest <buckets dir>                         print {"buckets": [...], "objects": {"<bucket>/<key>": "<etag>"}}
   verify-tar <tar.gz> <before> <after> <out>     the archive (GNU tar --xattrs, entries ./buckets/...) against the
@@ -45,7 +45,8 @@ def manifest(root):
     """The live store's objects. One deleted while this walks is left out; one without an ETag is listed apart
     (noetag) - an upload not finished yet has none for a moment, but one without it in both lists verify-tar compares
     is a store whose objects this cannot check (another attribute name, a mount without user xattrs) and fails it."""
-    buckets = sorted(b for b in os.listdir(root) if os.path.isdir(os.path.join(root, b)))
+    # a dot directory is versitygw's own, no bucket (1.8 keeps .vgwlocks here; no S3 bucket name starts with a dot)
+    buckets = sorted(b for b in os.listdir(root) if not b.startswith(".") and os.path.isdir(os.path.join(root, b)))
     objects, noetag, bad = {}, [], []
     for b in buckets:
         if "user.acl" not in os.listxattr(os.path.join(root, b)):
