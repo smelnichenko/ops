@@ -249,7 +249,10 @@ crawl). Full run 6 (20:02): failed in the build - the Gluster mounts did not com
 manager sat on PVC reads the API server held for its 60 s request timeout while etcd was down, until the API server's
 liveness probe restarted it), kubeadm's etcd client had given up at its default 2 m and rolled the upgrade back. Fixed
 in upgrade-kubeadm.yml (f76c27b): an UpgradeConfiguration whose etcdAPICall equals upgradeManifests, kubeadm's 5 m
-for any static pod; step 13 green again on that copy (etcd down 26 s that time). Next: the full run again.
+for any static pod; step 13 green again on that copy (etcd down 26 s that time). Full run 10:44: failed in its build
+- setup-patroni's restore of the Keycloak dump connected through HAProxy in the same second HAProxy marked the new
+leader up (two checks 3 s apart), and found no server; the restore goes straight to the leader's Postgres since
+(test:patroni-keycloak-restore runs it with HAProxy stopped). Next: the full run again.
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 

@@ -2,7 +2,8 @@
 # setup-patroni.yml's restore of the Keycloak dump a first install took (tasks/patroni-keycloak-restore.yml), on the
 # Vagrant Pis' running cluster: a small dump on pi1, HAProxy on pi1 stopped (as on a fresh cluster before HAProxy
 # marks the new leader up), the restore run against the leader - its rows in the leader's keycloak database, the dump
-# moved aside. Then HAProxy started again and the test's table and file removed; a dump already there is put back.
+# moved aside. HAProxy is started again and the test's table and file removed whatever the result (a dump already
+# there is put back); the checks come last.
 # Vagrant only. Usage: task test:patroni-keycloak-restore
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
@@ -29,6 +30,9 @@
         name: "{{ _leader.stdout | trim }}"
         groups: restore_leader
       changed_when: false
+
+    - name: What an earlier run left - its table, its dump, a dump it kept aside
+      ansible.builtin.include_tasks: tasks/patroni-keycloak-restore-clean.yml
 
     - name: A dump already there kept aside
       ansible.builtin.command: mv {{ dump }} {{ dump }}.kept-by-test
@@ -61,7 +65,7 @@
         state: stopped
         timeout: 5
 
-- name: The restore, into the leader
+- name: The restore, into the leader - its results recorded, checked at the end
   hosts: restore_leader
   become: true
   gather_facts: false
@@ -83,23 +87,17 @@
             state: started
           delegate_to: pi1
 
-    - name: The restore ran without HAProxy
-      ansible.builtin.assert:
-        that: _restore_failed is not defined
-        fail_msg: "the restore failed with HAProxy stopped: {{ _restore_failed | default('') }}"
-
-    - name: The leader's keycloak database has the dump's row
+    - name: The leader's keycloak database - the dump's row
       ansible.builtin.command: sudo -u postgres psql -d keycloak -tAc "SELECT x FROM restore_probe"
       register: _row
       changed_when: false
-      failed_when: _row.stdout | trim != '42'
+      failed_when: false
 
-    - name: The dump moved aside
+    - name: The dump on pi1
       ansible.builtin.stat:
         path: /var/backups/patroni-first-install/keycloak.sql
       register: _left
       delegate_to: pi1
-      failed_when: _left.stat.exists
 
 - name: Clean up
   hosts: pi1
@@ -108,22 +106,19 @@
   vars:
     dump: /var/backups/patroni-first-install/keycloak.sql
   tasks:
-    - name: The test's table gone
-      ansible.builtin.command: sudo -u postgres psql -d keycloak -qc "DROP TABLE IF EXISTS restore_probe"
-      delegate_to: "{{ groups['restore_leader'] | first }}"
-      changed_when: true
+    - name: The test's table, its dump; a dump that was there put back
+      ansible.builtin.include_tasks: tasks/patroni-keycloak-restore-clean.yml
 
-    - name: The test's dump gone (moved aside by the restore, or left by a failed one)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        for f in /var/backups/keycloak-pre-patroni-*.sql {{ dump }}; do
-          if [ -f "$f" ] && grep -q '^CREATE TABLE restore_probe' "$f"; then rm -f "$f"; fi
-        done
-      args:
-        executable: /bin/bash
-      changed_when: true
-
-    - name: A dump that was there put back
-      ansible.builtin.command: mv {{ dump }}.kept-by-test {{ dump }}
-      args:
-        removes: "{{ dump }}.kept-by-test"
+- name: The checks
+  hosts: restore_leader
+  gather_facts: false
+  tasks:
+    - name: The restore ran without HAProxy, the row is in the leader's database, the dump moved aside
+      ansible.builtin.assert:
+        that:
+          - _restore_failed is not defined
+          - _row.stdout | trim == '42'
+          - not _left.stat.exists
+        fail_msg: >-
+          restore: {{ _restore_failed | default('ran') }}; the row: {{ (_row.stdout ~ _row.stderr) | trim }};
+          the dump left on pi1: {{ _left.stat.exists }}

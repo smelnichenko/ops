@@ -1,0 +1,23 @@
+---
+# test-patroni-keycloak-restore.yml's clean-up, before and after: its table off the leader, its dump wherever the
+# restore left it (moved aside, or in place after a failure), a dump that was there before put back. Runs on pi1.
+# Expects: dump, the restore_leader group.
+- name: The test's table gone
+  ansible.builtin.command: sudo -u postgres psql -d keycloak -qc "DROP TABLE IF EXISTS restore_probe"
+  delegate_to: "{{ groups['restore_leader'] | first }}"
+  changed_when: true
+
+- name: The test's dump gone
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for f in /var/backups/keycloak-pre-patroni-*.sql {{ dump }}; do
+      if [ -f "$f" ] && grep -q '^CREATE TABLE restore_probe' "$f"; then rm -f "$f"; fi
+    done
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: A dump that was there put back
+  ansible.builtin.command: mv {{ dump }}.kept-by-test {{ dump }}
+  args:
+    removes: "{{ dump }}.kept-by-test"
