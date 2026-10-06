@@ -8,7 +8,8 @@
 #      left alone (so the step runner may replay every earlier step, and nothing can downgrade);
 #   2. the apt repository of the target minor (pkgs.k8s.io has one per minor);
 #   3. kubeadm to the target, `kubeadm upgrade plan`, then `kubeadm upgrade apply` - without the kube-proxy addon
-#      (Cilium replaces kube-proxy; ten has none, and the upgrade must not install one);
+#      (Cilium replaces kube-proxy; ten has none, and the upgrade must not install one), from a configuration file
+#      that also gives etcd the time this node takes to restart it;
 #   4. kubelet and kubectl to the target, kubernetes-cni and cri-tools to the minor's pinned ones, kubelet restarted;
 #   5. proof: node Ready on the new kubelet, every control-plane pod Ready on the new version.
 #
@@ -173,9 +174,30 @@
       register: _plan
       changed_when: false
 
+    # kubeadm's etcd client waits as long as kubeadm waits for any static pod to restart (upgradeManifests, its 5 m).
+    # Its own default, 2 m, is shorter than this node takes to bring etcd back: the kubelet starts the new etcd only
+    # after the old pod's volumes are unmounted, and its volume manager is stuck meanwhile on PVC reads the API server
+    # holds for its 60 s request timeout (etcd is down) - until the API server's liveness probe restarts it (80 s, then
+    # 30 s grace). Vagrant, 2026-10-06: etcd down 2 min 2 s, and kubeadm rolled the upgrade back.
+    - name: The upgrade's configuration - its target, phases and timeouts
+      ansible.builtin.copy:
+        dest: /etc/kubernetes/kubeadm-upgrade.yaml
+        mode: '0600'
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta4
+          kind: UpgradeConfiguration
+          apply:
+            kubernetesVersion: v{{ target }}
+            skipPhases: [addon/kube-proxy]
+            ignorePreflightErrors: {{ ignore_preflight.split(',') | select | list | to_json }}
+          timeouts:
+            upgradeManifests: {{ _restart_wait }}
+            etcdAPICall: {{ _restart_wait }}
+      vars:
+        _restart_wait: 5m0s  # kubeadm's own upgradeManifests
+
     - name: Kubeadm upgrade apply - without the kube-proxy addon (Cilium replaces it)
-      ansible.builtin.command: >-
-        kubeadm upgrade apply v{{ target }} --yes --skip-phases=addon/kube-proxy {{ ignore_preflight_flag }}
+      ansible.builtin.command: kubeadm upgrade apply --config /etc/kubernetes/kubeadm-upgrade.yaml --yes
       register: _apply
       changed_when: true
       timeout: 1800
