@@ -917,6 +917,8 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    step's new images from production's own registry are there, and the state between the step's two merges is one the
    run proved (scripts/upgrade-merge-order.py: the first merge alone renders every platform-chart application as
    before, or the second renders nothing new). Then the change is shown (log, stat, diff) and the operator answers;
+   at the step's first merge its public images are pulled on ten (upgrade-prepull.yml: a tag missing upstream stops
+   it with nothing live, and the rollout does not wait on a pull with the old pod gone);
    a step with a tempo-flush line (54) flushes Tempo's WAL to the store right before that repo's merge. Pushed and
    tagged upgrade-merged/<step> (a run cut short between the two is taken up); Argo settled on the pushed commits
    within 30 minutes (a step's `settle` line overrides: 57, SonarQube's migration), nothing out of sync. A

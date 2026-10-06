@@ -7,7 +7,9 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   begin      every earlier step done; ten's inventory as the done steps leave it and Argo settled on main   -> begun
   backup     each of the step's wave0 stores into the Pi store (upgrade-backup.yml)                -> backup <store>
   merge      each branch line in the file's order: the branch's own change exactly as the full run proved it, the
-             state between two merges one the full run proved (upgrade-merge-order.py), merged and pushed
+             state between two merges one the full run proved (upgrade-merge-order.py), the change shown and
+             confirmed, the step's public images pulled on ten at its first merge (upgrade-prepull.yml), merged and
+             pushed
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
              a barman-after-merge step's last merge (PostgreSQL 18): then, asked first, a base backup on what the
              merges put live (postgres-base-backup.yml)                                               -> base-backup
@@ -540,6 +542,17 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False):
     return out
 
 
+def prepull_images(step):
+    """The public images the step moves to (its `image ... => image <name> <tag>` and `+ image` lines), as name:tag -
+    production's own registry left out (registry_problems checks those are there)."""
+    out = []
+    for line in open(os.path.join(inv.STEPS, step + ".txt")):
+        m = re.fullmatch(r"(?:image \S+ \S+ => |\+ )image (\S+) (\S+)", line.strip())
+        if m and not m[1].startswith("git.pmon.dev/"):
+            out.append(f"{m[1]}:{m[2]}")
+    return out
+
+
 def registry_problems(step, status=None):
     """The step's new images from production's own registry (git.pmon.dev/schnappy), each there before the merge: the
     full run never pulls them (the copy preloads them; production's registry is beyond its fence), so a missing tag
@@ -687,6 +700,13 @@ def merge(step, repo):
                 run(["git", "-C", d, "--no-pager", *args, f"main..upgrade/{step}"])
             refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
                    else ["not confirmed - nothing merged, nothing recorded"])
+            # the step's first merge: its public images pulled on ten first - a tag missing upstream stops the step
+            # with nothing live, and its rollout does not wait on a pull while the old pod is gone (a Recreate
+            # deployment, a single replica)
+            images = prepull_images(step) if not any(s == step and e == "merged" for _, s, e, _ in events) else []
+            if images:
+                refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
+                       else [f"the step's images did not pull on ten (above) - nothing merged"])
             # a step that replaces Tempo's major: what Tempo still holds in its WAL flushed to the store first (the
             # next major does not replay it)
             if repo in step_info(step)["tempo_flush"]:

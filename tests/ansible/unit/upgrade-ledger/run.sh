@@ -246,7 +246,7 @@ class _Done:
     returncode, stdout = 0, "abc1234"
 
 
-def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True):
+def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info", "ten")
     saved = {k: getattr(m, k) for k in keep}
@@ -254,7 +254,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     m.proof_problems = lambda *a, **k: list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     m.run = lambda cmd, **k: calls.append(("run", os.path.basename(cmd[0]))) or _Done()
-    m.ansible = lambda *a: calls.append(("ansible", a[0])) or True
+    m.ansible = lambda *a: calls.append(("ansible", a[0])) or ansible_ok
     m.record = lambda st, ev, *a: calls.append(("record", ev))
     m.settled = lambda minutes, *a, **k: calls.append(("settled", minutes)) or (True, dict.fromkeys(m.URLS.values(), "r"),
                                                                                 ["app"])
@@ -303,14 +303,36 @@ got = phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47}
 check("merge 47 platform (its last): settled, then the base backup, asked first",
       [c for c in got if c[0] in ("ansible", "asked", "record")][-4:], [("record", "settled")] + BB)
 got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"))
-check("merge 47 infra (platform still to come): no base backup", [c for c in got if c[0] == "ansible"], [])
+check("merge 47 infra (platform still to come): no base backup",
+      [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])
 got = phase_calls(m.merge, "24-cnpg", "infra", events=ev("24-cnpg apps app"))
 check("merge 24 infra (barman-check, not after the merge): no base backup - done takes it",
-      [c for c in got if c[0] == "ansible"], [])
+      [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])
 got = phase_calls(m.merge, S47, "platform", answer=False, events=ev(
     f"{S47} apps app", f"{S47} merged infra a", f"{S47} settled infra a", f"{S47} merged platform b"))
 check("merge 47 platform, the backup not confirmed: settled recorded, no backup, not refused - done takes it",
       [c for c in got if c[0] in ("ansible", "record", "refused")], [("record", "settled")])
+
+# a step's public images pulled on ten at its first merge, after the yes and before the push: a tag missing upstream
+# stops it with nothing live, and the rollout does not wait on the pull with the old pod gone
+S54 = "54-tempo-3"
+check("prepull: 54's public image", m.prepull_images(S54), ["grafana/tempo:3.1.0"])
+check("prepull: an added image (+ image) too", "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1"
+      in m.prepull_images("27-kube-prometheus-stack"), True)
+check("prepull: production's own registry left out (the registry check covers it)",
+      [i for n in names for i in m.prepull_images(n) if i.startswith("git.pmon.dev/")], [])
+got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
+keep = [c for c in got if c in (("asked",), ("ansible", "playbooks/upgrade-prepull.yml"), ("run", "upgrade-merge-step.sh"))]
+check("merge 54 platform (its first): asked, the images pulled, then merged", keep,
+      [("asked",), ("ansible", "playbooks/upgrade-prepull.yml"), ("run", "upgrade-merge-step.sh")])
+got = phase_calls(m.merge, S54, "infra", events=ev(f"{S54} apps app", f"{S54} merged platform a",
+                                                   f"{S54} settled platform a"))
+check("merge 54 infra (its second): not pulled again", [c for c in got if c[0] == "ansible"], [])
+got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"), ansible_ok=False)
+check("merge 54, a pull failing: refused, nothing merged",
+      ([c for c in got if c == ("run", "upgrade-merge-step.sh")], got[-1][0]), ([], "refused"))
+got = phase_calls(m.merge, "22-apt-cacher-ng", "platform", events=ev("22-apt-cacher-ng apps app"))
+check("merge 22 (only its own registry's image): nothing pulled", [c for c in got if c[0] == "ansible"], [])
 
 # step 54 replaces Tempo's major: its WAL flushed right before the infra merge (after the yes), not before platform's
 S54 = "54-tempo-3"
