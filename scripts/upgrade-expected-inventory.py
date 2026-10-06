@@ -14,6 +14,9 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                after it - production's schedule, every pod volume; ~8 min)
     barman-check                              (the step changes CNPG or Postgres: the runner checks WAL archiving and
                                                takes a CNPG barman base backup of Postgres after it)
+    barman-after-merge                        (with barman-check: that base backup as soon as the step's merges settled,
+                                               before its preview and playbook lines - production's merge takes it so;
+                                               a new PostgreSQL major has no point to recover to until it exists)
     restore-check                             (the step changes CNPG, Postgres or their store: the runner recovers a
                                                copy of Postgres from a fresh backup and its WAL after it)
     cert-renew                                (the step changes cert-manager: the runner renews every Certificate
@@ -72,6 +75,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)
        scripts/upgrade-expected-inventory.py --backup-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --barman-check <step>                  (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --barman-after-merge <step>            (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --cert-renew <step>                    (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restarts-control-plane <step>        (prints "yes" or "no")
@@ -96,7 +100,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
           wave0=None, soak=None, settle=None, tempo_flush=None):
-    changes = []
+    changes, seen = [], set()
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
         where = f"{os.path.basename(path)}:{n}"
@@ -105,7 +109,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         if line.startswith("playbook "):
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
-        elif line in ("backup-check", "barman-check", "restore-check", "cert-renew", "restarts-control-plane"):
+        elif line in ("backup-check", "barman-check", "barman-after-merge", "restore-check", "cert-renew",
+                      "restarts-control-plane"):
+            seen.add(line)
             if flags is not None:
                 flags.add(line)
         elif re.fullmatch(r"restore-undo [a-z0-9-]+ \S+", line):
@@ -153,6 +159,8 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
             changes.append((line[2:].strip(), None, where))
         else:
             sys.exit(f"{where}: not a step line: {line}")
+    if "barman-after-merge" in seen and "barman-check" not in seen:
+        sys.exit(f"{os.path.basename(path)}: barman-after-merge without barman-check")
     return changes
 
 
@@ -215,7 +223,7 @@ def ref(repo, step_no, names):
 def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
-                                   ["--barman-check"], ["--restore-check"], ["--cert-renew"],
+                                   ["--barman-check"], ["--barman-after-merge"], ["--restore-check"], ["--cert-renew"],
                                    ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
                                    ["--wave0"]) else None
@@ -232,7 +240,8 @@ def main():
         if playbooks:
             print("\n".join(playbooks))
         return
-    if mode in ("--backup-check", "--barman-check", "--restore-check", "--cert-renew", "--restarts-control-plane"):
+    if mode in ("--backup-check", "--barman-check", "--barman-after-merge", "--restore-check", "--cert-renew",
+                "--restarts-control-plane"):
         flags = set()
         parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
         print("yes" if mode[2:] in flags else "no")

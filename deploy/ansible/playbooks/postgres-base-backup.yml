@@ -5,8 +5,9 @@
 # first base backup the new major has: the old major's WAL cannot restore it, and the daily ScheduledBackup may be up
 # to a day away. The Backup object is removed afterwards; its data stays in the store.
 #
-# Production's done phase runs it after a step with a barman-check line (scripts/upgrade-production.py); the Vagrant
-# runner runs the same playbook after such steps (tests/ansible/upgrade/barman-check.yml).
+# Production's done phase runs it after a step with a barman-check line - its merge phase already, once the last merge
+# settled, for a barman-after-merge step (scripts/upgrade-production.py); the Vagrant runner runs the same playbook at
+# the same point of such steps (tests/ansible/upgrade/barman-check.yml).
 #
 # Usage: ansible-playbook -i inventory/<env>.yml playbooks/postgres-base-backup.yml
 #        [-e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres]

@@ -9,14 +9,15 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   merge      each branch line in the file's order: the branch's own change exactly as the full run proved it, the
              state between two merges one the full run proved (upgrade-merge-order.py), merged and pushed
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
+             a barman-after-merge step's last merge (PostgreSQL 18): then, asked first, a base backup on what the
+             merges put live (postgres-base-backup.yml)                                               -> base-backup
   preview    the step's playbook lines in check mode, with diffs, on the cluster the merges left        -> previewed
   playbooks  the step's playbook lines against production                                               -> playbooks
   defaults   the step's default lines (scripts/upgrade-defaults.py) committed to ops main and pushed: a playbook
              run from now on installs what production runs                                             -> defaults
   done       ten's inventory as step N leaves it and Argo settled (after a step that changes cert-manager - its
              cert-renew line - first a throwaway certificate issued through production's ACME solver: acme-check.yml;
-             after one that changes CNPG, PostgreSQL or their store - barman-check - a fresh base backup:
-             postgres-base-backup.yml).
+             a barman-check step whose merge took no base backup - declined or failed there - takes it here).
              The first green call records checked; a call at
              least the step's soak later (its soak line; else 60 minutes after a wave0 step, 15 otherwise) that is
              green again with no container restarted since records done. A red call after checked records
@@ -108,7 +109,8 @@ def step_info(name):
             "soak": soak[-1] if soak else SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES,
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
-            "base_backup": "barman-check" in flags, "restarts_expected": "restarts-control-plane" in flags,
+            "base_backup": "barman-check" in flags, "base_backup_after_merge": "barman-after-merge" in flags,
+            "restarts_expected": "restarts-control-plane" in flags,
             "tempo_flush": tempo_flush}
 
 
@@ -670,9 +672,21 @@ def merge(step, repo):
         record(step, "merged", repo, sha)
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
-    ok, revs, _ = settled(step_info(step)["settle"], 4, 300, [], apps)
+    info = step_info(step)
+    ok, revs, _ = settled(info["settle"], 4, 300, [], apps)
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
+    # a barman-after-merge step (PostgreSQL 18): its base backup as soon as the last merge settled - until one exists
+    # the new major has no point to recover to (PostgreSQL 17's backups do not replay into 18). Declined or failed
+    # here, done's first call takes it.
+    if info["base_backup_after_merge"] and repo == info["branches"][-1]:
+        if not confirm(f"Step {step}'s merges settled: take PRODUCTION's Postgres base backup now "
+                       f"(postgres-base-backup.yml)?"):
+            print("no base backup now - deploy:upgrade:done takes it at its first call")
+        elif ansible("playbooks/postgres-base-backup.yml"):
+            record(step, "base-backup")
+        else:
+            print("the base backup failed (above) - deploy:upgrade:done takes it again at its first call")
 
 
 def playbooks(step):
@@ -743,15 +757,17 @@ def done(step):
     if checked is not None and left > 0:
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
-    # the first check of a cert-renew or barman-check step changes production: the operator's yes first
+    # the first check of a cert-renew or barman-check step changes production: the operator's yes first (a base backup
+    # its merge took already is not taken again)
+    base_backup = info["base_backup"] and not any(s == step and e == "base-backup" for _, s, e, _ in events)
     changes = (["a throwaway certificate through production's ACME solver (acme-check.yml)"] if info["acme"] else []) \
-        + (["a Postgres base backup (postgres-base-backup.yml)"] if info["base_backup"] else [])
+        + (["a Postgres base backup (postgres-base-backup.yml)"] if base_backup else [])
     if checked is None and changes:
         refuse([] if confirm(f"Step {step}'s first check changes PRODUCTION: {'; '.join(changes)} - run it?")
                else ["not confirmed - nothing run, nothing recorded"])
     if checked is None and info["acme"]:
         refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
-    if checked is None and info["base_backup"]:
+    if checked is None and base_backup:
         refuse([] if ansible("playbooks/postgres-base-backup.yml") else ["no fresh Postgres base backup (above)"])
     # after the soak: no container may have restarted since the first green check
     green = check(step, checked, deciding=checked is not None)

@@ -14,6 +14,9 @@ image ghcr.io/cloudnative-pg/postgresql 17 => image ghcr.io/cloudnative-pg/postg
 # A CNPG barman backup after it - WAL archiving and a fresh base backup: the new major (whose base backup the old WAL
 # cannot restore).
 barman-check
+# ...taken as soon as the merges settled, not at the end: PostgreSQL 17's backups do not replay into 18, so until it
+# exists the new major has no point to recover to
+barman-after-merge
 # and a copy of Postgres recovered from a fresh backup and its WAL (PostgreSQL 18 changed)
 restore-check
 # its change: the branch upgrade/47-postgres-18 in infra (the image and the new server name), merged first - then

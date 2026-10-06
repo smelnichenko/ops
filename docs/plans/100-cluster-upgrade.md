@@ -213,8 +213,10 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   ~8 min) runs after 10 and 25 only - Velero and its store: it holds no data volume (defect 20), so after any other
   step it guarded the least valuable backup at half a step's time; it ran after every step until full run 2. The
   backup production's data depends on, CNPG's barman backup of Postgres, is checked after 24 (the CNPG operator), 25
-  (its store) and 47 (PostgreSQL 18): WAL archiving working and a fresh base backup completed (`barman-check.yml`).
-  Step files mark them (`backup-check`, `barman-check`); the restore check closes the run.
+  (its store) and 47 (PostgreSQL 18): WAL archiving working and a fresh base backup completed (`barman-check.yml`) -
+  47's as soon as its merges settled (`barman-after-merge`: PostgreSQL 17's backups do not replay into 18, so the new
+  major has no recovery point until then), as production's merge takes it. Step files mark them (`backup-check`,
+  `barman-check`); the restore check closes the run.
 - **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
   ConfigMap change, so steps 58 and 60 change nothing in the running server; the image bumps right after them (59,
   61) restart it with the pin in place before the new version writes a part - the order that matters. Checked with
@@ -917,7 +919,8 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    before, or the second renders nothing new). Then the change is shown (log, stat, diff) and the operator answers;
    a step with a tempo-flush line (54) flushes Tempo's WAL to the store right before that repo's merge. Pushed and
    tagged upgrade-merged/<step> (a run cut short between the two is taken up); Argo settled on the pushed commits
-   within 30 minutes (a step's `settle` line overrides: 57, SonarQube's migration), nothing out of sync.
+   within 30 minutes (a step's `settle` line overrides: 57, SonarQube's migration), nothing out of sync. A
+   barman-after-merge step (47) then takes its Postgres base backup, asked first (declined or failed, done takes it).
 4. `deploy:upgrade:preview STEP=N` - a step with playbook lines, after its merges settled: check mode with diffs
    (read-only probes run, waits on changes the preview does not make are skipped), read by the operator. The full run
    runs the same preview on the Vagrant copy at every such step, so it is proven to pass.
@@ -930,7 +933,7 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    starts the soak: 60 minutes after a wave0 step, 15 otherwise (a step's `soak` line overrides). Called again after it
    - green, with no container restarted since the first green call - the step is done. A red call during the soak
    restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a
-   barman-check step's takes a Postgres base backup: that call asks first.
+   barman-check step's takes a Postgres base backup (unless its merge took one): that call asks first.
 Each phase that changes production asks first (the phase's own question, after showing what it will change) - the
 operator approves each. Every phase first checks the full run's proof: the step and every step before it proven by
 that one run; the ops paths it ran (deploy/, scripts/, tests/, Taskfile.yml, Vagrantfile) as it had them, but for the

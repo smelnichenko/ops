@@ -182,10 +182,10 @@ check("after them: not any more", pg17 in m.proof_inventory(names, S47, True), F
 
 # the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
 # a no - or no terminal - runs nothing and records nothing
-def done_calls(step, answer):
+def done_calls(step, answer, events=()):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record",
                                                    "proof_problems")}
-    m.ledger_for = lambda st, ph, arg=None: (names, [], info[st])
+    m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: (None, 0)
     m.confirm = lambda q: calls.append("asked") or answer
@@ -207,6 +207,8 @@ check("done 24 (barman-check), yes", done_calls("24-cnpg", True),
       ["asked", "playbooks/postgres-base-backup.yml", "checked"])
 check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
 check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
+check("done 47 with its base backup taken after the merges: none again, nothing asked",
+      done_calls(S47, False, ev(f"{S47} base-backup")), ["checked"])
 
 
 # done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done
@@ -291,6 +293,24 @@ got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube
 check("merge 57, not confirmed: refused after the change was shown - nothing merged, nothing recorded",
       ([c for c in got if c[0] == "run" and c[1] == "upgrade-merge-step.sh" or c[0] == "record"], got[-1][0]),
       ([], "refused"))
+
+# a barman-after-merge step: production's base backup on the new version as soon as its last merge settled (PostgreSQL
+# 18 has none until then - its point-in-time recovery starts there), not hours later at done; only 47 has one (25's is
+# about the Pi store its playbook upgrades: after that)
+check("barman-after-merge: 47 only", [n for n in names if info[n].get("base_backup_after_merge")], [S47])
+BB = [("asked",), ("ansible", "playbooks/postgres-base-backup.yml"), ("record", "base-backup")]
+got = phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47} merged infra a", f"{S47} settled infra a"))
+check("merge 47 platform (its last): settled, then the base backup, asked first",
+      [c for c in got if c[0] in ("ansible", "asked", "record")][-4:], [("record", "settled")] + BB)
+got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"))
+check("merge 47 infra (platform still to come): no base backup", [c for c in got if c[0] == "ansible"], [])
+got = phase_calls(m.merge, "24-cnpg", "infra", events=ev("24-cnpg apps app"))
+check("merge 24 infra (barman-check, not after the merge): no base backup - done takes it",
+      [c for c in got if c[0] == "ansible"], [])
+got = phase_calls(m.merge, S47, "platform", answer=False, events=ev(
+    f"{S47} apps app", f"{S47} merged infra a", f"{S47} settled infra a", f"{S47} merged platform b"))
+check("merge 47 platform, the backup not confirmed: settled recorded, no backup, not refused - done takes it",
+      [c for c in got if c[0] in ("ansible", "record", "refused")], [("record", "settled")])
 
 # step 54 replaces Tempo's major: its WAL flushed right before the infra merge (after the yes), not before platform's
 S54 = "54-tempo-3"
