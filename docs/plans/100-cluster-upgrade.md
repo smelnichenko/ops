@@ -242,7 +242,14 @@ with every fix - the guards, backup checks only on their 17 steps, the restore c
 stopped by the operator during its build. Full run 4 (18:03): failed at step 04 - the build had no Gluster, the VIP on
 pi2 found no velero bucket (defect 21). Full run 5 (19:24): stopped - new volumes not replicated to pi2 (the lookup
 crawl). Full run 6 (20:02): failed in the build - the Gluster mounts did not come back after the snapshot reboot
-(defect 22). Next: full run 7, after the review's fixes and the reordering.
+(defect 22). Full run 7 (2026-10-05 17:50): failed at step 09 (a cold start); then stopped to cut its time.
+2026-10-06, after the full review: full run 05:46 failed at step 13 - the kubelet's shutdown grace compared as text
+(kubeadm writes "3m0s", the step expects "180s"; compared in seconds since). Full run 08:10: steps 00-12 green, step
+13 failed - `kubeadm upgrade apply` restarted etcd, the kubelet brought it back only after 2 min 2 s (its volume
+manager sat on PVC reads the API server held for its 60 s request timeout while etcd was down, until the API server's
+liveness probe restarted it), kubeadm's etcd client had given up at its default 2 m and rolled the upgrade back. Fixed
+in upgrade-kubeadm.yml (f76c27b): an UpgradeConfiguration whose etcdAPICall equals upgradeManifests, kubeadm's 5 m
+for any static pod; step 13 green again on that copy (etcd down 26 s that time). Next: the full run again.
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
