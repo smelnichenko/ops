@@ -58,6 +58,12 @@ for upto in ((), K8S[:2], K8S):
     check(f"setup-kubeadm's CNI and crictl pins at {ver} (after {upto[-1] if upto else 'the tree'}): the minor's",
           got, minor[ver])
 
+# CI lints the playbooks with every committed step's lines in: none may make a line its 160 columns refuse
+allin = d.applied(tree, d.pending(tree))
+over = [f"{p}:{n}" for p, text in allin.items() if p.endswith(".yml")
+        for n, line in enumerate(text.split("\n"), 1) if len(line) > 160]
+check("every step's default lines applied: no playbook line over 160 columns", over, [])
+
 after13 = "\n".join(new for path, _, new in d.default_lines(K8S[0]) if path == KUBEADM) + "\n"
 try:
     d.applied(lambda p: after13, [K8S[2]])

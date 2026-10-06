@@ -64,8 +64,15 @@
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
     cilium_version: "1.19.1"
-    # the Scylla Manager chart's values where Argo does not install it (production's pins from the step that needs them)
-    scylla_manager_values: {scylla: {developerMode: true}}
+    # the Scylla Manager chart's values where Argo does not install it: its and its agents' image tags (production's
+    # pins from the step that needs them; empty: the chart's) - tags apart, so a step's default line stays one short line
+    scylla_manager_tag: ""
+    scylla_manager_agent_tag: ""
+    scylla_manager_values: >-
+      {{ {'scylla': {'developerMode': true}}
+         | combine({'image': {'tag': scylla_manager_tag}} if scylla_manager_tag else {})
+         | combine({'scylla': {'agentImage': {'tag': scylla_manager_agent_tag}}} if scylla_manager_agent_tag else {},
+                   recursive=true) }}
     # Cilium's Helm values. An upgrade renders cilium-config from these alone, so they must render what runs: the
     # 'Cilium's live config' check refuses otherwise.
     cilium_values:
