@@ -46,17 +46,17 @@ check "pushed and fast-forwarded, not tagged: taken up" 0 "pushed already" "$M" 
 check "tagged with main before the fast-forward (its reflog)" 0 "base $main2" base_of 03-c
 
 # a merged step's branch deleted after its merge: the next step's predecessor check reads its tag
-printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/03b-x.txt"
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/04-d.txt"
 g branch -q -D upgrade/03-c
-g checkout -q -b upgrade/03b-x; echo x >> "$W/infra/f"; g commit -q -am x; g checkout -q main
-check "the step before deleted after its merge: merged, its tag read" 0 "tagged upgrade-merged/03b-x" "$M" 03b-x infra
-rm "$W/ops/tests/ansible/upgrade/steps/03b-x.txt"
+g checkout -q -b upgrade/04-d; echo d >> "$W/infra/f"; g commit -q -am d; g checkout -q main
+check "the step before (03) deleted after its merge: 04 merged, 03's tag read" 0 "tagged upgrade-merged/04-d" \
+  "$M" 04-d infra
 
 # someone else moved origin's main: refused
 git clone -q "$W/origin.git" "$W/other" 2> /dev/null
 echo cd >> "$W/other/g"; git -C "$W/other" add g; git -C "$W/other" commit -q -m cd; git -C "$W/other" push -q origin main
-printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/04-d.txt"
-g checkout -q -b upgrade/04-d; echo d >> "$W/infra/f"; g commit -q -am d; g checkout -q main
-check "origin's main moved by someone else: refused" 1 "main is not origin/main" "$M" 04-d infra
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/05-e.txt"
+g checkout -q -b upgrade/05-e; echo e >> "$W/infra/f"; g commit -q -am e; g checkout -q main
+check "origin's main moved by someone else: refused" 1 "main is not origin/main" "$M" 05-e infra
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))
