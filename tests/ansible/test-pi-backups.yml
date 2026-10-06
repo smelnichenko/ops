@@ -2,7 +2,8 @@
 # The Pis' tier-0 backup (setup-pi-backups.yml) taken on the Vagrant Pi stack and every piece restored, all read back
 # from the Pi store:
 #   before     a marker database with a random row; two probe backups in the bucket, named 31 and 29 days back
-#   the run    started on both Pis: exactly one backs up and it is the VIP's Pi; the daily timer on, on both
+#   the run    started on both Pis at once: exactly one backs up, the other (Consul's lock) then finds the day done;
+#              the daily timer on, on both
 #   consul.snap      into a throwaway Consul dev agent on other ports - Vault's keys (vault/core/) and Patroni's
 #                    (service/) there
 #   pg-<db>.dump     a dump for every database, each into a scratch database - every table it lists there, the marker
@@ -54,11 +55,15 @@
           done
           rclone mkdir "store:$PI_BACKUP_BUCKET"
           rclone copy "$d" "store:$PI_BACKUP_BUCKET" --exclude names > /dev/null
+          # no success today yet (an earlier test run's would make the day done)
+          if [ -n "$(rclone lsf --files-only --include last-success "store:$PI_BACKUP_BUCKET")" ]; then
+            rclone deletefile "store:$PI_BACKUP_BUCKET/last-success"
+          fi
           cat "$d/names"
       register: _probes
       changed_when: true
 
-- name: A backup taken now (the VIP's Pi does it, the other finds it is not)
+- name: A backup taken now (one Pi does it, the other then finds the day done)
   hosts: pis
   become: true
   gather_facts: false
@@ -78,21 +83,17 @@
       register: _journal
       changed_when: false
 
-    - name: Whether this Pi holds the VIP
-      ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
-      register: _vip
-      changed_when: false
-
-    - name: Exactly one Pi backed up, and it holds the VIP
+    - name: Exactly one Pi backed up, the other found the day done
       ansible.builtin.assert:
         that:
           - _backed_up | length == 1
-          - _backed_up == _vip_holders
-        fail_msg: "backed up: {{ _backed_up }}, VIP on: {{ _vip_holders }}"
+          - _done | length == 1
+          - _backed_up != _done
+        fail_msg: "backed up: {{ _backed_up }}, found the day done: {{ _done }}"
         quiet: true
       vars:
         _backed_up: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_journal.stdout', 'search', 'PI TIER-0 BACKUP') | map(attribute='inventory_hostname') | list }}"
-        _vip_holders: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vip.stdout', '!=', '') | map(attribute='inventory_hostname') | list }}"
+        _done: "{{ ansible_play_hosts | map('extract', hostvars) | selectattr('_journal.stdout', 'search', \"today's backup is done\") | map(attribute='inventory_hostname') | list }}"
       run_once: true
 
     - name: This run's time
@@ -241,7 +242,7 @@
           {{ _pg.stdout_lines | join(', ') }}; keycloak - {{ _kc.stdout_lines | join(', ') }}; retention -
           {{ _retention.stdout }}
 
-# the cases a normal day does not reach, on the VIP's Pi (the other exits at once)
+# the cases a normal day does not reach, on one Pi (the VIP's), each a backup again the same day (PI_BACKUP_EVEN_TODAY)
 - name: A clock ahead keeps the newest; Keycloak down still backs up the rest
   hosts: pis
   become: true
@@ -261,7 +262,7 @@
             cmd: |
               set -euo pipefail
               set -a; . /etc/pi-backup/env; set +a
-              PI_BACKUP_RETENTION_DAYS=0 PI_BACKUP_KEEP=2 /usr/local/sbin/pi-tier0-backup.sh > /dev/null
+              PI_BACKUP_EVEN_TODAY=1 PI_BACKUP_RETENTION_DAYS=0 PI_BACKUP_KEEP=2 /usr/local/sbin/pi-tier0-backup.sh > /dev/null
               rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET" | sed 's#/$##' | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort
           register: _kept
           changed_when: true
@@ -276,7 +277,7 @@
               before=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success")
               systemctl stop keycloak
               trap 'systemctl start keycloak' EXIT
-              out=$(/usr/local/sbin/pi-tier0-backup.sh 2>&1); rc=$?
+              out=$(PI_BACKUP_EVEN_TODAY=1 /usr/local/sbin/pi-tier0-backup.sh 2>&1); rc=$?
               newest=$(rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET" | sed 's#/$##' | grep -E '^[0-9]{8}T' | sort | tail -1)
               files=$(rclone lsf "store:$PI_BACKUP_BUCKET/$newest" | sort | tr '\n' ' ')
               after=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success")
