@@ -272,8 +272,10 @@ terminating (side clusters deleted in the foreground since); 50 - Grafana 13 upd
 start, the image's copy removed first, which the read-only root filesystem refused with the plugin unregistered: the
 Mimir datasource answered "Plugin not registered", and every Mimir dashboard would have broken in production. A
 platform branch for 50 now (the chart's pluginsPreinstallAutoUpdate, merged first, rendering nothing alone; infra sets
-it with the image), platform 54-61 and infra 51-61 restacked on it. Next: the rest from 50 on that copy, then the full
-run again.
+it with the image), platform 54-61 and infra 51-61 restacked on it; 51 - its Wave 0 gateway backup refused
+versitygw 1.8's .vgwlocks as a bucket without an ACL (production's Wave 0 after step 25 the same; dot directories are
+no buckets since). Steps 51-61 and the restore check then green on that copy (21:27). Next: the full run again, from
+nothing, then the full review.
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
