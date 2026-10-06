@@ -81,6 +81,7 @@
       loop: "{{ consul_servers }}"
       run_once: true
       ignore_unreachable: true
+      no_log: true  # the gossip key
 
     - name: Their keys (the servers that answered)
       ansible.builtin.set_fact:
@@ -89,6 +90,7 @@
       vars:
         _answered: "{{ _consul_keys_all.results | rejectattr('unreachable', 'defined') | map(attribute='stdout') | list }}"
       run_once: true
+      no_log: true
 
     - name: One key among the running servers (or, none running, among the configs)
       ansible.builtin.assert:
@@ -106,6 +108,7 @@
     - name: A key generated - only on a first install with every server in the run, none running or having one
       ansible.builtin.command: consul keygen
       register: consul_key_gen
+      no_log: true
       when:
         - inventory_hostname == 'pi1'
         - consul_servers | difference(ansible_play_hosts) | length == 0
@@ -118,6 +121,7 @@
         consul_encrypt_key: >-
           {{ (_consul_live_keys + _consul_conf_keys + [hostvars['pi1']['consul_key_gen']['stdout'] | default('')])
              | select | first | default('') }}
+      no_log: true
 
     - name: A key to write (none found and none generated - a server alone in the run, the others unreachable)
       ansible.builtin.assert:
@@ -179,6 +183,7 @@
           connect {
             enabled = false
           }
+      diff: false  # it carries the gossip key - a --check --diff preview would print it
       register: _consul_config
 
     - name: Install Consul systemd service
@@ -260,16 +265,38 @@
         - _consul_pending.stdout == 'pending'
         - _consul_before.status.ActiveState | default('') == 'active'
       block:
-        - name: Patroni running (a first install has none yet)
+        # the others must carry the quorum while this one is away: with one already down, this restart loses it -
+        # and with it Vault's storage and Patroni's DCS
+        - name: Before - every server healthy, one loss tolerated
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              curl -sf --max-time 5 http://127.0.0.1:8500/v1/operator/autopilot/health | python3 -c '
+              import json, sys
+              h = json.load(sys.stdin)
+              s = h["Servers"]
+              ok = h["Healthy"] and h["FailureTolerance"] >= 1 and len(s) == 3 and all(x["Healthy"] and x["Voter"] for x in s)
+              print(("QUORUM HOLDS " if ok else "REFUSED: no restart without a server to spare - ") + ", ".join(
+                  "%s %s" % (x["Name"], "healthy" if x["Healthy"] else "unhealthy") for x in s))
+              sys.exit(0 if ok else 1)'
+          register: _consul_spare
+          retries: 6
+          delay: 5
+          until: _consul_spare.rc == 0
+          changed_when: false
+
+        # by whether Patroni is installed on the other Pi, not whether it runs there: with that one stopped, the
+        # leader on this Pi still demotes when its own agent is gone (patronictl reaches the cluster through Consul)
+        - name: Patroni on the other Pi (a first install has none yet)
           ansible.builtin.systemd:
             name: patroni
           register: _patroni_unit
-          failed_when: false
           delegate_to: "{{ _other_pi }}"
 
         - name: Whether to pause it
           ansible.builtin.set_fact:
-            _patroni_active: "{{ _patroni_unit.status.ActiveState | default('') == 'active' }}"
+            _patroni_active: "{{ _patroni_unit.status.LoadState | default('') == 'loaded' }}"
 
         # someone's maintenance (or another run) has it paused: this run's resume would end it - refused
         - name: Patroni not paused already
