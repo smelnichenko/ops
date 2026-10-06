@@ -14,6 +14,9 @@
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-keycloak.yml \
 #     -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Read Pi Vault root token (from pi1)
   hosts: pi1
   become: true

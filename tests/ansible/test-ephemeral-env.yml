@@ -14,6 +14,9 @@
 # Usage:
 #   task test:ephemeral-env
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test ephemeral environment lifecycle
   hosts: target
   become: true

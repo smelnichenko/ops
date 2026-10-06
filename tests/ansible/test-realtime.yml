@@ -12,6 +12,9 @@
 #
 # Prereqs: `_vagrant:k8s-stack` (Pi stack + kubeadm + ESO).
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test Centrifugo realtime chart
   hosts: target
   become: true

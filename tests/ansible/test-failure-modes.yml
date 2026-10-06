@@ -13,6 +13,9 @@
 # Suite 4: Memory pressure
 # Suite 5: Rate limiting under load
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Read Pi Vault root token (from pi1)
   hosts: pi1
   become: true

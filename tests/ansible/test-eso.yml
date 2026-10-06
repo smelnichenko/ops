@@ -17,6 +17,9 @@
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml \
 #     ../../tests/ansible/test-eso.yml
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 # ─── Fetch Pi Vault token + CA (pi1) ────────────────────────────────────────
 - name: Read Pi Vault root token (from pi1)
   hosts: pi1

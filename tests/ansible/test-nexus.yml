@@ -25,6 +25,9 @@
 #        active Pi (Gluster replicated it)
 #     4. restart keepalived on the original Pi; no flap-back (nopreempt)
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Discover which Pi holds the VIP
   hosts: pi1,pi2
   become: true

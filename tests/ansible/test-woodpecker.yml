@@ -13,6 +13,9 @@
 #   - _vagrant:pi-stack chain (Pi Forgejo running)
 #   - kubeadm VM provisioned
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test Woodpecker CI deployment
   hosts: target
   become: true

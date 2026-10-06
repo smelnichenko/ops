@@ -15,6 +15,9 @@
 # Usage:
 #   task test:hyperfoil-reports
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Read Pi Vault root token (from pi1)
   hosts: pi1
   become: true

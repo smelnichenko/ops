@@ -13,6 +13,9 @@
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/test-chat.yml \
 #     -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test chat infrastructure (Kafka + ScyllaDB)
   hosts: target
   become: true
@@ -165,7 +168,7 @@
       # Strimzi manages Kafka via a custom StrimziPodSet CR (not a
       # StatefulSet). Ready pods count is under `.status.readyPods`.
       kubernetes.core.k8s_info:
-        api_version: core.strimzi.io/v1beta2
+        api_version: core.strimzi.io/v1
         kind: StrimziPodSet
         name: schnappy-kafka
         namespace: "{{ ns }}"
@@ -310,7 +313,8 @@
       delay: 10
       until:
         - schema_job.resources | length > 0
-        - schema_job.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Complete') | selectattr('status', 'equalto', 'True') | list | length > 0
+        - schema_job.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Complete')
+          | selectattr('status', 'equalto', 'True') | list | length > 0
       failed_when: false
 
     - name: Check chat keyspace exists
@@ -403,8 +407,12 @@
       ansible.builtin.set_fact:
         # Both services expose multiple ports; find the expected one
         # regardless of ordering.
-        kafka_svc_ok: "{{ (kafka_svc.resources | default([]) | length > 0) and (9092 in (kafka_svc.resources[0].spec.ports | map(attribute='port') | list)) }}"
-        scylla_svc_ok: "{{ (scylla_svc.resources | default([]) | length > 0) and (9042 in (scylla_svc.resources[0].spec.ports | map(attribute='port') | list)) }}"
+        kafka_svc_ok: >-
+          {{ (kafka_svc.resources | default([]) | length > 0)
+             and (9092 in (kafka_svc.resources[0].spec.ports | map(attribute='port') | list)) }}
+        scylla_svc_ok: >-
+          {{ (scylla_svc.resources | default([]) | length > 0)
+             and (9042 in (scylla_svc.resources[0].spec.ports | map(attribute='port') | list)) }}
 
     # ================================================================
     # Phase 8: Summary
@@ -419,12 +427,21 @@
       # kafka_rollout is a StrimziPodSet (not a StatefulSet) → status
       # has `pods` / `readyPods`, no `spec.replicas`.
       ansible.builtin.set_fact:
-        kafka_running: "{{ not kafka_rollout.failed | default(false) and (kafka_rollout.resources | default([]) | length > 0) and (kafka_rollout.resources[0].status.pods | default(0)) > 0 and (kafka_rollout.resources[0].status.readyPods | default(0)) == kafka_rollout.resources[0].status.pods }}"
-        scylla_running: "{{ not scylla_rollout.failed | default(false) and (scylla_rollout.resources | default([]) | length > 0) and (scylla_rollout.resources[0].status.readyReplicas | default(0) == scylla_rollout.resources[0].spec.replicas) }}"
+        kafka_running: >-
+          {{ not kafka_rollout.failed | default(false) and (kafka_rollout.resources | default([]) | length > 0)
+             and (kafka_rollout.resources[0].status.pods | default(0)) > 0
+             and (kafka_rollout.resources[0].status.readyPods | default(0)) == kafka_rollout.resources[0].status.pods }}
+        scylla_running: >-
+          {{ not scylla_rollout.failed | default(false) and (scylla_rollout.resources | default([]) | length > 0)
+             and (scylla_rollout.resources[0].status.readyReplicas | default(0) == scylla_rollout.resources[0].spec.replicas) }}
 
     - name: "TEST RESULT"
       vars:
-        all_pass: "{{ kafka_running and scylla_running and topic_messages and topic_events and topic_notifications and schema_keyspace and schema_messages_by_channel and schema_messages_by_user and schema_reactions_by_message and schema_attachments_by_message and kafka_np_exists and scylla_np_exists and kafka_svc_ok and scylla_svc_ok }}"
+        all_pass: >-
+          {{ kafka_running and scylla_running and topic_messages and topic_events and topic_notifications
+             and schema_keyspace and schema_messages_by_channel and schema_messages_by_user
+             and schema_reactions_by_message and schema_attachments_by_message and kafka_np_exists and scylla_np_exists
+             and kafka_svc_ok and scylla_svc_ok }}
       ansible.builtin.debug:
         msg: |
           ====================================================

@@ -21,6 +21,9 @@
 #   venv/bin/ansible-playbook -i inventory/vagrant.yml \
 #     ../../tests/ansible/test-gateway.yml
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test Istio Gateway + HTTPRoute routing
   hosts: target
   become: true

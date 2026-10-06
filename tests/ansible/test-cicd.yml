@@ -9,6 +9,9 @@
 # Prerequisites: kubeadm VM provisioned with nerdctl, SDKMAN, Node.js.
 # Pi Forgejo provisioned by setup-pi-services.yml + setup-patroni.yml.
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test CI/CD with Pi Forgejo container registry
   hosts: target
   become: true

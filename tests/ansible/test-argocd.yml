@@ -9,6 +9,9 @@
 # Usage:
 #   ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-argocd.yml
 #
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 - name: Test Argo CD GitOps
   hosts: target
   become: true

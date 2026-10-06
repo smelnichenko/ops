@@ -16,6 +16,9 @@
 # Suite 3: Offsite restore (rsync to pi1, wipe primary, rsync back, restore)
 # Suite 4: Post-restore k6 smoke (the schnappy-test CronJob, restored by Velero)
 
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
 # ─── Play 0: Prepare pi1 (offsite backup target) + fetch Pi Vault token ────
 - name: Prepare pi1 for offsite backup tests + fetch Vault token
   hosts: pi1
