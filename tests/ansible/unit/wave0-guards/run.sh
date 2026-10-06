@@ -13,6 +13,10 @@ cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" -c 'import jinja2, yaml' || { echo "wave0-guards: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+# the playbook as Ansible loads it first: a free-form shell block it cannot split (a quote in a comment) never runs
+AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
+"$AP" --syntax-check -i localhost, tests/ansible/upgrade/wave0-rehearsal.yml > /dev/null 2>&1 \
+  || { echo "FAIL tests/ansible/upgrade/wave0-rehearsal.yml does not load:"; "$AP" --syntax-check -i localhost, tests/ansible/upgrade/wave0-rehearsal.yml 2>&1 | grep -A2 ERROR; exit 1; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin" "$W/vol" "$W/work"
