@@ -42,9 +42,10 @@ printf '\nHost *\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ConnectTi
 export VAGRANT_SSH_CONFIG=$logs/ssh-config
 
 play() { (cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml "$@"); }
-start() {  # name, command...
+start() {  # name, command... - stdin from /dev/null: under job control a job gets the caller's (a check reading it
+  # would take the caller's input, or stop on SIGTTIN at a terminal while wait -n waited for ever)
   local name=$1; shift
-  "$@" > "$logs/$name" 2>&1 &
+  "$@" > "$logs/$name" 2>&1 < /dev/null &
   names+=("$name"); pids+=("$!")
 }
 t0=$(date +%s)
@@ -60,7 +61,10 @@ left=${#pids[@]}
 while [ "$left" -gt 0 ]; do
   running=()
   for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || running+=("${pids[$i]}"); done
+  ended=""
   wait -n -p ended "${running[@]}"; rc=$?
+  # a return with no job ended (127: none of them a child any more) judges no check - never the last one again
+  [ -n "$ended" ] || { echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"; exit 1; }
   for i in "${!pids[@]}"; do
     if [ "${pids[$i]}" = "$ended" ]; then
       done_[i]=1
