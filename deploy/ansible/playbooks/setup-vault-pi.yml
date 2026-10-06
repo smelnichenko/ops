@@ -338,7 +338,7 @@
       ansible.builtin.command: vault operator init -status
       environment:
         VAULT_ADDR: https://127.0.0.1:8200
-        VAULT_SKIP_VERIFY: "1"
+        VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
       register: _api_wait
       retries: 12
       delay: 5
@@ -441,7 +441,7 @@
 
   environment:
     VAULT_ADDR: https://127.0.0.1:8200
-    VAULT_SKIP_VERIFY: "1"
+    VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
     - name: Check init status
@@ -544,7 +544,7 @@
 
   environment:
     VAULT_ADDR: https://127.0.0.1:8200
-    VAULT_SKIP_VERIFY: "1"
+    VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
     - name: Copy unseal-keys to pi2
@@ -666,7 +666,7 @@
 
   environment:
     VAULT_ADDR: https://127.0.0.1:8200
-    VAULT_SKIP_VERIFY: "1"
+    VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
     - name: Vault status

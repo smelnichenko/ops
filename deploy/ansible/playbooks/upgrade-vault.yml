@@ -24,7 +24,7 @@
     - name: Each Vault's state (200 active, 429 standby, 503 sealed)
       ansible.builtin.uri:
         url: "{{ vault_api }}/v1/sys/health"
-        validate_certs: false
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
         status_code: [200, 429, 503]
         return_content: true
       register: _health
@@ -126,7 +126,7 @@
     - name: Each on the version, unsealed
       ansible.builtin.uri:
         url: "{{ vault_api }}/v1/sys/health"
-        validate_certs: false
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
         status_code: [200, 429]
         return_content: true
       register: _after
@@ -137,7 +137,7 @@
     - name: Each sees a leader (the failover done)
       ansible.builtin.uri:
         url: "{{ vault_api }}/v1/sys/leader"
-        validate_certs: false
+        ca_path: /etc/vault.d/tls/ca-cert.pem  # its certificate names 127.0.0.1
         return_content: true
       register: _leader
       retries: 24

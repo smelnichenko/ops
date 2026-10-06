@@ -139,7 +139,16 @@
         stdin: "{{ forgejo_db_password }}"
       register: _dump
       changed_when: true
+      failed_when: false
       delegate_to: "{{ _first }}"
+      run_once: true
+      no_log: true  # the password went in on stdin - the dump's own error below, without it
+
+    - name: The dump taken (its error otherwise)
+      ansible.builtin.assert:
+        that: _dump.rc == 0
+        fail_msg: "the Forgejo dump failed: {{ _dump.stderr | default('') }}"
+        success_msg: "{{ _dump.stdout | default('') }}"
       run_once: true
 
     - name: Forgejo stopped on every Pi
