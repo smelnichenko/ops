@@ -124,14 +124,19 @@
 
     - name: Delete the pods and the volume
       ansible.builtin.shell: |
+        set -euo pipefail
         {{ kubectl }} delete pod {{ check_name }} {{ check_name }}-read --wait=true > /dev/null
         {{ kubectl }} delete pvc {{ check_name }} --wait=true > /dev/null
+      args:
+        executable: /bin/bash
       changed_when: true
 
     - name: The PersistentVolume and its directory are gone
       ansible.builtin.shell: |
         set -euo pipefail
-        echo "pv $(kubectl --kubeconfig {{ kubeconfig }} get pv {{ _read.stdout_lines[1].split()[1] }} --ignore-not-found -o name | wc -l)"
+        # read into a variable first: a substitution inside the argument of echo hides kubectl failing (it read 0, gone)
+        pv=$(kubectl --kubeconfig {{ kubeconfig }} get pv {{ _read.stdout_lines[1].split()[1] }} --ignore-not-found -o name)
+        echo "pv $([ -n "$pv" ] && echo 1 || echo 0)"
         echo "dir $([ -e '{{ _pv_path.stdout }}' ] && echo 1 || echo 0)"
       args:
         executable: /bin/bash
