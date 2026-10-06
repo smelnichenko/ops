@@ -255,6 +255,14 @@
         - { path: /etc/vault.d/tls/ca-cert.pem, mode: '0644' }
 
     # ── vault.hcl ──────────────────────────────────────────────────────
+    # a running Vault takes a changed config or unit by a restart - one Pi at a time, after this play (both at once
+    # sealed both: Vault down until unsealed); a Vault starting now (a first install) just starts on it
+    - name: Vault running before this run
+      ansible.builtin.systemd:
+        name: vault
+      register: _vault_before
+      failed_when: false
+
     - name: Write vault.hcl (Consul backend)
       ansible.builtin.copy:
         dest: /etc/vault.d/vault.hcl
@@ -279,7 +287,7 @@
 
           api_addr     = "https://{{ node_ip }}:8200"
           cluster_addr = "https://{{ node_ip }}:8201"
-      notify: Restart vault
+      register: _vault_config_written
 
     # ── vault.service ──────────────────────────────────────────────────
     # Wants= (soft) not Requires= (hard): vault retries consul backend
@@ -307,16 +315,13 @@
 
           [Install]
           WantedBy=multi-user.target
-      notify: Reload systemd and restart vault
+      register: _vault_unit_written
 
     # ── unseal.sh + vault-unseal.service (shared with upgrade-vault.yml) ──
     - name: The Pi's own unseal
       ansible.builtin.include_tasks: tasks/vault-unseal.yml
 
     # ── Start vault ────────────────────────────────────────────────────
-    - name: Flush handlers before API wait
-      ansible.builtin.meta: flush_handlers
-
     - name: Enable + start vault.service
       ansible.builtin.systemd:
         name: vault
@@ -336,17 +341,35 @@
       changed_when: false
       failed_when: _api_wait.rc not in [0, 1, 2]
 
-  handlers:
-    - name: Reload systemd and restart vault
-      ansible.builtin.systemd:
-        name: vault
-        daemon_reload: true
-        state: restarted
 
-    - name: Restart vault
-      ansible.builtin.systemd:
-        name: vault
-        state: restarted
+# ─── A changed config or unit: restarted one Pi at a time ──────────────────
+# Each back unsealed (its unseal unit restarts with it: Requires=) or, not initialised yet, answering - before the next
+- name: Vault restarted where its config or unit changed - one Pi at a time
+  hosts: pis
+  become: true
+  gather_facts: false
+  serial: 1
+  tasks:
+    - name: Restarted, unsealed before the next
+      when:
+        - _vault_config_written is changed or _vault_unit_written is changed
+        - _vault_before.status.ActiveState | default('') == 'active'
+      block:
+        - name: Restarted
+          ansible.builtin.systemd:
+            name: vault
+            state: restarted
+            daemon_reload: true
+
+        - name: Unsealed again (or not initialised yet)
+          ansible.builtin.uri:
+            url: https://127.0.0.1:8200/v1/sys/health
+            validate_certs: false
+            status_code: [200, 429, 473, 501, 503]
+          register: _vault_back
+          retries: 36
+          delay: 5
+          until: _vault_back.status in [200, 429, 501]
 
 # ─── Initialise Vault on pi1 (first run only) ───────────────────────────────
 - name: Initialise Vault on pi1

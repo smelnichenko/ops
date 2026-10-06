@@ -148,7 +148,7 @@
                 password: {{ pg_repl_password }}
             parameters:
               unix_socket_directories: '/var/run/postgresql'
-      notify: Restart Patroni
+      register: _patroni_config_written
 
     - name: Check if Patroni is already managing Postgres (idempotency gate)
       ansible.builtin.systemd:
@@ -175,11 +175,14 @@
 
     # a first install clears the data directory (Debian's own cluster, Keycloak's dumped first; a replica copies the
     # leader's) - never on the node Consul names as the cluster's leader, whatever this Pi's files say
+    # fails closed: only Consul's own answer that there is no such key counts as no leader - Consul unreachable (the
+    # incident a re-run comes in) refuses instead of clearing the data
     - name: Patroni's leader in Consul
       ansible.builtin.command: consul kv get service/{{ patroni_scope }}/leader
       register: _patroni_leader_key
       changed_when: false
-      failed_when: false
+      failed_when: >-
+        _patroni_leader_key.rc != 0 and 'No key exists at' not in _patroni_leader_key.stderr
       when: _patroni_first_install | bool
 
     - name: Never the leader's data
@@ -251,7 +254,7 @@
           RestartSec=5
           [Install]
           WantedBy=multi-user.target
-      notify: Restart Patroni
+      register: _patroni_service_written
 
     - name: Allow Patroni REST API through UFW
       community.general.ufw:
@@ -278,12 +281,91 @@
     # An explicit `CREATE ROLE` task would run before Patroni has finished
     # pg_basebackup on the non-leader Pi (socket not yet present) and fail.
 
-  handlers:
-    - name: Restart Patroni
+
+# A re-run that changed Patroni's config or unit (a password from .env, a hand edit) applies it without both Postgres
+# going down: it restarted Patroni on both Pis at once, unpaused - Patroni stops Postgres when it stops, both went down
+# together and raced for leader. A config change is reloaded (HUP: Patroni re-reads it); a unit change restarts one node
+# at a time, the cluster paused (Postgres untouched), the replicas first, each gated on the primary answering through
+# HAProxy. A first install starts Patroni on what it wrote: nothing to apply.
+- name: A changed config reloaded, a changed unit restarted one node at a time - the cluster paused
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  vars_files:
+    - ../vars/patroni.yml
+  vars:
+    patronictl: patronictl -c /etc/patroni/patroni.yml
+  tasks:
+    - name: What this run changed here
+      ansible.builtin.set_fact:
+        _patroni_reload: "{{ not _patroni_first_install | bool and _patroni_config_written is changed }}"
+        _patroni_restart: "{{ not _patroni_first_install | bool and _patroni_service_written is changed }}"
+
+    - name: Reloaded - a config change (unless a restart follows)
       ansible.builtin.systemd:
         name: patroni
-        state: restarted
-        daemon_reload: true
+        state: reloaded
+      when: _patroni_reload | bool and not _patroni_restart | bool
+
+    - name: A unit change - restarted, paused
+      when: ansible_play_hosts | map('extract', hostvars, '_patroni_restart') | map('bool') | select | list | length > 0
+      block:
+        - name: Every node in the run
+          ansible.builtin.assert:
+            that: ansible_play_hosts | sort == ['pi1', 'pi2']
+            fail_msg: "REFUSED: the run has {{ ansible_play_hosts | sort }} - a paused restart needs pi1 and pi2"
+            quiet: true
+          run_once: true
+
+        - name: The unit read again
+          ansible.builtin.systemd:
+            daemon_reload: true
+
+        - name: Each node's version and role
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8008/patroni
+            return_content: true
+          register: _patroni_api
+
+        - name: Its version and role, kept for the restart
+          ansible.builtin.set_fact:
+            restart_version: "{{ _patroni_api.json.patroni.version }}"
+            _leader: "{{ _patroni_api.json.role in ['primary', 'master'] }}"
+
+        - name: Not paused already (someone's maintenance - this run would end it)
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              out=$({{ patronictl }} list)
+              if grep 'Maintenance mode' <<< "$out" > /dev/null; then
+                echo "REFUSED: the cluster is paused - finish that first (patronictl resume)"; exit 1
+              fi
+          changed_when: false
+          run_once: true
+
+        - name: Paused, the replicas then the leader restarted, resumed
+          block:
+            - name: Paused - Postgres keeps running, no failover meanwhile
+              ansible.builtin.command: "{{ patronictl }} pause --wait"
+              register: _restart_paused
+              changed_when: true
+              run_once: true
+
+            - name: The replicas first, then the leader - each restarted, the primary answering
+              ansible.builtin.include_tasks: tasks/patroni-restart-node.yml
+              loop: "{{ [false, true] }}"
+              loop_control:
+                loop_var: _turn_leader
+                label: "{{ 'the leader' if _turn_leader else 'the replicas' }}"
+          always:
+            # only what this run paused (a failed pause left someone else's state alone)
+            - name: Resumed
+              ansible.builtin.command: "{{ patronictl }} resume --wait"
+              changed_when: true
+              run_once: true
+              when: _restart_paused is defined and _restart_paused is succeeded
 
 # ─── Restore Keycloak DB ─────────────────────────────────────────────────────
 # Must run against the Patroni primary, which is non-deterministic on a

@@ -654,23 +654,57 @@
       ansible.builtin.systemd:
         daemon_reload: true
 
+    # Each restart one Pi at a time (throttle), the service answering again before the next Pi's: both at once took
+    # Forgejo, or Keycloak (every login, Istio's key fetch), down on both Pis together. Bounded waits.
+    # Debian's own cluster, before Patroni takes over - never under Patroni (it would start a second Postgres)
     - name: Restart Postgres
-      ansible.builtin.systemd:
-        name: postgresql
-        state: restarted
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl restart postgresql
+        for _ in $(seq 60); do pg_isready -q -h 127.0.0.1 -p 5432 && exit 0; sleep 2; done
+        echo "Postgres on {{ inventory_hostname }} not ready 120 s after its restart" >&2; exit 1
+      args:
+        executable: /bin/bash
+      throttle: 1
+      changed_when: true
+      when: _patroni_state.status.ActiveState | default('') != 'active'
 
     - name: Restart Forgejo
-      ansible.builtin.systemd:
-        name: forgejo
-        state: restarted
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl restart forgejo
+        for _ in $(seq 90); do curl -sf -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0; sleep 2; done
+        echo "Forgejo on {{ inventory_hostname }} not serving 180 s after its restart" >&2; exit 1
+      args:
+        executable: /bin/bash
+      throttle: 1
+      changed_when: true
 
     - name: Restart Keycloak
-      ansible.builtin.systemd:
-        name: keycloak
-        state: restarted
-        daemon_reload: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl daemon-reload
+        systemctl restart keycloak
+        for _ in $(seq 120); do curl -sf -o /dev/null http://127.0.0.1:8080/realms/master && exit 0; sleep 2; done
+        echo "Keycloak on {{ inventory_hostname }} not serving 240 s after its restart" >&2; exit 1
+      args:
+        executable: /bin/bash
+      throttle: 1
+      changed_when: true
 
+    # Forgejo restarts with it (its unit Requires= haproxy): both answering again before the next Pi
     - name: Restart HAProxy
-      ansible.builtin.systemd:
-        name: haproxy
-        state: restarted
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl restart haproxy
+        for _ in $(seq 90); do
+          systemctl is-active --quiet haproxy \
+            && { ! systemctl is-enabled --quiet forgejo || curl -sf -o /dev/null http://127.0.0.1:3000/api/v1/version; } \
+            && exit 0
+          sleep 2
+        done
+        echo "HAProxy (or Forgejo behind it) on {{ inventory_hostname }} not back 180 s after its restart" >&2; exit 1
+      args:
+        executable: /bin/bash
+      throttle: 1
+      changed_when: true

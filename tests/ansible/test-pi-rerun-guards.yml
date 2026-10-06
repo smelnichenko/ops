@@ -8,6 +8,9 @@
 #   written back, each server restarted one at a time and Patroni paused around each - sampled every 0.2 s on each
 #   server: no two agents down together, Patroni paused whenever one is down - no failover, resumed; then on the
 #   converged cluster: the same key, no server restarted.
+#   setup-patroni with its config, then its unit, hand-edited on both Pis: the config reloaded (Patroni's PID kept),
+#   the unit restarted one node at a time paused (PIDs new) - Postgres never restarted, roles and timelines unchanged,
+#   not paused after.
 #   setup-keepalived with a drifted router_id that keepalived already runs: rewritten and reloaded - the running
 #   router_id back, the PID kept, the VIP where it was.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
@@ -422,6 +425,134 @@
 # setup-keepalived with a changed config: keepalived reloaded, not restarted (its PID kept - a restart runs the stop
 # drop-in, releasing Nexus on the active Pi), the VIP where it was, and the reload applied: pi1 runs a drifted
 # router_id (its config changed and reloaded by hand), the re-run writes the config back and the running one follows
+# setup-patroni on a cluster whose config, then whose unit, differs from what the playbook writes: the config change
+# reloaded (Patroni's PID kept), the unit change restarted one node at a time paused - either way Postgres never
+# restarted, no failover, the cluster resumed (it restarted both Patronis at once, unpaused: both Postgres down)
+- name: Patroni's config hand-edited on both Pis; Patroni and Postgres before
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: A line the playbook does not write
+      ansible.builtin.lineinfile:
+        path: /etc/patroni/patroni.yml
+        line: "# rerun-guards: a hand edit"
+
+    - name: Patroni's PID and Postgres before
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_before_config
+
+    - name: Patroni's PID before
+      ansible.builtin.command: systemctl show patroni -p MainPID --value
+      register: _pid_before_config
+      changed_when: false
+
+- name: setup-patroni re-run on the edited config
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Patroni after the config's re-run - reloaded, not restarted; then its unit hand-edited
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The config as the playbook writes it
+      ansible.builtin.command: grep -c "rerun-guards" /etc/patroni/patroni.yml
+      register: _drift_left
+      changed_when: false
+      failed_when: _drift_left.stdout != '0'
+
+    - name: Patroni's PID kept (a reload), Postgres not restarted, the same role and timeline
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_after_config
+      failed_when: >-
+        _pg_after_config.json.postmaster_start_time != _pg_before_config.json.postmaster_start_time
+        or _pg_after_config.json.role != _pg_before_config.json.role
+        or _pg_after_config.json.timeline != _pg_before_config.json.timeline
+
+    - name: Patroni's PID after
+      ansible.builtin.command: systemctl show patroni -p MainPID --value
+      register: _pid_after_config
+      changed_when: false
+      failed_when: _pid_after_config.stdout != _pid_before_config.stdout
+
+    - name: A line the playbook does not write, in the unit
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/patroni.service
+        line: "# rerun-guards: a hand edit"
+
+    - name: Postgres before the unit's re-run
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_before_unit
+
+- name: setup-patroni re-run on the edited unit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: The playbook
+      ansible.builtin.command:
+        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-patroni.yml"
+        chdir: "{{ playbook_dir }}/../../deploy/ansible"
+      changed_when: false
+
+- name: Patroni after the unit's re-run - restarted on both, paused, Postgres untouched, resumed
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The unit as the playbook writes it
+      ansible.builtin.command: grep -c "rerun-guards" /etc/systemd/system/patroni.service
+      register: _unit_drift_left
+      changed_when: false
+      failed_when: _unit_drift_left.stdout != '0'
+
+    - name: Patroni restarted here (its PID new), Postgres not, the same role and timeline
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8008/patroni
+        return_content: true
+      register: _pg_after_unit
+      failed_when: >-
+        _pg_after_unit.json.postmaster_start_time != _pg_before_unit.json.postmaster_start_time
+        or _pg_after_unit.json.role != _pg_before_unit.json.role
+        or _pg_after_unit.json.timeline != _pg_before_unit.json.timeline
+
+    - name: Patroni's PID after
+      ansible.builtin.command: systemctl show patroni -p MainPID --value
+      register: _pid_after_unit
+      changed_when: false
+      failed_when: _pid_after_unit.stdout == _pid_after_config.stdout
+
+    - name: Not paused
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          out=$(patronictl -c /etc/patroni/patroni.yml list)
+          if grep 'Maintenance mode' <<< "$out" > /dev/null; then echo PAUSED; exit 1; fi
+      changed_when: false
+      run_once: true
+
+    - name: Applied without a failover
+      ansible.builtin.debug:
+        msg: >-
+          PATRONI RE-RUN: a config edit reloaded (PIDs kept), a unit edit restarted each Patroni paused (PIDs new) -
+          Postgres not restarted, roles and timelines unchanged, resumed
+      run_once: true
+
 - name: Keepalived before - pi1 running a drifted router_id
   hosts: pi1,pi2
   become: true

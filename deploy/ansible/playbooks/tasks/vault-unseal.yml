@@ -15,6 +15,7 @@
       # Unseals this Pi's Vault with two of its key shares (ops tasks/vault-unseal.yml). Exit 0 unsealed, 1 not.
       set -uo pipefail
       API=https://127.0.0.1:8200
+      # Vault's own certificate checked (it names 127.0.0.1): a local process on 8200 before Vault never gets the shares
       KEYS=/etc/vault-unseal/unseal-keys
       sealed() { python3 -c 'import json, sys; print(str(json.load(sys.stdin)["sealed"]).lower())'; }
       # Consul (Vault's storage) with a leader first: before that, Vault is up but sealed and an unseal silently
@@ -26,7 +27,7 @@
       # Vault answering (seal-status answers sealed or not), at most 150 s
       st=""
       for _ in $(seq 1 150); do
-        st=$(curl -sk --max-time 2 "$API/v1/sys/seal-status" 2>/dev/null) && [ -n "$st" ] && break
+        st=$(curl -s --cacert /etc/vault.d/tls/ca-cert.pem --max-time 2 "$API/v1/sys/seal-status" 2>/dev/null) && [ -n "$st" ] && break
         st=""
         sleep 1
       done
@@ -34,12 +35,12 @@
       if [ "$(sealed <<< "$st")" = true ]; then
         for n in 1 2; do
           key=$(sed -n "${n}p" "$KEYS")
-          printf '{"key":"%s"}' "$key" | curl -sk --max-time 10 --data @- "$API/v1/sys/unseal" \
+          printf '{"key":"%s"}' "$key" | curl -s --cacert /etc/vault.d/tls/ca-cert.pem --max-time 10 --data @- "$API/v1/sys/unseal" \
             | python3 -c 'import json, sys; d = json.load(sys.stdin)
       print("vault-unseal: share", sys.argv[1], "sealed", d["sealed"], "progress", d["progress"])' "$n"
         done
       fi
-      st=$(curl -sk --max-time 2 "$API/v1/sys/seal-status")
+      st=$(curl -s --cacert /etc/vault.d/tls/ca-cert.pem --max-time 2 "$API/v1/sys/seal-status")
       [ "$(sealed <<< "$st")" = false ] || { echo "vault-unseal: still sealed"; exit 1; }
       echo "vault-unseal: unsealed"
   register: _unseal_script

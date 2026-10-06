@@ -1,7 +1,8 @@
 ---
-# One turn of upgrade-patroni.yml: the nodes whose role at the start (_leader) is _turn_leader - Patroni restarted
-# (paused: Postgres is not touched), its REST API on the new version, and the primary answering through this Pi's
-# HAProxy (:5000, which follows Patroni's /primary) before the turn ends.
+# One turn of a paused restart (upgrade-patroni.yml, setup-patroni.yml): the nodes whose role at the start (_leader)
+# is _turn_leader - Patroni restarted (paused: Postgres is not touched), its REST API on restart_version (default
+# patroni_version: the upgrade's; a plain restart passes the version running), and the primary answering through this
+# Pi's HAProxy (:5000, which follows Patroni's /primary) before the turn ends.
 - name: "Restarted ({{ 'the leader' if _turn_leader else 'the replicas' }})"
   ansible.builtin.systemd:
     name: patroni
@@ -15,7 +16,8 @@
   register: _after_api
   retries: 30
   delay: 5
-  until: _after_api.status | default(0) == 200 and _after_api.json.patroni.version == patroni_version
+  until: >-
+    _after_api.status | default(0) == 200 and _after_api.json.patroni.version == (restart_version | default(patroni_version))
   when: (_leader | bool) == _turn_leader
 
 - name: The primary answering through HAProxy, on every Pi

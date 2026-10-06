@@ -239,10 +239,25 @@
           ansible.builtin.set_fact:
             _patroni_active: "{{ _patroni_unit.status.ActiveState | default('') == 'active' }}"
 
+        # someone's maintenance (or another run) has it paused: this run's resume would end it - refused
+        - name: Patroni not paused already
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              out=$({{ patronictl }} list)
+              if grep 'Maintenance mode' <<< "$out" > /dev/null; then
+                echo "REFUSED: Patroni is paused - finish that first (patronictl resume)"; exit 1
+              fi
+          changed_when: false
+          delegate_to: "{{ _other_pi }}"
+          when: _patroni_active | bool
+
         - name: Restarted, Patroni paused meanwhile
           block:
             - name: Patroni paused - no demotion while this server's agent is away
               ansible.builtin.command: "{{ patronictl }} pause --wait"
+              register: _patroni_paused
               changed_when: true
               delegate_to: "{{ _other_pi }}"
               when: _patroni_active | bool
@@ -271,11 +286,12 @@
               until: _consul_health.rc == 0
               changed_when: false
           always:
+            # only what this run paused
             - name: Patroni resumed
               ansible.builtin.command: "{{ patronictl }} resume --wait"
               changed_when: true
               delegate_to: "{{ _other_pi }}"
-              when: _patroni_active | default(false) | bool
+              when: _patroni_paused is defined and _patroni_paused is succeeded and _patroni_paused is not skipped
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Consul cluster

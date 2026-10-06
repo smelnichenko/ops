@@ -85,6 +85,7 @@
       block:
         - name: Paused - Postgres keeps running, no failover meanwhile
           ansible.builtin.command: "{{ patronictl }} pause --wait"
+          register: _paused
           changed_when: true
           run_once: true
 
@@ -101,10 +102,12 @@
             loop_var: _turn_leader
             label: "{{ 'the leader' if _turn_leader else 'the replicas' }}"
       always:
+        # only what this run paused: a pause that failed (another run's, someone's maintenance) is left as it is
         - name: Resumed
           ansible.builtin.command: "{{ patronictl }} resume --wait"
           changed_when: true
           run_once: true
+          when: _paused is defined and _paused is succeeded
 
     - name: The cluster healthy and not paused after
       ansible.builtin.shell:
