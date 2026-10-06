@@ -195,6 +195,37 @@ check("done 24 (barman-check), yes", done_calls("24-cnpg", True),
 check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
 check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
 
+
+# done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done
+def done_run(step, soak, green):
+    calls, checks, saved = [], [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible",
+                                                               "check", "record", "proof_problems")}
+    m.ledger_for = lambda st, ph, arg=None: (names, [], info[st])
+    m.proof_problems = lambda *a, **k: []
+    m.soak_state = lambda *a: soak
+    m.confirm = lambda q: True
+    m.ansible = lambda *a: True
+    m.check = lambda *a, **k: checks.append((a, k)) or green
+    m.record = lambda st, ev, *a: calls.append(ev)
+    try:
+        m.done(step)
+    except SystemExit as e:
+        calls.append("refused: " + str(e).split(":")[0])
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return calls, checks
+calls, checks = done_run(S42, (T0, 600), True)
+check("done while soaking: refused, nothing checked", (calls, checks), (["refused: REFUSED"], []))
+calls, checks = done_run(S42, (T0, 0), True)
+check("done after the soak, green: done, judged since the first green check, deciding",
+      (calls, checks), (["done"], [((S42, T0), {"deciding": True})]))
+calls, checks = done_run(S42, (T0, 0), False)
+check("done after the soak, red: check-failed, refused - not done", calls, ["check-failed", "refused: REFUSED"])
+calls, checks = done_run(S42, (None, None), True)
+check("done's first call: no since, not deciding, records checked", (calls, checks),
+      (["checked"], [((S42, None), {"deciding": False})]))
+
 # every phase consults the proof first: refused by it, a phase runs, merges, records and asks nothing
 class _Done:
     returncode, stdout = 0, "abc1234"
@@ -342,7 +373,7 @@ check("merge without an app set: refused, nothing run", ([c for c in got if c[0]
 
 # a red settle while main moved (a CD push during the wait) is inconclusive: refused, nothing recorded
 class _Out:
-    returncode, stdout, stderr = 1, "NOT SETTLED", ""
+    returncode, stdout, stderr = 1, "NOT SETTLED\n", ""
 saved = {k: getattr(m, k) for k in ("main_revisions", "run")}
 revs = iter([dict.fromkeys(m.URLS.values(), "a"), dict.fromkeys(m.URLS.values(), "b")])
 m.main_revisions = lambda: next(revs)
