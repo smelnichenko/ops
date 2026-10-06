@@ -1,8 +1,8 @@
 # Mimir 3.0.8 -> 3.1.6, one minor at a time (infra upgrade/52-mimir-3.1). 3.1 removes only experimental options we do
 # not set.
 # outage: Mimir restarts - Prometheus retries its remote write, queries fail briefly
-# abort: one-way (3.x may write what 2.x cannot read): step 51's Wave 0 gateway backup (what Mimir wrote since is lost)
-# - the object store's and Mimir's volumes
+# abort: revert the step's merge on main (Argo syncs back to 3.0.8) - a 3.x minor's downgrade not rehearsed; past
+# that, step 51's Wave 0 gateway backup, 2.x's (what Mimir wrote since is lost)
 image grafana/mimir 3.0.8 => image grafana/mimir 3.1.6
 # its change: the branch upgrade/52-mimir-3.1 in infra
 branch infra

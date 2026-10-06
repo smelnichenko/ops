@@ -2,8 +2,8 @@
 # (ops tasks/versitygw.yml; in production outside the 02:00-04:00 backup window). At the rollout the vgw_version
 # default becomes 1.8.0. Platform's branch also turns Grafana's Deployment to Recreate (no restart: the pod template
 # is unchanged) - Grafana's upgrades (steps 28 and 50) must never run two Grafanas on one SQLite database.
-# outage: the in-cluster S3 gateway restarts (Mimir, Tempo and Velero retry their writes); the Pis' versitygw restarts
-# one Pi at a time
+# outage: the in-cluster S3 gateway restarts (Mimir and Tempo retry their writes); the Pis' versitygw restarts one Pi
+# at a time (Velero's and CNPG's store: their writes retried)
 # abort: revert the step's merge on main (Argo syncs back); the Pis' old package by hand (the no-downgrade check refuses
 # the playbook)
 image ghcr.io/versity/versitygw v1.6.0 => image ghcr.io/versity/versitygw v1.8.0

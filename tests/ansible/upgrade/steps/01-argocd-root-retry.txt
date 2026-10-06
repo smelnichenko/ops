@@ -1,8 +1,9 @@
 # What a fresh install of the cluster needs from Argo CD, in git (infra): the root app-of-apps retries a failed sync 20
 # times with a capped back-off (10 s doubling to 3 min) instead of the default 5 - on a cold start the first wave's
 # operators are Degraded for a while and the 5 ran out before the later waves existed (Vagrant 2026-10-04); and the
-# sync waves the Vagrant mirror used to add (cert-manager first, Scylla Manager after its operator, the environment
-# sets and observability after the infra they need). Annotations and the root's retry only: no version changes.
+# sync waves the Vagrant mirror used to add (cert-manager first, Prometheus's operator and CRDs from wave 3 to -1 so
+# the ServiceMonitors after it apply, Scylla Manager after its operator, the environment sets and observability after
+# the infra they need). Annotations and the root's retry only: no version changes.
 # And the two charts that floated at "*" pinned to what production runs (nothing running changes):
 # outage: none - Argo CD settings, sync waves and pins; nothing restarts
 # abort: revert the step's merge on main (Argo syncs back)

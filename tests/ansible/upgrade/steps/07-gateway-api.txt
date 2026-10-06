@@ -6,7 +6,10 @@
 # deleting that policy first, and a setup-kubeadm run with the old default (v1.2.1) fails until the default moves.
 # outage: none - CRDs only
 # abort: one-way: v1.5's safe-upgrades policy refuses the older CRDs, and setup-kubeadm.yml refuses an older bundle
-# (tasks/no-downgrade.yml); back only by hand, removing that policy first - not written down, not rehearsed
+# (tasks/no-downgrade.yml); back only by hand, removing that policy first - not written down, not rehearsed - or the
+# Wave 0 etcd snapshot restored into the node's etcd (only its restore into a scratch data directory is rehearsed)
+# one-way: etcd's snapshot backed up into the Pi store before the CRDs change (seconds)
+wave0 etcd
 crd gateway-api v1.2.1 => crd gateway-api v1.5.1
 playbook setup-kubeadm.yml --tags gateway-api -e gateway_api_version=v1.5.1
 # the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)

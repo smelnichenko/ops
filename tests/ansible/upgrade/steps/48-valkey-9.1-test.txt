@@ -1,5 +1,6 @@
-# Valkey 8.1 -> 9.1.2, pinned, in the test environment (infra) and the chart default PR environments use (platform),
-# before production's (operator 2026-10-05). Not in the Vagrant copy: no inventory change here. Both
+# Valkey 8.1 -> 9.1.2, pinned, in the test environment (infra) and the schnappy-data chart default (platform; every
+# environment sets its own image - it renders nowhere today, a new environment would take it), before production's
+# (operator 2026-10-05). Not in the Vagrant copy: no inventory change here. Both
 # upgrade/48-valkey-9.1-test.
 # its change: the branch upgrade/48-valkey-9.1-test in infra and platform
 # outage: the test environment only: its Valkey restarts, the cache empty

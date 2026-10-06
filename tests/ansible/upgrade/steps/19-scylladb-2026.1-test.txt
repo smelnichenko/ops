@@ -1,7 +1,8 @@
 # ScyllaDB 2025.1.16 -> 2026.1.14 in the test environment, before production's (operator 2026-10-05). Not in the
 # Vagrant copy: no inventory change here. infra upgrade/19-scylladb-2026.1-test. Stateful: shown before it runs.
 # its change: the branch upgrade/19-scylladb-2026.1-test in infra
-# outage: the test environment only: its ScyllaDB restarts
+# outage: the test environment only: its ScyllaDB restarts. Its schema Job's cqlsh stays on the floating scylla:6.2
+# (step 20 pins production's only)
 # abort: none for its data - the test environment's ScyllaDB has no backup (as step 16): its keyspaces rebuilt by
 # its schema Job, test data lost
 branch infra

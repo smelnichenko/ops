@@ -31,7 +31,7 @@
 # compared (count + md5) after the operator has finished - every rack updated and ready at the version the cluster
 # asks for, Available and not Progressing, and every ScyllaDB pod running the operator's own containers at the image of
 # the operator now running (an operator-only step changes no cluster generation: the old status read as finished). The
-# Scylla steps roll the database through 2025.1, 2026.1 and 2026.3.
+# Scylla steps roll the database through 2025.1 and 2026.1.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed|verify
 - name: Postgres data that must survive the upgrade

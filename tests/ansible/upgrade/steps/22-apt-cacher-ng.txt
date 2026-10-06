@@ -1,8 +1,10 @@
 # apt-cacher-ng from its CI build: the hand-built 1.0 is gone from the registry, ten runs it only from its node cache.
-# platform upgrade/22-apt-cacher-ng.
+# platform upgrade/22-apt-cacher-ng - with it, CI's image pulled with the Forgejo registry secret, and the observability
+# chart's mimir.extraArgs (none by default: nothing renders differently).
 # outage: apt-cacher-ng restarts (Recreate: the old pod goes before the new image is pulled) - CI's builds, its only
 # users, wait for it (the hosts' apt does not use it)
-# abort: revert the step's merge on main (Argo syncs back)
+# abort: revert the step's merge on main (Argo syncs back) - to the 1.0 image only ten's node cache still holds: once
+# the kubelet collects it, no way back
 image git.pmon.dev/schnappy/apt-cacher-ng 1.0 => image git.pmon.dev/schnappy/apt-cacher-ng 7b46aea
 # its change: the branch upgrade/22-apt-cacher-ng in platform
 branch platform
