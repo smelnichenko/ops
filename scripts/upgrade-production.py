@@ -550,23 +550,36 @@ CHECK_MINUTES = 15
 
 
 def defaults(step):
-    """The step's default lines into ops main, committed and pushed - nothing else may be in the commit."""
+    """The step's default lines into ops main, committed and pushed - nothing else may be in the commit. A run cut
+    short after its commit (the push failed) or after its push (the ledger not written) is taken up where it stopped:
+    the commit, found by its message as the last to touch the committed-steps record, pushed if it is not yet."""
     names, events, _ = ledger_for(step, "defaults")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    git = lambda *a: run(["git", "-C", OPS, *a], capture_output=True, check=True).stdout.strip()
+    message = f"upgrade {step}: its playbook defaults (in production)"
     run(["git", "-C", OPS, "fetch", "-q", "origin", "main"], check=True)
-    head = run(["git", "-C", OPS, "rev-parse", "HEAD", "origin/main"], capture_output=True, check=True).stdout.split()
-    branch = run(["git", "-C", OPS, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, check=True).stdout
-    dirty = run(["git", "-C", OPS, "status", "--porcelain"], capture_output=True, check=True).stdout
-    refuse(([] if branch.strip() == "main" and head[0] == head[1] else ["ops is not on main at origin/main"])
-           + ([f"ops has uncommitted changes:\n{dirty}"] if dirty.strip() else []))
+    branch, dirty = git("rev-parse", "--abbrev-ref", "HEAD"), git("status", "--porcelain")
+    refuse(([] if branch == "main" else ["ops is not on main"])
+           + ([f"ops has uncommitted changes:\n{dirty}"] if dirty else []))
+    last = git("log", "-1", "--format=%H %s", "--", dflt.COMMITTED).split(" ", 1)
+    if len(last) == 2 and last[1] == message:
+        sha = last[0]
+        refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step])
+               + ([] if git("rev-parse", "HEAD") == sha else [f"ops main is past the step's commit {sha[:10]}"]))
+        if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, "origin/main"]).returncode:
+            refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", "origin/main")
+                   else [f"the step's commit {sha[:10]} is not on origin/main's head"])
+            run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
+        print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
+        record(step, "defaults", sha)
+        return
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events))
+           + ([] if git("rev-parse", "HEAD") == git("rev-parse", "origin/main") else ["ops is not at origin/main"]))
     refuse([] if run([os.path.join(OPS, "scripts", "upgrade-defaults.py"), "--apply", step]).returncode == 0
            else ["the default lines did not apply (above)"])
-    paths = sorted({p for p, _, _ in dflt.default_lines(step)})
-    run(["git", "-C", OPS, "commit", "-q", "-m", f"upgrade {step}: its playbook defaults (in production)", "--",
-         *paths], check=True)
+    paths = sorted({p for p, _, _ in dflt.default_lines(step)} | {dflt.COMMITTED})
+    run(["git", "-C", OPS, "commit", "-q", "-m", message, "--", *paths], check=True)
     run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
-    sha = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
-    record(step, "defaults", sha)
+    record(step, "defaults", git("rev-parse", "HEAD"))
 
 
 def check(step, since=None, deciding=False):

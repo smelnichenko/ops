@@ -826,7 +826,11 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    (read-only probes run, waits on changes the preview does not make are skipped), read by the operator. The full run
    runs the same preview on the Vagrant copy at every such step, so it is proven to pass.
 5. `deploy:upgrade:playbooks STEP=N` - after every merge settled and the preview.
-6. `deploy:upgrade:done STEP=N` - ten as the step leaves it (its argo-out-of-sync apps allowed). The first green call
+6. `deploy:upgrade:defaults STEP=N` - a step with default lines: they and the step's name in
+   tests/ansible/upgrade/defaults-committed.txt, one commit to ops main, pushed (only the next step's; CI's
+   `upgrade-defaults.py --lint` and the targets branch start after the recorded ones). A run cut short after its commit
+   or its push is taken up where it stopped. The proof check then allows exactly those lines and that record.
+7. `deploy:upgrade:done STEP=N` - ten as the step leaves it (its argo-out-of-sync apps allowed). The first green call
    starts the soak: 60 minutes after a wave0 step, 15 otherwise (a step's `soak` line overrides). Called again after it
    - green, with no container restarted since the first green call - the step is done. A red call during the soak
    restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a

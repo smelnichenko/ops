@@ -1,0 +1,2 @@
+# The upgrade steps whose playbook default lines production committed to main, one per line, in step order:
+# scripts/upgrade-defaults.py --apply adds each with its lines (the defaults phase commits both together).
