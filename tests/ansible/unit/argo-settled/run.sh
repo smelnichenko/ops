@@ -21,7 +21,7 @@ work = tempfile.mkdtemp()
 def app(name):
     src = {"repoURL": "https://git.pmon.dev/schnappy/infra.git", "path": name, "targetRevision": "main"}
     return {"metadata": {"name": name}, "spec": {"source": src},
-            "status": {"sync": {"status": "Synced", "comparedTo": {"source": src}, "revision": "abc"},
+            "status": {"sync": {"status": "Synced", "comparedTo": {"source": dict(src)}, "revision": "abc"},
                        "health": {"status": "Healthy"}, "operationState": {"phase": "Succeeded"}}}
 
 
@@ -33,12 +33,12 @@ def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z"):
             "status": {"phase": "Running", "containerStatuses": [c]}}
 
 
-def run(apps, pods, *args):
+def run(apps, pods, *args, env=None):
     fa, fp = os.path.join(work, "apps.json"), os.path.join(work, "pods.json")
     json.dump({"items": apps}, open(fa, "w"))
     json.dump({"items": pods}, open(fp, "w"))
     r = subprocess.run([sys.executable, S, "--apps-json", fa, "--pods-json", fp, "--now", NOW, *args],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env={**os.environ, "MIRROR_REVISIONS": "", **(env or {})})
     return r.returncode, r.stdout + r.stderr
 
 
@@ -86,6 +86,98 @@ rc, out = run([emptied, app("b")], P)
 check("compared against an older spec with a field the spec dropped: not green",
       (rc, "compared against an older spec" in out), (1, True), out)
 
+# every gate, red when it should be and green beside it
+import copy
+def with_(a, path, value):
+    a = copy.deepcopy(a)
+    d = a
+    for k in path[:-1]:
+        d = d.setdefault(k, {})
+    d[path[-1]] = value
+    return a
+def gate(name, apps, pods, want_rc, word="", *args, env=None):
+    rc, out = run(apps, pods, *args, env=env)
+    check(name, (rc, word in out), (want_rc, True), out)
+B = app("b")
+gate("an app OutOfSync: not green", [with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P, 1, "sync=OutOfSync")
+gate("the same app allowed out of sync: green", [with_(app("a"), ["status", "sync", "status"], "OutOfSync"), B], P, 0,
+     "", "--allow-out-of-sync", "a")
+gate("an app Degraded: not green", [with_(app("a"), ["status", "health", "status"], "Degraded"), B], P, 1, "health=Degraded")
+gate("an operation Running: not green", [with_(app("a"), ["status", "operationState", "phase"], "Running"), B], P, 1,
+     "operation Running")
+gate("the last sync Failed: not green, its message shown",
+     [with_(with_(app("a"), ["status", "operationState", "phase"], "Failed"), ["status", "operationState", "message"],
+            "hook failed"), B], P, 1, "last sync Failed: hook failed")
+gate("a null operationState and message: read, not a crash",
+     [with_(app("a"), ["status", "operationState"], None), B], P, 0)
+gate("a failed sync with a null message: not green, no crash",
+     [with_(with_(app("a"), ["status", "operationState", "phase"], "Failed"), ["status", "operationState", "message"],
+            None), B], P, 1, "last sync Failed")
+MR = {"https://git.pmon.dev/schnappy/infra.git": "abc"}
+gate("on the pushed commit: green", A, P, 0, "", env={"MIRROR_REVISIONS": json.dumps(MR)})
+gate("on another commit: not green", A, P, 1, "not on the pushed commit",
+     env={"MIRROR_REVISIONS": json.dumps({"https://git.pmon.dev/schnappy/infra.git": "def"})})
+vo = with_(app("a"), ["spec", "source", "helm"], {"valuesObject": {"enabled": False}})
+vo = with_(vo, ["status", "sync", "comparedTo", "source", "helm"], {"valuesObject": {}})
+gate("helm valuesObject false against none: an older spec (values are data, not omitted fields)", [vo, B], P, 1,
+     "compared against an older spec")
+gate("no app at all: not green", [], P, 1)
+gate("no pod at all: not green", A, [], 1)
+pending = pod("p1", "u1"); pending["status"] = {"phase": "Pending", "containerStatuses": []}
+gate("a Pending pod: not green", A, [pending, pod("p2", "u2")], 1, "ns/p1 (Pending)")
+notready = pod("p1", "u1"); notready["status"]["containerStatuses"][0]["ready"] = False
+gate("a Running pod with a container not ready: not green", A, [notready, pod("p2", "u2")], 1, "ns/p1")
+gate("a restart 60 s before now, quiet 300: not green", A, [pod("p1", "u1", 1, "2026-10-06T11:59:00Z")], 1,
+     "restarted 60 s ago", "--restart-quiet", "300")
+gate("a restart 400 s before now, quiet 300: green", A, [pod("p1", "u1", 1, "2026-10-06T11:53:20Z")], 0, "",
+     "--restart-quiet", "300")
+gate("a restart at/after --restarted-since: not green", A, [pod("p1", "u1", 1, "2026-10-06T11:00:00Z")], 1,
+     "after 2026-10-06T10:30:00", "--restart-quiet", "300", "--restarted-since", "2026-10-06T10:30:00Z")
+gate("a restart before --restarted-since: green", A, [pod("p1", "u1", 1, "2026-10-06T10:00:00Z")], 0, "",
+     "--restart-quiet", "300", "--restarted-since", "2026-10-06T10:30:00Z")
+def owned(p, kind, name, labels=None, phase=None):
+    p["metadata"]["ownerReferences"] = [{"controller": True, "kind": kind, "name": name}]
+    p["metadata"]["labels"] = labels or {}
+    if phase:
+        p["status"] = {"phase": phase, "containerStatuses": []}
+    return p
+def leftover(p):
+    p["status"] = {"phase": "Failed", "reason": "Terminated", "message": "Pod was terminated in response to imminent node shutdown."}
+    return p
+old_rs = leftover(owned(pod("w-old-x", "u1"), "ReplicaSet", "w-6d8f", {"pod-template-hash": "6d8f"}))
+new_rs = owned(pod("w-new-y", "u2"), "ReplicaSet", "w-7c9a", {"pod-template-hash": "7c9a"})
+gate("a node-shutdown leftover replaced by a ready pod from a newer ReplicaSet: green", A, [old_rs, new_rs], 0)
+gate("a node-shutdown leftover never replaced: not green", A, [old_rs, pod("p2", "u3")], 1, "not replaced")
+failed = owned(pod("job-a", "j1"), "Job", "backup-1", phase="Failed")
+done = owned(pod("job-b", "j2"), "Job", "backup-1", phase="Succeeded")
+gate("a failed Job attempt a later attempt completed: green", A, [failed, done, pod("p2", "u3")], 0)
+gate("a failed Job attempt with no completed one: not green", A, [failed, pod("p2", "u3")], 1, "ns/job-a (Failed)")
+
+# the poll loop, against a kubectl stub: one failed poll is a red poll, not the end; restarts between polls never settle
+def loop(mode, *args):
+    d = tempfile.mkdtemp()
+    json.dump({"items": A}, open(os.path.join(d, "apps.json"), "w"))
+    with open(os.path.join(d, "kubectl"), "w") as f:
+        f.write(f"""#!/bin/bash
+n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
+case "$*" in *applications*) ;; *) p=1;; esac
+if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
+if [ -z "${{p:-}}" ]; then cat {d}/apps.json; exit 0; fi
+r=0; [ {mode} = churn ] && r=$n
+printf '{{"items":[{{"metadata":{{"namespace":"ns","name":"p1","uid":"u1"}},"status":{{"phase":"Running",'
+printf '"containerStatuses":[{{"ready":true,"restartCount":%d}}]}}}}]}}' $r
+""")
+    os.chmod(os.path.join(d, "kubectl"), 0o755)
+    r = subprocess.run([sys.executable, S, "--kubeconfig", "x", "--poll", "0", "--stable-polls", "2", *args],
+                       capture_output=True, text=True, env={**os.environ, "PATH": d + ":" + os.environ["PATH"],
+                                                             "MIRROR_REVISIONS": ""})
+    return r.returncode, r.stdout + r.stderr
+rc, out = loop("fail-first", "--minutes", "0.05", "--restart-quiet", "0")
+check("a failed poll first: red, then settled", (rc, "poll failed" in out, "ARGO SETTLED" in out), (0, True, True), out)
+rc, out = loop("churn", "--minutes", "0.02", "--restart-quiet", "0")
+check("a restart between every two polls: never settled", (rc, "NOT SETTLED" in out, "restarted=ns/p1" in out),
+      (1, True, True), out)
+
 H = os.path.join(work, "history.json")
 rc, out = run(A, [pod("p1", "u1", 3)], "--restart-history", H, "--step", "10")
 check("the first call records, judging nothing (restarts from before)", rc, 0, out)
@@ -102,19 +194,48 @@ check("a new pod (another uid) with a restart: one step only, green", rc, 0, out
 rc, out = run(A, [pod("p1", "u1", 0)], "--restart-history", H)
 check("--restart-history without --step: bad arguments", rc, 2, out)
 
-# control-plane upgrades in a row (steps 42 and 43): every leader-elected controller restarts in both
+# control-plane upgrades in a row (steps 42 and 43): every leader-elected controller restarts in both, not after
 H2 = os.path.join(work, "history-control-plane.json")
 run(A, [pod("op", "o1", 0)], "--restart-history", H2, "--step", "41")
 rc, out = run(A, [pod("op", "o1", 1)], "--restart-history", H2, "--step", "42", "--restarts-expected")
 check("a restart in a control-plane step: green", rc, 0, out)
 rc, out = run(A, [pod("op", "o1", 2)], "--restart-history", H2, "--step", "43", "--restarts-expected")
 check("a restart in the next control-plane step: green (both expected)", rc, 0, out)
-rc, out = run(A, [pod("op", "o1", 3)], "--restart-history", H2, "--step", "44")
-check("a restart in the step after them: green (theirs were no pod's restart step)", rc, 0, out)
-rc, out = run(A, [pod("op", "o1", 4)], "--restart-history", H2, "--step", "45")
-check("and again in the next: a crash loop, caught", (rc, "ns/op" in out and "(44, 45)" in out), (1, True), out)
-rc, out = run(A, [pod("op", "o1", 5)], "--restart-history", H2, "--step", "46", "--restarts-expected")
-check("a crash loop into a control-plane step: green there, recorded", rc, 0, out)
+rc, out = run(A, [pod("op", "o1", 2)], "--restart-history", H2, "--step", "44")
+check("no restart in the step after them: green", rc, 0, out)
+rc, out = run(A, [pod("op", "o1", 3)], "--restart-history", H2, "--step", "45")
+check("one restart a step later: green", rc, 0, out)
+rc, out = run(A, [pod("op", "o1", 4)], "--restart-history", H2, "--step", "46")
+check("and again in the next: a crash loop, caught", (rc, "ns/op" in out and "(45, 46)" in out), (1, True), out)
+rc, out = run(A, [pod("op", "o1", 4)], "--restart-history", H2, "--step", "46")
+check("the step's next call: caught again (the facts stay)", (rc, "(45, 46)" in out), (1, True), out)
+
+# an app crash-looping slowly through the control-plane steps: not judged there, caught by the step after them
+H3 = os.path.join(work, "history-app.json")
+run(A, [pod("app", "a1", 1)], "--restart-history", H3, "--step", "41")
+run(A, [pod("app", "a1", 25)], "--restart-history", H3, "--step", "42", "--restarts-expected")
+rc, out = run(A, [pod("app", "a1", 60)], "--restart-history", H3, "--step", "43", "--restarts-expected")
+check("an app restarting in two control-plane steps: green there (not judged)", rc, 0, out)
+rc, out = run(A, [pod("app", "a1", 61)], "--restart-history", H3, "--step", "44")
+check("and in the step after them: caught there", (rc, "ns/app" in out and "(43, 44)" in out), (1, True), out)
+rc, out = run(A, [pod("op", "o1", 0)], "--restart-history", H3, "--step", "44", "--restarts-expected")
+check("--restarts-expected says so", "restarts expected" in out, True, out)
+
+# a step recorded twice compares with the step before it, not with itself
+H4 = os.path.join(work, "history-rerun.json")
+run(A, [pod("p", "r1", 0)], "--restart-history", H4, "--step", "21")
+rc, out = run(A, [pod("p", "r1", 1)], "--restart-history", H4, "--step", "22")
+check("a restart in 22: green", rc, 0, out)
+rc, out = run(A, [pod("p", "r1", 2)], "--restart-history", H4, "--step", "22")
+check("another on 22's second call: green - 22 is compared with 21, where it did not restart", rc, 0, out)
+rc, out = run(A, [pod("p", "r1", 3)], "--restart-history", H4, "--step", "23")
+check("restarted in 22 and 23: caught", (rc, "(22, 23)" in out), (1, True), out)
+
+# a file of the earlier form (last_step, last_restart_step) is read as its steps
+H5 = os.path.join(work, "history-old.json")
+json.dump({"last_step": "30", "pods": {"x1": {"name": "ns/x", "count": 2, "last_restart_step": "30"}}}, open(H5, "w"))
+rc, out = run(A, [pod("x", "x1", 3)], "--restart-history", H5, "--step", "31")
+check("the earlier file's last restart step counts", (rc, "(30, 31)" in out), (1, True), out)
 
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
