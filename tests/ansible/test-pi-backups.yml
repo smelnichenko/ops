@@ -287,6 +287,11 @@
           register: _kc_down
           changed_when: true
 
+        - name: The two cases
+          ansible.builtin.debug:
+            msg: "kept under a clock ahead: {{ _kept.stdout_lines | join(', ') }}; Keycloak down: {{ _kc_down.stdout }}"
+      # serving again even when a case failed (the case's trap started it): the next run's backup needs it
+      always:
         - name: Keycloak serving again
           ansible.builtin.uri:
             url: http://127.0.0.1:8080/realms/master
@@ -294,8 +299,4 @@
           retries: 30
           delay: 10
           until: _kc_back.status == 200
-
-        - name: The two cases
-          ansible.builtin.debug:
-            msg: "kept under a clock ahead: {{ _kept.stdout_lines | join(', ') }}; Keycloak down: {{ _kc_down.stdout }}"
 
