@@ -1,0 +1,25 @@
+# kubeadm v1.34.12's own defaults - `kubeadm config print upgrade-defaults` (2026-10-06): the fields it knows, and the
+# timeouts it uses. upgrade-kubeadm.yml's UpgradeConfiguration is checked against them (run.sh).
+apiVersion: kubeadm.k8s.io/v1beta4
+apply:
+  certificateRenewal: true
+  etcdUpgrade: true
+  imagePullPolicy: IfNotPresent
+  imagePullSerial: true
+diff: {}
+kind: UpgradeConfiguration
+node:
+  certificateRenewal: true
+  etcdUpgrade: true
+  imagePullPolicy: IfNotPresent
+  imagePullSerial: true
+plan:
+  etcdUpgrade: true
+timeouts:
+  controlPlaneComponentHealthCheck: 4m0s
+  discovery: 5m0s
+  etcdAPICall: 2m0s
+  kubeletHealthCheck: 4m0s
+  kubernetesAPICall: 1m0s
+  tlsBootstrap: 5m0s
+  upgradeManifests: 5m0s
