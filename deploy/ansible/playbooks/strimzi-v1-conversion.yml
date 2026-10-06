@@ -184,6 +184,16 @@
             executable: /bin/bash
           changed_when: true
 
+    # a preview (--check) ran the probes only: no tool, no proof to report
+    - name: Would convert
+      when: ansible_check_mode
+      ansible.builtin.debug:
+        msg: >-
+          PREVIEW: would convert every Strimzi resource to v1 and store only v1 in
+          {{ _stored.stdout_lines | reject('match', '^\S+ \["v1"\]$') | list | length }} CRDs, with the tool of
+          {{ _operator.stdout }}
+
     - name: Converted
+      when: not ansible_check_mode
       ansible.builtin.debug:
         msg: "STRIMZI ON v1: {{ _after.stdout_lines | length }} CRDs store only v1; Kafka clusters Ready"

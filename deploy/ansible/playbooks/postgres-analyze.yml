@@ -81,5 +81,6 @@
     - name: Analysed
       ansible.builtin.debug:
         msg: >-
-          POSTGRES ANALYSED: {{ _pg.results | map(attribute='item') | map('replace', ' ', '/') | join(', ') }} on
+          {{ 'PREVIEW: would analyse' if ansible_check_mode else 'POSTGRES ANALYSED:' }}
+          {{ _pg.results | map(attribute='item') | map('replace', ' ', '/') | join(', ') }} on
           {{ _pg.results | map(attribute='stdout_lines') | map('last') | unique | join(', ') }}
