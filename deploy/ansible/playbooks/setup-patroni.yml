@@ -159,6 +159,7 @@
                 password: {{ pg_repl_password }}
             parameters:
               unix_socket_directories: '/var/run/postgresql'
+      diff: false  # the superuser's and the replication passwords - a --check --diff preview would print them
       register: _patroni_config_written
 
     - name: Check if Patroni is already managing Postgres (idempotency gate)
@@ -199,10 +200,13 @@
         - not _patroni_first_install | bool
         - patroni_unit_state.status.ActiveState | default('') != 'active'
 
-    # on disk, not in /tmp (tmpfs: a reboot before the restore lost it); written aside and kept only when complete
+    # on disk, not in /tmp (tmpfs: a reboot before the restore lost it); written aside and kept only when complete;
+    # root's alone (the realm's keys and secrets, every credential hash). Data there without a Postgres answering is
+    # never cleared undumped: the run refuses
     - name: Dump Keycloak DB before Patroni takes over (pi1)
       ansible.builtin.shell: |
         set -euo pipefail
+        umask 077
         if sudo -u postgres psql -qAtc "SELECT 1" > /dev/null 2>&1; then
           d=/var/backups/patroni-first-install
           install -d -m 0700 "$d"
@@ -210,8 +214,12 @@
           tail -n 5 "$d/keycloak.sql.part" | grep -q 'PostgreSQL database dump complete'
           mv "$d/keycloak.sql.part" "$d/keycloak.sql"
           echo "dumped $(wc -l < "$d/keycloak.sql") lines"
+        elif [ -e {{ pg_data_dir.stdout }}/PG_VERSION ]; then
+          echo "REFUSED: Postgres does not answer, and its data is in {{ pg_data_dir.stdout }} -" \
+            "start it (its Keycloak is dumped first) or clear it by hand" >&2
+          exit 1
         else
-          echo "postgres not running, skip dump"
+          echo "no Postgres data here - nothing to dump"
         fi
       args:
         executable: /bin/bash
@@ -225,7 +233,6 @@
       ansible.builtin.systemd:
         name: postgresql
         state: stopped
-      failed_when: false
       when: _patroni_first_install | bool
 
     - name: Clear Postgres data for Patroni init (only on first install)
@@ -312,7 +319,9 @@
 
     - name: What this run changed here
       ansible.builtin.set_fact:
-        _patroni_reload: "{{ not _patroni_first_install | bool and _patroni_config_written is changed }}"
+        # whenever not a first install: a run cut short after writing the config left it unloaded, and the next one
+        # changed nothing (Patroni's reload of an unchanged file does nothing)
+        _patroni_reload: "{{ not _patroni_first_install | bool }}"
         _patroni_restart: "{{ not _patroni_first_install | bool and _patroni_unit_pending.stdout | default('') == 'pending' }}"
 
     - name: Reloaded - a config change (unless a restart follows)
@@ -464,13 +473,19 @@
       loop: [forgejo, keycloak]
       changed_when: true
 
-    # only the dump this run took (a first install) - straight to this leader's Postgres, not through HAProxy
-    - name: Restore the Keycloak dump this run took
+    # a first install's dump waiting on pi1 - this run's, or one a run cut short before its restore left - goes into an
+    # empty keycloak database (straight to this leader's Postgres, not through HAProxy); beside a database in use it is
+    # refused, naming the file: the realm exists nowhere else
+    - name: A Keycloak dump waiting on pi1
+      ansible.builtin.stat:
+        path: /var/backups/patroni-first-install/keycloak.sql
+      register: _keycloak_dump
+      delegate_to: pi1
+      run_once: true
+
+    - name: Restore the waiting Keycloak dump
       ansible.builtin.include_tasks: tasks/patroni-keycloak-restore.yml
-      when:
-        - hostvars['pi1'].pg_dump_result is defined
-        - hostvars['pi1'].pg_dump_result is changed
-        - "'dumped' in hostvars['pi1'].pg_dump_result.stdout"
+      when: _keycloak_dump.stat.exists
 
 # Wait for the replica to finish its pg_basebackup + join the cluster.
 # Without this, downstream playbooks (vault, gluster, keepalived) race
@@ -526,7 +541,6 @@
       ansible.builtin.systemd:
         name: pgbouncer
       register: _pgbouncer_state
-      failed_when: false
 
     - name: PgBouncer installed here is running (else a re-run would move Forgejo and Keycloak to :5000 and restart them)
       ansible.builtin.fail:
@@ -545,6 +559,7 @@
         regexp: '^HOST = '
         line: "HOST = 127.0.0.1:{{ _db_port }}"
       register: _forgejo_cfg
+      notify: [Database port changed, Restart Forgejo]
 
     - name: Update Keycloak KC_DB_URL
       ansible.builtin.lineinfile:
@@ -552,48 +567,11 @@
         regexp: 'Environment=KC_DB_URL='
         line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:{{ _db_port }}/keycloak"
       register: _keycloak_cfg
+      notify: [Database port changed, Restart Keycloak]
 
-    # Wait for HAProxy to have a healthy Patroni leader backend BEFORE
-    # restarting Forgejo/Keycloak. HAProxy takes ~60–90s after first boot to
-    # resolve Consul DNS + complete the L7 /primary check. Restarting Forgejo
-    # before the backend is ready causes Forgejo's init to crash-loop.
-    - name: Wait for HAProxy to have a healthy postgres_primary backend (through the port the apps use)
-      ansible.builtin.shell: |
-        set -o pipefail
-        # the password on stdin, not in the environment Ansible puts on the command line
-        read -r PGPASSWORD; export PGPASSWORD
-        psql postgresql://postgres@127.0.0.1:{{ _db_port }}/postgres -c 'SELECT 1' 2>/dev/null
-      args:
-        executable: /bin/bash
-        stdin: "{{ postgres_admin_password }}"
-      register: _haproxy_check
-      retries: 30
-      delay: 5
-      until: _haproxy_check.rc == 0
-      changed_when: false
-      when: _forgejo_cfg.changed or _keycloak_cfg.changed
-
-    # These run after rewriting Forgejo/Keycloak DB configs above; the
-    # `_forgejo_cfg.changed` / `_keycloak_cfg.changed` registers are the
-    # only signal we have, and the writes happen in nearby tasks (not
-    # in a notify-handler chain), so a handler refactor would add more
-    # plumbing than it saves.
-    - name: Daemon-reload if keycloak unit changed  # noqa: no-handler
-      ansible.builtin.systemd:
-        daemon_reload: true
-      when: _keycloak_cfg.changed
-
-    - name: Restart Forgejo if reconfigured  # noqa: no-handler
-      ansible.builtin.systemd:
-        name: forgejo
-        state: restarted
-      when: _forgejo_cfg.changed
-
-    - name: Restart Keycloak if reconfigured  # noqa: no-handler
-      ansible.builtin.systemd:
-        name: keycloak
-        state: restarted
-      when: _keycloak_cfg.changed
+    # the restarts now, on this Pi, before its waits below (and before the next Pi: serial)
+    - name: The reconfigured services restarted
+      ansible.builtin.meta: flush_handlers
 
     # Forgejo can crash-loop on DB reconnect until systemd's Restart=on-failure
     # + HAProxy backend becomes stable — give it a generous budget on fresh
@@ -641,6 +619,48 @@
       # Forgejo's CLI takes the password only as an argument (no stdin, no file) - kept out of Ansible's output at
       # least; it runs only while the admin is missing (a first install)
       no_log: true
+
+  # one Pi at a time (serial), each service answering again before the next Pi's restart
+  handlers:
+    # Wait for HAProxy to have a healthy Patroni leader backend BEFORE restarting Forgejo/Keycloak. HAProxy takes
+    # ~60-90s after first boot to resolve Consul DNS + complete the L7 /primary check. Restarting Forgejo before the
+    # backend is ready causes Forgejo's init to crash-loop.
+    - name: Database port changed
+      ansible.builtin.shell: |
+        set -o pipefail
+        # the password on stdin, not in the environment Ansible puts on the command line
+        read -r PGPASSWORD; export PGPASSWORD
+        psql postgresql://postgres@127.0.0.1:{{ _db_port }}/postgres -c 'SELECT 1' 2>/dev/null
+      args:
+        executable: /bin/bash
+        stdin: "{{ postgres_admin_password }}"
+      register: _haproxy_check
+      retries: 30
+      delay: 5
+      until: _haproxy_check.rc == 0
+      changed_when: false
+      no_log: true
+
+    - name: Restart Forgejo
+      ansible.builtin.systemd:
+        name: forgejo
+        state: restarted
+
+    - name: Restart Keycloak
+      ansible.builtin.systemd:
+        name: keycloak
+        state: restarted
+        daemon_reload: true
+      notify: Keycloak serving again
+
+    - name: Keycloak serving again
+      ansible.builtin.uri:
+        url: http://localhost:8080/realms/master
+        status_code: 200
+      register: _keycloak_back
+      retries: 60
+      delay: 5
+      until: _keycloak_back.status == 200
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Patroni cluster

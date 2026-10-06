@@ -1,19 +1,23 @@
 ---
 # setup-patroni.yml's restore of the Keycloak dump a first install took (tasks/patroni-keycloak-restore.yml), on the
-# Vagrant Pis' running cluster: a small dump on pi1, HAProxy on pi1 stopped (as on a fresh cluster before HAProxy
-# marks the new leader up), the restore run against the leader - its rows in the leader's keycloak database, the dump
-# moved aside. HAProxy is started again and the test's table and file removed whatever the result (a dump already
-# there is put back); the checks come last.
+# Vagrant Pis' running cluster, into a scratch database of its own:
+#   restored   a small dump on pi1, HAProxy on pi1 stopped (as on a fresh cluster before HAProxy marks the new leader
+#              up), the restore run against the leader - its rows in the leader's database, the dump moved aside and
+#              root-only, Keycloak running again on both Pis;
+#   refused    a dump waiting beside a database that has tables: refused, naming the file, the dump still there.
+# HAProxy (and Forgejo, which Requires= it) started again and the test's database and files removed whatever the
+# result (a dump already there is put back); the checks come last.
 # Vagrant only. Usage: task test:patroni-keycloak-restore
 - name: Vagrant VMs only
   ansible.builtin.import_playbook: vagrant-only-play.yml
 
-- name: The leader, a dump to restore, no HAProxy
+- name: The leader, a scratch database, a dump to restore, no HAProxy
   hosts: pi1
   become: true
   gather_facts: false
   vars:
     dump: /var/backups/patroni-first-install/keycloak.sql
+    db: keycloak_restore_test
   tasks:
     - name: The Patroni leader
       ansible.builtin.shell: |
@@ -31,13 +35,18 @@
         groups: restore_leader
       changed_when: false
 
-    - name: What an earlier run left - its table, its dump, a dump it kept aside
+    - name: What an earlier run left - its database, its dump, a dump it kept aside
       ansible.builtin.include_tasks: tasks/patroni-keycloak-restore-clean.yml
 
     - name: A dump already there kept aside
       ansible.builtin.command: mv {{ dump }} {{ dump }}.kept-by-test
       args:
         removes: "{{ dump }}"
+
+    - name: The scratch database, empty
+      ansible.builtin.command: sudo -u postgres psql -v ON_ERROR_STOP=1 -qc "CREATE DATABASE {{ db }}"
+      delegate_to: "{{ groups['restore_leader'] | first }}"
+      changed_when: true
 
     - name: The dump's directory
       ansible.builtin.file:
@@ -48,12 +57,12 @@
     - name: The dump - one table, one row
       ansible.builtin.copy:
         dest: "{{ dump }}"
-        mode: '0644'
+        mode: '0600'
         content: |
           CREATE TABLE restore_probe (x int);
           INSERT INTO restore_probe VALUES (42);
 
-    - name: HAProxy stopped
+    - name: HAProxy stopped (Forgejo with it)
       ansible.builtin.systemd:
         name: haproxy
         state: stopped
@@ -71,6 +80,7 @@
   gather_facts: false
   vars:
     pg_password: "{{ postgres_admin_password }}"
+    keycloak_restore_db: keycloak_restore_test
   tasks:
     - name: The restore
       block:
@@ -79,24 +89,62 @@
       rescue:
         - name: It failed
           ansible.builtin.set_fact:
-            _restore_failed: "{{ ansible_failed_result.stderr | default(ansible_failed_result.msg) }}"
+            _restore_failed: "{{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('')) }}"
       always:
-        - name: HAProxy started again
+        - name: HAProxy and Forgejo started again
           ansible.builtin.systemd:
-            name: haproxy
+            name: "{{ item }}"
             state: started
+          loop: [haproxy, forgejo]
           delegate_to: pi1
 
-    - name: The leader's keycloak database - the dump's row
-      ansible.builtin.command: sudo -u postgres psql -d keycloak -tAc "SELECT x FROM restore_probe"
+    - name: The leader's scratch database - the dump's row
+      ansible.builtin.command: sudo -u postgres psql -d keycloak_restore_test -tAc "SELECT x FROM restore_probe"
       register: _row
       changed_when: false
       failed_when: false
 
-    - name: The dump on pi1
+    - name: The dump on pi1, and the copy moved aside (root-only)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        [ -e /var/backups/patroni-first-install/keycloak.sql ] && echo "left" || echo "moved"
+        stat -c %a /var/backups/patroni-first-install/keycloak-restored-*.sql | sort -u
+      args:
+        executable: /bin/bash
+      register: _moved
+      changed_when: false
+      failed_when: false
+      delegate_to: pi1
+
+    - name: Keycloak on both Pis
+      ansible.builtin.systemd:
+        name: keycloak
+      register: _keycloak
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+
+    # a dump waiting beside a database in use: refused, the dump left where it is
+    - name: Another dump, waiting beside the database the first one filled
+      ansible.builtin.copy:
+        dest: /var/backups/patroni-first-install/keycloak.sql
+        mode: '0600'
+        content: |
+          CREATE TABLE restore_probe_2 (x int);
+      delegate_to: pi1
+
+    - name: The restore again
+      block:
+        - name: Run it
+          ansible.builtin.include_tasks: ../../deploy/ansible/playbooks/tasks/patroni-keycloak-restore.yml
+      rescue:
+        - name: It refused
+          ansible.builtin.set_fact:
+            _refused: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: The second dump still there
       ansible.builtin.stat:
         path: /var/backups/patroni-first-install/keycloak.sql
-      register: _left
+      register: _second
       delegate_to: pi1
 
 - name: Clean up
@@ -105,20 +153,38 @@
   gather_facts: false
   vars:
     dump: /var/backups/patroni-first-install/keycloak.sql
+    db: keycloak_restore_test
   tasks:
-    - name: The test's table, its dump; a dump that was there put back
+    - name: The test's database, its dumps; a dump that was there put back
       ansible.builtin.include_tasks: tasks/patroni-keycloak-restore-clean.yml
+
+    - name: Forgejo answering again
+      ansible.builtin.uri:
+        url: http://localhost:3000/api/v1/version
+      register: _forgejo
+      retries: 30
+      delay: 5
+      until: _forgejo.status == 200
 
 - name: The checks
   hosts: restore_leader
   gather_facts: false
   tasks:
-    - name: The restore ran without HAProxy, the row is in the leader's database, the dump moved aside
+    - name: Restored without HAProxy into the empty database, the dump moved aside root-only, Keycloak running
       ansible.builtin.assert:
         that:
           - _restore_failed is not defined
           - _row.stdout | trim == '42'
-          - not _left.stat.exists
+          - _moved.stdout_lines == ['moved', '600']
+          - _keycloak.results | map(attribute='status.ActiveState') | unique | list == ['active']
         fail_msg: >-
           restore: {{ _restore_failed | default('ran') }}; the row: {{ (_row.stdout ~ _row.stderr) | trim }};
-          the dump left on pi1: {{ _left.stat.exists }}
+          the dump: {{ _moved.stdout_lines | default([]) }}; Keycloak:
+          {{ _keycloak.results | map(attribute='status.ActiveState') | list }}
+
+    - name: A dump beside a database in use - refused, naming the file, the dump left
+      ansible.builtin.assert:
+        that:
+          - _refused is defined and 'REFUSED' in _refused and 'keycloak.sql' in _refused
+          - _second.stat.exists
+        fail_msg: "refusal: {{ _refused | default('none - it restored') }}; the dump left: {{ _second.stat.exists }}"
