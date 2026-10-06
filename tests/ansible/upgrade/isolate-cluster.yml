@@ -164,17 +164,19 @@
               - toCIDR:
                   - "{{ production_lan }}"
 
-    # blocked means the TCP connect times out - a dropped SYN (curl exit 28); any other result (an answer, a refusal,
-    # a reset, a slow TLS exchange after a connect) is not proof of the drop and fails. Production's VIP, were it
-    # reachable, accepts the connect in milliseconds, so 1 s for the connect proves the drop
+    # blocked means the TCP connect never completed - a dropped SYN: curl exit 28 with no connect made. Exit 28 alone
+    # is no proof: the connect timeout also covers the TLS handshake, and -m the rest, so a VIP that took the connect
+    # and then stalled timed out the same way. Any other result (an answer, a refusal, a reset) fails too. Production's
+    # VIP, were it reachable, accepts the connect in milliseconds, so 1 s for the connect proves the drop
     - name: Prove it - the node cannot reach production's VIP
       ansible.builtin.shell: |
-        curl -sk -o /dev/null --connect-timeout 1 -m 5 https://{{ production_vip }}:8200/v1/sys/health; echo "curl exit $?"
+        n=$(curl -sk -o /dev/null -w '%{num_connects}' --connect-timeout 1 -m 5 https://{{ production_vip }}:8200/v1/sys/health)
+        echo "curl exit $?, connects $n"
       args:
         executable: /bin/bash
       register: _node_probe
       changed_when: false
-      failed_when: _node_probe.stdout != 'curl exit 28'
+      failed_when: _node_probe.stdout != 'curl exit 28, connects 0'
 
     - name: Prove it - a pod cannot reach production's VIP, and can reach the Vagrant VIP
       ansible.builtin.shell: |
@@ -192,9 +194,10 @@
         fi
         {{ kubectl }} exec isolation-probe $N -- sh -c '
           p=https://{{ production_vip }}:8200/v1/sys/health; v=https://{{ vagrant_vip }}:8200/v1/sys/health
-          # blocked = the connect timed out (exit 28, a dropped SYN); anything else is no proof of the drop
-          curl -sk -o /dev/null --connect-timeout 1 -m 5 "$p"; r=$?
-          if [ "$r" = 28 ]; then echo production-blocked; else echo "PRODUCTION-REACHABLE (curl exit $r)"; fi
+          # blocked = no connect made and timed out (a dropped SYN); anything else is no proof of the drop
+          n=$(curl -sk -o /dev/null -w "%{num_connects}" --connect-timeout 1 -m 5 "$p"); r=$?
+          if [ "$r" = 28 ] && [ "$n" = 0 ]; then echo production-blocked
+          else echo "PRODUCTION-REACHABLE (curl exit $r, $n connects)"; fi
           curl -sk -o /dev/null -m 10 "$v" && echo vagrant-reachable || echo VAGRANT-UNREACHABLE'
       args:
         executable: /bin/bash
