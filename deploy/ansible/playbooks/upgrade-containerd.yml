@@ -46,6 +46,7 @@
         fail_msg: "-e containerd_upgrade_to=X.Y.Z, e.g. 2.3.6"
 
     - name: The containerd package now installed
+      check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
         dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${Version}\n' containerd containerd.io runc 2>/dev/null \
@@ -62,6 +63,7 @@
         _runtime_line: "{{ _installed.stdout_lines | select('match', '^containerd(\\.io)? ') | first }}"
 
     - name: The node's runtime now - config schema, CRI, runtime version
+      check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
         echo "schema $(awk -F' *= *' '/^version *=/ {print $2; exit}' /etc/containerd/config.toml)"
@@ -87,6 +89,7 @@
           ansible.builtin.meta: end_host
 
     - name: Still on Debian's containerd - its live config is 1.7's default plus only the settings carried over
+      check_mode: false
       when: _runtime_line.split()[0] == 'containerd'
       ansible.builtin.shell: |
         set -euo pipefail
@@ -119,11 +122,15 @@
           deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts.distribution_release }} stable
         mode: '0644'
 
+    # read from the repository's own index, not apt's lists: a preview (--check) adds no repository and refreshes no
+    # lists, and finds the revision all the same
     - name: The target's package revision there
+      check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
-        apt-get update -qq
-        apt-cache madison containerd.io | awk '{print $3}' | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
+        curl -fsSL https://download.docker.com/linux/debian/dists/{{ ansible_facts.distribution_release }}/stable/binary-amd64/Packages \
+          | awk '/^Package: /{p=$2} /^Version: /{if (p=="containerd.io") print $2}' \
+          | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
       args:
         executable: /bin/bash
       register: _package
@@ -132,11 +139,22 @@
 
     # ── what runs now, to compare after ──────────────────────────────
     - name: The containers running now
+      check_mode: false
       ansible.builtin.shell: "set -o pipefail; {{ crictl }} ps -q --state running | sort"
       args:
         executable: /bin/bash
       register: _before
       changed_when: false
+
+    # a preview (--check) ends here: the checks above ran for real, and everything below acts on the installed package
+    - name: Preview - what the run would do
+      when: ansible_check_mode
+      block:
+        - name: Would replace
+          ansible.builtin.debug:
+            msg: "PREVIEW: would replace {{ _runtime_line }} with containerd.io {{ _package.stdout }} under {{ _before.stdout_lines | length }} running containers"
+        - name: End the preview here
+          ansible.builtin.meta: end_host
 
     # ── 3. the package ───────────────────────────────────────────────
     - name: Keep the live config (the first run's - never overwritten by a re-run)
@@ -150,6 +168,7 @@
     - name: Install containerd.io (replaces Debian's containerd and runc; keeps the live config while it starts)
       ansible.builtin.apt:
         name: "containerd.io={{ _package.stdout }}"
+        update_cache: true
         dpkg_options: force-confold,force-confdef
         allow_downgrade: false
         allow_change_held_packages: true

@@ -94,6 +94,18 @@ refused("playbooks 47 before platform settled", P(S47, "playbooks", ev(*bs, f"{S
 ball = bs + [f"{S47} merged platform def", f"{S47} settled platform def"]
 refused("playbooks 47 without the preview", P(S47, "playbooks", ev(*ball)), ["not previewed"])
 check("playbooks 47 after the preview", P(S47, "playbooks", ev(*ball, f"{S47} previewed")), [])
+# the preview: after every merge settled (its playbooks read the cluster the merges leave)
+refused("preview 47 before its merges", P(S47, "preview", ev(*bb)), ["not merged and settled yet"])
+refused("preview 47 with only infra settled", P(S47, "preview", ev(*bs)), ["platform"])
+check("preview 47 after both merges settled", P(S47, "preview", ev(*ball)), [])
+# the order `deploy:upgrade:status` names the next phase in: step 47's pinned, every step's preview after its merges
+check("47's phases in order", [(p, a) for p, a, _ in m.phases(info[S47])],
+      [("begin", None), ("backup", "postgres"), ("merge", "infra"), ("merge", "platform"), ("preview", None),
+       ("playbooks", None), ("done", None)])
+order = {n: [p for p, _, _ in m.phases(info[n])] for n in names}
+check("every step's preview after its merges",
+      [n for n, o in order.items() if "preview" in o and "merge" in o
+       and o.index("preview") < max(i for i, p in enumerate(o) if p == "merge")], [])
 refused("playbooks 47 twice", P(S47, "playbooks", ev(*ball, f"{S47} previewed", f"{S47} playbooks")), ["ran already"])
 refused("playbooks at a step without playbook lines", P("54-tempo-3", "playbooks", ev("54-tempo-3 begun")),
         ["no playbook lines"])

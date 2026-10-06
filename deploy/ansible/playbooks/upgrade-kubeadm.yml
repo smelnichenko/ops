@@ -46,6 +46,7 @@
         fail_msg: "-e k8s_upgrade_to=X.Y.Z, e.g. 1.34.12"
 
     - name: The version the cluster runs
+      check_mode: false
       ansible.builtin.command: "{{ kubectl }} get node -o jsonpath={.items[0].status.nodeInfo.kubeletVersion}"
       register: _running
       changed_when: false
@@ -71,12 +72,14 @@
         fail_msg: "running {{ running }}: {{ target }} is more than one minor up"
 
     - name: The node is Ready
+      check_mode: false
       ansible.builtin.command: "{{ kubectl }} wait node --all --for=condition=Ready --timeout=120s"
       changed_when: false
 
     # a new minor only on a container runtime it supports: the step order puts containerd.io 2.3 before 1.35, and this
     # refuses a run that skipped it
     - name: The container runtime the node runs
+      check_mode: false
       ansible.builtin.command: "{{ kubectl }} get node -o jsonpath={.items[0].status.nodeInfo.containerRuntimeVersion}"
       register: _runtime
       changed_when: false
@@ -89,6 +92,7 @@
     # kubeadm upgrade rewrites the kubelet's config.yaml from this ConfigMap: without them there, the upgrade turns the
     # graceful node shutdown off - configure-node.yml puts them there first
     - name: The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)
+      check_mode: false
       ansible.builtin.shell: |
         set -euo pipefail
         {{ kubectl }} -n kube-system get configmap kubelet-config -o jsonpath='{.data.kubelet}' \
@@ -121,21 +125,36 @@
           deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/ /
         mode: '0644'
 
+    # read from the repository's own index, not apt's lists: a preview (--check) switches no repository to a new minor
+    # and refreshes no lists, and finds the revision all the same
     - name: The target's package revision in that repository
+      check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
-        apt-get update -qq
-        apt-cache madison kubeadm | awk '{print $3}' | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Packages \
+          | awk '/^Package: /{p=$2} /^Version: /{if (p=="kubeadm") print $2}' \
+          | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
       args:
         executable: /bin/bash
       register: _package
       changed_when: false
       failed_when: _package.stdout | length == 0
 
+    # a preview (--check) ends here: the checks above ran for real, and everything below acts on the installed kubeadm
+    - name: Preview - what the run would do
+      when: ansible_check_mode
+      block:
+        - name: Would upgrade
+          ansible.builtin.debug:
+            msg: "PREVIEW: would upgrade Kubernetes {{ _running.stdout }} -> v{{ target }} (packages {{ _package.stdout }})"
+        - name: End the preview here
+          ansible.builtin.meta: end_host
+
     # ── 3. kubeadm, then the control plane ───────────────────────────
     - name: Install the target kubeadm (held packages may change here only)
       ansible.builtin.apt:
         name: "kubeadm={{ _package.stdout }}"
+        update_cache: true
         allow_change_held_packages: true
         allow_downgrade: false
 

@@ -11,6 +11,8 @@
   ansible.builtin.command: hostname -I
   register: _vagrant_only_addresses
   changed_when: false
+  # read-only: a --check run (the step preview) must see the addresses too, or the guard refuses every host
+  check_mode: false
   tags: [always]
 
 - name: Vagrant VMs only - refuse anything else (production LAN 192.168.11.0/24, or no Vagrant address)

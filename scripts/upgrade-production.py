@@ -7,10 +7,10 @@ every phase; the Taskfile's deploy:upgrade:* tasks call this. The procedure: doc
 Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   begin      every earlier step done; ten's inventory as the done steps leave it and Argo settled on main   -> begun
   backup     each of the step's wave0 stores into the Pi store (upgrade-backup.yml)                -> backup <store>
-  preview    the step's playbook lines in check mode, with diffs                                        -> previewed
   merge      each branch line in the file's order: the branch's own change exactly as the full run proved it, the
              state between two merges one the full run proved (upgrade-merge-order.py), merged and pushed
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
+  preview    the step's playbook lines in check mode, with diffs, on the cluster the merges left        -> previewed
   playbooks  the step's playbook lines against production                                               -> playbooks
   defaults   the step's default lines (scripts/upgrade-defaults.py) committed to ops main and pushed: a playbook
              run from now on installs what production runs                                             -> defaults
@@ -124,8 +124,6 @@ def problems(names, step, phase, events, info, arg=None):
     if phase == "backup":
         return [] if arg in info["wave0"] else \
             [f"{step} backs up no {arg} (its wave0 stores: {', '.join(info['wave0']) or 'none'})"]
-    if phase == "preview":
-        return [] if info["playbooks"] else [f"{step} has no playbook lines"]
     out = [f"not backed up yet: {', '.join(s for s in info['wave0'] if s not in backed)} (deploy:upgrade:backup)"] \
         if any(s not in backed for s in info["wave0"]) else []
     if phase == "merge":
@@ -136,6 +134,9 @@ def problems(names, step, phase, events, info, arg=None):
             + ([f"{arg} is merged and settled already"] if arg in settled else [])
     unsettled = [r for r in info["branches"] if r not in settled]
     out += [f"not merged and settled yet: {', '.join(unsettled)} (deploy:upgrade:merge)"] if unsettled else []
+    # the preview after the merges: a step's playbooks read the cluster the merge leaves (istiod at the target, ...)
+    if phase == "preview":
+        return out + ([] if info["playbooks"] else [f"{step} has no playbook lines"])
     if phase == "playbooks":
         if not info["playbooks"]:
             return out + [f"{step} has no playbook lines"]
@@ -588,6 +589,16 @@ def done(step):
     record(step, "done")
 
 
+def phases(info):
+    """A step's phases in their order: (phase, its argument, the ledger mark that ends it)."""
+    out = [("begin", None, ("begun", None)), *(("backup", s, ("backup", s)) for s in info["wave0"])]
+    out += [("merge", r, ("settled", r)) for r in info["branches"]]
+    out += [("preview", None, ("previewed", None))] if info["playbooks"] else []
+    out += [("playbooks", None, ("playbooks", None))] if info["playbooks"] else []
+    out += [("defaults", None, ("defaults", None))] if info["defaults"] else []
+    return out + [("done", None, ("done", None))]
+
+
 def status():
     names = step_names()
     _, events = read_ledger()
@@ -599,12 +610,7 @@ def status():
         return
     info = step_info(pending)
     have = {(e, a[0] if a else None) for _, s, e, a in events if s == pending}
-    phases = [("begin", None, ("begun", None)), *(("backup", s, ("backup", s)) for s in info["wave0"])]
-    phases += [("preview", None, ("previewed", None))] if info["playbooks"] else []
-    phases += [("merge", r, ("settled", r)) for r in info["branches"]]
-    phases += [("playbooks", None, ("playbooks", None))] if info["playbooks"] else []
-    phases += [("defaults", None, ("defaults", None))] if info["defaults"] else []
-    for phase, arg, mark in phases + [("done", None, ("done", None))]:
+    for phase, arg, mark in phases(info):
         if mark not in have:
             p = problems(names, pending, phase, events, info, arg)
             print(f"next: {pending} {phase}{' ' + arg if arg else ''}" + (f" - {'; '.join(p)}" if p else ""))

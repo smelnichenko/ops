@@ -126,6 +126,7 @@
       changed_when: "'peer probe: success' in peer_probe.stdout"
 
     - name: Wait for 2 peers connected (pi2 + ten)
+      check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
         gluster peer status | grep -c 'State: Peer in Cluster (Connected)'
@@ -139,6 +140,7 @@
     # error took the new-install path on a live cluster: Forgejo stopped, data copied into the live brick behind
     # Gluster's back.
     - name: Count existing forgejo-repos bricks
+      check_mode: false
       ansible.builtin.shell: |
         set -euo pipefail
         volumes=$(gluster volume list)
@@ -339,6 +341,7 @@
     # Forgejo is stopped and the repos remounted only when they are not mounted from the volume already - this used to
     # happen on every run, each re-run an outage of Forgejo.
     - name: Current source of the repos mount
+      check_mode: false
       ansible.builtin.command: findmnt -rn -o SOURCE --mountpoint {{ gluster_mount }}
       register: _repos_mount
       changed_when: false
@@ -386,18 +389,21 @@
 
   tasks:
     - name: Check volume status
+      check_mode: false
       ansible.builtin.shell: |
         gluster volume status forgejo-repos
       register: vol_status
       changed_when: false
 
     - name: Check replication
+      check_mode: false
       ansible.builtin.shell: |
         gluster volume heal forgejo-repos info
       register: heal_info
       changed_when: false
 
     - name: Check mount on both nodes
+      check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
         mount | grep forgejo-repos
@@ -562,6 +568,7 @@
 
     # as for forgejo-repos above: glusterd's own list says which volumes exist, a CLI error fails
     - name: Count existing bricks per volume
+      check_mode: false
       ansible.builtin.shell: |
         set -euo pipefail
         volumes=$(gluster volume list)
@@ -758,6 +765,7 @@
     # no condition): each re-run took Forgejo and Nexus down, and the backup store's gateway - listed as minio, gone
     # since versitygw - kept serving the local disk under the unmounted store.
     - name: Current source of each mount
+      check_mode: false
       ansible.builtin.command: findmnt -rn -o SOURCE --mountpoint {{ item.mount }}
       loop: "{{ backup_volumes }}"
       loop_control:
@@ -898,6 +906,7 @@
       changed_when: true
 
     - name: The entries on pi1's brick of each new volume, by path
+      when: not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
         brick=$(gluster volume info {{ item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
@@ -924,6 +933,7 @@
         label: "{{ item.item }} ({{ item.stdout_lines | length }} entries on pi1)"
 
     - name: Wait until pi2's brick of each new volume has every entry pi1's has
+      when: not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
         brick=$(gluster volume info {{ item.item }} | awk -v ip={{ ansible_host }} -F'[ :]+' '$1 ~ /^Brick[0-9]+$/ && $2 == ip {print $3}')
@@ -977,6 +987,7 @@
     # in flight as pending, which a busy Forgejo or a running backup always has.
     # Every brick must answer with a count: one that does not lists "Number of entries: -", which read as 0 here.
     - name: The new volumes are healed - every brick answering, nothing pending on any
+      when: not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
         healed=yes
@@ -1008,6 +1019,7 @@
       loop: "{{ gluster_new_volumes | default([]) }}"
 
     - name: Check all backup volume statuses
+      check_mode: false
       ansible.builtin.shell: |
         for vol in backup-minio backup-git-mirror nexus-data; do
           echo "=== $vol ==="
@@ -1017,6 +1029,7 @@
       changed_when: false
 
     - name: Verify mounts on both nodes
+      check_mode: false
       ansible.builtin.shell: |
         mount | grep -E "backup-|nexus-data"
       register: mount_check

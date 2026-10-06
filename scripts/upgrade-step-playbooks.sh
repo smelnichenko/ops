@@ -15,8 +15,9 @@
 # deploy:upgrade:playbooks`, after the step's Vagrant proof and the operator's approval. The allow-list holds there too.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-# --production --check <step>: the same, read-only - ansible's check mode with diffs (no task here overrides it): what
-# the step would change on ten and the Pis, before it runs (`task deploy:upgrade:preview`).
+# --check <step> (with --production: on ten and the Pis): the same, read-only - ansible's check mode with diffs: what the
+# step would change, before it runs (`task deploy:upgrade:preview`; the full run previews every such step on the copy).
+# Only read-only probes override it (check_mode: false), so the checks see the real state.
 step_vars=" argocd_version cilium_version containerd_upgrade_to gateway_api_version istio_version k8s_upgrade_to "
 step_vars+="kubelet_grace_in_kubelet_config_map local_path_provisioner_version pg_major pg_namespaces vgw_version "
 # fence <playbook> <args...>: exit 1 naming the first argument outside the allow-list
@@ -53,7 +54,6 @@ fi
 production=no; check=""
 if [ "${1:-}" = --production ]; then production=yes; shift; fi
 if [ "${1:-}" = --check ]; then
-  [ "$production" = yes ] || { echo "--check is for --production" >&2; exit 1; }
   check="--check --diff"; shift
 fi
 lines=$("$ops/scripts/upgrade-expected-inventory.py" --playbooks "$1")
@@ -70,6 +70,6 @@ while read -r playbook args; do
     # shellcheck disable=SC2086
     (cd "$ops/deploy/ansible" && env -i HOME="$HOME" PATH="$PATH" \
        venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/vagrant-only-play.yml \
-       "playbooks/$playbook" $args < /dev/null)
+       "playbooks/$playbook" $args $check < /dev/null)
   fi
 done <<< "$lines"

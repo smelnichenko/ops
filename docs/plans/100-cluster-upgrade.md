@@ -815,13 +815,16 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    copy has none); Argo settled on main's commits, judged on ten (4 polls, no container restarted in 5 minutes; the step
    before's argo-out-of-sync apps allowed).
 2. `deploy:upgrade:backup STEP=N STORE=s` - each wave0 line, before anything changes.
-3. `deploy:upgrade:preview STEP=N` - a step with playbook lines: check mode with diffs, read by the operator.
-4. `deploy:upgrade:merge STEP=N REPO=r` - each branch line in the file's order. The branch restacked on origin/main
-   first when main moved (the apps' CD pushes image tags to infra main): `scripts/upgrade-restack-in-place.sh ../infra`.
+3. `deploy:upgrade:merge STEP=N REPO=r` - each branch line in the file's order. The branch restacked on origin/main
+   first when main moved (the apps' CD pushes image tags to infra main): `scripts/upgrade-restack-in-place.sh ../infra`
+   (merged steps, tagged upgrade-merged/<step>, are skipped).
    Refused unless its own change (changed lines and files) is the one the full run proved, deploy/ and the step file
    are as that run had them, and the state between the step's two merges is one the run proved
    (scripts/upgrade-merge-order.py: the first merge alone renders every platform-chart application as before, or the
    second renders nothing new). Pushed; Argo settled on the pushed commits within 30 minutes, nothing out of sync.
+4. `deploy:upgrade:preview STEP=N` - a step with playbook lines, after its merges settled: check mode with diffs
+   (read-only probes run, waits on changes the preview does not make are skipped), read by the operator. The full run
+   runs the same preview on the Vagrant copy at every such step, so it is proven to pass.
 5. `deploy:upgrade:playbooks STEP=N` - after every merge settled and the preview.
 6. `deploy:upgrade:done STEP=N` - ten as the step leaves it (its argo-out-of-sync apps allowed). The first green call
    starts the soak: 60 minutes after a wave0 step, 15 otherwise (a step's `soak` line overrides). Called again after it

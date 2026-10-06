@@ -25,6 +25,7 @@
         fail_msg: "-e pg_major=<major>, e.g. 18"
 
     - name: The CNPG clusters (in the namespaces given, if any)
+      check_mode: false
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -44,6 +45,7 @@
       when: _clusters.stdout_lines | length == 0
 
     - name: Each cluster healthy, every instance ready, on that major
+      check_mode: false
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |

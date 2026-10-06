@@ -577,6 +577,7 @@
       tags: [cilium]  # an upgrade runs just the Cilium tasks: --tags cilium -e cilium_version=...
 
     - name: The running Cilium release
+      check_mode: false
       ansible.builtin.command: helm --kubeconfig /etc/kubernetes/admin.conf -n kube-system list --filter '^cilium$' -o json
       register: _cilium_release
       changed_when: false
@@ -592,6 +593,7 @@
       tags: [cilium]
       block:
         - name: The running chart's cilium-config, rendered from these values
+          check_mode: false
           ansible.builtin.command:
             argv: [helm, template, cilium, cilium/cilium, --version, "{{ _running_chart }}", --namespace, kube-system,
                    --values, '-', --show-only, templates/cilium-configmap.yaml]
@@ -737,6 +739,7 @@
     # the manifest's own too - read from the file before it is applied (once applied, the provisioner takes the new
     # paths at once) - and the same file is what gets applied.
     - name: The live local-path node paths are the expected ones (the manifest replaces them)
+      check_mode: false
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -752,6 +755,8 @@
       tags: [local-path]
 
     - name: The local-path-provisioner manifest of the version, downloaded
+      # in a preview (--check) too: the checks below and the dry-run apply read it (a file under /root, nothing else)
+      check_mode: false
       ansible.builtin.get_url:
         url: https://raw.githubusercontent.com/rancher/local-path-provisioner/{{ local_path_provisioner_version }}/deploy/local-path-storage.yaml
         dest: /root/local-path-storage-{{ local_path_provisioner_version }}.yaml
@@ -759,6 +764,7 @@
       tags: [local-path]
 
     - name: The manifest's node paths are the expected ones (before anything is applied)
+      check_mode: false
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -785,13 +791,17 @@
       # ten runs the upstream manifest applied with kubectl (namespace local-path-storage, StorageClass local-path,
       # not the default class), not a Helm release. The downstream wait polls the deployment, so a cold image pull
       # does not have to fit a timeout here.
+      # a preview (--check) applies it as a server-side dry run (admitted or refused, nothing written)
+      check_mode: false
       ansible.builtin.command: >-
-        kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f /root/local-path-storage-{{ local_path_provisioner_version }}.yaml
+        kubectl --kubeconfig /etc/kubernetes/admin.conf apply {{ '--dry-run=server' if ansible_check_mode else '' }}
+        -f /root/local-path-storage-{{ local_path_provisioner_version }}.yaml
       register: _lpp_apply
       changed_when: "'created' in _lpp_apply.stdout or 'configured' in _lpp_apply.stdout"
       tags: [local-path]  # an upgrade runs the local-path tasks: --tags local-path -e local_path_provisioner_version=...
 
     - name: The node paths after the apply are the expected ones still
+      when: not ansible_check_mode
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -930,10 +940,14 @@
       # Server-side, as Gateway API's own upgrade instructions say: a client-side apply keeps the whole CRD in an
       # annotation, which the larger CRDs of later releases overflow. --force-conflicts takes over the fields an
       # earlier client-side apply owns (ten's v1.2.1 was applied that way).
+      # A preview (--check) applies it as a server-side dry run: the API server admits or refuses the bundle (the
+      # safe-upgrades policy, field conflicts) and writes nothing.
+      check_mode: false
       ansible.builtin.command: >-
         kubectl --kubeconfig /etc/kubernetes/admin.conf apply --server-side --force-conflicts
+        {{ '--dry-run=server' if ansible_check_mode else '' }}
         -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ gateway_api_version }}/standard-install.yaml
-      changed_when: true
+      changed_when: not ansible_check_mode
       tags: [gateway-api]  # an upgrade runs just this: --tags gateway-api -e gateway_api_version=...
 
     # ================================================================

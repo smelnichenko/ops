@@ -35,6 +35,7 @@
   register: _vgw_binary
 
 - name: Check installed versitygw version
+  check_mode: false
   ansible.builtin.command: versitygw --version
   register: _vgw_installed
   changed_when: false
@@ -133,6 +134,7 @@
 # upgrade restarted nothing, and a run that failed between install and restart left no trace for the next. So the
 # running process is compared with the installed binary, whatever this run changed.
 - name: The binary the running versitygw executes
+  check_mode: false
   ansible.builtin.shell: |
     set -euo pipefail
     pid=$(systemctl show -p MainPID --value versitygw)
@@ -169,6 +171,7 @@
   changed_when: true
 
 - name: Versitygw serves, on the installed binary, version {{ vgw_version }}
+  when: not ansible_check_mode
   ansible.builtin.shell: |
     set -euo pipefail
     curl -fsS -o /dev/null http://localhost:{{ vgw_port }}/health

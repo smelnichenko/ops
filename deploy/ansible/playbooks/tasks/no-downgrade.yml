@@ -45,6 +45,7 @@
   register: _no_downgrade_cluster
 
 - name: No downgrade - the Helm releases
+  check_mode: false
   ansible.builtin.command: helm --kubeconfig /etc/kubernetes/admin.conf list -A -o json
   register: _no_downgrade_helm
   changed_when: false
@@ -76,6 +77,7 @@
   when: _no_downgrade_cluster.stat.exists and item.runs | bool
 
 - name: No downgrade - the running local-path provisioner and Gateway API bundle
+  check_mode: false
   ansible.builtin.shell: |
     set -euo pipefail
     k="kubectl --kubeconfig /etc/kubernetes/admin.conf"

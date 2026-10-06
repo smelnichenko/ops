@@ -55,6 +55,7 @@
     # after an upgrade must refuse, not Helm-downgrade Argo CD and its CRDs. First, before the
     # Forgejo token is replaced.
     - name: No downgrade - the Argo CD chart and image now running
+      check_mode: false
       ansible.builtin.shell: |
         set -euo pipefail
         k="kubectl --kubeconfig /etc/kubernetes/admin.conf"
@@ -133,6 +134,7 @@
     # the root app's repository, read with it: the token's one scope is read:repository - /api/v1/user answers 403
     # to it (user scope), and a token Forgejo does not know gets 401 even on a public repository
     - name: Does its token still read the root app's repository
+      check_mode: false
       ansible.builtin.uri:
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/repos/{{ argocd_root_repo }}"
         method: GET
@@ -149,6 +151,7 @@
         _token_works: "{{ _token_check.status | default(0) == 200 }}"
 
     - name: Forgejo's tokens of this user
+      check_mode: false
       ansible.builtin.uri:
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: GET
@@ -197,7 +200,9 @@
             url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
             username: "{{ _forgejo_user }}"
             password: "{{ argocd_token_result.json.sha1 }}"
-      when: not _token_works | bool
+      when:
+        - not ansible_check_mode
+        - not _token_works | bool
       no_log: true
 
     - name: Delete the older Argo CD tokens (the secret holds the new one now)

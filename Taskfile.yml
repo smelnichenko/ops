@@ -502,6 +502,10 @@ tasks:
           else
             echo "SETTLE BEFORE PLAYBOOKS: none (no playbook or out-of-sync lines)"
           fi
+      # the step's preview, as production takes it after the merge: its playbook lines in check mode (each probe reads the
+      # real state, nothing changes) - so the production preview is proven to pass
+      - cmd: |
+          if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then scripts/upgrade-step-playbooks.sh --check {{.STEP}}; fi
       # host-side changes (this step's playbook lines), after the cluster side
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
@@ -1086,7 +1090,7 @@ tasks:
       - cmd: scripts/upgrade-production.py backup {{.STEP}} {{.STORE}}
 
   deploy:upgrade:preview:
-    desc: "Read-only (records it in the ledger): what step STEP's playbook lines would change on ten and the Pis - ansible's check mode, with diffs (it stops at the first check that needs the change made: check mode makes none)"
+    desc: "Read-only (records it in the ledger): what step STEP's playbook lines would change on ten and the Pis, after the step's merges settled - ansible's check mode with diffs (read-only probes run; waits on changes the preview does not make are skipped; proven by the full run at every step)"
     deps: [deploy:install]
     requires:
       vars: [STEP]
