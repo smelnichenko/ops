@@ -155,6 +155,26 @@
         _grafana.rc != 0 or _grafana.stdout_lines[1] != dashboard_text
         or (mode == 'verify' and (_seed.grafana_uids | difference(_grafana.stdout_lines[0] | from_json)) | length > 0)
 
+    # Grafana 13 (step 50) moved how plugins and datasources load: each datasource answers its own health check - the
+    # ClickHouse plugin (installed at start), Mimir, Tempo
+    - name: Grafana - every datasource healthy
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          g() { {{ kubectl }} exec deploy/schnappy-grafana -c grafana -- sh -c \
+            'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" "http://localhost:3000$1"' _ "$1"; }
+          for uid in $(g /api/datasources | python3 -c 'import json, sys; print(" ".join(d["uid"] for d in json.load(sys.stdin)))'); do
+            echo "$uid $(g "/api/datasources/uid/$uid/health" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status"))')"
+          done
+      register: _datasources
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: >-
+        _datasources.rc == 0 and _datasources.stdout_lines | length > 0
+        and _datasources.stdout_lines | reject('match', '^\\S+ OK$') | list | length == 0
+
     # ── Tempo ─────────────────────────────────────────────────────────
     - name: Tempo - the canary trace, pushed over OTLP/HTTP (seed)
       ansible.builtin.include_tasks: tasks/tempo-push.yml
@@ -172,6 +192,36 @@
       retries: 30
       delay: 10
       until: _trace.rc == 0 and 'upgrade-canary' in _trace.stdout
+
+    # Tempo's metrics generator (service graphs, span metrics into Mimir) runs on: a fresh span, its call counted - Tempo 3
+    # (step 54) rebuilt the generator
+    # a span name of its own for each run (fixed once - a lookup in a variable runs again at each use): its span-metrics
+    # series is new, so a count proves this run's span
+    - name: Tempo - this run's span name
+      ansible.builtin.set_fact:
+        _span_name: "upgrade-check-{{ lookup('ansible.builtin.pipe', 'date +%s%N') }}"
+
+    - name: Tempo - a fresh span for the metrics generator
+      ansible.builtin.include_tasks: tasks/tempo-push.yml
+      vars:
+        push_trace_id: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-32') }}"
+        push_span_id: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-16') }}"
+        push_name: "{{ _span_name }}"
+
+    - name: Tempo - the fresh span counted in Mimir's span metrics
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          q=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' \
+            'sum(traces_spanmetrics_calls_total{service="upgrade-check",span_name="{{ _span_name }}"})')
+          kubectl --kubeconfig {{ kubeconfig }} get --raw "{{ proxy }}/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query=$q" \
+            | python3 -c 'import json, sys; r = json.load(sys.stdin)["data"]["result"]; print(r[0]["value"][1] if r else 0)'
+      register: _spanmetrics
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _spanmetrics.rc == 0 and (_spanmetrics.stdout | float) >= 1
 
     # ── Mimir ─────────────────────────────────────────────────────────
     # two minutes back: samples of that time have all arrived (remote write lags by seconds)
