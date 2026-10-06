@@ -638,6 +638,11 @@ tasks:
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
       - task: test:upgrade:restore-check
 
+  test:clickhouse-pin:
+    desc: "The ClickHouse rollback pin with the real images, in docker here: steps 59 and 61's newer image pinned to the older version writes and merges parts, the older reads every row back; unpinned it must not"
+    cmds:
+      - cmd: tests/clickhouse-pin/run.sh
+
   test:upgrade:wave0:
     desc: On the Vagrant copy, the Wave 0 backups as production takes them, each restored from the Pi store and its seeded canaries checked (STORES limits the list)
     deps: [deploy:install]

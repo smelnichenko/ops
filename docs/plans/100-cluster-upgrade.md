@@ -505,7 +505,9 @@ Test harness
 - R21 Data survival not checked for one-way steps: seed and verify ClickHouse, Grafana, Tempo, Mimir; the
   compatibility pin via system.merge_tree_settings; versions per step. DONE: tests/ansible/upgrade/survival-check.yml,
   seeded at the build, verified after every step - a ClickHouse MergeTree table (count, md5) and its compatibility
-  setting against the step files' clickhouse-compat lines (24.8 from the 25.8 step, 25.8 from the 26.8 one), every
+  setting against the step files' clickhouse-compat lines (24.8 from the 25.8 step, 25.8 from the 26.8 one), the
+  MergeTree format settings that pin holds (system.merge_tree_settings, since 2026-10-06 - before, only the session's
+  setting was read), every
   Grafana dashboard UID of the seed and a canary dashboard's content, a Tempo trace by ID, Mimir's `up` series at the
   seed's time. Vagrant 2026-10-04: seed and verify green (1000 rows, compat empty, 7 dashboards, the trace, 51 series);
   a wrong pin and a missing dashboard each failed.
@@ -671,8 +673,12 @@ verdict "not ready"; every item below to be fixed and proven before full run 7:
   losing writes after the upgrade: written down and rehearsed in Vagrant against the production names.
 - F23 ACME issuance through the porkbun webhook is never exercised (steps 23, 35): after each in production a
   throwaway staging Certificate through the porkbun solver, Ready, deleted.
-- F24 The ClickHouse pin's rollback is unproven (getSetting reads a session setting): rehearsed in Vagrant - 25.8
-  under the pin writes and merges parts, the image back to 24.8 reads them.
+- F24 The ClickHouse pin's rollback is unproven (getSetting reads a session setting). DONE 2026-10-06 with the real
+  images in docker (task test:clickhouse-pin): 25.8 pinned to 24.8 and 26.8 pinned to 25.8 write and merge parts of
+  the logs table, the older image reads every row back; unpinned, 24.8 does not start and 25.8 detaches half the
+  parts. The pin reaches MergeTree (system.merge_tree_settings: substream marks off, 'basic' serialization info,
+  single-stream strings, v2 object/dynamic) - the survival check now asserts those values at each pin. Not rehearsed:
+  the revert through Argo CD on the copy.
 - F25 Step 31 is ten's first setup-argocd run since 10-01: it installs the Application health check, after which
   the root waits for each wave Healthy (about 50 minutes of retries) - said in step 31, every app Healthy before it.
 - F26 deploy:upgrade:check allowed no argo-out-of-sync app: red after step 37 by design.
@@ -727,7 +733,7 @@ Fixed so far (2026-10-05, uncommitted where not said):
   setup-argocd run since 10-01).
 - F23: acme-check.yml after the cert-manager steps (production; objects validated by a server dry run on ten).
 - F27: postgres-base-backup.yml after 24, 25, 47 in production (the Vagrant barman-check runs the same playbook).
-Open, the operator's: F22, F24 and an etcd restore - the rollback rehearsals (≈ +3-4 h of full run).
+Open, the operator's: F22 and an etcd restore - the rollback rehearsals in the full run.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 

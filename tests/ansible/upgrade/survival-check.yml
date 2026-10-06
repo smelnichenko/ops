@@ -37,6 +37,22 @@
     trace_id: 5eedc0de5eedc0de5eedc0de5eedc0de
     span_id: 5eedc0de5eedc0de
     clickhouse_compat: ""
+    # what the pin holds, beyond the session's setting: the MergeTree format settings whose defaults moved after the
+    # pinned version, at the pinned version's values - measured with the real images (tests/clickhouse-pin, 2026-10-06:
+    # 25.8 pinned to 24.8, 26.8 pinned to 25.8). Each one the server has must hold that value.
+    clickhouse_format_pins:
+      "24.8":
+        write_marks_for_substreams_in_compact_parts: "0"
+      "25.8":
+        serialization_info_version: basic
+        string_serialization_version: single_stream
+        object_serialization_version: v2
+        dynamic_serialization_version: v2
+        object_shared_data_serialization_version: map
+        object_shared_data_serialization_version_for_zero_level_parts: map
+        propagate_types_serialization_versions_to_nested_types: "0"
+        escape_index_filenames: "0"
+        escape_variant_subcolumn_filenames: "0"
     clickhouse_users: default,schnappy
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
@@ -82,16 +98,25 @@
              FROM upgrade_check.canary"
           q "SELECT concat('compat=', getSetting('compatibility')), version()"
           q "SELECT concat('users=', arrayStringConcat(arraySort(groupArray(name)), ',')) FROM system.users"
+          q "SELECT concat('formats=', arrayStringConcat(arraySort(groupArray(concat(name, ':', value))), ','))
+             FROM system.merge_tree_settings WHERE name IN ('{{ _pins.keys() | join("', '") }}')"
+      vars:
+        _pins: "{{ clickhouse_format_pins[clickhouse_compat] | default({}) }}"
+        # name:value of each pinned setting the server has
+        _formats: "{{ (_ch.stdout_lines[3] | default('formats=')) | regex_replace('^formats=', '') | split(',')
+                      | reject('equalto', '') | list }}"
       register: _ch
       changed_when: false
       retries: 10
       delay: 10
-      until: _ch.rc == 0 and _ch.stdout_lines | length == 3
+      until: _ch.rc == 0 and _ch.stdout_lines | length == 4
       failed_when: >-
-        _ch.rc != 0 or _ch.stdout_lines | length != 3
+        _ch.rc != 0 or _ch.stdout_lines | length != 4
         or _ch.stdout_lines[0].split() != [rows | string, expected_md5]
         or _ch.stdout_lines[1].split()[0] != 'compat=' ~ clickhouse_compat
         or _ch.stdout_lines[2] != 'users=' ~ clickhouse_users
+        or (_formats | map('regex_replace', ':.*$', '') | map('extract', _pins) | list)
+           != (_formats | map('regex_replace', '^[^:]*:', '') | list)
 
     # ── Grafana ───────────────────────────────────────────────────────
     - name: Grafana - the canary dashboard (seed)
