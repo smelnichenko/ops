@@ -15,10 +15,16 @@
     upgrade_backup_endpoint: "{{ endpoint }}"
     upgrade_backup_bucket: "{{ bucket }}"
 
+# each delete then proven: no pod or volume of the side cluster outlives it (a pod still terminating was left once)
 - name: "Postgres - no side cluster left from an earlier run: {{ dump_name }}"
-  ansible.builtin.command: >-
-    {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
-    --cascade=foreground --timeout=600s
+  ansible.builtin.shell: |
+    set -euo pipefail
+    {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true \
+      --cascade=foreground --timeout=600s
+    left=$({{ kubectl }} -n {{ pg_namespace }} get pods,pvc -l cnpg.io/cluster={{ restored }} -o name)
+    [ -z "$left" ] || { echo "the side cluster outlived its delete: $left"; exit 1; }
+  args:
+    executable: /bin/bash
   changed_when: false
 
 - name: "Postgres - the side cluster, replayed and checked, removed whatever happens: {{ dump_name }}"
@@ -96,9 +102,14 @@
              ~ ' expected errors' ~ ((', seeded ' ~ _rows.stdout) if _rows.stdout is defined else '')] }}
   always:
     - name: "Postgres - remove the side cluster (its volume goes with it): {{ dump_name }}"
-      ansible.builtin.command: >-
-        {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found --wait=true
-        --cascade=foreground --timeout=600s
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kubectl }} -n {{ pg_namespace }} delete clusters.postgresql.cnpg.io {{ restored }} --ignore-not-found \
+          --wait=true --cascade=foreground --timeout=600s
+        left=$({{ kubectl }} -n {{ pg_namespace }} get pods,pvc -l cnpg.io/cluster={{ restored }} -o name)
+        [ -z "$left" ] || { echo "the side cluster outlived its delete: $left"; exit 1; }
+      args:
+        executable: /bin/bash
       changed_when: true
 
     - name: "Postgres - remove the side cluster's policies: {{ dump_name }}"
