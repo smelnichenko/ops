@@ -443,6 +443,17 @@ def merged_base(repo_dir, step):
 
 # ---- the phases -----------------------------------------------------------------------------------------------------
 
+def confirm(question):
+    """The operator's yes on the terminal, as the Taskfile's prompts ask it; no terminal is a no."""
+    try:
+        with open("/dev/tty", "r+") as tty:
+            tty.write(f"{question} [y/N] ")
+            tty.flush()
+            return tty.readline().strip().lower() in ("y", "yes")
+    except OSError:
+        return False
+
+
 def refuse(lines):
     if lines:
         sys.exit("REFUSED:\n" + "\n".join("  " + l for l in lines))
@@ -571,6 +582,12 @@ def done(step):
     if checked is not None and left > 0:
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
+    # the first check of a cert-renew or barman-check step changes production: the operator's yes first
+    changes = (["a throwaway certificate through production's ACME solver (acme-check.yml)"] if info["acme"] else []) \
+        + (["a Postgres base backup (postgres-base-backup.yml)"] if info["base_backup"] else [])
+    if checked is None and changes:
+        refuse([] if confirm(f"Step {step}'s first check changes PRODUCTION: {'; '.join(changes)} - run it?")
+               else ["not confirmed - nothing run, nothing recorded"])
     if checked is None and info["acme"]:
         refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
     if checked is None and info["base_backup"]:

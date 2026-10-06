@@ -154,6 +154,31 @@ check("own: another file differs", m.own_hash(D("other.yaml", 10, ["-  image: a:
 check("own: a line more differs",
       m.own_hash(D("values.yaml", 10, ["-  image: a:1", "+  image: a:2", "+  pull: Always"])) != base, True)
 
+# the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
+# a no - or no terminal - runs nothing and records nothing
+def done_calls(step, answer):
+    calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record")}
+    m.ledger_for = lambda st, ph, arg=None: (None, [], info[st])
+    m.soak_state = lambda *a: (None, 0)
+    m.confirm = lambda q: calls.append("asked") or answer
+    m.ansible = lambda *a: calls.append(a[0]) or True
+    m.check = lambda *a, **k: True
+    m.record = lambda st, ev, *a: calls.append(ev)
+    try:
+        m.done(step)
+    except SystemExit:
+        calls.append("refused")
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return calls
+S23 = "23-cert-manager"
+check("done 23 (cert-renew), no", done_calls(S23, False), ["asked", "refused"])
+check("done 23 (cert-renew), yes", done_calls(S23, True), ["asked", "playbooks/acme-check.yml", "checked"])
+check("done 24 (barman-check), yes", done_calls("24-cnpg", True), ["asked", "playbooks/postgres-base-backup.yml", "checked"])
+check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
+check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
+
 # image names as containerd lists them, so the inventory's floating tags meet the preload's digests
 check("full name: a library image", m.full_name("postgres"), "docker.io/library/postgres")
 check("full name: a Docker Hub image", m.full_name("valkey/valkey"), "docker.io/valkey/valkey")

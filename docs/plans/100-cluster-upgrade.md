@@ -829,8 +829,10 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
 6. `deploy:upgrade:done STEP=N` - ten as the step leaves it (its argo-out-of-sync apps allowed). The first green call
    starts the soak: 60 minutes after a wave0 step, 15 otherwise (a step's `soak` line overrides). Called again after it
    - green, with no container restarted since the first green call - the step is done. A red call during the soak
-   restarts it.
-Each phase that changes production asks first (the task's prompt) - the operator approves each.
+   restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a
+   barman-check step's takes a Postgres base backup: that call asks first.
+Each phase that changes production asks first (the task's prompt, or the done call's own question) - the operator
+approves each.
 
 Stop criteria: the rollout stops at the first of these - a phase refused or failed, Argo not settled after a merge,
 an inventory difference, a restart during the soak - and the step's abort line, with the operator, decides what

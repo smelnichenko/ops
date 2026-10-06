@@ -1123,7 +1123,7 @@ tasks:
       - cmd: scripts/upgrade-production.py defaults {{.STEP}}
 
   deploy:upgrade:done:
-    desc: "Step STEP's last phase (records it in the ledger; read-only otherwise): production as the step leaves it - the first green call starts the soak, a green call after it with no container restarted since ends the step"
+    desc: "Step STEP's last phase (records it in the ledger): production as the step leaves it - the first green call starts the soak, a green call after it with no container restarted since ends the step. Read-only, but a cert-renew or barman-check step's first call issues a throwaway certificate / takes a Postgres base backup: it asks first"
     requires:
       vars: [STEP]
     cmds:
