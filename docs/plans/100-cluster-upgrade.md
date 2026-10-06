@@ -758,8 +758,13 @@ external-secrets stability-support, Scylla Operator releases + metadata.yaml, St
 Pairings: ScyllaDB 6.2.3 is outside operator 1.20's and Manager 3.9's lists today; operator 1.22 lists ScyllaDB 2025.1,
 2026.1-2026.3, but Manager 3.12 lists 2025.1, 2025.4, 2026.1, 2026.2 - not 2026.3. Istio pins Gateway API per
 release: 1.25 v1.2.1, 1.26-1.27 v1.3.0, 1.28-1.29 v1.4.0, 1.30 v1.5.1 (install v1.5 before 1.30 - a hard minimum),
-1.31 v1.6.0. Gateway API v1.5 refuses a downgrade (step 18 is one-way). Strimzi 0.51 -> 1.2 directly: not yet
-checked against Strimzi's upgrade notes.
+1.31 v1.6.0. Gateway API v1.5 refuses a downgrade (step 18 is one-way). Strimzi 0.51 -> 1.2 directly: checked
+2026-10-06 against Strimzi's own upgrade documentation and changelog (0.51-1.2) - a multi-version upgrade is supported;
+its required sequence holds (Kubernetes 1.30+, KRaft, the v1 conversion before the operator - step 37, then the
+operator, then Kafka's version - step 40); 1.2.0 supports Kafka 4.2.0-4.3.1 (production's 4.2.0 is set in the CR);
+the removals and renames do not touch production's render (node pools carry resources and storage, KafkaUsers use
+`operations`, simple authorization and SCRAM - no OAuth, Keycloak or OPA - no rack, nothing names the Entity
+Operator's renamed health ports, no HTTP Bridge).
 
 The order then (old numbers below, to "Unavoidable windows") ran Argo CD 3.3, cert-manager 1.20, ESO 2.2, Strimzi
 0.51 and Scylla Operator 1.20 on Kubernetes 1.36 (steps 26-37), Istio 1.25-1.28 on 1.35 (16-22). Proposed order (each

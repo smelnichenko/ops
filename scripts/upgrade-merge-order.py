@@ -30,6 +30,7 @@ STEPS = os.path.join(OPS, "tests", "ansible", "upgrade", "steps")
 REPOS = {r: os.path.normpath(os.path.join(OPS, "..", r)) for r in ("infra", "platform")}
 APPS = "clusters/production/argocd/apps"
 PLATFORM_URL = "https://git.pmon.dev/schnappy/platform.git"
+HELM = "helm"  # the binary renders() runs (scripts/argo-helm-diff.py sets one per Helm version)
 INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
 _loader = importlib.machinery.SourceFileLoader("upgrade_expected_inventory", INVENTORY)
 inv = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_expected_inventory", _loader))
@@ -74,7 +75,7 @@ def renders(infra_ref, platform_ref, work):
                                      capture_output=True, check=True).stdout
             subprocess.run(["tar", "-x", "-C", dest], input=archive, check=True)
             charts[chart] = os.path.join(dest, chart)
-        args = ["helm", "template", release, charts[chart], "-n", namespace]
+        args = [HELM, "template", release, charts[chart], "-n", namespace]
         for i, path in enumerate(value_files):
             f = os.path.join(work, f"values-{len(out)}-{i}.yaml")
             with open(f, "w") as fh:

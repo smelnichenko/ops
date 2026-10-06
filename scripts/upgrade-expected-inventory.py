@@ -29,6 +29,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                before the step changes anything, and the backup rehearsed)
     soak <minutes>                            (production waits this long between the step's first green check and
                                                the next step - scripts/upgrade-production.py; default 15)
+    helm-diff <old> <new>                     (an Argo CD upgrade moving its Helm: every application rendered with both
+                                               the same before the full run boots - scripts/argo-helm-diff.py)
     settle <minutes>                          (production waits this long for Argo to settle after each of the step's
                                                merges - scripts/upgrade-production.py; default 30)
     default <file>: <line> => <line>          (a playbook default the step moves - scripts/upgrade-defaults.py)
@@ -114,6 +116,8 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         elif re.fullmatch(r"soak [1-9]\d*", line):
             if soak is not None:
                 soak.append(int(line.split()[1]))
+        elif re.fullmatch(r"helm-diff \d+\.\d+\.\d+ \d+\.\d+\.\d+", line):
+            pass  # scripts/argo-helm-diff.py
         elif re.fullmatch(r"settle [1-9]\d*", line):
             if settle is not None:
                 settle.append(int(line.split()[1]))

@@ -1,5 +1,7 @@
 # Strimzi 0.51.0 -> 1.2.0 (v1 API only), Argo's automated sync back (infra upgrade/38-strimzi-1.2). The operator rolls
-# the brokers onto its own 4.2.0 image. Stateful: shown to the operator before it runs in production.
+# the brokers onto its own 4.2.0 image. Stateful: shown to the operator before it runs in production. Strimzi's
+# upgrade documentation allows the multi-version upgrade; its sequence and 1.x's removals checked against
+# production's render (2026-10-06, the plan's support-matrix notes).
 # outage: the operator rolls Kafka - one broker, unavailable for its restart
 # abort: one-way: Strimzi 1.x serves v1 only; back by the Wave 0 Kafka backup with 0.51 (not rehearsed)
 # one-way: Kafka's volume (the broker stopped for the copy) backed up into the Pi store before the step changes anything

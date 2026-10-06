@@ -612,9 +612,11 @@ tasks:
     desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails); each green step's proof recorded for production's merge (.upgrade/proven)
     cmds:
       # before anything boots: the ops tree committed (the run proves a commit - production's phases compare with it),
-      # and every step's state between its two merges one the run proves
+      # every step's state between its two merges one the run proves, and an Argo CD upgrade's new Helm rendering every
+      # application as its old one did (helm-diff lines)
       - cmd: scripts/upgrade-production.py proof-start
       - cmd: scripts/upgrade-merge-order.py --all
+      - cmd: scripts/argo-helm-diff.py --all
       - task: test:upgrade:build
       # an empty step list is a failure, not a green run (the loop just did nothing)
       - cmd: |
