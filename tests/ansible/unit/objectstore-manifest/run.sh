@@ -1,7 +1,10 @@
 #!/bin/bash
 # objectstore-manifest.py on a synthetic versitygw posix store (ETags and ACLs in user.* extended attributes, versitygw
-# 1.8's .vgwlocks beside the buckets): a good archive and its restore pass; an archive missing an object, one without the attributes, an object whose content is
-# not its ETag, a restore without the attributes or without a bucket - each fails, naming it.
+# 1.8's .vgwlocks beside the buckets): a good archive and its restore pass; an archive missing an object, one without
+# the attributes or without a bucket's ACL, an object whose content is not its ETag, a restore without the attributes,
+# without a bucket or with an object's content changed - each fails, naming it. Only the objects the same before and
+# after the archive are checked (one written while tar ran is left out), and not when a tenth of them changed; a store
+# with a bucket that has no ACL gives no manifest.
 set -u
 M=$(cd "$(dirname "$0")/../../../../deploy/ansible/playbooks/files" && pwd)/objectstore-manifest.py
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -37,6 +40,9 @@ python3 "$M" manifest store/buckets > after.json
 expect pass "good archive" "4 objects in 2 buckets" python3 "$M" verify-tar good.tgz before.json after.json out.json
 tar "${X[@]}" -C store --exclude=./buckets/b1/k/o2 -czf missing.tgz .
 expect fail "archive missing an object" "b1/k/o2: not in the archive" python3 "$M" verify-tar missing.tgz before.json after.json x.json
+# an archive with the ETags but no bucket ACL
+tar --xattrs --xattrs-include='user.etag' -C store -czf noacl.tgz .
+expect fail "archive without a bucket's ACL" "bucket b1: no ACL in the archive" python3 "$M" verify-tar noacl.tgz before.json after.json x.json
 tar -C store -czf plain.tgz .
 expect fail "archive without the attributes" "ETag in the archive none" python3 "$M" verify-tar plain.tgz before.json after.json x.json
 echo changed > store/buckets/b1/k/o3
@@ -61,4 +67,40 @@ expect fail "objects without an ETag" "b1/o1: no ETag in the store" python3 "$M"
 expect fail "nothing to check" "no object to check" python3 "$M" verify-tar other.tgz o-before.json o-after.json x.json
 echo '{"buckets": ["b1"], "objects": {}}' > empty.json
 expect fail "an empty list proves nothing" "holds no object" python3 "$M" verify-tree r2/buckets empty.json
+# a restored object whose content is not its ETag (the attribute kept)
+mkdir r3; tar "${X[@]}" -C r3 -xzf good.tgz
+echo tampered > r3/buckets/b1/k/o1
+expect fail "restore with an object's content changed" "b1/k/o1: ETag .*content md5" python3 "$M" verify-tree r3/buckets out.json
+# a store with a bucket without its ACL gives no manifest
+python3 - <<'PY'
+import os
+os.makedirs("bare/buckets/b1"); os.makedirs("bare/buckets/b2"); os.setxattr("bare/buckets/b1", "user.acl", b'{"Owner":"x"}')
+PY
+expect fail "a bucket without its ACL in the store" "bucket b2: no ACL" python3 "$M" manifest bare/buckets
+# objects written while tar ran: 20 single-part objects, the archive taken after one (or two of ten) changed - the
+# changed ones are in the archive at their new ETag, which neither list agrees on
+python3 - <<'PY'
+import hashlib, os
+for store, n in (("w20", 20), ("w10", 10)):
+    os.makedirs(f"{store}/buckets/b1"); os.setxattr(f"{store}/buckets/b1", "user.acl", b'{"Owner":"x"}')
+    for i in range(n):
+        p = f"{store}/buckets/b1/o{i}"
+        open(p, "w").write(f"obj {i}\n")
+        os.setxattr(p, "user.etag", ('"%s"' % hashlib.md5(open(p, "rb").read(), usedforsecurity=False).hexdigest()).encode())
+PY
+rewrite() {  # rewrite <file>: new content, its ETag with it
+  python3 -c 'import hashlib, os, sys
+p = sys.argv[1]; open(p, "w").write("rewritten\n")
+os.setxattr(p, "user.etag", ("\"%s\"" % hashlib.md5(open(p, "rb").read(), usedforsecurity=False).hexdigest()).encode())' "$1"
+}
+python3 "$M" manifest w20/buckets > w20-before.json
+rewrite w20/buckets/b1/o0
+tar "${X[@]}" -C w20 -czf w20.tgz .
+python3 "$M" manifest w20/buckets > w20-after.json
+expect pass "an object written while tar ran is left out" "19 objects in 1 buckets" python3 "$M" verify-tar w20.tgz w20-before.json w20-after.json w20-out.json
+python3 "$M" manifest w10/buckets > w10-before.json
+rewrite w10/buckets/b1/o0; rewrite w10/buckets/b1/o1
+tar "${X[@]}" -C w10 -czf w10.tgz .
+python3 "$M" manifest w10/buckets > w10-after.json
+expect fail "a fifth of the objects written while tar ran" "only 8 of 10 objects unchanged" python3 "$M" verify-tar w10.tgz w10-before.json w10-after.json x.json
 [ "$fails" = 0 ] && echo "objectstore-manifest: ALL-PASS" || { echo "objectstore-manifest: $fails failed"; exit 1; }
