@@ -1,0 +1,29 @@
+---
+# Whether a service's restart is pending - its config files now against the ones it last loaded, by content: a stamp
+# (/var/lib/config-loaded/<service>.sha256) that tasks/restart-recorded.yml writes once it runs them. By the clock it
+# was wrong both ways on the Pis, which have no RTC: a boot before the NTP sync, or a clock that was ahead when a file
+# was written, read "pending" on every run (a needless rolling restart, Patroni paused); a write and a restart in one
+# second read "current". A host with no stamp yet (before this check) is read by the clock once.
+# Expects: loaded_service, loaded_files. Registers _restart_pending: stdout_lines [current|pending, <sha256 now>].
+# Tested: tests/ansible/unit/restart-pending.
+- name: "A restart pending - the config now against the one loaded: {{ loaded_service }}"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      now=$(cat {{ loaded_files | map('quote') | join(' ') }} | sha256sum | cut -d' ' -f1)
+      stamp=/var/lib/config-loaded/{{ loaded_service }}.sha256
+      if [ -f "$stamp" ]; then
+        if [ "$(cat "$stamp")" = "$now" ]; then echo current; else echo pending; fi
+      else
+        started=$(date -d "$(systemctl show {{ loaded_service }} -p ActiveEnterTimestamp --value)" +%s)
+        state=current
+        for f in {{ loaded_files | map('quote') | join(' ') }}; do
+          if [ "$(stat -c %Y "$f")" -gt "$started" ]; then state=pending; fi
+        done
+        echo "$state"
+      fi
+      echo "$now"
+  register: _restart_pending
+  changed_when: false
+  check_mode: false

@@ -13,7 +13,7 @@
 #   not paused after.
 #   setup-consul on pi2 rebuilt (agent stopped, key blanked) alone: the others' key written; refused while someone else
 #   paused Patroni, the pause left; setup-patroni the same; the unit restart one node at a time, the replica first.
-#   setup-vault-pi with vault.hcl touched: each Vault restarted alone, unsealed, one active; no shares on the controller.
+#   setup-vault-pi with a restart pending (Vault's record stale): each Vault restarted alone, unsealed, one active; no shares on the controller.
 #   setup-keepalived with a drifted router_id that keepalived already runs: rewritten and reloaded - the running
 #   router_id back, the PID kept, the VIP where it was.
 # Vagrant only (the guard play first). Usage: task test:pi:rerun-guards
@@ -477,9 +477,9 @@
         msg: "CONSUL RE-RUN: {{ inventory_hostname }} kept its key and was not restarted"
 
 # a run limited to one server (pi2) keeps the key the others run - it found none among the run's hosts and wrote an
-# empty one - and a restart left pending there (its config newer than its agent, as after a run cut short between
-# writing and restarting) is done; the servers outside the run are not touched
-- name: Consul before the limited run - pi2's config newer than its agent
+# empty one - and a restart left pending there (the agent's record of its loaded config stale, as after a run cut
+# short between writing and restarting) is done; the servers outside the run are not touched
+- name: Consul before the limited run - a restart pending on pi2
   hosts: pi1,pi2,target
   become: true
   gather_facts: false
@@ -493,9 +493,11 @@
       register: _consul_before_limited
       changed_when: false
 
-    - name: pi2's config touched (its content as it is)
-      ansible.builtin.command: touch /etc/consul.d/consul.hcl
-      changed_when: true
+    - name: The consul running as if it loaded another config - its record stale (a run cut short before the restart)
+      ansible.builtin.copy:
+        dest: /var/lib/config-loaded/consul.sha256
+        content: "stale\n"
+        mode: '0600'
       when: inventory_hostname == 'pi2'
 
 - name: setup-consul limited to pi2
@@ -626,9 +628,11 @@
   become: true
   gather_facts: false
   tasks:
-    - name: pi2's config touched (newer than its agent)
-      ansible.builtin.command: touch /etc/consul.d/consul.hcl
-      changed_when: true
+    - name: The consul running as if it loaded another config - its record stale (a run cut short before the restart)
+      ansible.builtin.copy:
+        dest: /var/lib/config-loaded/consul.sha256
+        content: "stale\n"
+        mode: '0600'
 
 - name: setup-consul refused while Patroni is paused by someone else
   hosts: localhost
@@ -745,6 +749,12 @@
       ansible.builtin.lineinfile:
         path: /etc/systemd/system/patroni.service
         line: "# rerun-guards: a hand edit"
+
+    - name: The patroni running as if it loaded another config - its record stale (a run cut short before the restart)
+      ansible.builtin.copy:
+        dest: /var/lib/config-loaded/patroni.sha256
+        content: "stale\n"
+        mode: '0600'
 
     - name: Postgres before the unit's re-run
       ansible.builtin.uri:
@@ -966,10 +976,10 @@
           KEEPALIVED RE-RUN: {{ inventory_hostname }} kept PID and VIP ({{ _ka_after.stdout }}), runs router_id
           {{ _ka_router.stdout }}{{ ' (was drift-pi1)' if inventory_hostname == 'pi1' else '' }}
 
-# setup-vault-pi with a change to apply on both Pis (vault.hcl newer than Vault): each Vault restarted one at a time,
+# setup-vault-pi with a change to apply on both Pis (Vault's record of its loaded config stale): each Vault restarted one at a time,
 # unsealed before the next (both at once sealed both), one active after; and no unseal shares left on the controller
 # (a fetch left every share in its /tmp)
-- name: Vault before - its config touched on both Pis
+- name: Vault before - a restart pending on both Pis
   hosts: pi1,pi2
   become: true
   gather_facts: false
@@ -987,9 +997,11 @@
       register: _vault_start_before
       changed_when: false
 
-    - name: Its config touched (newer than the running Vault)
-      ansible.builtin.command: touch /etc/vault.d/vault.hcl
-      changed_when: true
+    - name: The vault running as if it loaded another config - its record stale (a run cut short before the restart)
+      ansible.builtin.copy:
+        dest: /var/lib/config-loaded/vault.sha256
+        content: "stale\n"
+        mode: '0600'
 
 - name: setup-vault-pi re-run with the change to apply
   hosts: localhost

@@ -1,0 +1,18 @@
+---
+# A service's config as it runs it now recorded - after its restart, or found current: what tasks/restart-pending.yml
+# compares the next run with. Expects: loaded_service, loaded_hash (restart-pending's second line).
+- name: The record's directory
+  ansible.builtin.file:
+    path: /var/lib/config-loaded
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: "The config as loaded, recorded: {{ loaded_service }}"
+  ansible.builtin.copy:
+    dest: "/var/lib/config-loaded/{{ loaded_service }}.sha256"
+    content: "{{ loaded_hash }}\n"
+    owner: root
+    group: root
+    mode: '0600'

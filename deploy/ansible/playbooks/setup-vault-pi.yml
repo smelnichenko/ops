@@ -384,25 +384,21 @@
   tasks:
     # pending, not just changed by this run: a run that failed between writing and restarting left the new config on
     # disk and the old one running
-    - name: A restart pending here - the config or unit newer than the running Vault
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          started=$(date -d "$(systemctl show vault -p ActiveEnterTimestamp --value)" +%s)
-          for f in /etc/vault.d/vault.hcl /etc/systemd/system/vault.service; do
-            if [ "$(stat -c %Y "$f")" -gt "$started" ]; then echo pending; exit 0; fi
-          done
-          echo current
-      register: _vault_pending
-      changed_when: false
-      check_mode: false
+    - name: A restart pending here - the config or unit other than the running Vault loaded
+      ansible.builtin.include_tasks: tasks/restart-pending.yml
+      vars:
+        loaded_service: vault
+        loaded_files: [/etc/vault.d/vault.hcl, /etc/systemd/system/vault.service]
       when: _vault_before.status.ActiveState | default('') == 'active'
+
+    - name: Its answer
+      ansible.builtin.set_fact:
+        _vault_pending: "{{ _restart_pending.stdout_lines | default(['', '']) }}"
 
     - name: Restarted, unsealed before the next
       when:
         - _vault_before.status.ActiveState | default('') == 'active'
-        - _vault_pending.stdout | default('') == 'pending'
+        - _vault_pending[0] == 'pending'
       block:
         # this one sealed for its restart while the other is sealed too is Vault down: refused
         - name: The other Pi's Vault unsealed (or neither initialised yet)
@@ -432,6 +428,16 @@
           retries: 36
           delay: 5
           until: _vault_back.status in [200, 429, 501]
+
+    # what the next run compares with: restarted and unsealed again, or found running its config already
+    - name: Vault's config as it runs it, recorded
+      ansible.builtin.include_tasks: tasks/restart-recorded.yml
+      vars:
+        loaded_service: vault
+        loaded_hash: "{{ _vault_pending[1] }}"
+      when: >-
+        _vault_pending[0] == 'current'
+        or (_vault_back is defined and _vault_back is not skipped and _vault_back is succeeded)
 
 # ─── Initialise Vault on pi1 (first run only) ───────────────────────────────
 - name: Initialise Vault on pi1

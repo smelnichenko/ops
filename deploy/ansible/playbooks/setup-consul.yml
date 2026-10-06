@@ -231,19 +231,15 @@
 
     # pending, not just changed by this run: a run that failed after writing them and before the restart left the new
     # config on disk and the old one running - the next run changed nothing and restarted nothing
-    - name: A restart pending here - the config or unit newer than the running agent
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          started=$(date -d "$(systemctl show consul -p ActiveEnterTimestamp --value)" +%s)
-          for f in /etc/consul.d/consul.hcl /etc/systemd/system/consul.service; do
-            if [ "$(stat -c %Y "$f")" -gt "$started" ]; then echo pending; exit 0; fi
-          done
-          echo current
-      register: _consul_pending
-      changed_when: false
-      check_mode: false
+    - name: A restart pending here - the config or unit other than the running agent loaded
+      ansible.builtin.include_tasks: tasks/restart-pending.yml
+      vars:
+        loaded_service: consul
+        loaded_files: [/etc/consul.d/consul.hcl, /etc/systemd/system/consul.service]
+
+    - name: Kept for the restart play
+      ansible.builtin.set_fact:
+        _consul_pending: "{{ _restart_pending }}"
 
 # ─── Changed servers restarted one at a time ─────────────────────────────────
 # Each back and caught up - autopilot: every server healthy (in contact, its log caught up), one loss tolerated -
@@ -261,7 +257,7 @@
   tasks:
     - name: A restart here, and Patroni running to pause around it
       when:
-        - _consul_pending.stdout == 'pending'
+        - _consul_pending.stdout_lines[0] == 'pending'
         - _consul_before.status.ActiveState | default('') == 'active'
       block:
         # the others must carry the quorum while this one is away: with one already down, this restart loses it -
@@ -350,6 +346,16 @@
               changed_when: true
               delegate_to: "{{ _other_pi }}"
               when: _patroni_paused is defined and _patroni_paused is succeeded and _patroni_paused is not skipped
+
+    # what the next run compares with: the agent restarted and caught up, or found running its config already
+    - name: Consul's config as it runs it, recorded
+      ansible.builtin.include_tasks: tasks/restart-recorded.yml
+      vars:
+        loaded_service: consul
+        loaded_hash: "{{ _consul_pending.stdout_lines[1] }}"
+      when: >-
+        _consul_pending.stdout_lines[0] == 'current'
+        or (_consul_health is defined and _consul_health is not skipped and _consul_health is succeeded)
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Consul cluster

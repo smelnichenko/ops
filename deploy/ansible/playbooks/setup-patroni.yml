@@ -304,16 +304,15 @@
     patronictl: patronictl -c /etc/patroni/patroni.yml
   tasks:
     # the unit's restart pending, not just changed by this run: a run that failed before it left the new unit on disk
-    - name: The unit newer than the running Patroni
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          started=$(date -d "$(systemctl show patroni -p ActiveEnterTimestamp --value)" +%s)
-          if [ "$(stat -c %Y /etc/systemd/system/patroni.service)" -gt "$started" ]; then echo pending; else echo current; fi
-      register: _patroni_unit_pending
-      changed_when: false
-      check_mode: false
+    - name: The unit other than the running Patroni loaded
+      ansible.builtin.include_tasks: tasks/restart-pending.yml
+      vars:
+        loaded_service: patroni
+        loaded_files: [/etc/systemd/system/patroni.service]
+
+    - name: Its answer
+      ansible.builtin.set_fact:
+        _patroni_unit_pending: "{{ _restart_pending.stdout_lines }}"
       when: not _patroni_first_install | bool
 
     - name: What this run changed here
@@ -321,7 +320,7 @@
         # whenever not a first install: a run cut short after writing the config left it unloaded, and the next one
         # changed nothing (Patroni's reload of an unchanged file does nothing)
         _patroni_reload: "{{ not _patroni_first_install | bool }}"
-        _patroni_restart: "{{ not _patroni_first_install | bool and _patroni_unit_pending.stdout | default('') == 'pending' }}"
+        _patroni_restart: "{{ not _patroni_first_install | bool and _patroni_unit_pending[0] == 'pending' }}"
 
     - name: Reloaded - a config change (unless a restart follows)
       ansible.builtin.systemd:
@@ -387,6 +386,17 @@
               changed_when: true
               run_once: true
               when: _restart_paused is defined and _restart_paused is succeeded
+
+    # what the next run compares with: every node restarted (any_errors_fatal - a failed restart ends the play before
+    # this), started with this unit by a first install, or found running it already
+    - name: Patroni's unit as it runs it, recorded
+      ansible.builtin.include_tasks: tasks/restart-recorded.yml
+      vars:
+        loaded_service: patroni
+        loaded_hash: "{{ _patroni_unit_pending[1] }}"
+      when: >-
+        _patroni_unit_pending[0] == 'current' or _patroni_first_install | bool
+        or ansible_play_hosts | map('extract', hostvars, '_patroni_restart') | map('bool') | select | list | length > 0
 
 # ─── Restore Keycloak DB ─────────────────────────────────────────────────────
 # Must run against the Patroni primary, which is non-deterministic on a
