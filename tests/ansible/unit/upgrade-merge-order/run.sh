@@ -38,6 +38,7 @@ for s in ("01-before", "02-step"):
     open(os.path.join(W, "steps", s + ".txt"), "w").close()
 os.makedirs(os.path.join(W, ".upgrade"))
 mo.HELM, mo.STEPS, mo.OPS = helm, os.path.join(W, "steps"), W
+mo.WORK = os.path.join(W, "clean", ".upgrade")  # as CI's fresh checkout has it: not there yet
 mo.refs = lambda step: dict.fromkeys(("infra", "platform"), "main" if step == "01-before" else "upgrade/02-step")
 mo.capabilities = lambda step: ["--kube-version", "1.34.12", "--api-versions", "monitoring.coreos.com/v1,v1"]
 os.environ["HELM_ARGS"] = os.path.join(W, "helm-args")

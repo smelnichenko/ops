@@ -195,6 +195,7 @@ def check(step):
     between = dict(before, **{first: after[first]})
     CAPABILITIES[:] = capabilities(step)
     read = set()
+    os.makedirs(WORK, exist_ok=True)  # a fresh checkout has none
     with tempfile.TemporaryDirectory(dir=WORK) as work:
         a, m, b = (renders(s["infra"], s["platform"], os.path.join(work, k), read)
                    for k, s in (("before", before), ("between", between), ("after", after)))
@@ -230,7 +231,6 @@ def main():
     args = sys.argv[1:]
     if len(args) != 1:
         sys.exit(__doc__)
-    os.makedirs(WORK, exist_ok=True)
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     steps = names if args[0] == "--all" else [args[0]]
     if steps[0] not in names:

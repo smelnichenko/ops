@@ -13,6 +13,7 @@ work = tempfile.mkdtemp()
 os.makedirs(os.path.join(work, ".upgrade"))
 open(os.path.join(work, "34-x.txt"), "w").write("helm-diff 3.19.4 4.2.1\n")
 hd.STEPS, hd.OPS = work, work
+hd.WORK = os.path.join(work, "clean", ".upgrade")  # as CI's fresh checkout has it: not there yet
 hd.mo.refs = lambda step: {"infra": "i", "platform": "p"}
 hd.helm_binary = lambda version: version
 CAPS = ["--kube-version", "1.34.12", "--api-versions", "v1"]
