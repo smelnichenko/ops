@@ -65,7 +65,10 @@
     - name: Restored (psql's own error otherwise)
       ansible.builtin.assert:
         that: _restored.rc == 0
-        fail_msg: "the Keycloak restore failed: {{ _restored.stderr | default('') }}"
+        # psql's ERROR lines only - its DETAIL and CONTEXT quote the dump's rows (realm keys, secrets, credentials)
+        fail_msg: >-
+          the Keycloak restore failed: {{ _restored.stderr_lines | default([]) | select('search', 'ERROR:')
+          | join(' / ') or 'no ERROR line (exit ' ~ _restored.rc | default('?') ~ ')' }}
         success_msg: "{{ _restored.stdout | default('') }}"
       run_once: true
   always:
