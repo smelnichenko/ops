@@ -58,6 +58,7 @@
       ansible.builtin.slurp:
         src: /etc/vault-unseal/root-token
       register: vault_token_raw
+      no_log: true
 
     - name: Set token fact
       ansible.builtin.set_fact:
@@ -68,7 +69,7 @@
       community.hashi_vault.vault_list:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_cert: /etc/vault.d/tls/ca-cert.pem
         path: "secret/metadata/{{ vault_prefix }}"
       register: _list_result
       failed_when: false
@@ -97,17 +98,18 @@
         method: DELETE
         headers:
           X-Vault-Token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_path: /etc/vault.d/tls/ca-cert.pem
         status_code: [200, 204, 404]
       loop: "{{ keys_to_purge }}"
       loop_control:
         label: "{{ vault_prefix }}/{{ item }}"
+      no_log: true  # the root token in its headers
 
     - name: Verify prefix is empty
       community.hashi_vault.vault_list:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_cert: /etc/vault.d/tls/ca-cert.pem
         path: "secret/metadata/{{ vault_prefix }}"
       register: _verify
       failed_when: false

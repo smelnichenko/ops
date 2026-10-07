@@ -25,7 +25,7 @@
     realm: schnappy
     vault_addr: https://127.0.0.1:8200
     vault_cli_env: |
-      export VAULT_ADDR="{{ vault_addr }}" VAULT_SKIP_VERIFY=1
+      export VAULT_ADDR="{{ vault_addr }}" VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
       VAULT_TOKEN="$(cat /etc/vault-unseal/root-token)" || { echo "vault_cli_env: cannot read /etc/vault-unseal/root-token (needs become)" >&2; exit 1; }
       [ -n "$VAULT_TOKEN" ] || { echo "vault_cli_env: root-token file is empty" >&2; exit 1; }
       export VAULT_TOKEN

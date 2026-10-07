@@ -38,6 +38,7 @@
       ansible.builtin.slurp:
         src: /etc/vault-unseal/root-token
       register: vault_token_raw
+      no_log: true
 
     - name: Set token fact
       ansible.builtin.set_fact:
@@ -48,7 +49,7 @@
       community.hashi_vault.vault_write:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_cert: /etc/vault.d/tls/ca-cert.pem
         path: "sys/policies/acl/{{ policy_name }}"
         data:
           policy: |
@@ -96,7 +97,7 @@
       community.hashi_vault.vault_kv2_get:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_cert: /etc/vault.d/tls/ca-cert.pem
         path: "argocd/vault-cleanup-token"
       register: _existing_token
       failed_when: false
@@ -106,7 +107,7 @@
       community.hashi_vault.vault_write:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_cert: /etc/vault.d/tls/ca-cert.pem
         path: "auth/token/create"
         data:
           policies: ["{{ policy_name }}"]
@@ -123,7 +124,7 @@
       community.hashi_vault.vault_kv2_write:
         url: "{{ vault_addr }}"
         token: "{{ vault_token_value }}"
-        validate_certs: false
+        ca_cert: /etc/vault.d/tls/ca-cert.pem
         path: "argocd/vault-cleanup-token"
         data:
           token: "{{ _new_token.data.auth.client_token }}"
