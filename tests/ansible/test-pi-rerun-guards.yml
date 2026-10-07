@@ -156,9 +156,10 @@
           ({{ _db_after.stdout_lines | join(', ') }}); PgBouncer stopped -> refused, the port kept
 
 # setup-consul with every config's key drifted from the one Consul runs (as the old playbook left them: a new key
-# written each run, which Consul ignores after its first start): the live key written back, each server restarted
-# alone (no two down together), Patroni paused around each (no failover) and resumed. Then a re-run on the converged
-# cluster: nothing restarted, the key kept.
+# written each run, which Consul ignores after its first start) and no record of the config Consul loaded (the old
+# playbook kept none - production's first run reads its restart by the clock): the live key written back, each server
+# restarted alone (no two down together), Patroni paused around each (no failover) and resumed. Then a re-run on the
+# converged cluster: nothing restarted (its record says current), the key kept.
 - name: Consul - every config's key drifted; the live key and Patroni's state before
   hosts: pi1,pi2,target
   become: true
@@ -192,6 +193,13 @@
         path: /etc/consul.d/consul.hcl
         regexp: '^encrypt = '
         line: 'encrypt = "{{ _drift_key.stdout }}"'
+
+    # with the record a build by today's playbook leaves, the key written back is the config Consul loaded: nothing to
+    # restart - production has no record yet
+    - name: No record of the config Consul loaded (as production, from the old playbook)
+      ansible.builtin.file:
+        path: /var/lib/config-loaded/consul.sha256
+        state: absent
 
     - name: Each Patroni's Postgres before
       ansible.builtin.uri:
