@@ -285,30 +285,43 @@ def init():
 
 # ---- checks against ten -------------------------------------------------------------------------------------------
 
+def excluded_namespaces():
+    """The namespaces the inventory leaves out: the test environment's, and the preview environments open now
+    (schnappy-pr-<N>) - no step's, they come and go with their pull requests."""
+    names = [n.split("/", 1)[-1] for n in ten("kubectl get namespaces -o name").stdout.split()]
+    return " ".join([TEST_NAMESPACES, *(n for n in names if re.search(PREVIEW_NAMESPACES, n))])
+
+
 def inventory_check(applied):
-    """ten's and the Pis' inventory (the test environment left out, listed apart) against production's with the
-    given steps applied."""
+    """ten's and the Pis' inventory (the test environment and open preview environments left out, the test
+    environment listed apart) against production's with the given steps applied."""
     os.makedirs(WORK, exist_ok=True)
-    # this run's own files: a check beside a phase must not diff the other one's
-    expected = tempfile.mkstemp(prefix="prod-expected.", suffix=".txt", dir=WORK)[1]
-    now = tempfile.mkstemp(prefix="prod-inventory-now.", suffix=".txt", dir=WORK)[1]
-    with open(expected, "w") as f:
-        f.write("\n".join(sorted(inv.expected(applied))) + "\n")
-    script = open(os.path.join(OPS, "scripts", "version-inventory.sh")).read()
-    lines = ten(f"INVENTORY_EXCLUDE_NAMESPACES={shlex.quote(TEST_NAMESPACES)} bash -s", stdin=script).stdout
-    pi_script = open(os.path.join(OPS, "scripts", "version-inventory-pi.sh")).read()
-    for pi in PIS:
-        out = run(["ssh", pi, "sudo -n bash -s"], input=pi_script, capture_output=True)
-        if out.returncode:
-            sys.exit(f"inventory of {pi}: {out.stderr.strip()}")
-        lines += out.stdout
-    with open(now, "w") as f:
-        f.write(lines.replace("\r", ""))
-    apart = ten(f"INVENTORY_ONLY_NAMESPACES={shlex.quote(TEST_NAMESPACES)} bash -s", stdin=script).stdout
-    print(f"the test environment ({TEST_NAMESPACES}) - listed, not compared:")
-    print("\n".join("  " + l for l in apart.splitlines() if l.startswith(("image ", "helm ", "kafka-metadata "))))
-    return run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
-                os.path.join(inv.UPGRADE, "prod-transient.txt")]).returncode == 0
+    # this run's own files (a check beside a phase must not diff the other one's), removed after it
+    files = [tempfile.mkstemp(prefix=p, suffix=".txt", dir=WORK) for p in ("prod-expected.", "prod-inventory-now.")]
+    for fd, _ in files:
+        os.close(fd)
+    expected, now = (path for _, path in files)
+    try:
+        with open(expected, "w") as f:
+            f.write("\n".join(sorted(inv.expected(applied))) + "\n")
+        script = open(os.path.join(OPS, "scripts", "version-inventory.sh")).read()
+        lines = ten(f"INVENTORY_EXCLUDE_NAMESPACES={shlex.quote(excluded_namespaces())} bash -s", stdin=script).stdout
+        pi_script = open(os.path.join(OPS, "scripts", "version-inventory-pi.sh")).read()
+        for pi in PIS:
+            out = run(["ssh", pi, "sudo -n bash -s"], input=pi_script, capture_output=True)
+            if out.returncode:
+                sys.exit(f"inventory of {pi}: {out.stderr.strip()}")
+            lines += out.stdout
+        with open(now, "w") as f:
+            f.write(lines.replace("\r", ""))
+        apart = ten(f"INVENTORY_ONLY_NAMESPACES={shlex.quote(TEST_NAMESPACES)} bash -s", stdin=script).stdout
+        print(f"the test environment ({TEST_NAMESPACES}) - listed, not compared:")
+        print("\n".join("  " + l for l in apart.splitlines() if l.startswith(("image ", "helm ", "kafka-metadata "))))
+        return run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
+                    os.path.join(inv.UPGRADE, "prod-transient.txt")]).returncode == 0
+    finally:
+        for path in (expected, now):
+            os.remove(path)
 
 
 def main_revisions():

@@ -529,6 +529,30 @@ lacking = sorted(name for name, t in tasks_.items() if name.startswith("deploy:u
                  and any(f"upgrade-production.py {ph} " in str(t.get("cmds")) for ph in runs_ansible)
                  and "deploy:install" not in (t.get("deps") or []))
 check("every production phase that runs Ansible installs it first", lacking, [])
+# the inventory check leaves the preview environments open now out (their images are no step's), as the test
+# environment; its own files are removed after it
+import tempfile
+def inventory_run(namespaces):
+    seen, saved = [], {k: getattr(m, k) for k in ("ten", "run", "WORK")}
+    m.WORK = tempfile.mkdtemp()
+    def ten(command, stdin=None, check=True):
+        seen.append(command)
+        out = "\n".join(f"namespace/{n}" for n in namespaces) if command.startswith("kubectl get namespaces") else ""
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+    m.ten = ten
+    m.run = lambda cmd, **k: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    try:
+        ok = m.inventory_check(names[:1])
+        left = os.listdir(m.WORK)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return ok, [c for c in seen if "INVENTORY_EXCLUDE_NAMESPACES=" in c], left
+ok, cmds, left = inventory_run(["schnappy-production", "schnappy-test", "schnappy-pr-7", "schnappy-pr-12"])
+excluded = shlex.split(cmds[0])[0].split("=", 1)[1].split() if cmds else []
+check("inventory: the test environment and the preview environments open now left out, production not",
+      sorted(excluded), sorted(m.TEST_NAMESPACES.split() + ["schnappy-pr-12", "schnappy-pr-7"]))
+check("inventory: its own files removed after it", left, [])
 # status names the phase after the defaults one (its event carries the commit)
 import contextlib, io
 def status_of(lines):
