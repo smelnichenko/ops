@@ -10,6 +10,10 @@ cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" -c 'import jinja2, yaml' || { echo "vault-csr: no python3 with jinja2 and yaml"; exit 2; }
+# the playbook as Ansible loads it first: a quote in a free-form shell block's comment fails its argument splitting
+AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
+"$AP" --syntax-check -i localhost, deploy/ansible/playbooks/setup-vault-pi.yml > /dev/null 2>&1 \
+  || { echo "FAIL deploy/ansible/playbooks/setup-vault-pi.yml does not load"; echo "vault-csr: 1 FAILED"; exit 1; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/ca" "$W/tls"
@@ -36,8 +40,10 @@ def check(name, ok, detail=""):
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f"\n  {detail}"))
 check("the CSR given on stdin, as the task gives it", task["args"].get("stdin", "").startswith("{{ _vault_csr.content"))
+env_ok = {k: jinja2.Environment().from_string(str(v)).render(_sans=sans)
+          for k, v in (task.get("environment") or {}).items()}
 r = subprocess.run(["bash", "-c", script], input=open(os.path.join(W, "hostile.csr")).read(), capture_output=True,
-                   text=True)
+                   text=True, env=dict(os.environ, **env_ok))
 check("a hostile CSR signed", r.returncode == 0, r.stderr)
 open(os.path.join(W, "cert.pem"), "w").write(r.stdout)
 text = subprocess.run(["openssl", "x509", "-in", os.path.join(W, "cert.pem"), "-noout", "-text"], capture_output=True,
@@ -50,11 +56,22 @@ got = sorted(x.strip().replace("IP Address:", "IP:") for x in
 check("exactly the playbook's names, not the request's", got == sorted(sans) and "evil.example" not in text, got)
 check("the VIP's and loopback among them (External Secrets through the VIP, the unseal script on 127.0.0.1)",
       "IP:192.168.11.5" in sans and "IP:127.0.0.1" in sans, sans)
-v = subprocess.run(["openssl", "verify", "-CAfile", os.path.join(W, "tls", "ca-cert.pem"), os.path.join(W, "cert.pem")],
-                   capture_output=True, text=True)
+v = subprocess.run(["openssl", "verify", "-CAfile", os.path.join(W, "tls", "ca-cert.pem"),
+                    os.path.join(W, "cert.pem")], capture_output=True, text=True)
 check("verifies against the CA", v.returncode == 0, v.stdout + v.stderr)
 check("the CA's serial beside its key (root's), not in Vault's TLS directory",
       os.path.exists(os.path.join(W, "ca", "ca-cert.srl")) and not os.path.exists(os.path.join(W, "tls", "ca-cert.srl")))
+# the names reach pi1's root shell from the other Pi's facts: one that is not a plain name or address (a quote, a
+# command) is refused before the shell - and never templated into it
+bad = sans[:2] + ["IP:1.2.3.4$(touch " + os.path.join(W, "pwned") + ")"]
+script_bad = jinja2.Environment().from_string(task["ansible.builtin.shell"]).render(_sans=bad).replace(
+    "/etc/vault.d/tls", os.path.join(W, "tls")).replace("/etc/vault-ca", os.path.join(W, "ca"))
+env_bad = {k: jinja2.Environment().from_string(str(v)).render(_sans=bad)
+           for k, v in (task.get("environment") or {}).items()}
+r = subprocess.run(["bash", "-c", script_bad], input=open(os.path.join(W, "hostile.csr")).read(), capture_output=True,
+                   text=True, env=dict(os.environ, **env_bad))
+check("a name that is not a name or an address: refused, nothing run", r.returncode != 0
+      and not os.path.exists(os.path.join(W, "pwned")) and "not a name" in r.stdout + r.stderr, r.stdout + r.stderr)
 # Vault's own user owns its data only: the config, the TLS directory and its files are root's (a compromised Vault
 # swapped the CA its unseal script trusts, or its own config); the CA's directory is root-only
 owned = []

@@ -246,14 +246,22 @@
     - name: Sign the CSR with the CA on pi1 - a server certificate for the playbook's names only
       ansible.builtin.shell: |
         set -euo pipefail
+        # the names through the environment, never templated into this root shell - one is a fact of the other Pi -
+        # and each a plain DNS name or IPv4 address
+        for n in ${SANS//,/ }; do
+          [[ $n =~ ^DNS:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ || $n =~ ^IP:([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+            || { echo "REFUSED: $n is not a name or an address"; exit 1; }
+        done
         ext=$(mktemp); trap 'rm -f "$ext"' EXIT
         printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" \
-          "extendedKeyUsage=serverAuth" "subjectAltName={{ _sans | join(',') }}" > "$ext"
+          "extendedKeyUsage=serverAuth" "subjectAltName=$SANS" > "$ext"
         openssl x509 -req -in /dev/stdin -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault-ca/ca-key.pem \
           -CAserial /etc/vault-ca/ca-cert.srl -CAcreateserial -extfile "$ext" -days 3650
       args:
         executable: /bin/bash
         stdin: "{{ _vault_csr.content | b64decode }}"
+      environment:
+        SANS: "{{ _sans | join(',') }}"
       register: _vault_signed
       delegate_to: pi1
       changed_when: true
