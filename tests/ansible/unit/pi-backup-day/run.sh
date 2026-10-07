@@ -1,7 +1,9 @@
 #!/bin/bash
 # setup-pi-backups.yml's backup script as the playbook writes it, consul and rclone stubs: it runs under Consul's lock
 # (the two Pis' timers one at a time); with today's success in the store it stops at once, done; with yesterday's, or
-# PI_BACKUP_EVEN_TODAY=1, it goes on to the backup (here: the Consul snapshot, which the stub fails).
+# PI_BACKUP_EVEN_TODAY=1, it goes on to the backup (here: the Consul snapshot, which the stub fails) - and the failure
+# reaches the unit through the lock (Consul's exit 2; by default it exits 0). A lock held elsewhere is waited for a
+# bounded time, then the run fails.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -14,7 +16,21 @@ cat > "$W/bin/consul" <<'STUB'
 #!/bin/bash
 echo "consul $*" >> "$CALLS"
 case "$1" in
-  lock) shift 2; exec bash "$@" ;;   # consul lock <prefix> <child>: the child, under the lock
+  # as Consul 1.20's `consul lock [options] <prefix> <child...>`: the child through a shell; its failure is exit 2 only
+  # with -child-exit-code (else 0, the unit green); a lock held elsewhere (HELD=1) is waited for -timeout, then exit 1
+  # - without one, forever (here: exit 99 at once)
+  lock)
+    shift; code=0 timeout=
+    while [[ $1 == -* ]]; do
+      case "$1" in -child-exit-code | -child-exit-code=true) code=1 ;; -timeout=*) timeout=${1#*=} ;; esac; shift
+    done
+    shift
+    if [ -n "${HELD:-}" ]; then
+      [ -n "$timeout" ] || { echo "stub: waits for the lock forever" >&2; exit 99; }
+      echo "Lock acquisition failed: timeout after $timeout" >&2; exit 1
+    fi
+    bash -c "$*" && exit 0
+    [ $code = 1 ] && exit 2; exit 0 ;;
   snapshot) echo "snapshot: stub" >&2; exit 7 ;;
 esac
 STUB
@@ -49,14 +65,20 @@ def check(name, ok, detail):
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f"\n  {detail}"))
 rc, out, calls = run(today)
 check("today's success in the store: done at once, under the lock", rc == 0 and "today's backup is done" in out
-      and calls[0].startswith("consul lock pi-tier0-backup") and not any("snapshot" in c for c in calls), (rc, out, calls))
+      and calls[0].startswith("consul lock ") and " pi-tier0-backup " in calls[0]
+      and not any("snapshot" in c for c in calls), (rc, out, calls))
 rc, out, calls = run(yesterday)
-check("yesterday's: on to the backup", rc != 0 and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls))
+check("yesterday's: on to the backup, its failure through the lock (exit 2)",
+      rc == 2 and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls))
 rc, out, calls = run("")
-check("no success ever: on to the backup", rc != 0 and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls))
+check("no success ever: on to the backup, its failure through the lock",
+      rc == 2 and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls))
 rc, out, calls = run(today, PI_BACKUP_EVEN_TODAY="1")
-check("today's, but PI_BACKUP_EVEN_TODAY=1: on to the backup", rc != 0 and any("snapshot save" in c for c in calls),
+check("today's, but PI_BACKUP_EVEN_TODAY=1: on to the backup", rc == 2 and any("snapshot save" in c for c in calls),
       (rc, out, calls))
+rc, out, calls = run(yesterday, HELD="1")
+check("the lock held by the other Pi's hung run: waited a bounded time, then failed", rc == 1
+      and "Lock acquisition failed" in out and not any("snapshot" in c for c in calls), (rc, out, calls))
 print("pi-backup-day: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
