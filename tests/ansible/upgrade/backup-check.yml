@@ -171,8 +171,9 @@
           EOF
           $K wait job/kopia-epoch-hourly --for=condition=Complete --timeout=300s > /dev/null & ok=$!
           $K wait job/kopia-epoch-hourly --for=condition=Failed --timeout=300s > /dev/null & failed=$!
-          wait -n $ok $failed || true
-          kill $ok $failed 2> /dev/null || true
+          wait -n -p ended "$ok" "$failed" || true
+          # the other wait, still running - not the one wait -n reaped: that PID is no process of this shell any more
+          for p in "$ok" "$failed"; do [ "$p" = "${ended:-}" ] || kill "$p" 2> /dev/null || true; done
           $K logs job/kopia-epoch-hourly --tail=20
           succeeded=$($K get job kopia-epoch-hourly -o jsonpath='{.status.succeeded}')
           # gone again: the version inventory lists every Job's image
