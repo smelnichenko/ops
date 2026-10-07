@@ -10,7 +10,8 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
    restore checks at the end, unattended;
 3. a full review of the whole upgrade work after that run (not only what changed since the last one); its findings
    fixed and proven, and the full run repeated if a fix touches the steps or the harness - the review of 2026-10-06
-   (below) is done and its fixes in; the full run that proves them is next, then another full review;
+   (below) is done and its fixes in, as are the second's and the third's (2026-10-07); the full run that proves the
+   third's is next, then another full review;
 4. then production, step by step, each with the operator's approval - Wave 0 backup first for every one-way step,
    every stateful step shown before it runs.
 
@@ -281,6 +282,18 @@ versitygw 1.8's .vgwlocks as a bucket without an ACL (production's Wave 0 after 
 no buckets since). Steps 51-61 and the restore check then green on that copy (21:27). Next: the full run again, from
 nothing, then the full review.
 
+2026-10-07, after the second full review: full run 15:01 hung in its build at a password prompt - a free-form shell
+task's comment ended in a backslash, Ansible's argument parser joined the next line (the psql command) into the
+comment, the restore ran a psql with no password file and a terminal (`-tt`), and psql waited. Since: shell tasks with
+a comment or a backslash take the `cmd:` form, every psql/pg_dump/pg_restore of the playbooks and tests passes `-w`,
+Ansible pipelines (no terminal for a module), and the harnesses free-form-shell, keycloak-restore-shell and
+pg-no-prompt catch the class. Full run 15:56: its build failed in setup-vault-pi - the Vault CA carried no keyUsage,
+which Python 3.13's strict X.509 check refuses (production's certificates were made by an older OpenSSL and pass that
+check on both Pis, read-only); the CA is made with keyUsage since. Full run 16:28: steps 00-13 green, 14 failed - the
+apt module has no download-only mode; the containerd package is fetched with apt-get --download-only since. Steps
+14-61 on that copy green in 2 h 49 min (18:48-21:37). The third full review ran on that tree; full run 21:40 on it
+(the review's fixes not in it) green through 06 at 23:08.
+
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
 The steps (generated from tests/ansible/upgrade/steps - the step files are the source; Wave 0 = the stores backed up before the step, in production and in the full run):
@@ -536,7 +549,10 @@ Test harness
   node-shutdown leftover excepted: ten has 13); a failed kubectl call is not green; green held for stable_polls polls
   with no container restarting in between (4 = 30 s; the runner's first wait, before the playbooks, 1), and no
   container restarted in the last 5 min (CrashLoopBackOff's longest back-off: a crash loop never settles, one restart
-  costs at most 5 min - fixture: restarted 60 s ago not ready, 400 s ago ready). Proven: ten's
+  costs at most 5 min - fixture: restarted 60 s ago not ready, 400 s ago ready). Production keeps those values; the
+  full run's step settles use 120 s, 2 polls of 5 s since 2026-10-07 - a step's proof is recorded only after the next
+  step's settle judged its restarts (a crash loop slower than 120 s is caught there), and the last step's by a final
+  settle at production's values. Proven: ten's
   state read-only GREEN (31 apps); one-fault fixtures each NOT GREEN on their fault; a simulated loop - a restart
   resets the count, a crash loop and a pod restarting every 30 s while "ready" never settle, a failed poll resets;
   Vagrant without Argo: every poll failed, NOT SETTLED, the task failed.
@@ -632,8 +648,8 @@ Second review (2026-10-05, the new work: Wave 0, the checks, the production comm
   4 h after the seed (before 12 h the ingester answers the query alone); the Kafka rehearsal proves its extra
   message arrived (end offset 1001) and the restored log ends at 1000; the gateway restore is compared with the
   backup's object list before the pods start; Scylla restores the snapshot the Wave 0 run recorded (snapshots.txt),
-  not the newest; data-check's Kafka read is exact by the end offset; scrape targets must have stayed up for 3
-  minutes; an empty step branch fails the refs check; a node-shutdown leftover counts only when its workload runs a
+  not the newest; data-check's Kafka read is exact by the end offset; scrape targets must have stayed up for 2
+  minutes (3 until 2026-10-07); an empty step branch fails the refs check; a node-shutdown leftover counts only when its workload runs a
   ready pod again; restore-check recovers its base backup by barman ID (recoveryTarget.backupID), and -e
   restore_backup=wave0 recovers the Wave 0 base backup; the Postgres rehearsal replays every dump, allows only the
   roles and databases the side cluster had, and compares every table's row count with the dump.
@@ -840,6 +856,31 @@ mechanism is reverted:
 
 The operator's, added: Consul ACLs; the stray pi2-key.pem in production pi1's /etc/vault.d/tls; a first run with no
 stamp yet reads its restart by the clock once (kept).
+
+## Third full review 2026-10-07 - what it fixed
+
+Ten passes over ops 595250e..a19d595 (the second review's fixes and the three defects above), the platform and infra
+restacks. No Critical. Fixed, each with a test that fails first and again when its mechanism is reverted:
+- The full run: a step's proof recorded after the next step's settle (a crash loop between 120 s and 300 s was proven,
+  then stopped production's merge); the last step judged by a final settle at production's 300 s / 4 polls; Tempo's
+  flush proven by a marker trace found in the store (`?mode=blocks`), not by its metrics, which passed with the block
+  still uploading and refused an empty head block; the pre-pull run on the copy's node at every step, pulling only
+  what the node lacks and needing room only then; production pulls the digest the copy ran.
+- The procedure: the merge reads the branch's commit once and pushes, fast-forwards and tags that commit (a restack
+  in another shell pushed an unproven one); a push cut short is taken up after CD pushed on top; the claim read again
+  right before the push; an end the run could not write fails it; the soak's time left by ten's clock.
+- The playbooks: a failed Keycloak restore leaves Keycloak stopped (started, it built its own schema in the empty
+  database); Consul's RPC and Serf LAN open to the three servers only, the WAN ports closed; PgBouncer's, Nexus's and
+  the environment seed's secrets on stdin, not on a command line; setup-gluster's list of services to stop before a
+  fresh-install migration (its regex never matched); upgrade-containerd's post-start "containers lost" (pods deleted
+  meanwhile) removed; backup-check signals only the wait still running.
+- The harnesses: module-args fails on a module it cannot load and requires every module's collection (ansible.posix,
+  community.hashi_vault in requirements.yml and CI's image); conditionals evaluated as Ansible does
+  (`templar.condition`); kill paths checked by the process gone; the isolation probe's positive control; vault-csr per
+  loop item; kubeadm-preview keeps the tasks' failed_when/until.
+
+Open, the operator's: ten's Consul ports (no UFW on ten); infra feat/pi-backup-check (the stale-backup alert
+setup-pi-backups names) to push; Sonar's 23 complexity findings (S3776) after the run.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
