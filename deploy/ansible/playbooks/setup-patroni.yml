@@ -51,6 +51,7 @@
     - name: Is Patroni installed
       ansible.builtin.command: /usr/local/bin/patroni --version
       register: _patroni_installed
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
       failed_when: false
 
@@ -67,6 +68,7 @@
         set -o pipefail
         ls -d /usr/lib/postgresql/*/bin | head -1 | grep -oP '\d+'
       register: pg_version
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     # Compute from pg_version rather than glob the main/ dir — Patroni may
@@ -350,6 +352,7 @@
             url: http://127.0.0.1:8008/patroni
             return_content: true
           register: _patroni_api
+          check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
         - name: Its version and role, kept for the restart
           ansible.builtin.set_fact:
@@ -426,6 +429,7 @@
         done
         exit 1
       register: _leader
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
       run_once: true
 
@@ -609,6 +613,7 @@
           --config /var/lib/forgejo/custom/conf/app.ini" 2>&1 \
           | awk 'NR>1 { print $2 }'
       register: _forgejo_users_post
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
       run_once: true
       delegate_to: pi1
@@ -685,6 +690,7 @@
       ansible.builtin.shell: |
         patronictl -c /etc/patroni/patroni.yml list
       register: patroni_status
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
       retries: 6
       delay: 10

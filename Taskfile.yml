@@ -260,7 +260,7 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Run setup-consul.yml on PRODUCTION (both Pis and ten)?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml {{.CLI_ARGS}}
 
   deploy:patroni:
     desc: "PRODUCTION: Patroni on both Pis (setup-patroni.yml) - reloads or restarts paused, one node at a time"
@@ -269,7 +269,7 @@ tasks:
     dotenv: ['../../.env']
     prompt: "Run setup-patroni.yml on PRODUCTION's Pis?"
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml {{.CLI_ARGS}}
 
   promote:prod:
     desc: 'Promote test image tags -> prod. DRY-RUN by default; CONFIRM=1 commits+pushes. SERVICES="site monitor" limits scope (default all 7).'

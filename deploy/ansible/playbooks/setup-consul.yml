@@ -75,6 +75,7 @@
           echo "live=$live"
           echo "conf=$(sed -n 's/^encrypt = "\(.*\)"$/\1/p' /etc/consul.d/consul.hcl 2>/dev/null || true)"
       register: _consul_keys_all
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
       delegate_to: "{{ item }}"
       loop: "{{ consul_servers }}"
@@ -396,6 +397,7 @@
       ansible.builtin.shell: |
         consul members
       register: consul_status
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     - name: Print results

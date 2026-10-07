@@ -9,6 +9,7 @@
 - name: Patroni's leader in Consul
   ansible.builtin.command: consul kv get service/{{ patroni_scope }}/leader
   register: _patroni_leader_key
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
   changed_when: false
   failed_when: >-
     _patroni_leader_key.rc != 0 and 'No key exists at' not in _patroni_leader_key.stderr

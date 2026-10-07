@@ -88,6 +88,7 @@
           | join(' / ') or 'no ERROR line (exit ' ~ _restored.rc | default('?') ~ ')' }}
         success_msg: "{{ _restored.stdout | default('') }}"
       run_once: true
+      when: not ansible_check_mode  # the restore is a write: a preview (--check) skips it
   always:
     - name: Keycloak started again
       ansible.builtin.systemd:
