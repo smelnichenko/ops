@@ -701,6 +701,9 @@ tasks:
             task test:upgrade:step STEP="$step" 2>&1 \
               | python3 -u -c 'import sys, time
           for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()'
+            # the digests the copy runs now, right after the step: its proof (recorded a step later) keeps its images'
+            mkdir -p .upgrade/step-digests
+            scripts/vagrant-image-digests.sh > ".upgrade/step-digests/$step.txt"
             [ -z "$prev" ] || scripts/upgrade-production.py record-proof $prev
             prev="$step $infra_sha $platform_sha"
             echo "=== STEP $step GREEN $(date +%T)"

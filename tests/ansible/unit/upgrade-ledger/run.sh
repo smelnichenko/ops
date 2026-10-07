@@ -430,6 +430,21 @@ except SystemExit as e:
     got = "refused" if "2 digests" in str(e) else str(e)
 check("prepull: one tag pinned to two digests in the step's branches: refused", got, "refused")
 m.image_pins = lambda step, name, tag: set()
+# a chart that pins in two keys (tag: 3.12.1@sha256:...) composes the reference only in its pods' specs: the digest the
+# full run's copy ran (recorded in the step's proof) pulled - 21's Scylla Manager and its agent share a tag
+m.proven_digest = lambda step, name, tag: D1 if name.endswith("scylladb/scylla-manager") else None
+check("prepull: 21's manager by the digest the copy ran (a pin in two keys)",
+      [i for i in m.prepull_images("21-scylla-operator-1.22") if "scylla-manager:" in i],
+      [f"docker.io/scylladb/scylla-manager:3.12.1@{D1}"])
+m.image_pins = lambda step, name, tag: {D2} if name.endswith("scylladb/scylla-manager") else set()
+try:
+    m.prepull_images("21-scylla-operator-1.22")
+    got = "pulled"
+except SystemExit as e:
+    got = "refused" if "2 digests" in str(e) else str(e)
+check("prepull: the branch's pin and the copy's digest differ: refused", got, "refused")
+m.image_pins = lambda step, name, tag: set()
+m.proven_digest = lambda step, name, tag: None
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
 keep = [c for c in got if c in (("asked",), ("ansible", "playbooks/upgrade-prepull.yml"), ("run", "upgrade-merge-step.sh"))]
 check("merge 54 platform (its first): asked, the images pulled, then merged", keep,
@@ -834,7 +849,8 @@ check("pin: exactly 59 and 61 move ClickHouse's image",
       [n for n in names if m.pin_problems(n, "x", "o", pin_file)], [S59, S61])
 
 
-def record_59(pin):
+def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256:" + "3" * 64 + "\n"
+                         "other/image 1 sha256:" + "4" * 64 + "\n"):
     """record-proof of 59 with git and the tree stubbed; `pin` the rollback pin's result (None: no file)."""
     work = tempfile.mkdtemp()
     json.dump({"run": "r", "ops": "o", "branches": {}}, open(os.path.join(work, "run.json"), "w"))
@@ -849,14 +865,21 @@ def record_59(pin):
         if cmd[-2:-1] == ["--refs"]:
             return _Out("upgrade/59-x upgrade/59-y")
         return _Out({"upgrade/59-x": "i59", "upgrade/59-y": "p59"}.get(cmd[-1], "z"))
-    keep = ("PROVEN", "PIN_RESULT", "run", "ops_unchanged_since", "floating_digests", "own_change", "branch_moves")
+    keep = ("PROVEN", "PIN_RESULT", "run", "ops_unchanged_since", "floating_digests", "own_change", "branch_moves",
+            "WORK")
     saved = {k: getattr(m, k) for k in keep}
-    m.PROVEN, m.PIN_RESULT, m.run = work, os.path.join(work, "pin.json"), run
+    m.PROVEN, m.PIN_RESULT, m.run, m.WORK = work, os.path.join(work, "pin.json"), run, work
+    if digests is not None:
+        os.makedirs(os.path.join(work, "step-digests"))
+        open(os.path.join(work, "step-digests", S59 + ".txt"), "w").write(digests)
     m.ops_unchanged_since, m.floating_digests, m.own_change = (lambda *a: []), (lambda: {}), (lambda *a: "own")
     m.branch_moves = lambda recorded: []
     try:
         m.record_proof(S59, "i59", "p59")
-        return "recorded" if os.path.exists(os.path.join(work, S59 + ".json")) else "nothing"
+        if not os.path.exists(os.path.join(work, S59 + ".json")):
+            return "nothing"
+        RECORDED.append(json.load(open(os.path.join(work, S59 + ".json"))))
+        return "recorded"
     except SystemExit as e:
         return f"refused, nothing recorded: {not os.path.exists(os.path.join(work, S59 + '.json'))}"
     finally:
@@ -864,8 +887,14 @@ def record_59(pin):
             setattr(m, k, v)
 
 
+RECORDED = []
 check("record-proof 59 with its pin proven: recorded",
       record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}), "recorded")
+check("record-proof 59: the digests the copy ran for the step's images, only those, as containerd names them",
+      RECORDED[-1].get("digests"), {"docker.io/clickhouse/clickhouse-server:25.8.33.6-alpine": "sha256:" + "3" * 64})
+check("record-proof 59 without the digests the copy ran after it: refused, nothing recorded",
+      record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, digests=None),
+      "refused, nothing recorded: True")
 check("record-proof 59 without a pin result: refused, nothing recorded", record_59(None),
       "refused, nothing recorded: True")
 check("record-proof 59 with a pin another ops commit's test proved: refused, nothing recorded",

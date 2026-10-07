@@ -491,7 +491,10 @@ def record_proof(step, infra_sha, platform_sha):
     prev = dict(zip(REPOS, run([INVENTORY, "--refs",
                                 names[names.index(step) - 1]], capture_output=True, check=True).stdout.split())) \
         if names.index(step) else dict.fromkeys(REPOS, "main")
-    proof = {"step": step, "run": run_info["run"], "ops": run_info["ops"], "repos": {}, "floating": floating_digests()}
+    ran = step_digests(step)
+    moved = {f"{full_name(n)}:{t}" for n, t in step_images(step)}
+    proof = {"step": step, "run": run_info["run"], "ops": run_info["ops"], "repos": {}, "floating": floating_digests(),
+             "digests": {k: d for k, d in sorted(ran.items()) if k in moved}}
     for repo in REPOS:
         now_sha = run(["git", "-C", os.path.join(OPS, "..", repo), "rev-parse", refs[repo]], capture_output=True,
                       check=True).stdout.strip()
@@ -514,6 +517,36 @@ def floating_digests():
     if not os.path.exists(path):
         sys.exit("REFUSED: no .upgrade/floating-digests.txt - the run's build copies ten's floating-tag images")
     return {name: digest for name, digest in (l.split() for l in open(path) if l.strip())}
+
+
+def step_images(step):
+    """The images the step moves to (its `image ... => image <name> <tag>` and `+ image` lines), (name, tag) as
+    written."""
+    out = []
+    for line in open(os.path.join(inv.STEPS, step + ".txt")):
+        m = re.fullmatch(r"(?:image \S+ \S+ => |\+ )image (\S+) (\S+)", line.strip())
+        if m:
+            out.append((m[1], m[2]))
+    return out
+
+
+def step_digests(step):
+    """The digests the full run's copy ran right after `step` - its pods' specs, each image pinned by digest there
+    (scripts/vagrant-image-digests.sh into .upgrade/step-digests/<step>.txt): {"<name as containerd names it>:<tag>":
+    digest}. A chart that pins in two keys (tag: 3.12.1@sha256:...) composes the full reference only there."""
+    path = os.path.join(WORK, "step-digests", step + ".txt")
+    if not os.path.exists(path):
+        sys.exit(f"REFUSED: no {path} - the run records the digests its copy ran after each step")
+    return {f"{full_name(n)}:{t}": d for n, t, d in (l.split() for l in open(path) if l.strip())}
+
+
+def proven_digest(step, name, tag):
+    """The digest the full run's copy ran name:tag with after `step` (its proof), or None."""
+    try:
+        proof = json.load(open(proof_path(step)))
+    except (OSError, ValueError):
+        return None
+    return proof.get("digests", {}).get(f"{full_name(name)}:{tag}")
 
 
 def full_name(name):
@@ -656,19 +689,20 @@ def image_pins(step, name, tag):
 def prepull_images(step):
     """The public images the step moves to (its `image ... => image <name> <tag>` and `+ image` lines), as containerd
     names them (one image under its short and its docker.io name pulled once), each with the digest the step's
-    branches pin its tag to - the reference production runs (the tag alone may name another build by then) -
-    production's own registry left out (registry_problems checks those are there)."""
+    branches pin its tag to, or the full run's copy ran it with (a chart that pins in two keys) - the reference
+    production runs (the tag alone may name another build by then) - production's own registry left out
+    (registry_problems checks those are there)."""
     out, seen = [], set()
-    for line in open(os.path.join(inv.STEPS, step + ".txt")):
-        m = re.fullmatch(r"(?:image \S+ \S+ => |\+ )image (\S+) (\S+)", line.strip())
-        if not m or m[1].startswith("git.pmon.dev/") or (full_name(m[1]), m[2]) in seen:
+    for name, tag in step_images(step):
+        if name.startswith("git.pmon.dev/") or (full_name(name), tag) in seen:
             continue
-        seen.add((full_name(m[1]), m[2]))
-        pins = image_pins(step, m[1], m[2])
+        seen.add((full_name(name), tag))
+        # pinned in its branch as name:tag@digest, or composed so by its chart only (the digest the full run ran)
+        pins = image_pins(step, name, tag) | ({proven_digest(step, name, tag)} - {None})
         if len(pins) > 1:
-            sys.exit(f"{m[1]}:{m[2]} is pinned to {len(pins)} digests in the step's branches "
+            sys.exit(f"{name}:{tag} is pinned to {len(pins)} digests in the step's branches and the full run's copy "
                      f"({', '.join(sorted(pins))}) - which one production runs is unclear")
-        out.append(f"{full_name(m[1])}:{m[2]}" + "".join(f"@{p}" for p in pins))
+        out.append(f"{full_name(name)}:{tag}" + "".join(f"@{p}" for p in pins))
     return out
 
 
