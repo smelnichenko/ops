@@ -57,17 +57,34 @@
         home: /var/lib/vault
         create_home: false
 
+    # Vault's own user owns its data only: its config and TLS files are root's, readable by its group (a compromised
+    # Vault would otherwise swap the CA its unseal script trusts, or its own config)
     - name: Create vault directories
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ item.path }}"
         state: directory
-        owner: vault
+        owner: "{{ item.owner }}"
         group: vault
         mode: '0750'
       loop:
-        - /etc/vault.d
-        - /etc/vault.d/tls
-        - /var/lib/vault
+        - { path: /etc/vault.d, owner: root }
+        - { path: /etc/vault.d/tls, owner: root }
+        - { path: /var/lib/vault, owner: vault }
+
+    # the CA's key and serial in a root-only directory, out of Vault's reach (they were in /etc/vault.d/tls, Vault's)
+    - name: The CA's directory, root-only
+      ansible.builtin.file:
+        path: /etc/vault-ca
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: The CA's key moved out of Vault's TLS directory (production's, from before)
+      ansible.builtin.command: mv -n /etc/vault.d/tls/ca-key.pem /etc/vault-ca/ca-key.pem
+      args:
+        removes: /etc/vault.d/tls/ca-key.pem
+        creates: /etc/vault-ca/ca-key.pem
 
     - name: Create vault-unseal directory
       ansible.builtin.file:
@@ -179,7 +196,7 @@
     - name: Create the Vault CA on pi1 (once; production already has its CA)
       ansible.builtin.command: >-
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -days 3650 -nodes
-        -keyout /etc/vault.d/tls/ca-key.pem -out /etc/vault.d/tls/ca-cert.pem -subj "/CN=Schnappy Vault CA"
+        -keyout /etc/vault-ca/ca-key.pem -out /etc/vault.d/tls/ca-cert.pem -subj "/CN=Schnappy Vault CA"
       args:
         creates: /etc/vault.d/tls/ca-cert.pem
       delegate_to: pi1
@@ -232,8 +249,8 @@
         ext=$(mktemp); trap 'rm -f "$ext"' EXIT
         printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" \
           "extendedKeyUsage=serverAuth" "subjectAltName={{ _sans | join(',') }}" > "$ext"
-        openssl x509 -req -in /dev/stdin -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault.d/tls/ca-key.pem \
-          -CAcreateserial -extfile "$ext" -days 3650
+        openssl x509 -req -in /dev/stdin -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault-ca/ca-key.pem \
+          -CAserial /etc/vault-ca/ca-cert.srl -CAcreateserial -extfile "$ext" -days 3650
       args:
         executable: /bin/bash
         stdin: "{{ _vault_csr.content | b64decode }}"
@@ -249,10 +266,10 @@
         mode: '0644'
       when: not _vault_cert.stat.exists
 
-    - name: Set TLS file ownership
+    - name: Set TLS file ownership (root's, Vault reads them through its group)
       ansible.builtin.file:
         path: "{{ item.path }}"
-        owner: vault
+        owner: root
         group: vault
         mode: "{{ item.mode }}"
       loop:
@@ -279,7 +296,7 @@
     - name: Write vault.hcl (Consul backend)
       ansible.builtin.copy:
         dest: /etc/vault.d/vault.hcl
-        owner: vault
+        owner: root
         group: vault
         mode: '0640'
         content: |
