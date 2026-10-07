@@ -618,7 +618,7 @@
         fresh_install_services: >-
           {{
             backup_brick_count.results
-            | selectattr('stdout', 'match', '^\\s*0\\s*$')
+            | selectattr('stdout', 'match', '^\s*0\s*$')
             | map(attribute='item')
             | rejectattr('stop_service', 'equalto', '')
             | rejectattr('stop_service', 'equalto', None)
