@@ -14,8 +14,8 @@
 #   2. Docker's apt repository (ten has it since docker-ce was installed, 2026-02);
 #   3. the package downloaded (apt's lists refreshed while the kubelet still runs), the live config kept as
 #      config.toml.pre-containerd-io, the kubelet stopped (it must not act on the runtime during the swap), the
-#      containers running then kept on the node (the first run's list - never overwritten), then containerd.io
-#      installed from the download - keeping that config
+#      containers running then kept on the node (the first run's list - kept while the kubelet stays stopped, removed
+#      once it runs again), then containerd.io installed from the download - keeping that config
 #      (force-confold): the package's own default disables the CRI, the kubelet's runtime. containerd.io conflicts
 #      with and replaces Debian's containerd and runc (it bundles runc). It is held: an `apt upgrade` would otherwise
 #      move it, and restart the runtime under every pod;
@@ -45,7 +45,8 @@
     crictl: crictl --runtime-endpoint unix:///run/containerd/containerd.sock
     # the CRI registry config_path; empty on ten, set by the Vagrant inventory for its plain-HTTP test registry
     registry_config_path: "{{ containerd_registry_config_path_override | default('') }}"
-    # the containers running when the kubelet stopped, kept by the first run (a re-run checks against them)
+    # the containers running when the kubelet stopped, kept by the first run while the kubelet stays stopped (a re-run
+    # checks against them); removed once it runs again - a later run judges the containers running then
     before_file: /etc/containerd/containers-before-containerd-io
 
   tasks:
@@ -126,6 +127,11 @@
           ansible.builtin.systemd_service:
             name: kubelet
             state: started
+
+        - name: The list removed - the kubelet runs again (a later run takes the containers running then)
+          ansible.builtin.file:
+            path: "{{ before_file }}"
+            state: absent
 
         - name: Taken up
           ansible.builtin.debug:
@@ -231,7 +237,8 @@
 
     # with the kubelet stopped the set only shrinks (a Job finishing, which the check below accepts): taken before the
     # stop, a CI pod deleted meanwhile counted as lost, one started meanwhile went unguarded. The first run's list is
-    # kept - a re-run of a cut-short swap checks against it
+    # kept while the kubelet stays stopped - a re-run of a cut-short swap checks against it - and removed once the
+    # kubelet runs again (an hours-old list read the CI pods deleted since as lost)
     - name: The containers running now, kept on the node (the first run's)
       ansible.builtin.shell: |
         set -o pipefail
@@ -290,6 +297,11 @@
             name: kubelet
             state: started
 
+        - name: The list removed - the kubelet runs again (a later run takes the containers running then)
+          ansible.builtin.file:
+            path: "{{ before_file }}"
+            state: absent
+
         - name: Failed before the restart - the kubelet is back
           ansible.builtin.fail:
             msg: >-
@@ -345,6 +357,11 @@
       ansible.builtin.systemd_service:
         name: kubelet
         state: started
+
+    - name: The list removed - the kubelet runs again (a later run takes the containers running then)
+      ansible.builtin.file:
+        path: "{{ before_file }}"
+        state: absent
 
     - name: Failed - the runtime runs on the kept config
       ansible.builtin.fail:
