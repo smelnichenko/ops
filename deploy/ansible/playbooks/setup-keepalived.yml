@@ -523,20 +523,18 @@
       register: _vip_here
       changed_when: false
 
-    - name: A restart pending here - a drop-in newer than the running keepalived
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          [ "$(systemctl is-active keepalived)" = active ] || { echo current; exit 0; }
-          started=$(date -d "$(systemctl show keepalived -p ActiveEnterTimestamp --value)" +%s)
-          for f in /etc/systemd/system/keepalived.service.d /etc/systemd/system/keepalived.service.d/*.conf; do
-            if [ -e "$f" ] && [ "$(stat -c %Y "$f")" -gt "$started" ]; then echo pending; exit 0; fi
-          done
-          echo current
-      register: _keepalived_pending
-      changed_when: false
-      check_mode: false
+    # by content, against what the running keepalived last loaded (a stamp): by the clock it was wrong both ways on
+    # the Pis, which have no RTC - a clock that was ahead when the drop-in was written restarted both, the VIP moving,
+    # on every run
+    - name: A restart pending here - the drop-in other than the running keepalived loaded
+      ansible.builtin.include_tasks: tasks/restart-pending.yml
+      vars:
+        loaded_service: keepalived
+        loaded_files: [/etc/systemd/system/keepalived.service.d/release-active-services.conf]
+
+    - name: Kept for the restart play
+      ansible.builtin.set_fact:
+        _keepalived_pending: "{{ _restart_pending }}"
 
     - name: The order
       ansible.builtin.add_host:
@@ -559,7 +557,7 @@
     vip: "{{ keepalived_vip }}"
   tasks:
     - name: Restarted, the VIP held again before the next
-      when: _keepalived_pending.stdout == 'pending'
+      when: _keepalived_pending.stdout_lines[0] == 'pending'
       block:
         - name: The other Pi's keepalived running - the VIP has somewhere to be meanwhile
           ansible.builtin.systemd:
@@ -568,10 +566,13 @@
           delegate_to: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
           failed_when: _peer_keepalived.status.ActiveState != 'active'
 
+        # the unit read again first: a run cut short after writing the drop-in, before its handlers, left systemd on
+        # the old one - the restart ran it, and the drop-in then read "current" for good
         - name: Restarted
           ansible.builtin.systemd:
             name: keepalived
             state: restarted
+            daemon_reload: true
 
         - name: The VIP answers again (on whichever Pi holds it)
           ansible.builtin.command: ping -c 1 -W 2 {{ vip }}
@@ -580,6 +581,13 @@
           retries: 30
           delay: 2
           until: _vip_back.rc == 0
+
+    # what the next run compares with: restarted (a failed restart ends this Pi's run before here), or found current
+    - name: Keepalived's drop-in as it runs it, recorded
+      ansible.builtin.include_tasks: tasks/restart-recorded.yml
+      vars:
+        loaded_service: keepalived
+        loaded_hash: "{{ _keepalived_pending.stdout_lines[1] }}"
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify Keepalived
