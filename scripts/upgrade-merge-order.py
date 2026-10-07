@@ -56,11 +56,12 @@ def refs(step):
 
 
 def capabilities(step):
-    """As Argo CD renders, with the cluster's: the Kubernetes version at the step (its expected inventory) and
-    production's API versions (api-versions.txt) - without them a template gated on .Capabilities.APIVersions (a
-    ServiceMonitor) rendered in neither state, and the comparison never saw it."""
+    """As Argo CD renders, with the cluster's: the Kubernetes version the cluster runs when the step's merges land -
+    before the step (its expected inventory; a kubeadm step upgrades after its merge) - and production's API versions
+    (api-versions.txt) - without them a template gated on .Capabilities.APIVersions (a ServiceMonitor) rendered in
+    neither state, and the comparison never saw it."""
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
-    server = next(l.split()[2] for l in inv.expected(names[:names.index(step) + 1]) if l.startswith("k8s server "))
+    server = next(l.split()[2] for l in inv.expected(names[:names.index(step)]) if l.startswith("k8s server "))
     apis = [l.strip() for l in open(API_VERSIONS) if l.strip() and not l.startswith("#")]
     return ["--kube-version", server.lstrip("v"), "--api-versions", ",".join(apis)]
 

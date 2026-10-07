@@ -186,9 +186,11 @@ loader2 = importlib.machinery.SourceFileLoader("mo2", os.path.join(ROOT, "script
 real = importlib.util.module_from_spec(importlib.util.spec_from_loader("mo2", loader2))
 loader2.exec_module(real)
 caps = real.capabilities("34-argocd-3.5")
-fails += not check_("step 34's capabilities: Kubernetes 1.34.12 (after 13), production's API list",
+fails += not check_("step 34's capabilities: Kubernetes 1.34.12 (13's, before it), production's API list",
                     caps[:2] == ["--kube-version", "1.34.12"] and "monitoring.coreos.com/v1" in caps[3].split(","))
-fails += not check_("step 43's: 1.36.5", real.capabilities("43-kubernetes-1.36")[:2] == ["--kube-version", "1.36.5"])
+# as the cluster runs when the step's merges land: before the step - a kubeadm step upgrades after its merge
+fails += not check_("step 43's: 1.35.9 (its merge lands before its kubeadm upgrade to 1.36.5)",
+                    real.capabilities("43-kubernetes-1.36")[:2] == ["--kube-version", "1.35.9"])
 # Argo CD passes group/version/Kind too: a chart gated on "monitoring.coreos.com/v1/ServiceMonitor" rendered nothing
 # under either Helm, and the comparison passed without the object
 apis = caps[3].split(",")
