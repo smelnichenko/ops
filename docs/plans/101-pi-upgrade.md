@@ -80,16 +80,16 @@ test:patroni-upgrade, test:vault-upgrade). Phase 2 after plan 100's rollout.
    (each run its own file aside, moved whole; a run cut short resumes from it - a whole file aside is promoted), the
    bootstrap waits for the active Vault, enables only what is missing and fails on a failure, and the shares' files
    are on disk before the init's file goes.
-5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each:
-   `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database (Forgejo's among them),
-   Keycloak realm export - daily at 02:40 UTC from whichever Pi's timer gets there first, one at a time under Consul's
-   lock (a bounded wait; a day with a success is done - the other Pi's run, or a failed run's retry by it), a failure
-   failing the unit (the lock passes the run's exit on). NOT backed up: Forgejo's repositories (/var/lib/forgejo/repos on the Gluster volume
-   forgejo-repos - replicated, not backed up; the upgrade's pg_dump is taken with Forgejo still serving) - no
-   `forgejo dump` exists; one is the operator's decision. setup-pi-backups.yml,
-   restored in Vagrant (task test:pi-backups). Late: infra's kube-system CronJob pi-backup-check reads the bucket's
-   last-success every 3 h - older than 26 h or missing fails it, KubeJobFailed fires (local branch
-   feat/pi-backup-check, pushed after the Pis' first production backup, or it fires at once).
+5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each: `consul
+   snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database (Forgejo's among them), Keycloak
+   realm export - daily at 02:40 UTC from whichever Pi's timer gets there first, one at a time under Consul's lock (a
+   bounded wait; a day with a success is done - the other Pi's run, or a failed run's retry by it), a failure failing
+   the unit (the lock passes the run's exit on). NOT backed up: Forgejo's repositories (/var/lib/forgejo/repos on the
+   Gluster volume forgejo-repos - replicated, not backed up; the upgrade's pg_dump is taken with Forgejo still serving)
+   - no `forgejo dump` exists; one is the operator's decision. setup-pi-backups.yml, restored in Vagrant (task
+   test:pi-backups). Late: infra's kube-system CronJob pi-backup-check reads the bucket's last-success every 3 h - older
+   than 26 h or missing fails it, KubeJobFailed fires (local branch feat/pi-backup-check, pushed after the Pis' first
+   production backup, or it fires at once).
    Nexus gets no daily backup: read on production 2026-10-05, everything it holds is rebuilt by setup-nexus.yml
    (repositories, realms, anonymous read, the cleanup policy, the admin password; users and roles are Nexus's
    defaults, no content selectors or routing rules) or refilled from upstream (15 GB of proxy cache); its hosted
