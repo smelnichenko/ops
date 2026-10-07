@@ -721,6 +721,15 @@
     VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
+    # sent only when pi2's differ (pi1's compared by hash on the controller): a host answering as pi2 gets no shares
+    # it does not hold already
+    - name: pi2's unseal keys by their hash
+      ansible.builtin.command: sha256sum /etc/vault-unseal/unseal-keys
+      register: _pi2_keys_sum
+      changed_when: false
+      failed_when: _pi2_keys_sum.rc != 0 and 'No such file' not in _pi2_keys_sum.stderr
+      check_mode: false
+
     # on stdin (pipelined: in memory, through ssh), never a file on the controller (a copy with content: writes one);
     # written whole, root's alone - only when it differs
     - name: The unseal keys on pi2 - on stdin, never in a file on the controller
@@ -741,6 +750,9 @@
         stdin_add_newline: false
       register: _pi2_keys
       changed_when: "'written' in _pi2_keys.stdout"
+      when: >-
+        (_pi2_keys_sum.stdout.split() | first | default(''))
+        != (hostvars['pi1']._unseal_keys.content | b64decode | hash('sha256'))
       no_log: true
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)

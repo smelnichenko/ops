@@ -89,7 +89,33 @@ if dist:
     check("pi2's unseal-keys as pi1's, 0400", r.returncode == 0 and open(k).read() == "k1\nk2\nk3\n"
           and stat.S_IMODE(os.stat(k).st_mode) == 0o400)
     check("its stdin as given (no newline added)", (dist.get("args") or {}).get("stdin_add_newline") is False)
-    os.remove(k)
+    ino = os.stat(k).st_ino
+    r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
+                        os.path.join(W, "vu"))], input="k1\nk2\nk3\n", env=env, capture_output=True, text=True)
+    check("the same shares again: not rewritten", r.returncode == 0 and "written" not in r.stdout
+          and os.stat(k).st_ino == ino)
+    # sent only when pi2's differ: its file's hash read first (a host that is not pi2 gets nothing it lacks)
+    probe = next((t for t in alltasks if t.get("name", "").startswith("pi2's unseal keys by their hash")), None)
+    check("pi2's keys read by their hash before any are sent",
+          probe is not None and alltasks.index(probe) < alltasks.index(dist) and probe.get("check_mode") is False)
+    if probe:
+        psh = probe["ansible.builtin.shell"] if "ansible.builtin.shell" in probe else probe["ansible.builtin.command"]
+        psh = (psh if isinstance(psh, str) else psh["cmd"]).replace("/etc/vault-unseal", os.path.join(W, "vu"))
+        reg = probe["register"]
+        pi1 = {"pi1": {"_unseal_keys": {"content": base64.b64encode(b"k1\nk2\nk3\n").decode()}}}
+        def sent():
+            r = subprocess.run(["bash", "-c", psh], env=env, capture_output=True, text=True)
+            res = {"rc": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
+            return (condition(probe.get("failed_when", f"{reg}.rc != 0"), **{reg: res}),
+                    condition(dist.get("when", True), **{reg: res, "hostvars": pi1}))
+        check("pi2 holding the same shares: nothing sent", sent() == (False, False))
+        os.remove(k)
+        open(k, "w").write("k1\nk2\nOLD\n")
+        check("pi2 holding others: sent", sent() == (False, True))
+        os.remove(k)
+        check("pi2 holding none: sent", sent() == (False, True))
+    else:
+        os.remove(k)
 # an ssh retry overlapping a first invocation still running: each writes its own file aside - the other's output (the
 # only copy of the shares) never truncated
 os.remove(path)
