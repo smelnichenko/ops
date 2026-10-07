@@ -102,6 +102,10 @@ for name in every:
 check("restarts-control-plane: the three kubeadm steps exactly", flagged.get("restarts-control-plane"),
       ["13", "42", "43"])
 check("barman-after-merge: step 47 only", flagged.get("barman-after-merge"), ["47"])
+# the PostgreSQL major a step moves the cluster to - its base backup must be taken on it (the old major's backups do not
+# replay into the new one): 47's 18, none for the other barman-check steps (CNPG, its store)
+check("pg-major: 47 moves to 18, 24 and 25 to none", [inv.pg_major(s) for s in ("47-postgres-18", "24-cnpg", "25-versitygw")],
+      ["18", "", ""])
 
 for name in sorted(f[:-4] for f in os.listdir(inv.STEPS) if f.endswith(".txt")):
     found = []

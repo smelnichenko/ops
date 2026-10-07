@@ -10,7 +10,7 @@
 # runs the same playbook once the step's merges settled (tests/ansible/upgrade/barman-check.yml).
 #
 # Usage: ansible-playbook -i inventory/<env>.yml playbooks/postgres-base-backup.yml
-#        [-e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres]
+#        [-e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres] [-e pg_major=<the step's>]
 - name: CNPG backs Postgres up to its object store
   hosts: target
   become: true
@@ -43,6 +43,18 @@
       register: _primary
       changed_when: false
       failed_when: _primary.rc != 0 or _primary.stdout | length == 0
+
+    # a major upgrade's base backup on the new major: one taken while the old still ran is no recovery point for the new
+    # (its WAL does not replay into it) - given the step's major (pg_major), the primary must run it
+    - name: The primary runs the step's PostgreSQL major (pg_major, when given)
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ _primary.stdout }} -c postgres --
+        psql -U postgres -Atc "show server_version_num"
+      register: _server_version
+      changed_when: false
+      failed_when: >-
+        _server_version.rc != 0
+        or (pg_major | default('') | length > 0 and (_server_version.stdout | int) // 10000 != (pg_major | int))
 
     - name: A WAL file switched on it now
       ansible.builtin.command: >-

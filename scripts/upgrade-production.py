@@ -969,7 +969,7 @@ def merge(step, repo):
         if not confirm(f"Step {step}'s merges settled: take PRODUCTION's Postgres base backup now "
                        "(postgres-base-backup.yml)?"):
             print("no base backup now - deploy:upgrade:done takes it at its first call")
-        elif ansible("playbooks/postgres-base-backup.yml"):
+        elif ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_major={inv.pg_major(step)}"):
             record(step, "base-backup")
         else:
             print("the base backup failed (above) - deploy:upgrade:done takes it again at its first call")
@@ -1070,7 +1070,8 @@ def done(step):
     if checked is None and info["acme"]:
         refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
     if checked is None and base_backup:
-        refuse([] if ansible("playbooks/postgres-base-backup.yml") else ["no fresh Postgres base backup (above)"])
+        refuse([] if ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_major={inv.pg_major(step)}")
+               else ["no fresh Postgres base backup (above)"])
         # recorded: a red check later starts the soak again, and its next first call does not take another
         record(step, "base-backup")
     # the soak's start, read before the first check by ten's clock (the restarts' times are its): this machine's,

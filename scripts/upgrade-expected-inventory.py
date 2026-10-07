@@ -84,6 +84,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --clickhouse-compat <step>             (prints the version or nothing)
        scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
        scripts/upgrade-expected-inventory.py --wave0 <step>               (prints its wave0 stores, space-separated)
+       scripts/upgrade-expected-inventory.py --pg-major <step>    (the PostgreSQL major it moves to, or nothing)
 """
 import os
 import re
@@ -228,13 +229,23 @@ def ref(repo, step_no, names):
     return prev
 
 
+def pg_major(step):
+    """The PostgreSQL major the step moves the cluster to (its postgresql image line's new tag), "" for none - its base
+    backup is taken on it: the old major's backups do not replay into the new one."""
+    for line in open(os.path.join(STEPS, step + ".txt")):
+        m = re.fullmatch(r"image \S+ \S+ => image \S+/postgresql (\d+)\b\S*", line.strip())
+        if m:
+            return m[1]
+    return ""
+
+
 def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
                                    ["--barman-check"], ["--barman-after-merge"], ["--restore-check"], ["--cert-renew"],
                                    ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
-                                   ["--wave0"]) else None
+                                   ["--wave0"], ["--pg-major"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -242,6 +253,9 @@ def main():
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     if args[0] not in names:
         sys.exit(f"no step {args[0]} (steps: {', '.join(names)})")
+    if mode == "--pg-major":
+        print(pg_major(args[0]))
+        return
     if mode == "--playbooks":
         playbooks = []
         parse(os.path.join(STEPS, args[0] + ".txt"), playbooks)

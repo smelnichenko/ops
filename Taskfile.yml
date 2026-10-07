@@ -490,6 +490,9 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --backup-check {{.STEP}}
       BARMAN_CHECK:
         sh: scripts/upgrade-expected-inventory.py --barman-check {{.STEP}}
+      # the PostgreSQL major the step moves to (its base backup taken on it), empty for none
+      PG_MAJOR:
+        sh: scripts/upgrade-expected-inventory.py --pg-major {{.STEP}}
       # with a settle before the playbooks (playbook or out-of-sync lines) the base backup is taken right after it
       BARMAN_EARLY:
         sh: |
@@ -556,7 +559,7 @@ tasks:
       # cluster side settled - before the preview and the playbooks (below otherwise, after the step's checks)
       - cmd: |
           if [ "{{.BARMAN_EARLY}}" = yes ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml -e pg_major={{.PG_MAJOR}}
           fi
       # the step's preview, as production takes it after the merge: its playbook lines in check mode (each probe reads the
       # real state, nothing changes) - so the production preview is proven to pass
@@ -587,7 +590,7 @@ tasks:
           elif [ "{{.BARMAN_EARLY}}" = yes ]; then
             echo "BARMAN CHECK: taken after the merges settled (barman-after-merge)"
           else
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/barman-check.yml -e pg_major={{.PG_MAJOR}}
           fi
       # every Certificate renewed and Ready again - only after a step that changes cert-manager (cert-renew line)
       - cmd: |
