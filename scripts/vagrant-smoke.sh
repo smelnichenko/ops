@@ -4,12 +4,14 @@
 #
 # The chart's PostSync hook runs it on every sync of the apps, as in production; this runs the very same Job when the
 # test asks: rendered from platform's schnappy chart with production's values, changed only in what lets it run beside
-# the hook without touching Argo's objects - its own Job and script ConfigMap names, no hook annotations, no retries.
+# the hook without touching Argo's objects - its own Job and script ConfigMap names (this run's: a run left behind by
+# a stopped check never deletes another's), no hook annotations, no retries.
 # It reads the client secret the chart's ExternalSecret already made. TLS is verified as in production: the Vagrant
 # copy serves production's own *.pmon.dev certificate (tests/ansible/upgrade/production-state.yml). Prints k6's checks;
 # exit 0 only if k6 passed (set -e + pipefail carry the remote shell's exit 1 out).
 #
-# Leaves nothing behind.
+# Leaves nothing behind: the remote shell deletes the run's Job and ConfigMap when it ends - also when its connection
+# is gone (a heartbeat it writes fails then), its caller stopped.
 #
 # Usage: scripts/vagrant-smoke.sh [infra ref, default main] [platform ref, default main]
 #        (the refs the mirror pushed; read from the ../infra and ../platform checkouts' git, never their working trees)
@@ -20,6 +22,7 @@ platform_ref=${2:-main}
 mkdir -p "$ops/.upgrade"
 work=$(mktemp -d "$ops/.upgrade/smoke.XXXX")
 trap 'rm -rf "$work"' EXIT
+name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 
 git -C "$ops/../platform" archive "$platform_ref" helm/schnappy | tar -x -C "$work"
 git -C "$ops/../infra" show "$infra_ref:clusters/production/schnappy-production-apps/values.yaml" > "$work/values.yaml"
@@ -28,23 +31,23 @@ helm template schnappy-production "$work/helm/schnappy" -n schnappy-production -
 
 cat > "$work/pick.py" <<'EOF'
 import sys, yaml
-docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+docs, name = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d], sys.argv[2]
 cms = [d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "schnappy-k6-smoke"]
 jobs = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].endswith("-k6-smoke")]
 if len(cms) != 1 or len(jobs) != 1:
     sys.exit(f"smoke render: expected one k6 Job and its script ConfigMap, got {len(jobs)} and {len(cms)}")
 cm, job = cms[0], jobs[0]
-cm["metadata"] = {"name": "vagrant-k6-smoke"}
-job["metadata"] = {"name": "vagrant-k6-smoke"}
+cm["metadata"] = {"name": name}
+job["metadata"] = {"name": name}
 job["spec"]["backoffLimit"] = 0
 mounts = [v for v in job["spec"]["template"]["spec"]["volumes"]
           if v.get("configMap", {}).get("name") == "schnappy-k6-smoke"]
 if len(mounts) != 1:
     sys.exit("smoke render: the Job no longer mounts ConfigMap schnappy-k6-smoke - update this script")
-mounts[0]["configMap"]["name"] = "vagrant-k6-smoke"
+mounts[0]["configMap"]["name"] = name
 print(yaml.safe_dump_all([cm, job], sort_keys=False))
 EOF
-python3 "$work/pick.py" "$work/rendered.yaml" > "$work/smoke.yaml"
+python3 "$work/pick.py" "$work/rendered.yaml" "$name" > "$work/smoke.yaml"
 
 cd "$ops"
 # plain ssh with the VMs' config when the caller has it (VAGRANT_SSH_CONFIG, scripts/upgrade-step-checks.sh): Vagrant
@@ -57,27 +60,41 @@ vssh() {
     vagrant ssh "$1" -c "$2" 2> >(grep -v '^Connection to .* closed\.' >&2)
   fi
 }
-vssh kubeadm 'cat > /tmp/vagrant-k6-smoke.yaml' < "$work/smoke.yaml"
+vssh kubeadm "cat > /tmp/$name.yaml" < "$work/smoke.yaml"
 # One remote shell does the whole run: Complete and Failed are awaited side by side there and the loser killed, so no
 # waiter outlives the script (a local `vagrant ssh` waiter, killed by PID, left its ssh child holding the output open).
-vssh kubeadm 'sudo bash -s' <<'SH' | tr -d '\r'
+# A heartbeat (a carriage return, dropped here) every 5 s: once the connection is gone its write fails and the shell
+# ends - its EXIT trap deletes the run's Job and ConfigMap, silently (a write would end it at once).
+vssh kubeadm "sudo bash -s $name" <<'SH' | tr -d '\r'
 set -u
+NAME=$1
 K="kubectl --kubeconfig /etc/kubernetes/admin.conf -n schnappy-production"
-$K delete job vagrant-k6-smoke --ignore-not-found --wait=true > /dev/null \
-  || { echo "SMOKE FAILED: old Job not deleted"; exit 1; }
-$K apply -f /tmp/vagrant-k6-smoke.yaml || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
-rm -f /tmp/vagrant-k6-smoke.yaml
-$K wait job/vagrant-k6-smoke --for=condition=Complete --timeout=900s > /dev/null 2>&1 & ok=$!
-$K wait job/vagrant-k6-smoke --for=condition=Failed --timeout=900s > /dev/null 2>&1 & failed=$!
+ok="" failed="" beat=""
+cleanup() {
+  local p own
+  # this shell's jobs still running only - never a PID wait -n reaped
+  own=" $(jobs -p | tr '\n' ' ') "
+  for p in $beat $ok $failed; do [[ $own == *" $p "* ]] && kill "$p" 2> /dev/null; done
+  $K delete job "$NAME" --ignore-not-found --wait=false > /dev/null 2>&1
+  $K delete configmap "$NAME" --ignore-not-found > /dev/null 2>&1
+  rm -f "/tmp/$NAME.yaml"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM PIPE
+$K apply -f "/tmp/$NAME.yaml" || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
+rm -f "/tmp/$NAME.yaml"
+(trap '' PIPE; while sleep 5; do printf '\r' 2> /dev/null || { kill -TERM $$; exit; }; done) & beat=$!
+$K wait "job/$NAME" --for=condition=Complete --timeout=900s > /dev/null 2>&1 & ok=$!
+$K wait "job/$NAME" --for=condition=Failed --timeout=900s > /dev/null 2>&1 & failed=$!
 wait -n -p ended "$ok" "$failed"
 # the other wait, still running - not the one wait -n reaped: that PID is no process of this shell any more
 for p in "$ok" "$failed"; do [ "$p" = "${ended:-}" ] || kill "$p" 2> /dev/null; done
-wait 2> /dev/null
+wait "$ok" "$failed" 2> /dev/null
+ok="" failed=""
 echo "--- k6 checks"
-$K logs job/vagrant-k6-smoke -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(error|warning)' | head -40
-passed=$($K get job vagrant-k6-smoke -o jsonpath='{.status.succeeded}')
-# its checks are printed above; a failed pod left behind would hold the next settle wait (argo-settled.yml)
-$K delete job vagrant-k6-smoke --wait=false > /dev/null
-$K delete configmap vagrant-k6-smoke > /dev/null
+$K logs "job/$NAME" -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(error|warning)' | head -40
+passed=$($K get job "$NAME" -o jsonpath='{.status.succeeded}')
+# its checks are printed above; a failed pod left behind would hold the next settle wait (argo-settled.yml) - the
+# EXIT trap deletes the Job and its ConfigMap
 if [ "$passed" = 1 ]; then echo "SMOKE PASSED"; else echo "SMOKE FAILED"; exit 1; fi
 SH
