@@ -137,5 +137,29 @@ check "a short name, pinned under its docker.io name: found" 0 "PINS: ['sha256:$
   pins 08-h y/z 1
 check "a tag the branch does not pin: none" 0 "PINS: []" pins 08-h ghcr.io/x/pg 17
 check "no branch nor tag for the step: refused" 1 "neither upgrade/09-i nor" pins 09-i ghcr.io/x/pg 18.6
+
+# the run's proof-start records every step branch of both repos; a branch moved, made or deleted since - a restack in
+# the repos the run reads (2026-10-07: 16 platform branches rewritten under a running full run) - is named
+git init -q -b main "$W/platform"; git -C "$W/platform" commit -q --allow-empty -m p
+git -C "$W/platform" branch upgrade/20-p
+moves() {  # moves <python statements on m, run between the record and the check>
+  W=$W SRC=$src ACT=$1 python3 - <<'PYP'
+import importlib.machinery, importlib.util, os, subprocess
+L = importlib.machinery.SourceFileLoader("up", os.path.join(os.environ["SRC"], "scripts", "upgrade-production.py"))
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", L))
+L.exec_module(m)
+m.OPS = os.path.join(os.environ["W"], "ops")
+recorded = m.branch_shas()
+g = lambda repo, *a: subprocess.run(["git", "-C", os.path.join(os.environ["W"], repo), *a], check=True,
+                                    capture_output=True)
+exec(os.environ["ACT"])
+print("MOVES:", m.branch_moves(recorded) or "none")
+PYP
+}
+check "the branches as recorded: none moved" 0 "MOVES: none" moves "pass"
+check "one moved: named" 0 "platform upgrade/20-p:" moves 'g("platform", "commit", "-q", "--allow-empty", "-m", "x");
+g("platform", "branch", "-f", "upgrade/20-p")'
+check "one made: named" 0 "infra upgrade/99-new: none ->" moves 'g("infra", "branch", "upgrade/99-new", "main")'
+check "one deleted: named" 0 "infra upgrade/99-new:" moves 'g("infra", "branch", "-D", "upgrade/99-new")'
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

@@ -685,6 +685,30 @@ child.wait()
 got, token = released(child.pid)
 check("release: that run gone - its start closed, with its token", got, [("end", "merge", "released", token)])
 
+# a proof is refused when any step branch moved, was made or deleted since the run started (proof-start's record) -
+# the run then mixed states; a run.json from before that record refuses too
+import tempfile
+def proved(run_info, moved):
+    saved = {k: getattr(m, k) for k in ("PROVEN", "ops_unchanged_since", "branch_moves")}
+    m.PROVEN = tempfile.mkdtemp()
+    json.dump(run_info, open(os.path.join(m.PROVEN, "run.json"), "w"))
+    m.ops_unchanged_since = lambda *a: []
+    m.branch_moves = lambda recorded: list(moved)
+    try:
+        m.record_proof(S47, "i", "p")
+        got = "past the checks"
+    except SystemExit as e:  # a later check (the floating digests, here none) is past these
+        got = str(e) if "moved during the run" in str(e) or "proof-start" in str(e) else "past the checks"
+    except Exception:
+        got = "past the checks"
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return got
+check("a step branch moved during the run: refused",
+      "moved during the run" in proved({"ops": "x", "run": "r", "branches": {}}, ["platform upgrade/50-x: a -> b"]), True)
+check("none moved: past that check", proved({"ops": "x", "run": "r", "branches": {}}, []), "past the checks")
+check("a run.json without the record: refused", "proof-start" in proved({"ops": "x", "run": "r"}, []), True)
 # a step that moves ClickHouse's image (59, 61) is proven only with its rollback pin proven on the same platform commit
 # and images (tests/clickhouse-pin's result; the full run starts it beside the build)
 import json, tempfile
@@ -710,7 +734,7 @@ check("pin: exactly 59 and 61 move ClickHouse's image",
 def record_59(pin):
     """record-proof of 59 with git and the tree stubbed; `pin` the rollback pin's result (None: no file)."""
     work = tempfile.mkdtemp()
-    json.dump({"run": "r", "ops": "o"}, open(os.path.join(work, "run.json"), "w"))
+    json.dump({"run": "r", "ops": "o", "branches": {}}, open(os.path.join(work, "run.json"), "w"))
     if pin is not None:
         json.dump(pin, open(os.path.join(work, "pin.json"), "w"))
 
@@ -722,10 +746,11 @@ def record_59(pin):
         if cmd[-2:-1] == ["--refs"]:
             return _Out("upgrade/59-x upgrade/59-y")
         return _Out({"upgrade/59-x": "i59", "upgrade/59-y": "p59"}.get(cmd[-1], "z"))
-    keep = ("PROVEN", "PIN_RESULT", "run", "ops_unchanged_since", "floating_digests", "own_change")
+    keep = ("PROVEN", "PIN_RESULT", "run", "ops_unchanged_since", "floating_digests", "own_change", "branch_moves")
     saved = {k: getattr(m, k) for k in keep}
     m.PROVEN, m.PIN_RESULT, m.run = work, os.path.join(work, "pin.json"), run
     m.ops_unchanged_since, m.floating_digests, m.own_change = (lambda *a: []), (lambda: {}), (lambda *a: "own")
+    m.branch_moves = lambda recorded: []
     try:
         m.record_proof(S59, "i59", "p59")
         return "recorded" if os.path.exists(os.path.join(work, S59 + ".json")) else "nothing"

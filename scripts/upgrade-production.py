@@ -399,8 +399,27 @@ def proof_start():
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with open(os.path.join(PROVEN, "run.json"), "w") as f:
-        json.dump({"ops": head, "run": started}, f)
+        json.dump({"ops": head, "run": started, "branches": branch_shas()}, f)
     print(f"PROOF: run {started} of ops {head[:10]}")
+
+
+def branch_shas():
+    """Every step branch (upgrade/*) of infra and platform, its commit - proof-start records them for the run."""
+    out = {}
+    for repo in REPOS:
+        refs = run(["git", "-C", os.path.join(OPS, "..", repo), "for-each-ref",
+                    "--format=%(refname:short) %(objectname)", "refs/heads/upgrade/"], capture_output=True,
+                   check=True).stdout
+        out[repo] = dict(line.split() for line in refs.splitlines())
+    return out
+
+
+def branch_moves(recorded):
+    """The step branches moved, made or deleted since `recorded` (branch_shas()'s), named."""
+    now = branch_shas()
+    return [f"{repo} {b}: {recorded.get(repo, {}).get(b, 'none')[:10]} -> {now[repo].get(b, 'none')[:10]}"
+            for repo in REPOS for b in sorted(set(recorded.get(repo, {})) | set(now[repo]))
+            if recorded.get(repo, {}).get(b) != now[repo].get(b)]
 
 
 PIN_RESULT = os.path.join(WORK, "clickhouse-pin.json")
@@ -432,6 +451,13 @@ def record_proof(step, infra_sha, platform_sha):
     changed = ops_unchanged_since(run_info["ops"], PROVEN_PATHS)
     if changed:
         sys.exit(f"REFUSED: the ops tree changed during the run ({', '.join(changed)}) - the run proves nothing")
+    # every step branch as the run started: one rewritten meanwhile (a restack in the repos the run reads) mixed the
+    # states its steps proved
+    if "branches" not in run_info:
+        sys.exit("REFUSED: the run's run.json records no step branches - a run started before proof-start did; again")
+    moved = branch_moves(run_info["branches"])
+    if moved:
+        sys.exit(f"REFUSED: step branches moved during the run ({'; '.join(moved)}) - the run proves nothing")
     names = step_names()
     refs = dict(zip(REPOS, run([INVENTORY, "--refs", step],
                                capture_output=True, check=True).stdout.split()))
