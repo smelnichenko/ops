@@ -212,11 +212,20 @@
     # ── 3. the package ───────────────────────────────────────────────
     # with the kubelet still running: apt's lists and the download on the network take as long as they take - past
     # some 50 s without the kubelet the node is NotReady and every Service loses its endpoints
-    - name: Download containerd.io (installed from the download once the kubelet is stopped)
+    - name: Apt's lists current (the download below and the install after it read them)
       ansible.builtin.apt:
-        name: "containerd.io={{ _package.stdout }}"
         update_cache: true
-        download_only: true
+
+    # apt-get's own download-only (the apt module has none): the package and what it replaces resolved now, every .deb
+    # in apt's cache for the install once the kubelet is stopped
+    - name: Download containerd.io (installed from the download once the kubelet is stopped)
+      ansible.builtin.command:
+        argv: [apt-get, install, --download-only, --yes, --allow-change-held-packages,
+               "containerd.io={{ _package.stdout }}"]
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      register: _downloaded
+      changed_when: "'Download complete' in _downloaded.stdout"
 
     - name: Keep the live config (the first run's - never overwritten by a re-run)
       ansible.builtin.copy:

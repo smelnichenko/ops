@@ -50,10 +50,13 @@ def stub(t, fail):
     if svc.get("name") == "kubelet" and "state" in svc:
         return {"name": t["name"], "ansible.builtin.shell": f"echo -n {svc['state']} > {{{{ kubelet_state }}}}; "
                                                           f"echo kubelet {svc['state']} >> {{{{ events }}}}"}
+    argv = (t.get("ansible.builtin.command") or {}).get("argv") if isinstance(t.get("ansible.builtin.command"), dict) \
+        else None
+    if argv and "--download-only" in argv and any("containerd.io" in str(a) for a in argv):
+        return {**keep, "ansible.builtin.shell": "echo apt download >> {{ events }}"}
     apt = t.get("ansible.builtin.apt", {})
     if "containerd.io" in str(apt.get("name", "")):
-        return {**keep, "ansible.builtin.shell": "echo apt " + ("download" if apt.get("download_only") else "install")
-                + " >> {{ events }}"}
+        return {**keep, "ansible.builtin.shell": "echo apt install >> {{ events }}"}
     if t.get("ansible.builtin.include_tasks") == "tasks/containerd-known-containers.yml":
         return {**keep, "ansible.builtin.include_tasks": INC}
     body = str({k: v for k, v in t.items() if k.startswith("ansible.builtin.")})
