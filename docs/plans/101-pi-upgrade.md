@@ -60,19 +60,31 @@ test:patroni-upgrade, test:vault-upgrade). Phase 2 after plan 100's rollout.
 
 1. setup-patroni: the data wipe only on a first install - no Patroni unit and no patroni.dynamic.json on the node
    (Debian's own initial cluster has a PG_VERSION, so that cannot be the test), and never on the node Consul names
-   as the leader; never because the unit is stopped (refused). The Keycloak dump restored only in the run that took
-   it, then moved aside.
+   as the leader; never because the unit is stopped (refused). A Keycloak dump waiting on pi1 (root-only) is restored
+   by any run into an empty keycloak database - a first install cut short after its dump too - with Keycloak stopped
+   on both Pis around it, then moved aside; beside a database in use it is refused, naming the file.
 2. setup-consul: the gossip key generated once and kept (Vault, as the other secrets), never regenerated; the kept
    key must be in the running keyring; restarts one server at a time, Patroni paused around each (its leader
    demotes after 10 s without its Pi's agent), each gated on autopilot health (every server healthy - log caught
-   up - and one loss tolerated).
+   up - and one loss tolerated). A restart is pending by content - the config and unit against a stamp of what the
+   agent last loaded (/var/lib/config-loaded, tasks/restart-pending.yml) - never by the clock: the Pis have no RTC,
+   and a file dated ahead restarted every server on every run. Patroni's and Vault's restarts are judged the same way.
 3. One database port for Forgejo and Keycloak (PgBouncer :6432), set by one playbook; PgBouncer installed but not
    running is refused, not answered with :5000.
 4. keepalived: a config change reloads (the VIP and Nexus stay). A restart - a drop-in change, keepalived's package
-   upgrade - still stops Nexus through the drop-in's ExecStopPost and moves the VIP.
+   upgrade - still stops Nexus through the drop-in's ExecStopPost and moves the VIP: pending by content stamp (as
+   item 2), one Pi at a time, the VIP's holder last, the unit read again first, each Pi's VIP answering before the
+   next.
+4a. setup-vault-pi: a config change restarts the standby first, then the active (one failover), each unsealed by its
+   own script, by content stamp (as item 2). A first init writes its key shares on pi1 as the init returns them
+   (each run its own file aside, moved whole; a run cut short resumes from it - a whole file aside is promoted), the
+   bootstrap waits for the active Vault, enables only what is missing and fails on a failure, and the shares' files
+   are on disk before the init's file goes.
 5. Backups, timed, into the Pi store (offsite copies as the others) with a restore rehearsed in Vagrant each:
    `consul snapshot save` (holds Vault and Patroni's state), pg_dump of every Patroni database (Forgejo's among them),
-   Keycloak realm export. NOT backed up: Forgejo's repositories (/var/lib/forgejo/repos on the Gluster volume
+   Keycloak realm export - daily at 02:40 UTC from whichever Pi's timer gets there first, one at a time under Consul's
+   lock (a bounded wait; a day with a success is done - the other Pi's run, or a failed run's retry by it), a failure
+   failing the unit (the lock passes the run's exit on). NOT backed up: Forgejo's repositories (/var/lib/forgejo/repos on the Gluster volume
    forgejo-repos - replicated, not backed up; the upgrade's pg_dump is taken with Forgejo still serving) - no
    `forgejo dump` exists; one is the operator's decision. setup-pi-backups.yml,
    restored in Vagrant (task test:pi-backups). Late: infra's kube-system CronJob pi-backup-check reads the bucket's
