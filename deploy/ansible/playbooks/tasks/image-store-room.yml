@@ -3,7 +3,7 @@
 # their rollout are unused until it, and past imageGCHighThresholdPercent (the kubelet's config; 85, its default,
 # where the config sets none) its GC deletes unused images - these first; past imagefs.available<15% it evicts pods.
 # Expects: room_when (before | after the pulls), kubelet_config, image_store. Tested: tests/ansible/unit/prepull.
-- name: "The image store's room, {{ room_when }} - under the kubelet's image GC threshold"
+- name: "The image store under the kubelet's image GC threshold: {{ room_when }}"
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
