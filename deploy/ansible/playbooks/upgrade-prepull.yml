@@ -35,7 +35,8 @@
       loop: "{{ images.split(',') | select | list }}"
       register: _present
       changed_when: false
-      failed_when: false
+      # missing is crictl's own answer; any other failure (the runtime's socket) is no image missing
+      failed_when: _present.rc != 0 and 'no such image' not in _present.stderr
       check_mode: false  # a read: a preview (--check) runs it
 
     - name: The ones to pull

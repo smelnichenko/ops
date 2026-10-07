@@ -21,7 +21,10 @@ ln -s "$PWD/deploy/ansible/playbooks/tasks" "$W/tasks"  # the play's includes, b
 cat > "$W/bin/crictl" <<'STUB'
 #!/bin/bash
 if [ "${*: -2:1}" = inspecti ]; then
+  # as crictl answers: a broken runtime socket (INSPECT_BROKEN), an image there, one missing
+  [ -z "${INSPECT_BROKEN:-}" ] || { echo 'level=fatal msg="validate service connection: rpc error"' >&2; exit 1; }
   for p in ${PRESENT:-}; do [ "$p" = "${@: -1}" ] && exit 0; done
+  echo "level=fatal msg=\"no such image \\\"${*: -1}\\\" present\"" >&2
   exit 1
 fi
 echo "$*" >> "$CALLS"
@@ -100,5 +103,7 @@ USED=82,82 PRESENT="x:1 y:2" case_ "every image on the node already, the store a
   0 "" -e images=x:1,y:2
 USED=82,82 PRESENT="x:1" case_ "one missing, the store at 82%: refused, nothing pulled" 1 "" -e images=x:1,y:2
 USED=65,66 PRESENT="x:1" case_ "one missing, room enough: only it pulled" 0 "$E pull y:2" -e images=x:1,y:2
+# what the node has read wrongly (the runtime's socket broken) is no image missing: refused, nothing pulled
+INSPECT_BROKEN=1 case_ "the runtime not answering: refused, nothing pulled" 1 "" -e images=x:1
 echo "prepull: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
