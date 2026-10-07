@@ -44,7 +44,7 @@ yaml.safe_dump([{"hosts": "pi1", "gather_facts": False, "tasks": tasks}], open(o
                sort_keys=False)
 PY
 fails=0
-case_() {  # case_ <name> <table counts, JSON list> <want rc 0|1> <want log, ; between> [restore_fails]
+case_() {  # case_ <name> <table counts, JSON list> <want rc 0|1> <want log, ; between> [restore_fails] [said]
   : > "$W/log"
   cat > "$W/hosts.yml" <<HOSTS
 all:
@@ -55,7 +55,9 @@ HOSTS
   out=$(ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" 2>&1); rc=$?
   [ $rc = 0 ] || rc=1
   got=$(paste -sd';' "$W/log")
-  if [ "$rc" = "$3" ] && [ "$got" = "$4" ]; then echo "PASS $1"; return; fi
+  if [ "$rc" = "$3" ] && [ "$got" = "$4" ] && { [ -z "${6:-}" ] || grep -qF -- "$6" <<< "$out"; }; then
+    echo "PASS $1"; return
+  fi
   echo "FAIL $1 (rc $rc)"; echo "    got:  $got"; echo "    want: $4"; grep -E "ERROR|fatal" <<< "$out" | head -3
   fails=$((fails + 1))
 }
@@ -63,7 +65,10 @@ S="pi1 keycloak stopped;pi2 keycloak stopped" R="pi1 keycloak started;pi2 keyclo
 case_ "empty, and still empty with Keycloak stopped: restored, Keycloak started again" "[0, 0]" 0 "$S;restored;$R"
 case_ "empty, then its schema built before Keycloak stopped: refused, nothing restored, Keycloak started again" \
   "[0, 92]" 1 "$S;$R"
-case_ "in use before: refused, Keycloak never stopped" "[92, 92]" 1 ""
+# also a restore that went through on pi1 after its run was cut short (Ctrl-C) before the dump was moved aside - its
+# Keycloak left stopped: the refusal says so
+case_ "in use before: refused, Keycloak never stopped, a restore cut short named" "[92, 92]" 1 "" false \
+  "systemctl start keycloak"
 # a failed restore (one transaction) leaves the database empty: Keycloak started on it would build its schema there,
 # and every re-run would refuse the database in use - it stays stopped, and a re-run restores
 case_ "the restore fails: Keycloak left stopped, the run fails" "[0, 0]" 1 "$S" true

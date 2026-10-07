@@ -28,7 +28,9 @@
     fail_msg: >-
       REFUSED: a first install's Keycloak dump waits on pi1 (/var/backups/patroni-first-install/keycloak.sql) and the
       {{ _restore_db }} database has {{ _restore_tables.stdout | trim }} tables - restore it by hand into an empty one,
-      or move the file aside once its realm is known to be elsewhere
+      or move the file aside once its realm is known to be elsewhere. A restore can have gone through after its run
+      was cut short (a Ctrl-C skips the start below), Keycloak then stopped on both Pis: the realm in the database,
+      move the file aside and systemctl start keycloak on each
     quiet: true
 
 - name: The restore, Keycloak stopped on both Pis meanwhile
