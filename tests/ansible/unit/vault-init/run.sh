@@ -5,8 +5,8 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "vault-init: no python3 with jinja2 and yaml"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "vault-init: no python3 with ansible and yaml"; exit 2; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin"
@@ -28,7 +28,9 @@ STUB
 chmod +x "$W/bin/vault"
 W=$W "$PY" - <<'PY'
 import base64, json, os, stat, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 tasks = {t.get("name"): t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
          for t in p.get("tasks") or [] for t in [t] + (t.get("block") or [])}
@@ -38,8 +40,8 @@ def check(name, ok):
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}")
 init = tasks["Initialise Vault - its keys written on the Pi as it returns them"]
-script = jinja2.Environment().from_string(init["ansible.builtin.shell"]).render(
-    vault_unseal_shares=3, vault_unseal_threshold=2).replace("/etc/vault-unseal", os.path.join(W, "vu"))
+script = render(init["ansible.builtin.shell"],
+                vault_unseal_shares=3, vault_unseal_threshold=2).replace("/etc/vault-unseal", os.path.join(W, "vu"))
 check("the init skipped once its keys file exists (creates)", init["args"]["creates"] == "/etc/vault-unseal/init.json")
 env = dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"])
 aside = lambda: [f for f in os.listdir(os.path.join(W, "vu")) if f.startswith("init.json.")]
@@ -59,11 +61,8 @@ check("root-only: the file 0600, its directory 0700",
 slurped = {"content": base64.b64encode(open(path, "rb").read()).decode()}
 keys = tasks["Persist unseal keys (first init only)"]["ansible.builtin.copy"]["content"]
 token = tasks["Persist root token (first init only)"]["ansible.builtin.copy"]["content"]
-env_j = jinja2.Environment()
-env_j.filters["b64decode"] = lambda s: base64.b64decode(s).decode()
-env_j.filters["from_json"] = json.loads
-check("unseal-keys made from it", env_j.from_string(keys).render(_init_json=slurped).split() == ["k1", "k2", "k3"])
-check("root-token made from it", env_j.from_string(token).render(_init_json=slurped) == "hvs.root")
+check("unseal-keys made from it", render(keys, _init_json=slurped).split() == ["k1", "k2", "k3"])
+check("root-token made from it", render(token, _init_json=slurped) == "hvs.root")
 # an ssh retry overlapping a first invocation still running: each writes its own file aside - the other's output (the
 # only copy of the shares) never truncated
 os.remove(path)
@@ -108,10 +107,10 @@ for name, path_, enable in (("Enable KV v2", "secret/", "secrets enable -path=se
 # disk before the init's file - their only other copy - goes
 block = next(t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
              for t in p.get("tasks") or [] if t.get("name", "").startswith("Bootstrap KV + ESO + k8s-auth"))["block"]
-until = jinja2.Environment().compile_expression(block[0].get("until", "false"))
+until = "{{ %s }}" % block[0].get("until", "false")
 check("the bootstrap first waits for sys/health to say active (200) - not a standby (429), not sealed (503)",
-      "sys/health" in str(block[0]) and [bool(until(**{block[0]["register"]: {"status": c}})) for c in (200, 429, 503)]
-      == [True, False, False])
+      "sys/health" in str(block[0])
+      and [render(until, **{block[0]["register"]: {"status": c}}) for c in (200, 429, 503)] == [True, False, False])
 names = [t["name"] for t in block]
 removal = names.index("The first init done - its keys file removed (the shares are in unseal-keys and root-token)")
 check("the shares synced to disk before the keys file goes", "ansible.builtin.command" in block[removal - 1]

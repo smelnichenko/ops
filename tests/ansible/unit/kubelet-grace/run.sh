@@ -2,16 +2,17 @@
 # The kubelet's shutdown grace compared by value, not text: kubeadm writes 180s back as 3m0s (the full run's step 13
 # failed on it, 2026-10-06). upgrade-kubeadm's two checks (the ConfigMap before, the kubelet's file after) and
 # node-config's ConfigMap patch, each run as the playbook holds it, on both spellings and on 0s - the two checks judged
-# by their own failed_when, evaluated as Ansible evaluates it (a Jinja expression over the registered result).
+# by their own failed_when, evaluated by Ansible's templar over the registered result.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "kubelet-grace: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "kubelet-grace: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 "$PY" - <<'PY'
 import json, subprocess, sys
-import jinja2
 import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 fails = 0
 def check(name, got, want):
     global fails
@@ -21,7 +22,7 @@ pb = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))
 tasks = {t.get("name"): t for t in pb[0]["tasks"]}
 def failed(task, result):
     """The task's failed_when over its registered result, as Ansible evaluates a conditional."""
-    return bool(jinja2.Environment().compile_expression(task["failed_when"])(**{task["register"]: result}))
+    return render("{{ " + task["failed_when"] + " }}", **{task["register"]: result})
 import os, tempfile
 work = tempfile.mkdtemp()
 kubelet_file = os.path.join(work, "config.yaml")
@@ -32,7 +33,7 @@ os.chmod(stub, 0o755)
 for name in ("The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)",
              "The kubelet runs with the shutdown grace after the upgrade (180s / 30s)"):
     # the whole command as the playbook holds it, its inputs replaced: the ConfigMap by the stub, the file by ours
-    cmd = tasks[name]["ansible.builtin.shell"].replace("{{ kubectl }}", stub).replace(
+    cmd = render(tasks[name]["ansible.builtin.shell"], kubectl=stub).replace(
         "/var/lib/kubelet/config.yaml", kubelet_file)
     for text, ok in (("shutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\n", True),
                      ("shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n", True),
@@ -48,12 +49,12 @@ for name in ("The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)
 name = "The kubelet-config ConfigMap keeps the shutdown grace (180s / 30s)"
 with open(kubelet_file, "w") as f:
     f.write("shutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
-r = subprocess.run(["bash", "-c", tasks[name]["ansible.builtin.shell"].replace("{{ kubectl }}", stub)],
+r = subprocess.run(["bash", "-c", render(tasks[name]["ansible.builtin.shell"], kubectl=stub)],
                    capture_output=True, text=True, env=dict(os.environ, STUB_RC="1"))
 check("The kubelet-config ConfigMap read failed", not failed(tasks[name], {"rc": r.returncode,
                                                                            "stdout_lines": r.stdout.splitlines()}), False)
 t = yaml.safe_load(open("deploy/ansible/playbooks/tasks/node-config.yml"))
-cmd = next(x for x in t if "ConfigMap" in x.get("name", ""))["ansible.builtin.shell"]
+cmd = render(next(x for x in t if "ConfigMap" in x.get("name", ""))["ansible.builtin.shell"])
 patcher = cmd[cmd.index("python3 -c '") + len("python3 -c '"):cmd.index("' > \"$patch\"")]  # its python, fed JSON
 def patch(kubelet):
     r = subprocess.run([sys.executable, "-c", patcher], input=json.dumps({"data": {"kubelet": kubelet}}),
@@ -65,11 +66,8 @@ check("node-config: 0s patched to 180s / 30s",
       "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
 check("node-config: missing added", patch("a: 1\n"), "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
 # the patch applied only when there is one: an empty one (the ConfigMap right already) went to `kubectl patch -p ''`
-import jinja2
 apply = next(x for x in t if x.get("name", "").startswith("Keep the shutdown grace across kubeadm upgrades"))
-jenv = jinja2.Environment()
-jenv.filters["bool"] = lambda v: str(v).lower() in ("true", "yes", "1")
-applies = lambda out: bool(jenv.compile_expression(apply["when"])(_kubelet_config_patch={"stdout": out}))
+applies = lambda out: render("{{ " + apply["when"] + " }}", _kubelet_config_patch={"stdout": out})
 check("node-config: the ConfigMap right already - nothing applied", applies(""), False)
 check("node-config: a patch - applied", applies('{"data": {"kubelet": "x"}}'), True)
 print("kubelet-grace: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

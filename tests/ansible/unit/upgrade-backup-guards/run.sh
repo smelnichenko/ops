@@ -12,8 +12,10 @@ unset ANSIBLE_CONFIG
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 W=$W AP=$AP "$PY" - <<'PY'
-import os, shlex, subprocess, sys
-import jinja2, yaml
+import os, subprocess, sys
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W, AP = os.environ["W"], os.environ["AP"]
 def tasks(ts):
     for t in ts or []:
@@ -22,8 +24,6 @@ def tasks(ts):
             yield from tasks(t.get(k))
 book = [t for p in yaml.safe_load(open("deploy/ansible/playbooks/upgrade-backup.yml")) for t in tasks(p.get("tasks"))]
 by = lambda prefix: next(t for t in book if str(t.get("name", "")).startswith(prefix))
-env = jinja2.Environment()
-env.filters["quote"] = shlex.quote
 fails = 0
 def check(name, ok, detail=""):
     global fails
@@ -49,7 +49,7 @@ clean = by("ClickHouse - the snapshot released")["ansible.builtin.shell"]["cmd"]
 data = os.path.join(W, "ch")
 os.makedirs(os.path.join(data, "shadow", "wave0_1"))
 os.makedirs(os.path.join(data, "shadow", "other"))
-run = lambda path: subprocess.run(["bash", "-c", env.from_string(clean).render(_ch={"stdout": f"a b {path}"})],
+run = lambda path: subprocess.run(["bash", "-c", render(clean, _ch={"stdout": f"a b {path}"})],
                                   capture_output=True, text=True)
 r = run(data)
 check("ClickHouse: wave0_* removed, nothing else", r.returncode == 0 and os.listdir(os.path.join(data, "shadow"))

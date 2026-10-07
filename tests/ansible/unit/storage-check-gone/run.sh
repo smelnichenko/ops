@@ -1,12 +1,12 @@
 #!/bin/bash
 # storage-check.yml's last check - the PersistentVolume and its directory gone - run as the playbook holds it (rendered
-# with Jinja), kubectl a stub: the volume listed reads 1, gone reads 0, and kubectl failing fails the check - it read 0,
-# "gone", when the API server did not answer. Its delete step stops at the first delete that fails.
+# by Ansible's templar), kubectl a stub: the volume listed reads 1, gone reads 0, and kubectl failing fails the check -
+# it read 0, "gone", when the API server did not answer. Its delete step stops at the first delete that fails.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "storage-check-gone: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "storage-check-gone: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 # the playbook as Ansible loads it first: a free-form shell block it cannot split (a quote in a comment) never runs
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
 "$AP" --syntax-check -i localhost, tests/ansible/upgrade/storage-check.yml > /dev/null 2>&1 \
@@ -26,7 +26,9 @@ STUB
 chmod +x "$W/bin/kubectl"
 W=$W "$PY" - <<'PY'
 import os, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 tasks = {t["name"]: t for t in yaml.safe_load(open("tests/ansible/upgrade/storage-check.yml"))[0]["tasks"]}
 ctx = {"kubectl": os.path.join(W, "bin", "kubectl"), "kubeconfig": "/k", "check_name": "c",
@@ -35,7 +37,7 @@ fails = 0
 def run(name, mode):
     t = tasks[name]
     cmd = t["ansible.builtin.shell"]
-    script = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(cmd).render(**ctx)
+    script = render(cmd, **ctx)
     calls = os.path.join(W, "calls")
     open(calls, "w").close()
     shell = (t.get("args") or {}).get("executable", "/bin/sh")

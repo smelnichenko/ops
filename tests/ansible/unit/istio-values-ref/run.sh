@@ -6,7 +6,7 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -15,10 +15,10 @@ git clone -q "$W/origin.git" "$W/infra" 2> /dev/null
 git -C "$W/infra" commit -q --allow-empty -m a && git -C "$W/infra" push -q origin main
 W=$W "$PY" - <<'PY'
 import os, shlex, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
-env = jinja2.Environment()
-env.filters["quote"] = shlex.quote
 fails = 0
 def check(name, ok, detail=""):
     global fails
@@ -31,13 +31,13 @@ for f in ("deploy/ansible/playbooks/setup-istio.yml", "deploy/ansible/playbooks/
     for t in looks:
         expr = t["kubernetes.core.helm"]["values"].split("lookup('ansible.builtin.pipe', ", 1)[1]
         expr = expr.rsplit(") | from_yaml", 1)[0]
-        cmd = env.from_string("{{ " + expr + " }}").render(infra_dir=hostile, infra_values_ref="main")
+        cmd = render("{{ " + expr + " }}", infra_dir=hostile, infra_values_ref="main")
         check(f"{f}: {t['name']}: the directory one argument", shlex.split(cmd)[2] == hostile, cmd)
     sync = [t for t in tasks if str(t.get("name", "")).startswith("Infra's local main is origin's")]
     check(f"{f}: the local main checked against origin's", len(sync) == 1, [t.get("name") for t in tasks][:5])
     if not sync:
         continue
-    script = env.from_string(sync[0]["ansible.builtin.shell"]).render(infra_dir=os.path.join(W, "infra"))
+    script = render(sync[0]["ansible.builtin.shell"], infra_dir=os.path.join(W, "infra"))
     git = lambda *a: subprocess.run(["git", "-C", os.path.join(W, "infra"), *a], check=True, capture_output=True)
     run = lambda: subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     check(f"{f}: main as origin's: passes", run().returncode == 0)

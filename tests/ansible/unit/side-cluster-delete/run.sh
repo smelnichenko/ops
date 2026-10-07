@@ -1,12 +1,12 @@
 #!/bin/bash
-# tests/ansible/upgrade/tasks/side-cluster-delete.yml's shell as the task file holds it (rendered with Jinja, its poll
-# cut to 0.1 s), kubectl a stub: a side cluster's pods and volumes gone after its delete pass - at once, or after a
-# while (a pod still terminating when the foreground delete returned failed the run once, read a single time); still
-# there at the bound fails, naming them; kubectl failing fails. The four places that remove a side cluster use it.
+# tests/ansible/upgrade/tasks/side-cluster-delete.yml's shell as the task file holds it (rendered by Ansible's templar,
+# its poll cut to 0.1 s), kubectl a stub: a side cluster's pods and volumes gone after its delete pass - at once, or
+# after a while (a pod still terminating when the foreground delete returned failed the run once, read a single time);
+# still there at the bound fails, naming them; kubectl failing fails. The four places that remove a side cluster use it.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin"
@@ -24,11 +24,13 @@ STUB
 chmod +x "$W/bin/kubectl"
 W=$W "$PY" - <<'PY'
 import os, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 task = yaml.safe_load(open("tests/ansible/upgrade/tasks/side-cluster-delete.yml"))[0]
-script = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(task["ansible.builtin.shell"]).render(
-    side_kubectl="kubectl -n ns", side_cluster="side", side_gone_seconds=1, side_poll=0.1)
+script = render(task["ansible.builtin.shell"],
+                side_kubectl="kubectl -n ns", side_cluster="side", side_gone_seconds=1, side_poll=0.1)
 fails = 0
 for name, env, want_rc, words in (("gone at once", {}, 0, ""),
                                   ("a pod still terminating, gone after a while", {"LEFT_FOR": "3"}, 0, ""),

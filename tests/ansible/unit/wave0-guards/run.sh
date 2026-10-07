@@ -1,8 +1,9 @@
 #!/bin/bash
 # wave0-rehearsal.yml's guards before it deletes or writes on the node, each shell block run as the playbook holds it
-# (rendered with Jinja, kubectl a stub) and every tool that changes files FENCED - find, tar, cp, rm, du, chown, mv log
-# their call and exit 99, so nothing here touches this machine even when a guard is broken. Under `set -e` a test that
-# fails inside an && list stops nothing unless it is the last one; each guard must stop the block itself:
+# (rendered by Ansible's templar, kubectl a stub) and every tool that changes files FENCED - find, tar, cp, rm, du,
+# chown, mv log their call and exit 99, so nothing here touches this machine even when a guard is broken. Under
+# `set -e` a test that fails inside an && list stops nothing unless it is the last one; each guard must stop the block
+# itself:
 #   Kafka's volume      "/" or no such directory: refused before find -delete; a real directory: find called
 #   gateway's volumes   "/", no such directory or an empty archive refused before find -delete; a real directory
 #                       with its archive: find called
@@ -13,8 +14,8 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "wave0-guards: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "wave0-guards: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 # the playbook as Ansible loads it first: a free-form shell block it cannot split (a quote in a comment) never runs
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
 "$AP" --syntax-check -i localhost, tests/ansible/upgrade/wave0-rehearsal.yml > /dev/null 2>&1 \
@@ -39,7 +40,9 @@ echo data > "$W/work/pvc1.tar.gz"
 : > "$W/work/pvc2.tar.gz"  # an archive the backup left empty
 W=$W "$PY" - <<'PY'
 import os, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 tasks = {}
 def walk(items):
@@ -52,7 +55,7 @@ fails = 0
 def run(task, env=None, **ctx):
     cmd = tasks[task]["ansible.builtin.shell"]["cmd"]
     ctx = dict(kubectl=os.path.join(W, "bin", "kubectl"), work_dir=os.path.join(W, "work"), **ctx)
-    script = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(cmd).render(**ctx)
+    script = render(cmd, **ctx)
     log = os.path.join(W, "fenced.log")
     if os.path.exists(log):
         os.remove(log)
@@ -92,11 +95,9 @@ rc, out, fenced = run(ETCD, env=dict(good, HOST="/"))
 case("etcd's data hostPath /: refused, nothing copied", rc != 0 and not fenced, f"rc {rc}, fenced: {fenced!r}")
 rc, out, fenced = run(ETCD, env=good)
 case("etcd with pod, hostPath and mount: the snapshot copied", fenced.startswith("cp "), repr(fenced))
-ansible_env = jinja2.Environment()
-ansible_env.filters["basename"] = os.path.basename  # Ansible's own basename filter
-DUMPS = ansible_env.compile_expression(tasks["Postgres - the dumps of the backup"]["failed_when"])
-dumps = lambda *names: bool(DUMPS(_dumps={"files": [{"path": "/b/" + n} for n in names]}, **{
-    k: play["vars"][k] for k in ("pg_namespace", "pg_cluster")}))
+DUMPS = "{{ %s }}" % tasks["Postgres - the dumps of the backup"]["failed_when"]
+dumps = lambda *names: render(DUMPS, _dumps={"files": [{"path": "/b/" + n} for n in names]}, **{
+    k: play["vars"][k] for k in ("pg_namespace", "pg_cluster")})
 case("the dumps: production's among them - goes on",
      not dumps("schnappy-production-schnappy-production-postgres.sql.gz", "schnappy-test-schnappy-test-postgres.sql.gz"),
      "failed")

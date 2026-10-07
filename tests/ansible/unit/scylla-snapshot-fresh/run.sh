@@ -5,11 +5,13 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "scylla-snapshot-fresh: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "scylla-snapshot-fresh: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 "$PY" - <<'PY'
-import re, sys
-import jinja2, yaml
+import sys
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 def walk(items):
     for t in items or []:
         yield t
@@ -17,10 +19,7 @@ def walk(items):
             yield from walk(t.get(k))
 tasks = {t.get("name"): t for p in yaml.safe_load(open("deploy/ansible/playbooks/upgrade-backup.yml"))
          for t in walk(p.get("tasks"))}
-env = jinja2.Environment()
-env.filters["regex_findall"] = lambda s, p: re.findall(p, s)  # Ansible's
-env.filters["regex_replace"] = lambda s, p, r="": re.sub(p, r, s)
-fresh = env.compile_expression(tasks["Scylla - every snapshot taken by this run"]["ansible.builtin.assert"]["that"])
+fresh = "{{ %s }}" % tasks["Scylla - every snapshot taken by this run"]["ansible.builtin.assert"]["that"]
 node_t0, controller = "20261006203000", "20261006T203030Z"  # the controller 30 s ahead of the node
 fails = 0
 def check(name, got, want):
@@ -31,7 +30,7 @@ for tag, want, what in (("sm_20261006203005UTC", True, "taken 5 s into the backu
                         ("sm_20261006202900UTC", False, "taken a minute before the backup")):
     r = {"stdout": f"Status: DONE\nSnapshot Tag: {tag}\n", "item": "c name t loc"}
     check(f"a snapshot {what}: {'passes' if want else 'fails'}",
-          bool(fresh(r=r, _stamp=controller, _scylla_t0={"stdout": node_t0})), want)
+          render(fresh, r=r, _stamp=controller, _scylla_t0={"stdout": node_t0}), want)
 print("scylla-snapshot-fresh: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

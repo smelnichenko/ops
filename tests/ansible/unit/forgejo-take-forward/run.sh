@@ -5,24 +5,23 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "forgejo-take-forward: no python3 with jinja2 and yaml"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "forgejo-take-forward: no python3 with ansible and yaml"; exit 2; }
 "$PY" - <<'PY'
 import sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 tasks = {t.get("name"): t for t in yaml.safe_load(open("deploy/ansible/playbooks/upgrade-forgejo.yml"))[0]["tasks"]}
-env = jinja2.Environment()
-env.filters["extract"] = lambda key, hv: hv[key]
-env.filters["regex_search"] = lambda s, p: __import__("re").search(p, s) and __import__("re").search(p, s).group(0)
-render = lambda text, **ctx: env.from_string(text).render(**ctx).strip()
 facts = tasks["Its version numbers - served and installed"]["ansible.builtin.set_fact"]
-one = env.compile_expression(tasks["At most one Forgejo starting (two would be migrating one database)"]
-                             ["ansible.builtin.assert"]["that"])
+one = "{{ %s }}" % tasks["At most one Forgejo starting (two would be migrating one database)"][
+    "ansible.builtin.assert"]["that"]
 first = tasks["The first Pi"]["ansible.builtin.set_fact"]["_first"]
 def host(name, served, state, vip):
     h = {"inventory_hostname": name, "_addrs": {"stdout": "inet 192.168.11.5" if vip else ""}}
+    # set_fact keeps the bool Ansible's templar returns - selectattr below reads it as Ansible's hostvars hold it
     h["_starting"] = render(facts["_starting"], _served={"status": 200 if served else -1},
-                            _unit={"status": {"ActiveState": state}}) == "True"
+                            _unit={"status": {"ActiveState": state}})
     return h
 fails = 0
 def check(name, got, want):
@@ -32,7 +31,7 @@ def check(name, got, want):
 def case(pi1, pi2):
     hv = {"pi1": host("pi1", *pi1), "pi2": host("pi2", *pi2)}
     ctx = {"hostvars": hv, "ansible_play_hosts": ["pi1", "pi2"]}
-    return bool(one(**ctx)), render(first, **ctx)
+    return render(one, **ctx), render(first, **ctx)
 check("pi2 migrating (active, silent), the VIP on pi1: pi2 first", case((False, "inactive", True), (False, "active", False)),
       (True, "pi2"))
 check("pi2 activating, the VIP on pi1: pi2 first", case((False, "failed", True), (False, "activating", False)),

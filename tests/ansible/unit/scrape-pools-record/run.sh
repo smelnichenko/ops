@@ -5,18 +5,18 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "scrape-pools-record: no python3 with jinja2 and yaml"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "scrape-pools-record: no python3 with ansible and yaml"; exit 2; }
 "$PY" - <<'PY'
 import sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 tasks = yaml.safe_load(open("tests/ansible/upgrade/metrics-check.yml"))[0]["tasks"]
 record = next(t for t in tasks if "scrape_pools_file" in str(t.get("ansible.builtin.copy", {}).get("dest", "")))
-env = jinja2.Environment()
-env.filters["bool"] = lambda v: v if isinstance(v, bool) else str(v).lower() in ("yes", "y", "on", "true", "1")
 whens = record.get("when", [])
 whens = whens if isinstance(whens, list) else [whens]
-writes = lambda flag: all(env.compile_expression(str(w))(record_scrape_pools=flag) for w in whens)
+writes = lambda flag: all(render("{{ %s }}" % w, record_scrape_pools=flag) for w in whens)
 fails = 0
 for flag, want, what in ((True, True, "the build's Argo stage records"), (False, False, "a step's check leaves the record")):
     ok = writes(flag) == want

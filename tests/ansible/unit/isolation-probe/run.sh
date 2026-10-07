@@ -1,15 +1,16 @@
 #!/bin/bash
 # isolate-cluster.yml's proof that production is out of reach - its VIP and every public address, the node's probe
-# and the pod's - run as the playbook holds them (rendered with Jinja; kubectl and curl stubs, the pod's script run
-# here). Only a connect that never completed is "blocked": curl exit 28 with no connect made. A connect that completed
-# and then stalled (curl's --connect-timeout covers the TLS handshake, -m the rest: exit 28 too), a refusal, an answer -
-# each fails the proof; so does a public address reachable while the VIP is not (the second of two too), and so does
-# the Vagrant VIP unreachable (the positive control: a node or pod with no network reads "blocked" everywhere).
+# and the pod's - run as the playbook holds them (rendered by Ansible's templar; kubectl and curl stubs, the pod's
+# script run here). Only a connect that never completed is "blocked": curl exit 28 with no connect made. A connect that
+# completed and then stalled (curl's --connect-timeout covers the TLS handshake, -m the rest: exit 28 too), a refusal,
+# an answer - each fails the proof; so does a public address reachable while the VIP is not (the second of two too),
+# and so does the Vagrant VIP unreachable (the positive control: a node or pod with no network reads "blocked"
+# everywhere).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "isolation-probe: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "isolation-probe: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
 "$AP" --syntax-check -i localhost, tests/ansible/upgrade/isolate-cluster.yml > /dev/null 2>&1 \
   || { echo "FAIL isolate-cluster.yml does not load"; exit 1; }
@@ -44,7 +45,9 @@ STUB
 chmod +x "$W"/bin/*
 W=$W "$PY" - <<'PY'
 import os, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 tasks = {t.get("name"): t for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml"))
          for t in p.get("tasks", [])}
@@ -54,12 +57,12 @@ fails = 0
 def run(name, curl, public=None, addresses=("84.52.11.130",), **env):
     t = tasks[name]
     c = dict(ctx, production_public=list(addresses))
-    script = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(t["ansible.builtin.shell"]).render(**c)
+    script = render(t["ansible.builtin.shell"], **c)
     r = subprocess.run([t["args"]["executable"], "-c", script], capture_output=True, text=True, env=dict(
         os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], CURL=curl,
         **({"CURL_PUBLIC": public} if public else {}), **env))
     reg = {"rc": r.returncode, "stdout": r.stdout.strip(), "stdout_lines": r.stdout.strip().splitlines()}
-    return bool(jinja2.Environment().compile_expression(t["failed_when"])(**{t["register"]: reg}, **c)), reg
+    return render("{{ " + t["failed_when"] + " }}", **{t["register"]: reg}, **c), reg
 probes = [n for n in tasks if (n or "").startswith(("Prove it - the node cannot reach production's VIP",
                                                     "Prove it - a pod cannot reach production's VIP"))]
 fails += len(probes) != 2
