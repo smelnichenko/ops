@@ -211,15 +211,17 @@ def done_calls(step, answer, events=()):
 S23 = "23-cert-manager"
 check("done 23 (cert-renew), no", done_calls(S23, False), ["asked", "refused"])
 check("done 23 (cert-renew), yes", done_calls(S23, True), ["asked", "playbooks/acme-check.yml", "checked"])
-check("done 24 (barman-check), yes", done_calls("24-cnpg", True),
-      ["asked", "playbooks/postgres-base-backup.yml", "checked"])
+check("done 24 (barman-check), yes: the backup taken and recorded (a red check later does not take it again)",
+      done_calls("24-cnpg", True), ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
+check("done 24 after a check-failed, its backup recorded: not taken again",
+      done_calls("24-cnpg", False, ev("24-cnpg base-backup", "24-cnpg checked", "24-cnpg check-failed")), ["checked"])
 check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
 check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
 check("done 47 with its base backup taken after the merges: none again, nothing asked",
       done_calls(S47, False, ev(f"{S47} base-backup")), ["checked"])
 # the merge's promise when its base backup was declined or failed: done takes it, asked first
 check("done 47 with no base backup at its merges (declined): done takes it", done_calls(S47, True),
-      ["asked", "playbooks/postgres-base-backup.yml", "checked"])
+      ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
 
 
 # done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done

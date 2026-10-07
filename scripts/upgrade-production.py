@@ -982,6 +982,8 @@ def done(step):
         refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
     if checked is None and base_backup:
         refuse([] if ansible("playbooks/postgres-base-backup.yml") else ["no fresh Postgres base backup (above)"])
+        # recorded: a red check later starts the soak again, and its next first call does not take another
+        record(step, "base-backup")
     # after the soak: no container may have restarted since the first green check
     green = check(step, checked, deciding=checked is not None)
     if checked is None:
