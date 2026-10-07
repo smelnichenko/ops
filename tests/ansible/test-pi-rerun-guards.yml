@@ -476,6 +476,29 @@
       ansible.builtin.debug:
         msg: "CONSUL RE-RUN: {{ inventory_hostname }} kept its key and was not restarted"
 
+# Consul's HTTP API for its own node only (client_addr 127.0.0.1): each agent answers there, and no server's API
+# answers on its address from another - it has no ACLs (KV, the gossip keyring, the backups' lock)
+- name: Consul's HTTP API on each node itself, not across the network
+  hosts: pi1,pi2,target
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Its own agent answers; the others' do not on their addresses
+      ansible.builtin.shell: |
+        set -uo pipefail
+        curl -sf --max-time 5 http://127.0.0.1:8500/v1/status/leader > /dev/null && echo local-answers || echo LOCAL-SILENT
+        {% for h in ['pi1', 'pi2', 'target'] | difference([inventory_hostname]) %}
+        curl -s --max-time 5 -o /dev/null http://{{ hostvars[h].ansible_host }}:8500/v1/status/leader \
+          && echo "{{ h }}-ANSWERS" || echo "{{ h }}-closed"
+        {% endfor %}
+      args:
+        executable: /bin/bash
+      register: _consul_http
+      changed_when: false
+      failed_when: >-
+        _consul_http.stdout_lines | select('eq', 'local-answers') | list | length != 1
+        or _consul_http.stdout_lines | select('match', '.*-closed$') | list | length != 2
+
 # a run limited to one server (pi2) keeps the key the others run - it found none among the run's hosts and wrote an
 # empty one - and a restart left pending there (the agent's record of its loaded config stale, as after a run cut
 # short between writing and restarting) is done; the servers outside the run are not touched

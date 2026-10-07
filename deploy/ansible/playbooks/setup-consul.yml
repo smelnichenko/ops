@@ -147,7 +147,16 @@
         - { port: "8301", proto: "udp", name: "Consul Serf LAN UDP" }
         - { port: "8302", proto: "tcp", name: "Consul Serf WAN" }
         - { port: "8302", proto: "udp", name: "Consul Serf WAN UDP" }
-        - { port: "8500", proto: "tcp", name: "Consul HTTP" }
+      failed_when: false  # ten may not have UFW
+
+    # the HTTP API (KV, keyring, locks - no ACLs) on the node itself only (client_addr below): Vault, Patroni, HAProxy's
+    # resolver and the backups' lock all call their own agent; the rule that opened it to the LAN removed
+    - name: Consul's HTTP API no more open to the LAN
+      community.general.ufw:
+        rule: allow
+        port: "8500"
+        proto: tcp
+        delete: true
       failed_when: false  # ten may not have UFW
 
     - name: Write Consul config
@@ -165,7 +174,9 @@
           bootstrap_expect = 3
 
           bind_addr = "{{ node_ip }}"
-          client_addr = "0.0.0.0"
+          # its HTTP API and DNS for this node only - every caller is local (Vault, Patroni, HAProxy, the backups'
+          # lock); open to the LAN, anyone there read the gossip keyring, wrote KV and took the backups' lock
+          client_addr = "127.0.0.1"
 
           retry_join = ["{{ pi1_ip }}", "{{ pi2_ip }}", "{{ ten_ip }}"]
 
