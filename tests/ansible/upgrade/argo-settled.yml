@@ -100,18 +100,6 @@
         msg: "{{ _settled.stdout_lines[-60:] | join('\n') }}{{ _settled.stderr | default('') }}"
       when: _settled.rc != 0
 
-    # the script's own account of the mode it judged the restarts in, against what the step asked: a wiring that always
-    # said "expected" would let every crash loop through and look green
-    - name: The restarts judged in the mode the step asked for (expected only on a restarts-control-plane step)
-      ansible.builtin.assert:
-        that: >-
-          ("(restarts expected: recorded, not judged)" in _settled.stdout) == (restarts_expected | bool)
-        fail_msg: >-
-          asked restarts_expected={{ restarts_expected }}, the script reported:
-          {{ _settled.stdout_lines | select('match', '^RESTART HISTORY') | list }}
-        quiet: true
-      when: restart_step | length > 0
-
     - name: The Applications' names recorded for the steps' waits
       ansible.builtin.copy:
         content: "{{ (_settled.stdout_lines | select('match', '^APPS ') | last)[5:].split(',') | join('\n') }}\n"

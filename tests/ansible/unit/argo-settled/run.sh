@@ -8,8 +8,8 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "argo-settled: no python3 with jinja2 and yaml (PATH, repo venv)"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "argo-settled: no python3 with ansible and yaml (PATH, repo venv)"; exit 2; }
 "$PY" - <<'PY'
 import json
 import os
@@ -291,21 +291,19 @@ json.dump({"last_step": "30", "pods": {"x1": {"name": "ns/x", "count": 2, "last_
 rc, out = run(A, [pod("x", "x1", 3)], "--restart-history", H5, "--step", "31")
 check("the earlier file's last restart step counts", (rc, "(30, 31)" in out), (1, True), out)
 
-# argo-settled.yml: the script's report of its restart mode checked against the mode the step asked for - both ways
-import jinja2, yaml
-tasks = {t.get("name"): t for t in yaml.safe_load(open("tests/ansible/upgrade/argo-settled.yml"))[0]["tasks"]}
-ansible_env = jinja2.Environment()
-# Ansible's bool filter: the runner passes the step's yes / no
-ansible_env.filters["bool"] = lambda v: v if isinstance(v, bool) else str(v).lower() in ("yes", "y", "on", "true", "1")
-MODE = ansible_env.compile_expression(next(t for n, t in tasks.items() if n and n.startswith(
-    "The restarts judged in the mode"))["ansible.builtin.assert"]["that"])
-for flag in (False, True):
-    rc, out = run(A, P, "--restart-history", os.path.join(work, f"mode-{flag}.json"), "--step", "20",
-                  *(["--restarts-expected"] if flag else []))
-    for asked in ("no", "yes"):
-        check(f"the playbook's mode check: script {'expected' if flag else 'judged'}, step asked "
-              f"{'expected' if asked == 'yes' else 'judged'}",
-              bool(MODE(_settled={"stdout": out}, restarts_expected=asked)), flag == (asked == "yes"))
+# argo-settled.yml's command line, rendered by Ansible's templar as the playbook holds it: --restarts-expected exactly
+# when the step asks (the runner passes its yes / no) - a wiring that always passed it would record every crash loop
+# and never judge one; the restart history only with a step
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
+play = yaml.safe_load(open("tests/ansible/upgrade/argo-settled.yml"))[0]
+script = next(t for t in play["tasks"] if "ansible.builtin.script" in t)["ansible.builtin.script"]["cmd"]
+base = {k: v for k, v in play["vars"].items() if k != "mirror_revisions"}
+for step, asked, want in (("20", "no", (True, False)), ("20", "yes", (True, True)), ("", "no", (False, False))):
+    argv = render(script, **{**base, "restart_step": step, "restarts_expected": asked}).split()
+    check(f"the playbook's command line, step {step or 'none'}, restarts expected {asked}: history, expected",
+          ("--restart-history" in argv, "--restarts-expected" in argv), want)
 
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
