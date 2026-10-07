@@ -177,6 +177,22 @@ sets_case("helm valuesObject: refused, not evaluated",
           {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
               "helm: {valueFiles: [$values/values/demo.yaml]}", "helm: {valuesObject: {x: 3}}")},
           [], [], refused="valuesObject")
+# what the check cannot evaluate is refused, never skipped (each skipped, its applications went unjudged - the order
+# proven for what it left out): a matrix other than list x pullRequest, another generator, a value file from outside
+# infra
+sets_case("a matrix of two lists: refused",
+          {"clusters/production/argocd/apps/previews.yaml": SET_MATRIX.replace(
+              "- pullRequest: {gitea: {owner: schnappy, repo: x}}", "- list: {elements: [{number: '7'}]}")},
+          [], [], refused="list x pullRequest")
+sets_case("a clusters generator: refused",
+          {"clusters/production/argocd/apps/envs.yaml": SET_GIT.replace(
+              "- git: {repoURL: https://git.pmon.dev/schnappy/infra.git, directories: [{path: clusters/production/envs/*}]}",
+              "- clusters: {}")},
+          [], [], refused="cannot evaluate")
+sets_case("a value file from outside infra: refused",
+          {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
+              "helm: {valueFiles: [$values/values/demo.yaml]}", "helm: {valueFiles: [values/demo.yaml]}")},
+          [], [], refused="is not from infra")
 # as Argo CD renders: the cluster's Kubernetes version and API versions passed to every helm template
 calls = open(os.environ["HELM_ARGS"]).read().splitlines()
 check_ = lambda name, ok: (print(f"{'PASS' if ok else 'FAIL'} {name}"), ok)[1]
