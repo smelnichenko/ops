@@ -115,6 +115,21 @@
     - name: The swap done, the kubelet stopped - taken up where the run stopped
       when: _swapped | bool and _kubelet_now.status.ActiveState != 'active' and not ansible_check_mode
       block:
+        - name: The first run's list of the containers running then
+          ansible.builtin.stat:
+            path: "{{ before_file }}"
+          register: _before_list
+
+        # the list goes when the kubelet starts on the new runtime: without it the kubelet ran on the swap since, and
+        # is down now for another reason - not this playbook's to start on a guess
+        - name: No list - the kubelet ran on the swap since
+          ansible.builtin.fail:
+            msg: >-
+              containerd is swapped ({{ _runtime_line }}) and the kubelet ran on it since (its container list is gone),
+              but the kubelet is {{ _kubelet_now.status.ActiveState }} now - for another reason: find it
+              (journalctl -u kubelet) and start it; this playbook does not
+          when: not _before_list.stat.exists
+
         - name: The containers the first run found running
           ansible.builtin.command: cat {{ before_file }}
           register: _before
@@ -220,7 +235,7 @@
     # in apt's cache for the install once the kubelet is stopped
     - name: Download containerd.io (installed from the download once the kubelet is stopped)
       ansible.builtin.command:
-        argv: [apt-get, install, --download-only, --yes, --allow-change-held-packages,
+        argv: [apt-get, install, --download-only, --yes, --allow-change-held-packages, -o, "DPkg::Lock::Timeout=120",
                "containerd.io={{ _package.stdout }}"]
       environment:
         DEBIAN_FRONTEND: noninteractive
@@ -407,10 +422,9 @@
       delay: 10
       until: _node_runtime.rc == 0 and _node_runtime.stdout == 'containerd://' ~ target
 
-    # the guard's rule: running, or exited (a Job's container that finished during the swap) - a good swap is not
-    # failed for a CronJob that ended meanwhile
-    - name: Every container that ran before still runs, or finished
-      ansible.builtin.include_tasks: tasks/containerd-known-containers.yml
+    # no second look at the containers once the kubelet runs: it removes the containers of pods deleted while it was
+    # stopped (a CronJob's, a CI pod's), which then read as lost after a good swap - and it cannot show a container
+    # started twice either. The guard before its start (every container known) is the proof that counts.
 
     - name: Replaced
       ansible.builtin.debug:
