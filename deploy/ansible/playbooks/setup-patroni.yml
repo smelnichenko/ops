@@ -696,12 +696,14 @@
       delegate_to: pi1
 
     - name: Recreate Forgejo admin user post-Patroni (if missing)
-      ansible.builtin.shell: |
-        su - forgejo -c "forgejo admin user create \
-          --admin --username {{ forgejo_admin_user }} \
-          --password '{{ forgejo_admin_password }}' \
-          --email '{{ forgejo_admin_email }}' \
-          --config /var/lib/forgejo/custom/conf/app.ini"
+      # Forgejo's CLI takes the password only as an argument: the user, the e-mail and the password on stdin, read by
+      # forgejo's own shell into its arguments - templated into the script, root's shell ran $( ) and ` in them
+      ansible.builtin.shell:
+        cmd: >-
+          su - forgejo -c 'IFS= read -r user && IFS= read -r email && IFS= read -r pw
+          && exec forgejo admin user create --admin --username "$user" --email "$email" --password "$pw"
+          --config /var/lib/forgejo/custom/conf/app.ini'
+        stdin: "{{ forgejo_admin_user }}\n{{ forgejo_admin_email }}\n{{ forgejo_admin_password }}"
       register: _forgejo_admin_recreate
       retries: 5
       delay: 5
@@ -710,9 +712,7 @@
       run_once: true
       delegate_to: pi1
       changed_when: true
-      # Forgejo's CLI takes the password only as an argument (no stdin, no file) - kept out of Ansible's output at
-      # least; it runs only while the admin is missing (a first install)
-      no_log: true
+      no_log: true  # the password on stdin: a module's arguments are logged on its host
 
   # one Pi at a time (serial), each service answering again before the next Pi's restart
   handlers:

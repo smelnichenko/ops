@@ -8,9 +8,6 @@
 #   - kubeadm cluster running (setup-kubeadm.yml)
 #   - /mnt/backups mounted (backup partition)
 #
-# Environment variables required:
-#   BACKUP_ACCESS_KEY, BACKUP_SECRET_KEY
-#
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/setup-velero.yml
 #
@@ -24,9 +21,6 @@
     velero_chart_version: "11.4.0"
     velero_backup_path: "/mnt/backups/minio"
     velero_minio_storage_size: "100Gi"
-    # MinIO + Forgejo credentials come from inventory.
-    velero_minio_access_key: "{{ backup_root_user }}"
-    velero_minio_secret_key: "{{ backup_root_password }}"
     minio_image: "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
 
   tasks:
@@ -236,10 +230,10 @@
       vars:
         mc_image: "quay.io/minio/mc:latest"
         minio_url: "http://minio-backup.{{ velero_namespace }}.svc:9000"
+        # the server's own credentials, from its Secret into the pod's environment - templated in, they were on
+        # kubectl's command line on ten (any local user reads it in /proc)
         mc_cmd: >-
-          mc alias set backup {{ minio_url }}
-          {{ velero_minio_access_key }}
-          {{ velero_minio_secret_key }}
+          mc alias set backup {{ minio_url }} "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
           && mc mb --ignore-existing backup/velero
         pod_overrides:
           spec:
@@ -252,6 +246,9 @@
               - name: minio-setup
                 image: "{{ mc_image }}"
                 command: ["sh", "-c", "{{ mc_cmd }}"]
+                envFrom:
+                  - secretRef:
+                      name: minio-backup-secret
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:
