@@ -310,10 +310,10 @@
         loaded_service: patroni
         loaded_files: [/etc/systemd/system/patroni.service]
 
+    # on every node, a first install too: the record below reads it before its first-install term
     - name: Its answer
       ansible.builtin.set_fact:
         _patroni_unit_pending: "{{ _restart_pending.stdout_lines }}"
-      when: not _patroni_first_install | bool
 
     - name: What this run changed here
       ansible.builtin.set_fact:
