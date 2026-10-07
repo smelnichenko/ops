@@ -471,16 +471,22 @@ check("the deciding check: restarts judged since the first green check's time, n
       (settle_args(S47, at)["restarted_since"], settle_args(S47, at)["quiet"]), (at, 300))
 
 
-def settled_cmd(**kw):
+REVS = {m.URLS["infra"]: "infra-sha", m.URLS["platform"]: "platform-sha"}
+
+
+def settled_cmd(apps_seen="", returned=None, **kw):
+    """The command settled() runs on ten - argo-settled.py answering APPS `apps_seen`; settled()'s result in `returned`."""
     seen, saved = [], {k: getattr(m, k) for k in ("main_revisions", "run")}
 
     class _Out:
-        returncode, stdout, stderr = 0, "", ""
+        returncode, stdout, stderr = 0, (f"APPS {apps_seen}\n" if apps_seen else ""), ""
 
-    m.main_revisions = lambda: dict.fromkeys(m.URLS.values(), "r")
+    m.main_revisions = lambda: dict(REVS)
     m.run = lambda cmd, **k: seen.append(cmd[-1]) or _Out()
     try:
-        m.settled(1, 4, 300, [], **kw)
+        got = m.settled(1, 4, 300, [], **kw)
+        if returned is not None:
+            returned.extend(got[2])
     finally:
         for k, v in saved.items():
             setattr(m, k, v)
@@ -490,6 +496,17 @@ def settled_cmd(**kw):
 check("settled: --restarts-expected when expected", "--restarts-expected" in settled_cmd(restart_step=S42,
                                                                                          restarts_expected=True), True)
 check("settled: none otherwise", "--restarts-expected" in settled_cmd(restart_step=S47), False)
+# Argo judged on the commits main has now - each repo's own (with none, any commit passed the settle)
+import json, re, shlex
+check("settled: Argo judged against main's commits, each repo's",
+      json.loads(shlex.split(settled_cmd())[0].split("=", 1)[1]), REVS)
+# preview environments: allowed beside production's apps, and never counted into the step's app set
+returned = []
+cmd_words = shlex.split(settled_cmd(apps_seen="app-a,pr-7-app,app-b", returned=returned))
+allowed = cmd_words[cmd_words.index("--allow-extra-apps") + 1] if "--allow-extra-apps" in cmd_words else None
+check("settled: a preview environment's app allowed beside the step's",
+      [bool(allowed and re.search(allowed, a)) for a in ("pr-7-app", "app-a")], [True, False])
+check("settled: the apps it returns leave the preview environments out", returned, ["app-a", "app-b"])
 # a preview environment opened during a settle: its app and its pods left out, production's namespaces not
 import re, shlex
 words = shlex.split(settled_cmd())
