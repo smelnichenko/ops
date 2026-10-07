@@ -51,6 +51,13 @@ except SystemExit:
     pass
 check("production's done takes 47's base backup on 18", [c for c in calls if "postgres-base-backup" in c[0]],
       [["playbooks/postgres-base-backup.yml", "-e", "pg_major=18"]])
+calls.clear()
+try:
+    m.done("24-cnpg")
+except SystemExit:
+    pass
+check("CNPG's own step (no major of its own): done's base backup takes any", [c for c in calls if "postgres-base-backup" in c[0]],
+      [["playbooks/postgres-base-backup.yml", "-e", "pg_major="]])
 tf = open("Taskfile.yml").read()
 runs = re.findall(r"barman-check\.yml[^\n]*", tf)
 check("the Vagrant runner's barman checks pass the step's major", (len(runs), all("pg_major={{.PG_MAJOR}}" in r for r in runs)),

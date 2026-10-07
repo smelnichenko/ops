@@ -308,6 +308,7 @@ PROOF_KW = []  # the keyword arguments each phase read the proof with
 
 
 RUN_ARGS = []  # every command a phase ran (phase_calls), whole
+ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its arguments
 
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
@@ -330,7 +331,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
             return type("R", (), {"returncode": 0, "stdout": revs.get(ref, "abc1234")})()
         return _Done()
     m.run = fake_run
-    m.ansible = lambda *a: calls.append(("ansible", a[0])) or ansible_ok
+    m.ansible = lambda *a: calls.append(("ansible", a[0])) or ANSIBLE_ARGS.append(list(a)) or ansible_ok
     m.record = lambda st, ev, *a: calls.append(("record", ev))
     m.settled = lambda minutes, *a, **k: calls.append(("settled", minutes)) or (True, dict.fromkeys(m.URLS.values(), "r"),
                                                                                 ["app"])
@@ -417,9 +418,14 @@ check("merge 47 infra, the cluster not on 18 yet: no base backup",
 # merge renders nothing new) - the operator's pause between the merges, or a failed second settle, would leave 18
 # running with no point to recover to
 PG18 = "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye@sha256:" + "9" * 64
+ANSIBLE_ARGS.clear()
 got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"), ten_out=PG18)
 check("merge 47 infra, the cluster running 18 once it settled: the base backup then, asked first",
       [c for c in got if c[0] in ("ansible", "asked", "record")][-4:], [("record", "settled")] + BB)
+# the step's major passed: the playbook fails unless the primary runs it (a backup of 17 cannot replay into 18)
+check("merge 47's base backup on 18, its major asked",
+      [a for a in ANSIBLE_ARGS if a[0] == "playbooks/postgres-base-backup.yml"],
+      [["playbooks/postgres-base-backup.yml", "-e", "pg_major=18"]])
 got = phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47} merged infra a",
                                                       f"{S47} settled infra a", f"{S47} base-backup"), ten_out=PG18)
 check("merge 47 platform, the backup taken at the infra merge: not again",
