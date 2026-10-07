@@ -196,7 +196,8 @@
         # Its own default, 2 m, is shorter than this node takes to bring etcd back: the kubelet starts the new etcd only
         # after the old pod's volumes are unmounted, and its volume manager is stuck meanwhile on PVC reads the API server
         # holds for its 60 s request timeout (etcd is down) - until the API server's liveness probe restarts it (80 s, then
-        # 30 s grace). Vagrant, 2026-10-06: etcd down 2 min 2 s, and kubeadm rolled the upgrade back.
+        # 30 s grace). Vagrant, 2026-10-06: etcd down 2 min 2 s, kubeadm's etcd client gave up, and the apply failed half-way
+        # - etcd's new manifest running, the rest at the old version (not rolled back: a re-run finished it).
         - name: The upgrade's configuration - its target, phases and timeouts
           ansible.builtin.copy:
             dest: /etc/kubernetes/kubeadm-upgrade.yaml
