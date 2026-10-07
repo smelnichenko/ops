@@ -114,6 +114,69 @@ case_("no application reads a platform chart: refused", ["infra", "platform"],
       {"values/demo.yaml": "x: 2\n"}, {"charts/demo/templates/cm.yaml": "x: {{ .Values.x }}\nz: 1\n"}, False,
       ["REFUSED", "nothing proven"], url="https://git.pmon.dev/schnappy/platform")
 case_("one repo: nothing between", ["infra"], {"values/demo.yaml": "x: 2\n"}, {}, True, ["one repo"])
+# ApplicationSets as production has them (5 of the 8 apps reading a platform chart): a git-directories generator over
+# environment directories - one application per directory, each with its own values; a list x pullRequest matrix - one
+# per list element; inline helm values rendered; helm valuesObject refused (not evaluated)
+SET_GIT = """apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: {name: envs}
+spec:
+  generators:
+    - git: {repoURL: https://git.pmon.dev/schnappy/infra.git, directories: [{path: clusters/production/envs/*}]}
+  template:
+    metadata: {name: "demo-{{ .path.basenameNormalized }}"}
+    spec:
+      destination: {namespace: demo}
+      sources:
+        - repoURL: %s
+          path: charts/demo
+          helm: {valueFiles: ["$values/{{ .path.path }}/values.yaml"]}
+        - {repoURL: https://git.pmon.dev/schnappy/infra.git, ref: values}
+""" % mo.PLATFORM_URL
+SET_MATRIX = """apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: {name: previews}
+spec:
+  generators:
+    - matrix:
+        generators:
+          - list: {elements: [{repo: site}, {repo: chat}]}
+          - pullRequest: {gitea: {owner: schnappy, repo: x}}
+  template:
+    metadata: {name: "pr-{{ .number }}-{{ .repo }}"}
+    spec:
+      destination: {namespace: "pr-{{ .number }}"}
+      source:
+        repoURL: %s
+        path: charts/demo
+        helm: {values: "x: inline-{{ .repo }}"}
+""" % mo.PLATFORM_URL
+def sets_case(name, files, want_names, want_parts, refused=None):
+    global case, fails
+    case = name.replace(" ", "-")
+    mo.REPOS = {"infra": repo("infra", files, {}),
+                "platform": repo("platform", {"charts/demo/Chart.yaml": "name: demo\n",
+                                              "charts/demo/templates/cm.yaml": "x: {{ .Values.x }}\n"}, {})}
+    try:
+        got = mo.renders("main", "main", os.path.join(W, case + "-work"))
+        ok = refused is None and sorted(got) == want_names and all(part in got[n] for n, part in want_parts)
+        detail = got
+    except SystemExit as e:
+        ok, detail = refused is not None and refused in str(e), str(e)
+    fails += not ok
+    print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f"\n  {detail}"))
+os.makedirs(os.path.join(W, "sets-work"), exist_ok=True)
+sets_case("a git-directories ApplicationSet: an application per directory, its own values",
+          {"clusters/production/argocd/apps/envs.yaml": SET_GIT, "clusters/production/envs/a/values.yaml": "x: 1\n",
+           "clusters/production/envs/b/values.yaml": "x: 2\n"},
+          ["demo-a", "demo-b"], [("demo-a", "x: 1"), ("demo-b", "x: 2")])
+sets_case("a list x pullRequest ApplicationSet: an application per element, its inline values",
+          {"clusters/production/argocd/apps/previews.yaml": SET_MATRIX},
+          ["pr-1-chat", "pr-1-site"], [("pr-1-site", "x: inline-site"), ("pr-1-chat", "x: inline-chat")])
+sets_case("helm valuesObject: refused, not evaluated",
+          {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
+              "helm: {valueFiles: [$values/values/demo.yaml]}", "helm: {valuesObject: {x: 3}}")},
+          [], [], refused="valuesObject")
 # as Argo CD renders: the cluster's Kubernetes version and API versions passed to every helm template
 calls = open(os.environ["HELM_ARGS"]).read().splitlines()
 check_ = lambda name, ok: (print(f"{'PASS' if ok else 'FAIL'} {name}"), ok)[1]
