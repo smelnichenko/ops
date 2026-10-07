@@ -293,7 +293,9 @@
                 cmd: |
                   set -euo pipefail
                   d={{ _ch.stdout.split()[2] | quote }}/shadow
-                  [ -n {{ _ch.stdout.split()[2] | quote }} ] && [ {{ _ch.stdout.split()[2] | quote }} != / ]
+                  # the data path neither empty nor / (an && list alone: set -e ignores its first test failing)
+                  { [ -n {{ _ch.stdout.split()[2] | quote }} ] && [ {{ _ch.stdout.split()[2] | quote }} != / ]; } \
+                    || { echo "REFUSED: ClickHouse data path {{ _ch.stdout.split()[2] | quote }} - nothing removed"; exit 1; }
                   [ -d "$d" ] || exit 0
                   find "$d" -mindepth 1 -maxdepth 1 -name 'wave0_*' -exec rm -rf {} +
               changed_when: true
