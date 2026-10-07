@@ -68,6 +68,30 @@ check("the VIP's and loopback among them (External Secrets through the VIP, the 
 v = subprocess.run(["openssl", "verify", "-x509_strict", "-CAfile", os.path.join(W, "tls", "ca-cert.pem"),
                     os.path.join(W, "cert.pem")], capture_output=True, text=True)
 check("verifies against the CA, X.509-strict (Python 3.13's default)", v.returncode == 0, v.stdout + v.stderr)
+# the unseal's own check (tasks/vault-unseal.yml) on that chain passes; on a chain whose CA has no keyUsage - one
+# that openssl verify passes and Python 3.13 refuses - it fails: the check that guards every unseal checks as strictly
+unseal = yaml.safe_load(open("deploy/ansible/playbooks/tasks/vault-unseal.yml"))
+vcheck = next(t for t in unseal if str(t.get("name", "")).startswith("Vault's certificate verifies"))["ansible.builtin.shell"]
+import shutil
+shutil.copy(os.path.join(W, "cert.pem"), os.path.join(W, "tls", "vault-cert.pem"))
+def unseal_check(tls):
+    return subprocess.run(["bash", "-c", vcheck["cmd"].replace("/etc/vault.d/tls", tls)], capture_output=True,
+                          text=True).returncode
+check("the unseal's check: the playbook's chain passes", unseal_check(os.path.join(W, "tls")) == 0)
+weak = os.path.join(W, "weak")
+os.makedirs(weak)
+q = lambda *a: subprocess.run(list(a), capture_output=True, text=True, cwd=weak)
+q("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "ca.key",
+  "-out", "ca-cert.pem", "-days", "2", "-subj", "/CN=weak", "-addext", "basicConstraints=critical,CA:TRUE")
+q("openssl", "req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "k.pem",
+  "-out", "c.csr", "-subj", "/CN=vault")
+open(os.path.join(weak, "ext"), "w").write("subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
+q("openssl", "x509", "-req", "-in", "c.csr", "-CA", "ca-cert.pem", "-CAkey", "ca.key", "-CAcreateserial", "-days", "2",
+  "-extfile", "ext", "-out", "vault-cert.pem")
+plain = q("openssl", "verify", "-CAfile", "ca-cert.pem", "vault-cert.pem").returncode
+weak_rc = unseal_check(weak)
+check("the unseal's check: a CA without keyUsage (openssl's plain verify passes it) fails",
+      (plain, weak_rc != 0) == (0, True), f"plain verify {plain}, the unseal's check {weak_rc}")
 check("the CA's serial beside its key (root's), not in Vault's TLS directory",
       os.path.exists(os.path.join(W, "ca", "ca-cert.srl")) and not os.path.exists(os.path.join(W, "tls", "ca-cert.srl")))
 # the names reach pi1's root shell from the other Pi's facts: one that is not a plain name or address (a quote, a
