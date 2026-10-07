@@ -367,8 +367,13 @@
               out=$({{ patronictl }} list)
               if grep 'Maintenance mode' <<< "$out" > /dev/null; then
                 by=$(consul kv get ansible/patroni-paused-by 2> /dev/null || true)
-                [ -z "$by" ] || by=" - paused by $by, a run cut short (a Ctrl-C skips its resume): check patronictl list,"
-                by=${by:+$by then patronictl resume and consul kv delete ansible/patroni-paused-by}
+                # named only in the shape a run writes it (Consul has no ACLs: anything else is not echoed)
+                if [[ $by =~ ^(setup-consul|setup-patroni|upgrade-patroni)\ [0-9TZ:-]+$ ]]; then
+                  by=" - paused by $by: if that run is no longer running (a Ctrl-C skips its resume), check patronictl"
+                  by+=" list, then patronictl resume and consul kv delete ansible/patroni-paused-by"
+                elif [ -n "$by" ]; then
+                  by=" - a pause marker of another shape is there (consul kv get ansible/patroni-paused-by)"
+                fi
                 echo "REFUSED: the cluster is paused - finish that first (patronictl resume)$by"
                 exit 1
               fi
@@ -383,9 +388,21 @@
               ansible.builtin.shell:
                 executable: /bin/bash
                 cmd: |
-                  set -euo pipefail
-                  consul kv put ansible/patroni-paused-by "setup-patroni $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null
-                  {{ patronictl }} pause --wait
+                  set -uo pipefail
+                  key=ansible/patroni-paused-by
+                  # check-and-set: put only where none is - another run holding the cluster paused, or one cut short,
+                  # refuses this one before any pause; its ModifyIndex kept, for this run to delete its own marker only
+                  if ! consul kv put -cas -modify-index=0 "$key" "setup-patroni $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null; then
+                    echo "REFUSED: a Patroni pause marker is there already (consul kv get $key) - another run pausing, or one" \
+                      "cut short: patronictl list; if no run is running, patronictl resume and consul kv delete $key"
+                    exit 1
+                  fi
+                  idx=$(consul kv get -detailed "$key" | sed -n 's/^ModifyIndex[[:space:]]*//p')
+                  if ! {{ patronictl }} pause --wait; then
+                    consul kv delete -cas -modify-index="$idx" "$key" > /dev/null || true
+                    exit 1
+                  fi
+                  echo "MARKER $idx"
               register: _restart_paused
               changed_when: true
               run_once: true
@@ -404,8 +421,12 @@
                 cmd: |
                   set -euo pipefail
                   {{ patronictl }} resume --wait
-                  consul kv delete ansible/patroni-paused-by > /dev/null
+                  idx=$(sed -n 's/^MARKER //p' <<< "$PAUSED_OUT")
+                  consul kv delete -cas -modify-index="$idx" ansible/patroni-paused-by > /dev/null 2>&1 \
+                    || echo "the pause marker is not the one this run put - left as it is"
               changed_when: true
+              environment:
+                PAUSED_OUT: "{{ _restart_paused.stdout | default('') }}"
               run_once: true
               when: _restart_paused is defined and _restart_paused is succeeded
 
