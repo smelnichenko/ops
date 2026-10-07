@@ -24,7 +24,7 @@ ANSWERS = {
     "_grace_in_map": {"rc": 0, "stdout_lines": ["shutdownGracePeriod: 180s", "shutdownGracePeriodCriticalPods: 30s"]},
     "_package": {"rc": 0, "stdout": "1.34.12-1.1"},
 }
-KEEP = ("name", "when", "register", "check_mode", "vars", "loop", "loop_control", "changed_when")
+KEEP = ("name", "when", "register", "check_mode", "vars", "loop", "loop_control", "changed_when", "failed_when", "until")
 
 
 def stub(t):
