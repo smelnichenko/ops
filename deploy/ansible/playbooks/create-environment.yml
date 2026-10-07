@@ -231,10 +231,10 @@
           postgres:
             enabled: false
 
+          # Valkey's image: the schnappy-data chart's default (a pinned tag the Valkey upgrade moves)
           valkey:
             enabled: true
             existingSecret: {{ env_ns }}-valkey
-            image: valkey/valkey:8.1-alpine
             resources:
               requests: { cpu: 10m, memory: 32Mi }
               limits: { cpu: 100m, memory: 128Mi }

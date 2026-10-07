@@ -49,6 +49,11 @@ for j, t in enumerate(lines):
 tasks.append({"name": "The Namespace manifest carries an admitted environment label",
               "ansible.builtin.shell": "python3 -c \"import sys, yaml, glob; docs=[d for f in sorted(glob.glob('" + dest_dir + "/*.yaml')) for d in yaml.safe_load_all(open(f)) if isinstance(d, dict) and d.get('kind')=='Namespace']; assert docs, 'no Namespace rendered'; bad=[d['metadata']['name'] for d in docs if d['metadata'].get('labels',{}).get('environment') not in ('production','test')]; assert not bad, 'environment label not admitted by the default-deny: %s' % bad; print('namespace label ok for', [d['metadata']['name'] for d in docs])\"",
               "changed_when": False})
+# a new environment's Valkey is the schnappy-data chart's default (a pinned tag the Valkey upgrade moves): its own pin
+# stayed at the floating 8.1-alpine after production moved on
+tasks.append({"name": "A new environment's Valkey takes the chart default's image",
+              "ansible.builtin.shell": "python3 -c \"import yaml, glob; v=[d['valkey'] for f in sorted(glob.glob('" + dest_dir + "/*.yaml')) for d in yaml.safe_load_all(open(f)) if isinstance(d, dict) and isinstance(d.get('valkey'), dict) and d['valkey'].get('enabled')]; assert v, 'no enabled valkey rendered'; bad=[x['image'] for x in v if 'image' in x]; assert not bad, 'a Valkey image of its own: %s' % bad; print('valkey: the chart default', len(v))\"",
+              "changed_when": False})
 tasks.append({"name": "Every rendered template parses as YAML",
               "ansible.builtin.shell": "python3 -c \"import sys, yaml, glob; [list(yaml.safe_load_all(open(f))) for f in sorted(glob.glob('" + dest_dir + "/*.yaml'))]; print('parsed', len(glob.glob('" + dest_dir + "/*.yaml')), 'templates')\"",
               "changed_when": False})
