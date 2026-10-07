@@ -67,9 +67,20 @@ while [ "$left" -gt 0 ]; do
   for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || running+=("${pids[$i]}"); done
   ended=""
   wait -n -p ended "${running[@]}"; rc=$?
-  # a return with no job ended (127: none of them a child any more) judges no check - never the last one again; bash
-  # unsets `ended` then (set -u would end the script before this said why)
-  [ -n "${ended:-}" ] || { echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"; exit 1; }
+  # a return with no job ended (127: none of them a child any more - one killed by a signal and reaped already) judges
+  # no check - never the last one again; bash unsets `ended` then (set -u would end the script before this said why).
+  # The checks left named, each with what its log holds
+  if [ -z "${ended:-}" ]; then
+    echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"
+    unjudged=()
+    for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || unjudged+=("${names[$i]}"); done
+    echo "STEP CHECKS NOT JUDGED: ${unjudged[*]}"
+    for n in "${unjudged[@]}"; do
+      echo "===== check $n (not judged)"
+      cat "$logs/$n" 2> /dev/null || echo "(no log)"
+    done
+    exit 1
+  fi
   for i in "${!pids[@]}"; do
     if [ "${pids[$i]}" = "$ended" ]; then
       done_[i]=1
