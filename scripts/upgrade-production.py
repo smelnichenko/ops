@@ -257,6 +257,11 @@ def ten_now():
     return at
 
 
+def ten_clock():
+    """ten_now() as a time."""
+    return datetime.datetime.strptime(ten_now(), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+
 def claim_problems(step, obj):
     """This run's claim on the step (`obj`: the ledger read), if it holds one, closed meanwhile - released by hand
     while the run was alive, maybe claimed by another phase since."""
@@ -1028,8 +1033,8 @@ def done(step):
     names, events, info = ledger_for(step, "done")
     # what it checks and what its first call runs (an ACME issuance, a base backup) must be what the full run proved
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
-    now = datetime.datetime.now(datetime.timezone.utc)
-    checked, left = soak_state(events, step, info["soak"], now)
+    # by ten's clock, the one the first green check was recorded by: this machine's, ahead, would end the soak early
+    checked, left = soak_state(events, step, info["soak"], ten_clock())
     if checked is not None and left > 0:
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
@@ -1090,7 +1095,7 @@ def status():
             p = problems(names, pending, phase, events, info, arg)
             print(f"next: {pending} {phase}{' ' + arg if arg else ''}" + (f" - {'; '.join(p)}" if p else ""))
             if phase == "done":
-                checked, left = soak_state(events, pending, info["soak"], datetime.datetime.now(datetime.timezone.utc))
+                checked, left = soak_state(events, pending, info["soak"], ten_clock())
                 if checked is not None:
                     print(f"  soaking since {checked:%H:%M} UTC, {left / 60:.0f} of {info['soak']} minutes left")
             break

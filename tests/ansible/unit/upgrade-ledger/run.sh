@@ -247,16 +247,36 @@ def done_run(step, soak, green):
             setattr(m, k, v)
     return calls, checks
 calls, checks = done_run(S42, (T0, 600), True)
-check("done while soaking: refused, nothing checked", (calls, checks), (["refused: REFUSED"], []))
+check("done while soaking: refused, nothing checked", (calls, checks), (["ten's clock", "refused: REFUSED"], []))
 calls, checks = done_run(S42, (T0, 0), True)
 check("done after the soak, green: done, judged since the first green check, deciding",
-      (calls, checks), (["check", "done"], [((S42, T0), {"deciding": True})]))
+      (calls, checks), (["ten's clock", "check", "done"], [((S42, T0), {"deciding": True})]))
 calls, checks = done_run(S42, (T0, 0), False)
 check("done after the soak, red: check-failed, refused - not done", calls,
-      ["check", "check-failed", "refused: REFUSED"])
+      ["ten's clock", "check", "check-failed", "refused: REFUSED"])
 calls, checks = done_run(S42, (None, None), True)
-check("done's first call: ten's clock read, then the check (no since, not deciding), checked recorded at ten's time",
-      (calls, checks), (["ten's clock", "check", "checked at 2026-10-07T10:00:00Z"], [((S42, None), {"deciding": False})]))
+check("done's first call: ten's clock read (the soak's, then its start), then the check (no since, not deciding), "
+      "checked recorded at ten's time", (calls, checks),
+      (["ten's clock", "ten's clock", "check", "checked at 2026-10-07T10:00:00Z"], [((S42, None), {"deciding": False})]))
+
+# the soak's time left by ten's clock, the one its first green check was recorded by: this machine's, ahead of ten's,
+# ended the soak early by the skew
+def soak_now():
+    seen, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "ten_now", "proof_problems")}
+    m.ten_now = lambda: "2026-10-07T10:00:00Z"
+    m.ledger_for = lambda st, ph, arg=None: (names, [], info[st])
+    m.proof_problems = lambda *a, **k: []
+    m.soak_state = lambda ev, st, soak, now: seen.append(now) or (T0, 600)
+    try:
+        m.done(S42)
+    except SystemExit:
+        pass
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return seen
+check("done's soak measured by ten's clock", soak_now(),
+      [datetime.datetime(2026, 10, 7, 10, 0, tzinfo=datetime.timezone.utc)])
 
 # ten's clock as the ledger writes times, and nothing else
 saved_ten = m.ten
