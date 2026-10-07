@@ -525,12 +525,16 @@
 
     # a run cut short between the init and its move: Vault is initialised (the init above does not run again) and the
     # shares are only in the file aside - promoted, never left stranded; one not whole (cut short in its writing) stops
-    # the run for a look by hand
+    # the run for a look by hand. An empty one beside a whole keys file is a run cut short before its init wrote - an
+    # init that had initialised Vault would have made the one after fail: removed (it stopped every good run after)
     - name: A first init's output left aside promoted (a run cut short before its move)
       ansible.builtin.shell: |
         set -euo pipefail
         shopt -s nullglob
         for f in /etc/vault-unseal/init.json.*; do
+          if [ ! -s "$f" ] && [ -s /etc/vault-unseal/init.json ]; then
+            rm -f "$f"; echo "removed the empty $f"; continue
+          fi
           if python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["unseal_keys_b64"] and d["root_token"]' "$f" 2> /dev/null; then
             [ -e /etc/vault-unseal/init.json ] || { mv -n "$f" /etc/vault-unseal/init.json; echo "promoted $f"; }
           else
@@ -540,7 +544,7 @@
       args:
         executable: /bin/bash
       register: _promoted
-      changed_when: "'promoted' in _promoted.stdout"
+      changed_when: "'promoted' in _promoted.stdout or 'removed' in _promoted.stdout"
       no_log: true
 
     - name: A first init not finished (its keys file still here)

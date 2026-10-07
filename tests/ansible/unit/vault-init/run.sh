@@ -89,6 +89,20 @@ r = subprocess.run(["bash", "-c", pscript], env=env, capture_output=True, text=T
 check("one cut short in its writing: refused, kept for a look", r.returncode != 0 and "not whole" in r.stdout + r.stderr
       and os.path.exists(os.path.join(W, "vu", "init.json.ef34Gh")))
 os.remove(os.path.join(W, "vu", "init.json.ef34Gh"))
+# an empty file aside beside a whole keys file: a run cut short between its mktemp and an init that never initialised
+# Vault (an init that did would have made this run's fail) - removed, the run goes on (it stopped every good run after
+# for a look by hand); with no keys file it may be shares lost - refused, kept
+open(path, "w").write('{"unseal_keys_b64": ["k1"], "root_token": "hvs.root"}')
+open(os.path.join(W, "vu", "init.json.Ij56Kl"), "w").close()
+r = subprocess.run(["bash", "-c", pscript], env=env, capture_output=True, text=True)
+check("an empty one beside a whole keys file: removed, the run goes on", r.returncode == 0
+      and not os.path.exists(os.path.join(W, "vu", "init.json.Ij56Kl")) and os.path.exists(path))
+os.remove(path)
+open(os.path.join(W, "vu", "init.json.Ij56Kl"), "w").close()
+r = subprocess.run(["bash", "-c", pscript], env=env, capture_output=True, text=True)
+check("an empty one, no keys file: refused, kept for a look", r.returncode != 0
+      and os.path.exists(os.path.join(W, "vu", "init.json.Ij56Kl")))
+os.remove(os.path.join(W, "vu", "init.json.Ij56Kl"))
 # the bootstrap's engines: enabled when missing, left when there, a failure a failure (it read "already-enabled", the
 # keys file was removed and KV v2 never enabled)
 open(os.path.join(W, "vu", "root-token"), "w").write("hvs.root")
