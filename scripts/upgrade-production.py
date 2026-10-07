@@ -774,6 +774,8 @@ def merge(step, repo):
         refuse(proof_problems(step, names, repo, defaulted(events), partly=partly) + registry_problems(step))
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
+        # the branch's commit as checked: the one shown, and the only one the merge pushes
+        tip = run(["git", "-C", d, "rev-parse", f"upgrade/{step}"], capture_output=True, check=True).stdout.strip()
         if merged_base(d, step):
             # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
             print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
@@ -784,6 +786,12 @@ def merge(step, repo):
             refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up"])
                    .returncode == 0 else [f"the {repo} take-up failed (above)"])
         else:
+            # checked and shown against production's main: a local main behind origin's (CD pushed meanwhile) showed
+            # CD's commits as the step's and refused only after the yes, the pre-pull and Tempo's flush
+            local, origin = (run(["git", "-C", d, "rev-parse", r], capture_output=True, check=True).stdout.strip()
+                             for r in ("main", ORIGIN_MAIN))
+            refuse([] if local == origin else [f"{repo}'s main is not origin/main - git -C ../{repo} pull --ff-only "
+                                               f"(on main), then merge again"])
             # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
             if not partly:
                 order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
@@ -793,7 +801,7 @@ def merge(step, repo):
             # major, Kafka) has no preview, its one-way change starts when Argo syncs this push
             print(f"{repo}: what the merge puts on production's main (upgrade/{step}):", flush=True)
             for args in (["log", "--oneline"], ["diff", "--stat"], ["diff"]):
-                run(["git", "-C", d, "--no-pager", *args, f"main..upgrade/{step}"])
+                run(["git", "-C", d, "--no-pager", *args, f"{ORIGIN_MAIN}..{tip}"])
             refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
                    else ["not confirmed - nothing merged, nothing recorded"])
             # the step's public images pulled on ten first, at each of its merges (the first's may be collected by the
@@ -808,7 +816,7 @@ def merge(step, repo):
             if repo in step_info(step)["tempo_flush"]:
                 ten("kubectl get --raw /api/v1/namespaces/schnappy-infra/services/schnappy-tempo:3200/proxy/flush")
                 print("TEMPO FLUSHED (its WAL into the store) before the merge")
-            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo]).returncode == 0
+            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]).returncode == 0
                    else [f"the {repo} merge failed (above)"])
         sha = run(["git", "-C", d, "rev-parse", MERGED_TAG + step + "^{commit}"], capture_output=True,
                   check=True).stdout.strip()

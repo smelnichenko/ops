@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# upgrade-merge-step.sh <step> <infra|platform> [take-up] - the GitOps half of one production upgrade step: the
+# upgrade-merge-step.sh <step> <infra|platform> [take-up | <tip>] - the GitOps half of one production upgrade step: the
 # step's branch (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so
 # the push is the production change (platform's CI lints the same commit alongside; it gates nothing). Called by
 # scripts/upgrade-production.py merge (`task deploy:upgrade:merge`) after its ledger, proof and merge-order checks.
@@ -9,11 +9,16 @@
 # commits only (stacked branches carry every earlier step's: merged out of order they would bring unproven ones).
 # The merged step is tagged upgrade-merged/<step> (annotated: "base <main it went onto>"); a run cut short after its
 # push and before its tag is taken up by the next one. `take-up`: only that - any other state is refused, nothing
-# pushed (upgrade-production.py merge asks for it once its proof check found the push already live).
+# pushed (upgrade-production.py merge asks for it once its proof check found the push already live). <tip>: the
+# branch's commit the caller checked - a branch moved since is refused, nothing pushed.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-step=${1:?step}; repo=${2:?infra or platform}; only=${3:-}
-[ -z "$only" ] || [ "$only" = take-up ] || { echo "REFUSED: $only (take-up or nothing)" >&2; exit 1; }
+step=${1:?step}; repo=${2:?infra or platform}; only=${3:-} tip=
+case "$only" in
+  "" | take-up) ;;
+  *) [[ $only =~ ^[0-9a-f]{40}$ ]] || { echo "REFUSED: $only (take-up, a commit, or nothing)" >&2; exit 1; }
+     tip=$only only= ;;
+esac
 case "$repo" in infra|platform) ;; *) echo "REFUSED: repo $repo (infra or platform)" >&2; exit 1;; esac
 file="$ops/tests/ansible/upgrade/steps/$step.txt"
 [ -f "$file" ] || { echo "REFUSED: no step $step" >&2; exit 1; }
@@ -63,6 +68,8 @@ if [ -n "$prev" ]; then
 fi
 git -C "$dir" merge-base --is-ancestor main "$branch" \
   || { echo "REFUSED: $repo $branch does not contain main - rebase it" >&2; exit 1; }
+[ -z "$tip" ] || [ "$(git -C "$dir" rev-parse "$branch")" = "$tip" ] \
+  || { echo "REFUSED: $repo $branch moved since it was checked (${tip:0:10}) - nothing pushed" >&2; exit 1; }
 echo "$repo: main $(git -C "$dir" rev-parse --short main) -> $branch $(git -C "$dir" rev-parse --short "$branch"):"
 git -C "$dir" log --oneline "main..$branch"
 current=$(git -C "$dir" rev-parse --abbrev-ref HEAD)

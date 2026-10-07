@@ -257,8 +257,11 @@ class _Done:
 PROOF_KW = []  # the keyword arguments each phase read the proof with
 
 
+RUN_ARGS = []  # every command a phase ran (phase_calls), whole
+
+
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
-                pushed=None):
+                pushed=None, revs=None):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
                        "ten", "image_pins")
@@ -266,7 +269,13 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged") if x in k}) or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
-    m.run = lambda cmd, **k: calls.append(("run", os.path.basename(cmd[0]))) or _Done()
+    def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
+        calls.append(("run", os.path.basename(cmd[0])))
+        RUN_ARGS.append(list(cmd))
+        if revs and "rev-parse" in cmd:
+            return type("R", (), {"returncode": 0, "stdout": revs.get(cmd[-1], "abc1234")})()
+        return _Done()
+    m.run = fake_run
     m.ansible = lambda *a: calls.append(("ansible", a[0])) or ansible_ok
     m.record = lambda st, ev, *a: calls.append(("record", ev))
     m.settled = lambda minutes, *a, **k: calls.append(("settled", minutes)) or (True, dict.fromkeys(m.URLS.values(), "r"),
@@ -308,12 +317,26 @@ check("merge: refused by the registry check, nothing merged", (len(got), "REGIST
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"))
 check("merge 57: the change shown (log, stat, diff) and asked about, merged, then Argo given its settle line's 50 "
       "minutes", [c for c in got if c[0] in ("run", "settled", "record", "asked")],
-      [("run", "upgrade-merge-order.py"), ("run", "git"), ("run", "git"), ("run", "git"), ("asked",),
-       ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("settled", 50), ("record", "settled")])
+      [("run", "git"), ("run", "git"), ("run", "git"), ("run", "upgrade-merge-order.py"), ("run", "git"),
+       ("run", "git"), ("run", "git"), ("asked",), ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"),
+       ("settled", 50), ("record", "settled")])
+# the merge checks and shows the change against production's main (origin's): a local main behind it - CD pushed
+# meanwhile - refuses before the yes; the tip it checked is the one the merge pushes (the branch moved since: refused)
+got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"),
+                  revs={"main": "old", "origin/main": "new"})
+check("merge 57, local main behind origin's: refused before anything is asked or pulled",
+      ([c for c in got if c[0] in ("asked", "ansible")], got[-1][0], "pull --ff-only" in got[-1][1]),
+      ([], "refused", True))
+RUN_ARGS.clear()
+got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"),
+                  revs={"upgrade/57-sonarqube-26.9": "c4ecked"})
+check("merge 57: shown against origin's main, the checked tip handed to the merge",
+      ([a[-1] for a in RUN_ARGS if "diff" in a][:1], [a[-1] for a in RUN_ARGS if a[0].endswith("upgrade-merge-step.sh")]),
+      (["origin/main..c4ecked"], ["c4ecked"]))
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), pushed="b4se")
 check("merge 57 pushed by a run cut short before its tag: taken up (tagged) and recorded - not asked, nothing pulled",
       [c for c in got if c[0] in ("run", "ansible", "record", "asked")],
-      [("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("record", "settled")])
+      [("run", "git"), ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("record", "settled")])
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), answer=False)
 check("merge 57, not confirmed: refused after the change was shown - nothing merged, nothing recorded",
       ([c for c in got if c[0] == "run" and c[1] == "upgrade-merge-step.sh" or c[0] == "record"], got[-1][0]),

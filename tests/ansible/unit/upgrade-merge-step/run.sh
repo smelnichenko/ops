@@ -100,6 +100,20 @@ g push -q origin upgrade/07-g:main
 check "pushed untagged with a change the run did not prove: refused" 0 "brought a change other than" \
   proof 07-g "$main7..$proven7"
 
+# production's merge passes the tip it checked: a branch that moved since (between its checks and the push - an open
+# confirm, the pre-pull) is refused, nothing pushed; the tip it checked merges
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/10-j.txt"
+rm -f "$W/ops/tests/ansible/upgrade/steps/08-h.txt" "$W/ops/tests/ansible/upgrade/steps/09-i.txt"
+g pull -q --ff-only origin main  # 07's push (above) is origin's main
+g checkout -q -b upgrade/10-j; echo j >> "$W/infra/f"; g commit -q -am j
+checked=$(g rev-parse HEAD)
+echo moved >> "$W/infra/f"; g commit -q -am moved; g checkout -q main
+origin10=$(git -C "$W/origin.git" rev-parse main)
+check "the branch moved since the tip was checked: refused" 1 "moved since" "$M" 10-j infra "$checked"
+check "nothing pushed" 0 "$origin10" git -C "$W/origin.git" rev-parse main
+g branch -q -f upgrade/10-j "$checked"
+check "the tip it checked: merged" 0 "tagged upgrade-merged/10-j" "$M" 10-j infra "$checked"
+
 # the digests a step's branch pins an image tag to, read from the branch (production's prepull pulls the reference
 # production runs); a repo the step declares with neither its branch nor its merged tag refuses
 printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/08-h.txt"
