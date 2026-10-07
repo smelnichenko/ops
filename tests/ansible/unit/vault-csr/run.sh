@@ -4,7 +4,9 @@
 # a CSR asking for CA:TRUE and a name of its own gets a server certificate - CA:FALSE, serverAuth, exactly the
 # playbook's names, the VIP's and loopback among them - which verifies against the CA; the CA's serial file lands
 # beside its key, not in Vault's directory. Copied, the request's extensions made a CA certificate (the CA External
-# Secrets trusts). Vault's own user owns only its data: nothing under /etc/vault.d is its to change.
+# Secrets trusts). Vault's own user owns only its data: nothing under /etc/vault.d is its to change. The CA is the
+# playbook's own command's, and the chain verifies X.509-strict, as Python 3.13 verifies by default (the uri checks on
+# the Pis): the playbook's CA without keyUsage failed every one of them (full run 2026-10-07 16:13).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -17,12 +19,10 @@ AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playboo
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/ca" "$W/tls"
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -days 1 -nodes -keyout "$W/ca/ca-key.pem" \
-  -out "$W/tls/ca-cert.pem" -subj "/CN=Test CA" 2> /dev/null
 openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-384 -nodes -keyout "$W/key.pem" -out "$W/hostile.csr" \
   -subj "/CN=pi2" -addext "basicConstraints=critical,CA:TRUE" -addext "subjectAltName=DNS:evil.example" 2> /dev/null
 W=$W "$PY" - <<'PY'
-import base64, os, subprocess, sys
+import base64, os, shlex, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
@@ -41,6 +41,12 @@ def check(name, ok, detail=""):
     global fails
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f"\n  {detail}"))
+# the CA as the playbook makes it, its paths moved here
+make_ca = next(t for t in tasks if str(t.get("name", "")).startswith("Create the Vault CA on pi1"))
+r = subprocess.run(shlex.split(render(make_ca["ansible.builtin.command"]).replace(
+    "/etc/vault.d/tls", os.path.join(W, "tls")).replace("/etc/vault-ca", os.path.join(W, "ca"))),
+    capture_output=True, text=True)
+check("the CA made by the playbook's command", r.returncode == 0, r.stderr)
 check("the CSR given on stdin, as the task gives it", task["args"].get("stdin", "").startswith("{{ _vault_csr.content"))
 env_ok = {k: render(str(v), _sans=sans) for k, v in (task.get("environment") or {}).items()}
 # stdin as the task renders it: the slurped CSR (base64) decoded
@@ -59,9 +65,9 @@ got = sorted(x.strip().replace("IP Address:", "IP:") for x in
 check("exactly the playbook's names, not the request's", got == sorted(sans) and "evil.example" not in text, got)
 check("the VIP's and loopback among them (External Secrets through the VIP, the unseal script on 127.0.0.1)",
       "IP:192.168.11.5" in sans and "IP:127.0.0.1" in sans, sans)
-v = subprocess.run(["openssl", "verify", "-CAfile", os.path.join(W, "tls", "ca-cert.pem"),
+v = subprocess.run(["openssl", "verify", "-x509_strict", "-CAfile", os.path.join(W, "tls", "ca-cert.pem"),
                     os.path.join(W, "cert.pem")], capture_output=True, text=True)
-check("verifies against the CA", v.returncode == 0, v.stdout + v.stderr)
+check("verifies against the CA, X.509-strict (Python 3.13's default)", v.returncode == 0, v.stdout + v.stderr)
 check("the CA's serial beside its key (root's), not in Vault's TLS directory",
       os.path.exists(os.path.join(W, "ca", "ca-cert.srl")) and not os.path.exists(os.path.join(W, "tls", "ca-cert.srl")))
 # the names reach pi1's root shell from the other Pi's facts: one that is not a plain name or address (a quote, a

@@ -193,10 +193,13 @@
         path: /etc/vault.d/tls/vault-cert.pem
       register: _vault_cert
 
+    # keyUsage as production's CA has it: Python 3.13 verifies X.509-strict by default (every uri check against Vault
+    # on the Pis), and a CA certificate without it is refused
     - name: Create the Vault CA on pi1 (once; production already has its CA)
       ansible.builtin.command: >-
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-384 -days 3650 -nodes
         -keyout /etc/vault-ca/ca-key.pem -out /etc/vault.d/tls/ca-cert.pem -subj "/CN=Schnappy Vault CA"
+        -addext "keyUsage=critical,keyCertSign,cRLSign"
       args:
         creates: /etc/vault.d/tls/ca-cert.pem
       delegate_to: pi1
