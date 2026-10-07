@@ -89,10 +89,12 @@
     - name: Restored (psql's own error otherwise)
       ansible.builtin.assert:
         that: _restored.rc == 0
-        # psql's ERROR lines only - its DETAIL and CONTEXT quote the dump's rows (realm keys, secrets, credentials)
+        # psql's ERROR lines only - its DETAIL and CONTEXT quote the dump's rows (realm keys, secrets, credentials) -
+        # and what an ERROR quotes masked: it can be a value (invalid input syntax for type uuid: "...")
         fail_msg: >-
           the Keycloak restore failed: {{ _restored.stderr_lines | default([]) | select('search', 'ERROR:')
-          | join(' / ') or 'no ERROR line (exit ' ~ _restored.rc | default('?') ~ ')' }}
+          | map('regex_replace', '"[^"]*"', '"..."') | join(' / ')
+          or 'no ERROR line (exit ' ~ _restored.rc | default('?') ~ ')' }}
         success_msg: "{{ _restored.stdout | default('') }}"
       run_once: true
       when: not ansible_check_mode  # the restore is a write: a preview (--check) skips it
