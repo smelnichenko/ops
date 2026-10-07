@@ -130,6 +130,35 @@ check("nothing under /etc/vault.d Vault's own", owned == [], owned)
 ca_dir = next((t for t in tasks if (t.get("ansible.builtin.file") or {}).get("path") == "/etc/vault-ca"), {})
 check("the CA's directory root-only", (ca_dir.get("ansible.builtin.file") or {}).get("mode") == "0700"
       and (ca_dir.get("ansible.builtin.file") or {}).get("owner") == "root", ca_dir)
+# the CA's files on pi1 (the CA's Pi): its directory, the move of production's key and serial out of Vault's TLS
+# directory, and the key root's alone - each delegated to pi1, once: a run limited to pi2 signed with a key no task
+# had moved. Moved, production's key kept Vault's user as its owner (vault:vault 0400 there, checked 2026-10-08)
+on_pi1 = lambda t: t.get("delegate_to") == "pi1" and t.get("run_once") is True
+move = next((t for t in tasks if "/etc/vault-ca/" in str(t.get("ansible.builtin.shell", ""))
+             and "mv -n" in str(t.get("ansible.builtin.shell", ""))), None)
+key = next((t for t in tasks if (t.get("ansible.builtin.file") or {}).get("path") == "/etc/vault-ca/ca-key.pem"), None)
+check("the CA's directory, the move and the key's owner each on pi1, once",
+      all(x is not None and on_pi1(x) for x in (ca_dir, move, key)), [ca_dir.get("name"), (move or {}).get("name"),
+                                                                       (key or {}).get("name")])
+kf = (key or {}).get("ansible.builtin.file") or {}
+check("the CA's key root's alone, read-only", (kf.get("owner"), kf.get("group"), kf.get("mode")) == ("root", "root", "0400"),
+      kf)
+check("its owner set after the CA is made (a first install's key exists only then)", key is not None
+      and tasks.index(key) > tasks.index(make_ca), "")
+if move:
+    old, new = os.path.join(W, "old-tls"), os.path.join(W, "new-ca")
+    os.makedirs(old); os.makedirs(new)
+    for f, body in (("ca-key.pem", "KEY"), ("ca-cert.srl", "0A")):
+        open(os.path.join(old, f), "w").write(body)
+    sh = move["ansible.builtin.shell"]
+    sh = (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault.d/tls", old).replace("/etc/vault-ca", new)
+    r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True)
+    check("production's key and serial moved beside each other, out of Vault's directory", r.returncode == 0
+          and sorted(os.listdir(new)) == ["ca-cert.srl", "ca-key.pem"] and os.listdir(old) == [], r.stderr)
+    open(os.path.join(old, "ca-key.pem"), "w").write("OTHER")
+    r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True)
+    check("a key there already never overwritten", r.returncode == 0 and open(os.path.join(new, "ca-key.pem")).read()
+          == "KEY", r.stderr)
 print("vault-csr: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

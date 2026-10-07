@@ -71,7 +71,8 @@
         - { path: /etc/vault.d/tls, owner: root }
         - { path: /var/lib/vault, owner: vault }
 
-    # the CA's key and serial in a root-only directory, out of Vault's reach (they were in /etc/vault.d/tls, Vault's)
+    # the CA's key and serial in a root-only directory on pi1 (the CA's Pi), out of Vault's reach (they were in
+    # /etc/vault.d/tls, Vault's) - delegated: a run limited to pi2 signs its certificate with them all the same
     - name: The CA's directory, root-only
       ansible.builtin.file:
         path: /etc/vault-ca
@@ -79,12 +80,25 @@
         owner: root
         group: root
         mode: '0700'
+      delegate_to: pi1
+      run_once: true
 
-    - name: The CA's key moved out of Vault's TLS directory (production's, from before)
-      ansible.builtin.command: mv -n /etc/vault.d/tls/ca-key.pem /etc/vault-ca/ca-key.pem
-      args:
-        removes: /etc/vault.d/tls/ca-key.pem
-        creates: /etc/vault-ca/ca-key.pem
+    # production's key and serial (the serial keeps the CA's numbering), each only where none is yet
+    - name: The CA's key and serial moved out of Vault's TLS directory (production's, from before)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for f in ca-key.pem ca-cert.srl; do
+            if [ -e "/etc/vault.d/tls/$f" ] && [ ! -e "/etc/vault-ca/$f" ]; then
+              mv -n "/etc/vault.d/tls/$f" "/etc/vault-ca/$f"
+              echo "moved $f"
+            fi
+          done
+      register: _ca_moved
+      changed_when: "'moved' in _ca_moved.stdout"
+      delegate_to: pi1
+      run_once: true
 
     - name: Create vault-unseal directory
       ansible.builtin.file:
@@ -204,6 +218,25 @@
         creates: /etc/vault.d/tls/ca-cert.pem
       delegate_to: pi1
       run_once: true
+
+    # moved, production's kept Vault's user as its owner (vault:vault 0400): root's alone. Where it is (a preview,
+    # --check, moved nothing)
+    - name: The CA's key
+      ansible.builtin.stat:
+        path: /etc/vault-ca/ca-key.pem
+      register: _ca_key
+      delegate_to: pi1
+      run_once: true
+
+    - name: The CA's key root's alone
+      ansible.builtin.file:
+        path: /etc/vault-ca/ca-key.pem
+        owner: root
+        group: root
+        mode: '0400'
+      delegate_to: pi1
+      run_once: true
+      when: _ca_key.stat.exists
 
     - name: Read the Vault CA cert from pi1
       ansible.builtin.slurp:
