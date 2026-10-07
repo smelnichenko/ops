@@ -85,6 +85,18 @@ for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml")):
 check("loaded_started_now in consul, keepalived, patroni, vault: each its own service's systemd register",
       users, {f"setup-{n}.yml": (s_, [s_]) for n, s_ in (("consul", "consul"), ("keepalived", "keepalived"),
                                                         ("patroni", "patroni"), ("vault-pi", "vault"))})
+# and each one's expression, as Ansible renders it, for what its start task can find: started now from inactive or
+# failed; not when it ran already (active, activating), nor when the status is not there (a default of "running")
+STATES = (("inactive", True), ("failed", True), ("active", False), ("activating", False), (None, False))
+for f in sorted(users):
+    expr = None
+    for t in tasks_of(yaml.safe_load(open(os.path.join("deploy/ansible/playbooks", f)))):
+        v = t.get("vars") or {}
+        if "restart-pending" in str(t.get("ansible.builtin.include_tasks", "")) and "loaded_started_now" in v:
+            expr = v["loaded_started_now"]
+    reg = re.match(r"\{\{ (\w+)\.", expr).group(1)
+    got = [render(expr, **{reg: {"status": {"ActiveState": st}} if st else {}}) for st, _ in STATES]
+    check(f"{f}: started now - inactive, failed: yes; active, activating, no status: no", got, [w for _, w in STATES])
 print("restart-pending: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
