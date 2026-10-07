@@ -36,7 +36,12 @@ READ = """    - name: read
 check("a command's result read: named", play(PROBE + READ), ["_p.stdout"])
 check("check_mode: false: it runs, not named", play(PROBE.replace("register:", "check_mode: false\n      register:")
                                                     + READ), [])
-check("read with | default: not named", play(PROBE + READ.replace("_p.stdout }}", "_p.stdout | default('') }}")), [])
+# a shell or command skipped in check mode still registers an empty stdout (ansible-core 2.20): | default never applies
+# to it, and the empty value flows on - named; a uri's result has no json then, and | default applies - not named
+check("a command's read with | default: named (its stdout is there, empty)",
+      play(PROBE + READ.replace("_p.stdout }}", "_p.stdout | default('[]') }}")), ["_p.stdout"])
+check("a uri's read with | default: not named", play(PROBE.replace("ansible.builtin.command: cat /x",
+      "ansible.builtin.uri:\n        url: http://x") + READ.replace("_p.stdout }}", "_p.json | default({}) }}")), [])
 check("only .skipped read: not named", play(PROBE + READ.replace("_p.stdout", "_p.skipped")), [])
 check("the reader under not ansible_check_mode: not named",
       play(PROBE + READ.replace("    - name: read\n", "    - name: read\n      when: not ansible_check_mode\n")), [])
@@ -59,6 +64,23 @@ check("a probe the tags leave out: its reader too, not named",
 check("a probe the tags select, its reader too: named",
       play(PROBE.replace("register:", "tags: [b]\n      register:") + READ.replace("    - name: read\n",
            "    - name: read\n      tags: [always]\n"), {"b"}), ["_p.stdout"])
+# a task keyword before the module key (become_user, async, timeout, ...) is no module: the probe still read as one
+for kw in ("become_user: postgres", "async: 60", "timeout: 30", "remote_user: root", "module_defaults: {}",
+           "delegate_facts: true", "any_errors_fatal: true", "ignore_unreachable: true", "become_method: sudo"):
+    check(f"{kw.split(':')[0]} before the module: named", play(PROBE.replace("    - name: probe\n",
+                                                                              f"    - name: probe\n      {kw}\n")
+                                                               + READ), ["_p.stdout"])
+# a probe in pre_tasks read in tasks, and a read in a handler: named; a task tagged never (no --tags): not run
+def play_full(text):
+    path = os.path.join(work, "p2.yml")
+    open(path, "w").write(text)
+    return [x.split("reads ")[1].split(" -")[0] for x in c.lint(path, None)]
+check("a probe in pre_tasks, read in tasks: named", play_full("- hosts: x\n  pre_tasks:\n" + PROBE + "  tasks:\n"
+                                                              + READ), ["_p.stdout"])
+check("a read in a handler: named", play_full("- hosts: x\n  tasks:\n" + PROBE + "  handlers:\n" + READ),
+      ["_p.stdout"])
+check("a reader tagged never, no --tags: not named",
+      play(PROBE + READ.replace("    - name: read\n", "    - name: read\n      tags: [never]\n")), [])
 check("an imported file's probe: named", play("    - ansible.builtin.import_tasks: probe.yml\n" + READ,
                                              extra={"probe.yml": "- name: probe\n  ansible.builtin.shell: cat /x\n"
                                                     "  register: _p\n"}), ["_p.stdout"])

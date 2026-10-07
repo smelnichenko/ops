@@ -7,9 +7,13 @@ ansible_check_mode`. Their register then holds no stdout, rc or results, and a l
 preview - step 37's did, three hours into a full run (2026-10-06), found by nothing before. This reads each play in
 order, imports and static includes followed, as the preview runs it:
 
-  - only the tasks the line's --tags select run (with their blocks' and includes' tags; `always` always);
+  - only the tasks the line's --tags select run (with their blocks' and includes' tags; `always` always, `never` only
+    when selected); pre_tasks, tasks, post_tasks and handlers in that order;
   - an end_host reached only in check mode (under `when: ansible_check_mode`) ends the play for the preview;
-  - a read of a skipped register is fine with `| default(...)`, or in a task that check mode skips itself.
+  - a shell, command, script or raw task check mode skips still registers rc 0 and an empty stdout (ansible-core
+    2.20): a read of it is named, `| default(...)` or not (default never applies - the empty value flows on); a uri
+    skipped, or a task skipped by its own condition, registers no such field: a read with `| default(...)` is fine;
+  - a read in a task that check mode skips itself is fine.
 
 Usage: scripts/check-mode-lint.py                    (every step's playbook lines; exit 1 naming each read)
        scripts/check-mode-lint.py <playbook> [--tags <t,...>]
@@ -24,8 +28,17 @@ import yaml
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLAYBOOKS = os.path.join(OPS, "deploy", "ansible", "playbooks")
 SKIPPED = {"shell", "command", "script", "raw", "uri"}
+EMPTY = {"shell", "command", "script", "raw"}  # skipped in check mode, their register still holds rc 0, stdout ''
 FINE = {"skipped", "changed", "failed", "skip_reason"}  # what a skipped task's register does hold
 MODULE = re.compile(r"^(?:ansible\.builtin\.|ansible\.legacy\.)?([a-z_]+)$")
+# Ansible's task keywords - every other key of a task is its module (or action)
+KEYWORDS = {"name", "when", "register", "tags", "vars", "args", "loop", "loop_control", "become", "become_user",
+            "become_method", "become_flags", "become_exe", "block", "rescue", "always", "notify", "listen",
+            "environment", "delegate_to", "delegate_facts", "run_once", "changed_when", "failed_when", "retries",
+            "delay", "until", "check_mode", "diff", "no_log", "ignore_errors", "ignore_unreachable", "throttle",
+            "timeout", "async", "poll", "any_errors_fatal", "remote_user", "port", "connection", "module_defaults",
+            "collections", "debugger", "local_action"}
+SECTIONS = ("pre_tasks", "tasks", "post_tasks", "handlers")
 
 
 def whens(task):
@@ -45,10 +58,7 @@ def never_in_check(conditions):
 def module(task):
     for k in task:
         m = MODULE.match(k)
-        if m and k not in ("name", "when", "register", "tags", "vars", "args", "loop", "become", "block", "rescue",
-                           "always", "notify", "environment", "delegate_to", "run_once", "changed_when",
-                           "failed_when", "retries", "delay", "until", "check_mode", "no_log", "loop_control",
-                           "ignore_errors", "diff", "throttle", "listen"):
+        if m and k not in KEYWORDS and not k.startswith("with_"):
             return m.group(1)
     return ""
 
@@ -84,27 +94,32 @@ def lint(path, select=None, text=None):
     --tags `select` (None: every task)."""
     out, base = [], os.path.dirname(os.path.abspath(path))
     for play in yaml.safe_load(text if text is not None else open(path)) or []:
-        if not isinstance(play, dict) or "tasks" not in play:
+        if not isinstance(play, dict) or not any(k in play for k in SECTIONS):
             continue
-        skipped = set()
-        for t, conds, tg in flat(play["tasks"], base, whens(play), tags_of(play)):
+        skipped = {}  # register -> whether its fields are there, empty (EMPTY's) - else absent
+        for t, conds, tg in (x for k in SECTIONS for x in flat(play.get(k), base, whens(play), tags_of(play))):
             if select is not None and not (tg & (select | {"always"})):
+                continue
+            if "never" in tg and not (select and tg & select - {"never"}):
                 continue
             if module(t) == "meta" and "end_host" in str(t) and check_only(conds):
                 break
             runs = not never_in_check(conds)
             if runs:
                 body = yaml.safe_dump({k: v for k, v in t.items() if k != "register"}, width=10000)
-                for reg in sorted(skipped):
+                for reg, empty in sorted(skipped.items()):
                     for m in re.finditer(rf"\b{re.escape(reg)}\.([A-Za-z_]+)", body):
-                        if m.group(1) not in FINE and not re.match(r"\s*\|\s*default\b", body[m.end():]):
+                        defaulted = re.match(r"\s*\|\s*default\b", body[m.end():])
+                        if m.group(1) not in FINE and (empty or not defaulted):
                             out.append(f"{path}: '{t.get('name')}' reads {reg}.{m.group(1)} - skipped in check mode")
                             break
             if "register" in t:
-                if not runs or (module(t) in SKIPPED and t.get("check_mode") is not False):
-                    skipped.add(t["register"])
+                if not runs:
+                    skipped[t["register"]] = False
+                elif module(t) in SKIPPED and t.get("check_mode") is not False:
+                    skipped[t["register"]] = module(t) in EMPTY
                 else:
-                    skipped.discard(t["register"])
+                    skipped.pop(t["register"], None)
     return out
 
 
