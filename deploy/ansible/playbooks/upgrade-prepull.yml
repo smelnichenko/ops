@@ -24,18 +24,35 @@
         fail_msg: "-e images=<name:tag[@sha256:digest]>,... - got {{ images | default('') }}"
         quiet: true
 
+    # what the node has already (a two-repo step's second merge, the Vagrant copy's preload): only the rest is pulled,
+    # and room is needed only for that - a store at 80-85% refused a merge that pulled nothing
+    - name: The images on the node already
+      ansible.builtin.command:
+        argv: [crictl, --runtime-endpoint, "unix:///run/containerd/containerd.sock", --image-endpoint,
+               "unix:///run/containerd/containerd.sock", inspecti, "{{ item }}"]
+      loop: "{{ images.split(',') | select | list }}"
+      register: _present
+      changed_when: false
+      failed_when: false
+      check_mode: false  # a read: a preview (--check) runs it
+
+    - name: The ones to pull
+      ansible.builtin.set_fact:
+        _missing: "{{ _present.results | rejectattr('rc', 'eq', 0) | map(attribute='item') | list }}"
+
     - name: Room for them
       ansible.builtin.include_tasks: tasks/image-store-room.yml
       vars:
         room_when: before the pulls
+        room_needed: "{{ _missing | length > 0 }}"
 
     # through containerd's socket by name (ten has no /etc/crictl.yaml: crictl would try its deprecated default
     # endpoints in turn), a registry's passing failure retried
-    - name: Each image pulled (containerd's k8s.io namespace, where the kubelet looks)
+    - name: Each image missing pulled (containerd's k8s.io namespace, where the kubelet looks)
       ansible.builtin.command:
         argv: [crictl, --runtime-endpoint, "unix:///run/containerd/containerd.sock", --image-endpoint,
                "unix:///run/containerd/containerd.sock", pull, "{{ item }}"]
-      loop: "{{ images.split(',') | select | list }}"
+      loop: "{{ _missing }}"
       register: _pulled
       retries: 3
       delay: 10
@@ -46,3 +63,4 @@
       ansible.builtin.include_tasks: tasks/image-store-room.yml
       vars:
         room_when: after the pulls
+        room_needed: "{{ _missing | length > 0 }}"

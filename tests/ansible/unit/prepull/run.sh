@@ -17,8 +17,13 @@ trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin"
 ln -s "$PWD/deploy/ansible/playbooks/tasks" "$W/tasks"  # the play's includes, beside its copy
 # FAILS=<n>: the first n pulls fail (a registry's 5xx)
+# PRESENT: the images the node has already (inspecti answers them; not logged - only pulls are)
 cat > "$W/bin/crictl" <<'STUB'
 #!/bin/bash
+if [ "${*: -2:1}" = inspecti ]; then
+  for p in ${PRESENT:-}; do [ "$p" = "${@: -1}" ] && exit 0; done
+  exit 1
+fi
 echo "$*" >> "$CALLS"
 n=$(wc -l < "$CALLS")
 [ "$n" -gt "${FAILS:-0}" ] || { echo "pull failed: 503" >&2; exit 1; }
@@ -73,5 +78,11 @@ USED=65,66 case_ "the image store at 65%, then 66% (GC at 85): pulled" 0 "$E pul
 USED=80,80 case_ "at 80% before (GC at 85, less 5): refused, nothing pulled" 1 "" -e images=x:1
 USED=70,81 case_ "at 81% after the pulls: the run fails" 1 "$E pull x:1" -e images=x:1
 GC_HIGH=70 USED=66,66 case_ "the kubelet's own threshold read (70): 66% refused, nothing pulled" 1 "" -e images=x:1
+# the room needed only for what is pulled: images all on the node already (a two-repo step's second merge, the
+# Vagrant copy's preload) pull nothing and are not refused over a full image store; one missing is
+USED=82,82 PRESENT="x:1 y:2" case_ "every image on the node already, the store at 82%: nothing pulled, not refused" \
+  0 "" -e images=x:1,y:2
+USED=82,82 PRESENT="x:1" case_ "one missing, the store at 82%: refused, nothing pulled" 1 "" -e images=x:1,y:2
+USED=65,66 PRESENT="x:1" case_ "one missing, room enough: only it pulled" 0 "$E pull y:2" -e images=x:1,y:2
 echo "prepull: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

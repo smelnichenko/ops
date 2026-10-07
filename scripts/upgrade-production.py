@@ -44,6 +44,8 @@ Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py check <step>              (read-only: as `done` checks, nothing recorded)
        scripts/upgrade-production.py proof-start
        scripts/upgrade-production.py record-proof <step> <infra sha> <platform sha>
+       scripts/upgrade-production.py prepull-images <step>   (the images the merge pre-pulls, by the branches' pins:
+                                                             the Vagrant step runs the pre-pull with them)
 """
 import base64
 import datetime
@@ -686,19 +688,20 @@ def image_pins(step, name, tag):
     return found
 
 
-def prepull_images(step):
+def prepull_images(step, proven=True):
     """The public images the step moves to (its `image ... => image <name> <tag>` and `+ image` lines), as containerd
     names them (one image under its short and its docker.io name pulled once), each with the digest the step's
     branches pin its tag to, or the full run's copy ran it with (a chart that pins in two keys) - the reference
     production runs (the tag alone may name another build by then) - production's own registry left out
-    (registry_problems checks those are there)."""
+    (registry_problems checks those are there). proven=False: the branches' pins only (the Vagrant step, before its
+    proof)."""
     out, seen = [], set()
     for name, tag in step_images(step):
         if name.startswith("git.pmon.dev/") or (full_name(name), tag) in seen:
             continue
         seen.add((full_name(name), tag))
         # pinned in its branch as name:tag@digest, or composed so by its chart only (the digest the full run ran)
-        pins = image_pins(step, name, tag) | ({proven_digest(step, name, tag)} - {None})
+        pins = image_pins(step, name, tag) | ({proven_digest(step, name, tag) if proven else None} - {None})
         if len(pins) > 1:
             sys.exit(f"{name}:{tag} is pinned to {len(pins)} digests in the step's branches and the full run's copy "
                      f"({', '.join(sorted(pins))}) - which one production runs is unclear")
@@ -1086,7 +1089,8 @@ def main():
     actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start, ("release", 1): release,
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
-               ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof}
+               ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof,
+               ("prepull-images", 1): lambda step: print(",".join(prepull_images(step, proven=False)))}
     if a[:1] == ["check"] and len(a) == 2:
         sys.exit(0 if check(a[1]) else 1)
     fn = actions.get((a[0] if a else "", len(a) - 1))

@@ -531,6 +531,15 @@ tasks:
           fi
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
+      # production's pre-pull (playbooks/upgrade-prepull.yml, at the step's merges) on the copy's node, with the images
+      # it would pull: the preload's found there, anything else pulled, the image store's room read - the playbook run on
+      # a node before production runs it
+      - cmd: |
+          set -euo pipefail
+          imgs=$(scripts/upgrade-production.py prepull-images {{.STEP}})
+          if [ -n "$imgs" ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-prepull.yml -e "images=$imgs"
+          fi
       # Argo fetches the pushed commits within its 3-minute poll; the wait holds until every app is synced to them -
       # before a step's playbooks only (the cluster side first); a step without them is waited for once, below
       - cmd: |
