@@ -2,7 +2,8 @@
 # Every task's module arguments are its module's own: each task of the repo's playbooks and test playbooks (dict
 # arguments, args: included) against the options and aliases its module documents, read by Ansible's own plugin loader.
 # An unsupported one fails only when the task runs: apt's download_only (dnf's, not apt's) stopped the full run of
-# 2026-10-07 two hours in, at step 14. set_fact and add_host take any key and are not checked.
+# 2026-10-07 two hours in, at step 14. set_fact and add_host take any key and are not checked; a module this Ansible
+# cannot load (a collection CI's image lacks: ansible.posix, behind ansible.builtin.mount's redirect) is ansible-lint's.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -49,7 +50,7 @@ def tasks(node):
 
 
 def unsupported(task):
-    """[(module, [keys its module does not document])] - a module of the ansible namespace not found is named too."""
+    """[(module, [keys its module does not document])] - modules this Ansible can load."""
     out = []
     for m in [k for k in task if k not in KEYWORDS and not str(k).startswith("with_") and k not in ANY_KEY]:
         args = dict(task[m]) if isinstance(task[m], dict) else {}
@@ -57,8 +58,6 @@ def unsupported(task):
             args.update(task["args"])
         opts = options(m)
         if opts is None:
-            if str(m).startswith("ansible."):
-                out.append((m, ["no such module"]))
             continue
         extra = sorted(set(args) - opts - {"free_form", "_raw_params"})
         if extra:
