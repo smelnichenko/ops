@@ -26,7 +26,8 @@
   gather_facts: true
 
   vars:
-    node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
+    # the inventory's, not a fact the Pi reports: pi1's CA signs it into the other Pi's certificate
+    node_ip: "{{ node_ip_override | default(ansible_host) }}"
 
   pre_tasks:
     - name: Wait for SSH
@@ -283,14 +284,18 @@
       ansible.builtin.shell: |
         set -euo pipefail
         # the names through the environment, never templated into this root shell - one is a fact of the other Pi -
-        # and each a plain DNS name or IPv4 address
-        for n in ${SANS//,/ }; do
+        # each a plain DNS name or IPv4 address; split on commas alone and written as checked: a check that split on
+        # blanks too passed a tab or a newline between two names, which the extension file then read otherwise
+        [[ $SANS != *[[:space:]]* ]] \
+          || { echo "REFUSED: a blank or a newline in the names - not a name or an address"; exit 1; }
+        IFS=, read -r -a names <<< "$SANS"
+        for n in "${names[@]}"; do
           [[ $n =~ ^DNS:[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ || $n =~ ^IP:([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
             || { echo "REFUSED: $n is not a name or an address"; exit 1; }
         done
         ext=$(mktemp); trap 'rm -f "$ext"' EXIT
         printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" \
-          "extendedKeyUsage=serverAuth" "subjectAltName=$SANS" > "$ext"
+          "extendedKeyUsage=serverAuth" "subjectAltName=$(IFS=,; echo "${names[*]}")" > "$ext"
         openssl x509 -req -in /dev/stdin -CA /etc/vault.d/tls/ca-cert.pem -CAkey /etc/vault-ca/ca-key.pem \
           -CAserial /etc/vault-ca/ca-cert.srl -CAcreateserial -extfile "$ext" -days 3650
       args:

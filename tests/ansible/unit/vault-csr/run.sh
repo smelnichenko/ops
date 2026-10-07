@@ -104,6 +104,23 @@ r = subprocess.run(["bash", "-c", script_bad], input=csr, capture_output=True, t
                    env=dict(os.environ, **env_bad))
 check("a name that is not a name or an address: refused, nothing run", r.returncode != 0
       and not os.path.exists(os.path.join(W, "pwned")) and "not a name" in r.stdout + r.stderr, r.stdout + r.stderr)
+# what is checked is what is written: a list the check split otherwise (on blanks, globbing it) than the certificate's
+# extension reads it - a tab between two names - refused; a newline (a second line in the extension file) refused
+for label, odd in (("a tab between two names", "DNS:a.example\tDNS:b.example"),
+                   ("a newline and a second name", "DNS:a.example\nDNS:b.example")):
+    odd_sans = sans[:2] + [odd]
+    script_odd = render(task["ansible.builtin.shell"], _sans=odd_sans).replace(
+        "/etc/vault.d/tls", os.path.join(W, "tls")).replace("/etc/vault-ca", os.path.join(W, "ca"))
+    env_odd = {k: render(str(v), _sans=odd_sans) for k, v in (task.get("environment") or {}).items()}
+    r = subprocess.run(["bash", "-c", script_odd], input=csr, capture_output=True, text=True,
+                       env=dict(os.environ, **env_odd))
+    check(f"{label}: refused, nothing signed", r.returncode != 0 and "BEGIN CERTIFICATE" not in r.stdout
+          and "REFUSED" in r.stdout + r.stderr, r.stdout[-200:] + r.stderr[-200:])
+# the node's address from the inventory, not a fact the other Pi reports: pi1's CA signs what pi2's facts say
+node_ip = next(p for p in plays if "node_ip" in (p.get("vars") or {}))["vars"]["node_ip"]
+check("the node's address the inventory's (a forged default-IPv4 fact ignored)",
+      render(node_ip, ansible_host="192.168.11.6", ansible_default_ipv4={"address": "6.6.6.6"}) == "192.168.11.6",
+      node_ip)
 # Vault's own user owns its data only: the config, the TLS directory and its files are root's (a compromised Vault
 # swapped the CA its unseal script trusts, or its own config); the CA's directory is root-only
 owned = []
