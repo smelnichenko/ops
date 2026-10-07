@@ -34,6 +34,16 @@ for f, name, pend, health, as_list in (
             {"name": "recorded", "ansible.builtin.debug": {"msg": f"RECORDED {f}: {label}"}, "when": task["when"]},
             {"name": "not", "ansible.builtin.debug": {"msg": f"NOT RECORDED {f}: {label}"},
              "when": f"not ({task['when']})"}]})
+# Vault's answer read only when its own check ran (Vault was running): a pending answer setup-consul left in the same
+# run (its register of the same name) is not Vault's
+answer = next(t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
+              for t in p.get("tasks") or [] if t.get("name", "").startswith("Its answer") and "_vault_pending" in str(t))
+for label, active in (("vault inactive, consul's answer left", "inactive"), ("vault active", "active")):
+    plays.append({"hosts": f"case{len(plays)}", "gather_facts": False, "name": label, "tasks": [
+        {"ansible.builtin.set_fact": {"_restart_pending": {"stdout_lines": ["pending", "consul-sha"]},
+                                      "_vault_before": {"status": {"ActiveState": active}}}},
+        answer,
+        {"ansible.builtin.debug": {"msg": "VAULT ANSWER " + label + ": {{ _vault_pending | join('/') }}"}}]})
 yaml.safe_dump(plays, open(os.path.join(W, "play.yml"), "w"), sort_keys=False)
 yaml.safe_dump({"all": {"hosts": {p["hosts"]: {"ansible_connection": "local",
                                                  "ansible_python_interpreter": "{{ ansible_playbook_python }}"}
@@ -50,6 +60,10 @@ for f in setup-consul.yml setup-vault-pi.yml; do
     if grep -qF "\"msg\": \"$want $f: $label\"" <<< "$out"; then echo "PASS $f: $label: $want"
     else echo "FAIL $f: $label: want $want"; fails=$((fails + 1)); fi
   done
+done
+for c in "vault inactive, consul's answer left: /" "vault active: pending/consul-sha"; do
+  if grep -qF "\"msg\": \"VAULT ANSWER $c\"" <<< "$out"; then echo "PASS Vault's answer, $c"
+  else echo "FAIL Vault's answer, want $c"; fails=$((fails + 1)); fi
 done
 echo "record-conditions: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
