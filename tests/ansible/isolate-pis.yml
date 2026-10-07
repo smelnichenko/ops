@@ -72,6 +72,21 @@
         daemon_reload: true
       changed_when: false
 
+    # the guard drops production's LAN by IPv4 only, and that LAN carries an IPv6 prefix too (ten's ULA,
+    # fd0a:94e6:20b4:9f6b::/64): no IPv6 beyond link-local here - failing closed the day a box or a libvirt network
+    # gives the VM one
+    - name: No IPv6 beyond link-local (the guard drops IPv4 only)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          routes=$(ip -6 route show | grep -vE '^(fe80::/64 |multicast ff00::/8 )' || true)
+          addrs=$(ip -6 addr show scope global | grep inet6 || true)
+          if [ -n "$routes$addrs" ]; then echo "IPv6 BEYOND LINK-LOCAL: $routes $addrs"; exit 1; fi
+          echo "no IPv6 beyond link-local"
+      changed_when: false
+      check_mode: false  # a read
+
     - name: Prove it - the Pi resolves its names to the Vagrant VIP and cannot reach production's VIP
       ansible.builtin.shell: |
         set -uo pipefail
