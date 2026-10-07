@@ -510,26 +510,20 @@
         name: keepalived
         state: reloaded
 
-# ─── A restart pending (its drop-ins changed): one Pi at a time, the VIP's holder last ─────────────────
-# both at once left the VIP on neither Pi; pending, not "changed by this run": a run that failed after writing a
-# drop-in and before its restart left the new one unloaded, and the next run changed nothing
-- name: Keepalived's restart order - the VIP's holder last
+# ─── The drop-in loaded where it is pending: a daemon-reload, no restart ───────────────────────────────────────────
+# The drop-in sets ExecStopPost alone, which systemd runs at keepalived's next stop from the unit as it holds it: a
+# daemon-reload applies it (checked on a running unit, 2026-10-08: its PID kept, the new ExecStopPost run at its stop) -
+# the restart it had moved the VIP for nothing. One that sets anything else needs keepalived restarted: refused here.
+# Pending, not "changed by this run": a run cut short after writing the drop-in and before its reload left it
+# unloaded, and the next run changed nothing.
+- name: Keepalived's drop-in loaded where pending - a daemon-reload, no restart
   hosts: pi1,pi2
   become: true
   gather_facts: false
-  vars:
-    vip: "{{ keepalived_vip }}"
   tasks:
-    - name: Does this Pi hold the VIP
-      ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
-      register: _vip_here
-      changed_when: false
-      check_mode: false  # a read: a preview orders the Pis as a run would
-
-    # by content, against what the running keepalived last loaded (a stamp): by the clock it was wrong both ways on
-    # the Pis, which have no RTC - a clock that was ahead when the drop-in was written restarted both, the VIP moving,
-    # on every run
-    - name: A restart pending here - the drop-in other than the running keepalived loaded
+    # by content, against what systemd last loaded for keepalived (a stamp): by the clock it was wrong both ways on the
+    # Pis, which have no RTC
+    - name: A drop-in pending here - other than the one systemd holds for keepalived
       ansible.builtin.include_tasks: tasks/restart-pending.yml
       vars:
         loaded_service: keepalived
@@ -537,62 +531,36 @@
         # its status as the start found it: not running, it started on this drop-in just now
         loaded_started_now: "{{ _keepalived_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
 
-    - name: Kept for the restart play
-      ansible.builtin.set_fact:
-        _keepalived_pending: "{{ _restart_pending }}"
-
-    - name: The order
-      ansible.builtin.add_host:
-        name: "{{ item }}"
-        groups: keepalived_restart_order
-      loop: "{{ (ansible_play_hosts | difference(_holders)) + _holders }}"
-      vars:
-        _holders: >-
-          {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vip_here.stdout', 'ne', '')
-             | map(attribute='inventory_hostname') | list }}
-      run_once: true
+    - name: The drop-in sets ExecStopPost alone (anything else needs keepalived restarted - one Pi at a time, by hand)
+      ansible.builtin.command:
+        argv: [grep, -vxE, '\[Service\]|ExecStopPost=.*|#.*|[[:space:]]*',
+               /etc/systemd/system/keepalived.service.d/release-active-services.conf]
+      register: _dropin_other
       changed_when: false
+      failed_when: _dropin_other.rc != 1  # grep -v: 1 when every line is one of those
+      check_mode: false  # a read
 
-- name: Keepalived restarted where pending, one Pi at a time
-  hosts: keepalived_restart_order
-  become: true
-  gather_facts: false
-  serial: 1
-  vars:
-    vip: "{{ keepalived_vip }}"
-  tasks:
-    - name: Restarted, the VIP held again before the next
-      when: _keepalived_pending.stdout_lines[0] == 'pending'
-      block:
-        - name: The other Pi's keepalived running - the VIP has somewhere to be meanwhile
-          ansible.builtin.systemd:
-            name: keepalived
-          register: _peer_keepalived
-          delegate_to: "{{ groups['pis'] | difference([inventory_hostname]) | first }}"
-          failed_when: _peer_keepalived.status.ActiveState != 'active'
+    - name: The unit read again
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: _restart_pending.stdout_lines[0] == 'pending'
 
-        # the unit read again first: a run cut short after writing the drop-in, before its handlers, left systemd on
-        # the old one - the restart ran it, and the drop-in then read "current" for good
-        - name: Restarted
-          ansible.builtin.systemd:
-            name: keepalived
-            state: restarted
-            daemon_reload: true
+    - name: Systemd runs the drop-in's ExecStopPost at keepalived's next stop
+      ansible.builtin.command:
+        argv: [systemctl, show, keepalived, -p, ExecStopPost, --value]
+      register: _stop_post
+      changed_when: false
+      failed_when: _stop_post.rc != 0 or 'active_services_backup.sh --force' not in _stop_post.stdout
+      when:
+        - _restart_pending.stdout_lines[0] == 'pending'
+        - not ansible_check_mode  # a preview reloaded nothing
 
-        - name: The VIP answers again (on whichever Pi holds it)
-          ansible.builtin.command: ping -c 1 -W 2 {{ vip }}
-          register: _vip_back
-          changed_when: false
-          retries: 30
-          delay: 2
-          until: _vip_back.rc == 0
-
-    # what the next run compares with: restarted (a failed restart ends this Pi's run before here), or found current
-    - name: Keepalived's drop-in as it runs it, recorded
+    # what the next run compares with: loaded (a failed reload or check ends this Pi's run before here), or current
+    - name: Keepalived's drop-in as systemd runs it, recorded
       ansible.builtin.include_tasks: tasks/restart-recorded.yml
       vars:
         loaded_service: keepalived
-        loaded_hash: "{{ _keepalived_pending.stdout_lines[1] }}"
+        loaded_hash: "{{ _restart_pending.stdout_lines[1] }}"
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify Keepalived
