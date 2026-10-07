@@ -18,7 +18,12 @@ order, imports and static includes followed, as the preview runs it:
   - an import's tasks take its tags, an include's do not (only its apply: tags) - and run only when the include does;
   - handlers run after each section (pre_tasks, tasks, post_tasks); an import or include the lint cannot follow (not
     found, its name templated) is named, never skipped unseen;
-  - a read in a task that check mode skips itself is fine.
+  - a read in a task that check mode skips itself is fine;
+  - a block's and an include's own keywords (when, loop, vars) are read where they stand; a register lives on in its
+    host's later plays and other hosts read it through hostvars (hostvars['h']['r'].stdout) - read across the
+    playbook; a loop over a skipped looped register's results gets its items, each skipped - an item's field other
+    than what a skipped item holds (item, skipped, skip_reason...) is a read; strings are read as parsed (a subscript in
+    double quotes, r["stdout"], as one in single).
 
 Usage: scripts/check-mode-lint.py                    (every step's playbook lines, and the playbooks a deploy task
                                                      hands {{.CLI_ARGS}} - a --check preview; exit 1 naming each read)
@@ -92,11 +97,15 @@ def flat(tasks, base, conds=(), tags=frozenset(), seen=(), select=None):
             continue
         c, tg = list(conds) + whens(t), set(tags) | tags_of(t)
         if "block" in t:
+            # the block's own keywords, read where it stands
+            yield {"__head__": True, **{k: v for k, v in t.items() if k not in ("block", "rescue", "always")}}, \
+                list(conds), tg
             for part in ("block", "rescue", "always"):
                 yield from flat(t.get(part), base, c, tg, seen, select)
             continue
         mod = module(t)
         if mod in ("import_tasks", "include_tasks"):
+            yield {"__head__": True, **{k: v for k, v in t.items() if not k.endswith(mod)}}, list(conds), tg
             ref = t[next(k for k in t if k.endswith(mod))]
             apply = (ref.get("apply") or {}) if isinstance(ref, dict) else {}
             ref = ref.get("file") if isinstance(ref, dict) else ref
@@ -114,14 +123,40 @@ def flat(tasks, base, conds=(), tags=frozenset(), seen=(), select=None):
         yield t, c, tg
 
 
+def strings(node):
+    """Every string of a task as parsed (keys aside) - a subscript's quotes as written, not as YAML would dump them."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from strings(v)
+
+
+def read_of(reg, text, field=None):
+    """[(field, read with | default)] of register `reg` in `text`: reg.f, reg['f'], hostvars[...]['reg'].f - with
+    `field`, only reads of that field."""
+    out = []
+    for m in re.finditer(rf"(?:(?<![\w.]){re.escape(reg)}|\[\s*['\"]{re.escape(reg)}['\"]\s*\])"
+                         rf"(?:\.([A-Za-z_]+)|\[\s*['\"]([A-Za-z_]+)['\"]\s*\])", str(text)):
+        f = m.group(1) or m.group(2)
+        if field is None or f == field:
+            out.append((f, bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+    return out
+
+
 def lint(path, select=None, text=None):
     """The reads of a result check mode never made, in the playbook at `path` (its text `text`, if given) run with
     --tags `select` (None: every task)."""
     out, base = [], os.path.dirname(os.path.abspath(path))
+    # register -> whether its fields are there, empty (EMPTY's) - else absent; across the plays: a register lives on in
+    # its host's later plays, and the others read it through hostvars
+    skipped = {}
     for play in yaml.safe_load(text if text is not None else open(path)) or []:
         if not isinstance(play, dict) or not any(k in play for k in SECTIONS):
             continue
-        skipped = {}  # register -> whether its fields are there, empty (EMPTY's) - else absent
         for t, conds, tg in (x for k in RUN_ORDER for x in flat(play.get(k), base, whens(play), tags_of(play),
                                                                  select=select)):
             if "__not_followed__" in t:
@@ -132,19 +167,21 @@ def lint(path, select=None, text=None):
                 continue
             if module(t) == "meta" and "end_host" in str(t) and check_only(conds):
                 break
-            runs = not never_in_check(conds)
+            runs = not never_in_check(conds)  # a block's or an include's own when is read: its conditions are its parents'
             if runs:
-                body = yaml.safe_dump({k: v for k, v in t.items() if k != "register"}, width=10000)
+                texts = list(strings({k: v for k, v in t.items() if k not in ("register", "__head__")}))
                 # its own register aside: a task check mode skips evaluates no until/failed_when on it
-                for reg, empty in sorted((r, e) for r, e in skipped.items() if r != t.get("register")):
-                    # a subscript's quotes as YAML writes them ('' in a single-quoted scalar)
-                    for m in re.finditer(rf"\b{re.escape(reg)}(?:\.([A-Za-z_]+)|\[(?:''|'|\")([A-Za-z_]+)(?:''|'|\")\])",
-                                         body):
-                        field = m.group(1) or m.group(2)
-                        defaulted = re.match(r"\s*\|\s*default\b", body[m.end():])
-                        if field not in FINE and (empty or not defaulted):
-                            out.append(f"{path}: '{t.get('name')}' reads {reg}.{field} - skipped in check mode")
-                            break
+                reads = [(reg, empty) for reg, empty in sorted(skipped.items()) if reg != t.get("register")]
+                # a loop over a skipped looped register's results: its items, each a skipped item
+                loop = str(t.get("loop", "")) + str(t.get("with_items", ""))
+                if any(read_of(reg, loop, "results") for reg, empty in reads if not empty):
+                    reads.append(("item", False))
+                for reg, empty in reads:
+                    hit = next((f for x in texts for f, defaulted in read_of(reg, x)
+                                if f not in FINE | ({"item", "false_condition", "ansible_loop_var"} if reg == "item"
+                                                    else set()) and (empty or not defaulted)), None)
+                    if hit:
+                        out.append(f"{path}: '{t.get('name')}' reads {reg}.{hit} - skipped in check mode")
             if "register" in t:
                 if not runs:
                     skipped[t["register"]] = False

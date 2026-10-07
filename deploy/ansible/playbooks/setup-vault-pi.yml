@@ -170,6 +170,7 @@
       register: current_vault_version
       failed_when: false
       changed_when: false
+      check_mode: false  # a read: skipped, it registered rc 0 and a preview showed Vault installed where it is not
 
     # only where Vault is missing: a running pair is moved by upgrade-vault.yml (standby first, restarted, unsealed) -
     # a swap here replaced the binary under the running server and restarted nothing

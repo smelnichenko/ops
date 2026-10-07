@@ -109,6 +109,7 @@
       ansible.builtin.command: consul keygen
       register: consul_key_gen
       no_log: true
+      check_mode: false  # it prints a random key, nothing more: skipped, a first install's preview had no key to write
       when:
         - inventory_hostname == 'pi1'
         - consul_servers | difference(ansible_play_hosts) | length == 0

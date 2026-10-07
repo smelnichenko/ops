@@ -118,6 +118,31 @@ FLUSHED = ("- hosts: x\n  tasks:\n" + PROBE.replace("    - name: probe\n", "    
            + "  post_tasks:\n" + PROBE.replace("register:", "check_mode: false\n      register:")
            + "  handlers:\n" + READ.replace("    - name: read\n", "    - name: h\n"))
 check("a handler flushed after tasks reads the probe tasks left skipped: named", play_full(FLUSHED), ["_p.stdout"])
+# a block's and an include's own when/loop read too (a block whose when read a skipped probe was never seen)
+check("a block's own when reads a skipped probe: named",
+      play(PROBE + "    - name: blk\n      when: _p.rc != 0\n      block:\n        - name: x\n"
+                   "          ansible.builtin.debug:\n            msg: hi\n"), ["_p.rc"])
+check("an include's own loop reads a skipped probe: named",
+      play(PROBE + "    - name: inc\n      ansible.builtin.include_tasks: inc2.yml\n      loop: '{{ _p.stdout_lines }}'\n",
+           extra={"inc2.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"}), ["_p.stdout_lines"])
+# a register lives on in the host's later plays, and other hosts read it through hostvars
+check("a probe in one play, read in the next: named",
+      play_full("- hosts: x\n  tasks:\n" + PROBE + "- hosts: x\n  tasks:\n" + READ), ["_p.stdout"])
+check("read through hostvars in another play: named",
+      play_full("- hosts: a\n  tasks:\n" + PROBE + "- hosts: b\n  tasks:\n"
+                + READ.replace("_p.stdout", "hostvars['a']['_p'].stdout")), ["_p.stdout"])
+check("a double-quoted subscript: named", play(PROBE + "    - name: read\n      ansible.builtin.debug:\n"
+                                                       "        msg: '{{ _p[\"stdout\"] }}'\n"), ["_p.stdout"])
+# a loop over a skipped looped register's results: its items are there, skipped - none holds a stdout
+LOOPED = PROBE.replace("    - name: probe\n", "    - name: probe\n      loop: [1, 2]\n      when: not ansible_check_mode\n")
+check("a loop over a skipped register's results reading item.stdout: named",
+      play_full("- hosts: a\n  tasks:\n" + LOOPED + "- hosts: b\n  tasks:\n    - name: use\n"
+                "      ansible.builtin.copy:\n        content: '{{ item.stdout }}'\n        dest: /x\n"
+                "      loop: \"{{ hostvars['a']['_p'].results | default([]) }}\"\n"), ["item.stdout"])
+check("the same loop reading item.item alone: not named",
+      play_full("- hosts: a\n  tasks:\n" + LOOPED + "- hosts: b\n  tasks:\n    - name: use\n"
+                "      ansible.builtin.debug:\n        msg: '{{ item.item }}'\n"
+                "      loop: \"{{ hostvars['a']['_p'].results | default([]) }}\"\n"), [])
 # kept here as it was (git show 59e2640^:...): a shallow clone has no history that far back
 old = open("tests/ansible/unit/check-mode-lint/strimzi-v1-conversion-before-59e2640.yml").read()
 check("step 37's conversion before its fix: named",

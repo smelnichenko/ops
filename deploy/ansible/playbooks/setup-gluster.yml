@@ -946,6 +946,7 @@
   gather_facts: false
   tasks:
     - name: Pi1's entry list of each new volume, for the comparison
+      when: not ansible_check_mode  # as pi1's listing: a preview's new volumes do not exist yet
       ansible.builtin.copy:
         content: "{{ item.stdout }}\n"
         dest: "/var/tmp/gluster-{{ item.item }}.pi1-entries"
