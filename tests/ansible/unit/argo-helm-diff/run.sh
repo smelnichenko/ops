@@ -101,9 +101,18 @@ fails += not check_("upstream: parameters - forceString as --set-string",
                     and args[args.index("--set") + 1] == "b=2", args)
 fails += not check_("upstream: an OCI chart by oci://", calls["oci"][0][2] == "oci://registry.example.com/charts/other",
                     calls["oci"][0])
-fails += not check_("which Helm renders it: only the old one, only the new one",
-                    [hd.where("k", {"k": 1}, {}, "3.19", "4.2"), hd.where("k", {}, {"k": 1}, "3.19", "4.2")]
-                    == ["only 3.19", "only 4.2"])
+# renders(): the platform charts' applications and the upstream ones, together (check() compares them all) - from a
+# fresh copy of the module, the one above has its renders stubbed for check()
+loader2 = importlib.machinery.SourceFileLoader("hd2", "scripts/argo-helm-diff.py")
+fresh = importlib.util.module_from_spec(importlib.util.spec_from_loader("hd2", loader2))
+loader2.exec_module(fresh)
+fresh.mo.REPOS = {"infra": infra, "platform": infra}
+fresh.mo.CAPABILITIES[:] = CAPS
+both = fresh.renders(helm, {"infra": "main", "platform": "main"}, os.path.join(up, "work2"))
+fails += not check_("renders: the upstream applications among them", sorted(both) == ["oci", "up"], sorted(both))
+labels = [hd.where("k", {"k": 1}, {}, "3.19", "4.2"), hd.where("k", {}, {"k": 1}, "3.19", "4.2")]
+fails += not check_("which Helm renders it: only the old one, only the new one", labels == ["only 3.19", "only 4.2"],
+                    labels)
 print("argo-helm-diff: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
