@@ -12,32 +12,39 @@
 # Usage: scripts/upgrade-build-with-pin.sh   (test:upgrade:full)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
-# every line stamped with its time, as the steps' are: where the build's minutes go stays measurable
-exec > >(python3 -u -c 'import sys, time
+# every line stamped with its time, as the steps' are: where the build's minutes go stays measurable. A Ctrl-C reaches
+# the stamper too (the terminal's foreground group): it ignores it and ends when its input does - what this script says
+# while it stops reaches the log, and no write of it dies of a closed pipe
+exec > >(trap '' INT; exec python3 -u -c 'import sys, time
 for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
-# the build and the pin each in a process group of their own (job control while they start): stopped whole when this
-# ends early - a failed build, an interrupt, a TERM - the pin's docker calls with it (its own trap removes its
-# containers). The build in the background too, waited for: a trap waits for a foreground command to end (an hour's
-# build), `wait` returns at once. Neither reads the caller's input (a background job at a terminal would stop on it).
-set -m
-tests/clickhouse-pin/run.sh > .upgrade/clickhouse-pin.log 2>&1 < /dev/null &
-pin=$!
-task test:upgrade:build < /dev/null &
-build_job=$!
-set +m
+build_job="" pin="" signalled=""
 stop() {
   local j own
-  # a group signalled only while it is still this script's job: never one it did not start
+  # a session signalled only while it is still this script's job: never one it did not start
   own=" $(jobs -p | tr '\n' ' ') "
   for j in "$build_job" "$pin"; do
-    [[ $own == *" $j "* ]] && kill -TERM -- "-$j" 2> /dev/null
+    [ -n "$j" ] && [[ $own == *" $j "* ]] && kill -TERM -- "-$j" 2> /dev/null
   done
   # these two only: a bare wait waits for the time-stamping process too, which waits for this script's end
-  wait "$build_job" "$pin" 2> /dev/null
+  for j in "$build_job" "$pin"; do
+    [ -z "$j" ] || wait "$j" 2> /dev/null
+  done
+  [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
 }
+# the traps before the jobs: a signal between a job's start and its trap left the job running
 trap stop EXIT
-trap 'exit 130' INT TERM
+trap 'signalled=1; exit 130' INT TERM
+# the build and the pin each in a session of its own (setsid: no job control here, so neither leads a process group
+# and setsid runs it in place - its PID is $!, its session's and group's): stopped whole when this ends early - a
+# failed build, an interrupt, a TERM - the pin's docker calls with it (its own trap removes its containers). With no
+# terminal, neither can stop on reading one (an ssh asking for a host key would, and the wait with it): it fails. The
+# build in the background too, waited for: a trap waits for a foreground command to end (an hour's build), `wait`
+# returns at once.
+setsid tests/clickhouse-pin/run.sh > .upgrade/clickhouse-pin.log 2>&1 < /dev/null &
+pin=$!
+setsid task test:upgrade:build < /dev/null &
+build_job=$!
 build=0
 wait "$build_job" || build=$?
 [ "$build" = 0 ] || { echo "THE BUILD FAILED (exit $build) - the ClickHouse pin stopped"; exit "$build"; }
