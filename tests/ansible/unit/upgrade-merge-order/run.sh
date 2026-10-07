@@ -126,6 +126,14 @@ caps = real.capabilities("34-argocd-3.5")
 fails += not check_("step 34's capabilities: Kubernetes 1.34.12 (after 13), production's API list",
                     caps[:2] == ["--kube-version", "1.34.12"] and "monitoring.coreos.com/v1" in caps[3].split(","))
 fails += not check_("step 43's: 1.36.5", real.capabilities("43-kubernetes-1.36")[:2] == ["--kube-version", "1.36.5"])
+# Argo CD passes group/version/Kind too: a chart gated on "monitoring.coreos.com/v1/ServiceMonitor" rendered nothing
+# under either Helm, and the comparison passed without the object
+apis = caps[3].split(",")
+fails += not check_("the API list holds group/version/Kind as Argo passes it (a ServiceMonitor's)",
+                    "monitoring.coreos.com/v1/ServiceMonitor" in apis and "v1/ConfigMap" in apis)
+versions = [a for a in apis if a == "v1" or (a.count("/") == 1 and not a.startswith("v1/"))]  # v1/<Kind>: core kinds
+fails += not check_("every group/version in it with its kinds", len(versions) > 50 and all(
+    any(k.startswith(gv + "/") and k.count("/") == gv.count("/") + 1 for k in apis) for gv in versions))
 print("upgrade-merge-order: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 raise SystemExit(1 if fails else 0)
 PY
