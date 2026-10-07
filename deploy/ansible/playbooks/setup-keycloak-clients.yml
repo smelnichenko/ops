@@ -74,6 +74,7 @@
       no_log: true
 
     - name: Look up each app realm role
+      no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/{{ item.name }}"
         headers:
@@ -85,6 +86,7 @@
       register: _role_lookup
 
     - name: Create the missing app realm roles
+      no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
         method: POST
@@ -100,6 +102,7 @@
       changed_when: true
 
     - name: Read the realm roles
+      no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
         headers:
@@ -112,6 +115,7 @@
         fail_msg: "realm roles missing after creation: {{ realm_roles | map(attribute='name') | difference(kc_roles.json | map(attribute='name')) }}"
 
     - name: Read the Admins composite
+      no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/Admins/composites"
         headers:
@@ -119,6 +123,7 @@
       register: _admins_composite
 
     - name: Add the app roles the Admins composite lacks
+      no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/Admins/composites"
         method: POST

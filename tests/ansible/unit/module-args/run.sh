@@ -12,17 +12,13 @@ PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" -c 'import ansible, yaml' || { echo "module-args: no python3 with ansible and yaml"; exit 2; }
 "$PY" - <<'PY'
-import glob, sys
+import sys
 import yaml
 from ansible.plugins.loader import fragment_loader, init_plugin_loader, module_loader
 from ansible.utils.plugin_docs import get_docstring
 init_plugin_loader()
-KEYWORDS = {"name", "when", "register", "tags", "vars", "args", "loop", "loop_control", "become", "become_user",
-            "become_method", "become_flags", "become_exe", "block", "rescue", "always", "notify", "listen",
-            "environment", "delegate_to", "delegate_facts", "run_once", "changed_when", "failed_when", "retries",
-            "delay", "until", "check_mode", "diff", "no_log", "ignore_errors", "ignore_unreachable", "throttle",
-            "timeout", "async", "poll", "any_errors_fatal", "remote_user", "port", "connection", "module_defaults",
-            "debugger", "collections", "local_action"}
+sys.path.insert(0, "tests/ansible/unit")
+from plays import actions, files, load, tasks  # noqa: E402
 ANY_KEY = {"ansible.builtin.set_fact", "set_fact", "ansible.builtin.add_host", "add_host"}
 cache, collections = {}, {}
 
@@ -42,25 +38,13 @@ def options(module):
     return cache[module]
 
 
-def tasks(node, top=True):
-    """The tasks of a playbook (its plays' task lists) or of a task file (a list of tasks) - not a play, an inventory or
-    a vars file."""
-    if isinstance(node, list):
-        for x in node:
-            if top and isinstance(x, dict) and ("hosts" in x or "import_playbook" in x):
-                for k in ("tasks", "pre_tasks", "post_tasks", "handlers"):
-                    yield from tasks(x.get(k), False)
-            elif isinstance(x, dict):
-                yield x
-                for k in ("block", "rescue", "always"):
-                    yield from tasks(x.get(k), False)
-
-
 def unsupported(task):
     """[(module, [keys its module does not document])] - modules this Ansible can load."""
     out = []
-    for m in [k for k in task if k not in KEYWORDS and not str(k).startswith("with_") and k not in ANY_KEY]:
-        args = dict(task[m]) if isinstance(task[m], dict) else {}
+    for m, value in actions(task):
+        if m in ANY_KEY:
+            continue
+        args = dict(value) if isinstance(value, dict) else {}
         if isinstance(task.get("args"), dict):
             args.update(task["args"])
         opts = options(m)
@@ -86,14 +70,8 @@ check("apt with download_only: named", unsupported({"ansible.builtin.apt": {"nam
 check("apt with an alias (pkg) and update_cache: fine",
       unsupported({"ansible.builtin.apt": {"pkg": "x", "update_cache": True}}), [])
 seen, bad = 0, []
-for f in sorted(glob.glob("deploy/ansible/**/*.yml", recursive=True) + glob.glob("tests/ansible/**/*.yml", recursive=True)):
-    if "/venv/" in f:
-        continue
-    try:
-        doc = yaml.safe_load(open(f))
-    except yaml.YAMLError:
-        continue  # not YAML Ansible reads (a template)
-    for t in tasks(doc):
+for f in files():
+    for t in tasks(load(f)):
         if "block" in t:
             continue
         seen += 1

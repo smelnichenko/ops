@@ -155,6 +155,7 @@
       when: existing_infra_token is not none
 
     - name: Create Forgejo PAT for Woodpecker infra repo push
+      no_log: true  # its result is a token
       ansible.builtin.uri:
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
         method: POST
@@ -177,6 +178,7 @@
       no_log: true
 
     - name: Fetch SonarQube token from schnappy namespace secret
+      no_log: true  # its result is a token
       kubernetes.core.k8s_info:
         kubeconfig: /etc/kubernetes/admin.conf
         kind: Secret

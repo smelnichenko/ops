@@ -3,6 +3,7 @@
 # Expects: client_config.client_id, client_config.roles, kc_token, keycloak_url, realm
 
 - name: "Get client UUID for {{ client_config.client_id }}"
+  no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/clients?clientId={{ client_config.client_id }}"
     headers:
@@ -10,6 +11,7 @@
   register: kc_client
 
 - name: "Get service account user for {{ client_config.client_id }}"
+  no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/clients/{{ kc_client.json[0].id }}/service-account-user"
     headers:
@@ -17,6 +19,7 @@
   register: kc_sa_user
 
 - name: "Get realm roles"
+  no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
     headers:
@@ -29,6 +32,7 @@
     fail_msg: "not realm roles (would have been silently dropped): {{ client_config.roles | difference(kc_roles.json | map(attribute='name')) }}"
 
 - name: "Assign roles to service account"  # {{ client_config.client_id }}
+  no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
     method: POST
@@ -41,6 +45,7 @@
   changed_when: true
 
 - name: "Read the service account's realm role mappings"
+  no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
     headers:

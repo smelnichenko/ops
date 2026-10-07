@@ -7,12 +7,15 @@
 # form, cmd: or argv:) or in environment:. Excepted, each for its reason below.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
-python3 - <<'PY'
-import glob, re, sys
-import yaml
+PY=python3
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" - <<'PY'
+import re, sys
+from ansible.parsing.mod_args import FREEFORM_ACTIONS
+sys.path.insert(0, "tests/ansible/unit")
+from plays import actions, files, load, plays, tasks  # noqa: E402
 SECRET = re.compile(r"\{\{[^}]*\b\w*(password|passwd|secret|token|api_key|apikey)\w*\b[^}]*\}\}", re.I)
 NOT_A_SECRET = re.compile(r"_(dir|file|path|name|ttl|policy|role)\b", re.I)  # where a secret is, not the secret
-MODULE = re.compile(r"^(?:ansible\.(?:builtin|legacy)\.)?(shell|command)$")
 # (file, task name): why it cannot go another way
 ALLOWED = {
     ("deploy/ansible/playbooks/setup-pi-services.yml",
@@ -25,16 +28,6 @@ ALLOWED = {
 }
 
 
-def tasks(node):
-    if isinstance(node, list):
-        for x in node:
-            yield from tasks(x)
-    elif isinstance(node, dict):
-        yield node
-        for k in ("tasks", "pre_tasks", "post_tasks", "handlers", "block", "rescue", "always"):
-            yield from tasks(node.get(k))
-
-
 def secrets(text):
     return [m.group(0) for m in SECRET.finditer(str(text or "")) if not NOT_A_SECRET.search(m.group(0))]
 
@@ -42,14 +35,19 @@ def secrets(text):
 def named(task):
     """The templated secrets a task puts on a command line: its script's and its environment's."""
     out = []
-    for k, v in task.items():
-        if MODULE.match(str(k)):
+    for k, v in actions(task):
+        if k in FREEFORM_ACTIONS:
             script = v if isinstance(v, str) else " ".join([str(v.get("cmd") or "")] + [str(a) for a in v.get("argv") or []]) \
                 if isinstance(v, dict) else ""
             out += [f"script {s}" for s in secrets(script)]
     if isinstance(task.get("environment"), dict):
         out += [f"environment {k}={s}" for k, v in task["environment"].items() for s in secrets(v)]
     return out
+
+
+def judged(doc):
+    """What can put a secret on a command line: each play (its environment reaches every task of it) and each task."""
+    return plays(doc) + list(tasks(doc))
 
 
 fails = 0
@@ -63,17 +61,14 @@ check("a password templated into a script: named",
       bool(named({"ansible.builtin.shell": "curl -u admin:{{ admin_password }} x"})), True)
 check("one in a task's environment: named", bool(named({"ansible.builtin.shell": "x", "environment":
                                                          {"P": "{{ db_password }}"}})), True)
+check("one in a play's environment: named", [n for t in judged([{"hosts": "all", "environment": {"T": "{{ vault_token }}"},
+                                                                 "tasks": [{"ansible.builtin.shell": "x"}]}])
+                                            for n in named(t)], ["environment T={{ vault_token }}"])
 check("one on stdin, a path to one: not named",
       named({"ansible.builtin.shell": {"cmd": "cat {{ secret_dir }}/x", "stdin": "{{ db_password }}"}}), [])
 bad, used = [], set()
-for f in sorted(glob.glob("deploy/ansible/**/*.yml", recursive=True)):
-    if "/venv/" in f:
-        continue
-    try:
-        doc = yaml.safe_load(open(f))
-    except yaml.YAMLError:
-        continue
-    for t in tasks(doc):
+for f in files("deploy/ansible"):
+    for t in judged(load(f)):
         for n in named(t):
             if (f, t.get("name")) in ALLOWED:
                 used.add((f, t.get("name")))
