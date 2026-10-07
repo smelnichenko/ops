@@ -64,6 +64,14 @@ check("node-config: 0s patched to 180s / 30s",
       patch("a: 1\nshutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\n"),
       "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
 check("node-config: missing added", patch("a: 1\n"), "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
+# the patch applied only when there is one: an empty one (the ConfigMap right already) went to `kubectl patch -p ''`
+import jinja2
+apply = next(x for x in t if x.get("name", "").startswith("Keep the shutdown grace across kubeadm upgrades"))
+jenv = jinja2.Environment()
+jenv.filters["bool"] = lambda v: str(v).lower() in ("true", "yes", "1")
+applies = lambda out: bool(jenv.compile_expression(apply["when"])(_kubelet_config_patch={"stdout": out}))
+check("node-config: the ConfigMap right already - nothing applied", applies(""), False)
+check("node-config: a patch - applied", applies('{"data": {"kubelet": "x"}}'), True)
 print("kubelet-grace: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
