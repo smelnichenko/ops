@@ -103,4 +103,20 @@ rewrite w10/buckets/b1/o0; rewrite w10/buckets/b1/o1
 tar "${X[@]}" -C w10 -czf w10.tgz .
 python3 "$M" manifest w10/buckets > w10-after.json
 expect fail "a fifth of the objects written while tar ran" "only 8 of 10 objects unchanged" python3 "$M" verify-tar w10.tgz w10-before.json w10-after.json x.json
+# what the restore is judged against: only the objects unchanged while tar ran (o0 rewritten is not among them)
+expect pass "the restore's list leaves out an object written while tar ran" "19 0" python3 -c '
+import json; o = json.load(open("w20-out.json"))["objects"]; print(len(o), int("b1/o0" in o))'
+# an upload in flight (no ETag yet) in the list before the archive only: nothing wrong
+python3 -c 'import json; m = json.load(open("before.json")); m["noetag"] = ["b1/k/new"]; json.dump(m, open("inflight.json", "w"))'
+expect pass "an upload in flight before the archive only" "4 objects in 2 buckets" python3 "$M" verify-tar good.tgz inflight.json after.json x.json
+# a bucket made while tar ran (in the list after it only) is not wanted in the archive
+python3 -c 'import json; m = json.load(open("after.json")); m["buckets"].append("b3"); json.dump(m, open("after-b3.json", "w"))'
+expect pass "a bucket made while tar ran" "4 objects in 2 buckets" python3 "$M" verify-tar good.tgz before.json after-b3.json x.json
+# a restored multipart object (its content not checked) whose ETag changed
+mkdir r4; tar "${X[@]}" -C r4 -xzf good.tgz
+python3 -c 'import os; os.setxattr("r4/buckets/b2/multi", "user.etag", b"\"zzz-2\"")'
+expect fail "a restored object's ETag changed" "b2/multi: ETag zzz-2" python3 "$M" verify-tree r4/buckets out.json
+# a store with no bucket at all gives no manifest
+mkdir -p none/buckets
+expect fail "a store with no bucket" "no bucket" python3 "$M" manifest none/buckets
 [ "$fails" = 0 ] && echo "objectstore-manifest: ALL-PASS" || { echo "objectstore-manifest: $fails failed"; exit 1; }
