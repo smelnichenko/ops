@@ -31,7 +31,7 @@ W = os.environ["W"]
 play = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-containerd.yml"))[0]
 tasks = play["tasks"]
 names = [t.get("name", "") for t in tasks]
-start = names.index("Keep the live config (the first run's - never overwritten by a re-run)")
+start = next(i for i, n in enumerate(names) if n.startswith("Download containerd.io"))
 end = names.index("Failed - the runtime runs on the kept config")
 takeup = next(t for t in tasks if t.get("name", "").startswith("The swap done, the kubelet stopped"))
 KEEP = ("name", "when", "register", "changed_when", "failed_when", "vars", "args", "loop", "loop_control")
@@ -48,7 +48,12 @@ def stub(t, fail):
         return {"name": t["name"], "ansible.builtin.fail": {"msg": "injected"}}
     svc = t.get("ansible.builtin.systemd_service", {})
     if svc.get("name") == "kubelet" and "state" in svc:
-        return {"name": t["name"], "ansible.builtin.copy": {"content": svc["state"], "dest": "{{ kubelet_state }}"}}
+        return {"name": t["name"], "ansible.builtin.shell": f"echo -n {svc['state']} > {{{{ kubelet_state }}}}; "
+                                                          f"echo kubelet {svc['state']} >> {{{{ events }}}}"}
+    apt = t.get("ansible.builtin.apt", {})
+    if "containerd.io" in str(apt.get("name", "")):
+        return {**keep, "ansible.builtin.shell": "echo apt " + ("download" if apt.get("download_only") else "install")
+                + " >> {{ events }}"}
     if t.get("ansible.builtin.include_tasks") == "tasks/containerd-known-containers.yml":
         return {**keep, "ansible.builtin.include_tasks": INC}
     body = str({k: v for k, v in t.items() if k.startswith("ansible.builtin.")})
@@ -63,6 +68,7 @@ def stub(t, fail):
 
 
 VARS = {"crictl": os.path.join(W, "crictl"), "before_file": os.path.join(W, "list"),
+        "events": os.path.join(W, "events"),
         "kubelet_state": os.path.join(W, "kubelet"), "_package": {"stdout": "2.3.6-1"}, "_runtime_line": "1.7.24",
         "_swapped": True, "_kubelet_now": {"status": {"ActiveState": "inactive"}}}
 for name, part, fail in (("swap", tasks[start:end + 1], None),
@@ -87,9 +93,15 @@ expect() {  # expect <name> <rc 0|1> <state> <output must contain>
   echo "FAIL $1 (rc $rc, $(state); want rc $2, $3, '$4')"; grep -E "ERROR|fatal|msg" <<< "$out" | tail -3
   fails=$((fails + 1))
 }
-fresh() { rm -f "$W/list" "$W/kubelet"; }
+fresh() { rm -f "$W/list" "$W/kubelet" "$W/events"; }
 fresh; run swap RUNNING="aaa bbb" EXITED=""
 expect "the swap done: the kubelet started, the list gone" 0 "kubelet=started list=gone" "PLAY RECAP"
+# the package fetched while the kubelet still runs, installed only once it is stopped (a download on the network with
+# the kubelet down left the node NotReady, its Services without endpoints)
+got=$(paste -sd';' "$W/events")
+if [ "$got" = "apt download;kubelet stopped;apt install;kubelet started" ]; then
+  echo "PASS the package downloaded with the kubelet running, installed with it stopped"
+else echo "FAIL the order of the swap: $got"; fails=$((fails + 1)); fi
 fresh; run install-fails RUNNING="aaa bbb" EXITED=""
 expect "the install failed, recovered: the kubelet started, the list gone" 1 "kubelet=started list=gone" \
   "Failed before the restart - the kubelet is back"
