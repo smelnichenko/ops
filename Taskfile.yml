@@ -665,21 +665,8 @@ tasks:
       # every step preview (check mode) reads no result check mode skips - step 37's crashed three hours in once
       - cmd: scripts/check-mode-lint.py
       - cmd: scripts/argo-helm-diff.py --all
-      # the build, and beside it (no wall time) the ClickHouse rollback pin of steps 59 and 61 with the real images, in
-      # docker here: a failed pin stops the run when the build ends, not hours later at 59, whose proof (and 61's) wants
-      # its passing result for the commits and images they run
-      - cmd: |
-          set -uo pipefail
-          rm -f .upgrade/clickhouse-pin.json
-          tests/clickhouse-pin/run.sh > .upgrade/clickhouse-pin.log 2>&1 &
-          pin=$!
-          trap 'kill "$pin" 2> /dev/null' EXIT
-          task test:upgrade:build; build=$?
-          wait "$pin"; pinned=$?
-          trap - EXIT
-          [ "$build" = 0 ] || exit "$build"
-          [ "$pinned" = 0 ] || { echo "THE CLICKHOUSE PIN FAILED (.upgrade/clickhouse-pin.log):"; tail -20 .upgrade/clickhouse-pin.log; exit 1; }
-          echo "CLICKHOUSE PIN: $(tail -1 .upgrade/clickhouse-pin.log)"
+      # the build, and beside it (no wall time) the ClickHouse rollback pin of steps 59 and 61 with the real images
+      - cmd: scripts/upgrade-build-with-pin.sh
       # an empty step list is a failure, not a green run (the loop just did nothing)
       - cmd: |
           set -euo pipefail

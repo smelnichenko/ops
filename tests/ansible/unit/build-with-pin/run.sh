@@ -1,0 +1,62 @@
+#!/bin/bash
+# scripts/upgrade-build-with-pin.sh in a copy of its tree, `task` and the pin stubbed: the full run's build and, beside
+# it, the ClickHouse pin - both passing pass; a failed pin fails the run when the build ends, saying so; a failed build
+# fails at once and stops the pin still running (its own process group), rather than waiting for it or leaving it
+# behind; a TERM to the script stops the pin too. (Inline in the Taskfile it ran in go-task's own shell: `$!` no PID,
+# `kill` a no-op, errexit always on - the pin orphaned, its failure unprinted.) test:upgrade:full runs it.
+set -u
+ROOT=$(cd "$(dirname "$0")/../../../.." && pwd)
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/scripts" "$T/tests/clickhouse-pin" "$T/bin" "$T/.upgrade"
+cp "$ROOT/scripts/upgrade-build-with-pin.sh" "$T/scripts/" 2> /dev/null \
+  || { echo "FAIL scripts/upgrade-build-with-pin.sh missing"; echo "build-with-pin: 1 FAILED"; exit 1; }
+# task test:upgrade:build: BUILD (its exit), after BUILD_SECONDS
+printf '#!/bin/bash\nsleep "${BUILD_SECONDS:-0}"; echo build; echo > .upgrade/build.finished; exit "${BUILD:-0}"\n' \
+  > "$T/bin/task"
+# the pin: PIN (its exit) after PIN_SECONDS, its PID first, "finished" when it ran its course
+cat > "$T/tests/clickhouse-pin/run.sh" <<'STUB'
+#!/bin/bash
+echo $$ > .upgrade/pin.pid
+sleep "${PIN_SECONDS:-0}"
+echo "pin result line"; echo finished > .upgrade/pin.finished
+exit "${PIN:-0}"
+STUB
+chmod +x "$T/bin/task" "$T/tests/clickhouse-pin/run.sh"
+fails=0
+run() {  # run <env...>: the script's output in $out, its exit in $rc, its seconds in $took
+  rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+  local t0=$SECONDS
+  out=$(cd "$T" && env "$@" PATH="$T/bin:$PATH" bash scripts/upgrade-build-with-pin.sh < /dev/null 2>&1); rc=$?
+  took=$((SECONDS - t0))
+}
+check() {  # check <name> <got> <want>
+  if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
+  echo "FAIL $1: got '$2', want '$3'"; sed 's/^/    /' <<< "$out"; fails=$((fails + 1))
+}
+pin_end() { [ -e "$T/.upgrade/pin.finished" ] && echo finished || echo stopped; }
+run
+check "build and pin pass: passed, the pin's result line shown" \
+  "$rc $(grep -c '^CLICKHOUSE PIN: pin result line' <<< "$out")" "0 1"
+run PIN=1
+check "the pin failed: the run fails when the build ends, saying so" \
+  "$rc $(grep -c 'THE CLICKHOUSE PIN FAILED' <<< "$out")" "1 1"
+run BUILD=2 PIN_SECONDS=30
+check "the build failed: its exit at once, the pin still running stopped" "$rc $(pin_end) $((took < 10))" "2 stopped 1"
+# the script stopped as an interrupted full run stops it: it is this test's own child, checked so before the signal
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+t0=$SECONDS
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" bash scripts/upgrade-build-with-pin.sh \
+  < /dev/null > "$T/term.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
+[ "$(ps -o ppid= -p "$sp" | tr -d ' ')" = "$$" ] && kill -TERM "$sp"
+wait "$sp"
+out=$(cat "$T/term.out")
+check "a TERM to the script, mid-build: it ends at once, the build and the pin stopped" \
+  "$(pin_end) $([ -e "$T/.upgrade/build.finished" ] && echo finished || echo stopped) $((SECONDS - t0 < 10))" \
+  "stopped stopped 1"
+check "test:upgrade:full runs it (not the block inline)" \
+  "$(grep -c '^      - cmd: scripts/upgrade-build-with-pin.sh$' "$ROOT/Taskfile.yml")" 1
+echo "build-with-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
+[ $fails = 0 ]
