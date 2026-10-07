@@ -227,6 +227,7 @@
         enabled: true
         state: started
         daemon_reload: true
+      register: _consul_start
 
     - name: Wait for Consul to be ready
       ansible.builtin.shell: |
@@ -247,6 +248,8 @@
       vars:
         loaded_service: consul
         loaded_files: [/etc/consul.d/consul.hcl, /etc/systemd/system/consul.service]
+        # its status as the start found it: not running, it started on these files just now
+        loaded_started_now: "{{ _consul_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
 
     - name: Kept for the restart play
       ansible.builtin.set_fact:

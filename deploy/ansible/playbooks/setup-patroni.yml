@@ -275,6 +275,7 @@
         enabled: true
         state: started
         daemon_reload: true
+      register: _patroni_start
 
     - name: Wait for Patroni to be ready
       ansible.builtin.uri:
@@ -309,6 +310,8 @@
       vars:
         loaded_service: patroni
         loaded_files: [/etc/systemd/system/patroni.service]
+        # its status as the start found it: not running, it started on this unit just now
+        loaded_started_now: "{{ _patroni_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
 
     # on every node, a first install too: the record below reads it before its first-install term
     - name: Its answer

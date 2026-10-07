@@ -1,13 +1,15 @@
 #!/bin/bash
 # tasks/restart-pending.yml's shell as the playbooks hold it (the stamp directory moved, systemctl a stub for the start
-# time): with a stamp, the content decides - equal is current, different is pending, a file written with the clock
-# ahead (mtime in the future) is current while its content is what was loaded; with no stamp yet, the clock once - a
-# file newer than the start is pending, an older one current. Its second line is the content's sha256.
+# time), rendered by Ansible's templar: with a stamp, the content decides - equal is current, different is pending, a
+# file written with the clock ahead (mtime in the future) is current while its content is what was loaded; with no
+# stamp yet, the clock once - a file newer than the start is pending, an older one current; a service this run started
+# from inactive runs the files as they are - current, a stale stamp notwithstanding (it restarted a service it had just
+# started). Its second line is the content's sha256.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "restart-pending: no python3 with jinja2 and yaml"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "restart-pending: no python3 with ansible and yaml"; exit 2; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin" "$W/stamps"
@@ -17,20 +19,21 @@ echo "$STARTED"
 STUB
 chmod +x "$W/bin/systemctl"
 W=$W "$PY" - <<'PY'
-import hashlib, os, shlex, subprocess, sys, time
-import jinja2, yaml
+import hashlib, os, subprocess, sys, time
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 task = yaml.safe_load(open("deploy/ansible/playbooks/tasks/restart-pending.yml"))[0]
-env = jinja2.Environment()
-env.filters["quote"] = shlex.quote
 conf, unit = os.path.join(W, "svc.hcl"), os.path.join(W, "svc.service")
 open(conf, "w").write("a = 1\n"); open(unit, "w").write("[Service]\n")
-script = env.from_string(task["ansible.builtin.shell"]["cmd"]).render(
-    loaded_service="svc", loaded_files=[conf, unit]).replace("/var/lib/config-loaded", os.path.join(W, "stamps"))
+def script(**extra):  # the task's shell for the service; extra: the playbook's optional vars
+    return render(task["ansible.builtin.shell"]["cmd"], loaded_service="svc", loaded_files=[conf, unit],
+                  **extra).replace("/var/lib/config-loaded", os.path.join(W, "stamps"))
 sha = lambda: hashlib.sha256(open(conf, "rb").read() + open(unit, "rb").read()).hexdigest()
 stamp = os.path.join(W, "stamps", "svc.sha256")
-def run(started):
-    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+def run(started, **extra):
+    r = subprocess.run(["bash", "-c", script(**extra)], capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], STARTED=started))
     return r.returncode, r.stdout.split()
 fails = 0
@@ -54,6 +57,34 @@ os.utime(conf, (future, future))
 check("a file written with the clock ahead, its content loaded: current", run(long_ago), (0, ["current", sha()]))
 open(conf, "w").write("a = 2\n")
 check("the content changed since it was loaded: pending, even started later", run(later), (0, ["pending", sha()]))
+check("not started by this run (running already), the stamp stale: pending",
+      run(later, loaded_started_now=False), (0, ["pending", sha()]))
+check("started by this run from inactive, the stamp stale: current - it runs these files",
+      run(later, loaded_started_now=True), (0, ["current", sha()]))
+# each playbook's loaded_started_now reads a register of its own service's systemd task (the status as that task found
+# it) - a name that matches none is undefined, its default "running", and the answer by the stamp again
+import glob, re
+def tasks_of(node):
+    if isinstance(node, list):
+        for x in node:
+            yield from tasks_of(x)
+    elif isinstance(node, dict):
+        yield node
+        for k in ("tasks", "pre_tasks", "post_tasks", "handlers", "block", "rescue", "always"):
+            yield from tasks_of(node.get(k))
+users = {}
+for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml")):
+    ts = list(tasks_of(yaml.safe_load(open(f))))
+    for t in ts:
+        v = t.get("vars") or {}
+        if "restart-pending" in str(t.get("ansible.builtin.include_tasks", "")) and "loaded_started_now" in v:
+            reg = re.match(r"\{\{ (\w+)\.status\.ActiveState", v["loaded_started_now"]).group(1)
+            svc = [(t2.get("ansible.builtin.systemd") or t2.get("ansible.builtin.systemd_service") or {}).get("name")
+                   for t2 in ts if t2.get("register") == reg]
+            users[os.path.basename(f)] = (v["loaded_service"], svc)
+check("loaded_started_now in consul, keepalived, patroni, vault: each its own service's systemd register",
+      users, {f"setup-{n}.yml": (s_, [s_]) for n, s_ in (("consul", "consul"), ("keepalived", "keepalived"),
+                                                        ("patroni", "patroni"), ("vault-pi", "vault"))})
 print("restart-pending: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

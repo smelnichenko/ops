@@ -3,8 +3,11 @@
 # (/var/lib/config-loaded/<service>.sha256) that tasks/restart-recorded.yml writes once it runs them. By the clock it
 # was wrong both ways on the Pis, which have no RTC: a boot before the NTP sync, or a clock that was ahead when a file
 # was written, read "pending" on every run (a needless rolling restart, Patroni paused); a write and a restart in one
-# second read "current". A host with no stamp yet (before this check) is read by the clock once.
-# Expects: loaded_service, loaded_files. Registers _restart_pending: stdout_lines [current|pending, <sha256 now>].
+# second read "current". A host with no stamp yet (before this check) is read by the clock once. A service this run
+# started from inactive (loaded_started_now) runs the files as they are now: current - its stale stamp restarted it
+# needlessly (Vault sealed, Patroni paused, the VIP moved).
+# Expects: loaded_service, loaded_files; optional loaded_started_now (the start task's state before it was not running).
+# Registers _restart_pending: stdout_lines [current|pending, <sha256 now>].
 # Tested: tests/ansible/unit/restart-pending.
 - name: "A restart pending - the config now against the one loaded: {{ loaded_service }}"
   ansible.builtin.shell:
@@ -13,7 +16,9 @@
       set -euo pipefail
       now=$(cat {{ loaded_files | map('quote') | join(' ') }} | sha256sum | cut -d' ' -f1)
       stamp=/var/lib/config-loaded/{{ loaded_service }}.sha256
-      if [ -f "$stamp" ]; then
+      if {{ 'true' if loaded_started_now | default(false) | bool else 'false' }}; then
+        echo current
+      elif [ -f "$stamp" ]; then
         if [ "$(cat "$stamp")" = "$now" ]; then echo current; else echo pending; fi
       else
         started=$(date -d "$(systemctl show {{ loaded_service }} -p ActiveEnterTimestamp --value)" +%s)

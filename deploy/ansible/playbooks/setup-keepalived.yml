@@ -402,6 +402,7 @@
         enabled: true
         state: started
         daemon_reload: true
+      register: _keepalived_start
 
     # Fire any pending keepalived restart NOW, not at end of play — the
     # converge + verify tasks below must assert the post-restart steady
@@ -533,6 +534,8 @@
       vars:
         loaded_service: keepalived
         loaded_files: [/etc/systemd/system/keepalived.service.d/release-active-services.conf]
+        # its status as the start found it: not running, it started on this drop-in just now
+        loaded_started_now: "{{ _keepalived_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
 
     - name: Kept for the restart play
       ansible.builtin.set_fact:

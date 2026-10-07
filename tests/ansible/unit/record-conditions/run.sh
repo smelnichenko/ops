@@ -2,7 +2,8 @@
 # setup-consul.yml's and setup-vault-pi.yml's record of the config a service runs (tasks/restart-recorded.yml), its
 # condition as the playbook holds it, evaluated by ansible-playbook: found current, or restarted and its check
 # passed - recorded; pending and not restarted here (skipped, the check never reached) or the check failed - never
-# recorded (the next run would read the new config as loaded, and its restart was lost for good).
+# recorded (the next run would read the new config as loaded, and its restart was lost for good). Vault's answer is
+# its own check's, a Vault this run started current.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -34,15 +35,23 @@ for f, name, pend, health, as_list in (
             {"name": "recorded", "ansible.builtin.debug": {"msg": f"RECORDED {f}: {label}"}, "when": task["when"]},
             {"name": "not", "ansible.builtin.debug": {"msg": f"NOT RECORDED {f}: {label}"},
              "when": f"not ({task['when']})"}]})
-# Vault's answer read only when its own check ran (Vault was running): a pending answer setup-consul left in the same
-# run (its register of the same name) is not Vault's
-answer = next(t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
-              for t in p.get("tasks") or [] if t.get("name", "").startswith("Its answer") and "_vault_pending" in str(t))
-for label, active in (("vault inactive, consul's answer left", "inactive"), ("vault active", "active")):
+# Vault's answer: its own check's, whatever its state before - a pending answer setup-consul left in the same run (its
+# register of the same name) never read; a Vault this run started (not running before) current, as it runs these files.
+# The playbook's check and answer tasks as they are, restart-pending.yml a stub answering by loaded_started_now.
+vault_tasks = [t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml")) for t in p.get("tasks") or []
+               if t.get("vars", {}).get("loaded_service") == "vault" and "restart-pending" in str(t)
+               or t.get("name", "").startswith("Its answer") and "_vault_pending" in str(t)]
+assert len(vault_tasks) == 2, [t.get("name") for t in vault_tasks]
+os.makedirs(os.path.join(W, "tasks"))
+yaml.safe_dump([{"ansible.builtin.set_fact": {"_restart_pending": {"stdout_lines": [
+    "{{ 'current' if loaded_started_now | bool else 'pending' }}", "vault-sha"]}}}],
+    open(os.path.join(W, "tasks", "restart-pending.yml"), "w"))
+for label, active in (("vault inactive, consul's answer left", "inactive"), ("vault active", "active"),
+                      ("vault failed", "failed"), ("vault's state unread", None)):
     plays.append({"hosts": f"case{len(plays)}", "gather_facts": False, "name": label, "tasks": [
         {"ansible.builtin.set_fact": {"_restart_pending": {"stdout_lines": ["pending", "consul-sha"]},
-                                      "_vault_before": {"status": {"ActiveState": active}}}},
-        answer,
+                                      "_vault_before": {"status": {"ActiveState": active}} if active else {}}},
+        *vault_tasks,
         {"ansible.builtin.debug": {"msg": "VAULT ANSWER " + label + ": {{ _vault_pending | join('/') }}"}}]})
 yaml.safe_dump(plays, open(os.path.join(W, "play.yml"), "w"), sort_keys=False)
 yaml.safe_dump({"all": {"hosts": {p["hosts"]: {"ansible_connection": "local",
@@ -61,7 +70,8 @@ for f in setup-consul.yml setup-vault-pi.yml; do
     else echo "FAIL $f: $label: want $want"; fails=$((fails + 1)); fi
   done
 done
-for c in "vault inactive, consul's answer left: /" "vault active: pending/consul-sha"; do
+for c in "vault inactive, consul's answer left: current/vault-sha" "vault active: pending/vault-sha" \
+         "vault failed: current/vault-sha" "vault's state unread: pending/vault-sha"; do
   if grep -qF "\"msg\": \"VAULT ANSWER $c\"" <<< "$out"; then echo "PASS Vault's answer, $c"
   else echo "FAIL Vault's answer, want $c"; fails=$((fails + 1)); fi
 done

@@ -423,14 +423,12 @@
       vars:
         loaded_service: vault
         loaded_files: [/etc/vault.d/vault.hcl, /etc/systemd/system/vault.service]
-      when: _vault_before.status.ActiveState | default('') == 'active'
+        # not running before this run: started on these files just now (and recorded below - the next run's stamp)
+        loaded_started_now: "{{ _vault_before.status.ActiveState | default('active') not in ['active', 'activating'] }}"
 
-    # read only when its check ran (Vault running): a register of that name another play of the same run left (setup-
-    # consul's) is not Vault's answer
     - name: Its answer
       ansible.builtin.set_fact:
-        _vault_pending: >-
-          {{ _restart_pending.stdout_lines if _vault_before.status.ActiveState | default('') == 'active' else ['', ''] }}
+        _vault_pending: "{{ _restart_pending.stdout_lines }}"
 
     - name: Restarted, unsealed before the next
       when:
