@@ -54,7 +54,7 @@ fails = 0
 def check(name, got, want):
     global fails
     fails += got != want
-    print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else ":\n  " + "\n  ".join(map(str, got))))
+    print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else ":\n  " + "\n  ".join(map(str, got if isinstance(got, list) else [got]))))
 
 
 check("a password templated into a script: named",

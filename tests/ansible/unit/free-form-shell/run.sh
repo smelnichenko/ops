@@ -58,7 +58,7 @@ fails = 0
 def check(name, got, want):
     global fails
     fails += got != want
-    print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f":\n  " + "\n  ".join(map(str, got))))
+    print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f":\n  " + "\n  ".join(map(str, got if isinstance(got, list) else [got]))))
 
 
 # the parser's behaviour this guards against, on a fixture: a comment's backslash joins the next line into it

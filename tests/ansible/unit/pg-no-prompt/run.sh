@@ -38,7 +38,7 @@ fails = 0
 def check(name, got, want):
     global fails
     fails += got != want
-    detail = "\n  ".join(map(str, got)) if isinstance(got, list) else f"got {got}, want {want}"
+    detail = "\n  ".join(map(str, got if isinstance(got, list) else [got])) if isinstance(got, list) else f"got {got}, want {want}"
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else ":\n  " + detail))
 check(f"every client over TCP never prompts: -w ({seen} calls)", bad, [])
 check("the calls found (the scan reaches them)", seen >= 5, True)
