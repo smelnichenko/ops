@@ -450,8 +450,10 @@ tasks:
       # Before Argo: istiod fetches the realm's keys when it starts
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
-      # the Applications' names recorded: every step's waits want exactly these
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true
+      # the Applications' names recorded: every step's waits want exactly these. The deciding settle's quiet (120 s,
+      # 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up, and each restart began 300 s
+      # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by step 00's restart history
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
       # data of the one-way observability steps (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
