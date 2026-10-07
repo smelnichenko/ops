@@ -136,29 +136,46 @@
         name: consul
       register: _consul_before
 
-    - name: Allow Consul ports through UFW
+    - name: UFW on this node (ten has none)
+      ansible.builtin.stat:
+        path: /usr/sbin/ufw
+      register: _ufw
+
+    # RPC and Serf LAN from the three servers only: the RPC port serves what the HTTP API does - the keyring, KV,
+    # sessions (the backups' lock), snapshots of Vault's storage - and no ACLs guard it. The narrow rules first, then
+    # the open ones removed: Serf never loses its peers in between
+    - name: Consul's RPC and Serf LAN open to the servers only
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ item.0 }}"
+        to_port: "{{ item.1.port }}"
+        proto: "{{ item.1.proto }}"
+        comment: "Consul {{ item.1.name }} from {{ item.0 }}"
+      loop: "{{ [pi1_ip, pi2_ip, ten_ip] | product(_ports) | list }}"
+      vars:
+        _ports:
+          - { port: "8300", proto: "tcp", name: "RPC" }
+          - { port: "8301", proto: "tcp", name: "Serf LAN" }
+          - { port: "8301", proto: "udp", name: "Serf LAN UDP" }
+      when: _ufw.stat.exists
+
+    # the rules that opened RPC and Serf to the whole LAN, the WAN ports (one datacenter - nothing joins over WAN) and
+    # the HTTP API (on the node itself only, client_addr below: Vault, Patroni, HAProxy's resolver and the backups'
+    # lock all call their own agent)
+    - name: Consul's ports no more open to the LAN
       community.general.ufw:
         rule: allow
         port: "{{ item.port }}"
         proto: "{{ item.proto }}"
-        comment: "{{ item.name }}"
-      loop:
-        - { port: "8300", proto: "tcp", name: "Consul RPC" }
-        - { port: "8301", proto: "tcp", name: "Consul Serf LAN" }
-        - { port: "8301", proto: "udp", name: "Consul Serf LAN UDP" }
-        - { port: "8302", proto: "tcp", name: "Consul Serf WAN" }
-        - { port: "8302", proto: "udp", name: "Consul Serf WAN UDP" }
-      failed_when: false  # ten may not have UFW
-
-    # the HTTP API (KV, keyring, locks - no ACLs) on the node itself only (client_addr below): Vault, Patroni, HAProxy's
-    # resolver and the backups' lock all call their own agent; the rule that opened it to the LAN removed
-    - name: Consul's HTTP API no more open to the LAN
-      community.general.ufw:
-        rule: allow
-        port: "8500"
-        proto: tcp
         delete: true
-      failed_when: false  # ten may not have UFW
+      loop:
+        - { port: "8300", proto: "tcp" }
+        - { port: "8301", proto: "tcp" }
+        - { port: "8301", proto: "udp" }
+        - { port: "8302", proto: "tcp" }
+        - { port: "8302", proto: "udp" }
+        - { port: "8500", proto: "tcp" }
+      when: _ufw.stat.exists
 
     - name: Write Consul config
       ansible.builtin.copy:

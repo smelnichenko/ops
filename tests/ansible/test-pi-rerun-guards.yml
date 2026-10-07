@@ -499,6 +499,32 @@
         _consul_http.stdout_lines | select('eq', 'local-answers') | list | length != 1
         or _consul_http.stdout_lines | select('match', '.*-closed$') | list | length != 2
 
+# the RPC port serves the keyring, KV, sessions and snapshots with no ACLs: open between the servers, closed to the
+# rest of the LAN - the controller is no server
+- name: Consul's RPC port - closed to the LAN, open server to server
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
+  vars:
+    probe: >-
+      python3 -c 'import socket, sys;
+      s = socket.socket(); s.settimeout(3);
+      print("open" if s.connect_ex((sys.argv[1], 8300)) == 0 else "closed")'
+  tasks:
+    - name: From the controller (no server) - closed
+      ansible.builtin.command: "{{ probe }} {{ ansible_host }}"
+      delegate_to: localhost
+      become: false
+      register: _rpc_lan
+      changed_when: false
+      failed_when: _rpc_lan.stdout != 'closed'
+
+    - name: From the other Pi (a server) - open
+      ansible.builtin.command: "{{ probe }} {{ hostvars[groups['pis'] | difference([inventory_hostname]) | first].ansible_host }}"
+      register: _rpc_peer
+      changed_when: false
+      failed_when: _rpc_peer.stdout != 'open'
+
 # a run limited to one server (pi2) keeps the key the others run - it found none among the run's hosts and wrote an
 # empty one - and a restart left pending there (the agent's record of its loaded config stale, as after a run cut
 # short between writing and restarting) is done; the servers outside the run are not touched
