@@ -10,9 +10,14 @@ order, imports and static includes followed, as the preview runs it:
   - only the tasks the line's --tags select run (with their blocks' and includes' tags; `always` always, `never` only
     when selected); pre_tasks, tasks, post_tasks and handlers in that order;
   - an end_host reached only in check mode (under `when: ansible_check_mode`) ends the play for the preview;
-  - a shell, command, script or raw task check mode skips still registers rc 0 and an empty stdout (ansible-core
-    2.20): a read of it is named, `| default(...)` or not (default never applies - the empty value flows on); a uri
-    skipped, or a task skipped by its own condition, registers no such field: a read with `| default(...)` is fine;
+  - a shell or command task check mode skips still registers rc 0 and an empty stdout (ansible-core 2.20): a read of
+    it is named, `| default(...)` or not (default never applies - the empty value flows on); a raw, script or uri task
+    skipped (raw: skipped alone; script: skipped, or changed with creates/removes), or a task skipped by its own
+    condition, registers no such field: a read with `| default(...)` is fine; a read by subscript (r['stdout']) is a
+    read;
+  - an import's tasks take its tags, an include's do not (only its apply: tags) - and run only when the include does;
+  - handlers run after each section (pre_tasks, tasks, post_tasks); an import or include the lint cannot follow (not
+    found, its name templated) is named, never skipped unseen;
   - a read in a task that check mode skips itself is fine.
 
 Usage: scripts/check-mode-lint.py                    (every step's playbook lines, and the playbooks a deploy task
@@ -29,7 +34,7 @@ import yaml
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLAYBOOKS = os.path.join(OPS, "deploy", "ansible", "playbooks")
 SKIPPED = {"shell", "command", "script", "raw", "uri"}
-EMPTY = {"shell", "command", "script", "raw"}  # skipped in check mode, their register still holds rc 0, stdout ''
+EMPTY = {"shell", "command"}  # skipped in check mode, their register still holds rc 0, stdout '' (raw, script: none)
 FINE = {"skipped", "changed", "failed", "skip_reason"}  # what a skipped task's register does hold
 MODULE = re.compile(r"^(?:ansible\.builtin\.|ansible\.legacy\.)?([a-z_]+)$")
 # Ansible's task keywords - every other key of a task is its module (or action)
@@ -40,6 +45,8 @@ KEYWORDS = {"name", "when", "register", "tags", "vars", "args", "loop", "loop_co
             "timeout", "async", "poll", "any_errors_fatal", "remote_user", "port", "connection", "module_defaults",
             "collections", "debugger", "local_action"}
 SECTIONS = ("pre_tasks", "tasks", "post_tasks", "handlers")
+# the order a play runs them in: handlers flushed after each of the others
+RUN_ORDER = ("pre_tasks", "handlers", "tasks", "handlers", "post_tasks", "handlers")
 
 
 def whens(task):
@@ -69,23 +76,40 @@ def tags_of(task):
     return set(t if isinstance(t, list) else [t])
 
 
-def flat(tasks, base, conds=(), tags=frozenset(), seen=()):
-    """(task, the conditions above it, its tags with its parents') in run order; imports/includes followed."""
+def selected(tags, select):
+    """Whether a task of these tags runs under --tags `select` (None: every task)."""
+    if select is not None and not (tags & (select | {"always"})):
+        return False
+    return "never" not in tags or bool(select and tags & select - {"never"})
+
+
+def flat(tasks, base, conds=(), tags=frozenset(), seen=(), select=None):
+    """(task, the conditions above it, its tags with its parents') in run order; imports and includes followed - an
+    import's tasks with its tags, an include's with its apply: tags alone, and only when the include itself runs. One
+    not followed (not found, its name templated) yields ({"__not_followed__": ref}, ...)."""
     for t in tasks or []:
         if not isinstance(t, dict):
             continue
         c, tg = list(conds) + whens(t), set(tags) | tags_of(t)
         if "block" in t:
             for part in ("block", "rescue", "always"):
-                yield from flat(t.get(part), base, c, tg, seen)
+                yield from flat(t.get(part), base, c, tg, seen, select)
             continue
         mod = module(t)
         if mod in ("import_tasks", "include_tasks"):
             ref = t[next(k for k in t if k.endswith(mod))]
+            apply = (ref.get("apply") or {}) if isinstance(ref, dict) else {}
             ref = ref.get("file") if isinstance(ref, dict) else ref
+            if mod == "include_tasks":
+                if not selected(tg, select):
+                    continue
+                apply_tags = apply.get("tags", [])
+                tg = set(apply_tags if isinstance(apply_tags, list) else [apply_tags])
             path = os.path.normpath(os.path.join(base, str(ref).replace("{{ playbook_dir }}", base)))
-            if "{{" not in path and os.path.exists(path) and path not in seen:
-                yield from flat(yaml.safe_load(open(path)), os.path.dirname(path), c, tg, seen + (path,))
+            if "{{" in path or not os.path.exists(path):
+                yield {"__not_followed__": ref}, c, tg
+            elif path not in seen:
+                yield from flat(yaml.safe_load(open(path)), os.path.dirname(path), c, tg, seen + (path,), select)
             continue
         yield t, c, tg
 
@@ -98,21 +122,28 @@ def lint(path, select=None, text=None):
         if not isinstance(play, dict) or not any(k in play for k in SECTIONS):
             continue
         skipped = {}  # register -> whether its fields are there, empty (EMPTY's) - else absent
-        for t, conds, tg in (x for k in SECTIONS for x in flat(play.get(k), base, whens(play), tags_of(play))):
-            if select is not None and not (tg & (select | {"always"})):
+        for t, conds, tg in (x for k in RUN_ORDER for x in flat(play.get(k), base, whens(play), tags_of(play),
+                                                                 select=select)):
+            if "__not_followed__" in t:
+                out.append(f"{path}: imports or includes {t['__not_followed__']} - not followed (not found, or its name "
+                           f"templated): what it holds is unread")
                 continue
-            if "never" in tg and not (select and tg & select - {"never"}):
+            if not selected(tg, select):
                 continue
             if module(t) == "meta" and "end_host" in str(t) and check_only(conds):
                 break
             runs = not never_in_check(conds)
             if runs:
                 body = yaml.safe_dump({k: v for k, v in t.items() if k != "register"}, width=10000)
-                for reg, empty in sorted(skipped.items()):
-                    for m in re.finditer(rf"\b{re.escape(reg)}\.([A-Za-z_]+)", body):
+                # its own register aside: a task check mode skips evaluates no until/failed_when on it
+                for reg, empty in sorted((r, e) for r, e in skipped.items() if r != t.get("register")):
+                    # a subscript's quotes as YAML writes them ('' in a single-quoted scalar)
+                    for m in re.finditer(rf"\b{re.escape(reg)}(?:\.([A-Za-z_]+)|\[(?:''|'|\")([A-Za-z_]+)(?:''|'|\")\])",
+                                         body):
+                        field = m.group(1) or m.group(2)
                         defaulted = re.match(r"\s*\|\s*default\b", body[m.end():])
-                        if m.group(1) not in FINE and (empty or not defaulted):
-                            out.append(f"{path}: '{t.get('name')}' reads {reg}.{m.group(1)} - skipped in check mode")
+                        if field not in FINE and (empty or not defaulted):
+                            out.append(f"{path}: '{t.get('name')}' reads {reg}.{field} - skipped in check mode")
                             break
             if "register" in t:
                 if not runs:
@@ -121,7 +152,7 @@ def lint(path, select=None, text=None):
                     skipped[t["register"]] = module(t) in EMPTY
                 else:
                     skipped.pop(t["register"], None)
-    return out
+    return list(dict.fromkeys(out))  # a handler run after each section names a read once
 
 
 def step_lines():

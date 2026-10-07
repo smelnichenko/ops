@@ -84,6 +84,40 @@ check("a reader tagged never, no --tags: not named",
 check("an imported file's probe: named", play("    - ansible.builtin.import_tasks: probe.yml\n" + READ,
                                              extra={"probe.yml": "- name: probe\n  ansible.builtin.shell: cat /x\n"
                                                     "  register: _p\n"}), ["_p.stdout"])
+# a read by subscript is a read: _p['stdout'] as _p.stdout
+check("a read by subscript: named", play(PROBE + READ.replace("_p.stdout", "_p['stdout']")), ["_p.stdout"])
+# raw and script in check mode register no stdout at all (raw: skipped; script: skipped, or changed with creates) -
+# | default applies to them, as to a uri's; read bare, named
+for mod in ("ansible.builtin.raw: cat /x", "ansible.builtin.script: x.sh"):
+    probe = PROBE.replace("ansible.builtin.command: cat /x", mod)
+    check(f"{mod.split(':')[0]}'s read with | default: not named",
+          play(probe + READ.replace("_p.stdout }}", "_p.stdout | default('') }}")), [])
+    check(f"{mod.split(':')[0]}'s read bare: named", play(probe + READ), ["_p.stdout"])
+# a loop keyword (with_items) before the module is no module either
+check("with_items before the module: named", play(PROBE.replace("    - name: probe\n",
+                                                               "    - name: probe\n      with_items: [1]\n") + READ),
+      ["_p.stdout"])
+# a dynamic include's tags are its own, not its tasks': with --tags b and the include tagged b, its untagged tasks do
+# not run (they inherited the tag here, and a read that never runs was named)
+INC = {"inc.yml": "- name: probe\n  ansible.builtin.command: cat /x\n  register: _p\n"
+                  "- name: read\n  ansible.builtin.debug:\n    msg: '{{ _p.stdout }}'\n"}
+check("an include_tasks tagged b, its untagged tasks under --tags b: not run, not named",
+      play("    - ansible.builtin.include_tasks: inc.yml\n      tags: [b]\n", {"b"}, extra=INC), [])
+check("an import_tasks tagged b: its tasks inherit it, named",
+      play("    - ansible.builtin.import_tasks: inc.yml\n      tags: [b]\n", {"b"}, extra=INC), ["_p.stdout"])
+check("an include_tasks with apply tags b: its tasks run, named",
+      play("    - ansible.builtin.include_tasks:\n        file: inc.yml\n        apply: {tags: [b]}\n      tags: [b]\n",
+           {"b"}, extra=INC), ["_p.stdout"])
+# a file the lint cannot follow is named, never skipped unseen
+open(os.path.join(work, "p3.yml"), "w").write("- hosts: x\n  tasks:\n    - ansible.builtin.import_tasks: missing.yml\n")
+got = c.lint(os.path.join(work, "p3.yml"), None)
+check("an import of a file that is not there: named", (len(got), "not followed" in str(got)), (1, True))
+# handlers run after each section (pre_tasks, tasks, post_tasks): one reading a probe of tasks that post_tasks
+# registered again read the skipped one
+FLUSHED = ("- hosts: x\n  tasks:\n" + PROBE.replace("    - name: probe\n", "    - name: probe\n      notify: h\n")
+           + "  post_tasks:\n" + PROBE.replace("register:", "check_mode: false\n      register:")
+           + "  handlers:\n" + READ.replace("    - name: read\n", "    - name: h\n"))
+check("a handler flushed after tasks reads the probe tasks left skipped: named", play_full(FLUSHED), ["_p.stdout"])
 # kept here as it was (git show 59e2640^:...): a shallow clone has no history that far back
 old = open("tests/ansible/unit/check-mode-lint/strimzi-v1-conversion-before-59e2640.yml").read()
 check("step 37's conversion before its fix: named",
