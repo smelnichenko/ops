@@ -150,7 +150,7 @@
           mkdir -p {{ dump_dir }} && chmod 0700 {{ dump_dir }}
           out={{ dump_dir }}/forgejo-$(date -u +%Y%m%dT%H%M%SZ)-{{ _running }}.sql.gz
           # written aside and renamed once checked: a failed dump never counts among the 3 kept
-          pg_dump -h 127.0.0.1 -p 5000 -U postgres forgejo | gzip > "$out.part"
+          pg_dump -w -h 127.0.0.1 -p 5000 -U postgres forgejo | gzip > "$out.part"
           gzip -t "$out.part"
           [ "$(gzip -dc "$out.part" | tail -n 5 | grep -c 'PostgreSQL database dump complete')" = 1 ]
           mv "$out.part" "$out"

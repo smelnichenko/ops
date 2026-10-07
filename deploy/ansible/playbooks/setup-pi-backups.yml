@@ -113,7 +113,7 @@
           consul snapshot save "$work/consul.snap" > /dev/null
           consul snapshot inspect "$work/consul.snap" > /dev/null
           # every Patroni database through HAProxy (the primary), and the roles
-          P=(-h 127.0.0.1 -p 5000 -U postgres)
+          P=(-w -h 127.0.0.1 -p 5000 -U postgres)
           dbs=$(psql "${P[@]}" -d postgres -Atc "select datname from pg_database where not datistemplate and datname <> 'postgres'")
           [ -n "$dbs" ] || { echo "no database to dump"; exit 1; }
           for db in $dbs; do

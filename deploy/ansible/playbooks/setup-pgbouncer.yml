@@ -93,7 +93,7 @@
     - name: Provision auth_user role + lookup function in Patroni (run_once)
       ansible.builtin.shell: |
         set -eo pipefail
-        PGPASSWORD='{{ postgres_admin_password }}' psql -h 127.0.0.1 -p {{ haproxy_port }} -U postgres -d postgres <<'SQL'
+        PGPASSWORD='{{ postgres_admin_password }}' psql -w -h 127.0.0.1 -p {{ haproxy_port }} -U postgres -d postgres <<'SQL'
         DO $do$
         BEGIN
           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer') THEN

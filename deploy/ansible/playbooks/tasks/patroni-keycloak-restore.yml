@@ -55,21 +55,25 @@
           (/var/backups/patroni-first-install/keycloak.sql): drop and recreate the database empty, then run again
         quiet: true
 
+    # the dict form: a free-form script is parsed by Ansible first, and a backslash in a comment joined the next line
+    # into it (the .pgpass never written, psql waiting at a password prompt for good) - and -w: a password psql does
+    # not get fails at once instead
     - name: Restore the waiting Keycloak dump
-      ansible.builtin.shell: |
-        set -euo pipefail
-        f=/var/backups/patroni-first-install/keycloak.sql
-        pass=$(mktemp); trap 'rm -f "$pass"' EXIT
-        read -r pw
-        pw=${pw//\\/\\\\}; pw=${pw//:/\\:}  # a .pgpass field escapes \ and :
-        printf '%s:5432:*:postgres:%s\n' "$PGHOST" "$pw" > "$pass"
-        PGPASSFILE=$pass psql -p 5432 -U postgres -d {{ _restore_db }} -1 -v ON_ERROR_STOP=1 -q -f "$f" > /dev/null
-        echo "restored $(wc -l < "$f") lines into $PGHOST"
-        install -m 0600 "$f" "/var/backups/patroni-first-install/keycloak-restored-$(date -u +%Y%m%dT%H%M%SZ).sql"
-        rm "$f"
-      args:
+      ansible.builtin.shell:
         executable: /bin/bash
         stdin: "{{ pg_password }}"
+        cmd: |
+          set -euo pipefail
+          f=/var/backups/patroni-first-install/keycloak.sql
+          pass=$(mktemp); trap 'rm -f "$pass"' EXIT
+          read -r pw
+          # .pgpass escapes a backslash and a colon in a field
+          pw=${pw//\\/\\\\}; pw=${pw//:/\\:}
+          printf '%s:5432:*:postgres:%s\n' "$PGHOST" "$pw" > "$pass"
+          PGPASSFILE=$pass psql -w -p 5432 -U postgres -d {{ _restore_db }} -1 -v ON_ERROR_STOP=1 -q -f "$f" > /dev/null
+          echo "restored $(wc -l < "$f") lines into $PGHOST"
+          install -m 0600 "$f" "/var/backups/patroni-first-install/keycloak-restored-$(date -u +%Y%m%dT%H%M%SZ).sql"
+          rm "$f"
       environment:
         PGHOST: "{{ hostvars[inventory_hostname].ansible_host }}"
       delegate_to: pi1
