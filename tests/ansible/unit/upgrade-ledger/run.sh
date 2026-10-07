@@ -261,7 +261,7 @@ RUN_ARGS = []  # every command a phase ran (phase_calls), whole
 
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
-                pushed=None, revs=None):
+                pushed=None, revs=None, ten_out="abc1234"):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
                        "ten", "image_pins")
@@ -282,7 +282,8 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
                                                                                 ["app"])
     m.inventory_check = lambda *a: calls.append(("inventory",)) or True
     m.confirm = lambda q: calls.append(("asked",)) or answer
-    m.ten = lambda command, **k: calls.append(("ten", command.split("/")[-1])) or _Done()
+    m.ten = lambda command, **k: calls.append(("ten", command.split("/")[-1])) or type(
+        "R", (), {"returncode": 0, "stdout": ten_out})()
     m.check = lambda *a, **k: True
     m.soak_state = lambda *a: (None, 0)
     m.merged_base = lambda *a: None
@@ -351,8 +352,21 @@ got = phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47}
 check("merge 47 platform (its last): settled, then the base backup, asked first",
       [c for c in got if c[0] in ("ansible", "asked", "record")][-4:], [("record", "settled")] + BB)
 got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"))
-check("merge 47 infra (platform still to come): no base backup",
+check("merge 47 infra, the cluster not on 18 yet: no base backup",
       [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])
+# the backup follows the merge that makes the new major live, not the step's last: 47's infra merge does (its platform
+# merge renders nothing new) - the operator's pause between the merges, or a failed second settle, would leave 18
+# running with no point to recover to
+PG18 = "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye@sha256:" + "9" * 64
+got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"), ten_out=PG18)
+check("merge 47 infra, the cluster running 18 once it settled: the base backup then, asked first",
+      [c for c in got if c[0] in ("ansible", "asked", "record")][-4:], [("record", "settled")] + BB)
+got = phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47} merged infra a",
+                                                      f"{S47} settled infra a", f"{S47} base-backup"), ten_out=PG18)
+check("merge 47 platform, the backup taken at the infra merge: not again",
+      [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])
+check("47's new major, read from its image line", m.postgres_target(S47),
+      "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye")
 got = phase_calls(m.merge, "24-cnpg", "infra", events=ev("24-cnpg apps app"))
 check("merge 24 infra (barman-check, not after the merge): no base backup - done takes it",
       [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])

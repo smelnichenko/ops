@@ -11,8 +11,8 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
              confirmed, the step's public images pulled on ten at each merge (upgrade-prepull.yml), merged and
              pushed
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
-             a barman-after-merge step's last merge (PostgreSQL 18): then, asked first, a base backup on what the
-             merges put live (postgres-base-backup.yml)                                               -> base-backup
+             a barman-after-merge step's merge that makes its new PostgreSQL major live (or its last): then,
+             asked first, a base backup on it (postgres-base-backup.yml)                              -> base-backup
   preview    the step's playbook lines in check mode, with diffs, on the cluster the merges left        -> previewed
   playbooks  the step's playbook lines against production                                               -> playbooks
   defaults   the step's default lines (scripts/upgrade-defaults.py) committed to ops main and pushed: a playbook
@@ -827,10 +827,13 @@ def merge(step, repo):
     ok, revs, _ = settled(info["settle"], 4, 300, [], apps)
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
-    # a barman-after-merge step (PostgreSQL 18): its base backup as soon as the last merge settled - until one exists
-    # the new major has no point to recover to (PostgreSQL 17's backups do not replay into 18). Declined or failed
-    # here, done's first call takes it.
-    if info["base_backup_after_merge"] and repo == info["branches"][-1]:
+    # a barman-after-merge step (PostgreSQL 18): its base backup as soon as the merge that makes the new major live
+    # settled (47's infra merge; its platform merge renders nothing new) - until one exists the new major has no point
+    # to recover to (PostgreSQL 17's backups do not replay into 18), and the operator's pause between the merges or a
+    # failed second settle would leave it so. At the step's last merge whatever runs; once. Declined or failed here,
+    # done's first call takes it.
+    if info["base_backup_after_merge"] and not any(s == step and e == "base-backup" for _, s, e, _ in events) \
+            and (repo == info["branches"][-1] or cluster_runs(postgres_target(step))):
         if not confirm(f"Step {step}'s merges settled: take PRODUCTION's Postgres base backup now "
                        f"(postgres-base-backup.yml)?"):
             print("no base backup now - deploy:upgrade:done takes it at its first call")
@@ -838,6 +841,22 @@ def merge(step, repo):
             record(step, "base-backup")
         else:
             print("the base backup failed (above) - deploy:upgrade:done takes it again at its first call")
+
+
+def postgres_target(step):
+    """The PostgreSQL image a barman-after-merge step moves production's cluster to (its image line), name:tag."""
+    for line in open(os.path.join(inv.STEPS, step + ".txt")):
+        m = re.fullmatch(r"image \S+ \S+ => image (\S+/postgresql) (\S+)", line.strip())
+        if m:
+            return f"{m[1]}:{m[2]}"
+    sys.exit(f"{step}: barman-after-merge with no PostgreSQL image line - which merge makes it live is unknown")
+
+
+def cluster_runs(image):
+    """Whether production's Postgres cluster runs `image` (name:tag, its digest aside) - CNPG's status."""
+    now = ten("kubectl -n schnappy-production get clusters.postgresql.cnpg.io schnappy-production-postgres "
+              "-o jsonpath={.status.image}").stdout.strip()
+    return now == image or now.startswith(image + "@")
 
 
 def playbooks(step):
