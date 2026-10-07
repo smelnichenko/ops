@@ -1,8 +1,8 @@
 #!/bin/bash
 # upgrade-prepull.yml as the playbook holds it, run by ansible-playbook on localhost (become dropped, the retry delay
-# 0), crictl a stub that logs its arguments: no images refuses; each image pulled through containerd's socket by name
-# (ten has no crictl.yaml - crictl tried its deprecated default endpoints); a registry's passing failure retried, a
-# lasting one fails the pull.
+# 0), crictl a stub that logs its arguments: no images refuses, nor does anything that is no image reference (a flag,
+# two words); each image pulled through containerd's socket by name (ten has no crictl.yaml - crictl tried its
+# deprecated default endpoints); a registry's passing failure retried, a lasting one fails the pull.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -45,11 +45,15 @@ case_() {  # case_ <name> <want rc 0|1> <want calls, ; between> <ansible-playboo
 }
 E="--runtime-endpoint unix:///run/containerd/containerd.sock --image-endpoint unix:///run/containerd/containerd.sock"
 case_ "no images: refused, nothing pulled" 1 "" -e images=
-case_ "each image pulled through containerd's socket" 0 "$E pull docker.io/a/b:1;$E pull ghcr.io/c/d:2@sha256:ff" \
-  -e images=docker.io/a/b:1,ghcr.io/c/d:2@sha256:ff
+D=sha256:$(printf 'f%.0s' {1..64})
+case_ "each image pulled through containerd's socket" 0 "$E pull docker.io/a/b:1;$E pull ghcr.io/c/d:2@$D" \
+  -e images=docker.io/a/b:1,ghcr.io/c/d:2@$D
 FAILS=1 case_ "a pull failing once: retried, pulled" 0 "$E pull docker.io/a/b:1;$E pull docker.io/a/b:1" \
   -e images=docker.io/a/b:1
 FAILS=9 case_ "a pull failing every time: the run fails" 1 "$E pull x:1;$E pull x:1;$E pull x:1;$E pull x:1" \
   -e images=x:1
+# a value that is no image reference - a crictl flag, two words - refused before any pull
+case_ "a flag for an image: refused, nothing pulled" 1 "" -e images=--debug
+case_ "two words for an image: refused, nothing pulled" 1 "" -e '{"images": "a/b:1 --insecure"}'
 echo "prepull: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

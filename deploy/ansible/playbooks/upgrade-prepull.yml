@@ -10,18 +10,23 @@
   become: true
   gather_facts: false
   tasks:
-    - name: The images to pull
+    # each an image reference, nothing else: the list comes in on the command line, and a flag or a second word would
+    # reach crictl as one of its own
+    - name: The images to pull, each an image reference
       ansible.builtin.assert:
-        that: images | default('') | length > 0
-        fail_msg: "-e images=<name:tag>,..."
+        that:
+          - images | default('') | length > 0
+          - images.split(',') | select | reject('match', '^[a-z0-9][a-z0-9._/:-]*(@sha256:[0-9a-f]{64})?$') | list
+            | length == 0
+        fail_msg: "-e images=<name:tag[@sha256:digest]>,... - got {{ images | default('') }}"
         quiet: true
 
     # through containerd's socket by name (ten has no /etc/crictl.yaml: crictl would try its deprecated default
     # endpoints in turn), a registry's passing failure retried
     - name: Each image pulled (containerd's k8s.io namespace, where the kubelet looks)
-      ansible.builtin.command: >-
-        crictl --runtime-endpoint unix:///run/containerd/containerd.sock
-        --image-endpoint unix:///run/containerd/containerd.sock pull {{ item }}
+      ansible.builtin.command:
+        argv: [crictl, --runtime-endpoint, "unix:///run/containerd/containerd.sock", --image-endpoint,
+               "unix:///run/containerd/containerd.sock", pull, "{{ item }}"]
       loop: "{{ images.split(',') | select | list }}"
       register: _pulled
       retries: 3
