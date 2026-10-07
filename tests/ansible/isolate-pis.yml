@@ -26,11 +26,11 @@
       ansible.builtin.import_tasks: vagrant-only.yml
 
     # read once, from a public resolver (the LAN's resolves pmon.dev to production's LAN address): every A record,
-    # each a public address off the LAN - else refused (public-addresses.py): an empty lookup dropped nothing, a
+    # each a public address - else refused (public-addresses.py): an empty lookup dropped nothing, a
     # DNS-intercepting router's LAN answer made the proof probe an address dropped already
     - name: Production's public addresses
       ansible.builtin.set_fact:
-        production_public: "{{ lookup('ansible.builtin.pipe', 'python3 ' ~ playbook_dir ~ '/public-addresses.py pmon.dev ' ~ production_lan) | split }}"
+        production_public: "{{ lookup('ansible.builtin.pipe', 'python3 ' ~ playbook_dir ~ '/public-addresses.py pmon.dev') | split }}"
 
     - name: The names the Pis serve resolve to the Vagrant VIP (any other pmon.dev name goes to production and is dropped)
       ansible.builtin.blockinfile:
