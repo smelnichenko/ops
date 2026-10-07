@@ -18,7 +18,9 @@ cat > "$W/bin/kubectl" <<'STUB'
 echo "$*" >> "$CALLS"
 case "$*" in
   *ContinuousArchiving*) echo -n True ;;
-  *"get backups.postgresql.cnpg.io -o json"*) [ -n "${BACKUPS:-}" ] && echo "$BACKUPS" || echo '{"items": []}' ;;
+  *"get backups.postgresql.cnpg.io -o json"*)
+    [ -n "${BACKUPS:-}" ] && echo "$BACKUPS" || echo '{"items": []}'
+    exit "${BACKUPS_RC:-0}" ;;
   *currentPrimary*) echo -n pg-1 ;;
   *pg_switch_wal*) echo "${SWITCHED-000000010000000000000005}" ;;
   *pg_stat_archiver*) echo "$ARCHIVED" ;;
@@ -68,5 +70,7 @@ BACKUPS=$(backup schnappy-production-postgres running) \
 BACKUPS=$(backup schnappy-production-postgres completed) \
   case_ "the cluster's earlier backup completed: taken" 000000010000000000000005 0 1
 BACKUPS=$(backup other running) case_ "another cluster's running: taken" 000000010000000000000005 0 1
+BACKUPS_RC=1 case_ "the Backup list's read failing (its output a list all the same): refused" \
+  000000010000000000000005 1 0
 echo "base-backup-archiving: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

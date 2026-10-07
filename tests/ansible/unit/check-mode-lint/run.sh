@@ -91,8 +91,16 @@ check("step 37's conversion before its fix: named",
                                                            None, old)], ["_after.stdout_lines"])
 # the playbooks a deploy task hands the caller's arguments ({{.CLI_ARGS}}: a --check preview among them) are linted
 # too, read from the Taskfile
-check("the playbooks a deploy task previews: linted (setup-keepalived's and setup-nexus' among them)",
-      {"setup-keepalived.yml", "setup-nexus.yml"} <= set(c.previewed_playbooks()), True)
+linted = []
+real_lint, c.lint = c.lint, lambda path, tags: linted.append(os.path.basename(path)) or []
+argv, sys.argv = sys.argv, ["check-mode-lint.py"]
+try:
+    c.main()
+except SystemExit:
+    pass
+c.lint, sys.argv = real_lint, argv
+check("the playbooks a deploy task previews: linted by the default run (setup-keepalived's and setup-nexus' among them)",
+      {"setup-keepalived.yml", "setup-nexus.yml"} <= set(linted), True)
 r = subprocess.run(["scripts/check-mode-lint.py"], capture_output=True, text=True)
 check("every step's playbook lines today: clean", (r.returncode, r.stdout.strip().endswith("check mode skips")),
       (0, True))
