@@ -305,6 +305,14 @@ for step, asked, want in (("20", "no", (True, False)), ("20", "yes", (True, True
     check(f"the playbook's command line, step {step or 'none'}, restarts expected {asked}: history, expected",
           ("--restart-history" in argv, "--restarts-expected" in argv), want)
 
+# the settle's values reach the script as given (the full run's step settles: 120 s, 2 polls 5 s apart) and are
+# production's by default (300 s, 4 polls 10 s apart) - a wiring that dropped one ran every settle at the script's
+for given, want in (({}, ["300", "4", "10"]), ({"restart_quiet": 120, "stable_polls": 2, "poll_seconds": 5}, ["120", "2", "5"])):
+    argv = render(script, **{**base, "restart_step": "", "restarts_expected": "no", **given}).split()
+    got = [argv[argv.index(f) + 1] if f in argv else None for f in ("--restart-quiet", "--stable-polls", "--poll")]
+    check(f"the playbook's command line, {'the full run step settle' if given else 'the defaults'}: quiet, polls, poll",
+          got, want)
+
 print("argo-settled: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
