@@ -43,9 +43,8 @@ for f in ("deploy/ansible/playbooks/setup-istio.yml", "deploy/ansible/playbooks/
     # run with the default ref only (a branch under test is read as it is), and before the values are read
     when = " and ".join(f"({w})" for w in ([sync[0]["when"]] if isinstance(sync[0].get("when"), str)
                                           else sync[0].get("when") or ["true"]))
-    check(f"{f}: run with ref main, not with another", [render("{{ " + when + " }}", infra_values_ref=r,
-                                                               platform_by_argo=False) for r in ("main", "upgrade/x")],
-          [True, False])
+    ran = [render("{{ " + when + " }}", infra_values_ref=r, platform_by_argo=False) for r in ("main", "upgrade/x")]
+    check(f"{f}: run with ref main, not with another", ran == [True, False], ran)
     check(f"{f}: before the installs that read the values",
           all(tasks.index(sync[0]) < tasks.index(t) for t in looks) and bool(looks), [t["name"] for t in looks])
     script = render(sync[0]["ansible.builtin.shell"], infra_dir=os.path.join(W, "infra"))
