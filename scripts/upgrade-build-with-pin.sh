@@ -12,6 +12,9 @@
 # Usage: scripts/upgrade-build-with-pin.sh   (test:upgrade:full)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
+# every line stamped with its time, as the steps' are: where the build's minutes go stays measurable
+exec > >(python3 -u -c 'import sys, time
+for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
 # the build and the pin each in a process group of their own (job control while they start): stopped whole when this
 # ends early - a failed build, an interrupt, a TERM - the pin's docker calls with it (its own trap removes its
@@ -30,7 +33,8 @@ stop() {
   for j in "$build_job" "$pin"; do
     [[ $own == *" $j "* ]] && kill -TERM -- "-$j" 2> /dev/null
   done
-  wait 2> /dev/null
+  # these two only: a bare wait waits for the time-stamping process too, which waits for this script's end
+  wait "$build_job" "$pin" 2> /dev/null
 }
 trap stop EXIT
 trap 'exit 130' INT TERM

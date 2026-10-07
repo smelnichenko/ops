@@ -27,7 +27,9 @@ fails=0
 run() {  # run <env...>: the script's output in $out, its exit in $rc, its seconds in $took
   rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
   local t0=$SECONDS
-  out=$(cd "$T" && env "$@" PATH="$T/bin:$PATH" bash scripts/upgrade-build-with-pin.sh < /dev/null 2>&1); rc=$?
+  # bounded: a cleanup that waited on its own output's process hung the run for good
+  out=$(cd "$T" && env "$@" PATH="$T/bin:$PATH" timeout -k 5 30 bash scripts/upgrade-build-with-pin.sh < /dev/null 2>&1)
+  rc=$?
   took=$((SECONDS - t0))
 }
 check() {  # check <name> <got> <want>
@@ -37,7 +39,9 @@ check() {  # check <name> <got> <want>
 pin_end() { [ -e "$T/.upgrade/pin.finished" ] && echo finished || echo stopped; }
 run
 check "build and pin pass: passed, the pin's result line shown" \
-  "$rc $(grep -c '^CLICKHOUSE PIN: pin result line' <<< "$out")" "0 1"
+  "$rc $(grep -c '^[0-9:]\{8\} CLICKHOUSE PIN: pin result line$' <<< "$out")" "0 1"
+check "every line stamped with its time (the build's minutes measurable)" \
+  "$(grep -vc '^[0-2][0-9]:[0-5][0-9]:[0-5][0-9] ' <<< "$out")" 0
 run PIN=1
 check "the pin failed: the run fails when the build ends, saying so" \
   "$rc $(grep -c 'THE CLICKHOUSE PIN FAILED' <<< "$out")" "1 1"
@@ -46,7 +50,8 @@ check "the build failed: its exit at once, the pin still running stopped" "$rc $
 # the script stopped as an interrupted full run stops it: it is this test's own child, checked so before the signal
 rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
 t0=$SECONDS
-(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" bash scripts/upgrade-build-with-pin.sh \
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/upgrade-build-with-pin.sh \
   < /dev/null > "$T/term.out" 2>&1) &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"

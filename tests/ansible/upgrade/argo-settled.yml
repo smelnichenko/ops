@@ -32,7 +32,8 @@
 # there too is a crash loop, caught a step later).
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml [-e settle_minutes=40]
-#        [-e expect_mirror=true] [-e allow_out_of_sync=strimzi] [-e stable_polls=1] [-e record_apps=true]
+#        [-e expect_mirror=true] [-e allow_out_of_sync=strimzi] [-e stable_polls=1] [-e restart_quiet=120]
+#        [-e record_apps=true]
 #        [-e expect_apps=true] [-e restart_step=<step> [-e restarts_expected=true]]
 - name: Argo CD settled (all apps Synced + Healthy, all pods ready)
   hosts: target
@@ -43,6 +44,10 @@
     settle_minutes: 40
     poll_seconds: 10
     stable_polls: 4
+    # no container restarted in the last restart_quiet seconds (argo-settled.py's --restart-quiet): 300 is
+    # CrashLoopBackOff's longest back-off - a crash loop never settles in its own step; the step runner's deciding wait
+    # takes 120 (a crash loop slower than that settles once, and the restart history fails it at the next step)
+    restart_quiet: 300
     expect_mirror: false
     allow_out_of_sync: ""
     record_apps: false
@@ -78,7 +83,7 @@
       ansible.builtin.script:
         cmd: >-
           files/argo-settled.py --kubeconfig {{ kubeconfig }} --minutes {{ settle_minutes }} --poll {{ poll_seconds }}
-          --stable-polls {{ stable_polls }} --allow-out-of-sync '{{ allow_out_of_sync }}'
+          --stable-polls {{ stable_polls }} --restart-quiet {{ restart_quiet }} --allow-out-of-sync '{{ allow_out_of_sync }}'
           {{ '--print-apps' if record_apps | bool else '' }}
           {{ ('--expect-apps ' ~ (lookup('ansible.builtin.file', apps_file).split() | join(','))) if expect_apps | bool else '' }}
           {{ ('--restart-history ' ~ restart_history ~ ' --step ' ~ restart_step) if restart_step | length > 0 else '' }}
