@@ -4,8 +4,10 @@
 # their call and exit 99, so nothing here touches this machine even when a guard is broken. Under `set -e` a test that
 # fails inside an && list stops nothing unless it is the last one; each guard must stop the block itself:
 #   Kafka's volume      "/" or no such directory: refused before find -delete; a real directory: find called
-#   gateway's volumes   "/" refused before find -delete; a real directory with its archive: find called
-#   etcd's data path    no hostPath (or no pod, or no mount) refused before the snapshot is copied; all three: cp called
+#   gateway's volumes   "/", no such directory or an empty archive refused before find -delete; a real directory
+#                       with its archive: find called
+#   etcd's data path    no hostPath, "/" (or no pod, or no mount) refused before the snapshot is copied; all three:
+#                       cp called
 #   the Postgres dumps  production's own cluster's dump among them, or the task fails (its failed_when, as Ansible
 #                       evaluates it, with the play's names)
 set -u
@@ -34,6 +36,7 @@ esac
 STUB
 chmod +x "$W"/bin/*
 echo data > "$W/work/pvc1.tar.gz"
+: > "$W/work/pvc2.tar.gz"  # an archive the backup left empty
 W=$W "$PY" - <<'PY'
 import os, subprocess, sys
 import jinja2, yaml
@@ -70,6 +73,12 @@ case("Kafka's volume a directory: find called", fenced.startswith(f"find {W}/vol
 GW = "Gateway - each volume's content replaced by the backup's, extended attributes too"
 rc, out, fenced = run(GW, _gw={"stdout": "pvc1 /"})
 case("gateway volume /: refused, nothing deleted", rc != 0 and not fenced, f"rc {rc}, fenced: {fenced!r}")
+rc, out, fenced = run(GW, _gw={"stdout": f"pvc2 {W}/vol"})
+case("gateway volume whose archive is empty: refused, nothing deleted", rc != 0 and not fenced,
+     f"rc {rc}, fenced: {fenced!r}")
+rc, out, fenced = run(GW, _gw={"stdout": f"pvc1 {W}/nope"})
+case("gateway volume no such directory: refused, nothing deleted", rc != 0 and not fenced,
+     f"rc {rc}, fenced: {fenced!r}")
 rc, out, fenced = run(GW, _gw={"stdout": f"pvc1 {W}/vol"})
 case("gateway volume a directory with its archive: find called", fenced.startswith(f"find {W}/vol -mindepth 1"),
      repr(fenced))
@@ -79,6 +88,8 @@ for missing in ("POD", "HOST", "MOUNT"):
     rc, out, fenced = run(ETCD, env=dict(good, **{missing: ""}))
     case(f"etcd without its {missing.lower()}: refused, nothing copied", rc != 0 and not fenced and "etcd" in out,
          f"rc {rc}, fenced: {fenced!r}, out: {out.strip()[-200:]}")
+rc, out, fenced = run(ETCD, env=dict(good, HOST="/"))
+case("etcd's data hostPath /: refused, nothing copied", rc != 0 and not fenced, f"rc {rc}, fenced: {fenced!r}")
 rc, out, fenced = run(ETCD, env=good)
 case("etcd with pod, hostPath and mount: the snapshot copied", fenced.startswith("cp "), repr(fenced))
 ansible_env = jinja2.Environment()
