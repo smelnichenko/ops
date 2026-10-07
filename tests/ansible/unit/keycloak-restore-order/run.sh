@@ -33,7 +33,9 @@ def stub(t):
     if svc:
         return {**keep, "ansible.builtin.shell": f"echo \"{{{{ item }}}} {svc['name']} {svc['state']}\" >> {LOG}"}
     if "psql" in str(t.get("ansible.builtin.shell", "")):
-        return {**keep, "ansible.builtin.shell": f"echo restored >> {LOG}", "register": t["register"]}
+        # the restore as the case says: done, or failed (psql's error, the database left empty - one transaction)
+        return {**keep, "failed_when": False, "register": t["register"], "ansible.builtin.shell":
+                "{% if restore_fails | default(false) %}exit 3{% else %}echo restored >> " + LOG + "{% endif %}"}
     return {**keep, **{k: v for k, v in t.items() if k.startswith("ansible.builtin.")}}
 
 
@@ -42,12 +44,12 @@ yaml.safe_dump([{"hosts": "pi1", "gather_facts": False, "tasks": tasks}], open(o
                sort_keys=False)
 PY
 fails=0
-case_() {  # case_ <name> <table counts, JSON list> <want rc 0|1> <want log, ; between>
+case_() {  # case_ <name> <table counts, JSON list> <want rc 0|1> <want log, ; between> [restore_fails]
   : > "$W/log"
   cat > "$W/hosts.yml" <<HOSTS
 all:
   vars: {ansible_connection: local, ansible_python_interpreter: "{{ ansible_playbook_python }}", tables: $2,
-         pg_password: x}
+         pg_password: x, restore_fails: ${5:-false}}
   children: {pis: {hosts: {pi1: {}, pi2: {}}}}
 HOSTS
   out=$(ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" 2>&1); rc=$?
@@ -62,5 +64,8 @@ case_ "empty, and still empty with Keycloak stopped: restored, Keycloak started 
 case_ "empty, then its schema built before Keycloak stopped: refused, nothing restored, Keycloak started again" \
   "[0, 92]" 1 "$S;$R"
 case_ "in use before: refused, Keycloak never stopped" "[92, 92]" 1 ""
+# a failed restore (one transaction) leaves the database empty: Keycloak started on it would build its schema there,
+# and every re-run would refuse the database in use - it stays stopped, and a re-run restores
+case_ "the restore fails: Keycloak left stopped, the run fails" "[0, 0]" 1 "$S" true
 echo "keycloak-restore-order: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

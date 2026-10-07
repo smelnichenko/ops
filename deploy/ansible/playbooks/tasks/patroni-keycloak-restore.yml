@@ -52,7 +52,8 @@
         fail_msg: >-
           REFUSED: the {{ _restore_db }} database was empty and has {{ _restore_tables_stopped.stdout | trim }} tables
           now Keycloak is stopped - a Keycloak running until then built its schema in it. The dump waits on pi1
-          (/var/backups/patroni-first-install/keycloak.sql): drop and recreate the database empty, then run again
+          (/var/backups/patroni-first-install/keycloak.sql): stop Keycloak on both Pis (it is started again here),
+          drop and recreate the database empty, then run again
         quiet: true
 
     # the dict form: a free-form script is parsed by Ansible first, and a backslash in a comment joined the next line
@@ -94,9 +95,23 @@
       run_once: true
       when: not ansible_check_mode  # the restore is a write: a preview (--check) skips it
   always:
-    - name: Keycloak started again
+    # not after a failed restore: one transaction, the database is still empty - Keycloak started on it would build its
+    # schema there, and every re-run would refuse the database in use (the realm only in the dump). A re-run restores.
+    - name: Keycloak started again (unless the restore failed)
       ansible.builtin.systemd:
         name: keycloak
         state: started
       delegate_to: "{{ item }}"
       loop: "{{ groups['pis'] }}"
+      when:  # a preview (--check) stopped nothing
+        - not ansible_check_mode
+        - _restored is not defined or _restored is skipped or _restored.rc | default(0) == 0
+
+    - name: Keycloak left stopped
+      ansible.builtin.debug:
+        msg: >-
+          KEYCLOAK LEFT STOPPED on both Pis: the restore failed and the {{ _restore_db }} database is still empty - run
+          setup-patroni.yml again to restore the waiting dump (Keycloak started now would build its own schema there)
+      when:
+        - not ansible_check_mode
+        - _restored is defined and _restored is not skipped and _restored.rc | default(0) != 0
