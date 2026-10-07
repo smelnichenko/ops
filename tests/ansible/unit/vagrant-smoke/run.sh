@@ -68,6 +68,8 @@ out=$(remote ENDED=Failed | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out#
 check "a failed Job: failed, said so, its Job and ConfigMap deleted" \
   "$rc $(grep -c '^SMOKE FAILED (Failed)$' <<< "$out") $(deleted)" "1 1 2"
 # its connection gone (the caller stopped): the next heartbeat's write fails - it ends, deleting its Job and ConfigMap
+# (PIPE in its trap is an equivalent mutant on bash 5.2: a fatal SIGPIPE runs the EXIT trap too - measured
+# 2026-10-07, the shell's exit 141 and its deletes; the trap keeps the exit explicit)
 t0=$SECONDS
 remote | head -c 0
 check "its connection gone: it ends at its next heartbeat, its Job and ConfigMap deleted" \
