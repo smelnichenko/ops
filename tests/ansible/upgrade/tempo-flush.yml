@@ -4,8 +4,10 @@
 # names (scripts/upgrade-production.py merge). In the Vagrant copy, before the step's mirror push:
 #
 #   -e mode=flush   a fresh trace pushed and found (Tempo 2 holds it), then Tempo flushed and the flush waited for -
-#                   scripts/tempo-flush.py, as production runs it; its ID kept in .upgrade/tempo-preflush.txt
-#   -e mode=verify  after the step: that trace by its ID - on Tempo 3, from the store (the flush put it there)
+#                   scripts/tempo-flush.py, as production runs it; then a second pushed and found (what arrives after
+#                   the flush, until Tempo 2 stops); both IDs kept in .upgrade/tempo-preflush.txt
+#   -e mode=verify  after the step: both traces by their IDs - on Tempo 3, from the store (the flush put the first
+#                   there, Tempo 2's stop the second: flush_all_on_shutdown)
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=flush|verify
 - name: Vagrant VMs only
@@ -55,21 +57,43 @@
             executable: python3
           changed_when: true
 
-        - name: Its ID kept for the check after the step
+        # what arrives after the flush, until Tempo 2 is replaced: written to the store by its stop
+        # (flush_all_on_shutdown) - Tempo 3 does not replay 2's WAL
+        - name: A second trace ID, for a trace pushed after the flush
+          ansible.builtin.set_fact:
+            _after: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-32') }}"
+
+        - name: The second trace, pushed after the flush
+          ansible.builtin.include_tasks: tasks/tempo-push.yml
+          vars:
+            push_trace_id: "{{ _after }}"
+            push_span_id: "{{ _after[:16] }}"
+            push_name: upgrade-postflush
+
+        - name: Tempo has it (in its ingester - only its stop writes it to the store)
+          ansible.builtin.command: >-
+            kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-tempo:3200/proxy/api/traces/{{ _after }}'
+          register: _held_after
+          changed_when: false
+          retries: 30
+          delay: 5
+          until: _held_after.rc == 0 and 'upgrade-postflush' in _held_after.stdout
+
+        - name: Both IDs kept for the check after the step, each with its span's name
           ansible.builtin.copy:
-            content: "{{ _trace }}\n"
+            content: "{{ _trace }} upgrade-preflush\n{{ _after }} upgrade-postflush\n"
             dest: "{{ id_file }}"
             mode: '0644'
           delegate_to: localhost
           become: false
 
-    - name: The trace pushed before the flush, after the step
+    - name: The traces pushed before and after the flush, after the step - each by its ID, its span's name in it
       when: mode == 'verify'
       ansible.builtin.command: >-
-        kubectl --kubeconfig {{ kubeconfig }} get --raw
-        '{{ proxy }}/schnappy-tempo:3200/proxy/api/traces/{{ lookup('ansible.builtin.file', id_file) | trim }}'
+        kubectl --kubeconfig {{ kubeconfig }} get --raw '{{ proxy }}/schnappy-tempo:3200/proxy/api/traces/{{ item.split()[0] }}'
+      loop: "{{ lookup('ansible.builtin.file', id_file).splitlines() }}"
       register: _kept
       changed_when: false
       retries: 30
       delay: 10
-      until: _kept.rc == 0 and 'upgrade-preflush' in _kept.stdout
+      until: _kept.rc == 0 and item.split()[1] in _kept.stdout
