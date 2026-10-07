@@ -264,8 +264,12 @@ def record(step, event, *args, obj=None):
     line = " ".join((at, step, event, *args))
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
     out = ten("kubectl replace -f -", stdin=json.dumps(obj), check=False)
-    if out.returncode:
+    if out.returncode and ("Conflict" in out.stderr or "has been modified" in out.stderr):
         sys.exit(f"REFUSED: the ledger changed since it was read (another phase at work?): {out.stderr.strip()}")
+    if out.returncode:
+        # the connection gone after the server took it: the event may stand (a start then waits for its release)
+        sys.exit(f"the ledger write failed - it may have been made all the same (task deploy:upgrade:status): "
+                 f"{out.stderr.strip()}")
     print(f"LEDGER: {line}")
 
 

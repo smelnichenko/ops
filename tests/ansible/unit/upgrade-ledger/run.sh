@@ -614,11 +614,11 @@ check("its own end closes it", P(S47, "backup", late + ev(f"{S47} end preview pa
 class _Rc:
     def __init__(self, rc, err=""):
         self.returncode, self.stdout, self.stderr = rc, "", err
-def claim(replace_rc):
+def claim(replace_rc, err="Error from server (Conflict): the object has been modified"):
     sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten")}
     reads = iter(range(7, 99))  # each read a newer resourceVersion: a claim that re-read would send another
     m.read_ledger = lambda: ({"metadata": {"resourceVersion": str(next(reads))}, "data": {"events": ""}}, ev(*base47))
-    m.ten = lambda command, stdin=None, check=True: sent.append(json.loads(stdin)) or _Rc(replace_rc, "Conflict")
+    m.ten = lambda command, stdin=None, check=True: sent.append(json.loads(stdin)) or _Rc(replace_rc, err)
     m.CLAIMED.clear()
     try:
         m.ledger_for(S47, "backup", "postgres")
@@ -636,6 +636,10 @@ check("the claim: start written with the read's resourceVersion, its token kept 
       ("claimed", "7", ["start", "backup"], [(S47, "backup")], True))
 got, _, claimed = claim(1)
 check("a concurrent change: the claim refused, nothing claimed", (got.startswith("REFUSED: the ledger changed"), claimed),
+      (True, []))
+# another failure (the connection gone after the server took it): not "changed" - the write may have been made
+got, _, claimed = claim(1, "Unable to connect to the server: connection reset by peer")
+check("the write failing otherwise: said so - it may have been made", ("may have been made" in got, claimed),
       (True, []))
 # main records the claimed phase's end, passed or failed
 def main_ends(code):
