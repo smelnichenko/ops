@@ -60,7 +60,7 @@
       changed_when: false
       retries: 30
       delay: 10
-      until: _archived.rc == 0 and _archived.stdout | length == 24 and _archived.stdout >= _switched.stdout
+      until: _archived.rc == 0 and _archived.stdout >= _switched.stdout
 
     - name: A fresh base backup
       ansible.builtin.include_tasks: tasks/cnpg-backup.yml

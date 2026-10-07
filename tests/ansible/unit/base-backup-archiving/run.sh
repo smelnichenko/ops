@@ -19,7 +19,7 @@ echo "$*" >> "$CALLS"
 case "$*" in
   *ContinuousArchiving*) echo -n True ;;
   *currentPrimary*) echo -n pg-1 ;;
-  *pg_switch_wal*) echo 000000010000000000000005 ;;
+  *pg_switch_wal*) echo "${SWITCHED-000000010000000000000005}" ;;
   *pg_stat_archiver*) echo "$ARCHIVED" ;;
 esac
 STUB
@@ -55,5 +55,7 @@ case_ "the switched WAL archived: the backup taken" 000000010000000000000005 0 1
 case_ "archived past it: the backup taken" 000000010000000000000007 0 1
 case_ "the archiver behind it, the condition True: refused, no backup" 000000010000000000000003 1 0
 case_ "nothing archived yet: refused" "" 1 0
+SWITCHED= case_ "the switch answering no WAL file name: refused (anything archived would pass)" \
+  000000010000000000000003 1 0
 echo "base-backup-archiving: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
