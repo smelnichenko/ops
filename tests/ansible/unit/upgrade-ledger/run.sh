@@ -179,6 +179,14 @@ check("own: a binary file's content counts", m.own_hash(binary("LcmZQzWMT")) != 
 pg17 = "image ghcr.io/cloudnative-pg/postgresql 17"
 check("floating images before 47's merges: postgresql:17 in use", pg17 in m.proof_inventory(names, S47, False), True)
 check("after them: not any more", pg17 in m.proof_inventory(names, S47, True), False)
+# between a two-repo step's merges (its infra merge live): only what both sides use - postgresql:17, replaced by the
+# first merge, may be gone already (the second merge was refused for good); 18, the second's, is not pulled yet
+before47, after47 = m.proof_inventory(names, S47, False), m.proof_inventory(names, S47, True)
+pg18 = next(l for l in after47 if l.startswith("image ghcr.io/cloudnative-pg/postgresql ") and l not in before47)
+kept = next(l for l in before47 if l.startswith("image ") and l in after47)
+between = m.proof_inventory(names, S47, False, partly=True)
+check("between 47's merges: postgresql:17 not judged, 18 not yet, the rest as before",
+      (pg17 in between, pg18 in between, kept in between), (False, False, True))
 
 # the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
 # a no - or no terminal - runs nothing and records nothing
@@ -246,12 +254,15 @@ class _Done:
     returncode, stdout = 0, "abc1234"
 
 
+PROOF_KW = []  # the keyword arguments each phase read the proof with
+
+
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info", "ten")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
-    m.proof_problems = lambda *a, **k: list(proof)
+    m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged") if x in k}) or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     m.run = lambda cmd, **k: calls.append(("run", os.path.basename(cmd[0]))) or _Done()
     m.ansible = lambda *a: calls.append(("ansible", a[0])) or ansible_ok
@@ -282,6 +293,12 @@ for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "p
     got = phase_calls(fn, *args, proof=["PROOF-X"])
     check(f"{name}: refused by the proof, nothing done", (len(got), got[-1][0], "PROOF-X" in got[-1][1]),
           (1, "refused", True))
+# the proof read as production stands at each merge: a two-repo step's second merge judges the images between them
+PROOF_KW.clear()
+phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"))
+phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47} merged infra a", f"{S47} settled infra a"))
+check("merge reads the proof as production stands: 47's infra before the step, its platform between the merges",
+      [k.get("partly", False) for k in PROOF_KW], [False, True])
 got = phase_calls(m.merge, "22-apt-cacher-ng", "platform", registry=["REGISTRY-X"])
 check("merge: refused by the registry check, nothing merged", (len(got), "REGISTRY-X" in got[-1][1]), (1, True))
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"))

@@ -501,15 +501,22 @@ def app_tag_problems():
             if tag(overlay, key) is not None and str(tag(production, key)) != str(tag(overlay, key))]
 
 
-def proof_inventory(names, step, merged):
+def proof_inventory(names, step, merged, partly=False):
     """Production's inventory the floating-image check reads: as the done steps leave it - or, once the step's merges
-    settled (`merged`), as the step leaves it: an image the step replaced may be gone then (the kubelet collects it)."""
-    return inv.expected(names[:names.index(step) + (1 if merged else 0)])
+    settled (`merged`), as the step leaves it: an image the step replaced may be gone then (the kubelet collects it).
+    Between a two-repo step's merges (`partly`), what both leave in use: one the first merge replaced may be gone
+    already, one the second brings is not pulled yet."""
+    i = names.index(step)
+    if partly:
+        after = set(inv.expected(names[:i + 1]))
+        return [line for line in inv.expected(names[:i]) if line in after]
+    return inv.expected(names[:i + (1 if merged else 0)])
 
 
-def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False):
+def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, partly=False):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
-    the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled."""
+    the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled; `partly`:
+    some of them (a two-repo step between its merges)."""
     path = proof_path(step)
     if not os.path.exists(path):
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
@@ -523,7 +530,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False):
     if not proof.get("floating"):
         out.append(f"{step}'s proof records no floating-tag images")
     else:
-        out += floating_problems(proof["floating"], proof_inventory(names, step, merged))
+        out += floating_problems(proof["floating"], proof_inventory(names, step, merged, partly))
     out += app_tag_problems()
     try:
         changed = unproven_changes(proof["ops"], defaulted_steps)
@@ -688,9 +695,10 @@ def preview(step):
 def merge(step, repo):
     names, events, _ = ledger_for(step, "merge", repo)
     merged = any(s == step and e == "merged" and a[:1] == [repo] for _, s, e, a in events)
+    partly = any(s == step and e == "merged" for _, s, e, _ in events)  # the step's other repo merged already
     if not merged:
         d = os.path.join(OPS, "..", repo)
-        refuse(proof_problems(step, names, repo, defaulted(events)) + registry_problems(step))
+        refuse(proof_problems(step, names, repo, defaulted(events), partly=partly) + registry_problems(step))
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
         if merged_base(d, step):
@@ -698,7 +706,7 @@ def merge(step, repo):
             print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
         else:
             # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
-            if not any(s == step and e == "merged" for _, s, e, _ in events):
+            if not partly:
                 order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
                 refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven "
                                                          "(above)"])
@@ -712,7 +720,7 @@ def merge(step, repo):
             # the step's first merge: its public images pulled on ten first - a tag missing upstream stops the step
             # with nothing live, and its rollout does not wait on a pull while the old pod is gone (a Recreate
             # deployment, a single replica)
-            images = prepull_images(step) if not any(s == step and e == "merged" for _, s, e, _ in events) else []
+            images = prepull_images(step) if not partly else []
             if images:
                 refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
                        else [f"the step's images did not pull on ten (above) - nothing merged"])
