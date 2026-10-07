@@ -95,6 +95,7 @@
           {{ existing_oauth_app.client_secret | default('')
           if existing_oauth_app is not none
           else oauth_result.json.client_secret }}
+      no_log: true
 
     - name: Warn if reusing existing OAuth app without secret
       ansible.builtin.debug:
@@ -126,6 +127,7 @@
             WOODPECKER_FORGEJO_CLIENT: "{{ woodpecker_oauth_client_id }}"
             WOODPECKER_FORGEJO_SECRET: "{{ woodpecker_oauth_client_secret }}"
       when: woodpecker_oauth_client_secret | length > 0
+      no_log: true
 
     - name: Check existing Forgejo tokens for infra repo PAT
       ansible.builtin.uri:
@@ -216,6 +218,7 @@
             nexus_url: "http://{{ nexus_host | default(keepalived_vip) }}:{{ nexus_port | default('8081') }}"
             nexus_npm_registry: "http://{{ nexus_host | default(keepalived_vip) }}:{{ nexus_port | default('8081') }}/repository/npm-public/"
             infra_repo_token: "{{ woodpecker_infra_repo_token | default('') }}"
+      no_log: true
 
     # ================================================================
     # Phase 3: Deploy Woodpecker (unified chart)

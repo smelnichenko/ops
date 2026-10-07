@@ -411,6 +411,9 @@
 
           # no applicationSet key: the chart has no switch for its controller (an `enabled: false` here rendered the
           # same, 9.5.4 and 9.5.11), and production's ApplicationSets (schnappy-apps-envs, schnappy-data-envs) need it
+      # its values carry the OIDC client secret (logged on the host, printed at -v); a failure's message is hidden too:
+      # `helm status argocd -n argocd` and the pods on ten say why
+      no_log: true
 
     - name: Wait for argocd-server to be ready
       kubernetes.core.k8s_info:
