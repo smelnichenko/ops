@@ -146,6 +146,18 @@ MR = {"https://git.pmon.dev/schnappy/infra.git": "abc"}
 gate("on the pushed commit: green", A, P, 0, "", env={"MIRROR_REVISIONS": json.dumps(MR)})
 gate("on another commit: not green", A, P, 1, "not on the pushed commit",
      env={"MIRROR_REVISIONS": json.dumps({"https://git.pmon.dev/schnappy/infra.git": "def"})})
+# a multi-source app (production's: platform's chart, infra's values as a ref source) - each source's revision
+# against its repo's pushed commit: infra's values stale while the chart is current is not on the pushed commit
+def multi(platform_rev, infra_rev):
+    srcs = [{"repoURL": "https://git.pmon.dev/schnappy/platform.git", "path": "charts/x", "targetRevision": "main"},
+            {"repoURL": "https://git.pmon.dev/schnappy/infra.git", "targetRevision": "main", "ref": "values"}]
+    m = with_(with_(app("m"), ["spec"], {"sources": srcs}), ["status", "sync", "comparedTo"], {"sources": srcs})
+    return with_(m, ["status", "sync", "revisions"], [platform_rev, infra_rev])
+MR2 = {"https://git.pmon.dev/schnappy/platform.git": "p1", "https://git.pmon.dev/schnappy/infra.git": "i1"}
+gate("multi-source, both sources on their pushed commits: green", [multi("p1", "i1")], P, 0, "",
+     env={"MIRROR_REVISIONS": json.dumps(MR2)})
+gate("multi-source, infra's values on an older commit: not green", [multi("p1", "i0")], P, 1,
+     "not on the pushed commit", env={"MIRROR_REVISIONS": json.dumps(MR2)})
 vo = with_(app("a"), ["spec", "source", "helm"], {"valuesObject": {"enabled": False}})
 vo = with_(vo, ["status", "sync", "comparedTo", "source", "helm"], {"valuesObject": {}})
 gate("helm valuesObject false against none: an older spec (values are data, not omitted fields)", [vo, B], P, 1,
