@@ -91,46 +91,46 @@
     # no shell re-parsing of quotes or `$`. An absent key is skipped visibly, never
     # written as a placeholder. Caveat: at -vvv Ansible prints a task's environment
     # in the EXEC line, so never run this at that verbosity on a shared terminal.
+    # every value on stdin as one JSON document, each handed to jq as a here-string: none on a command line - the
+    # environment Ansible passes reaches sudo's, jq's --arg values its own, and any local user reads those
     - name: Seed Vault secrets for {{ env_ns }}
-      ansible.builtin.shell: |
-        set -eo pipefail
-        {{ vault_cli_env }}
-        jq -n --arg database monitor --arg username monitor --arg password "$GEN_DB_PASSWORD" \
-          '{database: $database, username: $username, password: $password}' | vault kv put secret/{{ env_ns }}/postgres -
-        jq -n --arg password "$GEN_VALKEY_PASSWORD" '{password: $password}' | vault kv put secret/{{ env_ns }}/valkey -
-        jq -n --arg access_key admin --arg secret_key "$GEN_MINIO_PASSWORD" \
-          '{access_key: $access_key, secret_key: $secret_key}' | vault kv put secret/{{ env_ns }}/s3gw -
-        jq -n --arg cluster_id "$GEN_KAFKA_CLUSTER_ID" '{cluster_id: $cluster_id}' | vault kv put secret/{{ env_ns }}/kafka -
-        if [ -n "$ANTHROPIC_API_KEY" ]; then
-          jq -n --arg api_key "$ANTHROPIC_API_KEY" '{api_key: $api_key}' | vault kv put secret/{{ env_ns }}/ai -
-        else
-          echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not in .env (no placeholder written)"
-        fi
-        if [ -n "$MAIL_PASSWORD" ]; then
-          jq -n --arg password "$MAIL_PASSWORD" '{password: $password}' | vault kv put secret/{{ env_ns }}/mail -
-        else
-          echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not in .env (no placeholder written)"
-        fi
-        if [ -n "$RESEND_WEBHOOK_SECRET" ] && [ -n "$RESEND_API_KEY" ]; then
-          jq -n --arg signing_secret "$RESEND_WEBHOOK_SECRET" --arg api_key "$RESEND_API_KEY" \
-            '{signing_secret: $signing_secret, api_key: $api_key}' | vault kv put secret/{{ env_ns }}/webhook -
-        else
-          missing=""
-          [ -n "$RESEND_WEBHOOK_SECRET" ] || missing="$missing RESEND_WEBHOOK_SECRET"
-          [ -n "$RESEND_API_KEY" ] || missing="$missing RESEND_API_KEY"
-          echo "SKIPPED secret/{{ env_ns }}/webhook: missing in .env:$missing (needs both; no placeholder written)"
-        fi
-      args:
+      ansible.builtin.shell:
         executable: /bin/bash
-      environment:
-        GEN_DB_PASSWORD: "{{ gen_db_password }}"
-        GEN_VALKEY_PASSWORD: "{{ gen_valkey_password }}"
-        GEN_MINIO_PASSWORD: "{{ gen_minio_password }}"
-        GEN_KAFKA_CLUSTER_ID: "{{ gen_kafka_cluster_id }}"
-        ANTHROPIC_API_KEY: "{{ lookup('env', 'ANTHROPIC_API_KEY') | trim }}"
-        MAIL_PASSWORD: "{{ lookup('env', 'MAIL_PASSWORD') | trim }}"
-        RESEND_WEBHOOK_SECRET: "{{ lookup('env', 'RESEND_WEBHOOK_SECRET') | trim }}"
-        RESEND_API_KEY: "{{ lookup('env', 'RESEND_API_KEY') | trim }}"
+        stdin: >-
+          {{ {'db': gen_db_password, 'valkey': gen_valkey_password, 'minio': gen_minio_password,
+              'kafka': gen_kafka_cluster_id, 'ai': lookup('env', 'ANTHROPIC_API_KEY') | trim,
+              'mail': lookup('env', 'MAIL_PASSWORD') | trim,
+              'signing': lookup('env', 'RESEND_WEBHOOK_SECRET') | trim,
+              'resend': lookup('env', 'RESEND_API_KEY') | trim} | to_json }}
+        cmd: |
+          set -eo pipefail
+          {{ vault_cli_env }}
+          s=$(cat)
+          put() { vault kv put "secret/{{ env_ns }}/$1" -; }
+          has() { jq -e --arg k "$1" '.[$k] != ""' <<< "$s" > /dev/null; }
+          jq -c '{database: "monitor", username: "monitor", password: .db}' <<< "$s" | put postgres
+          jq -c '{password: .valkey}' <<< "$s" | put valkey
+          jq -c '{access_key: "admin", secret_key: .minio}' <<< "$s" | put s3gw
+          jq -c '{cluster_id: .kafka}' <<< "$s" | put kafka
+          if has ai; then
+            jq -c '{api_key: .ai}' <<< "$s" | put ai
+          else
+            echo "SKIPPED secret/{{ env_ns }}/ai: ANTHROPIC_API_KEY not in .env (no placeholder written)"
+          fi
+          if has mail; then
+            jq -c '{password: .mail}' <<< "$s" | put mail
+          else
+            echo "SKIPPED secret/{{ env_ns }}/mail: MAIL_PASSWORD not in .env (no placeholder written)"
+          fi
+          if has signing && has resend; then
+            jq -c '{signing_secret: .signing, api_key: .resend}' <<< "$s" | put webhook
+          else
+            missing=""
+            has signing || missing="$missing RESEND_WEBHOOK_SECRET"
+            has resend || missing="$missing RESEND_API_KEY"
+            echo "SKIPPED secret/{{ env_ns }}/webhook: missing in .env:$missing (needs both; no placeholder written)"
+          fi
+      no_log: true  # the values are its stdin
       changed_when: true
 
     - name: "PHASE 1: Vault secrets seeded"

@@ -383,25 +383,34 @@
       retries: 60
       delay: 10
 
+    # the password on stdin, into a curl config of this run's own: never on curl's command line (any local user reads
+    # those), never in the task's output (no_log - a failed shell prints its script)
     - name: Wait for admin password file or verify configured password works
-      ansible.builtin.shell: |
-        for i in $(seq 1 30); do
-          if [ -f "{{ nexus_data_dir }}/admin.password" ]; then
-            echo "admin.password file found"
-            exit 0
-          fi
-          HTTP=$(curl -sf -o /dev/null -w '%{http_code}' \
-            -u "admin:{{ nexus_admin_password }}" \
-            "http://localhost:{{ nexus_port }}/service/rest/v1/status")
-          if [ "$HTTP" = "200" ]; then
-            echo "auth works with configured password"
-            exit 0
-          fi
-          sleep 5
-        done
-        echo "FAIL: neither admin.password nor configured password works"
-        exit 1
+      ansible.builtin.shell:
+        executable: /bin/bash
+        stdin: "{{ nexus_admin_password }}"
+        cmd: |
+          set -uo pipefail
+          cfg=$(mktemp); trap 'rm -f "$cfg"' EXIT
+          IFS= read -r pw; pw=${pw//\\/\\\\}; pw=${pw//\"/\\\"}
+          printf 'user = "admin:%s"\n' "$pw" > "$cfg"
+          for i in $(seq 1 30); do
+            if [ -f "{{ nexus_data_dir }}/admin.password" ]; then
+              echo "admin.password file found"
+              exit 0
+            fi
+            HTTP=$(curl -sf -o /dev/null -w '%{http_code}' -K "$cfg" \
+              "http://localhost:{{ nexus_port }}/service/rest/v1/status")
+            if [ "$HTTP" = "200" ]; then
+              echo "auth works with configured password"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "FAIL: neither admin.password nor configured password works"
+          exit 1
       changed_when: false
+      no_log: true
 
     - name: Check initial admin password file
       ansible.builtin.stat:
@@ -413,23 +422,33 @@
         src: "{{ nexus_data_dir }}/admin.password"
       register: initial_password
       when: initial_password_file.stat.exists
+      no_log: true
 
     - name: Set current password fact
       ansible.builtin.set_fact:
         current_admin_password: "{{ (initial_password.content | b64decode) if initial_password_file.stat.exists else nexus_admin_password }}"
+      no_log: true
 
+    # both passwords on stdin: the current one into a curl config of this run's own, the new one as the request's body
     - name: Change admin password to configured value
-      ansible.builtin.shell: |
-        HTTP_CODE=$(curl -sf -o /dev/null -w '%{http_code}' \
-          -u "admin:{{ current_admin_password }}" \
-          -X PUT -H "Content-Type: text/plain" \
-          -d "{{ nexus_admin_password }}" \
-          "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password")
-        echo "Password change HTTP status: $HTTP_CODE"
-        [ "$HTTP_CODE" = "204" ]
+      ansible.builtin.shell:
+        executable: /bin/bash
+        stdin: "{{ current_admin_password }}\n{{ nexus_admin_password }}"
+        cmd: |
+          set -uo pipefail
+          cfg=$(mktemp); trap 'rm -f "$cfg"' EXIT
+          IFS= read -r cur; IFS= read -r new
+          cur=${cur//\\/\\\\}; cur=${cur//\"/\\\"}
+          printf 'user = "admin:%s"\n' "$cur" > "$cfg"
+          HTTP_CODE=$(printf '%s' "$new" | curl -sf -o /dev/null -w '%{http_code}' -K "$cfg" \
+            -X PUT -H "Content-Type: text/plain" --data-binary @- \
+            "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password")
+          echo "Password change HTTP status: $HTTP_CODE"
+          [ "$HTTP_CODE" = "204" ]
       register: password_change
       changed_when: "'204' in password_change.stdout"
       when: initial_password_file.stat.exists
+      no_log: true
 
     - name: Delete initial admin password file
       ansible.builtin.file:
