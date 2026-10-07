@@ -1,6 +1,6 @@
 #!/bin/bash
 # The places that wait for a Job's Complete and Failed side by side and stop the other wait - strimzi-v1-conversion,
-# vagrant-smoke, backup-check - their lines as the files hold them, kubectl a stub (one condition at once, the other
+# backup-check (vagrant-smoke polls instead) - their lines as the files hold them, kubectl a stub (one condition at once, the other
 # sleeping - both orders), `kill` recorded (passed on to the running wait alone): only the wait still running is
 # signalled - the one wait -n reaped is no process of theirs any more (its PID free for another) - and it stops.
 set -u
@@ -18,7 +18,7 @@ case "$*" in *"condition=$FIRST"*) exit 0 ;; *condition=*) exec sleep 30 ;; esac
 STUB
 chmod +x "$W/kubectl"
 fails=0
-for f in deploy/ansible/playbooks/strimzi-v1-conversion.yml scripts/vagrant-smoke.sh tests/ansible/upgrade/backup-check.yml
+for f in deploy/ansible/playbooks/strimzi-v1-conversion.yml tests/ansible/upgrade/backup-check.yml
 do
   for first in Complete Failed; do
     # from the Complete waiter through the kill (its first line not a comment that names kill): the file's own lines,

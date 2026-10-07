@@ -39,14 +39,13 @@ d = list(yaml.safe_load_all(sys.stdin))
 print(" ".join([x["metadata"]["name"] for x in d if x] + [d[1]["spec"]["template"]["spec"]["volumes"][0]["configMap"]["name"]]))')
 check "the render: the ConfigMap, the Job and its mount named for the run" "$picked" \
   "vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12"
-# kubectl: every call recorded; COMPLETE: the Complete condition at once (else neither comes - both waits sleep)
+# kubectl: every call recorded; ENDED: the Job's condition (none: still running)
 cat > "$W/kubectl" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$W/calls"
 case "$*" in
-  *condition=Complete*) [ -n "${COMPLETE:-}" ] && exit 0; echo $$ >> "$W/waits"; exec sleep 30 ;;
-  *condition=Failed*) echo $$ >> "$W/waits"; exec sleep 30 ;;
-  *jsonpath*succeeded*) echo 1 ;;
+  *jsonpath*conditions*) echo "${ENDED:-}" ;;
+  *jsonpath*succeeded*) [ "${ENDED:-}" = Complete ] && echo 1 ;;
   *" logs "*) echo "✓ status is 200" ;;
 esac
 exit 0
@@ -54,23 +53,26 @@ STUB
 chmod +x "$W/kubectl"
 mkdir -p "$W/bin"; ln -s "$W/kubectl" "$W/bin/kubectl"
 remote() {  # remote <env...>: the remote shell as root runs it - its stdin the program, the run's name its argument
-  : > "$W/calls"; : > "$W/waits"
-  env "$@" W="$W" PATH="$W/bin:$PATH" bash -s vagrant-k6-smoke-ab12 < "$W/remote.sh"
+  : > "$W/calls"
+  # bounded: a shell that never ends fails here rather than hanging the suite
+  timeout -k 5 40 env "$@" W="$W" PATH="$W/bin:$PATH" bash -s vagrant-k6-smoke-ab12 < "$W/remote.sh"
 }
-out=$(remote COMPLETE=1 | tr -d '\r')
+deleted() { grep -cE 'delete (job|configmap) vagrant-k6-smoke-ab12' "$W/calls"; }
+out=$(remote ENDED=Complete | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
 objects=$(grep -oE '(job|job/|configmap) ?[a-z0-9-]*k6-smoke[a-z0-9-]*' "$W/calls" | awk '{print $NF}' | sed 's|.*/||' \
   | sort -u | tr '\n' ' ')
 check "a passing run: passed, every Job and ConfigMap it names the run's own" \
-  "$(grep -c '^SMOKE PASSED$' <<< "$out") $objects" "1 vagrant-k6-smoke-ab12 "
-check "a passing run: its Job and ConfigMap deleted" \
-  "$(grep -cE '^.*delete (job|configmap) vagrant-k6-smoke-ab12' "$W/calls")" 2
-# its connection gone (the caller stopped): the next heartbeat's write fails - it ends, deletes its Job and ConfigMap,
-# and its waits are gone
+  "$rc $(grep -c '^SMOKE PASSED$' <<< "$out") $objects" "0 1 vagrant-k6-smoke-ab12 "
+check "a passing run: its Job and ConfigMap deleted" "$(deleted)" 2
+out=$(remote ENDED=Failed | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
+check "a failed Job: failed, said so, its Job and ConfigMap deleted" \
+  "$rc $(grep -c '^SMOKE FAILED (Failed)$' <<< "$out") $(deleted)" "1 1 2"
+# its connection gone (the caller stopped): the next heartbeat's write fails - it ends, deleting its Job and ConfigMap
 t0=$SECONDS
 remote | head -c 0
-sleep 1
-left=0; for p in $(cat "$W/waits"); do [ -e "/proc/$p" ] && left=$((left + 1)); done
-check "its connection gone: it ends within a heartbeat, its Job and ConfigMap deleted, its waits gone" \
-  "$((SECONDS - t0 < 15)) $(grep -cE 'delete (job|configmap) vagrant-k6-smoke-ab12' "$W/calls") $left" "1 2 0"
+check "its connection gone: it ends at its next heartbeat, its Job and ConfigMap deleted" \
+  "$((SECONDS - t0 < 10)) $(deleted)" "1 2"
+# the heartbeat is the poll's own write: no process of its own (one left behind signalled a PID that may be another's)
+check "no background process in the remote shell" "$(grep -cE '&( |$)' "$W/remote.sh")" 0
 echo "vagrant-smoke: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

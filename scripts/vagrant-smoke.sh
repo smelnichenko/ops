@@ -61,20 +61,14 @@ vssh() {
   fi
 }
 vssh kubeadm "cat > /tmp/$name.yaml" < "$work/smoke.yaml"
-# One remote shell does the whole run: Complete and Failed are awaited side by side there and the loser killed, so no
-# waiter outlives the script (a local `vagrant ssh` waiter, killed by PID, left its ssh child holding the output open).
-# A heartbeat (a carriage return, dropped here) every 5 s: once the connection is gone its write fails and the shell
-# ends - its EXIT trap deletes the run's Job and ConfigMap, silently (a write would end it at once).
+# One remote shell does the whole run, polling the Job's end itself: no waiter to stop, none to outlive it. Each poll
+# writes a heartbeat (a carriage return, dropped here): once the connection is gone the write fails and the shell ends
+# - its EXIT trap deletes the run's Job and ConfigMap, silently (a write would end it at once).
 vssh kubeadm "sudo bash -s $name" <<'SH' | tr -d '\r'
 set -u
 NAME=$1
 K="kubectl --kubeconfig /etc/kubernetes/admin.conf -n schnappy-production"
-ok="" failed="" beat=""
 cleanup() {
-  local p own
-  # this shell's jobs still running only - never a PID wait -n reaped
-  own=" $(jobs -p | tr '\n' ' ') "
-  for p in $beat $ok $failed; do [[ $own == *" $p "* ]] && kill "$p" 2> /dev/null; done
   $K delete job "$NAME" --ignore-not-found --wait=false > /dev/null 2>&1
   $K delete configmap "$NAME" --ignore-not-found > /dev/null 2>&1
   rm -f "/tmp/$NAME.yaml"
@@ -83,18 +77,17 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM PIPE
 $K apply -f "/tmp/$NAME.yaml" || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
 rm -f "/tmp/$NAME.yaml"
-(trap '' PIPE; while sleep 5; do printf '\r' 2> /dev/null || { kill -TERM $$; exit; }; done) & beat=$!
-$K wait "job/$NAME" --for=condition=Complete --timeout=900s > /dev/null 2>&1 & ok=$!
-$K wait "job/$NAME" --for=condition=Failed --timeout=900s > /dev/null 2>&1 & failed=$!
-wait -n -p ended "$ok" "$failed"
-# the other wait, still running - not the one wait -n reaped: that PID is no process of this shell any more
-for p in "$ok" "$failed"; do [ "$p" = "${ended:-}" ] || kill "$p" 2> /dev/null; done
-wait "$ok" "$failed" 2> /dev/null
-ok="" failed=""
+ended=""
+for _ in $(seq 180); do  # 15 minutes
+  printf '\r' 2> /dev/null
+  ended=$($K get job "$NAME" -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2> /dev/null)
+  case "$ended" in *Complete* | *Failed*) break ;; esac
+  sleep 5
+done
 echo "--- k6 checks"
 $K logs "job/$NAME" -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(error|warning)' | head -40
 passed=$($K get job "$NAME" -o jsonpath='{.status.succeeded}')
 # its checks are printed above; a failed pod left behind would hold the next settle wait (argo-settled.yml) - the
 # EXIT trap deletes the Job and its ConfigMap
-if [ "$passed" = 1 ]; then echo "SMOKE PASSED"; else echo "SMOKE FAILED"; exit 1; fi
+if [ "$passed" = 1 ]; then echo "SMOKE PASSED"; else echo "SMOKE FAILED${ended:+ ($ended)}"; exit 1; fi
 SH
