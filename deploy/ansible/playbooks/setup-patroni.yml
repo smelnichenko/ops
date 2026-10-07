@@ -493,6 +493,27 @@
       changed_when: true
       no_log: true
 
+    # a first install's dump waiting on pi1 - this run's, or one a run cut short before its restore left - goes into an
+    # empty keycloak database (straight to this leader's Postgres, not through HAProxy); beside a database in use it is
+    # refused, naming the file: the realm exists nowhere else
+    - name: A Keycloak dump waiting on pi1
+      ansible.builtin.stat:
+        path: /var/backups/patroni-first-install/keycloak.sql
+      register: _keycloak_dump
+      delegate_to: pi1
+      run_once: true
+
+    # before its empty database exists: a Keycloak running reconnects to it, builds its own schema there, and the
+    # restore then refuses the database in use (the run stopped for a hand fix). The restore starts it again
+    - name: Keycloak stopped on both Pis before its empty database exists (a dump waits)
+      ansible.builtin.systemd:
+        name: keycloak
+        state: stopped
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      run_once: true
+      when: _keycloak_dump.stat.exists
+
     # the leader's own socket: no password needed, none on a command line
     - name: Create forgejo + keycloak databases
       ansible.builtin.shell: |
@@ -504,16 +525,6 @@
         executable: /bin/bash
       loop: [forgejo, keycloak]
       changed_when: true
-
-    # a first install's dump waiting on pi1 - this run's, or one a run cut short before its restore left - goes into an
-    # empty keycloak database (straight to this leader's Postgres, not through HAProxy); beside a database in use it is
-    # refused, naming the file: the realm exists nowhere else
-    - name: A Keycloak dump waiting on pi1
-      ansible.builtin.stat:
-        path: /var/backups/patroni-first-install/keycloak.sql
-      register: _keycloak_dump
-      delegate_to: pi1
-      run_once: true
 
     - name: Restore the waiting Keycloak dump
       ansible.builtin.include_tasks: tasks/patroni-keycloak-restore.yml
