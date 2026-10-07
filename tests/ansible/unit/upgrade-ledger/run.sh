@@ -740,6 +740,16 @@ json.dump({"59": {"platform": "p59", "images": img[S59]}, "61": {"platform": "p6
 check("pin: 59 on the commit and images it proved", m.pin_problems(S59, "p59", pin_file), [])
 check("pin: 61 on the commit and images it proved", m.pin_problems(S61, "p61", pin_file), [])
 check("pin: 59 on another platform commit - refused", len(m.pin_problems(S59, "other", pin_file)), 1)
+# the round trip: tests/clickhouse-pin/run.sh's own lines that write the result, with the step files' images, read back
+# by pin_problems (they were tested apart, against hand-written JSON)
+pin_sh = open("tests/clickhouse-pin/run.sh").read()
+writer = pin_sh[pin_sh.index("{ printf '{\"59\""):pin_sh.index('} > "$result"') + len('} > "$result"')]
+written = os.path.join(tempfile.mkdtemp(), "written.json")
+subprocess.run(["bash", "-c", writer], check=True, env=dict(
+    os.environ, result=written, sha59="p59", old59=img[S59][0], new59=img[S59][1], pin59="24.8",
+    sha61="p61", old61=img[S61][0], new61=img[S61][1], pin61="25.8"))
+check("pin: the result run.sh writes, read back - 59 and 61 proven",
+      (m.pin_problems(S59, "p59", written), m.pin_problems(S61, "p61", written)), ([], []))
 json.dump({"61": {"platform": "p61", "images": img[S61]}}, open(pin_file, "w"))
 check("pin: 59 with no result of its own (the run failed it) - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
 json.dump({"59": {"platform": "p59", "images": ["24.8-alpine", "25.3-alpine"]}}, open(pin_file, "w"))
