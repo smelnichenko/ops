@@ -535,6 +535,13 @@ check("its end: the next phase may run",
 check("a released start: the next phase may run",
       P(S47, "backup", ev(*base47, f"{S47} start backup postgres host:1", f"{S47} end backup released"), "postgres"),
       [])
+# an end closes only the start it ends - by its token (the claim's host:pid:nonce): a released run still alive, its end
+# coming later, must not close the claim made after the release (an end with no token, as an older ledger's, closes it)
+late = ev(*base47, f"{S47} start merge infra host:1:aa", f"{S47} end merge released host:1:aa",
+          f"{S47} start preview host:2:bb", f"{S47} end merge passed host:1:aa")
+refused("a released run's late end: the claim made after the release still open", P(S47, "backup", late, "postgres"),
+        ["preview host:2:bb started"])
+check("its own end closes it", P(S47, "backup", late + ev(f"{S47} end preview passed host:2:bb"), "postgres"), [])
 # the claim is written against the read the checks were made on: a concurrent change refuses it
 class _Rc:
     def __init__(self, rc, err=""):
@@ -555,9 +562,10 @@ def claim(replace_rc):
             setattr(m, k, v)
     return got, sent, list(m.CLAIMED)
 got, sent, claimed = claim(0)
-check("the claim: start written with the read's resourceVersion",
-      (got, sent[0]["metadata"]["resourceVersion"], sent[0]["data"]["events"].split()[2:4], claimed),
-      ("claimed", "7", ["start", "backup"], [(S47, "backup")]))
+check("the claim: start written with the read's resourceVersion, its token kept for the end",
+      (got, sent[0]["metadata"]["resourceVersion"], sent[0]["data"]["events"].split()[2:4],
+       [c[:2] for c in claimed], sent[0]["data"]["events"].split()[-1] == claimed[0][2]),
+      ("claimed", "7", ["start", "backup"], [(S47, "backup")], True))
 got, _, claimed = claim(1)
 check("a concurrent change: the claim refused, nothing claimed", (got.startswith("REFUSED: the ledger changed"), claimed),
       (True, []))
@@ -566,7 +574,7 @@ def main_ends(code):
     ends, saved = [], {k: getattr(m, k) for k in ("record", "begin")}
     m.record = lambda st, e, *a, **k: ends.append((st, e, *a))
     def fake_begin(step):
-        m.CLAIMED.append((step, "begin"))
+        m.CLAIMED.append((step, "begin", "host:1:aa"))
         if code:
             sys.exit(code)
     m.begin = fake_begin
@@ -582,8 +590,59 @@ def main_ends(code):
         for k, v in saved.items():
             setattr(m, k, v)
     return ends
-check("a phase that passes: its end recorded passed", main_ends(0), [(S47, "end", "begin", "passed")])
-check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"), [(S47, "end", "begin", "failed")])
+check("a phase that passes: its end recorded passed, with its claim's token", main_ends(0),
+      [(S47, "end", "begin", "passed", "host:1:aa")])
+check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
+      [(S47, "end", "begin", "failed", "host:1:aa")])
+# a run whose claim was closed meanwhile (released by hand, its run still alive) records nothing more: its events would
+# land in another phase's claim
+def recorded(lines):
+    sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten")}
+    text = "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(lines))
+    m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text))
+    m.ten = lambda command, stdin=None, check=True: sent.append(stdin) or _Rc(0)
+    m.CLAIMED[:] = [(S47, "merge", "host:1:aa")]
+    try:
+        m.record(S47, "merged", "infra", "abc")
+        got = "recorded"
+    except SystemExit as e:
+        got = "refused" if "closed" in str(e) else str(e)
+    finally:
+        m.CLAIMED.clear()
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return got, len(sent)
+check("its claim still open: recorded", recorded([f"{S47} start merge infra host:1:aa"]), ("recorded", 1))
+check("its claim released meanwhile: refused, nothing written",
+      recorded([f"{S47} start merge infra host:1:aa", f"{S47} end merge released host:1:aa"]), ("refused", 0))
+check("released, and another phase claimed it: refused", recorded(
+    [f"{S47} start merge infra host:1:aa", f"{S47} end merge released host:1:aa", f"{S47} start preview host:2:bb"]),
+    ("refused", 0))
+# release closes a start only when the run that made it is gone - not one alive on this host (a process this test
+# starts, its command line naming the script, and stops)
+import socket, subprocess
+def released(pid):
+    ends, saved = [], {k: getattr(m, k) for k in ("read_ledger", "confirm", "record")}
+    token = f"{socket.gethostname()}:{pid}:cc"
+    m.read_ledger = lambda: ({}, ev(f"{S47} start merge infra {token}"))
+    m.confirm = lambda q: True
+    m.record = lambda st, e, *a, **k: ends.append((e, *a))
+    try:
+        m.release(S47)
+        got = ends
+    except SystemExit as e:
+        got = "refused" if "alive" in str(e) else str(e)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return got, token
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "upgrade-production.py"])
+got, _ = released(child.pid)
+check("release: the run that claimed it alive here - refused", got, "refused")
+child.kill()
+child.wait()
+got, token = released(child.pid)
+check("release: that run gone - its start closed, with its token", got, [("end", "merge", "released", token)])
 
 # a step that moves ClickHouse's image (59, 61) is proven only with its rollback pin proven on the same platform commit
 # and images (tests/clickhouse-pin's result; the full run starts it beside the build)

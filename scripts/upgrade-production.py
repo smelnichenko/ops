@@ -53,6 +53,7 @@ import importlib.util
 import json
 import os
 import re
+import secrets
 import shlex
 import subprocess
 import socket
@@ -191,14 +192,16 @@ def problems(names, step, phase, events, info, arg=None):
 
 
 def open_start(mine):
-    """The step's last phase start (time, its arguments) that no end followed, else None.
+    """The step's last phase start (time, its arguments - its token, host:pid:nonce, last) that no end of its own
+    followed, else None. An end carries the token of the start it closes: a released run's late end leaves a later
+    claim open (one with no token, an older ledger's, closes whatever start is open).
 
     `mine`: (time, event, args)."""
     started = None
     for at, e, a in mine:
         if e == "start":
             started = (at, a)
-        elif e == "end":
+        elif e == "end" and started and (len(a) < 3 or a[2] == started[1][-1]):
             started = None
     return started
 
@@ -248,6 +251,15 @@ def record(step, event, *args, obj=None):
     """Append one event - kubectl replace with the read resourceVersion (`obj`'s, when given: the read a decision was
     made on): a concurrent change refuses."""
     obj = obj if obj is not None else read_ledger()[0]
+    # a run whose claim on the step was closed meanwhile (released by hand, the run alive) records nothing more: its
+    # events would land in whatever claimed the step after
+    token = next((t for s, _, t in CLAIMED if s == step), None)
+    if token:
+        started = open_start([(at, e, a) for at, s, e, a in parse_events(obj.get("data", {}).get("events", ""))
+                              if s == step])
+        if not started or started[1][-1] != token:
+            sys.exit(f"REFUSED: this run's claim on {step} was closed meanwhile (deploy:upgrade:release?) - "
+                     f"{event} not recorded")
     at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = " ".join((at, step, event, *args))
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
@@ -683,7 +695,7 @@ def refuse(lines):
         sys.exit("REFUSED:\n" + "\n".join("  " + l for l in lines))
 
 
-CLAIMED = []  # the step this process claimed (its start recorded): main() records its end
+CLAIMED = []  # (step, phase, token) this process claimed (its start recorded): main() records its end
 
 
 def ledger_for(step, phase, arg=None):
@@ -692,8 +704,9 @@ def ledger_for(step, phase, arg=None):
     obj, events = read_ledger()
     info = step_info(step) if step in names else None
     refuse(problems(names, step, phase, events, info, arg))
-    record(step, "start", phase, *([arg] if arg else []), f"{socket.gethostname()}:{os.getpid()}", obj=obj)
-    CLAIMED.append((step, phase))
+    token = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+    record(step, "start", phase, *([arg] if arg else []), token, obj=obj)
+    CLAIMED.append((step, phase, token))
     return names, events, info
 
 
@@ -703,9 +716,14 @@ def release(step):
     started = open_start([(at, e, a) for at, s, e, a in events if s == step])
     if not started:
         sys.exit(f"{step} has no open start")
+    token = started[1][-1]
+    host, pid = (token.split(":") + ["", ""])[:2]
+    if host == socket.gethostname() and pid.isdigit() and os.path.exists(f"/proc/{pid}/cmdline") \
+            and "upgrade-production" in open(f"/proc/{pid}/cmdline").read():
+        sys.exit(f"REFUSED: the run that started {step}'s {started[1][0]} (pid {pid}) is alive here - stop it first")
     refuse([] if confirm(f"Nothing runs {step}'s {' '.join(started[1])} (started {started[0]:%Y-%m-%d %H:%M} UTC) "
                          f"any more - close it?") else ["not confirmed"])
-    record(step, "end", started[1][0], "released", obj=obj)
+    record(step, "end", started[1][0], "released", token, obj=obj)
 
 
 def ansible(*args):
@@ -961,8 +979,11 @@ def main():
         result = "passed" if e.code in (None, 0) else "failed"
         raise
     finally:
-        for step, phase in CLAIMED:
-            record(step, "end", phase, result)
+        for step, phase, token in CLAIMED:
+            try:
+                record(step, "end", phase, result, token)
+            except SystemExit as e:  # released meanwhile: its end is written already
+                print(e)
 
 
 if __name__ == "__main__":
