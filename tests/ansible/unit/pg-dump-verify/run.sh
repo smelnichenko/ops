@@ -67,5 +67,12 @@ expect fail "a database missing" 'other db: psql: error: database "other db" doe
 dump unreadable 'COPY public."unterminated (x) FROM stdin;'
 counts as-dumped
 expect fail "a COPY line it cannot read" "a COPY line this cannot read" unreadable
+# a dump with no table (an empty pg_dumpall, a truncated one) proves nothing; a COPY before any \connect is no
+# pg_dumpall (its database unknown)
+printf '%s\n' '\connect app' '-- nothing else' | gzip > "$W/notable.sql.gz"
+counts as-dumped
+expect fail "a dump with no table: fails" "no table in the dump" notable
+printf '%s\n' 'COPY public.t (x) FROM stdin;' '1' '\.' | gzip > "$W/noconnect.sql.gz"
+expect fail "a COPY before any \connect: fails" "a COPY before any" noconnect
 echo "pg-dump-verify: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
