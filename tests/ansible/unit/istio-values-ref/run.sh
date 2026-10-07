@@ -29,7 +29,8 @@ for f in ("deploy/ansible/playbooks/setup-istio.yml", "deploy/ansible/playbooks/
     looks = [t for t in tasks if "git -C" in str(t.get("kubernetes.core.helm", {}).get("values", ""))]
     hostile = "/x; touch " + os.path.join(W, "pwned")
     for t in looks:
-        expr = t["kubernetes.core.helm"]["values"].split("lookup('ansible.builtin.pipe', ", 1)[1].rsplit(") | from_yaml", 1)[0]
+        expr = t["kubernetes.core.helm"]["values"].split("lookup('ansible.builtin.pipe', ", 1)[1]
+        expr = expr.rsplit(") | from_yaml", 1)[0]
         cmd = env.from_string("{{ " + expr + " }}").render(infra_dir=hostile, infra_values_ref="main")
         check(f"{f}: {t['name']}: the directory one argument", shlex.split(cmd)[2] == hostile, cmd)
     sync = [t for t in tasks if str(t.get("name", "")).startswith("Infra's local main is origin's")]
