@@ -94,15 +94,19 @@
         _pg_restored: >-
           {{ _pg_restored | default([]) + [dump_name ~ ': ' ~ _tables.stdout ~ ', ' ~ _replay.stdout_lines[-1]
              ~ ' expected errors' ~ ((', seeded ' ~ _rows.stdout) if _rows.stdout is defined else '')] }}
+  # its policies removed whatever the side cluster's removal did: a failed task in always: ends it there (the side
+  # cluster outliving its bound left them behind)
   always:
-    - name: "Postgres - remove the side cluster (its volume goes with it): {{ dump_name }}"
-      ansible.builtin.include_tasks: side-cluster-delete.yml
-      vars:
-        side_kubectl: "{{ kubectl }} -n {{ pg_namespace }}"
-        side_cluster: "{{ restored }}"
-
-    - name: "Postgres - remove the side cluster's policies: {{ dump_name }}"
-      ansible.builtin.include_tasks: side-cluster-policies.yml
-      vars:
-        side_cluster: "{{ restored }}"
-        side_state: absent
+    - name: "Postgres - remove the side cluster, then its policies: {{ dump_name }}"
+      block:
+        - name: "Postgres - remove the side cluster (its volume goes with it): {{ dump_name }}"
+          ansible.builtin.include_tasks: side-cluster-delete.yml
+          vars:
+            side_kubectl: "{{ kubectl }} -n {{ pg_namespace }}"
+            side_cluster: "{{ restored }}"
+      always:
+        - name: "Postgres - remove the side cluster's policies: {{ dump_name }}"
+          ansible.builtin.include_tasks: side-cluster-policies.yml
+          vars:
+            side_cluster: "{{ restored }}"
+            side_state: absent

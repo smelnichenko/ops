@@ -2,7 +2,8 @@
 # tests/ansible/upgrade/tasks/side-cluster-delete.yml's shell as the task file holds it (rendered by Ansible's templar,
 # its poll cut to 0.1 s), kubectl a stub: a side cluster's pods and volumes gone after its delete pass - at once, or
 # after a while (a pod still terminating when the foreground delete returned failed the run once, read a single time);
-# still there at the bound fails, naming them; kubectl failing fails. The four places that remove a side cluster use it.
+# still there at the bound fails, naming them; a read failing is read again (one failed get ended the run), failing
+# to the bound fails, saying why. The four places that remove a side cluster use it.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -10,14 +11,15 @@ PY=python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin"
-# get pods,pvc: "pod/x" for the first LEFT_FOR calls, then nothing; GET_FAIL=1: the API server not answering
+# get pods,pvc: "pod/x" for the first LEFT_FOR calls, then nothing; GET_FAIL_FOR=<n>: the API server not answering the
+# first n
 cat > "$W/bin/kubectl" <<'STUB'
 #!/bin/bash
 case "$*" in
   *delete*) exit 0 ;;
   *"get pods,pvc"*)
-    [ -z "${GET_FAIL:-}" ] || { echo "connection refused" >&2; exit 1; }
     n=$(( $(cat "$W/n" 2> /dev/null || echo 0) + 1 )); echo $n > "$W/n"
+    [ "$n" -gt "${GET_FAIL_FOR:-0}" ] || { echo "connection refused" >&2; exit 1; }
     [ "$n" -gt "${LEFT_FOR:-0}" ] || echo pod/side-1 ;;
 esac
 STUB
@@ -35,7 +37,10 @@ fails = 0
 for name, env, want_rc, words in (("gone at once", {}, 0, ""),
                                   ("a pod still terminating, gone after a while", {"LEFT_FOR": "3"}, 0, ""),
                                   ("still there at the bound: fails, naming it", {"LEFT_FOR": "999"}, 1, "pod/side-1"),
-                                  ("kubectl failing: fails", {"GET_FAIL": "1"}, 1, "")):
+                                  ("kubectl failing once (the API server a moment away), then gone: passes",
+                                   {"GET_FAIL_FOR": "1"}, 0, ""),
+                                  ("kubectl failing to the bound: fails, saying so", {"GET_FAIL_FOR": "999"}, 1,
+                                   "connection refused")):
     os.path.exists(os.path.join(W, "n")) and os.remove(os.path.join(W, "n"))
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))

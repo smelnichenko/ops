@@ -211,23 +211,27 @@
         - name: It failed
           ansible.builtin.fail:
             msg: "the side cluster did not recover - its state above"
+      # each removal whatever the one before did: a failed task in always: ends it there (the side cluster outliving its
+      # bound left the Backup and the policies behind)
       always:
-        - name: Remove the side cluster (its volume goes with it)
-          ansible.builtin.include_tasks: tasks/side-cluster-delete.yml
-          vars:
-            side_kubectl: "{{ kubectl }}"
-            side_cluster: "{{ recovered }}"
-
         - name: Remove the backup object (its data stays in the store)
           ansible.builtin.command: "{{ kubectl }} delete backups.postgresql.cnpg.io {{ _backup }} --ignore-not-found"
           changed_when: true
 
-        - name: Remove the side cluster's policies
-          ansible.builtin.include_tasks: tasks/side-cluster-policies.yml
-          vars:
-            pg_cluster: "{{ cluster }}"
-            side_cluster: "{{ recovered }}"
-            side_state: absent
+        - name: Remove the side cluster, then its policies
+          block:
+            - name: Remove the side cluster (its volume goes with it)
+              ansible.builtin.include_tasks: tasks/side-cluster-delete.yml
+              vars:
+                side_kubectl: "{{ kubectl }}"
+                side_cluster: "{{ recovered }}"
+          always:
+            - name: Remove the side cluster's policies
+              ansible.builtin.include_tasks: tasks/side-cluster-policies.yml
+              vars:
+                pg_cluster: "{{ cluster }}"
+                side_cluster: "{{ recovered }}"
+                side_state: absent
 
     - name: Postgres restores
       ansible.builtin.debug:

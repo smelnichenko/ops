@@ -1,7 +1,9 @@
 ---
 # A CNPG side cluster deleted (foreground: its pods and volumes first) and proven gone - no pod or volume of it left,
 # waited for up to side_gone_seconds (default 300): read a single time, a pod still terminating when the delete
-# returned failed the run once. Expects: side_kubectl (kubectl with the cluster's namespace), side_cluster.
+# returned failed the run once. A read that fails is read again (one failed get - the API server a moment away -
+# ended the run); failing to the bound fails, saying so. Expects: side_kubectl (kubectl with the cluster's namespace),
+# side_cluster.
 # Tested: tests/ansible/unit/side-cluster-delete.
 - name: "The side cluster deleted, nothing of it left: {{ side_cluster }}"
   ansible.builtin.shell: |
@@ -9,8 +11,11 @@
     {{ side_kubectl }} delete clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found --wait=true \
       --cascade=foreground --timeout=600s
     for i in $(seq 1 {{ [1, ((side_gone_seconds | default(300)) / (side_poll | default(5))) | int] | max }}); do
-      left=$({{ side_kubectl }} get pods,pvc -l cnpg.io/cluster={{ side_cluster }} -o name)
-      [ -n "$left" ] || exit 0
+      if left=$({{ side_kubectl }} get pods,pvc -l cnpg.io/cluster={{ side_cluster }} -o name 2>&1); then
+        [ -n "$left" ] || exit 0
+      else
+        left="not read: $left"
+      fi
       sleep {{ side_poll | default(5) }}
     done
     echo "the side cluster outlived its delete by {{ side_gone_seconds | default(300) }} s: $left"
