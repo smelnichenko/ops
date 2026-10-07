@@ -61,7 +61,7 @@
 
     - name: Forgejo's database dropped and made empty
       ansible.builtin.command: >-
-        psql -h 127.0.0.1 -p 5000 -U postgres -d postgres -v ON_ERROR_STOP=1
+        psql -w -h 127.0.0.1 -p 5000 -U postgres -d postgres -v ON_ERROR_STOP=1
         -c "DROP DATABASE IF EXISTS forgejo WITH (FORCE)" -c "CREATE DATABASE forgejo"
       environment:
         PGPASSWORD: "{{ postgres_admin_password }}"
@@ -146,7 +146,7 @@
 
     - name: The column the target's migration adds - not there yet
       ansible.builtin.command: >-
-        psql -h 127.0.0.1 -p 5000 -U postgres -d forgejo -Atc
+        psql -w -h 127.0.0.1 -p 5000 -U postgres -d forgejo -Atc
         "select count(*) from information_schema.columns where table_name = '{{ migration_adds.split('.')[0] }}' and column_name = '{{ migration_adds.split('.')[1] }}'"
       environment:
         PGPASSWORD: "{{ postgres_admin_password }}"
@@ -236,7 +236,7 @@
 
     - name: The column there now (the migration ran)
       ansible.builtin.command: >-
-        psql -h 127.0.0.1 -p 5000 -U postgres -d forgejo -Atc
+        psql -w -h 127.0.0.1 -p 5000 -U postgres -d forgejo -Atc
         "select count(*) from information_schema.columns where table_name = '{{ migration_adds.split('.')[0] }}' and column_name = '{{ migration_adds.split('.')[1] }}'"
       environment:
         PGPASSWORD: "{{ postgres_admin_password }}"

@@ -647,7 +647,7 @@
         set -o pipefail
         # the password on stdin, not in the environment Ansible puts on the command line
         read -r PGPASSWORD; export PGPASSWORD
-        psql postgresql://postgres@127.0.0.1:{{ _db_port }}/postgres -c 'SELECT 1' 2>/dev/null
+        psql -w postgresql://postgres@127.0.0.1:{{ _db_port }}/postgres -c 'SELECT 1' 2>/dev/null
       args:
         executable: /bin/bash
         stdin: "{{ postgres_admin_password }}"

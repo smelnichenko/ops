@@ -34,7 +34,7 @@
         cmd: |
           set -euo pipefail
           set -a; . /etc/pi-backup/env; set +a
-          P=(-h 127.0.0.1 -p 5000 -U postgres -v ON_ERROR_STOP=1)
+          P=(-w -h 127.0.0.1 -p 5000 -U postgres -v ON_ERROR_STOP=1)
           v=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
           psql "${P[@]}" -d postgres -qc "drop database if exists backup_probe" -c "create database backup_probe"
           psql "${P[@]}" -d backup_probe -qc "create table marker (v text)" -c "insert into marker values ('$v')"
@@ -175,7 +175,7 @@
         cmd: |
           set -euo pipefail
           set -a; . /etc/pi-backup/env; set +a
-          P=(-h 127.0.0.1 -p 5000 -U postgres)
+          P=(-w -h 127.0.0.1 -p 5000 -U postgres)
           q() { psql "${P[@]}" -d "$1" -Atc "$2"; }
           # a dump for every database Patroni has, none missing
           have=$(q postgres "select datname from pg_database where not datistemplate and datname <> 'postgres' order by 1" | tr '\n' ' ')
@@ -232,7 +232,7 @@
           set -euo pipefail
           set -a; . /etc/pi-backup/env; set +a
           rm -rf {{ work }}
-          psql -h 127.0.0.1 -p 5000 -U postgres -d postgres -qc "drop database if exists backup_probe"
+          psql -w -h 127.0.0.1 -p 5000 -U postgres -d postgres -qc "drop database if exists backup_probe"
       changed_when: true
 
     - name: Restored
