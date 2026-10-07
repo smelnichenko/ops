@@ -96,6 +96,13 @@ fails += not check_("upstream: its CRDs and the cluster's version and API versio
 contents = sorted(files.values())
 fails += not check_("upstream: the infra value file, the inline values and valuesObject, each a file",
                     contents == sorted(["fromfile: 1\n", "inline: 2", "object: 3\n"]), contents)
+# Argo CD's precedence, as helm reads -f (each later one over the ones before): the value files in their order, then
+# the inline values, then valuesObject - and the parameters over all of them (after every -f)
+order = [files[args[i + 1]] for i, a in enumerate(args) if a == "-f"]
+fails += not check_("upstream: the values in Argo CD's precedence - value files, values, valuesObject, then parameters",
+                    order == ["fromfile: 1\n", "inline: 2", "object: 3\n"]
+                    and max(i for i, a in enumerate(args) if a == "-f") < min(i for i, a in enumerate(args)
+                                                                          if a in ("--set", "--set-string")), args)
 fails += not check_("upstream: parameters - forceString as --set-string",
                     "--set-string" in args and args[args.index("--set-string") + 1] == "a=1"
                     and args[args.index("--set") + 1] == "b=2", args)
