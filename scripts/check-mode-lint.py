@@ -15,7 +15,8 @@ order, imports and static includes followed, as the preview runs it:
     skipped, or a task skipped by its own condition, registers no such field: a read with `| default(...)` is fine;
   - a read in a task that check mode skips itself is fine.
 
-Usage: scripts/check-mode-lint.py                    (every step's playbook lines; exit 1 naming each read)
+Usage: scripts/check-mode-lint.py                    (every step's playbook lines, and the playbooks a deploy task
+                                                     hands {{.CLI_ARGS}} - a --check preview; exit 1 naming each read)
        scripts/check-mode-lint.py <playbook> [--tags <t,...>]
 """
 import os
@@ -138,13 +139,25 @@ def step_lines():
     return sorted(out, key=str)
 
 
+def previewed_playbooks():
+    """The playbooks a Taskfile task runs with the caller's arguments ({{.CLI_ARGS}}: a --check preview among them)."""
+    tasks = yaml.safe_load(open(os.path.join(OPS, "Taskfile.yml")))["tasks"]
+    out = set()
+    for t in tasks.values():
+        for c in (t or {}).get("cmds") or []:
+            cmd = c.get("cmd", "") if isinstance(c, dict) else str(c)
+            if "{{.CLI_ARGS}}" in cmd:
+                out.update(re.findall(r"playbooks/([a-z0-9-]+\.yml)", cmd))
+    return sorted(out)
+
+
 def main():
     args = sys.argv[1:]
     if args:
         tags = args[args.index("--tags") + 1] if "--tags" in args else None
         lines = [(args[0], tags)]
     else:
-        lines = step_lines()
+        lines = step_lines() + [(os.path.join(PLAYBOOKS, p), None) for p in previewed_playbooks()]
     bad = [b for p, t in lines for b in lint(p, set(t.split(",")) if t else None)]
     print("\n".join(bad) or f"{len(lines)} playbook lines: no read of a result check mode skips")
     sys.exit(1 if bad else 0)

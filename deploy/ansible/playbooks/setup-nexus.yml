@@ -446,6 +446,7 @@
         force_basic_auth: true
         return_content: true
       register: eula_status
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
     - name: Accept EULA
       ansible.builtin.uri:
@@ -484,6 +485,7 @@
         force_basic_auth: true
         return_content: true
       register: active_realms
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
     - name: Enable Docker Bearer Token Realm
       ansible.builtin.uri:
@@ -506,6 +508,7 @@
         force_basic_auth: true
         return_content: true
       register: existing_repos
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
     - name: Set existing_repo_names fact
       ansible.builtin.set_fact:
@@ -741,6 +744,7 @@
         force_basic_auth: true
         return_content: true
       register: final_repos
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
     - name: Bootstrap summary
       ansible.builtin.debug:
@@ -790,6 +794,7 @@
     - name: Check VIP ownership
       ansible.builtin.command: ip -o addr show to "{{ vip }}/32"
       register: _vip_owner
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     # Neither (Keepalived down, a changed VIP) would otherwise skip both Pis and

@@ -29,6 +29,7 @@
     force_basic_auth: true
     return_content: true
   register: _repos
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
 - name: Create pytorch-cpu hosted repository
   ansible.builtin.uri:
@@ -55,6 +56,7 @@
     force_basic_auth: true
     return_content: true
   register: _pypi_public
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
 - name: Add pytorch-cpu to the pypi-public group
   ansible.builtin.uri:
@@ -85,6 +87,7 @@
   loop: "{{ pytorch_cpu_wheels }}"
   loop_control: { label: "{{ item.file }}" }
   register: _wheel_lookup
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
 - name: Work out which wheels are missing
   ansible.builtin.set_fact:

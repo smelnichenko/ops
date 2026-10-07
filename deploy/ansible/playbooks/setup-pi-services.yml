@@ -164,6 +164,7 @@
         set -o pipefail
         ls -d /etc/postgresql/*/main | head -1
       register: pg_conf_dir
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     - name: Configure Postgres for network access + replication
@@ -465,6 +466,7 @@
           --config /var/lib/forgejo/custom/conf/app.ini" 2>&1 \
           | awk 'NR>1 { print $2 }'
       register: _forgejo_users
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     - name: Create Forgejo admin user (with retries — Forgejo can be slow to settle after first start)

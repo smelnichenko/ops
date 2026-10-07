@@ -42,6 +42,7 @@
         set -eo pipefail
         ip -o -4 addr show | awk -v ip="{{ ansible_host }}" '$4 ~ "^"ip"/" {print $2; exit}'
       register: _vrrp_iface
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     - name: Set vrrp_interface fact
@@ -605,6 +606,7 @@
         set -o pipefail
         systemctl is-active keepalived && ip addr show | grep {{ vip }} || echo "VIP not on this node"
       register: keepalived_status
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       changed_when: false
 
     - name: Print status
@@ -637,6 +639,7 @@
         url: "http://{{ vip }}:3000/api/v1/version"
         status_code: 200
       register: forgejo_vip
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
       retries: 24
       delay: 5
       until: forgejo_vip.status == 200
@@ -646,6 +649,7 @@
         url: "http://{{ vip }}:8080/realms/master"
         status_code: 200
       register: keycloak_vip
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
     - name: Print results
       ansible.builtin.debug:

@@ -89,6 +89,10 @@ old = open("tests/ansible/unit/check-mode-lint/strimzi-v1-conversion-before-59e2
 check("step 37's conversion before its fix: named",
       [x.split("reads ")[1].split(" -")[0] for x in c.lint("deploy/ansible/playbooks/strimzi-v1-conversion.yml",
                                                            None, old)], ["_after.stdout_lines"])
+# the playbooks a deploy task hands the caller's arguments ({{.CLI_ARGS}}: a --check preview among them) are linted
+# too, read from the Taskfile
+check("the playbooks a deploy task previews: linted (setup-keepalived's and setup-nexus' among them)",
+      {"setup-keepalived.yml", "setup-nexus.yml"} <= set(c.previewed_playbooks()), True)
 r = subprocess.run(["scripts/check-mode-lint.py"], capture_output=True, text=True)
 check("every step's playbook lines today: clean", (r.returncode, r.stdout.strip().endswith("check mode skips")),
       (0, True))
