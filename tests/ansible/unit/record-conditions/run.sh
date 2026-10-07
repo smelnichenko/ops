@@ -16,8 +16,8 @@ import os, yaml
 W = os.environ["W"]
 SKIPPED, OK, FAILED = {"skipped": True, "changed": False}, {"rc": 0, "failed": False}, {"rc": 1, "failed": True}
 cases = [("current", "current", None), ("pending, restarted and checked", "pending", OK),
-         ("pending, its restart skipped here", "pending", SKIPPED), ("pending, the check never reached", "pending", "-"),
-         ("pending, the check failed", "pending", FAILED)]
+         ("pending, its restart skipped here", "pending", SKIPPED),
+         ("pending, the check never reached", "pending", "-"), ("pending, the check failed", "pending", FAILED)]
 plays = []
 for f, name, pend, health, as_list in (
         ("setup-consul.yml", "Consul's config as it runs it, recorded", "_consul_pending", "_consul_health", False),
@@ -27,18 +27,25 @@ for f, name, pend, health, as_list in (
     for label, state, h in cases:
         answer = [state, "c0ffee"] if as_list else {"stdout_lines": [state, "c0ffee"]}
         facts = {pend: answer, **({health: h} if h not in (None, "-") else {})}
-        plays.append({"hosts": "localhost", "gather_facts": False, "name": f"{f}: {label}", "tasks": [
+        # a host of its own per case: a fact set in one play stays on its host for the next
+        host = f"case{len(plays)}"
+        plays.append({"hosts": host, "gather_facts": False, "name": f"{f}: {label}", "tasks": [
             {"ansible.builtin.set_fact": facts},
             {"name": "recorded", "ansible.builtin.debug": {"msg": f"RECORDED {f}: {label}"}, "when": task["when"]},
             {"name": "not", "ansible.builtin.debug": {"msg": f"NOT RECORDED {f}: {label}"},
              "when": f"not ({task['when']})"}]})
 yaml.safe_dump(plays, open(os.path.join(W, "play.yml"), "w"), sort_keys=False)
+yaml.safe_dump({"all": {"hosts": {p["hosts"]: {"ansible_connection": "local",
+                                                 "ansible_python_interpreter": "{{ ansible_playbook_python }}"}
+                                  for p in plays}}}, open(os.path.join(W, "hosts.yml"), "w"))
 PY
-out=$(ANSIBLE_NOCOLOR=1 "$AP" -i localhost, -c local "$W/play.yml" 2>&1) || { echo "$out" | grep -E "ERROR|fatal" | head -3; }
+out=$(ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" 2>&1) \
+  || { echo "$out" | grep -E "ERROR|fatal" | head -3; }
 fails=0
 for f in setup-consul.yml setup-vault-pi.yml; do
-  for c in "current:RECORDED" "pending, restarted and checked:RECORDED" "pending, its restart skipped here:NOT RECORDED" \
-           "pending, the check never reached:NOT RECORDED" "pending, the check failed:NOT RECORDED"; do
+  for c in "current:RECORDED" "pending, restarted and checked:RECORDED" \
+           "pending, its restart skipped here:NOT RECORDED" "pending, the check never reached:NOT RECORDED" \
+           "pending, the check failed:NOT RECORDED"; do
     label=${c%%:*} want=${c#*:}
     if grep -qF "\"msg\": \"$want $f: $label\"" <<< "$out"; then echo "PASS $f: $label: $want"
     else echo "FAIL $f: $label: want $want"; fails=$((fails + 1)); fi
