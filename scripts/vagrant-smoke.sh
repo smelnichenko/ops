@@ -69,8 +69,9 @@ $K apply -f /tmp/vagrant-k6-smoke.yaml || { echo "SMOKE FAILED: the Job not appl
 rm -f /tmp/vagrant-k6-smoke.yaml
 $K wait job/vagrant-k6-smoke --for=condition=Complete --timeout=900s > /dev/null 2>&1 & ok=$!
 $K wait job/vagrant-k6-smoke --for=condition=Failed --timeout=900s > /dev/null 2>&1 & failed=$!
-wait -n "$ok" "$failed"
-kill "$ok" "$failed" 2> /dev/null
+wait -n -p ended "$ok" "$failed"
+# the other wait, still running - not the one wait -n reaped: that PID is no process of this shell any more
+for p in "$ok" "$failed"; do [ "$p" = "${ended:-}" ] || kill "$p" 2> /dev/null; done
 wait 2> /dev/null
 echo "--- k6 checks"
 $K logs job/vagrant-k6-smoke -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(error|warning)' | head -40

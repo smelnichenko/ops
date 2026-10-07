@@ -152,9 +152,9 @@
             $K wait job/$job --for=condition=Failed --timeout=600s > /dev/null & failed=$!
             # whichever wait ends first (a timeout ends both with an error); the status of the Job below decides
             first=0
-            wait -n $ok $failed || first=$?
-            # the other wait is still running - or ended already, which kill reports and nothing else needs
-            kill $ok $failed 2> /dev/null || true
+            wait -n -p ended $ok $failed || first=$?
+            # the other wait, still running - not the one wait -n reaped: that PID is no process of this shell any more
+            for p in $ok $failed; do [ "$p" = "${ended:-}" ] || kill "$p" 2> /dev/null || true; done
             $K logs job/$job --tail=40
             [ "$($K get job $job -o jsonpath='{.status.succeeded}')" = 1 ] \
               || { echo "$job did not succeed (the first wait ended with $first)"; exit 1; }
