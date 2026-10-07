@@ -15,6 +15,7 @@ PY=python3
 "$PY" - <<'PY'
 import re, sys
 from ansible.parsing.mod_args import FREEFORM_ACTIONS
+from ansible.errors import AnsibleParserError
 from ansible.parsing.splitter import parse_kv
 sys.path.insert(0, "tests/ansible/unit")
 from plays import actions, files, load, tasks  # noqa: E402
@@ -44,7 +45,10 @@ def altered(text, raw=None):
     """What Ansible's free-form parser changes in a script (`raw`: what it made of it, else parse_kv's): [] when it
     reaches the shell as written - every line exact (trailing blanks aside), a continuation's joined line up to its
     blanks."""
-    parsed = parse_kv(text, check_raw=True) if raw is None else {"_raw_params": raw}
+    try:
+        parsed = parse_kv(text, check_raw=True) if raw is None else {"_raw_params": raw}
+    except AnsibleParserError as e:  # Ansible cannot run it at all: named, not a crash of the harness
+        return [f"unparseable: {str(e).splitlines()[0][:90]}"]
     out = [f"taken as the module's own {k}=" for k in sorted(set(parsed) - {"_raw_params"})]
     a, b = logical(text), [line for line, _ in logical(parsed.get("_raw_params") or "")]
     out += [f"{x.strip()[:70]!r} -> {y.strip()[:70]!r}" for (x, joined), y in zip(a, b)
@@ -65,6 +69,7 @@ def check(name, got, want):
 check("a comment's backslash: the next line joined into the comment (the parser as it is)",
       bool(altered("a=1  # escapes \\ and :\nprintf x > f\n")), True)
 check("a line continuation: as bash reads it", altered("echo a \\\n  b\n"), [])
+check("an apostrophe in a comment: unparseable, named", bool(altered("# it's\necho x\n")), True)
 # the comparison exact where no continuation is: blanks inside a quoted string changed are a change
 check("blanks changed inside a quoted string: named", bool(altered("echo 'a  b'\n", raw="echo 'a b'\n")), True)
 check("a continuation spaced otherwise: the same", altered("echo a \\\n    b\n", raw="echo a  b\n"), [])

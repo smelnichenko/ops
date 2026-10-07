@@ -16,10 +16,13 @@ mkdir "$W/bin"
 cat > "$W/bin/kubectl" <<'STUB'
 #!/bin/bash
 case "$*" in
-  *delete*) exit 0 ;;
+  *delete*) [ -z "${DELETE_FAILS:-}" ] || { echo "the server is currently unable to handle the request" >&2; exit 1; }
+    exit 0 ;;
   *"get pods,pvc"*)
     n=$(( $(cat "$W/n" 2> /dev/null || echo 0) + 1 )); echo $n > "$W/n"
     [ "$n" -gt "${GET_FAIL_FOR:-0}" ] || { echo "connection refused" >&2; exit 1; }
+    # a read that answers and logs besides (an aggregated API down: discovery's line on stderr)
+    [ -z "${STDERR_NOTE:-}" ] || echo "E1008 memcache.go:265] couldn't get resource list for metrics.k8s.io/v1beta1" >&2
     [ "$n" -gt "${LEFT_FOR:-0}" ] || echo pod/side-1 ;;
 esac
 STUB
@@ -40,13 +43,23 @@ for name, env, want_rc, words in (("gone at once", {}, 0, ""),
                                   ("kubectl failing once (the API server a moment away), then gone: passes",
                                    {"GET_FAIL_FOR": "1"}, 0, ""),
                                   ("kubectl failing to the bound: fails, saying so", {"GET_FAIL_FOR": "999"}, 1,
-                                   "connection refused")):
+                                   "connection refused"),
+                                  ("gone, the read logging on stderr besides: passes - the log is no leftover",
+                                   {"STDERR_NOTE": "1"}, 0, ""),
+                                  ("the delete's own call failing (an API blip), gone after: passes - the polls judge",
+                                   {"DELETE_FAILS": "1"}, 0, "")):
     os.path.exists(os.path.join(W, "n")) and os.remove(os.path.join(W, "n"))
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
     ok = min(r.returncode, 1) == want_rc and words in r.stdout + r.stderr
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f" (rc {r.returncode}: {r.stdout}{r.stderr})"))
+# the read as bash reads it (its continuation joined), up to its redirection
+get = task["ansible.builtin.shell"].replace("\\\n", " ").split("get pods,pvc")[1].split("2>")[0] \
+    if "get pods,pvc" in task["ansible.builtin.shell"] else ""
+check_get = "--request-timeout=" in get
+fails += not check_get
+print(f"{'PASS' if check_get else 'FAIL'} each read bounded (--request-timeout): a hung one outlived the bound")
 # every place that removes a side cluster removes it so
 users = {f: open(f).read().count("side-cluster-delete.yml") for f in
          ("tests/ansible/upgrade/tasks/wave0-pg-dump.yml", "tests/ansible/upgrade/restore-check.yml")}
