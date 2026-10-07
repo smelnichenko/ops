@@ -3,16 +3,19 @@
 # waited for up to side_gone_seconds (default 300): read a single time, a pod still terminating when the delete
 # returned failed the run once. A read that fails is read again (one failed get - the API server a moment away -
 # ended the run), each bounded; failing to the bound fails, saying so; what a read logs on stderr is no leftover; the
-# delete's own call failing is judged by the polls. Expects: side_kubectl (kubectl with the cluster's namespace),
-# side_cluster.
+# delete's own call failing (it may never have reached the cluster) is asked again at each poll until one does.
+# Expects: side_kubectl (kubectl with the cluster's namespace), side_cluster.
 # Tested: tests/ansible/unit/side-cluster-delete.
 - name: "The side cluster deleted, nothing of it left: {{ side_cluster }}"
   ansible.builtin.shell: |
     set -euo pipefail
     err=$(mktemp); trap 'rm -f "$err"' EXIT
-    # the delete call failing (an API blip mid-wait) is no verdict: the polls below judge what is left
-    {{ side_kubectl }} delete clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found --wait=true \
-      --cascade=foreground --timeout=600s || echo "the delete returned $? - what is left judged below"
+    del() { {{ side_kubectl }} delete clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found \
+      --cascade=foreground "$@"; }
+    # the delete call failing (an API blip) is no verdict: asked again at each poll until a call reaches the cluster,
+    # the polls judging what is left
+    asked=0
+    if del --wait=true --timeout=600s; then asked=1; else echo "the delete returned $? - asked again below"; fi
     for i in $(seq 1 {{ [1, ((side_gone_seconds | default(300)) / (side_poll | default(5))) | int] | max }}); do
       # stderr apart: a read that answers can log besides (discovery, an aggregated API down) - no leftover
       if left=$({{ side_kubectl }} get pods,pvc -l cnpg.io/cluster={{ side_cluster }} -o name \
@@ -20,6 +23,10 @@
         [ -n "$left" ] || exit 0
       else
         left="not read: $(cat "$err")"
+      fi
+      if [ "$asked" = 0 ]; then
+        if del --wait=false --request-timeout=30s > /dev/null 2> "$err"; then asked=1
+        else left+=" (its delete not taken: $(cat "$err"))"; fi
       fi
       sleep {{ side_poll | default(5) }}
     done
