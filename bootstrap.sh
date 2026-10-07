@@ -150,22 +150,22 @@ install_velero() {
 setup_vault_eso() {
   log "Configuring ESO → Pi Vault connection..."
 
-  local VAULT_VIP="${VAULT_VIP:-192.168.11.5}"
   local VAULT_PI="${VAULT_PI:-192.168.11.4}"
-  local VAULT_PASSWORD="${VAULT_ROOT_TOKEN:-}"
+  local work
+  work=$(mktemp -d) || return 1
+  # this run's own directory, removed however the step ends
+  trap 'rm -rf "$work"; trap - RETURN' RETURN
 
-  # Fetch Vault CA cert from Pi
-  if [[ -f /tmp/vault-ca.pem ]]; then
-    log "Using cached Vault CA from /tmp/vault-ca.pem"
-  else
-    ssh "sm@${VAULT_PI}" "sudo cat /etc/vault.d/tls/ca-cert.pem" > /tmp/vault-ca.pem 2>/dev/null || {
-      err "Cannot fetch Vault CA from Pi. Copy /etc/vault.d/tls/ca-cert.pem to /tmp/vault-ca.pem manually."
-      return 1
-    }
+  # Vault's CA read from the Pi now, never a copy kept in a world-writable directory: a planted one made the cluster
+  # trust another Vault
+  if ! ssh "sm@${VAULT_PI}" "sudo cat /etc/vault.d/tls/ca-cert.pem" > "$work/vault-ca.pem" \
+      || [[ ! -s "$work/vault-ca.pem" ]]; then
+    err "Cannot read Vault's CA from the Pi (/etc/vault.d/tls/ca-cert.pem)"
+    return 1
   fi
 
   local VAULT_CA_B64
-  VAULT_CA_B64=$(base64 -w0 < /tmp/vault-ca.pem)
+  VAULT_CA_B64=$(base64 -w0 < "$work/vault-ca.pem")
 
   # Create Vault CA secret in external-secrets namespace
   kubectl apply -f - <<EOF
@@ -206,38 +206,45 @@ metadata:
 type: kubernetes.io/service-account-token
 EOF
 
-  sleep 3
-
-  # Configure Vault kubernetes auth on Pi
-  local K8S_CA
-  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d)
-  local SA_TOKEN
-  SA_TOKEN=$(kubectl get secret vault-token-reviewer -n external-secrets -o jsonpath='{.data.token}' | base64 -d)
-  local K8S_HOST
+  # the token controller fills the Secret's token after the Secret exists: waited for, a minute at most
+  local SA_TOKEN="" i
+  for i in $(seq 1 60); do
+    SA_TOKEN=$(kubectl get secret vault-token-reviewer -n external-secrets -o jsonpath='{.data.token}' | base64 -d)
+    [[ -n "$SA_TOKEN" ]] && break
+    sleep 1
+  done
+  [[ -n "$SA_TOKEN" ]] || { err "No token in Secret external-secrets/vault-token-reviewer after a minute"; return 1; }
+  local K8S_CA K8S_HOST
+  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
   K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+  [[ $K8S_HOST =~ ^https://[A-Za-z0-9.:-]+$ ]] \
+    || { err "The cluster's server is not a plain https URL: $K8S_HOST"; return 1; }
 
-  # Write K8s CA to temp file for Vault
-  echo "$K8S_CA" > /tmp/k8s-ca.pem
-
-  ssh "sm@${VAULT_PI}" "sudo bash -c '
-    export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
-    export VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
-    vault write auth/kubernetes/config \
-      kubernetes_host=\"${K8S_HOST}\" \
-      kubernetes_ca_cert=@/dev/stdin \
-      token_reviewer_jwt=\"${SA_TOKEN}\" \
-      disable_local_ca_jwt=true << CERT
+  # Vault's Kubernetes auth on the Pi: the script and the token on ssh's stdin, never on a command line (ssh's here,
+  # sudo's and vault's there - any local user reads those in /proc); on the Pi in root-only files Vault reads, Vault
+  # verified against its CA (its certificate names 127.0.0.1). A failure fails the step
+  if ! ssh "sm@${VAULT_PI}" "sudo bash -s" <<REMOTE; then
+set -euo pipefail
+umask 077
+d=\$(mktemp -d)
+trap 'rm -rf "\$d"' EXIT
+base64 -d > "\$d/ca.pem" <<'B64'
 ${K8S_CA}
-CERT
-    vault write auth/kubernetes/role/eso-role \
-      bound_service_account_names=external-secrets \
-      bound_service_account_namespaces=external-secrets \
-      policies=eso-reader \
-      ttl=1h
-  '" 2>/dev/null || {
-    warn "Could not configure Vault kubernetes auth via SSH. Configure manually."
-    return 0
-  }
+B64
+base64 -d > "\$d/jwt" <<'B64'
+$(printf '%s' "$SA_TOKEN" | base64 -w0)
+B64
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
+export VAULT_TOKEN
+vault write auth/kubernetes/config kubernetes_host='${K8S_HOST}' kubernetes_ca_cert=@"\$d/ca.pem" \\
+  token_reviewer_jwt=@"\$d/jwt" disable_local_ca_jwt=true > /dev/null
+vault write auth/kubernetes/role/eso-role bound_service_account_names=external-secrets \\
+  bound_service_account_namespaces=external-secrets policies=eso-reader ttl=1h > /dev/null
+REMOTE
+    err "Configuring Vault's Kubernetes auth on the Pi failed (above)"
+    return 1
+  fi
 
   log "ESO → Pi Vault configured"
 }
