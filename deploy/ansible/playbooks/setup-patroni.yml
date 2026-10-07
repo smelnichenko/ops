@@ -503,28 +503,55 @@
       delegate_to: pi1
       run_once: true
 
-    # before its empty database exists: a Keycloak running reconnects to it, builds its own schema there, and the
-    # restore then refuses the database in use (the run stopped for a hand fix). The restore starts it again
-    - name: Keycloak stopped on both Pis before its empty database exists (a dump waits)
-      ansible.builtin.systemd:
-        name: keycloak
-        state: stopped
-      delegate_to: "{{ item }}"
-      loop: "{{ groups['pis'] }}"
-      run_once: true
+    # the leader's own socket: a read
+    - name: Whether the keycloak database is there already
+      ansible.builtin.command: sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='keycloak'"
+      register: _keycloak_db
+      changed_when: false
+      check_mode: false  # a read: a preview (--check) judges the stop below as a run would
       when: _keycloak_dump.stat.exists
 
-    # the leader's own socket: no password needed, none on a command line
-    - name: Create forgejo + keycloak databases
-      ansible.builtin.shell: |
-        set -euo pipefail
-        if [ "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='{{ item }}'")" != 1 ]; then
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -qc "CREATE DATABASE {{ item }}"
-        fi
-      args:
-        executable: /bin/bash
-      loop: [forgejo, keycloak]
-      changed_when: true
+    - name: Its database created - Keycloak stopped first when a dump waits for it
+      block:
+        # before its empty database is created: a Keycloak running reconnects to it, builds its own schema there, and
+        # the restore then refuses the database in use (the run stopped for a hand fix). Only then - beside a database
+        # there (in use: the restore refuses; empty: it stops Keycloak and counts again) Keycloak keeps serving. The
+        # restore starts it again
+        - name: Keycloak stopped on both Pis before its empty database exists (a dump waits)
+          ansible.builtin.systemd:
+            name: keycloak
+            state: stopped
+          delegate_to: "{{ item }}"
+          loop: "{{ groups['pis'] }}"
+          run_once: true
+          register: _keycloak_stopped_first
+          when:
+            - _keycloak_dump.stat.exists
+            - _keycloak_db.stdout | default('') | trim != '1'
+
+        # the leader's own socket: no password needed, none on a command line
+        - name: Create forgejo + keycloak databases
+          ansible.builtin.shell: |
+            set -euo pipefail
+            if [ "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='{{ item }}'")" != 1 ]; then
+              sudo -u postgres psql -v ON_ERROR_STOP=1 -qc "CREATE DATABASE {{ item }}"
+            fi
+          args:
+            executable: /bin/bash
+          loop: [forgejo, keycloak]
+          changed_when: true
+      rescue:
+        - name: Keycloak left stopped
+          ansible.builtin.debug:
+            msg: >-
+              KEYCLOAK LEFT STOPPED on both Pis: it was stopped for the waiting dump's restore and its database was
+              not created (above) - run setup-patroni.yml again (it creates the database, restores the dump and starts
+              Keycloak)
+          when: _keycloak_stopped_first is defined and _keycloak_stopped_first is not skipped
+
+        - name: The databases not created
+          ansible.builtin.fail:
+            msg: "creating the forgejo and keycloak databases failed (above)"
 
     - name: Restore the waiting Keycloak dump
       ansible.builtin.include_tasks: tasks/patroni-keycloak-restore.yml
