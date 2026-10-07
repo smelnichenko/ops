@@ -464,20 +464,51 @@
 
     # the key shares and root token written on the Pi by the init command itself: held only in Ansible's memory, an
     # ssh retry after init ran (ansible.cfg: retries) found it "already initialized" and the shares were gone. Kept,
-    # root-only, until the first-init steps below are done - a run cut short after init resumes from it
+    # root-only, until the first-init steps below are done - a run cut short after init resumes from it. Each
+    # invocation writes its own file aside (an ssh retry overlapping a first one still running truncated the file that
+    # one wrote: its shares), on disk before the move (an SD card after a power cut)
     - name: Initialise Vault - its keys written on the Pi as it returns them
       ansible.builtin.shell: |
         set -euo pipefail
         umask 077
         install -d -m 0700 /etc/vault-unseal
-        vault operator init -key-shares={{ vault_unseal_shares }} -key-threshold={{ vault_unseal_threshold }} \
-          -format=json > /etc/vault-unseal/init.json.part
-        mv /etc/vault-unseal/init.json.part /etc/vault-unseal/init.json
+        aside=$(mktemp /etc/vault-unseal/init.json.XXXXXX)
+        if ! vault operator init -key-shares={{ vault_unseal_shares }} -key-threshold={{ vault_unseal_threshold }} \
+            -format=json > "$aside"; then
+          # not initialised: no share exists, its output is nothing; initialised (or unknown), it may hold the shares
+          status=0; vault operator init -status > /dev/null 2>&1 || status=$?
+          if [ "$status" = 2 ]; then rm -f "$aside"; echo "the init failed, Vault not initialised"; exit 1; fi
+          echo "THE INIT FAILED WITH VAULT INITIALISED (or its state unknown) - its output kept at $aside: look by hand"
+          exit 1
+        fi
+        sync "$aside"
+        mv -n "$aside" /etc/vault-unseal/init.json
+        sync /etc/vault-unseal
       args:
         executable: /bin/bash
         creates: /etc/vault-unseal/init.json
       when: _init_status.rc == 2
       changed_when: true
+      no_log: true
+
+    # a run cut short between the init and its move: Vault is initialised (the init above does not run again) and the
+    # shares are only in the file aside - promoted, never left stranded; one not whole (cut short in its writing) stops
+    # the run for a look by hand
+    - name: A first init's output left aside promoted (a run cut short before its move)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        shopt -s nullglob
+        for f in /etc/vault-unseal/init.json.*; do
+          if python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); assert d["unseal_keys_b64"] and d["root_token"]' "$f" 2> /dev/null; then
+            [ -e /etc/vault-unseal/init.json ] || { mv -n "$f" /etc/vault-unseal/init.json; echo "promoted $f"; }
+          else
+            echo "$f is not whole - an init cut short in its writing? Look at it by hand (Vault's state, the shares)"; exit 1
+          fi
+        done
+      args:
+        executable: /bin/bash
+      register: _promoted
+      changed_when: "'promoted' in _promoted.stdout"
       no_log: true
 
     - name: A first init not finished (its keys file still here)
@@ -545,11 +576,32 @@
       # each task re-runnable (an enabled engine, a written policy), so a first init cut short resumes here
       when: _init_pending.stat.exists
       block:
+        # unsealed is not active: a standby (Consul's lock not taken yet) refuses every write below
+        - name: This Vault the active one
+          ansible.builtin.uri:
+            url: https://127.0.0.1:8200/v1/sys/health
+            ca_path: /etc/vault.d/tls/ca-cert.pem
+            status_code: [200, 429, 503]
+          register: _vault_health
+          retries: 30
+          delay: 2
+          until: _vault_health.status == 200
+
+        # each one checked first, enabled only when missing - a failure fails (it read "already-enabled", the keys
+        # file was then removed and the engine never enabled)
         - name: Enable KV v2
           ansible.builtin.shell: |
+            set -euo pipefail
             export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
-            vault secrets enable -path=secret kv-v2 2>&1 || echo already-enabled
-          changed_when: true
+            if vault secrets list -format=json | python3 -c 'import json, sys; sys.exit("secret/" not in json.load(sys.stdin))'; then
+              echo already-enabled
+            else
+              vault secrets enable -path=secret kv-v2
+            fi
+          args:
+            executable: /bin/bash
+          register: _kv
+          changed_when: "'already-enabled' not in _kv.stdout"
 
         - name: Write eso-reader policy
           ansible.builtin.shell: |
@@ -562,9 +614,22 @@
 
         - name: Enable Kubernetes auth
           ansible.builtin.shell: |
+            set -euo pipefail
             export VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
-            vault auth enable kubernetes 2>&1 || echo already-enabled
-          changed_when: true
+            if vault auth list -format=json | python3 -c 'import json, sys; sys.exit("kubernetes/" not in json.load(sys.stdin))'; then
+              echo already-enabled
+            else
+              vault auth enable kubernetes
+            fi
+          args:
+            executable: /bin/bash
+          register: _k8s_auth
+          changed_when: "'already-enabled' not in _k8s_auth.stdout"
+
+        # the shares' files on disk before their only other copy goes (an SD card after a power cut)
+        - name: The shares synced to disk
+          ansible.builtin.command: sync /etc/vault-unseal/unseal-keys /etc/vault-unseal/root-token
+          changed_when: false
 
         - name: The first init done - its keys file removed (the shares are in unseal-keys and root-token)
           ansible.builtin.file:
