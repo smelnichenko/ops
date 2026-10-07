@@ -9,6 +9,9 @@
   hosts: target
   become: true
   gather_facts: false
+  vars:
+    kubelet_config: /var/lib/kubelet/config.yaml
+    image_store: /var/lib/containerd
   tasks:
     # each an image reference, nothing else: the list comes in on the command line, and a flag or a second word would
     # reach crictl as one of its own
@@ -20,6 +23,11 @@
             | length == 0
         fail_msg: "-e images=<name:tag[@sha256:digest]>,... - got {{ images | default('') }}"
         quiet: true
+
+    - name: Room for them
+      ansible.builtin.include_tasks: tasks/image-store-room.yml
+      vars:
+        room_when: before the pulls
 
     # through containerd's socket by name (ten has no /etc/crictl.yaml: crictl would try its deprecated default
     # endpoints in turn), a registry's passing failure retried
@@ -33,3 +41,8 @@
       delay: 10
       until: _pulled.rc == 0
       changed_when: true
+
+    - name: Room left after them
+      ansible.builtin.include_tasks: tasks/image-store-room.yml
+      vars:
+        room_when: after the pulls

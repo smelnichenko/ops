@@ -1,0 +1,19 @@
+---
+# The node's image store (containerd's root) under the kubelet's image GC threshold less 5: images pulled ahead of
+# their rollout are unused until it, and past imageGCHighThresholdPercent (the kubelet's config; 85, its default,
+# where the config sets none) its GC deletes unused images - these first; past imagefs.available<15% it evicts pods.
+# Expects: room_when (before | after the pulls), kubelet_config, image_store. Tested: tests/ansible/unit/prepull.
+- name: "The image store's room, {{ room_when }} - under the kubelet's image GC threshold"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      high=$(sed -n 's/^imageGCHighThresholdPercent: *\([0-9][0-9]*\) *$/\1/p' {{ kubelet_config | quote }})
+      high=${high:-85}
+      used=$(df --output=pcent {{ image_store | quote }} | tail -n 1 | tr -dc 0-9)
+      echo "the image store {{ image_store }} ${used}% used, the kubelet's image GC at ${high}%"
+      [ "$used" -lt $(( high - 5 )) ] \
+        || { echo "too full: GC would delete the pulled images before their rollout - room first"; exit 1; }
+  register: _image_store_room
+  changed_when: false
+  check_mode: false  # a read: a preview (--check) runs it
