@@ -208,7 +208,7 @@ def check(step):
     second_rest = outside(second, before[second], after[second], read) if m == b else []
     if m == a and not first_rest:
         print(f"{step}: safe - {first} alone renders every platform-chart application as before; {second} makes the "
-              f"step")
+              "step")
         return True
     if m == b and not second_rest:
         print(f"{step}: safe - {first} makes the whole step; {second} renders nothing new")

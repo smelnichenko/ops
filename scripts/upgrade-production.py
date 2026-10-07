@@ -86,6 +86,7 @@ WORK = os.path.join(OPS, ".upgrade")  # the runs' own files, git-ignored
 PROVEN = os.path.join(WORK, "proven")
 INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
 ORIGIN_MAIN = "origin/main"
+BRANCH = "upgrade/"  # + step: a step's branch in infra and platform
 MERGED_TAG = "upgrade-merged/"  # + step: the tag a production merge leaves (scripts/upgrade-merge-step.sh)
 PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml", "Vagrantfile")
 # the app images the full run ran: production's values with these tags over them (the Vagrant overlay)
@@ -292,7 +293,7 @@ def record(step, event, *args, obj=None, at=None):
         sys.exit(f"REFUSED: the ledger changed since it was read (another phase at work?): {out.stderr.strip()}")
     if out.returncode:
         # the connection gone after the server took it: the event may stand (a start then waits for its release)
-        sys.exit(f"the ledger write failed - it may have been made all the same (task deploy:upgrade:status): "
+        sys.exit("the ledger write failed - it may have been made all the same (task deploy:upgrade:status): "
                  f"{out.stderr.strip()}")
     print(f"LEDGER: {line}")
 
@@ -451,7 +452,7 @@ def branch_shas():
         refs = run(["git", "-C", os.path.join(OPS, "..", repo), "for-each-ref",
                     "--format=%(refname:short) %(objectname)", "refs/heads/upgrade/"], capture_output=True,
                    check=True).stdout
-        out[repo] = {name: sha for name, sha in (line.split() for line in refs.splitlines())}
+        out[repo] = dict(line.split() for line in refs.splitlines())
     return out
 
 
@@ -482,7 +483,7 @@ def pin_problems(step, platform_sha, ops_sha, path=None):
         got = None
     if got is None:
         return [f"{step} moves ClickHouse's image, and its rollback pin has no passing result ({path}; "
-                f"tests/clickhouse-pin/run.sh, its log .upgrade/clickhouse-pin.log)"]
+                "tests/clickhouse-pin/run.sh, its log .upgrade/clickhouse-pin.log)"]
     if {k: got.get(k) for k in want} != want:
         return [f"{step}'s rollback pin was proven for {got}, not this step's {want}"]
     return []
@@ -532,7 +533,7 @@ def floating_digests():
     path = os.path.join(WORK, "floating-digests.txt")
     if not os.path.exists(path):
         sys.exit("REFUSED: no .upgrade/floating-digests.txt - the run's build copies ten's floating-tag images")
-    return {name: digest for name, digest in (l.split() for l in open(path) if l.strip())}
+    return dict(l.split() for l in open(path) if l.strip())
 
 
 def step_images(step):
@@ -610,7 +611,7 @@ def app_tag_problems():
     production = yaml.safe_load(run(["git", "-C", infra, "show", f"origin/main:{APP_VALUES}"], capture_output=True,
                                     check=True).stdout)
     return [f"{key}: production runs {tag(production, key)}, the full run ran {tag(overlay, key)} - promote it first, "
-            f"or drop the overlay's tag and prove again" for key in overlay
+            "or drop the overlay's tag and prove again" for key in overlay
             if tag(overlay, key) is not None and str(tag(production, key)) != str(tag(overlay, key))]
 
 
@@ -655,7 +656,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
     if repo:
         d = os.path.join(OPS, "..", repo)
         # the commit the merge pushes (`tip`, read once by merge()), else the branch as it is now
-        branch = tip or "upgrade/" + step
+        branch = tip or BRANCH + step
         run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
         base = merged_base(d, step)
         pushed = None if base else pushed_base(d, step, tip)
@@ -670,10 +671,10 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
             # main, the branch itself now, it was empty - refused on every retry)
             if not pushed:
                 out.append(f"{repo} upgrade/{step} is in origin's main with no {MERGED_TAG}{step}, and its main before "
-                           f"is unknown")
+                           "is unknown")
             elif own_change(d, pushed, branch) != proof["repos"][repo]["own"]:
                 out.append(f"{repo} {branch}, pushed with no tag, brought a change other than the one the full run "
-                           f"proved")
+                           "proved")
         elif run(["git", "-C", d, "merge-base", "--is-ancestor", ORIGIN_MAIN, branch]).returncode:
             out.append(f"{repo} {branch} does not contain origin/main - restack it "
                        f"(scripts/upgrade-restack-in-place.sh ../{repo})")
@@ -688,7 +689,7 @@ def image_pins(step, name, tag):
     found = set()
     for repo in step_info(step)["branches"]:
         d = os.path.join(OPS, "..", repo)
-        ref = next((r for r in ("upgrade/" + step, MERGED_TAG + step)
+        ref = next((r for r in (BRANCH + step, MERGED_TAG + step)
                     if run(["git", "-C", d, "rev-parse", "-q", "--verify", r + "^{commit}"],
                            capture_output=True).returncode == 0), None)
         if ref is None:
@@ -742,7 +743,7 @@ def package_status(name, version):
     """Forgejo's answer for a container package version of schnappy (200: there), read with git's credentials."""
     cred = run(["git", "credential", "fill"], input="protocol=https\nhost=git.pmon.dev\n\n", capture_output=True,
                check=True).stdout
-    fields = {k: v for k, v in (l.split("=", 1) for l in cred.splitlines() if "=" in l)}
+    fields = dict(l.split("=", 1) for l in cred.splitlines() if "=" in l)
     request = urllib.request.Request(f"https://git.pmon.dev/api/v1/packages/schnappy/container/{name}/{version}")
     request.add_header("Authorization", "Basic " + base64.b64encode(
         f"{fields['username']}:{fields['password']}".encode()).decode())
@@ -772,7 +773,7 @@ def pushed_base(repo_dir, step, tip=None):
     git = lambda *a: run(["git", "-C", repo_dir, *a], capture_output=True)
     if git("rev-parse", "-q", "--verify", f"refs/tags/{MERGED_TAG}{step}").returncode == 0:
         return None
-    tip = tip or git("rev-parse", "upgrade/" + step).stdout.strip()
+    tip = tip or git("rev-parse", BRANCH + step).stdout.strip()
     if not tip or git("merge-base", "--is-ancestor", tip, ORIGIN_MAIN).returncode:
         return None
     main = git("rev-parse", "main").stdout.strip()
@@ -826,7 +827,7 @@ def release(step):
             and "upgrade-production" in open(f"/proc/{pid}/cmdline").read():
         sys.exit(f"REFUSED: the run that started {step}'s {started[1][0]} (pid {pid}) is alive here - stop it first")
     refuse([] if confirm(f"Nothing runs {step}'s {' '.join(started[1])} (started {started[0]:%Y-%m-%d %H:%M} UTC) "
-                         f"any more - close it?") else ["not confirmed"])
+                         "any more - close it?") else ["not confirmed"])
     record(step, "end", started[1][0], "released", token, obj=obj)
 
 
@@ -877,7 +878,7 @@ def merge(step, repo):
         d = os.path.join(OPS, "..", repo)
         # the branch's commit, read once before its checks: the one the proof is checked against, shown, pulled for and
         # pushed - a restack between the checks and the push (another shell) no longer pushes a commit nothing checked
-        tip = run(["git", "-C", d, "rev-parse", "-q", "--verify", f"upgrade/{step}^{{commit}}"],
+        tip = run(["git", "-C", d, "rev-parse", "-q", "--verify", f"{BRANCH}{step}^{{commit}}"],
                   capture_output=True).stdout.strip() or None
         refuse(proof_problems(step, names, repo, defaulted(events), partly=partly, tip=tip) + registry_problems(step))
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
@@ -897,7 +898,7 @@ def merge(step, repo):
             local, origin = (run(["git", "-C", d, "rev-parse", r], capture_output=True, check=True).stdout.strip()
                              for r in ("main", ORIGIN_MAIN))
             refuse([] if local == origin else [f"{repo}'s main is not origin/main - git -C ../{repo} pull --ff-only "
-                                               f"(on main), then merge again"])
+                                               "(on main), then merge again"])
             # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
             if not partly:
                 order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
@@ -916,7 +917,7 @@ def merge(step, repo):
             images = prepull_images(step)
             if images:
                 refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
-                       else [f"the step's images did not pull on ten (above) - nothing merged"])
+                       else ["the step's images did not pull on ten (above) - nothing merged"])
             # a step that replaces Tempo's major: what Tempo still holds in its WAL flushed to the store first (the
             # next major does not replay it) - proven by a marker trace found in the store; on ten, with its kubectl
             if repo in step_info(step)["tempo_flush"]:
@@ -946,7 +947,7 @@ def merge(step, repo):
     if info["base_backup_after_merge"] and not any(s == step and e == "base-backup" for _, s, e, _ in events) \
             and (repo == info["branches"][-1] or cluster_runs(postgres_target(step))):
         if not confirm(f"Step {step}'s merges settled: take PRODUCTION's Postgres base backup now "
-                       f"(postgres-base-backup.yml)?"):
+                       "(postgres-base-backup.yml)?"):
             print("no base backup now - deploy:upgrade:done takes it at its first call")
         elif ansible("playbooks/postgres-base-backup.yml"):
             record(step, "base-backup")
@@ -1123,11 +1124,15 @@ def main():
         result = "passed" if e.code in (None, 0) else "failed"
         raise
     finally:
+        # an end that cannot be written fails the run, whatever the phase's result (the next start then refuses on the
+        # open claim); a claim released meanwhile has its end written already
         for step, phase, token in CLAIMED:
-            try:
-                record(step, "end", phase, result, token)
-            except SystemExit as e:  # released meanwhile: its end is written already
-                print(e)
+            obj = read_ledger()[0]
+            lost = claim_problems(step, obj)
+            if lost:
+                print(f"{lost[0]} - its end not recorded")
+            else:
+                record(step, "end", phase, result, token, obj=obj)
 
 
 if __name__ == "__main__":

@@ -732,10 +732,18 @@ check("a concurrent change: the claim refused, nothing claimed", (got.startswith
 got, _, claimed = claim(1, "Unable to connect to the server: connection reset by peer")
 check("the write failing otherwise: said so - it may have been made", ("may have been made" in got, claimed),
       (True, []))
-# main records the claimed phase's end, passed or failed
-def main_ends(code):
-    ends, saved = [], {k: getattr(m, k) for k in ("record", "begin")}
-    m.record = lambda st, e, *a, **k: ends.append((st, e, *a))
+# main records the claimed phase's end, passed or failed - an end it could not write fails the run (the phase's own
+# result aside); a claim released meanwhile has its end written already: nothing written, said so
+def main_ends(code, released=False, write_fails=False):
+    ends, saved = [], {k: getattr(m, k) for k in ("record", "begin", "read_ledger")}
+    def fake_record(st, e, *a, **k):
+        if write_fails:
+            sys.exit("the ledger write failed - it may have been made all the same")
+        ends.append((st, e, *a))
+    m.record = fake_record
+    lines = [f"{S47} start begin host:1:aa"] + ([f"{S47} end begin released host:1:aa"] if released else [])
+    text = "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(lines))
+    m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text))
     def fake_begin(step):
         m.CLAIMED.append((step, "begin", "host:1:aa"))
         if code:
@@ -744,19 +752,24 @@ def main_ends(code):
     m.CLAIMED.clear()
     argv = sys.argv
     sys.argv = ["x", "begin", S47]
+    exit_code = None
     try:
         m.main()
-    except SystemExit:
-        pass
+    except SystemExit as e:
+        exit_code = e.code
     finally:
         sys.argv = argv
+        m.CLAIMED.clear()
         for k, v in saved.items():
             setattr(m, k, v)
-    return ends
+    return ends, exit_code in (None, 0)
 check("a phase that passes: its end recorded passed, with its claim's token", main_ends(0),
-      [(S47, "end", "begin", "passed", "host:1:aa")])
+      ([(S47, "end", "begin", "passed", "host:1:aa")], True))
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
-      [(S47, "end", "begin", "failed", "host:1:aa")])
+      ([(S47, "end", "begin", "failed", "host:1:aa")], False))
+check("a phase that passes, its end not written: the run fails", main_ends(0, write_fails=True), ([], False))
+check("a phase whose claim was released meanwhile: no end written (its release is), the phase's result",
+      main_ends(0, released=True), ([], True))
 # a run whose claim was closed meanwhile (released by hand, its run still alive) records nothing more: its events would
 # land in another phase's claim
 def recorded(lines):

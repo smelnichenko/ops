@@ -92,7 +92,7 @@ def main():
                 if r.returncode != 0:
                     sys.exit(f"{repo_name}: {name} -> upgrade/{new}: {c[:10]} does not apply on {base}:\n"
                              f"{r.stdout.strip()}\n{r.stderr.strip()}\n(resolve, or `git cherry-pick --abort` and"
-                             f" reorder; the old branches are upgrade-old/*)")
+                             " reorder; the old branches are upgrade-old/*)")
         git(repo, "checkout", "-q", "main")
     print("== step files")
     for name in names:

@@ -97,7 +97,7 @@ def flush(args):
         sys.exit(f"Tempo's /flush failed: {out.strip()}")
     if not wait_for(f"/api/traces/{trace_id}?mode=blocks", ATTEMPTS_STORED, POLL_STORED, kubeconfig):
         sys.exit(f"the marker trace {trace_id} is not in Tempo's store {POLL_STORED * ATTEMPTS_STORED} s after its "
-                 f"/flush - the spans it held may still be in its WAL")
+                 "/flush - the spans it held may still be in its WAL")
     print(f"TEMPO FLUSHED: the marker trace {trace_id}, pushed before the flush, is in the store")
 
 
