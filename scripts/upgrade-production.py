@@ -544,12 +544,22 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
         branch = "upgrade/" + step
         run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
         base = merged_base(d, step)
+        pushed = None if base else pushed_base(d, step)
         if base:
             # merged already (an interrupted run pushed, then did not record): the change it brought, base..tag
             if run(["git", "-C", d, "merge-base", "--is-ancestor", MERGED_TAG + step, ORIGIN_MAIN]).returncode:
                 out.append(f"{repo} upgrade-merged/{step} is not in origin/main")
             elif own_change(d, base, MERGED_TAG + step) != proof["repos"][repo]["own"]:
                 out.append(f"{repo} upgrade-merged/{step} brought a change other than the one the full run proved")
+        elif pushed is not None:
+            # pushed by a run cut short before its tag: the change against the main it went onto (against origin's
+            # main, the branch itself now, it was empty - refused on every retry)
+            if not pushed:
+                out.append(f"{repo} main is {branch} on origin with no {MERGED_TAG}{step}, and its main before is "
+                           f"unknown")
+            elif own_change(d, pushed, branch) != proof["repos"][repo]["own"]:
+                out.append(f"{repo} {branch}, pushed with no tag, brought a change other than the one the full run "
+                           f"proved")
         elif run(["git", "-C", d, "merge-base", "--is-ancestor", ORIGIN_MAIN, branch]).returncode:
             out.append(f"{repo} {branch} does not contain origin/main - restack it "
                        f"(scripts/upgrade-restack-in-place.sh ../{repo})")
@@ -608,6 +618,23 @@ def merged_base(repo_dir, step):
     if not tag.startswith("base "):
         sys.exit(f"{repo_dir}: upgrade-merged/{step} carries no base ({tag!r})")
     return tag.split()[1]
+
+
+def pushed_base(repo_dir, step):
+    """None unless origin's main is upgrade/<step> with no upgrade-merged/<step> tag (a run cut short after its push);
+    then the main it went onto as scripts/upgrade-merge-step.sh's take-up finds it - local main if not moved yet, else
+    where it was before the fast-forward - or "" when that is unknown."""
+    git = lambda *a: run(["git", "-C", repo_dir, *a], capture_output=True)
+    branch = "upgrade/" + step
+    if git("rev-parse", "-q", "--verify", f"refs/tags/{MERGED_TAG}{step}").returncode == 0:
+        return None
+    tip = git("rev-parse", branch).stdout.strip()
+    if not tip or git("rev-parse", ORIGIN_MAIN).stdout.strip() != tip:
+        return None
+    main = git("rev-parse", "main").stdout.strip()
+    base = main if main != tip else git("rev-parse", "main@{1}").stdout.strip()
+    ok = base and base != tip and git("merge-base", "--is-ancestor", base, branch).returncode == 0
+    return base if ok else ""
 
 
 # ---- the phases -----------------------------------------------------------------------------------------------------
@@ -704,6 +731,12 @@ def merge(step, repo):
         if merged_base(d, step):
             # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
             print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
+        elif pushed_base(d, step):
+            # pushed by an earlier run cut short before its tag (its change checked above): tagged, recorded - nothing
+            # asked or pushed again
+            print(f"{repo}: {step} was pushed already (no {MERGED_TAG}{step} yet) - tagging it, recording it")
+            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up"])
+                   .returncode == 0 else [f"the {repo} take-up failed (above)"])
         else:
             # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
             if not partly:

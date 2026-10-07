@@ -257,9 +257,11 @@ class _Done:
 PROOF_KW = []  # the keyword arguments each phase read the proof with
 
 
-def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True):
+def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
+                pushed=None):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
-                       "inventory_check", "confirm", "check", "soak_state", "merged_base", "step_info", "ten")
+                       "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
+                       "ten")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged") if x in k}) or list(proof)
@@ -275,6 +277,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     m.check = lambda *a, **k: True
     m.soak_state = lambda *a: (None, 0)
     m.merged_base = lambda *a: None
+    m.pushed_base = lambda *a: pushed
     if step_info:
         m.step_info = step_info
     try:
@@ -306,6 +309,10 @@ check("merge 57: the change shown (log, stat, diff) and asked about, merged, the
       "minutes", [c for c in got if c[0] in ("run", "settled", "record", "asked")],
       [("run", "upgrade-merge-order.py"), ("run", "git"), ("run", "git"), ("run", "git"), ("asked",),
        ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("settled", 50), ("record", "settled")])
+got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), pushed="b4se")
+check("merge 57 pushed by a run cut short before its tag: taken up (tagged) and recorded - not asked, nothing pulled",
+      [c for c in got if c[0] in ("run", "ansible", "record", "asked")],
+      [("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("record", "settled")])
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), answer=False)
 check("merge 57, not confirmed: refused after the change was shown - nothing merged, nothing recorded",
       ([c for c in got if c[0] == "run" and c[1] == "upgrade-merge-step.sh" or c[0] == "record"], got[-1][0]),

@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# upgrade-merge-step.sh <step> <infra|platform> - the GitOps half of one production upgrade step: the step's branch
-# (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so the push is
-# the production change (platform's CI lints the same commit alongside; it gates nothing). Called by
+# upgrade-merge-step.sh <step> <infra|platform> [take-up] - the GitOps half of one production upgrade step: the
+# step's branch (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so
+# the push is the production change (platform's CI lints the same commit alongside; it gates nothing). Called by
 # scripts/upgrade-production.py merge (`task deploy:upgrade:merge`) after its ledger, proof and merge-order checks.
 #
 # Refuses unless the step file declares that repo's branch, the repo's working tree is clean, main is origin/main,
 # the repo's previous step branch is in main already and this one contains main - so the merge adds this step's
 # commits only (stacked branches carry every earlier step's: merged out of order they would bring unproven ones).
 # The merged step is tagged upgrade-merged/<step> (annotated: "base <main it went onto>"); a run cut short after its
-# push and before its tag is taken up by the next one.
+# push and before its tag is taken up by the next one. `take-up`: only that - any other state is refused, nothing
+# pushed (upgrade-production.py merge asks for it once its proof check found the push already live).
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-step=${1:?step}; repo=${2:?infra or platform}
+step=${1:?step}; repo=${2:?infra or platform}; only=${3:-}
+[ -z "$only" ] || [ "$only" = take-up ] || { echo "REFUSED: $only (take-up or nothing)" >&2; exit 1; }
 case "$repo" in infra|platform) ;; *) echo "REFUSED: repo $repo (infra or platform)" >&2; exit 1;; esac
 file="$ops/tests/ansible/upgrade/steps/$step.txt"
 [ -f "$file" ] || { echo "REFUSED: no step $step" >&2; exit 1; }
@@ -43,6 +45,7 @@ if [ "$(git -C "$dir" rev-parse origin/main)" = "$(git -C "$dir" rev-parse "$bra
     "base $(git -C "$dir" rev-parse --short "$base")"
   exit 0
 fi
+[ -z "$only" ] || { echo "REFUSED: take-up only, and $repo $branch is not origin's main without $tag" >&2; exit 1; }
 [ "$(git -C "$dir" rev-parse main)" = "$(git -C "$dir" rev-parse origin/main)" ] \
   || { echo "REFUSED: $repo main is not origin/main" >&2; exit 1; }
 # stacked branches all contain main: what matters is that the repo's previous step branch is merged already, so this
