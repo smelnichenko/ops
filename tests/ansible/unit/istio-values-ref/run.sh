@@ -28,7 +28,7 @@ for f in ("deploy/ansible/playbooks/setup-istio.yml", "deploy/ansible/playbooks/
     tasks = [t for p in yaml.safe_load(open(f)) for b in p.get("tasks") or [] for t in [b] + (b.get("block") or [])]
     looks = [t for t in tasks if "git -C" in str(t.get("kubernetes.core.helm", {}).get("values", ""))]
     hostile = "/x; touch " + os.path.join(W, "pwned")
-    hostile_ref = "main; touch " + os.path.join(W, "pwned-ref")
+    hostile_ref = "main; touch " + os.path.join(W, "pwned-ref") + "; echo"  # the path appended after it goes to echo
     for t in looks:
         expr = t["kubernetes.core.helm"]["values"].split("lookup('ansible.builtin.pipe', ", 1)[1]
         expr = expr.rsplit(") | from_yaml", 1)[0]
