@@ -879,8 +879,44 @@ restacks. No Critical. Fixed, each with a test that fails first and again when i
   (`templar.condition`); kill paths checked by the process gone; the isolation probe's positive control; vault-csr per
   loop item; kubeadm-preview keeps the tasks' failed_when/until.
 
+Then the review's Suggestions, each fixed the same way (ops e3d6e33.., platform's step 45 and its restack):
+- Production's script: every ssh with keep-alives and a bound (remote-timeouts); the claim read again right before
+  the merge's push; an end the run cannot write fails it; the soak timed by ten's clock; settle values from one place
+  (`settle-values`, the full run's final settle takes them).
+- The full run: build-with-pin's traps before its jobs, each job in a session of its own (no terminal to stop on), its
+  time-stamper through a Ctrl-C; vagrant-smoke's Job a name per run, removed when its remote shell ends - also once its
+  connection is gone (a heartbeat it writes itself; no process of its own); step-checks name a check a wait could not
+  judge, with its log; argo-helm-diff's Helm written whole; side clusters read again after a failed read, their Backup
+  and policies removed even when they outlive their bound; the metrics check's window fixed at its first look (a flap
+  is not waited out); the base backup checks the primary runs the step's PostgreSQL major (pg_major from the step
+  file); the image store's room by the GC threshold the kubelet runs with (configz); the pre-pull takes every legal
+  reference.
+- The Pis: backups wait for a synchronized clock; a Patroni pause leaves a marker in Consul naming its run (a run cut
+  short is named by the next one's refusal); Keycloak stopped before its empty database exists when a dump waits, and
+  a restore that went through after its run was cut short named; keepalived's drop-in (ExecStopPost alone) loaded by a
+  daemon-reload, not a restart (the VIP no longer moves); Vault: the unseal's check X.509-strict, the CA's key and
+  serial on pi1 for every run (root's alone), the names it signs checked as written, the other Pi's address from the
+  inventory, the key shares never in a file on the controller, an empty init file aside removed; setup-vault-pi
+  previews (`task deploy:vault-pi -- --check --diff`), linted by default; Tempo 2 flushes all it holds on shutdown from
+  step 45 (merged alone - in step 54's platform branch the state between its merges was unproven).
+- Security: bootstrap.sh vault-eso reads Vault's CA from the Pi each time (a copy in /tmp was any local user's to
+  plant), the reviewer token on no command line, Vault verified; 16 token tasks no_log (a module logs its arguments on
+  its host); the Keycloak restore's error masks what psql quotes; the Vagrant isolation proves no IPv6 beyond
+  link-local (production's LAN has a ULA prefix).
+- The harnesses: one walk and Ansible's own keywords (pre_tasks and post_tasks were unseen by some); free-form-shell
+  over Ansible's FREEFORM_ACTIONS, every line exact; ansible-lint's `args` an error; check-mode-lint as the preview
+  runs (subscripts, raw and script, includes' tags, handlers after each section, an unfollowed import named); dead
+  checks made live (istio-values-ref's), equivalent mutants measured and said (vagrant-smoke's PIPE trap, the Tempo
+  render's registry-port case).
+
+Running a deploy: stop it with Ctrl-C at its terminal (the whole process group gets it - go-task forwards no signal,
+so a kill of task's own PID leaves ansible-playbook running: checked 2026-10-08, it logs the signal and waits for its
+command). A Ctrl-C skips the playbook's always: - a Patroni pause (its marker names the run) or a stopped Keycloak is
+the next run's to report.
+
 Open, the operator's: ten's Consul ports (no UFW on ten); infra feat/pi-backup-check (the stale-backup alert
-setup-pi-backups names) to push; Sonar's 23 complexity findings (S3776) after the run.
+setup-pi-backups names) to push; Sonar's 23 complexity findings (S3776) after the run; pi2's stray ca-cert.srl in
+/etc/vault.d/tls (an old signing's, unused - to remove by hand or leave).
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
