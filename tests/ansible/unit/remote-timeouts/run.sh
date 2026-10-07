@@ -45,6 +45,18 @@ check("ten answering: its output, ssh with keep-alives", call(lambda: m.ten("tru
 check("ten never answering: the phase ends, said so", call(lambda: m.ten("true"), True), ("no answer", True, True))
 pi = lambda: m.remote(m.PIS[0], "sudo -n bash -s", stdin="")
 check("a Pi never answering: the same", call(pi, True), ("no answer", True, True))
+# the settle waits on ten for as long as asked (merges: 30 minutes): its ssh bound past that - the default cut a 30
+# minute settle at 15 ("no answer - it may have run")
+bounds = []
+saved = (m.remote, m.main_revisions)
+m.main_revisions = lambda: dict.fromkeys(m.URLS.values(), "r")
+m.remote = lambda host, command, stdin=None, timeout=None, capture=True: bounds.append((timeout, command)) or \
+    type("R", (), {"returncode": 0, "stdout": "APPS a\n", "stderr": ""})()
+for minutes in (30, 90):
+    m.settled(minutes, [])
+m.remote, m.main_revisions = saved
+check("the settle's ssh bound past its own wait (30 and 90 minutes asked)",
+      [(t is not None and t > n * 60 and f"--minutes {n} " in c) for (t, c), n in zip(bounds, (30, 90))], [True, True])
 # the class: no ssh call of the script without those options
 src = open("scripts/upgrade-production.py").read()
 check("every ssh call of the script goes through the options (ssh named once, in them)", src.count('"ssh"'), 1)

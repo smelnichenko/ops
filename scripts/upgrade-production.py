@@ -1139,12 +1139,13 @@ def main():
         sys.exit(__doc__)
     if a[0] == "merge" and a[2] not in REPOS:
         sys.exit("merge <step> <infra|platform>")
-    result = "failed"
+    result, reason = "failed", None
     try:
         fn(*a[1:])
         result = "passed"
     except SystemExit as e:
         result = "passed" if e.code in (None, 0) else "failed"
+        reason = e.code if isinstance(e.code, str) else None
         raise
     finally:
         # an end that cannot be written fails the run, whatever the phase's result (the next start then refuses on the
@@ -1154,8 +1155,13 @@ def main():
             lost = claim_problems(step, obj)
             if lost:
                 print(f"{lost[0]} - its end not recorded")
-            else:
+                continue
+            try:
                 record(step, "end", phase, result, token, obj=obj)
+            except SystemExit:
+                if reason:  # the write's failure becomes the exit: the phase's own reason said first
+                    print(reason, file=sys.stderr)
+                raise
 
 
 if __name__ == "__main__":

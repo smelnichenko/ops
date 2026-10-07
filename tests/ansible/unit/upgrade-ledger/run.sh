@@ -753,6 +753,7 @@ check("the write failing otherwise: said so - it may have been made", ("may have
       (True, []))
 # main records the claimed phase's end, passed or failed - an end it could not write fails the run (the phase's own
 # result aside); a claim released meanwhile has its end written already: nothing written, said so
+MAIN_OUT = {}  # main_ends' last run: its stderr and its exit
 def main_ends(code, released=False, write_fails=False):
     ends, saved = [], {k: getattr(m, k) for k in ("record", "begin", "read_ledger")}
     def fake_record(st, e, *a, **k):
@@ -772,11 +773,14 @@ def main_ends(code, released=False, write_fails=False):
     argv = sys.argv
     sys.argv = ["x", "begin", S47]
     exit_code = None
+    err = io.StringIO()
     try:
-        m.main()
+        with contextlib.redirect_stderr(err):
+            m.main()
     except SystemExit as e:
         exit_code = e.code
     finally:
+        MAIN_OUT.update(err=err.getvalue(), exit=exit_code)
         sys.argv = argv
         m.CLAIMED.clear()
         for k, v in saved.items():
@@ -787,6 +791,9 @@ check("a phase that passes: its end recorded passed, with its claim's token", ma
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
       ([(S47, "end", "begin", "failed", "host:1:aa")], False))
 check("a phase that passes, its end not written: the run fails", main_ends(0, write_fails=True), ([], False))
+main_ends("REFUSED: the phase's own reason", write_fails=True)
+check("a phase refused, its end not written: both said - the phase's reason, then the write's",
+      ("REFUSED: the phase's own reason" in MAIN_OUT["err"], "ledger write failed" in str(MAIN_OUT["exit"])), (True, True))
 check("a phase whose claim was released meanwhile: no end written (its release is), the phase's result",
       main_ends(0, released=True), ([], True))
 # a run whose claim was closed meanwhile (released by hand, its run still alive) records nothing more: its events would
