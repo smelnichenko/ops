@@ -160,7 +160,14 @@
           total=$(printf '%s\n' "${backups[@]}" | grep -c .)  # (not the array's length operator: Jinja reads it)
           for i in "${!backups[@]}"; do
             if [ $(( total - i )) -gt "$PI_BACKUP_KEEP" ] && [[ "${backups[$i]}" < "$cutoff" ]]; then
-              rclone purge "store:$PI_BACKUP_BUCKET/${backups[$i]}"
+              # gone meanwhile - another run purged it first (the lock lost with a dropped Consul session) - is
+              # purged all the same; still listed, or the listing failing, fails the run
+              if ! rclone purge "store:$PI_BACKUP_BUCKET/${backups[$i]}"; then
+                listing=$(rclone lsf --dirs-only "store:$PI_BACKUP_BUCKET")
+                if grep -qx "${backups[$i]}/" <<< "$listing"; then
+                  echo "the old copy ${backups[$i]} could not be purged"; exit 1
+                fi
+              fi
             fi
           done
           # then the time of this success

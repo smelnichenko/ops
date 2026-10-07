@@ -3,12 +3,14 @@
 # (the two Pis' timers one at a time); with today's success in the store it stops at once, done; with yesterday's, or
 # PI_BACKUP_EVEN_TODAY=1, it goes on to the backup (here: the Consul snapshot, which the stub fails) - and the failure
 # reaches the unit through the lock (Consul's exit 2; by default it exits 0). A lock held elsewhere is waited for a
-# bounded time, then the run fails.
+# bounded time, then the run fails. Its retention, the section alone: an old copy another run purged first (the lock
+# lost to a dropped Consul session) is purged all the same - the loser's purge failed it after its upload, no
+# last-success; one still listed after a failed purge, or a failed listing, fails the run.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
-"$PY" -c 'import jinja2, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-"$PY" -c 'import jinja2, yaml' || { echo "pi-backup-day: no python3 with jinja2 and yaml"; exit 2; }
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
+"$PY" -c 'import ansible, yaml' || { echo "pi-backup-day: no python3 with ansible and yaml"; exit 2; }
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir "$W/bin"
@@ -42,18 +44,31 @@ exec $(command -v date) "\$@"
 STUB
 cat > "$W/bin/rclone" <<'STUB'
 #!/bin/bash
-case "$1" in cat) [ -n "$LAST" ] && echo "$LAST" || exit 3 ;; esac
+echo "rclone $*" >> "$CALLS"
+case "$1" in
+  cat) [ -n "$LAST" ] && echo "$LAST" || exit 3 ;;
+  # the bucket's copies from $DIRS; LSF_FAIL_FROM=<n>: the n-th listing on fails
+  lsf) n=$(grep -c "^rclone lsf" "$CALLS"); [ "$n" -lt "${LSF_FAIL_FROM:-999}" ] || exit 5; cat "$DIRS" ;;
+  # PURGE=ok: gone; gone: gone, but another run's purge got there first (this one fails); stuck: fails, still there
+  purge)
+    d=${2##*/}
+    [ "${PURGE:-ok}" = stuck ] || { grep -vx "$d/" "$DIRS" > "$DIRS.n"; mv "$DIRS.n" "$DIRS"; }
+    [ "${PURGE:-ok}" = ok ] || exit 1 ;;
+  rcat) cat > /dev/null ;;
+esac
 STUB
 chmod +x "$W/bin"/*
 W=$W "$PY" - <<'PY'
 import datetime, os, subprocess, sys
-import jinja2, yaml
+import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render
 W = os.environ["W"]
 task = next(t for t in yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-backups.yml"))[0]["tasks"]
             if t.get("name") == "The backup script")
 script = os.path.join(W, "backup.sh")
-open(script, "w").write(jinja2.Environment().from_string(task["ansible.builtin.copy"]["content"]).render()
-                        .replace("/var/backups/pi-tier0", os.path.join(W, "pi-tier0")))  # its work directory, here
+content = render(task["ansible.builtin.copy"]["content"])
+open(script, "w").write(content.replace("/var/backups/pi-tier0", os.path.join(W, "pi-tier0")))  # its work directory
 os.chmod(script, 0o700)
 today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 yesterday = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime("%Y%m%dT%H%M%SZ")
@@ -110,6 +125,31 @@ for prev, day in zip(days, days[1:]) if m else ():
     if rc != 0 or any("snapshot" in c for c in calls):
         wrong.append(f"{day}: the other Pi's run at {stamp(later)} backed up again (the day's success at {stamp(t)})")
 check("a year's firings: one backup a day, through both DST changes and midsummer", not wrong, wrong[:3])
+# the retention, the script's own lines from the old copies' purge to last-success, after this run's upload ($ts)
+lines = content.splitlines()
+first = next(i for i, l in enumerate(lines) if "the old ones gone" in l)
+last = next(i for i, l in enumerate(lines) if "last-success" in l and "rcat" in l)
+retention = os.path.join(W, "retention.sh")
+open(retention, "w").write("set -euo pipefail\n" + "\n".join(lines[first:last + 1]) + "\n")
+old = [(datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=d)).strftime("%Y%m%dT%H%M%SZ")
+       for d in (90, 60, 0)]
+def retain(**extra):
+    calls, dirs = os.path.join(W, "calls"), os.path.join(W, "dirs")
+    open(calls, "w").close()
+    open(dirs, "w").write("".join(d + "/\n" for d in old))
+    env = dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], CALLS=calls, DIRS=dirs,
+               PI_BACKUP_BUCKET="b", PI_BACKUP_RETENTION_DAYS="30", PI_BACKUP_KEEP="1", ts=old[-1], **extra)
+    r = subprocess.run(["bash", retention], capture_output=True, text=True, env=env)
+    c = open(calls).read()
+    return r.returncode, c.count("rclone purge"), "rclone rcat" in c, r.stdout + r.stderr
+check("retention: the two old copies purged, then last-success", retain()[:3] == (0, 2, True), retain())
+check("retention: an old copy another run purged first - purged all the same, last-success written",
+      retain(PURGE="gone")[:3] == (0, 2, True), retain(PURGE="gone"))
+check("retention: a copy still listed after its failed purge - fails, no last-success",
+      (retain(PURGE="stuck")[0] != 0, retain(PURGE="stuck")[2]) == (True, False), retain(PURGE="stuck"))
+check("retention: the listing after a failed purge failing - fails, no last-success",
+      (retain(PURGE="gone", LSF_FAIL_FROM="2")[0] != 0, retain(PURGE="gone", LSF_FAIL_FROM="2")[2]) == (True, False),
+      retain(PURGE="gone", LSF_FAIL_FROM="2"))
 print("pi-backup-day: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
