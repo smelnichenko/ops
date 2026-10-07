@@ -193,6 +193,19 @@ failed = owned(pod("job-a", "j1"), "Job", "backup-1", phase="Failed")
 done = owned(pod("job-b", "j2"), "Job", "backup-1", phase="Succeeded")
 gate("a failed Job attempt a later attempt completed: green", A, [failed, done, pod("p2", "u3")], 0)
 gate("a failed Job attempt with no completed one: not green", A, [failed, pod("p2", "u3")], 1, "ns/job-a (Failed)")
+# a Succeeded pod excuses failed attempts of its Job only - another kind's failed pod is not "a later attempt completed"
+rs_failed = owned(pod("rs-a", "r1"), "ReplicaSet", "web-1", phase="Failed")
+rs_done = owned(pod("rs-b", "r2"), "ReplicaSet", "web-1", phase="Succeeded")
+gate("a failed ReplicaSet pod beside a Succeeded one of the same owner: not green", A, [rs_failed, rs_done], 1,
+     "ns/rs-a (Failed)")
+# a Failed pod is a node-shutdown leftover only by the kubelet's own message - one terminated otherwise is a failure,
+# whatever replaced it
+other = with_(old_rs, ["status", "message"], "Pod was terminated in response to an eviction.")
+gate("a pod terminated otherwise (not the node's shutdown), its owner running again: not green", A, [other, new_rs],
+     1, "Failed")
+# a restart exactly at --restarted-since is after the step began: judged
+gate("a restart at the very --restarted-since: not green", A, [pod("p1", "u1", 1, "2026-10-06T10:30:00Z")], 1,
+     "after 2026-10-06T10:30:00", "--restart-quiet", "300", "--restarted-since", "2026-10-06T10:30:00Z")
 
 # the poll loop, against a kubectl stub: one failed poll is a red poll, not the end; restarts between polls never settle
 def loop(mode, *args):
