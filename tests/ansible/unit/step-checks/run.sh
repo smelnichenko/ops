@@ -68,12 +68,18 @@ check "a TERM to the script: it ends (130), the check still running stopped, not
 set +m
 setsid sleep 1000 < /dev/null > /dev/null 2>&1 &
 ghost=$!
-read -r gppid gpgid gsid gcomm <<< "$(proc_info "$ghost")"
+trap 'kill "$ghost" 2> /dev/null; rm -rf "$T"' EXIT
+# setsid starts its session and execs the sleep in its own time (CI: read still as "setsid" in the shell's group) -
+# read until it has, a bounded wait
+for _ in $(seq 100); do
+  read -r gppid gpgid gsid gcomm <<< "$(proc_info "$ghost")"
+  [ "$gpgid $gsid $gcomm" = "$ghost $ghost sleep" ] && break
+  sleep 0.05
+done
 if [ "$gpgid $gsid $gcomm" != "$ghost $ghost sleep" ]; then
   echo "FAIL the test's own process is not a session-leading sleep ($ghost: $gpgid $gsid $gcomm) - not used"
   exit 1
 fi
-trap 'kill "$ghost" 2> /dev/null; rm -rf "$T"' EXIT
 sed -i 's|^start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"$|&\nnames+=(ghost); pids+=("$GHOST")|' \
   "$T/scripts/upgrade-step-checks.sh"
 check "the ghost added to the copy" "$(grep -c 'pids+=("$GHOST")' "$T/scripts/upgrade-step-checks.sh")" 1

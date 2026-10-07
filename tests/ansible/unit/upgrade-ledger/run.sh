@@ -423,12 +423,16 @@ check("merge 22 (only its own registry's image): nothing pulled", [c for c in go
 # step 54 replaces Tempo's major: its WAL flushed right before the infra merge (after the yes), not before platform's
 S54 = "54-tempo-3"
 check("54 flushes Tempo before its infra merge", info[S54]["tempo_flush"], ["infra"])
+RUN_ARGS.clear()
 got = [c for c in phase_calls(m.merge, S54, "infra", events=ev(f"{S54} apps app")) if c[0] in ("ten", "asked", "run")]
-check("merge 54 infra: asked, Tempo flushed, then merged",
-      [c for c in got if c[0] != "run" or c[1] == "upgrade-merge-step.sh"],
-      [("asked",), ("ten", "flush"), ("run", "upgrade-merge-step.sh")])
+check("merge 54 infra: asked, Tempo flushed (the flush waited for), then merged",
+      [c for c in got if c[0] != "run" or c[1] in ("upgrade-merge-step.sh", "tempo-flush.py")],
+      [("asked",), ("run", "tempo-flush.py"), ("run", "upgrade-merge-step.sh")])
+check("merge 54 infra: the flush's kubectl is ten's", [a[1:] for a in RUN_ARGS if a[0].endswith("tempo-flush.py")],
+      [["ssh", m.TEN, "kubectl"]])
+RUN_ARGS.clear()
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
-check("merge 54 platform: no flush", [c for c in got if c[0] == "ten"], [])
+check("merge 54 platform: no flush", [c for c in got if c in (("ten", "flush"), ("run", "tempo-flush.py"))], [])
 
 # the terminal question fails closed: no terminal (a cron, a pipe) is a no
 import subprocess as _sp
