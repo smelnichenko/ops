@@ -531,29 +531,24 @@
         # its status as the start found it: not running, it started on this drop-in just now
         loaded_started_now: "{{ _keepalived_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
 
-    - name: The drop-in sets ExecStopPost alone (anything else needs keepalived restarted - one Pi at a time, by hand)
-      ansible.builtin.command:
-        argv: [grep, -vxE, '\[Service\]|ExecStopPost=.*|#.*|[[:space:]]*',
-               /etc/systemd/system/keepalived.service.d/release-active-services.conf]
-      register: _dropin_other
-      changed_when: false
-      failed_when: _dropin_other.rc != 1  # grep -v: 1 when every line is one of those
-      check_mode: false  # a read
-
+    # the drop-in (written above) sets ExecStopPost alone - anything else would need keepalived restarted, one Pi at a
+    # time: tests/ansible/unit/keepalived-pending holds it to that
     - name: The unit read again
       ansible.builtin.systemd:
         daemon_reload: true
       when: _restart_pending.stdout_lines[0] == 'pending'
 
-    - name: Systemd runs the drop-in's ExecStopPost at keepalived's next stop
+    # pending or not: a record that says current proves nothing of the unit systemd holds now
+    - name: Systemd runs the drop-in's ExecStopPost at keepalived's next stop, its unit needing no reload
       ansible.builtin.command:
-        argv: [systemctl, show, keepalived, -p, ExecStopPost, --value]
+        argv: [systemctl, show, keepalived, -p, ExecStopPost, -p, NeedDaemonReload]
       register: _stop_post
       changed_when: false
-      failed_when: _stop_post.rc != 0 or 'active_services_backup.sh --force' not in _stop_post.stdout
-      when:
-        - _restart_pending.stdout_lines[0] == 'pending'
-        - not ansible_check_mode  # a preview reloaded nothing
+      failed_when: >-
+        _stop_post.rc != 0 or 'active_services_backup.sh --force' not in _stop_post.stdout
+        or 'NeedDaemonReload=no' not in _stop_post.stdout_lines
+      check_mode: false  # a read
+      when: not (ansible_check_mode and _restart_pending.stdout_lines[0] == 'pending')  # a preview reloaded nothing
 
     # what the next run compares with: loaded (a failed reload or check ends this Pi's run before here), or current
     - name: Keepalived's drop-in as systemd runs it, recorded
