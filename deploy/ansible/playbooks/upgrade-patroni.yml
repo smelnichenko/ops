@@ -54,7 +54,10 @@
           set -euo pipefail
           out=$({{ patronictl }} list)
           if grep 'Maintenance mode' <<< "$out" > /dev/null; then
-            echo "REFUSED: the cluster is paused (Maintenance mode) - an interrupted run leaves it so: patronictl resume"
+            by=$(consul kv get ansible/patroni-paused-by 2> /dev/null || true)
+            [ -z "$by" ] || by=" - paused by $by, a run cut short (a Ctrl-C skips its resume): check patronictl list,"
+            by=${by:+$by then patronictl resume and consul kv delete ansible/patroni-paused-by}
+            echo "REFUSED: the cluster is paused (Maintenance mode) - an interrupted run leaves it so: patronictl resume$by"
             exit 1
           fi
       register: _not_paused
@@ -84,7 +87,14 @@
     - name: Paused, each node upgraded, resumed
       block:
         - name: Paused - Postgres keeps running, no failover meanwhile
-          ansible.builtin.command: "{{ patronictl }} pause --wait"
+          # a marker first, naming this run: a Ctrl-C skips the always: below and leaves the cluster paused - the
+          # next run's not-paused check names it
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              consul kv put ansible/patroni-paused-by "upgrade-patroni $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null
+              {{ patronictl }} pause --wait
           register: _paused
           changed_when: true
           run_once: true
@@ -104,7 +114,12 @@
       always:
         # only what this run paused: a pause that failed (another run's, someone's maintenance) is left as it is
         - name: Resumed
-          ansible.builtin.command: "{{ patronictl }} resume --wait"
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              {{ patronictl }} resume --wait
+              consul kv delete ansible/patroni-paused-by > /dev/null
           changed_when: true
           run_once: true
           when: _paused is defined and _paused is succeeded

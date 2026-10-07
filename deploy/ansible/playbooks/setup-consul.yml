@@ -333,7 +333,11 @@
               set -euo pipefail
               out=$({{ patronictl }} list)
               if grep 'Maintenance mode' <<< "$out" > /dev/null; then
-                echo "REFUSED: Patroni is paused - finish that first (patronictl resume)"; exit 1
+                by=$(consul kv get ansible/patroni-paused-by 2> /dev/null || true)
+                [ -z "$by" ] || by=" - paused by $by, a run cut short (a Ctrl-C skips its resume): check patronictl list,"
+                by=${by:+$by then patronictl resume and consul kv delete ansible/patroni-paused-by}
+                echo "REFUSED: Patroni is paused - finish that first (patronictl resume)$by"
+                exit 1
               fi
           changed_when: false
           delegate_to: "{{ _other_pi }}"
@@ -342,7 +346,14 @@
         - name: Restarted, Patroni paused meanwhile
           block:
             - name: Patroni paused - no demotion while this server's agent is away
-              ansible.builtin.command: "{{ patronictl }} pause --wait"
+              # a marker first, naming this run: a Ctrl-C skips the always: below and leaves the cluster paused - the
+              # next run's not-paused check names it
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  consul kv put ansible/patroni-paused-by "setup-consul $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /dev/null
+                  {{ patronictl }} pause --wait
               register: _patroni_paused
               changed_when: true
               delegate_to: "{{ _other_pi }}"
@@ -374,7 +385,12 @@
           always:
             # only what this run paused
             - name: Patroni resumed
-              ansible.builtin.command: "{{ patronictl }} resume --wait"
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  {{ patronictl }} resume --wait
+                  consul kv delete ansible/patroni-paused-by > /dev/null
               changed_when: true
               delegate_to: "{{ _other_pi }}"
               when: _patroni_paused is defined and _patroni_paused is succeeded and _patroni_paused is not skipped
