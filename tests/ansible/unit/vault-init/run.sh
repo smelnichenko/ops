@@ -58,11 +58,38 @@ path = os.path.join(W, "vu", "init.json")
 check("the init's keys on the Pi, whole", r.returncode == 0 and json.load(open(path))["root_token"] == "hvs.root")
 check("root-only: the file 0600, its directory 0700",
       stat.S_IMODE(os.stat(path).st_mode) == 0o600 and stat.S_IMODE(os.stat(os.path.dirname(path)).st_mode) == 0o700)
-slurped = {"content": base64.b64encode(open(path, "rb").read()).decode()}
-keys = tasks["Persist unseal keys (first init only)"]["ansible.builtin.copy"]["content"]
-token = tasks["Persist root token (first init only)"]["ansible.builtin.copy"]["content"]
-check("unseal-keys made from it", render(keys, _init_json=slurped).split() == ["k1", "k2", "k3"])
-check("root-token made from it", render(token, _init_json=slurped) == "hvs.root")
+# the unseal-keys and root-token files made from it on the Pi - the shares never through the controller (a copy with
+# content: is written to a file on the controller first) - root's alone, read-only
+book = yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
+alltasks = [t for p in book for t in p.get("tasks") or [] for t in [t] + (t.get("block") or [])]
+through = [t.get("name") for t in alltasks if ("ansible.builtin.copy" in t or "ansible.builtin.slurp" in t)
+           and any(x in yaml.safe_dump(t) for x in ("init.json", "unseal_keys_b64", "root_token"))]
+check("the first init's keys never read to the controller or written from it", through == [])
+persist = next((t for t in alltasks if "unseal-keys" in str(t.get("ansible.builtin.shell", ""))
+                and "init.json" in str(t.get("ansible.builtin.shell", ""))), None)
+check("unseal-keys and root-token written on the Pi from its keys file", persist is not None)
+if persist:
+    sh = persist["ansible.builtin.shell"]
+    r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
+                        os.path.join(W, "vu"))], env=env, capture_output=True, text=True)
+    k, t = os.path.join(W, "vu", "unseal-keys"), os.path.join(W, "vu", "root-token")
+    check("unseal-keys made from it, one share a line", r.returncode == 0 and open(k).read() == "k1\nk2\nk3\n")
+    check("root-token made from it", open(t).read() == "hvs.root")
+    check("both root-only, read-only (0400)", all(stat.S_IMODE(os.stat(f).st_mode) == 0o400 for f in (k, t)))
+    os.remove(k); os.remove(t)
+# pi2's copy of the shares: on a shell's stdin (pipelined, in memory), written there root-only - never a file on the
+# controller
+dist = next((t for t in alltasks if t.get("name", "").startswith("The unseal keys on pi2")), None)
+check("pi2's shares given on stdin", dist is not None and "_unseal_keys" in str((dist.get("args") or {}).get("stdin", "")))
+if dist:
+    sh = dist["ansible.builtin.shell"]
+    r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
+                        os.path.join(W, "vu"))], input="k1\nk2\nk3\n", env=env, capture_output=True, text=True)
+    k = os.path.join(W, "vu", "unseal-keys")
+    check("pi2's unseal-keys as pi1's, 0400", r.returncode == 0 and open(k).read() == "k1\nk2\nk3\n"
+          and stat.S_IMODE(os.stat(k).st_mode) == 0o400)
+    check("its stdin as given (no newline added)", (dist.get("args") or {}).get("stdin_add_newline") is False)
+    os.remove(k)
 # an ssh retry overlapping a first invocation still running: each writes its own file aside - the other's output (the
 # only copy of the shares) never truncated
 os.remove(path)

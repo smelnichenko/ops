@@ -590,34 +590,30 @@
         path: /etc/vault-unseal/init.json
       register: _init_pending
 
-    - name: Its keys
-      ansible.builtin.slurp:
-        src: /etc/vault-unseal/init.json
-      register: _init_json
+    # written here from the keys file - the shares never through the controller (read into a result, then a copy with
+    # content: writes them to a file on the controller first); each written whole (aside, then moved), root's alone
+    - name: The unseal keys and root token written from the first init's keys file, on the Pi (first init only)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          umask 077
+          python3 - /etc/vault-unseal <<'PY'
+          import json, os, sys
+          d = sys.argv[1]
+          init = json.load(open(os.path.join(d, "init.json")))
+          for name, body in (("unseal-keys", "".join(k + "\n" for k in init["unseal_keys_b64"])),
+                             ("root-token", init["root_token"])):
+              part = os.path.join(d, name + ".part")
+              with open(part, "w") as f:
+                  f.write(body)
+                  f.flush()
+                  os.fsync(f.fileno())
+              os.chmod(part, 0o400)
+              os.replace(part, os.path.join(d, name))
+          PY
       when: _init_pending.stat.exists
-      no_log: true
-
-    - name: Persist unseal keys (first init only)
-      ansible.builtin.copy:
-        dest: /etc/vault-unseal/unseal-keys
-        content: |
-          {% for k in (_init_json.content | b64decode | from_json).unseal_keys_b64 %}
-          {{ k }}
-          {% endfor %}
-        owner: root
-        group: root
-        mode: '0400'
-      when: _init_pending.stat.exists
-      no_log: true
-
-    - name: Persist root token (first init only)
-      ansible.builtin.copy:
-        dest: /etc/vault-unseal/root-token
-        content: "{{ (_init_json.content | b64decode | from_json).root_token }}"
-        owner: root
-        group: root
-        mode: '0400'
-      when: _init_pending.stat.exists
+      changed_when: true
       no_log: true
 
     - name: Show root token (first init only)
@@ -721,13 +717,26 @@
     VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
-    - name: Copy unseal-keys to pi2
-      ansible.builtin.copy:
-        content: "{{ hostvars['pi1']._unseal_keys.content | b64decode }}"
-        dest: /etc/vault-unseal/unseal-keys
-        owner: root
-        group: root
-        mode: '0400'
+    # on stdin (pipelined: in memory, through ssh), never a file on the controller (a copy with content: writes one);
+    # written whole, root's alone - only when it differs
+    - name: The unseal keys on pi2 - on stdin, never in a file on the controller
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          umask 077
+          part=$(mktemp /etc/vault-unseal/unseal-keys.XXXXXX)
+          trap 'rm -f "$part"' EXIT
+          cat > "$part"
+          if cmp -s "$part" /etc/vault-unseal/unseal-keys; then exit 0; fi
+          chmod 0400 "$part"
+          mv "$part" /etc/vault-unseal/unseal-keys
+          echo written
+      args:
+        stdin: "{{ hostvars['pi1']._unseal_keys.content | b64decode }}"
+        stdin_add_newline: false
+      register: _pi2_keys
+      changed_when: "'written' in _pi2_keys.stdout"
       no_log: true
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
