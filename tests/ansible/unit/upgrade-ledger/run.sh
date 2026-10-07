@@ -489,7 +489,7 @@ check("merge 54 infra: asked, Tempo flushed (the flush waited for), then merged"
       [c for c in got if c[0] != "run" or c[1] in ("upgrade-merge-step.sh", "tempo-flush.py")],
       [("asked",), ("run", "tempo-flush.py"), ("run", "upgrade-merge-step.sh")])
 check("merge 54 infra: the flush runs on ten (its kubectl and credentials), the script on its python's stdin",
-      [a for a in RUN_ARGS if a[-1] == "<tempo-flush.py>"], [["ssh", m.TEN, "python3", "-", "<tempo-flush.py>"]])
+      [a for a in RUN_ARGS if a[-1] == "<tempo-flush.py>"], [[*m.SSH, m.TEN, "python3 -", "<tempo-flush.py>"]])
 RUN_ARGS.clear()
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
 check("merge 54 platform: no flush", [c for c in got if c in (("ten", "flush"), ("run", "tempo-flush.py"))], [])

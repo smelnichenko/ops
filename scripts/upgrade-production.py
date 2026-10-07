@@ -233,8 +233,23 @@ def run(cmd, **kw):
     return subprocess.run(cmd, text=True, **kw)
 
 
+# ssh giving up on a dead connection (a minute without an answer to its keep-alives), and a bound on a remote command
+# that never answers: either hung a phase for ever
+SSH = ["ssh", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+REMOTE_TIMEOUT = 900  # s: a read, a write, an inventory (the settle and Tempo's flush pass their own)
+
+
+def remote(host, command, stdin=None, timeout=None, capture=True):
+    """`command` run on `host` (one string, as ssh passes it), `stdin` given."""
+    timeout = timeout or REMOTE_TIMEOUT
+    try:
+        return run([*SSH, host, command], input=stdin, capture_output=capture, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        sys.exit(f"on {host}: {command.split()[0]}...: no answer in {timeout} s - it may have run all the same")
+
+
 def ten(command, stdin=None, check=True):
-    out = run(["ssh", TEN, command], input=stdin, capture_output=True)
+    out = remote(TEN, command, stdin)
     if check and out.returncode:
         sys.exit(f"on ten: {command}: rc {out.returncode}: {out.stderr.strip()}")
     return out
@@ -333,7 +348,7 @@ def inventory_check(applied):
         lines = ten(f"INVENTORY_EXCLUDE_NAMESPACES={shlex.quote(excluded_namespaces())} bash -s", stdin=script).stdout
         pi_script = open(os.path.join(OPS, "scripts", "version-inventory-pi.sh")).read()
         for pi in PIS:
-            out = run(["ssh", pi, "sudo -n bash -s"], input=pi_script, capture_output=True)
+            out = remote(pi, "sudo -n bash -s", pi_script)
             if out.returncode:
                 sys.exit(f"inventory of {pi}: {out.stderr.strip()}")
             lines += out.stdout
@@ -383,7 +398,7 @@ def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=N
         if restarts_expected:
             cmd += " --restarts-expected"
     print(f"Argo on ten, on infra {revs[URLS['infra']][:10]} / platform {revs[URLS['platform']][:10]}:", flush=True)
-    out = run(["ssh", TEN, cmd], input=script, capture_output=True)
+    out = remote(TEN, cmd, script, timeout=minutes * 60 + 600)
     print(out.stdout + out.stderr, end="")
     seen = next((l[5:].split(",") for l in reversed(out.stdout.splitlines()) if l.startswith("APPS ")), [])
     if out.returncode and main_revisions() != revs:
@@ -922,7 +937,8 @@ def merge(step, repo):
             # next major does not replay it) - proven by a marker trace found in the store; on ten, with its kubectl
             if repo in step_info(step)["tempo_flush"]:
                 with open(os.path.join(OPS, "scripts", "tempo-flush.py")) as script:
-                    flushed = run(["ssh", TEN, "python3", "-"], input=script.read()).returncode == 0
+                    # (its own waits bounded: held 30 x 2 s, stored 60 x 10 s, each query 30 s at most)
+                    flushed = remote(TEN, "python3 -", script.read(), timeout=3600, capture=False).returncode == 0
                 refuse([] if flushed
                        else ["Tempo's flush did not complete (above) - nothing merged"])
             # the claim read again right before the push: released by hand during the yes, the pre-pull or the flush
