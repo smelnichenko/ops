@@ -88,10 +88,18 @@ def walk(ts):
         for k in ("block", "rescue", "always"):
             walk(t.get(k))
         f = t.get("ansible.builtin.file") or t.get("ansible.builtin.copy") or {}
-        paths = [f.get("path") or f.get("dest")] + [i if isinstance(i, str) else i.get("path")
-                                                     for i in (t.get("loop") or [])]
-        if f.get("owner") == "vault" and any(str(x).startswith("/etc/vault.d") for x in paths if x):
-            owned.append(t.get("name"))
+        # each loop item rendered (its path and owner may be the item's: {{ item.owner }}), or the task alone; what
+        # needs more than the item (a fact, an inventory variable) kept as written
+        def soft(text, item):
+            try:
+                return str(render(str(text or ""), item=item))
+            except Exception:
+                return str(text or "")
+        for item in (t.get("loop") if isinstance(t.get("loop"), list) else [None]):
+            path = soft(f.get("path") or f.get("dest"), item)
+            owner = soft(f.get("owner"), item)
+            if owner == "vault" and path.startswith("/etc/vault.d"):
+                owned.append(f"{t.get('name')}: {path}")
 for p in plays:
     walk(p.get("tasks"))
 check("nothing under /etc/vault.d Vault's own", owned == [], owned)
