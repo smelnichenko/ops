@@ -699,6 +699,23 @@
         wait_timeout: 300s
 
       when: not platform_by_argo | bool
+    # the Istio values from production's main: a local main behind origin's (CD pushed meanwhile) or with commits never
+    # pushed installed other values than production runs - refused; a ref given on purpose is read as given
+    - name: Infra's local main is origin's (the Istio values read from it)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        git -C {{ infra_dir | quote }} fetch -q origin main
+        [ "$(git -C {{ infra_dir | quote }} rev-parse main)" = "$(git -C {{ infra_dir | quote }} rev-parse origin/main)" ] \
+          || { echo "REFUSED: the main of {{ infra_dir }} is not origin/main - pull it first"; exit 1; }
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+      check_mode: false
+      when: infra_values_ref == 'main' and not platform_by_argo | bool
+
     - name: Install Istiod (control plane)
       kubernetes.core.helm:
         kubeconfig: /etc/kubernetes/admin.conf
@@ -708,8 +725,8 @@
         release_namespace: istio-system
         # Argo CD's own values (infra's main, next to ops), so Argo's later sync of them changes nothing
         values: >-
-          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ infra_dir ~ ' show ' ~ infra_values_ref
-                    ~ ':clusters/production/istio/istiod-values.yaml') | from_yaml }}
+          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ (infra_dir | quote) ~ ' show ' ~ (infra_values_ref
+                    ~ ':clusters/production/istio/istiod-values.yaml') | quote) | from_yaml }}
         wait: true
         wait_timeout: 300s
 
@@ -722,8 +739,8 @@
         chart_version: "{{ istio_version }}"
         release_namespace: istio-system
         values: >-
-          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ infra_dir ~ ' show ' ~ infra_values_ref
-                    ~ ':clusters/production/istio/cni-values.yaml') | from_yaml }}
+          {{ lookup('ansible.builtin.pipe', 'git -C ' ~ (infra_dir | quote) ~ ' show ' ~ (infra_values_ref
+                    ~ ':clusters/production/istio/cni-values.yaml') | quote) | from_yaml }}
         wait: true
         wait_timeout: 300s
 
