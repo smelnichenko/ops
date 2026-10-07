@@ -247,6 +247,17 @@
             daemon_reload: true
 
     # ── 5. proof ─────────────────────────────────────────────────────
+    # a preview of a run cut short after the kubelet's restart (the cluster at the target): only the proofs are left,
+    # and check mode skips them - the preview said "upgraded" on nothing proven
+    - name: Preview - only the proofs left
+      when: ansible_check_mode and _proofs_only | bool
+      block:
+        - name: Would prove
+          ansible.builtin.debug:
+            msg: "PREVIEW: Kubernetes at v{{ target }} already (a run cut short after the kubelet's restart) - its proofs would run"
+        - name: End the preview here (its proofs only)
+          ansible.builtin.meta: end_host
+
     - name: The node is Ready on the new kubelet
       ansible.builtin.shell: |
         set -euo pipefail
