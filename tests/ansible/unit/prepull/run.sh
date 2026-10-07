@@ -74,6 +74,10 @@ FAILS=9 case_ "a pull failing every time: the run fails" 1 "$E pull x:1;$E pull 
 # a value that is no image reference - a crictl flag, two words - refused before any pull
 case_ "a flag for an image: refused, nothing pulled" 1 "" -e images=--debug
 case_ "two words for an image: refused, nothing pulled" 1 "" -e '{"images": "a/b:1 --insecure"}'
+# a legal reference passes: a tag with upper case and underscores, a registry with a port
+case_ "a tag in upper case with underscores, a registry's port: pulled" 0 \
+  "$E pull quay.io/a/b:V1.2_RC3;$E pull registry.local:5000/c/d:2" -e images=quay.io/a/b:V1.2_RC3,registry.local:5000/c/d:2
+case_ "a name in upper case: refused, nothing pulled" 1 "" -e images=Docker.io/a/b:1
 USED=65,66 case_ "the image store at 65%, then 66% (GC at 85): pulled" 0 "$E pull x:1" -e images=x:1
 USED=80,80 case_ "at 80% before (GC at 85, less 5): refused, nothing pulled" 1 "" -e images=x:1
 USED=70,81 case_ "at 81% after the pulls: the run fails" 1 "$E pull x:1" -e images=x:1

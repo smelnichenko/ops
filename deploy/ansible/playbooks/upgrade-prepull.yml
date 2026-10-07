@@ -14,15 +14,17 @@
     image_store: /var/lib/containerd
   tasks:
     # each an image reference, nothing else: the list comes in on the command line, and a flag or a second word would
-    # reach crictl as one of its own
+    # reach crictl as one of its own. A name in lower case (a registry's port in it), a tag as the registries allow
+    # (upper case and underscores too - refused before), a digest
     - name: The images to pull, each an image reference
       ansible.builtin.assert:
         that:
           - images | default('') | length > 0
-          - images.split(',') | select | reject('match', '^[a-z0-9][a-z0-9._/:-]*(@sha256:[0-9a-f]{64})?$') | list
-            | length == 0
+          - images.split(',') | select | reject('match', _reference) | list | length == 0
         fail_msg: "-e images=<name:tag[@sha256:digest]>,... - got {{ images | default('') }}"
         quiet: true
+      vars:
+        _reference: '^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9._-]+)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$'
 
     # what the node has already (a two-repo step's second merge, the Vagrant copy's preload): only the rest is pulled,
     # and room is needed only for that - a store at 80-85% refused a merge that pulled nothing
