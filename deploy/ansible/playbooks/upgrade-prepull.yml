@@ -10,7 +10,7 @@
   become: true
   gather_facts: false
   vars:
-    kubelet_config: /var/lib/kubelet/config.yaml
+    kubeconfig: /etc/kubernetes/admin.conf
     image_store: /var/lib/containerd
   tasks:
     # each an image reference, nothing else: the list comes in on the command line, and a flag or a second word would

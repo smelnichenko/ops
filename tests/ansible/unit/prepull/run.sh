@@ -3,9 +3,9 @@
 # 0), crictl a stub that logs its arguments: no images refuses, nor does anything that is no image reference (a flag,
 # two words); each image pulled through containerd's socket by name (ten has no crictl.yaml - crictl tried its
 # deprecated default endpoints); a registry's passing failure retried, a lasting one fails the pull. The image store
-# (df a stub, the kubelet's config a file here) under the kubelet's image GC threshold less 5 before the pulls and
-# after - the pulled images are unused until their rollout, and GC deletes those first: too full before, nothing
-# pulled; too full after, the run fails; the threshold read from the kubelet's config (85, its default, without one).
+# (df a stub) under the kubelet's image GC threshold less 5 before the pulls and after - the pulled images are unused
+# until their rollout, and GC deletes those first: too full before, nothing pulled; too full after, the run fails; the
+# threshold the running kubelet's (configz, kubectl a stub), unreadable refused.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -36,7 +36,15 @@ n=$(wc -l < "$W/df-calls")
 IFS=, read -r -a used <<< "${USED:-50,50}"
 echo "Use%"; echo " ${used[$((n - 1))]:-${used[-1]}}%"
 STUB
-chmod +x "$W/bin/crictl" "$W/bin/df"
+# the running kubelet's configuration (configz through the API server), its image GC threshold GC_HIGH (85, its
+# default, without); CONFIGZ_FAILS: unreadable
+cat > "$W/bin/kubectl" <<'STUB'
+#!/bin/bash
+echo "kubectl $*" >> "$W/kubectl-calls"
+[ -z "${CONFIGZ_FAILS:-}" ] || { echo "Error from server (ServiceUnavailable)" >&2; exit 1; }
+echo "{\"kubeletconfig\": {\"imageGCHighThresholdPercent\": ${GC_HIGH:-85}, \"imageGCLowThresholdPercent\": 80}}"
+STUB
+chmod +x "$W/bin/crictl" "$W/bin/df" "$W/bin/kubectl"
 W=$W "$PY" - <<'PY'
 import os, yaml
 W = os.environ["W"]
@@ -53,10 +61,9 @@ PY
 fails=0
 case_() {  # case_ <name> <want rc 0|1> <want calls, ; between> <ansible-playbook args...>
   local name=$1 want=$2 calls=$3; shift 3
-  : > "$W/calls"; : > "$W/df-calls"
-  printf '%s\n' "kind: KubeletConfiguration" ${GC_HIGH:+"imageGCHighThresholdPercent: $GC_HIGH"} > "$W/kubelet.yaml"
+  : > "$W/calls"; : > "$W/df-calls"; : > "$W/kubectl-calls"
   out=$(PATH="$W/bin:$PATH" CALLS="$W/calls" W="$W" ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" \
-    -e kubelet_config="$W/kubelet.yaml" -e image_store="$W" "$@" 2>&1); rc=$?
+    -e kubeconfig="$W/admin.conf" -e image_store="$W" "$@" 2>&1); rc=$?
   [ "$rc" = 0 ] || rc=1
   got=$(paste -sd';' "$W/calls")
   if [ "$rc" = "$want" ] && [ "$got" = "$calls" ]; then echo "PASS $name"; return; fi
@@ -81,7 +88,12 @@ case_ "a name in upper case: refused, nothing pulled" 1 "" -e images=Docker.io/a
 USED=65,66 case_ "the image store at 65%, then 66% (GC at 85): pulled" 0 "$E pull x:1" -e images=x:1
 USED=80,80 case_ "at 80% before (GC at 85, less 5): refused, nothing pulled" 1 "" -e images=x:1
 USED=70,81 case_ "at 81% after the pulls: the run fails" 1 "$E pull x:1" -e images=x:1
-GC_HIGH=70 USED=66,66 case_ "the kubelet's own threshold read (70): 66% refused, nothing pulled" 1 "" -e images=x:1
+# the threshold the kubelet runs with (its configz - the config file may not hold it, ten's does not), read for this
+# node; unread, nothing pulled
+GC_HIGH=70 USED=66,66 case_ "the running kubelet's own threshold (70): 66% refused, nothing pulled" 1 "" -e images=x:1
+if grep -q "get --raw /api/v1/nodes/$(hostname)/proxy/configz" "$W/kubectl-calls"; then echo "PASS read for this node"
+else echo "FAIL read for this node: $(cat "$W/kubectl-calls")"; fails=$((fails + 1)); fi
+CONFIGZ_FAILS=1 case_ "the kubelet's configuration unreadable: refused, nothing pulled" 1 "" -e images=x:1
 # the room needed only for what is pulled: images all on the node already (a two-repo step's second merge, the
 # Vagrant copy's preload) pull nothing and are not refused over a full image store; one missing is
 USED=82,82 PRESENT="x:1 y:2" case_ "every image on the node already, the store at 82%: nothing pulled, not refused" \

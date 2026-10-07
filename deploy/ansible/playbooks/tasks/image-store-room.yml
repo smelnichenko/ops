@@ -1,17 +1,19 @@
 ---
 # The node's image store (containerd's root) under the kubelet's image GC threshold less 5: images pulled ahead of
-# their rollout are unused until it, and past imageGCHighThresholdPercent (the kubelet's config; 85, its default,
-# where the config sets none) its GC deletes unused images - these first; past imagefs.available<15% it evicts pods.
-# Read and reported always; refused only with room_needed (something is pulled).
-# Expects: room_when (before | after the pulls), room_needed, kubelet_config, image_store.
+# their rollout are unused until it, and past imageGCHighThresholdPercent its GC deletes unused images - these first;
+# past imagefs.available<15% it evicts pods. The threshold the kubelet runs with - its configz, read for this node
+# through the API server: a config file need not hold it (ten's does not), nor be what the kubelet started with.
+# Unread, refused. Read and reported always; refused only with room_needed (something is pulled).
+# Expects: room_when (before | after the pulls), room_needed, kubeconfig, image_store.
 # Tested: tests/ansible/unit/prepull.
 - name: "The image store under the kubelet's image GC threshold: {{ room_when }}"
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      high=$(sed -n 's/^imageGCHighThresholdPercent: *\([0-9][0-9]*\) *$/\1/p' {{ kubelet_config | quote }})
-      high=${high:-85}
+      high=$(kubectl --kubeconfig {{ kubeconfig | quote }} --request-timeout=30s \
+        get --raw "/api/v1/nodes/$(hostname)/proxy/configz" \
+        | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["kubeletconfig"]["imageGCHighThresholdPercent"]))')
       used=$(df --output=pcent {{ image_store | quote }} | tail -n 1 | tr -dc 0-9)
       echo "the image store {{ image_store }} ${used}% used, the kubelet's image GC at ${high}%"
       [ "$used" -lt $(( high - 5 )) ] || {
