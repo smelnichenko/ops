@@ -15,8 +15,9 @@ STUB
 # every check: what it read on stdin (nothing, within a second), and exit 1 for the metrics one
 cat > "$T/deploy/ansible/venv/bin/ansible-playbook" <<'STUB'
 #!/bin/bash
-# LONG=<file>: the storage check runs on (its PID in the file) - until the script's cleanup stops it
-case "$*" in *storage-check*) [ -z "${LONG:-}" ] || { echo $$ > "$LONG"; sleep 30; } ;; esac
+# LONG=<file>: the storage check runs on (its PID in the file) until the script's cleanup stops it - one that ran
+# its course leaves <file>.finished (the cleanup's wait waited it out)
+case "$*" in *storage-check*) [ -z "${LONG:-}" ] || { echo $$ > "$LONG"; sleep 30; echo > "$LONG.finished"; } ;; esac
 got=$(timeout 1 cat 2> /dev/null || true)
 echo "check $* read stdin: [$got]"
 case "$*" in *metrics-check*) exit 1 ;; esac
@@ -39,6 +40,20 @@ check "five checks judged" "$(grep -c '^===== check ' <<< "$out")" 5
 check "the failing one named, the run failed" "$rc $(grep -o 'STEP CHECKS FAILED: metrics' <<< "$out")" \
   "1 STEP CHECKS FAILED: metrics"
 
+# the script stopped (a TERM, as an interrupted full run sends): the checks still running stopped with it - the storage
+# check runs on here until then; the script is this test's own child, checked so before it is signalled
+LONG="$T/long.pid" PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy < /dev/null \
+  > "$T/term.out" 2>&1 &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
+if [ "$(ps -o ppid=,comm= -p "$sp" | awk '{print $1, $2}')" = "$$ bash" ]; then
+  kill -TERM "$sp"
+fi
+wait "$sp"; rc=$?
+out=$(cat "$T/term.out")
+check "a TERM to the script: it ends (130), the check still running stopped, not run to its end" \
+  "$rc $([ -e "$T/long.pid.finished" ] && echo finished || echo stopped)" "130 stopped"
+
 # a "check" that is no child of the script: its own process, started here - a sleep in a session of its own (job
 # control off, so setsid does not fork: $! is the sleep), proven so before its PID is used, killed by this test alone.
 # wait -n can never return it: the script must say so (its guard), and its cleanup must signal only its own jobs' groups
@@ -55,13 +70,10 @@ trap 'kill "$ghost" 2> /dev/null; rm -rf "$T"' EXIT
 sed -i 's|^start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"$|&\nnames+=(ghost); pids+=("$GHOST")|' \
   "$T/scripts/upgrade-step-checks.sh"
 check "the ghost added to the copy" "$(grep -c 'pids+=("$GHOST")' "$T/scripts/upgrade-step-checks.sh")" 1
-out=$(GHOST=$ghost LONG="$T/long.pid" PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy \
-  < /dev/null 2>&1)
+out=$(GHOST=$ghost PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy < /dev/null 2>&1)
 rc=$?
 check "wait -n with no check ended: the guard says so, the run fails" \
   "$rc $(grep -c 'with no check ended - the rest not judged' <<< "$out")" "1 1"
 check "its cleanup signalled only its own jobs: the foreign process lives" \
   "$(ps -o comm= -p "$ghost" 2> /dev/null)" sleep
-check "and stopped its own: the storage check still running then is gone" \
-  "$([ -s "$T/long.pid" ] && { ps -p "$(cat "$T/long.pid")" > /dev/null && echo running || echo gone; })" gone
 if [ "$fails" = 0 ]; then echo "step-checks: ALL-PASS"; else echo "step-checks: $fails FAILED"; exit 1; fi
