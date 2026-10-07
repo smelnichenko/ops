@@ -723,7 +723,7 @@
   tasks:
     # sent only when pi2's differ (pi1's compared by hash on the controller): a host answering as pi2 gets no shares
     # it does not hold already
-    - name: pi2's unseal keys by their hash
+    - name: Hash of the unseal keys pi2 holds
       ansible.builtin.command: sha256sum /etc/vault-unseal/unseal-keys
       register: _pi2_keys_sum
       changed_when: false

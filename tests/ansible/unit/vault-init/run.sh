@@ -118,7 +118,7 @@ if dist:
     check("the same shares again: not rewritten", r.returncode == 0 and "written" not in r.stdout
           and os.stat(k).st_ino == ino)
     # sent only when pi2's differ: its file's hash read first (a host that is not pi2 gets nothing it lacks)
-    probe = next((t for t in alltasks if t.get("name", "").startswith("pi2's unseal keys by their hash")), None)
+    probe = next((t for t in alltasks if t.get("name", "").startswith("Hash of the unseal keys pi2 holds")), None)
     check("pi2's keys read by their hash before any are sent",
           probe is not None and alltasks.index(probe) < alltasks.index(dist) and probe.get("check_mode") is False)
     if probe:
