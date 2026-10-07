@@ -22,9 +22,13 @@ mkdir -p .upgrade
 logs=$(mktemp -d "$ops/.upgrade/step-checks.XXXX")
 names=() pids=() done_=()
 cleanup() {
-  local i
+  local i own
+  # a group signalled only while it is one of this script's jobs: never a PID it did not start (1 is `kill -- -1`,
+  # every process of the user; 2026-10-07 a test's PID 1 ended the operator's session), nor one the system gave to
+  # another process after the job ended
+  own=" $(jobs -p | tr '\n' ' ') "
   for i in "${!pids[@]}"; do
-    [ -n "${done_[$i]:-}" ] || kill -TERM -- "-${pids[$i]}" 2> /dev/null
+    [ -z "${done_[$i]:-}" ] && [[ $own == *" ${pids[$i]} "* ]] && kill -TERM -- "-${pids[$i]}" 2> /dev/null
   done
   wait 2> /dev/null
   rm -rf "$logs"
@@ -63,8 +67,9 @@ while [ "$left" -gt 0 ]; do
   for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || running+=("${pids[$i]}"); done
   ended=""
   wait -n -p ended "${running[@]}"; rc=$?
-  # a return with no job ended (127: none of them a child any more) judges no check - never the last one again
-  [ -n "$ended" ] || { echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"; exit 1; }
+  # a return with no job ended (127: none of them a child any more) judges no check - never the last one again; bash
+  # unsets `ended` then (set -u would end the script before this said why)
+  [ -n "${ended:-}" ] || { echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"; exit 1; }
   for i in "${!pids[@]}"; do
     if [ "${pids[$i]}" = "$ended" ]; then
       done_[i]=1
