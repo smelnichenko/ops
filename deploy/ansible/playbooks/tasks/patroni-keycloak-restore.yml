@@ -6,11 +6,12 @@
 #
 # Only into an empty database: beside one in use it refuses, naming the file - the realm exists nowhere else, and
 # replayed over live rows it would write old ones over new ones. Keycloak is stopped on both Pis meanwhile (it would
-# build its own schema in the empty database first); the dump goes in as one transaction (all or nothing), and is then
-# moved aside in its root-only directory, root-only itself.
+# build its own schema in the empty database first), and the database counted again once it is: one running until then
+# could have built its schema since the first count - the dump then failed on it, and every later run refused. The dump
+# goes in as one transaction (all or nothing), and is then moved aside in its root-only directory, root-only itself.
 #
 # Expects: pg_password (Postgres' superuser); keycloak_restore_db (default keycloak). Tested:
-# tests/ansible/test-patroni-keycloak-restore.yml.
+# tests/ansible/test-patroni-keycloak-restore.yml, tests/ansible/unit/keycloak-restore-order (the order).
 - name: The database to restore into
   ansible.builtin.set_fact:
     _restore_db: "{{ keycloak_restore_db | default('keycloak') }}"
@@ -19,6 +20,7 @@
   ansible.builtin.command: sudo -u postgres psql -d {{ _restore_db }} -tAc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'"
   register: _restore_tables
   changed_when: false
+  check_mode: false  # a read: a preview (--check) runs it, and what reads it
 
 - name: Only into an empty database
   ansible.builtin.assert:
@@ -37,6 +39,21 @@
         state: stopped
       delegate_to: "{{ item }}"
       loop: "{{ groups['pis'] }}"
+
+    - name: Tables in it, Keycloak stopped
+      ansible.builtin.command: sudo -u postgres psql -d {{ _restore_db }} -tAc "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'"
+      register: _restore_tables_stopped
+      changed_when: false
+      check_mode: false  # a read: a preview (--check) runs it, and what reads it
+
+    - name: Still empty - no schema built before Keycloak stopped
+      ansible.builtin.assert:
+        that: _restore_tables_stopped.stdout | trim == '0'
+        fail_msg: >-
+          REFUSED: the {{ _restore_db }} database was empty and has {{ _restore_tables_stopped.stdout | trim }} tables
+          now Keycloak is stopped - a Keycloak running until then built its schema in it. The dump waits on pi1
+          (/var/backups/patroni-first-install/keycloak.sql): drop and recreate the database empty, then run again
+        quiet: true
 
     - name: Restore the waiting Keycloak dump
       ansible.builtin.shell: |
