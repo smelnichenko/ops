@@ -11,10 +11,9 @@
 # one-way: the in-cluster object store (Mimir's and Tempo's blocks) backed up into the Pi store before the step changes anything
 wave0 gateway
 image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0
-# its change: the branch upgrade/54-tempo-3 in platform, merged first - with the 2.x image it renders 2's config, now
-# flushing all it holds when stopped (flush_all_on_shutdown: one restart, Tempo 2 replays its own WAL) - then infra's,
-# whose stop of Tempo 2 writes what arrived after the explicit flush to the store; infra first would start Tempo 3 on
-# the 2.x config
+# its change: the branch upgrade/54-tempo-3 in platform, merged first (with the 2.x image it renders as before), then
+# infra's - whose stop of Tempo 2 writes what arrived after the explicit flush to the store (flush_all_on_shutdown,
+# since step 45); infra first would start Tempo 3 on the 2.x config
 branch platform
 branch infra
 tempo-flush infra
