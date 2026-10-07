@@ -178,7 +178,9 @@ data:
   ca.crt: ${VAULT_CA_B64}
 EOF
 
-  # Create token reviewer ClusterRoleBinding
+  # External Secrets' account may review tokens: Vault (no reviewer token of its own) reviews the short-lived token ESO
+  # logs in with by that same token - a non-expiring token of this account, kept in Vault's config, was anyone's who
+  # read it to use as External Secrets
   kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -194,35 +196,15 @@ subjects:
     namespace: external-secrets
 EOF
 
-  # Create long-lived SA token for Vault token reviewer
-  kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: vault-token-reviewer
-  namespace: external-secrets
-  annotations:
-    kubernetes.io/service-account.name: external-secrets
-type: kubernetes.io/service-account-token
-EOF
-
-  # the token controller fills the Secret's token after the Secret exists: waited for, a minute at most
-  local SA_TOKEN="" i
-  for i in $(seq 1 60); do
-    SA_TOKEN=$(kubectl get secret vault-token-reviewer -n external-secrets -o jsonpath='{.data.token}' | base64 -d)
-    [[ -n "$SA_TOKEN" ]] && break
-    sleep 1
-  done
-  [[ -n "$SA_TOKEN" ]] || { err "No token in Secret external-secrets/vault-token-reviewer after a minute"; return 1; }
   local K8S_CA K8S_HOST
   K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
   K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
   [[ $K8S_HOST =~ ^https://[A-Za-z0-9.:-]+$ ]] \
     || { err "The cluster's server is not a plain https URL: $K8S_HOST"; return 1; }
 
-  # Vault's Kubernetes auth on the Pi: the script and the token on ssh's stdin, never on a command line (ssh's here,
-  # sudo's and vault's there - any local user reads those in /proc); on the Pi in root-only files Vault reads, Vault
-  # verified against its CA (its certificate names 127.0.0.1). A failure fails the step
+  # Vault's Kubernetes auth on the Pi: the script on ssh's stdin, the root token read there (on no command line - any
+  # local user reads those in /proc), Vault verified against its CA (its certificate names 127.0.0.1); no
+  # token_reviewer_jwt - each client's own token reviews itself. A failure fails the step
   if ! ssh "sm@${VAULT_PI}" "sudo bash -s" <<REMOTE; then
 set -euo pipefail
 umask 077
@@ -231,14 +213,11 @@ trap 'rm -rf "\$d"' EXIT
 base64 -d > "\$d/ca.pem" <<'B64'
 ${K8S_CA}
 B64
-base64 -d > "\$d/jwt" <<'B64'
-$(printf '%s' "$SA_TOKEN" | base64 -w0)
-B64
 export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
 VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
 export VAULT_TOKEN
 vault write auth/kubernetes/config kubernetes_host='${K8S_HOST}' kubernetes_ca_cert=@"\$d/ca.pem" \\
-  token_reviewer_jwt=@"\$d/jwt" disable_local_ca_jwt=true > /dev/null
+  disable_local_ca_jwt=true > /dev/null
 vault write auth/kubernetes/role/eso-role bound_service_account_names=external-secrets \\
   bound_service_account_namespaces=external-secrets policies=eso-reader ttl=1h > /dev/null
 REMOTE

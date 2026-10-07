@@ -251,9 +251,9 @@
         or 'vagrant-reachable' not in _pod_probe.stdout_lines
 
     # ── 3. Vault (bootstrap.sh configure_eso, against the Vagrant Vault) ──
-    # External Secrets' namespace and service account, where Argo has not made them yet: the reviewer token below is that
-    # account's, and on a build at the targets no Helm install came first (Argo owns External Secrets there). Argo
-    # applies the chart's own over them later - the account, and so its token, stay.
+    # External Secrets' namespace and service account, where Argo has not made them yet: the CA Secret below goes there,
+    # and on a build at the targets no Helm install came first (Argo owns External Secrets there). Argo applies the
+    # chart's own over them later.
     - name: External Secrets' namespace and service account (made when absent)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -277,45 +277,23 @@
           data:
             ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
 
-    - name: Token reviewer for Vault's Kubernetes auth (as bootstrap.sh)
+    # as bootstrap.sh: no reviewer token - Vault reviews the token External Secrets logs in with by that same token
+    - name: External Secrets' account may review tokens (as bootstrap.sh)
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
         definition:
-          - apiVersion: rbac.authorization.k8s.io/v1
-            kind: ClusterRoleBinding
-            metadata:
-              name: vault-token-reviewer
-            roleRef:
-              apiGroup: rbac.authorization.k8s.io
-              kind: ClusterRole
-              name: system:auth-delegator
-            subjects:
-              - kind: ServiceAccount
-                name: external-secrets
-                namespace: external-secrets
-          - apiVersion: v1
-            kind: Secret
-            metadata:
-              name: vault-token-reviewer
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: vault-token-reviewer
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: system:auth-delegator
+          subjects:
+            - kind: ServiceAccount
+              name: external-secrets
               namespace: external-secrets
-              annotations:
-                kubernetes.io/service-account.name: external-secrets
-            type: kubernetes.io/service-account-token
-
-    - name: Read the reviewer token and the cluster CA
-      ansible.builtin.shell: |
-        set -euo pipefail
-        for i in $(seq 1 30); do
-          t=$({{ kubectl }} -n external-secrets get secret vault-token-reviewer -o jsonpath='{.data.token}' 2>/dev/null || true)
-          [ -n "$t" ] && break; sleep 2
-        done
-        [ -n "$t" ] || { echo "no reviewer token"; exit 1; }
-        echo "$t"
-      args:
-        executable: /bin/bash
-      register: _reviewer
-      changed_when: false
-      no_log: true
 
     - name: Read the cluster CA
       ansible.builtin.slurp:
@@ -333,18 +311,19 @@
     - name: Write auth/kubernetes/config and role eso-role
       ansible.builtin.shell: |
         set -euo pipefail
-        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
+        umask 077
+        d=$(mktemp -d)
+        trap 'rm -rf "$d"' EXIT
+        printf '%s' "$K8S_CA" > "$d/ca.pem"
+        export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
         VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
-        printf '%s' "$K8S_CA" > /tmp/k8s-ca.pem
         vault write auth/kubernetes/config kubernetes_host="https://{{ hostvars['target']['ansible_host'] }}:6443" \
-          kubernetes_ca_cert=@/tmp/k8s-ca.pem token_reviewer_jwt="$REVIEWER" disable_local_ca_jwt=true > /dev/null
-        rm -f /tmp/k8s-ca.pem
+          kubernetes_ca_cert=@"$d/ca.pem" disable_local_ca_jwt=true > /dev/null
         vault write auth/kubernetes/role/eso-role bound_service_account_names=external-secrets \
           bound_service_account_namespaces=external-secrets policies=eso-reader ttl=1h > /dev/null
       args:
         executable: /bin/bash
       environment:
         K8S_CA: "{{ hostvars['target']['_k8s_ca'].content | b64decode }}"
-        REVIEWER: "{{ hostvars['target']['_reviewer'].stdout | b64decode }}"
       no_log: true
       changed_when: true

@@ -1,10 +1,12 @@
 #!/bin/bash
-# bootstrap.sh vault-eso against stubs - kubectl (the cluster: its CA, the reviewer token once its controller filled
-# it), ssh (the Pi: `sudo cat` of Vault's CA, and the remote script run here with its root files moved) and vault
-# (its arguments, its environment and the files it reads recorded): the cluster trusts the CA read from the Pi now
-# (a "cached" one in world-writable /tmp was any local user's to plant); the reviewer token waited for, then reaching
-# the Pi on ssh's stdin and Vault from a root-only file - on no command line (ssh's here, sudo's and vault's there:
-# /proc); Vault verified against its CA, not skipped; a failure on the Pi fails the step (it warned and went on).
+# bootstrap.sh vault-eso against stubs - kubectl (the cluster: its CA), ssh (the Pi: `sudo cat` of Vault's CA, and the
+# remote script run here with its root files moved) and vault (its arguments, its environment and the files it reads
+# recorded): the cluster trusts the CA read from the Pi now (a "cached" one in world-writable /tmp was any local user's
+# to plant); no reviewer token - Vault reviews External Secrets' short-lived token with that token itself (its account
+# bound to system:auth-delegator), so no non-expiring token of that account is made, read or kept in Vault's config
+# (one was: anyone reading it was External Secrets, every secret it may read); Vault verified against its CA, not
+# skipped; a failure on the Pi fails the step (it warned and went on). tests/ansible/upgrade/isolate-cluster.yml writes
+# the same configuration to the Vagrant Vault.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -17,12 +19,10 @@ cat > "$W/bin/kubectl" <<STUB
 #!/bin/bash
 echo "kubectl \$*" >> "$W/kubectl-calls"
 case "\$*" in
-  "apply -f -") cat >> "$W/applied" ;;
+  "apply -f -") { cat; echo ---; } >> "$W/applied" ;;
   *certificate-authority-data*) printf '%s' "\$(printf 'THE CLUSTER CA' | base64 -w0)" ;;
   *cluster.server*) printf 'https://192.168.11.2:6443' ;;
-  *"get secret vault-token-reviewer"*)
-    n=\$(grep -c "get secret vault-token-reviewer" "$W/kubectl-calls")
-    [ "\$n" -ge "\${TOKEN_FROM:-1}" ] && printf '%s' "\$(printf '%s' "$JWT" | base64 -w0)" ;;
+  *"get secret vault-token-reviewer"*) printf '%s' "\$(printf '%s' "$JWT" | base64 -w0)" ;;
 esac
 exit 0
 STUB
@@ -57,24 +57,34 @@ run() {  # run <env...>: bootstrap.sh vault-eso, its exit in $rc
 check "nothing of it kept in /tmp (the CA a cache any local user plants)" \
   "$(sed -n '/^setup_vault_eso()/,/^}/p' bootstrap.sh | grep -c '/tmp')" 0
 [ "$fails" = 0 ] || { echo "bootstrap-vault-eso: $fails FAILED (not run: it would write /tmp)"; exit 1; }
-run TOKEN_FROM=3
+run
 check "the step passes" "$rc" 0
 check "the cluster trusts the CA read from the Pi now" \
   "$(grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")" "$W/applied")" 1
-check "the reviewer token waited for (its controller fills it after the Secret)" \
-  "$(grep -c 'get secret vault-token-reviewer' "$W/kubectl-calls")" 3
-check "the token on no command line - ssh's here, vault's on the Pi" \
-  "$(cat "$W/ssh-argv" "$W/vault-argv" | grep -c "$JWT")" 0
-check "Vault reads it from a file, with the cluster's CA" \
-  "$(grep -c "^token_reviewer_jwt $JWT$" "$W/vault-files") $(grep -c '^kubernetes_ca_cert THE CLUSTER CA$' "$W/vault-files")" \
-  "1 1"
+check "no non-expiring token of External Secrets' account made, none read" \
+  "$(grep -c 'kubernetes.io/service-account-token' "$W/applied") $(grep -c 'get secret' "$W/kubectl-calls")" "0 0"
+check "its account may review tokens (system:auth-delegator) - Vault reviews its token with that token" \
+  "$(sed -n '/kind: ClusterRoleBinding/,/^---$/p' "$W/applied" | tr -d ' ' | grep -cE '^name:(system:auth-delegator|external-secrets)$|^namespace:external-secrets$')" 3
+check "Vault's config: no reviewer token, the client's own used (disable_local_ca_jwt), the cluster's CA from a file" \
+  "$(grep -c token_reviewer_jwt "$W/vault-argv" "$W/vault-files" | awk -F: '{s += $2} END {print s}') \
+$(grep -c 'auth/kubernetes/config .*disable_local_ca_jwt=true' "$W/vault-argv") \
+$(grep -c '^kubernetes_ca_cert THE CLUSTER CA$' "$W/vault-files")" "0 1 1"
 check "Vault verified against its CA, never skipped" \
   "$(grep -c '^VAULT_SKIP_VERIFY' "$W/vault-env") $(grep -c "^VAULT_CACERT=$W/pi/etc/vault.d/tls/ca-cert.pem$" "$W/vault-env")" \
   "0 2"
 check "the role written" "$(grep -c 'auth/kubernetes/role/eso-role' "$W/vault-argv")" 1
 run VAULT_FAIL=1
 check "a failure on the Pi: the step fails, said so" "$rc $(grep -c 'failed' <<< "$out")" "1 1"
-run TOKEN_FROM=999
-check "no reviewer token at all: the step fails, nothing sent to the Pi" "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 0"
+# the Vagrant Vault configured as ten's: the same keys in the same write, the same account bound, no token Secret
+keys() { grep -oE '(kubernetes_host|kubernetes_ca_cert|token_reviewer_jwt|disable_local_ca_jwt|issuer|pem_keys)=' | sort -u | tr -d '\n'; }
+iso=tests/ansible/upgrade/isolate-cluster.yml
+check "isolate-cluster.yml writes Vault's Kubernetes auth with bootstrap.sh's keys" \
+  "$(sed -n '/vault write auth\/kubernetes\/config/,/> \/dev\/null/p' "$iso" | keys)" \
+  "$(sed -n '/^vault write auth\/kubernetes\/config/,/> \/dev\/null/p' bootstrap.sh | keys)"
+check "isolate-cluster.yml: no non-expiring token Secret, none read; the account bound to system:auth-delegator" \
+  "$(grep -c 'service-account-token\|get secret vault-token-reviewer' "$iso") $(grep -c 'name: system:auth-delegator' "$iso")" "0 1"
+check "isolate-cluster.yml: the Vagrant Vault verified against its CA, as ten's; the cluster CA in no fixed /tmp file" \
+  "$(grep -c 'VAULT_SKIP_VERIFY' "$iso") $(grep -c 'VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem' "$iso") \
+$(sed -n '/Configure Kubernetes auth in the Vagrant Vault/,$p' "$iso" | grep -c '/tmp/')" "0 1 0"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
