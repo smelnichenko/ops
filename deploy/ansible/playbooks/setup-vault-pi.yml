@@ -730,6 +730,15 @@
       failed_when: _pi2_keys_sum.rc != 0 and 'No such file' not in _pi2_keys_sum.stderr
       check_mode: false
 
+    # stdin is in memory only while modules are piped to the remote python: without pipelining Ansible writes the
+    # module, its stdin included, to a temp file on the controller first. As this run has it (ansible.cfg, ANSIBLE_*,
+    # a host var)
+    - name: Pipelining on - the shares never in a file on the controller
+      ansible.builtin.assert:
+        that: lookup('ansible.builtin.config', 'pipelining', plugin_type='connection', plugin_name='ssh') | bool
+        fail_msg: "REFUSED: pipelining is off - pi2's key shares would be written to a temp file here first"
+        quiet: true
+
     # on stdin (pipelined: in memory, through ssh), never a file on the controller (a copy with content: writes one);
     # written whole, root's alone - only when it differs
     - name: The unseal keys on pi2 - on stdin, never in a file on the controller

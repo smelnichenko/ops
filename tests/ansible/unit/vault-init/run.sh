@@ -89,6 +89,29 @@ if dist:
     check("pi2's unseal-keys as pi1's, 0400", r.returncode == 0 and open(k).read() == "k1\nk2\nk3\n"
           and stat.S_IMODE(os.stat(k).st_mode) == 0o400)
     check("its stdin as given (no newline added)", (dist.get("args") or {}).get("stdin_add_newline") is False)
+    # stdin is in memory only while modules are piped (pipelining): without it Ansible writes the module, its stdin
+    # included, to a temp file on the controller first - asserted in the play, as the run's own config has it (a
+    # config file, ANSIBLE_* or a host var may turn it off)
+    play = next(p for p in book if dist in (p.get("tasks") or []))
+    gate = next((t for t in play["tasks"][:play["tasks"].index(dist)] if "ansible.builtin.assert" in t
+                 and "pipelining" in str(t["ansible.builtin.assert"].get("that"))), None)
+    check("pipelining asserted in pi2's play before the shares go", gate is not None)
+    if gate:
+        cfg = os.path.abspath("deploy/ansible/ansible.cfg")
+        def piped(env=None, **hv):
+            # the plugin loader as the CLI starts it (a lookup by its full name needs the collection loader)
+            code = ("import json, sys; sys.path.insert(0, 'tests/ansible/unit'); from templar import condition; "
+                    "from ansible.plugins.loader import init_plugin_loader; init_plugin_loader(); "
+                    "print(condition(json.loads(sys.argv[1]), **json.loads(sys.argv[2])))")
+            r = subprocess.run([sys.executable, "-c", code, json.dumps(gate["ansible.builtin.assert"]["that"]),
+                                json.dumps(hv)], capture_output=True, text=True,
+                               env={"HOME": os.environ["HOME"], "PATH": os.environ["PATH"], "ANSIBLE_CONFIG": cfg,
+                                    "PYTHONDONTWRITEBYTECODE": "1", **(env or {})})
+            return r.stdout.strip() or r.stderr.strip()[-200:]
+        got = [piped(), piped({"ANSIBLE_PIPELINING": "False"}), piped(ansible_pipelining=False),
+               piped(ansible_ssh_pipelining=False)]
+        check("pipelining: on as ansible.cfg has it; off by ANSIBLE_PIPELINING, ansible_pipelining or "
+              f"ansible_ssh_pipelining (got {got})", got == ["True", "False", "False", "False"])
     ino = os.stat(k).st_ino
     r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
                         os.path.join(W, "vu"))], input="k1\nk2\nk3\n", env=env, capture_output=True, text=True)
