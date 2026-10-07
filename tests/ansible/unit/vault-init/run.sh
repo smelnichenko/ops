@@ -30,7 +30,7 @@ W=$W "$PY" - <<'PY'
 import base64, json, os, stat, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import render, condition
 W = os.environ["W"]
 tasks = {t.get("name"): t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
          for t in p.get("tasks") or [] for t in [t] + (t.get("block") or [])}
@@ -107,10 +107,10 @@ for name, path_, enable in (("Enable KV v2", "secret/", "secrets enable -path=se
 # disk before the init's file - their only other copy - goes
 block = next(t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
              for t in p.get("tasks") or [] if t.get("name", "").startswith("Bootstrap KV + ESO + k8s-auth"))["block"]
-until = "{{ %s }}" % block[0].get("until", "false")
+until = block[0].get("until", "false")
 check("the bootstrap first waits for sys/health to say active (200) - not a standby (429), not sealed (503)",
       "sys/health" in str(block[0])
-      and [render(until, **{block[0]["register"]: {"status": c}}) for c in (200, 429, 503)] == [True, False, False])
+      and [condition(until, **{block[0]["register"]: {"status": c}}) for c in (200, 429, 503)] == [True, False, False])
 names = [t["name"] for t in block]
 removal = names.index("The first init done - its keys file removed (the shares are in unseal-keys and root-token)")
 check("the shares synced to disk before the keys file goes", "ansible.builtin.command" in block[removal - 1]

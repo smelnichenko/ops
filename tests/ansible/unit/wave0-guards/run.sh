@@ -42,7 +42,7 @@ W=$W "$PY" - <<'PY'
 import os, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import render, condition
 W = os.environ["W"]
 tasks = {}
 def walk(items):
@@ -95,8 +95,8 @@ rc, out, fenced = run(ETCD, env=dict(good, HOST="/"))
 case("etcd's data hostPath /: refused, nothing copied", rc != 0 and not fenced, f"rc {rc}, fenced: {fenced!r}")
 rc, out, fenced = run(ETCD, env=good)
 case("etcd with pod, hostPath and mount: the snapshot copied", fenced.startswith("cp "), repr(fenced))
-DUMPS = "{{ %s }}" % tasks["Postgres - the dumps of the backup"]["failed_when"]
-dumps = lambda *names: render(DUMPS, _dumps={"files": [{"path": "/b/" + n} for n in names]}, **{
+DUMPS = tasks["Postgres - the dumps of the backup"]["failed_when"]
+dumps = lambda *names: condition(DUMPS, _dumps={"files": [{"path": "/b/" + n} for n in names]}, **{
     k: play["vars"][k] for k in ("pg_namespace", "pg_cluster")})
 case("the dumps: production's among them - goes on",
      not dumps("schnappy-production-schnappy-production-postgres.sql.gz", "schnappy-test-schnappy-test-postgres.sql.gz"),

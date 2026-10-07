@@ -11,12 +11,12 @@ PY=python3
 import sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import render, condition
 tasks = yaml.safe_load(open("tests/ansible/upgrade/metrics-check.yml"))[0]["tasks"]
 record = next(t for t in tasks if "scrape_pools_file" in str(t.get("ansible.builtin.copy", {}).get("dest", "")))
 whens = record.get("when", [])
 whens = whens if isinstance(whens, list) else [whens]
-writes = lambda flag: all(render("{{ %s }}" % w, record_scrape_pools=flag) for w in whens)
+writes = lambda flag: all(condition(w, record_scrape_pools=flag) for w in whens)
 fails = 0
 for flag, want, what in ((True, True, "the build's Argo stage records"), (False, False, "a step's check leaves the record")):
     ok = writes(flag) == want

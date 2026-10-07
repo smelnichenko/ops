@@ -12,7 +12,7 @@ PY=python3
 import json, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import render, condition
 fails = 0
 def check(name, got, want):
     global fails
@@ -22,7 +22,7 @@ pb = yaml.safe_load(open("deploy/ansible/playbooks/upgrade-kubeadm.yml"))
 tasks = {t.get("name"): t for t in pb[0]["tasks"]}
 def failed(task, result):
     """The task's failed_when over its registered result, as Ansible evaluates a conditional."""
-    return render("{{ " + task["failed_when"] + " }}", **{task["register"]: result})
+    return condition(task["failed_when"], **{task["register"]: result})
 import os, tempfile
 work = tempfile.mkdtemp()
 kubelet_file = os.path.join(work, "config.yaml")
@@ -67,7 +67,7 @@ check("node-config: 0s patched to 180s / 30s",
 check("node-config: missing added", patch("a: 1\n"), "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
 # the patch applied only when there is one: an empty one (the ConfigMap right already) went to `kubectl patch -p ''`
 apply = next(x for x in t if x.get("name", "").startswith("Keep the shutdown grace across kubeadm upgrades"))
-applies = lambda out: render("{{ " + apply["when"] + " }}", _kubelet_config_patch={"stdout": out})
+applies = lambda out: condition(apply["when"], _kubelet_config_patch={"stdout": out})
 check("node-config: the ConfigMap right already - nothing applied", applies(""), False)
 check("node-config: a patch - applied", applies('{"data": {"kubelet": "x"}}'), True)
 print("kubelet-grace: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

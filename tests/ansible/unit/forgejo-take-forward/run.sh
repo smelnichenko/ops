@@ -11,11 +11,10 @@ PY=python3
 import sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import render, condition
 tasks = {t.get("name"): t for t in yaml.safe_load(open("deploy/ansible/playbooks/upgrade-forgejo.yml"))[0]["tasks"]}
 facts = tasks["Its version numbers - served and installed"]["ansible.builtin.set_fact"]
-one = "{{ %s }}" % tasks["At most one Forgejo starting (two would be migrating one database)"][
-    "ansible.builtin.assert"]["that"]
+one = tasks["At most one Forgejo starting (two would be migrating one database)"]["ansible.builtin.assert"]["that"]
 first = tasks["The first Pi"]["ansible.builtin.set_fact"]["_first"]
 def host(name, served, state, vip):
     h = {"inventory_hostname": name, "_addrs": {"stdout": "inet 192.168.11.5" if vip else ""}}
@@ -31,7 +30,7 @@ def check(name, got, want):
 def case(pi1, pi2):
     hv = {"pi1": host("pi1", *pi1), "pi2": host("pi2", *pi2)}
     ctx = {"hostvars": hv, "ansible_play_hosts": ["pi1", "pi2"]}
-    return render(one, **ctx), render(first, **ctx)
+    return condition(one, **ctx), render(first, **ctx)
 check("pi2 migrating (active, silent), the VIP on pi1: pi2 first", case((False, "inactive", True), (False, "active", False)),
       (True, "pi2"))
 check("pi2 activating, the VIP on pi1: pi2 first", case((False, "failed", True), (False, "activating", False)),

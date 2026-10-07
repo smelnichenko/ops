@@ -17,7 +17,7 @@ W=$W "$PY" - <<'PY'
 import os, shlex, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import render, condition
 W = os.environ["W"]
 fails = 0
 def check(name, ok, detail=""):
@@ -41,9 +41,8 @@ for f in ("deploy/ansible/playbooks/setup-istio.yml", "deploy/ansible/playbooks/
     if not sync:
         continue
     # run with the default ref only (a branch under test is read as it is), and before the values are read
-    when = " and ".join(f"({w})" for w in ([sync[0]["when"]] if isinstance(sync[0].get("when"), str)
-                                          else sync[0].get("when") or ["true"]))
-    ran = [render("{{ " + when + " }}", infra_values_ref=r, platform_by_argo=False) for r in ("main", "upgrade/x")]
+    ran = [condition(sync[0].get("when", True), infra_values_ref=r, platform_by_argo=False)
+           for r in ("main", "upgrade/x")]
     check(f"{f}: run with ref main, not with another", ran == [True, False], ran)
     check(f"{f}: before the installs that read the values",
           all(tasks.index(sync[0]) < tasks.index(t) for t in looks) and bool(looks), [t["name"] for t in looks])
