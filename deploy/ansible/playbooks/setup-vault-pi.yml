@@ -393,7 +393,10 @@
         ca_path: /etc/vault.d/tls/ca-cert.pem
         status_code: [200, 429, 472, 473, 501, 503]
       register: _vault_role
+      # a Vault not answering at all (stopped): no status - ordered with the standbys, before the active one; its
+      # restart can only start it
       failed_when: false
+      check_mode: false  # a read: a preview orders the Pis as a run would
 
     - name: The restart order
       ansible.builtin.add_host:

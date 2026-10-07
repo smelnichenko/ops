@@ -522,6 +522,7 @@
       ansible.builtin.command: ip -o -4 addr show to {{ vip }}/32
       register: _vip_here
       changed_when: false
+      check_mode: false  # a read: a preview orders the Pis as a run would
 
     # by content, against what the running keepalived last loaded (a stamp): by the clock it was wrong both ways on
     # the Pis, which have no RTC - a clock that was ahead when the drop-in was written restarted both, the VIP moving,
