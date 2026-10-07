@@ -36,6 +36,32 @@
       delay: 10
       until: _archiving.stdout == 'True'
 
+    # the condition can still read the old major's True right after a major upgrade: archiving proven on the server
+    # running now - a WAL file switched on the primary reaches the store
+    - name: The cluster's primary
+      ansible.builtin.command: "{{ kubectl }} get clusters.postgresql.cnpg.io {{ cluster }} -o jsonpath={.status.currentPrimary}"
+      register: _primary
+      changed_when: false
+      failed_when: _primary.rc != 0 or _primary.stdout | length == 0
+
+    - name: A WAL file switched on it now
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ _primary.stdout }} -c postgres --
+        psql -U postgres -Atc "select pg_walfile_name(pg_switch_wal())"
+      register: _switched
+      changed_when: true
+      failed_when: _switched.rc != 0 or _switched.stdout | length != 24
+
+    - name: That WAL file archived to the store (pg_stat_archiver)
+      ansible.builtin.command: >-
+        {{ kubectl }} exec {{ _primary.stdout }} -c postgres --
+        psql -U postgres -Atc "select coalesce(last_archived_wal, '') from pg_stat_archiver"
+      register: _archived
+      changed_when: false
+      retries: 30
+      delay: 10
+      until: _archived.rc == 0 and _archived.stdout | length == 24 and _archived.stdout >= _switched.stdout
+
     - name: A fresh base backup
       ansible.builtin.include_tasks: tasks/cnpg-backup.yml
 
@@ -45,4 +71,4 @@
 
     - name: CNPG backs up
       ansible.builtin.debug:
-        msg: "BASE BACKUP OK: WAL archiving True, base backup {{ cnpg_backup }} completed"
+        msg: "BASE BACKUP OK: WAL archiving True, {{ _switched.stdout }} archived, base backup {{ cnpg_backup }} completed"
