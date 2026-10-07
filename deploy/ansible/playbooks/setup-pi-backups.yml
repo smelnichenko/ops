@@ -36,8 +36,10 @@
     pi_backup_retention_days: 30
     # the newest backups kept whatever their age - retention reads the Pi's clock
     pi_backup_keep: 7
-    # after CNPG's (01:30) and Velero's (02:00), before the Scylla repair window
-    pi_backup_on_calendar: "*-*-* 02:40:00"
+    # after CNPG's (01:30) and Velero's (02:00), before the Scylla repair window - all three in UTC, as the day the
+    # script reads from last-success: on the Pis' zone (Europe/Tallinn) 02:40 was 23:40 UTC in summer (the other Pi's
+    # run after midnight backed up again, the next night was skipped) and the spring change's Monday was skipped
+    pi_backup_on_calendar: "*-*-* 02:40:00 UTC"
   tasks:
     - name: The S3 client - rclone, Debian's
       ansible.builtin.apt:
@@ -97,7 +99,9 @@
           if [ -z "${PI_BACKUP_LOCKED:-}" ]; then
             PI_BACKUP_LOCKED=1 exec consul lock -child-exit-code -timeout=30m pi-tier0-backup "$0"
           fi
-          # a day with a success is done - PI_BACKUP_EVEN_TODAY=1 backs up again (a test, a backup by hand)
+          # a day with a success is done - PI_BACKUP_EVEN_TODAY=1 backs up again (a test, a backup by hand). The day is
+          # UTC's, as the timer's. Any failed read is "none": the run goes on to a backup, which fails if the store is
+          # what failed - never a day skipped on a read error
           last=$(rclone cat "store:$PI_BACKUP_BUCKET/last-success" 2> /dev/null || true)
           if [ "${last:0:8}" = "$(date -u +%Y%m%d)" ] && [ -z "${PI_BACKUP_EVEN_TODAY:-}" ]; then
             echo "today's backup is done (last-success $last)"; exit 0

@@ -34,6 +34,12 @@ case "$1" in
   snapshot) echo "snapshot: stub" >&2; exit 7 ;;
 esac
 STUB
+# date: the clock at NOW (epoch seconds) when set - the schedule's firings below
+cat > "$W/bin/date" <<STUB
+#!/bin/bash
+[ -z "\${NOW:-}" ] || exec $(command -v date) -d "@\$NOW" "\$@"
+exec $(command -v date) "\$@"
+STUB
 cat > "$W/bin/rclone" <<'STUB'
 #!/bin/bash
 case "$1" in cat) [ -n "$LAST" ] && echo "$LAST" || exit 3 ;; esac
@@ -79,6 +85,31 @@ check("today's, but PI_BACKUP_EVEN_TODAY=1: on to the backup", rc == 2 and any("
 rc, out, calls = run(yesterday, HELD="1")
 check("the lock held by the other Pi's hung run: waited a bounded time, then failed", rc == 1
       and "Lock acquisition failed" in out and not any("snapshot" in c for c in calls), (rc, out, calls))
+# the timer's firings through a year's turns (both DST changes, midsummer): each day's first run, the day before's
+# success in the store, backs up; the other Pi's, 25 minutes later (it waited on the lock), finds the day done. The
+# timer's spec as the playbook sets it; with no zone in it, the Pis' (Europe/Tallinn, read on both 2026-10-07)
+import re, zoneinfo
+spec = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-backups.yml"))[0]["vars"]["pi_backup_on_calendar"]
+m = re.fullmatch(r"\*-\*-\* (\d\d):(\d\d):(\d\d)(?: (\S+))?", spec)
+check(f"the timer's spec is a daily time ({spec})", bool(m), spec)
+zone = zoneinfo.ZoneInfo(m[4] or "Europe/Tallinn") if m else None
+fire = lambda d: datetime.datetime(d.year, d.month, d.day, int(m[1]), int(m[2]), int(m[3]), tzinfo=zone)
+stamp = lambda t: t.astimezone(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+days = [datetime.date(2027, mo, 1) + datetime.timedelta(n)
+        for mo, span in ((3, 40), (6, 10), (10, 40)) for n in range(span)]
+wrong = []
+for prev, day in zip(days, days[1:]) if m else ():
+    if (day - prev).days != 1:
+        continue
+    t = fire(day)
+    rc, out, calls = run(stamp(fire(prev) + datetime.timedelta(minutes=2)), NOW=str(int(t.timestamp())))
+    if not any(c.startswith("consul snapshot save") for c in calls):
+        wrong.append(f"{day}: the first run at {stamp(t)} found the day done ({stamp(fire(prev))}'s success)")
+    later = t + datetime.timedelta(minutes=25)
+    rc, out, calls = run(stamp(t + datetime.timedelta(minutes=2)), NOW=str(int(later.timestamp())))
+    if rc != 0 or any("snapshot" in c for c in calls):
+        wrong.append(f"{day}: the other Pi's run at {stamp(later)} backed up again (the day's success at {stamp(t)})")
+check("a year's firings: one backup a day, through both DST changes and midsummer", not wrong, wrong[:3])
 print("pi-backup-day: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
