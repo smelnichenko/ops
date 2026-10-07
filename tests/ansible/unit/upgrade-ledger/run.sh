@@ -4,6 +4,15 @@
 # the soak, and the own-change hash the merge compares with the full run's proof.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
+# fenced: ssh and kubectl here fail loudly - a test that reached the real ones ran its command on production (the
+# status test read ten's clock over ssh, 2026-10-07/08, until this)
+FENCE=$(mktemp -d)
+trap 'rm -rf "$FENCE"' EXIT
+for tool in ssh kubectl; do
+  printf '#!/bin/sh\necho "FENCED: a unit test ran %s $*" >&2\nexit 97\n' "$tool" > "$FENCE/$tool"
+  chmod +x "$FENCE/$tool"
+done
+export PATH="$FENCE:$PATH"
 python3 - <<'EOF'
 import datetime
 import importlib.machinery
@@ -625,14 +634,15 @@ check("inventory: its own files removed after it", left, [])
 # status names the phase after the defaults one (its event carries the commit)
 import contextlib, io
 def status_of(lines):
-    saved = m.read_ledger
+    saved = m.read_ledger, m.ten_now
     m.read_ledger = lambda: (None, ev(*lines))
+    m.ten_now = lambda: "2026-10-07T10:00:00Z"  # ten's clock, as status reads the soak's time left by it
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
             m.status()
     finally:
-        m.read_ledger = saved
+        m.read_ledger, m.ten_now = saved
     return [l for l in buf.getvalue().splitlines() if l.startswith("next: ")]
 S13 = "13-kubernetes-1.34.12"
 mid13 = done_upto("12-kubelet-shutdown-grace") + [f"{S13} apps app", f"{S13} begun", f"{S13} backup etcd",
