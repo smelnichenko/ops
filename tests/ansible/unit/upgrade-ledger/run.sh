@@ -620,7 +620,7 @@ check("released, and another phase claimed it: refused", recorded(
     ("refused", 0))
 # release closes a start only when the run that made it is gone - not one alive on this host (a process this test
 # starts, its command line naming the script, and stops)
-import socket, subprocess
+import socket, subprocess, time
 def released(pid):
     ends, saved = [], {k: getattr(m, k) for k in ("read_ledger", "confirm", "record")}
     token = f"{socket.gethostname()}:{pid}:cc"
@@ -637,6 +637,10 @@ def released(pid):
             setattr(m, k, v)
     return got, token
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "upgrade-production.py"])
+for _ in range(50):  # until its exec shows (right after the fork its command line is still this one's)
+    if "upgrade-production" in open(f"/proc/{child.pid}/cmdline").read():
+        break
+    time.sleep(0.1)
 got, _ = released(child.pid)
 check("release: the run that claimed it alive here - refused", got, "refused")
 child.kill()
