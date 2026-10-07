@@ -38,6 +38,11 @@ proc_info() {  # proc_info <pid>: "<ppid> <pgid> <sid> <comm>" - nothing for no 
   echo "$2 $3 $4 $comm"
 }
 fails=0
+gone() {  # gone <pid file>: the process it names no more there - a moment allowed for its teardown
+  local pid; pid=$(cat "$1" 2> /dev/null) || { echo "no-pid"; return; }
+  for _ in $(seq 20); do [ -e "/proc/$pid" ] || { echo gone; return; }; sleep 0.1; done
+  echo "running"
+}
 check() {
   if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
   echo "FAIL $1: got $2, want $3"; printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1))
@@ -58,8 +63,8 @@ if [ "$(proc_info "$sp" | awk '{print $1, $4}')" = "$$ bash" ]; then
 fi
 wait "$sp"; rc=$?
 out=$(cat "$T/term.out")
-check "a TERM to the script: it ends (130), the check still running stopped, not run to its end" \
-  "$rc $([ -e "$T/long.pid.finished" ] && echo finished || echo stopped)" "130 stopped"
+check "a TERM to the script: it ends (130), the check still running stopped - its process gone, not left asleep" \
+  "$rc $([ -e "$T/long.pid.finished" ] && echo finished || echo stopped) $(gone "$T/long.pid")" "130 stopped gone"
 
 # a "check" that is no child of the script: its own process, started here - a sleep in a session of its own (job
 # control off, so setsid does not fork: $! is the sleep), proven so before its PID is used, killed by this test alone.

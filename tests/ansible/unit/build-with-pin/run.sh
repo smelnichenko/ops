@@ -44,6 +44,12 @@ check() {  # check <name> <got> <want>
   echo "FAIL $1: got '$2', want '$3'"; sed 's/^/    /' <<< "$out"; fails=$((fails + 1))
 }
 pin_end() { [ -e "$T/.upgrade/pin.finished" ] && echo finished || echo stopped; }
+gone() {  # gone <pid file>: the process it names no more there - a moment allowed for its teardown
+  local pid; pid=$(cat "$1" 2> /dev/null) || { echo "no-pid"; return; }
+  for _ in $(seq 20); do [ -e "/proc/$pid" ] || { echo gone; return; }; sleep 0.1; done
+  echo "running"
+}
+
 run
 check "build and pin pass: passed, the pin's result line shown" \
   "$rc $(grep -c '^[0-9:]\{8\} CLICKHOUSE PIN: pin result line$' <<< "$out")" "0 1"
@@ -53,7 +59,8 @@ run PIN=1
 check "the pin failed: the run fails when the build ends, saying so" \
   "$rc $(grep -c 'THE CLICKHOUSE PIN FAILED' <<< "$out")" "1 1"
 run BUILD=2 PIN_SECONDS=30
-check "the build failed: its exit at once, the pin still running stopped" "$rc $(pin_end) $((took < 10))" "2 stopped 1"
+check "the build failed: its exit at once, the pin still running stopped - its process gone, not left asleep" \
+  "$rc $(pin_end) $((took < 10)) $(gone "$T/.upgrade/pin.pid")" "2 stopped 1 gone"
 # the script stopped as an interrupted full run stops it: it is this test's own child, checked so before the signal
 rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
 t0=$SECONDS
@@ -65,9 +72,9 @@ timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
 [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
 wait "$sp"
 out=$(cat "$T/term.out")
-check "a TERM to the script, mid-build: it ends at once, the build and the pin stopped" \
-  "$(pin_end) $([ -e "$T/.upgrade/build.finished" ] && echo finished || echo stopped) $((SECONDS - t0 < 10))" \
-  "stopped stopped 1"
+check "a TERM to the script, mid-build: it ends at once, the build and the pin stopped, the pin's process gone" \
+  "$(pin_end) $([ -e "$T/.upgrade/build.finished" ] && echo finished || echo stopped) $((SECONDS - t0 < 10)) \
+$(gone "$T/.upgrade/pin.pid")" "stopped stopped 1 gone"
 check "test:upgrade:full runs it (not the block inline)" \
   "$(grep -c '^      - cmd: scripts/upgrade-build-with-pin.sh$' "$ROOT/Taskfile.yml")" 1
 echo "build-with-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
