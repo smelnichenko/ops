@@ -43,16 +43,26 @@
       delay: 15
       until: _prom.stdout == 'True/True'
 
-    # up now, and up through the last 2 minutes (min_over_time of `up`): one lucky poll does not pass a target that
-    # flaps without restarting (scrape timeouts, an intermittent 503 through the mesh). As long as the deciding settle's
-    # quiet window (120 s): 3 minutes outlived it, and this check waited out the step's own restarts (61 s a step)
-    - name: Every scrape target is up, and stayed up for 2 minutes
+    # the window `up` is judged over starts 2 minutes before the first look - as long as the deciding settle's quiet
+    # window (120 s): 3 minutes outlived it, and this check waited out the step's own restarts (61 s a step) - and stays
+    # there through the retries: each retry read the 2 minutes before its own time, so a flap aged out
+    - name: The window's start - 2 minutes before the first look, the node's clock (Prometheus' own)
+      ansible.builtin.command: date -d '-120 seconds' +%s
+      register: _metrics_from
+      changed_when: false
+      check_mode: false  # a read
+
+    # up now, and up since the window's start (min_over_time of `up`): one lucky poll does not pass a target that flaps
+    # without restarting (scrape timeouts, an intermittent 503 through the mesh)
+    - name: Every scrape target is up, and stayed up since 2 minutes before the first look
       ansible.builtin.shell: |
         set -euo pipefail
         P='{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1'
         d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+        range=$(( $(date +%s) - {{ _metrics_from.stdout | int }} ))
         kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/targets?state=active" > "$d/targets"
-        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=min_over_time(up%5B2m%5D)%20%3C%201" > "$d/flapped"
+        kubectl --kubeconfig {{ kubeconfig }} get --raw "$P/query?query=min_over_time(up%5B${range}s%5D)%20%3C%201" \
+          > "$d/flapped"
         ALLOWED='{{ allowed_down | to_json }}' python3 - "$d" <<'PY'
         import json, os, sys
         d = sys.argv[1]
@@ -63,7 +73,7 @@
                 if t["health"] != "up" and t["scrapePool"] not in allowed]
         flapped = ["%s %s" % (r["metric"].get("job"), r["metric"].get("instance"))
                    for r in json.load(open(d + "/flapped"))["data"]["result"] if r["metric"].get("job") not in allowed_jobs]
-        print("%d targets, %d down, %d down at some time in the last 2 minutes" % (len(targets), len(down), len(flapped)))
+        print("%d targets, %d down, %d down at some time since the window's start" % (len(targets), len(down), len(flapped)))
         for x in down:
             print("  DOWN", x)
         for x in flapped:
