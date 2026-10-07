@@ -23,6 +23,13 @@ echo "pin result line"; echo finished > .upgrade/pin.finished
 exit "${PIN:-0}"
 STUB
 chmod +x "$T/bin/task" "$T/tests/clickhouse-pin/run.sh"
+# a process's parent, process group, session and command name, from /proc (CI's image has no ps)
+proc_info() {  # proc_info <pid>: "<ppid> <pgid> <sid> <comm>" - nothing for no such process
+  local stat comm
+  stat=$(cat "/proc/$1/stat" 2> /dev/null) && comm=$(cat "/proc/$1/comm" 2> /dev/null) || return 0
+  set -- ${stat##*) }
+  echo "$2 $3 $4 $comm"
+}
 fails=0
 run() {  # run <env...>: the script's output in $out, its exit in $rc, its seconds in $took
   rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
@@ -55,7 +62,7 @@ t0=$SECONDS
   < /dev/null > "$T/term.out" 2>&1) &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
-[ "$(ps -o ppid= -p "$sp" | tr -d ' ')" = "$$" ] && kill -TERM "$sp"
+[ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
 wait "$sp"
 out=$(cat "$T/term.out")
 check "a TERM to the script, mid-build: it ends at once, the build and the pin stopped" \

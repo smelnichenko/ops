@@ -30,6 +30,13 @@ STUB
 chmod +x "$T/bin/vagrant" "$T/deploy/ansible/venv/bin/ansible-playbook" "$T/scripts/vagrant-smoke.sh"
 out=$(echo "THE CALLER'S INPUT" | PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy 2>&1)
 rc=$?
+# a process's parent, process group, session and command name, from /proc (CI's image has no ps)
+proc_info() {  # proc_info <pid>: "<ppid> <pgid> <sid> <comm>" - nothing for no such process
+  local stat comm
+  stat=$(cat "/proc/$1/stat" 2> /dev/null) && comm=$(cat "/proc/$1/comm" 2> /dev/null) || return 0
+  set -- ${stat##*) }
+  echo "$2 $3 $4 $comm"
+}
 fails=0
 check() {
   if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
@@ -46,7 +53,7 @@ LONG="$T/long.pid" PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" 
   > "$T/term.out" 2>&1 &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
-if [ "$(ps -o ppid=,comm= -p "$sp" | awk '{print $1, $2}')" = "$$ bash" ]; then
+if [ "$(proc_info "$sp" | awk '{print $1, $4}')" = "$$ bash" ]; then
   kill -TERM "$sp"
 fi
 wait "$sp"; rc=$?
@@ -61,9 +68,9 @@ check "a TERM to the script: it ends (130), the check still running stopped, not
 set +m
 setsid sleep 1000 < /dev/null > /dev/null 2>&1 &
 ghost=$!
-read -r gpid gpgid gsid gcomm <<< "$(ps -o pid=,pgid=,sid=,comm= -p "$ghost")"
-if [ "$gpid $gpgid $gsid $gcomm" != "$ghost $ghost $ghost sleep" ]; then
-  echo "FAIL the test's own process is not a session-leading sleep ($gpid $gpgid $gsid $gcomm) - not used"
+read -r gppid gpgid gsid gcomm <<< "$(proc_info "$ghost")"
+if [ "$gpgid $gsid $gcomm" != "$ghost $ghost sleep" ]; then
+  echo "FAIL the test's own process is not a session-leading sleep ($ghost: $gpgid $gsid $gcomm) - not used"
   exit 1
 fi
 trap 'kill "$ghost" 2> /dev/null; rm -rf "$T"' EXIT
@@ -75,5 +82,5 @@ rc=$?
 check "wait -n with no check ended: the guard says so, the run fails" \
   "$rc $(grep -c 'with no check ended - the rest not judged' <<< "$out")" "1 1"
 check "its cleanup signalled only its own jobs: the foreign process lives" \
-  "$(ps -o comm= -p "$ghost" 2> /dev/null)" sleep
+  "$(proc_info "$ghost" | awk '{print $4}')" sleep
 if [ "$fails" = 0 ]; then echo "step-checks: ALL-PASS"; else echo "step-checks: $fails FAILED"; exit 1; fi
