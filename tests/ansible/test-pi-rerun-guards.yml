@@ -897,6 +897,8 @@
     running_router_id: |
       set -euo pipefail
       pid=$(systemctl show keepalived -p MainPID --value)
+      # 0 when keepalived is not running: `kill 0` would signal this task's own process group
+      [ "$pid" -gt 1 ] || { echo "keepalived is not running (MainPID $pid)" >&2; exit 1; }
       rm -f /tmp/keepalived.data
       kill -s "$(keepalived --signum=DATA)" "$pid"
       for i in $(seq 1 20); do [ -s /tmp/keepalived.data ] && break; sleep 0.25; done
@@ -948,6 +950,8 @@
     running_router_id: |
       set -euo pipefail
       pid=$(systemctl show keepalived -p MainPID --value)
+      # 0 when keepalived is not running: `kill 0` would signal this task's own process group
+      [ "$pid" -gt 1 ] || { echo "keepalived is not running (MainPID $pid)" >&2; exit 1; }
       rm -f /tmp/keepalived.data
       kill -s "$(keepalived --signum=DATA)" "$pid"
       for i in $(seq 1 20); do [ -s /tmp/keepalived.data ] && break; sleep 0.25; done
