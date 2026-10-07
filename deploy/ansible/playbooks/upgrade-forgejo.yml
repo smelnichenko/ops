@@ -165,6 +165,7 @@
       no_log: true  # the password went in on stdin - the dump's own error below, without it
 
     - name: The dump taken (its error otherwise)
+      when: not _forward | bool
       ansible.builtin.assert:
         that: _dump.rc == 0
         fail_msg: "the Forgejo dump failed: {{ _dump.stderr | default('') }}"

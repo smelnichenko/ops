@@ -41,6 +41,21 @@ check("both down (inactive), the VIP on pi2: pi2 first", case((False, "inactive"
       (True, "pi2"))
 check("both serving, the VIP on pi1: pi1 first", case((True, "active", True), (True, "active", False)), (True, "pi1"))
 check("both starting: refused", case((False, "active", True), (False, "activating", False))[0], False)
+# a run taken forward skips every task under `not _forward`: Ansible registers {skipped: true} for each, so a task
+# that still runs and reads such a result's field (rc, stdout - not skipped or changed, none with | default) fails
+skipped, reads = set(), []
+for t in yaml.safe_load(open("deploy/ansible/playbooks/upgrade-forgejo.yml"))[0]["tasks"]:
+    when = " ".join(map(str, t.get("when", []) if isinstance(t.get("when"), list) else [t.get("when", "")]))
+    forward_skips = bool(__import__("re").search(r"not\s+_forward\b", when))
+    if not forward_skips:
+        body = yaml.safe_dump({k: v for k, v in t.items() if k != "register"}, width=10000)
+        for reg in skipped:
+            for m in __import__("re").finditer(rf"\b{reg}\.(\w+)(?!\w)", body):
+                if m[1] not in ("skipped", "changed") and not __import__("re").match(r"\s*\|\s*default\b", body[m.end():]):
+                    reads.append(f"{t.get('name')}: {reg}.{m[1]}")
+    if "register" in t and forward_skips:
+        skipped.add(t["register"])
+check("taken forward: no task that runs reads a result the run skipped", reads, [])
 print("forgejo-take-forward: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
