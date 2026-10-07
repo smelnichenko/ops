@@ -945,11 +945,11 @@
   vars:
     running_router_id: |
       set -euo pipefail
-      pid=$(systemctl show keepalived -p MainPID --value)
-      # 0 when keepalived is not running: `kill 0` would signal this task's own process group
-      [ "$pid" -gt 1 ] || { echo "keepalived is not running (MainPID $pid)" >&2; exit 1; }
+      systemctl is-active --quiet keepalived || { echo "keepalived is not running" >&2; exit 1; }
       rm -f /tmp/keepalived.data
-      kill -s "$(keepalived --signum=DATA)" "$pid"
+      # by systemd, to the unit's main process as it is when signalled: a MainPID read first could be another
+      # process's by the kill, keepalived restarted in between
+      systemctl kill --kill-whom=main -s "$(keepalived --signum=DATA)" keepalived
       for i in $(seq 1 20); do [ -s /tmp/keepalived.data ] && break; sleep 0.25; done
       sed -n 's/^ *Router ID = //p' /tmp/keepalived.data
   tasks:
@@ -998,11 +998,11 @@
   vars:
     running_router_id: |
       set -euo pipefail
-      pid=$(systemctl show keepalived -p MainPID --value)
-      # 0 when keepalived is not running: `kill 0` would signal this task's own process group
-      [ "$pid" -gt 1 ] || { echo "keepalived is not running (MainPID $pid)" >&2; exit 1; }
+      systemctl is-active --quiet keepalived || { echo "keepalived is not running" >&2; exit 1; }
       rm -f /tmp/keepalived.data
-      kill -s "$(keepalived --signum=DATA)" "$pid"
+      # by systemd, to the unit's main process as it is when signalled: a MainPID read first could be another
+      # process's by the kill, keepalived restarted in between
+      systemctl kill --kill-whom=main -s "$(keepalived --signum=DATA)" keepalived
       for i in $(seq 1 20); do [ -s /tmp/keepalived.data ] && break; sleep 0.25; done
       sed -n 's/^ *Router ID = //p' /tmp/keepalived.data
   tasks:
