@@ -192,14 +192,15 @@ check("between 47's merges: postgresql:17 not judged, 18 not yet, the rest as be
 # a no - or no terminal - runs nothing and records nothing
 def done_calls(step, answer, events=()):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record",
-                                                   "proof_problems")}
+                                                   "proof_problems", "ten_now")}
+    m.ten_now = lambda: "2026-10-07T10:00:00Z"
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: (None, 0)
     m.confirm = lambda q: calls.append("asked") or answer
     m.ansible = lambda *a: calls.append(a[0]) or True
     m.check = lambda *a, **k: True
-    m.record = lambda st, ev, *a: calls.append(ev)
+    m.record = lambda st, ev, *a, **k: calls.append(ev)
     try:
         m.done(step)
     except SystemExit:
@@ -224,17 +225,19 @@ check("done 47 with no base backup at its merges (declined): done takes it", don
       ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
 
 
-# done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done
+# done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done; the
+# first green check recorded at ten's time (the restarts' clock) read before it ran
 def done_run(step, soak, green):
     calls, checks, saved = [], [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible",
-                                                               "check", "record", "proof_problems")}
+                                                               "check", "record", "proof_problems", "ten_now")}
+    m.ten_now = lambda: calls.append("ten's clock") or "2026-10-07T10:00:00Z"
     m.ledger_for = lambda st, ph, arg=None: (names, [], info[st])
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: soak
     m.confirm = lambda q: True
     m.ansible = lambda *a: True
-    m.check = lambda *a, **k: checks.append((a, k)) or green
-    m.record = lambda st, ev, *a: calls.append(ev)
+    m.check = lambda *a, **k: checks.append((a, k)) or calls.append("check") or green
+    m.record = lambda st, ev, *a, **k: calls.append(ev + (f" at {k['at']}" if k.get("at") else ""))
     try:
         m.done(step)
     except SystemExit as e:
@@ -247,12 +250,25 @@ calls, checks = done_run(S42, (T0, 600), True)
 check("done while soaking: refused, nothing checked", (calls, checks), (["refused: REFUSED"], []))
 calls, checks = done_run(S42, (T0, 0), True)
 check("done after the soak, green: done, judged since the first green check, deciding",
-      (calls, checks), (["done"], [((S42, T0), {"deciding": True})]))
+      (calls, checks), (["check", "done"], [((S42, T0), {"deciding": True})]))
 calls, checks = done_run(S42, (T0, 0), False)
-check("done after the soak, red: check-failed, refused - not done", calls, ["check-failed", "refused: REFUSED"])
+check("done after the soak, red: check-failed, refused - not done", calls,
+      ["check", "check-failed", "refused: REFUSED"])
 calls, checks = done_run(S42, (None, None), True)
-check("done's first call: no since, not deciding, records checked", (calls, checks),
-      (["checked"], [((S42, None), {"deciding": False})]))
+check("done's first call: ten's clock read, then the check (no since, not deciding), checked recorded at ten's time",
+      (calls, checks), (["ten's clock", "check", "checked at 2026-10-07T10:00:00Z"], [((S42, None), {"deciding": False})]))
+
+# ten's clock as the ledger writes times, and nothing else
+saved_ten = m.ten
+for answer, want in (("2026-10-07T10:00:00Z\n", "2026-10-07T10:00:00Z"), ("Wed Oct  7 10:00:00 UTC 2026\n", "refused"),
+                     ("", "refused")):
+    m.ten = lambda command, **k: type("R", (), {"returncode": 0, "stdout": answer})()
+    try:
+        got = m.ten_now()
+    except SystemExit:
+        got = "refused"
+    check(f"ten's clock answering {answer.strip() or 'nothing'!r}: {want}", got, want)
+m.ten = saved_ten
 
 # every phase consults the proof first: refused by it, a phase runs, merges, records and asks nothing
 class _Done:

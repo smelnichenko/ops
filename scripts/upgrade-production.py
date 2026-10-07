@@ -247,9 +247,17 @@ def read_ledger():
     return obj, parse_events(obj.get("data", {}).get("events", ""))
 
 
-def record(step, event, *args, obj=None):
+def ten_now():
+    """ten's clock, UTC, as the ledger writes times: the pods' restart times are its."""
+    at = ten("date -u +%Y-%m-%dT%H:%M:%SZ").stdout.strip()
+    if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", at):
+        sys.exit(f"ten's clock answered {at!r}")
+    return at
+
+
+def record(step, event, *args, obj=None, at=None):
     """Append one event - kubectl replace with the read resourceVersion (`obj`'s, when given: the read a decision was
-    made on): a concurrent change refuses."""
+    made on): a concurrent change refuses. `at`: the event's time (now, by this machine's clock, without)."""
     obj = obj if obj is not None else read_ledger()[0]
     # a run whose claim on the step was closed meanwhile (released by hand, the run alive) records nothing more: its
     # events would land in whatever claimed the step after
@@ -260,7 +268,7 @@ def record(step, event, *args, obj=None):
         if not started or started[1][-1] != token:
             sys.exit(f"REFUSED: this run's claim on {step} was closed meanwhile (deploy:upgrade:release?) - "
                      f"{event} not recorded")
-    at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    at = at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = " ".join((at, step, event, *args))
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
     out = ten("kubectl replace -f -", stdin=json.dumps(obj), check=False)
@@ -985,11 +993,14 @@ def done(step):
         refuse([] if ansible("playbooks/postgres-base-backup.yml") else ["no fresh Postgres base backup (above)"])
         # recorded: a red check later starts the soak again, and its next first call does not take another
         record(step, "base-backup")
+    # the soak's start, read before the first check by ten's clock (the restarts' times are its): this machine's,
+    # after the check, let a restart as the check ran, or within the clocks' skew, slip past the deciding check
+    started = ten_now() if checked is None else None
     # after the soak: no container may have restarted since the first green check
     green = check(step, checked, deciding=checked is not None)
     if checked is None:
         refuse([] if green else ["not green - nothing recorded (fix, or the step's abort line)"])
-        record(step, "checked")
+        record(step, "checked", at=started)
         print(f"the soak runs {info['soak']} minutes - deploy:upgrade:done again after it")
         return
     if not green:
