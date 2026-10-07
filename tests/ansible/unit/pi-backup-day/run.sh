@@ -57,6 +57,13 @@ case "$1" in
   rcat) cat > /dev/null ;;
 esac
 STUB
+# the clock's sync state (NTPSynchronized): yes from the SYNCED_FROM-th look on (1: at once); sleep recorded, not slept
+cat > "$W/bin/timedatectl" <<'STUB'
+#!/bin/bash
+echo "timedatectl $*" >> "$CALLS"
+[ "$(grep -c '^timedatectl' "$CALLS")" -ge "${SYNCED_FROM:-1}" ] && echo yes || echo no
+STUB
+printf '#!/bin/bash\necho "sleep $*" >> "$CALLS"\n' > "$W/bin/sleep"
 chmod +x "$W/bin"/*
 W=$W "$PY" - <<'PY'
 import datetime, os, subprocess, sys
@@ -85,8 +92,9 @@ def check(name, ok, detail):
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f"\n  {detail}"))
 rc, out, calls = run(today)
+work = [c for c in calls if c and not c.startswith(("timedatectl", "sleep"))]
 check("today's success in the store: done at once, under the lock", rc == 0 and "today's backup is done" in out
-      and calls[0].startswith("consul lock ") and " pi-tier0-backup " in calls[0]
+      and work[0].startswith("consul lock ") and " pi-tier0-backup " in work[0]
       and not any("snapshot" in c for c in calls), (rc, out, calls))
 rc, out, calls = run(yesterday)
 check("yesterday's: on to the backup, its failure through the lock (exit 2)",
@@ -100,6 +108,17 @@ check("today's, but PI_BACKUP_EVEN_TODAY=1: on to the backup", rc == 2 and any("
 rc, out, calls = run(yesterday, HELD="1")
 check("the lock held by the other Pi's hung run: waited a bounded time, then failed", rc == 1
       and "Lock acquisition failed" in out and not any("snapshot" in c for c in calls), (rc, out, calls))
+# the clock synchronized before anything: after a boot the timer's catch-up run (Persistent) can start on the time a
+# Pi kept without a battery - the day it reads, its backup's name and the retention's cutoff all wrong. Waited for a
+# bounded time, then nothing done
+looks = lambda calls: sum(c.startswith("timedatectl") for c in calls)
+rc, out, calls = run(yesterday, SYNCED_FROM="3")
+check("the clock synchronized at the third look: then on to the backup", rc == 2 and looks(calls) == 3
+      and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls))
+rc, out, calls = run(yesterday, SYNCED_FROM="9999")
+check("the clock never synchronized: failed after its bounded wait, said so, nothing read or backed up",
+      rc == 1 and "not synchronized" in out and looks(calls) == 60
+      and not any(c.startswith(("consul", "rclone")) for c in calls), (rc, out, calls[:3], looks(calls)))
 # the timer's firings through a year's turns (both DST changes, midsummer): each day's first run, the day before's
 # success in the store, backs up; the other Pi's, 25 minutes later (it waited on the lock), finds the day done. The
 # timer's spec as the playbook sets it; with no zone in it, the Pis' (Europe/Tallinn, read on both 2026-10-07)

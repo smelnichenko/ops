@@ -98,6 +98,14 @@
           # passed on (by default the lock exits 0 whatever its child did - the unit green); the wait bounded: a hung
           # run holding it fails this one with time left in the unit's budget, rather than starving it
           if [ -z "${PI_BACKUP_LOCKED:-}" ]; then
+            # the clock synchronized first: after a boot the timer's catch-up run (Persistent) can start on the time a
+            # Pi kept without a battery - the day read below, the backup's name and the retention's cutoff all wrong.
+            # Ten minutes allowed (chrony or timesyncd, either sets it), then nothing done
+            for i in $(seq 60); do
+              [ "$(timedatectl show -p NTPSynchronized --value 2> /dev/null)" = yes ] && break
+              [ "$i" != 60 ] || { echo "the clock is not synchronized (timedatectl) - no backup" >&2; exit 1; }
+              sleep 10
+            done
             PI_BACKUP_LOCKED=1 exec consul lock -child-exit-code -timeout=30m pi-tier0-backup "$0"
           fi
           # a day with a success is done - PI_BACKUP_EVEN_TODAY=1 backs up again (a test, a backup by hand). The day is
