@@ -38,7 +38,13 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(f"{'PASS' if got == want else 'FAIL'} {name}" + ("" if got == want else f": got {got}, want {want}"))
-long_ago, later = "Mon 2026-10-05 10:00:00 UTC", "Fri 2026-10-30 10:00:00 UTC"
+# every time relative to now - a fixed date aged the test out (the files are written as it runs): the files a day old,
+# the service started two days ago (before them) or twelve hours ago (after them)
+day = 86400
+for f in (conf, unit):
+    os.utime(f, (time.time() - day, time.time() - day))
+at = lambda seconds_ago: time.strftime("%a %Y-%m-%d %H:%M:%S UTC", time.gmtime(time.time() - seconds_ago))
+long_ago, later = at(2 * day), at(day / 2)
 check("no stamp, the files newer than the start: pending (the clock, once)", run(long_ago), (0, ["pending", sha()]))
 check("no stamp, the files older than the start: current", run(later), (0, ["current", sha()]))
 open(stamp, "w").write(sha() + "\n")
