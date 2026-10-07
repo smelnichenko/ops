@@ -1,10 +1,10 @@
 ---
-# The public images an upgrade step moves to, pulled into containerd on the node before the step's first merge
-# (scripts/upgrade-production.py merge): a tag missing upstream stops the step while nothing of it is live, and the
-# rollout does not wait on the pull while the old pod is gone (a Recreate deployment, a single replica). Nothing that
-# runs changes - only the node's image store grows.
+# The public images an upgrade step moves to, pulled into containerd on the node before each of the step's merges
+# (scripts/upgrade-production.py merge) - by the digest the step pins where it pins one: a tag missing upstream stops
+# the step while nothing more of it is live, and the rollout does not wait on the pull while the old pod is gone (a
+# Recreate deployment, a single replica). Nothing that runs changes - only the node's image store grows.
 #
-# Usage: only through task deploy:upgrade:merge (the step's first merge) - it passes -e images=<name:tag>,...
+# Usage: only through task deploy:upgrade:merge - it passes -e images=<name:tag[@digest]>,...
 - name: Pull an upgrade step's images on the node
   hosts: target
   become: true
@@ -16,7 +16,15 @@
         fail_msg: "-e images=<name:tag>,..."
         quiet: true
 
+    # through containerd's socket by name (ten has no /etc/crictl.yaml: crictl would try its deprecated default
+    # endpoints in turn), a registry's passing failure retried
     - name: Each image pulled (containerd's k8s.io namespace, where the kubelet looks)
-      ansible.builtin.command: crictl pull {{ item }}
+      ansible.builtin.command: >-
+        crictl --runtime-endpoint unix:///run/containerd/containerd.sock
+        --image-endpoint unix:///run/containerd/containerd.sock pull {{ item }}
       loop: "{{ images.split(',') | select | list }}"
+      register: _pulled
+      retries: 3
+      delay: 10
+      until: _pulled.rc == 0
       changed_when: true

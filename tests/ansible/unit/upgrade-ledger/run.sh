@@ -261,7 +261,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
                 pushed=None):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
-                       "ten")
+                       "ten", "image_pins")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged") if x in k}) or list(proof)
@@ -278,6 +278,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     m.soak_state = lambda *a: (None, 0)
     m.merged_base = lambda *a: None
     m.pushed_base = lambda *a: pushed
+    m.image_pins = lambda *a: set()
     if step_info:
         m.step_info = step_info
     try:
@@ -340,18 +341,37 @@ check("merge 47 platform, the backup not confirmed: settled recorded, no backup,
 # a step's public images pulled on ten at its first merge, after the yes and before the push: a tag missing upstream
 # stops it with nothing live, and the rollout does not wait on the pull with the old pod gone
 S54 = "54-tempo-3"
-check("prepull: 54's public image", m.prepull_images(S54), ["grafana/tempo:3.1.0"])
+m.image_pins = lambda step, name, tag: set()  # no pins in the step's branches (read on real repos: upgrade-merge-step)
+check("prepull: 54's public image, as containerd names it", m.prepull_images(S54), ["docker.io/grafana/tempo:3.1.0"])
 check("prepull: an added image (+ image) too", "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1"
       in m.prepull_images("27-kube-prometheus-stack"), True)
 check("prepull: production's own registry left out (the registry check covers it)",
       [i for n in names for i in m.prepull_images(n) if i.startswith("git.pmon.dev/")], [])
+check("prepull: one image under its short and its docker.io name pulled once (21's manager agent)",
+      [i for i in m.prepull_images("21-scylla-operator-1.22") if "scylla-manager-agent" in i],
+      ["docker.io/scylladb/scylla-manager-agent:3.12.1"])
+# the reference production runs: a digest the step's branches pin the tag to (47's postgresql 18) pulled with it - the
+# tag alone may name another build by then; two digests for one tag refuse
+D1, D2 = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+m.image_pins = lambda step, name, tag: {D1} if "postgresql" in name else set()
+check("prepull: 47's postgresql 18 by the digest its branch pins",
+      m.prepull_images(S47), [f"ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye@{D1}"])
+m.image_pins = lambda step, name, tag: {D1, D2} if "postgresql" in name else set()
+try:
+    m.prepull_images(S47)
+    got = "pulled"
+except SystemExit as e:
+    got = "refused" if "2 digests" in str(e) else str(e)
+check("prepull: one tag pinned to two digests in the step's branches: refused", got, "refused")
+m.image_pins = lambda step, name, tag: set()
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
 keep = [c for c in got if c in (("asked",), ("ansible", "playbooks/upgrade-prepull.yml"), ("run", "upgrade-merge-step.sh"))]
 check("merge 54 platform (its first): asked, the images pulled, then merged", keep,
       [("asked",), ("ansible", "playbooks/upgrade-prepull.yml"), ("run", "upgrade-merge-step.sh")])
 got = phase_calls(m.merge, S54, "infra", events=ev(f"{S54} apps app", f"{S54} merged platform a",
                                                    f"{S54} settled platform a"))
-check("merge 54 infra (its second): not pulled again", [c for c in got if c[0] == "ansible"], [])
+check("merge 54 infra (its second): pulled again - collected meanwhile, or the second repo's",
+      [c for c in got if c[0] == "ansible"], [("ansible", "playbooks/upgrade-prepull.yml")])
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"), ansible_ok=False)
 check("merge 54, a pull failing: refused, nothing merged",
       ([c for c in got if c == ("run", "upgrade-merge-step.sh")], got[-1][0]), ([], "refused"))

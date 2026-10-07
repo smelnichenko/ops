@@ -8,7 +8,7 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   backup     each of the step's wave0 stores into the Pi store (upgrade-backup.yml)                -> backup <store>
   merge      each branch line in the file's order: the branch's own change exactly as the full run proved it, the
              state between two merges one the full run proved (upgrade-merge-order.py), the change shown and
-             confirmed, the step's public images pulled on ten at its first merge (upgrade-prepull.yml), merged and
+             confirmed, the step's public images pulled on ten at each merge (upgrade-prepull.yml), merged and
              pushed
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
              a barman-after-merge step's last merge (PostgreSQL 18): then, asked first, a base backup on what the
@@ -568,14 +568,42 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
     return out
 
 
+def image_pins(step, name, tag):
+    """The digests the step's branches pin <name>:<tag> to - `<name>:<tag>@sha256:<digest>` in any file of each repo's
+    upgrade/<step> (its merged tag once the branch is gone), the name as written or as containerd lists it."""
+    found = set()
+    for repo in step_info(step)["branches"]:
+        d = os.path.join(OPS, "..", repo)
+        ref = next((r for r in ("upgrade/" + step, MERGED_TAG + step)
+                    if run(["git", "-C", d, "rev-parse", "-q", "--verify", r + "^{commit}"],
+                           capture_output=True).returncode == 0), None)
+        if ref is None:
+            sys.exit(f"{repo} has neither upgrade/{step} nor {MERGED_TAG}{step} - its image pins unread")
+        for n in {name, full_name(name)}:
+            pattern = f"{n}:{tag}@sha256:".replace(".", "\\.") + "[0-9a-f]{64}"
+            r = run(["git", "-C", d, "grep", "-h", "-o", "-E", "-e", pattern, ref], capture_output=True)
+            if r.returncode not in (0, 1):  # 1: no match
+                sys.exit(f"{repo}: git grep for {n}:{tag}'s pin failed: {r.stderr.strip()}")
+            found |= set(re.findall(r"@(sha256:[0-9a-f]{64})", r.stdout or ""))
+    return found
+
+
 def prepull_images(step):
-    """The public images the step moves to (its `image ... => image <name> <tag>` and `+ image` lines), as name:tag -
+    """The public images the step moves to (its `image ... => image <name> <tag>` and `+ image` lines), as containerd
+    names them (one image under its short and its docker.io name pulled once), each with the digest the step's
+    branches pin its tag to - the reference production runs (the tag alone may name another build by then) -
     production's own registry left out (registry_problems checks those are there)."""
-    out = []
+    out, seen = [], set()
     for line in open(os.path.join(inv.STEPS, step + ".txt")):
         m = re.fullmatch(r"(?:image \S+ \S+ => |\+ )image (\S+) (\S+)", line.strip())
-        if m and not m[1].startswith("git.pmon.dev/"):
-            out.append(f"{m[1]}:{m[2]}")
+        if not m or m[1].startswith("git.pmon.dev/") or (full_name(m[1]), m[2]) in seen:
+            continue
+        seen.add((full_name(m[1]), m[2]))
+        pins = image_pins(step, m[1], m[2])
+        if len(pins) > 1:
+            sys.exit(f"{m[1]}:{m[2]} is pinned to {len(pins)} digests in the step's branches "
+                     f"({', '.join(sorted(pins))}) - which one production runs is unclear")
+        out.append(f"{full_name(m[1])}:{m[2]}" + "".join(f"@{p}" for p in pins))
     return out
 
 
@@ -750,10 +778,10 @@ def merge(step, repo):
                 run(["git", "-C", d, "--no-pager", *args, f"main..upgrade/{step}"])
             refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
                    else ["not confirmed - nothing merged, nothing recorded"])
-            # the step's first merge: its public images pulled on ten first - a tag missing upstream stops the step
-            # with nothing live, and its rollout does not wait on a pull while the old pod is gone (a Recreate
-            # deployment, a single replica)
-            images = prepull_images(step) if not partly else []
+            # the step's public images pulled on ten first, at each of its merges (the first's may be collected by the
+            # second, or be the second repo's) - a tag missing upstream stops the step with nothing more live, and its
+            # rollout does not wait on a pull while the old pod is gone (a Recreate deployment, a single replica)
+            images = prepull_images(step)
             if images:
                 refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
                        else [f"the step's images did not pull on ten (above) - nothing merged"])

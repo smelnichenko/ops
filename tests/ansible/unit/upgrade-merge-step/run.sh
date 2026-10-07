@@ -99,5 +99,29 @@ g checkout -q upgrade/07-g; echo unproven >> "$W/infra/f"; g commit -q -am unpro
 g push -q origin upgrade/07-g:main
 check "pushed untagged with a change the run did not prove: refused" 0 "brought a change other than" \
   proof 07-g "$main7..$proven7"
+
+# the digests a step's branch pins an image tag to, read from the branch (production's prepull pulls the reference
+# production runs); a repo the step declares with neither its branch nor its merged tag refuses
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/08-h.txt"
+g checkout -q -b upgrade/08-h
+printf 'imageName: ghcr.io/x/pg:18.6@sha256:%s\nother: docker.io/y/z:1@sha256:%s\n' "$(printf 'a%.0s' {1..64})" \
+  "$(printf 'b%.0s' {1..64})" > "$W/infra/values.yaml"
+g add values.yaml; g commit -q -m h; g checkout -q main
+pins() {  # pins <step> <name> <tag>: production's lookup of the digests
+  W=$W SRC=$src python3 - "$@" <<'PYP'
+import importlib.machinery, importlib.util, os, sys
+L = importlib.machinery.SourceFileLoader("up", os.path.join(os.environ["SRC"], "scripts", "upgrade-production.py"))
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", L))
+L.exec_module(m)
+m.OPS = os.path.join(os.environ["W"], "ops")
+m.step_info = lambda step: {"branches": ["infra"]}
+print("PINS:", sorted(m.image_pins(*sys.argv[1:])))
+PYP
+}
+check "a tag the branch pins: its digest" 0 "PINS: ['sha256:$(printf 'a%.0s' {1..64})']" pins 08-h ghcr.io/x/pg 18.6
+check "a short name, pinned under its docker.io name: found" 0 "PINS: ['sha256:$(printf 'b%.0s' {1..64})']" \
+  pins 08-h y/z 1
+check "a tag the branch does not pin: none" 0 "PINS: []" pins 08-h ghcr.io/x/pg 17
+check "no branch nor tag for the step: refused" 1 "neither upgrade/09-i nor" pins 09-i ghcr.io/x/pg 18.6
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))
