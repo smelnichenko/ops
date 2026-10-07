@@ -452,7 +452,8 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
       # the Applications' names recorded: every step's waits want exactly these. The deciding settle's quiet (120 s,
       # 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up, and each restart began 300 s
-      # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by step 00's restart history
+      # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by the restart history once two
+      # steps have recorded it (step 00's settle records only)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
@@ -685,6 +686,11 @@ tasks:
           steps=$(ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V)
           [ -n "$steps" ] || { echo "no upgrade steps in tests/ansible/upgrade/steps"; exit 1; }
           echo "=== $(echo "$steps" | wc -l) steps"
+          # a step's proof is recorded once the next step's deciding settle has judged its restarts too: that settle's
+          # quiet window is 120 s, and a crash loop slower than that settles once - the restart history fails it a step
+          # later, so a step proven at once was proven with it. The last step is judged once more at production's own
+          # settle (test:upgrade:final-settle), then proven
+          prev=
           for step in $steps; do
             echo "=== STEP $step $(date +%T)"
             # the commits the step mirrors, before it: the proof refuses them if a branch moved meanwhile
@@ -695,11 +701,27 @@ tasks:
             task test:upgrade:step STEP="$step" 2>&1 \
               | python3 -u -c 'import sys, time
           for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()'
-            scripts/upgrade-production.py record-proof "$step" "$infra_sha" "$platform_sha"
+            [ -z "$prev" ] || scripts/upgrade-production.py record-proof $prev
+            prev="$step $infra_sha $platform_sha"
             echo "=== STEP $step GREEN $(date +%T)"
           done
+          task test:upgrade:final-settle STEP="${prev%% *}"
+          scripts/upgrade-production.py record-proof $prev
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
       - task: test:upgrade:restore-check
+
+  # the full run's last step judged as production will judge it: its quiet window 300 s, held 4 polls 10 s apart, and
+  # its restarts against the step's own (a restart-history entry of its own) - no step after it does
+  test:upgrade:final-settle:
+    desc: "The full run's last step settled at production's own values, its restarts judged against the step's (STEP=<the last step>)"
+    deps: [deploy:install]
+    requires:
+      vars: [STEP]
+    vars:
+      OUT_OF_SYNC:
+        sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step=final -e restart_quiet=300 -e stable_polls=4 -e poll_seconds=10
 
   test:clickhouse-pin:
     desc: "The ClickHouse rollback pin with the real images, in docker here: steps 59 and 61's newer image pinned to the older version writes and merges parts, the older reads every row back; unpinned it must not"
