@@ -1310,7 +1310,7 @@
       changed_when: false
 
     - name: "OFFSITE: Install pubkey on pi1 via delegate"
-      ansible.builtin.authorized_key:
+      ansible.posix.authorized_key:
         user: "{{ offsite_user }}"
         key: "{{ offsite_pubkey.stdout }}"
         state: present
@@ -1673,7 +1673,7 @@
         - /root/.ssh/offsite_key.pub
 
     - name: "OFFSITE: Remove pubkey from pi1"
-      ansible.builtin.authorized_key:
+      ansible.posix.authorized_key:
         user: "{{ offsite_user }}"
         key: "{{ offsite_pubkey.stdout }}"
         state: absent

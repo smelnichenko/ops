@@ -350,7 +350,7 @@
     # the entry alone where the repos are mounted already: the mount module remounts a mounted volume when its entry
     # changes
     - name: The repos' fstab entry  # noqa: syntax-check[unknown-module]
-      ansible.builtin.mount:
+      ansible.posix.mount:
         path: "{{ gluster_mount }}"
         src: "{{ node_ip }}:/forgejo-repos"
         fstype: glusterfs
@@ -376,13 +376,13 @@
             state: stopped
 
         - name: Unmount what is mounted there now  # noqa: syntax-check[unknown-module]
-          ansible.builtin.mount:
+          ansible.posix.mount:
             path: "{{ gluster_mount }}"
             state: unmounted
           when: _repos_mount.stdout | trim | length > 0
 
         - name: Mount GlusterFS volume
-          ansible.builtin.mount:
+          ansible.posix.mount:
             path: "{{ gluster_mount }}"
             src: "{{ node_ip }}:/forgejo-repos"
             fstype: glusterfs
@@ -459,7 +459,7 @@
     # between left the Pi without it (production pi1 matches, 2026-10-04).
     - name: Unmount old GlusterFS backup mounts
       ansible.builtin.shell: |
-        set -eu
+        set -euo pipefail
         old=':/(backups|backup-scylla|backup-postgres|backup-velero)$'
         for mnt in /mnt/backups /mnt/backups/scylla /mnt/backups/postgres /mnt/backups/velero; do
           if src=$(findmnt -rn -t fuse.glusterfs -o SOURCE --mountpoint "$mnt") && echo "$src" | grep -qE "$old"; then
@@ -472,6 +472,8 @@
           sed -i -E "\,$entries,d" /etc/fstab
           echo "fstab: the old volumes' entries removed"
         fi
+      args:
+        executable: /bin/bash
       register: unmount_old
       changed_when: unmount_old.stdout | length > 0
 
@@ -838,7 +840,7 @@
       loop: "{{ backup_volumes }}"
 
     - name: Unmount what another source has mounted there
-      ansible.builtin.mount:
+      ansible.posix.mount:
         path: "{{ item.item.mount }}"
         state: unmounted
       loop: "{{ _current_mounts.results }}"
@@ -849,7 +851,7 @@
     # mounted where not mounted from the volume yet; elsewhere the entry alone - the mount module remounts a mounted
     # volume when its entry changes
     - name: Mount backup volumes
-      ansible.builtin.mount:
+      ansible.posix.mount:
         path: "{{ item.mount }}"
         src: "{{ node_ip }}:/{{ item.name }}"
         fstype: glusterfs
@@ -1038,20 +1040,29 @@
         state: absent
       loop: "{{ gluster_new_volumes | default([]) }}"
 
+    # printed, never failing (as before): a volume's status read whole (head closing the pipe early would end gluster
+    # on SIGPIPE), its first lines shown, a failed read said
     - name: Check all backup volume statuses
       check_mode: false
       ansible.builtin.shell: |
+        set -uo pipefail
         for vol in backup-minio backup-git-mirror nexus-data; do
           echo "=== $vol ==="
-          gluster volume status $vol 2>/dev/null | head -8
+          out=$(gluster volume status "$vol" 2>&1) || out="(no status: $out)"
+          printf '%s\n' "$out" | sed -n 1,8p
         done
+      args:
+        executable: /bin/bash
       register: backup_status
       changed_when: false
 
     - name: Verify mounts on both nodes
       check_mode: false
       ansible.builtin.shell: |
-        mount | grep -E "backup-|nexus-data"
+        set -o pipefail
+        findmnt -rn -t fuse.glusterfs -o TARGET,SOURCE | grep -E "backup-|nexus-data"
+      args:
+        executable: /bin/bash
       register: mount_check
       changed_when: false
       delegate_to: "{{ item }}"

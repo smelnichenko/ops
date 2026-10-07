@@ -2,7 +2,7 @@
 # A new forgejo-repos volume never goes over a brick with anything in it (setup-gluster.yml): each of
 # forgejo_repos_bricks ({host, brick, may_hold_copy}) empty, but one that may hold this playbook's own copy - its mark
 # forgejo_repos_mark there (a run that failed half-way). Tested: tests/ansible/unit/forgejo-repos-bricks.
-- name: "Brick empty, or this playbook's own copy: {{ item.brick }} on {{ item.host }}"
+- name: "Brick empty, or this playbook's own copy: {{ item.brick ~ ' on ' ~ item.host }}"
   ansible.builtin.shell: |
     set -eu
     if [ -n "$(ls -A "{{ item.brick }}" 2> /dev/null)" ] \
