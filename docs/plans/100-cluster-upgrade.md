@@ -816,6 +816,31 @@ The operator's - decisions this review does not make:
    permission rules (remove and rotate); production's wildcard key in the Vagrant copy.
 8. F22 and an etcd restore rehearsed in the full run (longer run).
 
+## Second full review 2026-10-07 - what it fixed
+
+Ten passes again over the full review's fixes (ops 08741c9.., the platform restack, the Pi playbooks), and the
+harnesses run in CI's own image (as root, no ps). Fixed, each with a test that fails first and fails again when its
+mechanism is reverted:
+- The procedure: a step's second merge no longer refused for an image its first replaced; a merge pushed but not
+  tagged resumes; the branch shown is the branch pushed (its commit passed on), against origin's main; step branches
+  recorded at proof-start and a moved one refuses its proof; ledger events carry the run's token, a released claim
+  records nothing more; images pulled by digest at every merge, under the kubelet's image GC threshold; Tempo's flush
+  waited for; PG 18's base backup after the merge that makes it live, gated on the archiver, never beside a running
+  one; the soak timed by ten's clock; the ClickHouse pin bound to the run's ops commit; a session kill path that could
+  signal a PID it did not start (the reviewers' own session died of it) - every kill path signals only its own jobs.
+- The Pis: Patroni's first install; Consul's lock passes the backup's failure on, its wait bounded, its API on
+  localhost; the backup day by the timer's clock through DST; an old copy another run purged is purged; containerd's
+  container list removed after each kubelet start; keepalived's and every service's restart decided by content, never
+  by the clock or a stale stamp after a start from inactive; Vault's init, CA and certificates root-only, its secrets
+  engines enabled on the active node; the Keycloak restore counts again with Keycloak stopped.
+- Previews: every playbook a deploy task hands --check (deploy:keepalived, nexus, pi-services, consul, patroni) runs
+  its reads in check mode, linted by default.
+- The full run: the deciding settle's quiet window 120 s with 2 polls of 5 s (production keeps 300 s), and the boot's
+  phases time-stamped - measured 5.4 min a step and a 56 min boot (6.5 h); the next cuts from the boot's measurement.
+
+The operator's, added: Consul ACLs; the stray pi2-key.pem in production pi1's /etc/vault.d/tls; a first run with no
+stamp yet reads its restart by the clock once (kept).
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
