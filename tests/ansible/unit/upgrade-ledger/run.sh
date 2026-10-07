@@ -518,6 +518,17 @@ check("settled: the preview environments' namespaces left out, production's and 
       [bool(ignored and re.search(ignored, ns)) for ns in ("schnappy-pr-7", "schnappy-production", "schnappy-test",
                                                            "schnappy-infra")], [True, False, False, False])
 
+# each phase that runs Ansible (ansible(...) in its function, or the step's playbook lines) has its Taskfile task depend
+# on deploy:install - the venv and the collections; merge's pre-pull and base backup lacked it
+import ast, yaml as _yaml
+src = open("scripts/upgrade-production.py").read()
+funcs = {n.name: ast.get_source_segment(src, n) for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)}
+runs_ansible = {f for f, body in funcs.items() if "ansible(" in body or "upgrade-step-playbooks.sh" in body} - {"ansible"}
+tasks_ = _yaml.safe_load(open("Taskfile.yml"))["tasks"]
+lacking = sorted(name for name, t in tasks_.items() if name.startswith("deploy:upgrade:")
+                 and any(f"upgrade-production.py {ph} " in str(t.get("cmds")) for ph in runs_ansible)
+                 and "deploy:install" not in (t.get("deps") or []))
+check("every production phase that runs Ansible installs it first", lacking, [])
 # status names the phase after the defaults one (its event carries the commit)
 import contextlib, io
 def status_of(lines):

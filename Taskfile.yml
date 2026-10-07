@@ -1184,6 +1184,8 @@ tasks:
 
   deploy:upgrade:merge:
     desc: "PRODUCTION: the GitOps half of step STEP in REPO (infra or platform) - its branch, the change the full run proved, shown and asked about, then fast-forwarded onto main and pushed; then Argo settled on the pushed commits"
+    # its pre-pull and base backup run Ansible (the venv and the collections)
+    deps: [deploy:install]
     requires:
       vars: [STEP, REPO]
     cmds:
