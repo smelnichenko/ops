@@ -113,6 +113,43 @@ fails += not check_("renders: the upstream applications among them", sorted(both
 labels = [hd.where("k", {"k": 1}, {}, "3.19", "4.2"), hd.where("k", {}, {"k": 1}, "3.19", "4.2")]
 fails += not check_("which Helm renders it: only the old one, only the new one", labels == ["only 3.19", "only 4.2"],
                     labels)
+# the binary: written whole or not at all - a download cut short (here: the archive's read failing midway) left a
+# partial helm at its path, and every later run used it
+import hashlib, tarfile, urllib.request
+def archive(body):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as t:
+        info = tarfile.TarInfo("linux-amd64/helm"); info.size = len(body)
+        t.addfile(info, io.BytesIO(body))
+    return buf.getvalue()
+blob = archive(b"#!/bin/sh\necho helm\n")
+class Resp:
+    def __init__(self, data):
+        self.data = data
+    def read(self):
+        return self.data
+bins = tempfile.mkdtemp()
+saved = (fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile)
+fresh.BIN = bins
+urllib.request.urlopen = lambda url, timeout=None: Resp(hashlib.sha256(blob).hexdigest().encode() + b"  x\n"
+                                                         if url.endswith(".sha256sum") else blob)
+class Cut:
+    def read(self):
+        raise KeyboardInterrupt
+try:
+    tarfile.TarFile.extractfile = lambda self, m: Cut()
+    try:
+        fresh.helm_binary("9.9.9")
+    except KeyboardInterrupt:
+        pass
+    left = sorted(os.listdir(os.path.join(bins, "9.9.9"))) if os.path.isdir(os.path.join(bins, "9.9.9")) else []
+    fails += not check_("a download cut short leaves no helm, no partial file", left == [], left)
+    tarfile.TarFile.extractfile = saved[2]
+    path = fresh.helm_binary("9.9.9")
+    fails += not check_("the next run downloads it whole, executable", (open(path, "rb").read(), os.access(path, os.X_OK))
+                        == (b"#!/bin/sh\necho helm\n", True), path)
+finally:
+    fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile = saved
 print("argo-helm-diff: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

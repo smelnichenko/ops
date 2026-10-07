@@ -49,11 +49,16 @@ def helm_binary(version):
     if hashlib.sha256(archive).hexdigest() != want:
         sys.exit(f"helm {version}: the archive's sha256 is not the published one")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with tarfile.open(fileobj=io.BytesIO(archive)) as t:
-        member = t.extractfile("linux-amd64/helm")
-        with open(path, "wb") as f:
-            f.write(member.read())
-    os.chmod(path, 0o755)
+    # written beside it and moved into place whole: one cut short left a partial helm that every later run used
+    fd, part = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".helm-")
+    try:
+        with os.fdopen(fd, "wb") as f, tarfile.open(fileobj=io.BytesIO(archive)) as t:
+            f.write(t.extractfile("linux-amd64/helm").read())
+        os.chmod(part, 0o755)
+        os.replace(part, path)
+    finally:
+        if os.path.exists(part):
+            os.remove(part)
     return path
 
 
