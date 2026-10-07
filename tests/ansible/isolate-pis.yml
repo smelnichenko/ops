@@ -21,6 +21,8 @@
   vars:
     production_lan: 192.168.11.0/24
     production_vip: 192.168.11.5
+    # the positive control's target: the other Pi (its ssh port)
+    peer: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first].ansible_host }}"
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: vagrant-only.yml
@@ -85,12 +87,17 @@
         {% for a in production_public %}
         blocked https://{{ a }}:443/ public
         {% endfor %}
+        # the positive control: the other Pi reached (a connect made to its ssh port) - a Pi with no network at all
+        # reads "blocked" everywhere
+        n=$(curl -s -o /dev/null -w '%{num_connects}' --connect-timeout 3 -m 3 telnet://{{ peer }}:22 < /dev/null)
+        if [ "${n:-0}" -ge 1 ]; then echo peer-reachable; else echo "PEER-UNREACHABLE ($n connects)"; fi
       args:
         executable: /bin/bash
       register: _pi_probe
       changed_when: false
       failed_when: >-
         _pi_probe.rc != 0 or 'production-blocked' not in _pi_probe.stdout_lines
+        or 'peer-reachable' not in _pi_probe.stdout_lines
         or _pi_probe.stdout_lines | select('eq', 'public-blocked') | list | length != production_public | length
         or (_pi_probe.stdout_lines | select('match', '^[^ ]+\\.pmon\\.dev ')
             | reject('match', '^[^ ]+ ' ~ (keepalived_vip | regex_escape) ~ '$') | list | length) > 0
