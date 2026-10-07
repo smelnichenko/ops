@@ -2,7 +2,8 @@
 # The cleanups of a Postgres side cluster - restore-check.yml's (the recovering block's always:) and the Wave 0 dump's
 # (tasks/wave0-pg-dump.yml) - as the files hold them, run by ansible-playbook on localhost, their steps stubbed and
 # logged: the side cluster removed, then its policies, and restore-check's Backup object - also when removing the side
-# cluster fails (it outlived its bound): a failed task in always: ended the cleanup there, the rest left behind.
+# cluster fails (it outlived its bound), or the Backup's removal does: a failed task in always: ended the cleanup
+# there, the rest left behind.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -29,7 +30,7 @@ def stub(t):
     if inc.endswith("side-cluster-policies.yml"):
         return {**keep, "ansible.builtin.shell": f"echo policies-{t['vars']['side_state']} >> {LOG}"}
     if "delete backups.postgresql.cnpg.io" in cmd:
-        return {**keep, "ansible.builtin.shell": f"echo backup >> {LOG}"}
+        return {**keep, "ansible.builtin.shell": f"echo backup >> {LOG}; exit {{{{ 1 if backup_fails else 0 }}}}"}
     raise SystemExit(f"a cleanup step this harness does not know: {t.get('name')}")
 
 
@@ -62,9 +63,10 @@ for name, path in (("restore-check", "tests/ansible/upgrade/restore-check.yml"),
         open(os.path.join(W, name + ".yml"), "w"), sort_keys=False)
 PY
 fails=0
-case_() {  # case_ <name> <play> <work_fails> <side_fails> <want rc 0|1> <want log, ; between>
+case_() {  # case_ <name> <play> <work_fails> <side_fails> <want rc 0|1> <want log, ; between> [backup_fails]
   : > "$W/log"
-  out=$(ANSIBLE_NOCOLOR=1 "$AP" -i localhost, -c local "$W/$2.yml" -e "{\"work_fails\": $3, \"side_fails\": $4, \"dump_name\": \"d\"}" 2>&1)
+  out=$(ANSIBLE_NOCOLOR=1 "$AP" -i localhost, -c local "$W/$2.yml" \
+    -e "{\"work_fails\": $3, \"side_fails\": $4, \"backup_fails\": ${7:-false}, \"dump_name\": \"d\"}" 2>&1)
   rc=$?; [ $rc = 0 ] || rc=1
   got=$(paste -sd';' "$W/log")
   if [ "$rc" = "$5" ] && [ "$got" = "$6" ]; then echo "PASS $2: $1"; return; fi
@@ -76,6 +78,8 @@ case_ "done: the Backup, the side cluster, then its policies removed" restore-ch
 case_ "failed: all three removed, the run fails" restore-check true false 1 "$R"
 case_ "the side cluster outliving its bound: the Backup and the policies removed all the same" restore-check \
   false true 1 "$R"
+case_ "the Backup's removal failing: the side cluster and its policies removed all the same" restore-check \
+  false false 1 "$R" true
 case_ "done: the side cluster, then its policies removed" wave0-pg-dump false false 0 "$D"
 case_ "the side cluster outliving its bound: its policies removed all the same" wave0-pg-dump false true 1 "$D"
 echo "restore-check-cleanup: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
