@@ -51,7 +51,7 @@
 
         - name: Tempo flushed, the flush waited for - the script production's merge runs
           ansible.builtin.script:
-            cmd: "{{ playbook_dir }}/../../../scripts/tempo-flush.py kubectl --kubeconfig {{ kubeconfig }}"
+            cmd: "{{ playbook_dir }}/../../../scripts/tempo-flush.py --kubeconfig {{ kubeconfig }}"
             executable: python3
           changed_when: true
 

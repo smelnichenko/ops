@@ -864,9 +864,11 @@ def merge(step, repo):
                 refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
                        else [f"the step's images did not pull on ten (above) - nothing merged"])
             # a step that replaces Tempo's major: what Tempo still holds in its WAL flushed to the store first (the
-            # next major does not replay it), the flush waited for
+            # next major does not replay it) - proven by a marker trace found in the store; on ten, with its kubectl
             if repo in step_info(step)["tempo_flush"]:
-                refuse([] if run([os.path.join(OPS, "scripts", "tempo-flush.py"), "ssh", TEN, "kubectl"]).returncode == 0
+                with open(os.path.join(OPS, "scripts", "tempo-flush.py")) as script:
+                    flushed = run(["ssh", TEN, "python3", "-"], input=script.read()).returncode == 0
+                refuse([] if flushed
                        else ["Tempo's flush did not complete (above) - nothing merged"])
             refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]).returncode == 0
                    else [f"the {repo} merge failed (above)"])

@@ -291,8 +291,9 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged") if x in k}) or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
-        calls.append(("run", os.path.basename(cmd[0])))
-        RUN_ARGS.append(list(cmd))
+        flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
+        calls.append(("run", "tempo-flush.py" if flush else os.path.basename(cmd[0])))
+        RUN_ARGS.append(list(cmd) + (["<tempo-flush.py>"] if flush else []))
         if revs and "rev-parse" in cmd:
             return type("R", (), {"returncode": 0, "stdout": revs.get(cmd[-1], "abc1234")})()
         return _Done()
@@ -444,8 +445,8 @@ got = [c for c in phase_calls(m.merge, S54, "infra", events=ev(f"{S54} apps app"
 check("merge 54 infra: asked, Tempo flushed (the flush waited for), then merged",
       [c for c in got if c[0] != "run" or c[1] in ("upgrade-merge-step.sh", "tempo-flush.py")],
       [("asked",), ("run", "tempo-flush.py"), ("run", "upgrade-merge-step.sh")])
-check("merge 54 infra: the flush's kubectl is ten's", [a[1:] for a in RUN_ARGS if a[0].endswith("tempo-flush.py")],
-      [["ssh", m.TEN, "kubectl"]])
+check("merge 54 infra: the flush runs on ten (its kubectl and credentials), the script on its python's stdin",
+      [a for a in RUN_ARGS if a[-1] == "<tempo-flush.py>"], [["ssh", m.TEN, "python3", "-", "<tempo-flush.py>"]])
 RUN_ARGS.clear()
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
 check("merge 54 platform: no flush", [c for c in got if c in (("ten", "flush"), ("run", "tempo-flush.py"))], [])
