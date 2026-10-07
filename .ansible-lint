@@ -5,6 +5,12 @@ exclude_paths:
   - deploy/ansible/venv/
   - deploy/ansible/.cache/
   - deploy/ansible/vars/sealed-secrets-key-backup.yaml
+# experimental, so in no profile: what a module does not document (apt's download_only, 2026-10-07) refused here too,
+# beside tests/ansible/unit/module-args - an error, not a warning: an experimental rule only warns while warn_list keeps
+# its default (experimental), and a warning passes the lint
+enable_list:
+  - args
+warn_list: []
 skip_list:
   # run-once[task] only matters when a play runs under strategy: free.
   # Every play in this repo uses strategy: linear (the default), and
