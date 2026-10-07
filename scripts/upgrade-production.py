@@ -435,7 +435,7 @@ def branch_shas():
         refs = run(["git", "-C", os.path.join(OPS, "..", repo), "for-each-ref",
                     "--format=%(refname:short) %(objectname)", "refs/heads/upgrade/"], capture_output=True,
                    check=True).stdout
-        out[repo] = dict(line.split() for line in refs.splitlines())
+        out[repo] = {name: sha for name, sha in (line.split() for line in refs.splitlines())}
     return out
 
 
