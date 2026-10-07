@@ -143,7 +143,9 @@
           environment:
             PAUSED_OUT: "{{ _paused.stdout | default('') }}"
           run_once: true
-          when: _paused is defined and _paused is succeeded
+          when:  # a preview (--check) paused nothing
+            - _paused is defined and _paused is succeeded
+            - not ansible_check_mode
 
     - name: The cluster healthy and not paused after
       ansible.builtin.shell:

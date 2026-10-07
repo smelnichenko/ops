@@ -414,7 +414,9 @@
               environment:
                 PAUSED_OUT: "{{ _patroni_paused.stdout | default('') }}"
               delegate_to: "{{ _other_pi }}"
-              when: _patroni_paused is defined and _patroni_paused is succeeded and _patroni_paused is not skipped
+              when:  # a preview (--check) paused nothing
+                - _patroni_paused is defined and _patroni_paused is succeeded and _patroni_paused is not skipped
+                - not ansible_check_mode
 
     # what the next run compares with: the agent restarted and caught up, or found running its config already
     - name: Consul's config as it runs it, recorded

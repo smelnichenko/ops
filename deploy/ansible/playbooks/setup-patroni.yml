@@ -428,7 +428,9 @@
               environment:
                 PAUSED_OUT: "{{ _restart_paused.stdout | default('') }}"
               run_once: true
-              when: _restart_paused is defined and _restart_paused is succeeded
+              when:  # a preview (--check) paused nothing
+                - _restart_paused is defined and _restart_paused is succeeded
+                - not ansible_check_mode
 
     # what the next run compares with: every node restarted (any_errors_fatal - a failed restart ends the play before
     # this), started with this unit by a first install, or found running it already
