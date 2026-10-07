@@ -442,15 +442,16 @@ def branch_moves(recorded):
 PIN_RESULT = os.path.join(WORK, "clickhouse-pin.json")
 
 
-def pin_problems(step, platform_sha, path=None):
+def pin_problems(step, platform_sha, ops_sha, path=None):
     """A step that moves ClickHouse's image (its abort line goes back while the compatibility pin holds) is proven only
-    with that pin proven for it: tests/clickhouse-pin on the same platform commit and the same two images, its result
-    in .upgrade/clickhouse-pin.json - the full run starts it beside the build."""
+    with that pin proven for it: tests/clickhouse-pin of the run's ops commit, on the same platform commit and the same
+    two images, its result in .upgrade/clickhouse-pin.json - the full run starts it beside the build."""
     lines = [l.split() for l in open(os.path.join(inv.STEPS, step + ".txt"))
              if l.startswith("image clickhouse/clickhouse-server ")]
     if not lines:
         return []
-    want, path = {"platform": platform_sha, "images": [lines[0][2], lines[0][6]]}, path or PIN_RESULT
+    want = {"platform": platform_sha, "images": [lines[0][2], lines[0][6]], "ops": ops_sha}
+    path = path or PIN_RESULT
     try:
         got = json.load(open(path)).get(step.split("-")[0])
     except (OSError, ValueError):
@@ -491,7 +492,7 @@ def record_proof(step, infra_sha, platform_sha):
         if repo in step_info(step)["branches"]:
             proof["repos"][repo] = {"sha": now_sha, "own": own_change(os.path.join(OPS, "..", repo), prev[repo],
                                                                       refs[repo])}
-    pin = pin_problems(step, shas["platform"])
+    pin = pin_problems(step, shas["platform"], run_info["ops"])
     if pin:
         sys.exit("REFUSED: " + "; ".join(pin))
     with open(proof_path(step), "w") as f:

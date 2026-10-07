@@ -775,35 +775,38 @@ check("a step branch moved during the run: refused",
 check("none moved: past that check", proved({"ops": "x", "run": "r", "branches": {}}, []), "past the checks")
 check("a run.json without the record: refused", "proof-start" in proved({"ops": "x", "run": "r"}, []), True)
 # a step that moves ClickHouse's image (59, 61) is proven only with its rollback pin proven on the same platform commit
-# and images (tests/clickhouse-pin's result; the full run starts it beside the build)
+# and images, by the pin test of the run's ops commit (tests/clickhouse-pin's result; the full run starts it beside the
+# build)
 import json, tempfile
 S59, S61 = "59-clickhouse-25.8", "61-clickhouse-26.8"
 pin_file = os.path.join(tempfile.mkdtemp(), "clickhouse-pin.json")
 img = {S59: ["24.8-alpine", "25.8.33.6-alpine"], S61: ["25.8.33.6-alpine", "26.8.15.10-alpine"]}
-json.dump({"59": {"platform": "p59", "images": img[S59]}, "61": {"platform": "p61", "images": img[S61]}},
-          open(pin_file, "w"))
-check("pin: 59 on the commit and images it proved", m.pin_problems(S59, "p59", pin_file), [])
-check("pin: 61 on the commit and images it proved", m.pin_problems(S61, "p61", pin_file), [])
-check("pin: 59 on another platform commit - refused", len(m.pin_problems(S59, "other", pin_file)), 1)
+json.dump({"59": {"platform": "p59", "images": img[S59], "ops": "o"},
+           "61": {"platform": "p61", "images": img[S61], "ops": "o"}}, open(pin_file, "w"))
+check("pin: 59 on the commit and images it proved", m.pin_problems(S59, "p59", "o", pin_file), [])
+check("pin: 61 on the commit and images it proved", m.pin_problems(S61, "p61", "o", pin_file), [])
+check("pin: 59 on another platform commit - refused", len(m.pin_problems(S59, "other", "o", pin_file)), 1)
+check("pin: proven by another ops commit's pin test - refused", len(m.pin_problems(S59, "p59", "o2", pin_file)), 1)
 # the round trip: tests/clickhouse-pin/run.sh's own lines that write the result, with the step files' images, read back
 # by pin_problems (they were tested apart, against hand-written JSON)
 pin_sh = open("tests/clickhouse-pin/run.sh").read()
 writer = pin_sh[pin_sh.index("{ printf '{\"59\""):pin_sh.index('} > "$result"') + len('} > "$result"')]
 written = os.path.join(tempfile.mkdtemp(), "written.json")
 subprocess.run(["bash", "-c", writer], check=True, env=dict(
-    os.environ, result=written, sha59="p59", old59=img[S59][0], new59=img[S59][1], pin59="24.8",
+    os.environ, result=written, ops_sha="o", sha59="p59", old59=img[S59][0], new59=img[S59][1], pin59="24.8",
     sha61="p61", old61=img[S61][0], new61=img[S61][1], pin61="25.8"))
 check("pin: the result run.sh writes, read back - 59 and 61 proven",
-      (m.pin_problems(S59, "p59", written), m.pin_problems(S61, "p61", written)), ([], []))
-json.dump({"61": {"platform": "p61", "images": img[S61]}}, open(pin_file, "w"))
-check("pin: 59 with no result of its own (the run failed it) - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
-json.dump({"59": {"platform": "p59", "images": ["24.8-alpine", "25.3-alpine"]}}, open(pin_file, "w"))
-check("pin: 59 proven for other images - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
+      (m.pin_problems(S59, "p59", "o", written), m.pin_problems(S61, "p61", "o", written)), ([], []))
+json.dump({"61": {"platform": "p61", "images": img[S61], "ops": "o"}}, open(pin_file, "w"))
+check("pin: 59 with no result of its own (the run failed it) - refused",
+      len(m.pin_problems(S59, "p59", "o", pin_file)), 1)
+json.dump({"59": {"platform": "p59", "images": ["24.8-alpine", "25.3-alpine"], "ops": "o"}}, open(pin_file, "w"))
+check("pin: 59 proven for other images - refused", len(m.pin_problems(S59, "p59", "o", pin_file)), 1)
 os.remove(pin_file)
-check("pin: no result at all - refused", len(m.pin_problems(S59, "p59", pin_file)), 1)
-check("pin: a step that does not move ClickHouse wants none", m.pin_problems(S47, "x", pin_file), [])
+check("pin: no result at all - refused", len(m.pin_problems(S59, "p59", "o", pin_file)), 1)
+check("pin: a step that does not move ClickHouse wants none", m.pin_problems(S47, "x", "o", pin_file), [])
 check("pin: exactly 59 and 61 move ClickHouse's image",
-      [n for n in names if m.pin_problems(n, "x", pin_file)], [S59, S61])
+      [n for n in names if m.pin_problems(n, "x", "o", pin_file)], [S59, S61])
 
 
 def record_59(pin):
@@ -837,8 +840,11 @@ def record_59(pin):
 
 
 check("record-proof 59 with its pin proven: recorded",
-      record_59({"59": {"platform": "p59", "images": img[S59]}}), "recorded")
+      record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}), "recorded")
 check("record-proof 59 without a pin result: refused, nothing recorded", record_59(None),
+      "refused, nothing recorded: True")
+check("record-proof 59 with a pin another ops commit's test proved: refused, nothing recorded",
+      record_59({"59": {"platform": "p59", "images": img[S59], "ops": "an earlier ops"}}),
       "refused, nothing recorded: True")
 
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

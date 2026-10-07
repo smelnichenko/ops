@@ -8,8 +8,9 @@
 # Measured 2026-10-06: both pins hold (602500 rows back on the older image); unpinned, 24.8 does not start on 25.8's
 # parts, and 25.8 detaches 26.8's (half the rows gone).
 #
-# A pass writes .upgrade/clickhouse-pin.json - per step, the platform commit and the two images it proved; the full
-# run starts this beside its build, and its proof of 59 and 61 wants that result for the commits and images they run.
+# A pass writes .upgrade/clickhouse-pin.json - per step, the platform commit and the two images it proved, and the ops
+# commit this test ran at (-dirty when its own files differ from it); the full run starts this beside its build, and
+# its proof of 59 and 61 wants that result for the commits and images they run.
 #
 # Usage: tests/clickhouse-pin/run.sh      (task test:clickhouse-pin)
 set -uo pipefail
@@ -34,6 +35,7 @@ pin() {  # step -> the compatibility value of platform's upgrade/<step file's na
 }
 # the commits read, before anything runs: the result names what was proven, not what the branch became since
 sha59=$(git -C "$ops/../platform" rev-parse "$(branch 59)") sha61=$(git -C "$ops/../platform" rev-parse "$(branch 61)")
+ops_sha=$(git -C "$ops" rev-parse HEAD)$([ -z "$(git -C "$ops" status --porcelain -- tests/clickhouse-pin)" ] || echo -dirty)
 pin59=$(pin 59) pin61=$(pin 61)
 [ -n "$pin59" ] && [ -n "$pin61" ] \
   || { echo "clickhouse-pin: no compatibility in steps 59/61's clickhouse-users.xml"; exit 2; }
@@ -105,6 +107,8 @@ check "61: $new61 pinned to $pin61 - $old61 reads its parts" 0 "$old61" "$new61"
 check "61: $new61 unpinned - $old61 does not (the run sees the fault)" 1 "$old61" "$new61" ""
 echo "clickhouse-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ] || exit 1
-{ printf '{"59": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s"},\n' "$sha59" "$old59" "$new59" "$pin59"
-  printf ' "61": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s"}}\n' "$sha61" "$old61" "$new61" "$pin61"
+{ printf '{"59": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s", "ops": "%s"},\n' \
+    "$sha59" "$old59" "$new59" "$pin59" "$ops_sha"
+  printf ' "61": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s", "ops": "%s"}}\n' \
+    "$sha61" "$old61" "$new61" "$pin61" "$ops_sha"
 } > "$result"
