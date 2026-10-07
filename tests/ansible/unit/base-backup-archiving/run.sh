@@ -18,6 +18,7 @@ cat > "$W/bin/kubectl" <<'STUB'
 echo "$*" >> "$CALLS"
 case "$*" in
   *ContinuousArchiving*) echo -n True ;;
+  *"get backups.postgresql.cnpg.io -o json"*) [ -n "${BACKUPS:-}" ] && echo "$BACKUPS" || echo '{"items": []}' ;;
   *currentPrimary*) echo -n pg-1 ;;
   *pg_switch_wal*) echo "${SWITCHED-000000010000000000000005}" ;;
   *pg_stat_archiver*) echo "$ARCHIVED" ;;
@@ -42,13 +43,13 @@ open(os.path.join(W, "hosts.yml"), "w").write(
     "all:\n  hosts:\n    target: {ansible_connection: local, ansible_python_interpreter: '{{ ansible_playbook_python }}'}\n")
 PY
 fails=0
-case_() {  # case_ <name> <archived WAL> <want rc 0|1> <backup taken: 1|0>
+case_() {  # case_ <name> <archived WAL> <want rc 0|1> <backup taken: 1|0> [<switches: 1|0>]
   : > "$W/calls"
   out=$(PATH="$W/bin:$PATH" CALLS="$W/calls" ARCHIVED=$2 ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" 2>&1)
   rc=$?; [ $rc = 0 ] || rc=1
   got="$rc $(grep -c 'BACKUP TAKEN' <<< "$out") $(grep -c pg_switch_wal "$W/calls")"
-  if [ "$got" = "$3 $4 1" ]; then echo "PASS $1"; return; fi
-  echo "FAIL $1: got '$got' (rc, backup, WAL switched), want '$3 $4 1'"; grep -E "fatal|FAILED" <<< "$out" | head -2
+  if [ "$got" = "$3 $4 ${5:-1}" ]; then echo "PASS $1"; return; fi
+  echo "FAIL $1: got '$got' (rc, backup, WAL switched), want '$3 $4 ${5:-1}'"; grep -E "fatal|FAILED" <<< "$out" | head -2
   fails=$((fails + 1))
 }
 case_ "the switched WAL archived: the backup taken" 000000010000000000000005 0 1
@@ -57,5 +58,15 @@ case_ "the archiver behind it, the condition True: refused, no backup" 000000010
 case_ "nothing archived yet: refused" "" 1 0
 SWITCHED= case_ "the switch answering no WAL file name: refused (anything archived would pass)" \
   000000010000000000000003 1 0
+# a backup of the cluster still running (a run that timed out left it): another is not stacked beside it
+backup() {  # backup <cluster> <phase>: the Backup list with one of that cluster's in that phase
+  printf '{"items": [{"metadata": {"name": "old"}, "spec": {"cluster": {"name": "%s"}}, "status": {"phase": "%s"}}]}' \
+    "$1" "$2"
+}
+BACKUPS=$(backup schnappy-production-postgres running) \
+  case_ "a backup of the cluster still running: refused, none stacked" 000000010000000000000005 1 0
+BACKUPS=$(backup schnappy-production-postgres completed) \
+  case_ "the cluster's earlier backup completed: taken" 000000010000000000000005 0 1
+BACKUPS=$(backup other running) case_ "another cluster's running: taken" 000000010000000000000005 0 1
 echo "base-backup-archiving: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

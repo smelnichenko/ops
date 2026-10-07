@@ -62,6 +62,18 @@
       delay: 10
       until: _archived.rc == 0 and _archived.stdout >= _switched.stdout
 
+    # a backup of this cluster still running (a run that timed out waiting left its Backup going): another beside it
+    # would stack two base backups on the store - refused until it ends
+    - name: No backup of the cluster running already
+      ansible.builtin.shell: >-
+        {{ kubectl }} get backups.postgresql.cnpg.io -o json | python3 -c 'import json, sys;
+        print(" ".join(b["metadata"]["name"] for b in json.load(sys.stdin)["items"]
+        if b["spec"]["cluster"]["name"] == sys.argv[1]
+        and (b.get("status") or {}).get("phase") not in ("completed", "failed")))' {{ cluster }}
+      register: _backups_running
+      changed_when: false
+      failed_when: _backups_running.rc != 0 or _backups_running.stdout | length > 0
+
     - name: A fresh base backup
       ansible.builtin.include_tasks: tasks/cnpg-backup.yml
 
