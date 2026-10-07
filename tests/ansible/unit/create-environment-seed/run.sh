@@ -15,7 +15,7 @@ mkdir "$W/bin"
 cat > "$W/bin/vault" <<'STUB'
 #!/bin/bash
 echo "vault $*" >> "$W/argv"
-echo "$3 $(cat)" >> "$W/stored"
+echo "$3 $(tr -d '\n')" >> "$W/stored"  # the body on one line, however jq printed it
 STUB
 cat > "$W/bin/jq" <<STUB
 #!/bin/bash
