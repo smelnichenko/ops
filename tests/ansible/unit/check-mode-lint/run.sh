@@ -99,8 +99,9 @@ try:
 except SystemExit:
     pass
 c.lint, sys.argv = real_lint, argv
-check("the playbooks a deploy task previews: linted by the default run (setup-keepalived's and setup-nexus' among them)",
-      {"setup-keepalived.yml", "setup-nexus.yml"} <= set(linted), True)
+check("the playbooks a deploy task previews: linted by the default run (setup-keepalived's, setup-nexus' and "
+      "setup-vault-pi's among them)", {"setup-keepalived.yml", "setup-nexus.yml", "setup-vault-pi.yml"} <= set(linted),
+      True)
 r = subprocess.run(["scripts/check-mode-lint.py"], capture_output=True, text=True)
 check("every step's playbook lines today: clean", (r.returncode, r.stdout.strip().endswith("check mode skips")),
       (0, True))

@@ -213,11 +213,11 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
 
   deploy:vault-pi:
-    desc: Deploy Pi Vault (Consul backend + Shamir + vault-unseal.service on both Pis)
+    desc: "Deploy Pi Vault (Consul backend + Shamir + vault-unseal.service on both Pis); task deploy:vault-pi -- --check --diff previews it"
     dir: deploy/ansible
     deps: [deploy:install]
     cmds:
-      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml {{.CLI_ARGS}}
 
   deploy:vault-keys-backup:
     desc: Back up Vault unseal keys + root token off the Pis to the controller (review L4)

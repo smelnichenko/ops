@@ -308,12 +308,15 @@
       changed_when: true
       when: not _vault_cert.stat.exists
 
+    # a preview (--check) signed nothing: its certificate would read empty
     - name: Install the signed cert
       ansible.builtin.copy:
         dest: /etc/vault.d/tls/vault-cert.pem
         content: "{{ _vault_signed.stdout }}\n"
         mode: '0644'
-      when: not _vault_cert.stat.exists
+      when:
+        - not _vault_cert.stat.exists
+        - not ansible_check_mode
 
     - name: Set TLS file ownership (root's, Vault reads them through its group)
       ansible.builtin.file:
@@ -529,6 +532,7 @@
     - name: Check init status
       ansible.builtin.command: vault operator init -status
       register: _init_status
+      check_mode: false  # a read: a preview (--check) reads it, and what reads it
       changed_when: false
       failed_when: _init_status.rc not in [0, 2]
 
@@ -857,6 +861,7 @@
       register: _status
       changed_when: false
       failed_when: false
+      check_mode: false  # a read: a preview (--check) shows it
 
     - name: Consul KV has vault/ keys
       ansible.builtin.shell: |
@@ -864,6 +869,7 @@
         consul kv get -keys vault/ 2>/dev/null | head -5
       register: _consul_keys
       changed_when: false
+      check_mode: false  # a read: a preview (--check) shows it
 
     - name: Summary
       ansible.builtin.debug:
