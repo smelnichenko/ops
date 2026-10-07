@@ -217,6 +217,9 @@ check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "ref
 check("done 42 (neither) asks nothing", done_calls(S42, False), ["checked"])
 check("done 47 with its base backup taken after the merges: none again, nothing asked",
       done_calls(S47, False, ev(f"{S47} base-backup")), ["checked"])
+# the merge's promise when its base backup was declined or failed: done takes it, asked first
+check("done 47 with no base backup at its merges (declined): done takes it", done_calls(S47, True),
+      ["asked", "playbooks/postgres-base-backup.yml", "checked"])
 
 
 # done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done
