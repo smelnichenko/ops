@@ -12,7 +12,8 @@
 #   keycloak-<realm>.json  each realm's partial export (clients, groups, roles) - a readable copy across Keycloak
 #                      versions, not a restore source: Keycloak masks client and identity-provider secrets in it
 #                      (**********) and leaves users out; Keycloak's restore is its database dump
-#   last-success       the run's time, written last - a check in the cluster alerts when it is old
+#   last-success       the run's time, written last - read by infra's pi-backup-check (a CronJob that alerts when
+#                      it is old; on infra's feat/pi-backup-check until the Pis' first backup: nothing alerts yet)
 # Uploaded with rclone and compared (rclone check); copies older than pi_backup_retention_days deleted by their names,
 # the newest pi_backup_keep kept whatever the clock says - in this bucket only (the store's key is its root key: an
 # empty bucket name would reach every bucket, so it stops the run). A failed Keycloak export still uploads the rest,
@@ -123,7 +124,7 @@
           pg_dumpall "${P[@]}" --globals-only > "$work/pg-globals.sql"
           # Keycloak's realms (users are in its database dump). Best effort: Keycloak down, or its admin's password
           # changed, must not throw away the Consul and Postgres backups above - they are uploaded, and the run then
-          # fails without a new last-success (the late check reports it)
+          # fails without a new last-success (pi-backup-check reports it, once it is in infra)
           keycloak() {
             local kc=http://127.0.0.1:8080 token realms realm
             # the password on curl's stdin, the token in a config curl reads from a pipe (printf is bash's own)
