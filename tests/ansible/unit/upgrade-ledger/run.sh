@@ -288,14 +288,16 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
                        "ten", "image_pins")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
-    m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged") if x in k}) or list(proof)
+    m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged", "tip") if x in k}) \
+        or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
         calls.append(("run", "tempo-flush.py" if flush else os.path.basename(cmd[0])))
         RUN_ARGS.append(list(cmd) + (["<tempo-flush.py>"] if flush else []))
         if revs and "rev-parse" in cmd:
-            return type("R", (), {"returncode": 0, "stdout": revs.get(cmd[-1], "abc1234")})()
+            ref = cmd[-1].removesuffix("^{commit}")
+            return type("R", (), {"returncode": 0, "stdout": revs.get(ref, "abc1234")})()
         return _Done()
     m.run = fake_run
     m.ansible = lambda *a: calls.append(("ansible", a[0])) or ansible_ok
@@ -327,7 +329,9 @@ for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "p
                        ("preview", m.preview, (S47,)), ("playbooks", m.playbooks, (S47,)), ("done", m.done, (S23,)),
                        ("merge", m.merge, (S47, "infra"))):
     got = phase_calls(fn, *args, proof=["PROOF-X"])
-    check(f"{name}: refused by the proof, nothing done", (len(got), got[-1][0], "PROOF-X" in got[-1][1]),
+    # (merge reads the branch's commit first - a read, the one its proof check is given)
+    did = [c for c in got if c != ("run", "git")]
+    check(f"{name}: refused by the proof, nothing done", (len(did), did[-1][0], "PROOF-X" in did[-1][1]),
           (1, "refused", True))
 # the proof read as production stands at each merge: a two-repo step's second merge judges the images between them
 PROOF_KW.clear()
@@ -336,7 +340,8 @@ phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47} merge
 check("merge reads the proof as production stands: 47's infra before the step, its platform between the merges",
       [k.get("partly", False) for k in PROOF_KW], [False, True])
 got = phase_calls(m.merge, "22-apt-cacher-ng", "platform", registry=["REGISTRY-X"])
-check("merge: refused by the registry check, nothing merged", (len(got), "REGISTRY-X" in got[-1][1]), (1, True))
+check("merge: refused by the registry check, nothing merged",
+      (len([c for c in got if c != ("run", "git")]), "REGISTRY-X" in got[-1][1]), (1, True))
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"))
 check("merge 57: the change shown (log, stat, diff) and asked about, merged, then Argo given its settle line's 50 "
       "minutes", [c for c in got if c[0] in ("run", "settled", "record", "asked")],
@@ -353,6 +358,8 @@ check("merge 57, local main behind origin's: refused before anything is asked or
 RUN_ARGS.clear()
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"),
                   revs={"upgrade/57-sonarqube-26.9": "c4ecked"})
+check("merge 57: the proof checked against the tip the merge then pushes (read once, first)",
+      PROOF_KW[-1].get("tip"), "c4ecked")
 check("merge 57: shown against origin's main, the checked tip handed to the merge",
       ([a[-1] for a in RUN_ARGS if "diff" in a][:1], [a[-1] for a in RUN_ARGS if a[0].endswith("upgrade-merge-step.sh")]),
       (["origin/main..c4ecked"], ["c4ecked"]))
@@ -604,7 +611,8 @@ check("begin with apps but no begun (cut short): may run again",
 
 # merge without the step's app set: refused before anything is pushed
 got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} begun"))
-check("merge without an app set: refused, nothing run", ([c for c in got if c[0] == "run"], got[-1][0],
+check("merge without an app set: refused, nothing run", ([c for c in got if c[0] == "run" and c != ("run", "git")],
+                                                          got[-1][0],
                                                           "no app set" in got[-1][1]), ([], "refused", True))
 
 # a red settle while main moved (a CD push during the wait) is inconclusive: refused, nothing recorded

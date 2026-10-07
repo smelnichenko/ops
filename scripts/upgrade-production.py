@@ -577,7 +577,7 @@ def proof_inventory(names, step, merged, partly=False):
     return inv.expected(names[:i + (1 if merged else 0)])
 
 
-def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, partly=False):
+def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, partly=False, tip=None):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
     the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled; `partly`:
     some of them (a two-repo step between its merges)."""
@@ -605,10 +605,11 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
                    f"steps' playbook defaults: {', '.join(changed)}")
     if repo:
         d = os.path.join(OPS, "..", repo)
-        branch = "upgrade/" + step
+        # the commit the merge pushes (`tip`, read once by merge()), else the branch as it is now
+        branch = tip or "upgrade/" + step
         run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
         base = merged_base(d, step)
-        pushed = None if base else pushed_base(d, step)
+        pushed = None if base else pushed_base(d, step, tip)
         if base:
             # merged already (an interrupted run pushed, then did not record): the change it brought, base..tag
             if run(["git", "-C", d, "merge-base", "--is-ancestor", MERGED_TAG + step, ORIGIN_MAIN]).returncode:
@@ -619,8 +620,8 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
             # pushed by a run cut short before its tag: the change against the main it went onto (against origin's
             # main, the branch itself now, it was empty - refused on every retry)
             if not pushed:
-                out.append(f"{repo} main is {branch} on origin with no {MERGED_TAG}{step}, and its main before is "
-                           f"unknown")
+                out.append(f"{repo} upgrade/{step} is in origin's main with no {MERGED_TAG}{step}, and its main before "
+                           f"is unknown")
             elif own_change(d, pushed, branch) != proof["repos"][repo]["own"]:
                 out.append(f"{repo} {branch}, pushed with no tag, brought a change other than the one the full run "
                            f"proved")
@@ -712,20 +713,20 @@ def merged_base(repo_dir, step):
     return tag.split()[1]
 
 
-def pushed_base(repo_dir, step):
-    """None unless origin's main is upgrade/<step> with no upgrade-merged/<step> tag (a run cut short after its push);
-    then the main it went onto as scripts/upgrade-merge-step.sh's take-up finds it - local main if not moved yet, else
-    where it was before the fast-forward - or "" when that is unknown."""
+def pushed_base(repo_dir, step, tip=None):
+    """None unless upgrade/<step>'s commit (`tip`, else the branch's) is in origin's main with no upgrade-merged/<step>
+    tag (a run cut short after its push - CD may have pushed on top since); then the main it went onto as
+    scripts/upgrade-merge-step.sh's take-up finds it - local main if not moved yet, else where it was before the
+    fast-forward - or "" when that is unknown."""
     git = lambda *a: run(["git", "-C", repo_dir, *a], capture_output=True)
-    branch = "upgrade/" + step
     if git("rev-parse", "-q", "--verify", f"refs/tags/{MERGED_TAG}{step}").returncode == 0:
         return None
-    tip = git("rev-parse", branch).stdout.strip()
-    if not tip or git("rev-parse", ORIGIN_MAIN).stdout.strip() != tip:
+    tip = tip or git("rev-parse", "upgrade/" + step).stdout.strip()
+    if not tip or git("merge-base", "--is-ancestor", tip, ORIGIN_MAIN).returncode:
         return None
     main = git("rev-parse", "main").stdout.strip()
     base = main if main != tip else git("rev-parse", "main@{1}").stdout.strip()
-    ok = base and base != tip and git("merge-base", "--is-ancestor", base, branch).returncode == 0
+    ok = base and base != tip and git("merge-base", "--is-ancestor", base, tip).returncode == 0
     return base if ok else ""
 
 
@@ -823,15 +824,17 @@ def merge(step, repo):
     partly = any(s == step and e == "merged" for _, s, e, _ in events)  # the step's other repo merged already
     if not merged:
         d = os.path.join(OPS, "..", repo)
-        refuse(proof_problems(step, names, repo, defaulted(events), partly=partly) + registry_problems(step))
+        # the branch's commit, read once before its checks: the one the proof is checked against, shown, pulled for and
+        # pushed - a restack between the checks and the push (another shell) no longer pushes a commit nothing checked
+        tip = run(["git", "-C", d, "rev-parse", "-q", "--verify", f"upgrade/{step}^{{commit}}"],
+                  capture_output=True).stdout.strip() or None
+        refuse(proof_problems(step, names, repo, defaulted(events), partly=partly, tip=tip) + registry_problems(step))
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
-        # the branch's commit as checked: the one shown, and the only one the merge pushes
-        tip = run(["git", "-C", d, "rev-parse", f"upgrade/{step}"], capture_output=True, check=True).stdout.strip()
         if merged_base(d, step):
             # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
             print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
-        elif pushed_base(d, step):
+        elif pushed_base(d, step, tip):
             # pushed by an earlier run cut short before its tag (its change checked above): tagged, recorded - nothing
             # asked or pushed again
             print(f"{repo}: {step} was pushed already (no {MERGED_TAG}{step} yet) - tagging it, recording it")

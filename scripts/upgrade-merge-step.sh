@@ -30,27 +30,31 @@ git -C "$dir" fetch -q origin main
 git -C "$dir" rev-parse -q --verify "refs/heads/$branch" > /dev/null \
   || { echo "REFUSED: no $repo branch $branch" >&2; exit 1; }
 tag="upgrade-merged/$step"
-# pushed by an earlier run cut short before its tag (a push the server took, the connection gone): origin's main is
-# the branch and no tag says so - tagged now with the main it went onto (local main if not moved yet, else where it
-# was before the fast-forward), so the re-run is a resume, not a refusal of a change already live
-if [ "$(git -C "$dir" rev-parse origin/main)" = "$(git -C "$dir" rev-parse "$branch")" ] \
+# the branch's commit, read once: the one checked (the caller's tip), logged, pushed and tagged - a branch moving under
+# the run (a restack in another shell) is refused below, and never pushed by its name
+head=$(git -C "$dir" rev-parse "$branch")
+# pushed by an earlier run cut short before its tag (a push the server took, the connection gone): the branch's commit
+# is in origin's main (CD may have pushed on top since) and no tag says so - tagged now with the main it went onto
+# (local main if not moved yet, else where it was before the fast-forward), so the re-run is a resume, not a refusal
+# of a change already live
+if git -C "$dir" merge-base --is-ancestor "$head" origin/main \
    && ! git -C "$dir" rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
-  if [ "$(git -C "$dir" rev-parse main)" != "$(git -C "$dir" rev-parse "$branch")" ]; then
+  if [ "$(git -C "$dir" rev-parse main)" != "$head" ]; then
     base=$(git -C "$dir" rev-parse main)
   else
     base=$(git -C "$dir" rev-parse 'main@{1}')
   fi
-  [ "$base" != "$(git -C "$dir" rev-parse "$branch")" ] && git -C "$dir" merge-base --is-ancestor "$base" "$branch" \
-    || { echo "REFUSED: $repo main is $branch on origin with no $tag, and its main before is unknown" >&2; exit 1; }
+  [ "$base" != "$head" ] && git -C "$dir" merge-base --is-ancestor "$base" "$head" \
+    || { echo "REFUSED: $repo $branch is in origin's main with no $tag, and its main before is unknown" >&2; exit 1; }
   [ "$(git -C "$dir" rev-parse --abbrev-ref HEAD)" = main ] \
     || { echo "REFUSED: $repo is on $(git -C "$dir" rev-parse --abbrev-ref HEAD) - check out main first" >&2; exit 1; }
-  git -C "$dir" merge --ff-only -q "$branch"
-  git -C "$dir" tag -a -m "base $base" "$tag" "$branch"
+  git -C "$dir" merge --ff-only -q "$head"
+  git -C "$dir" tag -a -m "base $base" "$tag" "$head"
   echo "$repo: $branch was pushed already (a run cut short before its tag) - tagged $tag," \
     "base $(git -C "$dir" rev-parse --short "$base")"
   exit 0
 fi
-[ -z "$only" ] || { echo "REFUSED: take-up only, and $repo $branch is not origin's main without $tag" >&2; exit 1; }
+[ -z "$only" ] || { echo "REFUSED: take-up only, and $repo $branch is not in origin's main without $tag" >&2; exit 1; }
 [ "$(git -C "$dir" rev-parse main)" = "$(git -C "$dir" rev-parse origin/main)" ] \
   || { echo "REFUSED: $repo main is not origin/main" >&2; exit 1; }
 # stacked branches all contain main: what matters is that the repo's previous step branch is merged already, so this
@@ -66,20 +70,20 @@ if [ -n "$prev" ]; then
   git -C "$dir" merge-base --is-ancestor "$prev" main \
     || { echo "REFUSED: $repo $prev (the step before) is not merged into main yet" >&2; exit 1; }
 fi
-git -C "$dir" merge-base --is-ancestor main "$branch" \
-  || { echo "REFUSED: $repo $branch does not contain main - rebase it" >&2; exit 1; }
-[ -z "$tip" ] || [ "$(git -C "$dir" rev-parse "$branch")" = "$tip" ] \
+[ -z "$tip" ] || [ "$head" = "$tip" ] \
   || { echo "REFUSED: $repo $branch moved since it was checked (${tip:0:10}) - nothing pushed" >&2; exit 1; }
-echo "$repo: main $(git -C "$dir" rev-parse --short main) -> $branch $(git -C "$dir" rev-parse --short "$branch"):"
-git -C "$dir" log --oneline "main..$branch"
+git -C "$dir" merge-base --is-ancestor main "$head" \
+  || { echo "REFUSED: $repo $branch does not contain main - rebase it" >&2; exit 1; }
+echo "$repo: main $(git -C "$dir" rev-parse --short main) -> $branch $(git -C "$dir" rev-parse --short "$head"):"
+git -C "$dir" log --oneline "main..$head"
 current=$(git -C "$dir" rev-parse --abbrev-ref HEAD)
 [ "$current" = main ] || { echo "REFUSED: $repo is on $current - check out main first" >&2; exit 1; }
 base=$(git -C "$dir" rev-parse main)
 # pushed first, then local main moved: a push rejected (CD pushed meanwhile) leaves local main as origin's
-git -C "$dir" push -q origin "$branch:main"
-git -C "$dir" merge --ff-only -q "$branch"
+git -C "$dir" push -q origin "$head:refs/heads/main"
+git -C "$dir" merge --ff-only -q "$head"
 # the step marked merged, with the main it went onto: the refs check, the restack and the merge order skip merged steps
 # (their branches are in main now), and a re-run after an interrupted ledger record finds the step's own change
 # (base..tag) to compare with its proof
-git -C "$dir" tag -a -f -m "base $base" "$tag" "$branch"
+git -C "$dir" tag -a -f -m "base $base" "$tag" "$head"
 echo "$repo: main is $(git -C "$dir" rev-parse --short main), pushed; tagged $tag"

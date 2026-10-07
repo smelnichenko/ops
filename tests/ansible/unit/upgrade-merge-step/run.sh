@@ -114,6 +114,43 @@ check "nothing pushed" 0 "$origin10" git -C "$W/origin.git" rev-parse main
 g branch -q -f upgrade/10-j "$checked"
 check "the tip it checked: merged" 0 "tagged upgrade-merged/10-j" "$M" 10-j infra "$checked"
 
+# the branch moved while the merge runs, after its tip was checked (a restack in another shell): the commit checked is
+# the one pushed and tagged - the push by the branch's name took the moved one, unproven
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/11-k.txt"
+g checkout -q -b upgrade/11-k; echo k >> "$W/infra/f"; g commit -q -am k
+checked11=$(g rev-parse HEAD)
+echo moved >> "$W/infra/f"; g commit -q -am moved11; moved11=$(g rev-parse HEAD)
+g checkout -q main; g branch -q -f upgrade/11-k "$checked11"
+mkdir -p "$W/bin"
+cat > "$W/bin/git" <<STUB
+#!/bin/bash
+# the branch moved once, at the script's first log - after its tip check, before its push
+if [ "\$1" = -C ] && [ "\$3" = log ] && [ ! -e "$W/moved" ]; then
+  : > "$W/moved"; $(command -v git) -C "$W/infra" update-ref refs/heads/upgrade/11-k "$moved11"
+fi
+exec $(command -v git) "\$@"
+STUB
+chmod +x "$W/bin/git"
+check "the branch moved mid-run, after the tip check: the merge still runs" 0 "tagged upgrade-merged/11-k" \
+  env PATH="$W/bin:$PATH" "$M" 11-k infra "$checked11"
+check "the moved branch did move (the fixture worked)" 0 "$moved11" g rev-parse upgrade/11-k
+check "origin's main is the commit checked, not the moved branch" 0 "$checked11" git -C "$W/origin.git" rev-parse main
+check "its tag is the commit checked" 0 "$checked11" g rev-parse "upgrade-merged/11-k^{commit}"
+
+# pushed by a run cut short before its tag, then CD pushed on top of it: still a push to take up - the proof check
+# compared with origin's main, which is no longer the branch, said "restack it", and the restack made the change empty
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/12-l.txt"
+g checkout -q -b upgrade/12-l; echo l >> "$W/infra/f"; g commit -q -am l; g checkout -q main
+main12=$(g rev-parse main)
+g push -q origin upgrade/12-l:main
+git -C "$W/other" pull -q --ff-only origin main
+echo cd2 >> "$W/other/g"; git -C "$W/other" commit -q -am cd2; git -C "$W/other" push -q origin main
+g fetch -q origin main
+check "pushed untagged, CD on top: its change, against the main it went onto, is the proven one" 0 "PROBLEMS: none" \
+  proof 12-l "$main12..upgrade/12-l"
+check "then taken up: tagged" 0 "pushed already" "$M" 12-l infra take-up
+check "its base the main before the push" 0 "base $main12" base_of 12-l
+
 # the digests a step's branch pins an image tag to, read from the branch (production's prepull pulls the reference
 # production runs); a repo the step declares with neither its branch nor its merged tag refuses
 printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/08-h.txt"
