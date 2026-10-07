@@ -32,10 +32,14 @@ for f in ("deploy/ansible/playbooks/setup-istio.yml", "deploy/ansible/playbooks/
     for t in looks:
         expr = t["kubernetes.core.helm"]["values"].split("lookup('ansible.builtin.pipe', ", 1)[1]
         expr = expr.rsplit(") | from_yaml", 1)[0]
+        # each rendered command run as the pipe lookup runs it - through a shell: a name that broke out of its quotes
+        # runs its touch (checked at the end)
         cmd = render("{{ " + expr + " }}", infra_dir=hostile, infra_values_ref="main")
         check(f"{f}: {t['name']}: the directory one argument", shlex.split(cmd)[2] == hostile, cmd)
+        subprocess.run(["bash", "-c", cmd], capture_output=True)
         cmd = render("{{ " + expr + " }}", infra_dir="/infra", infra_values_ref=hostile_ref)
         check(f"{f}: {t['name']}: the ref one argument", shlex.split(cmd)[4].startswith(hostile_ref + ":"), cmd)
+        subprocess.run(["bash", "-c", cmd], capture_output=True)
     sync = [t for t in tasks if str(t.get("name", "")).startswith("Infra's local main is origin's")]
     check(f"{f}: the local main checked against origin's", len(sync) == 1, [t.get("name") for t in tasks][:5])
     if not sync:
