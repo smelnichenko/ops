@@ -257,19 +257,28 @@ def ten_now():
     return at
 
 
+def claim_problems(step, obj):
+    """This run's claim on the step (`obj`: the ledger read), if it holds one, closed meanwhile - released by hand
+    while the run was alive, maybe claimed by another phase since."""
+    token = next((t for s, _, t in CLAIMED if s == step), None)
+    if not token:
+        return []
+    started = open_start([(at, e, a) for at, s, e, a in parse_events(obj.get("data", {}).get("events", ""))
+                          if s == step])
+    if started and started[1][-1] == token:
+        return []
+    return [f"this run's claim on {step} was closed meanwhile (deploy:upgrade:release?)"]
+
+
 def record(step, event, *args, obj=None, at=None):
     """Append one event - kubectl replace with the read resourceVersion (`obj`'s, when given: the read a decision was
     made on): a concurrent change refuses. `at`: the event's time (now, by this machine's clock, without)."""
     obj = obj if obj is not None else read_ledger()[0]
     # a run whose claim on the step was closed meanwhile (released by hand, the run alive) records nothing more: its
     # events would land in whatever claimed the step after
-    token = next((t for s, _, t in CLAIMED if s == step), None)
-    if token:
-        started = open_start([(at, e, a) for at, s, e, a in parse_events(obj.get("data", {}).get("events", ""))
-                              if s == step])
-        if not started or started[1][-1] != token:
-            sys.exit(f"REFUSED: this run's claim on {step} was closed meanwhile (deploy:upgrade:release?) - "
-                     f"{event} not recorded")
+    lost = claim_problems(step, obj)
+    if lost:
+        sys.exit(f"REFUSED: {lost[0]} - {event} not recorded")
     at = at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = " ".join((at, step, event, *args))
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
@@ -910,6 +919,9 @@ def merge(step, repo):
                     flushed = run(["ssh", TEN, "python3", "-"], input=script.read()).returncode == 0
                 refuse([] if flushed
                        else ["Tempo's flush did not complete (above) - nothing merged"])
+            # the claim read again right before the push: released by hand during the yes, the pre-pull or the flush
+            # (the run looked dead), the change would go live under no claim - the next record refuses only after it
+            refuse([f"{p} - nothing merged" for p in claim_problems(step, read_ledger()[0])])
             refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]).returncode == 0
                    else [f"the {repo} merge failed (above)"])
         sha = run(["git", "-C", d, "rev-parse", MERGED_TAG + step + "^{commit}"], capture_output=True,

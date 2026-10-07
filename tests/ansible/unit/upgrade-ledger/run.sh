@@ -285,9 +285,10 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
                 pushed=None, revs=None, ten_out="abc1234"):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
-                       "ten", "image_pins")
+                       "ten", "image_pins", "read_ledger")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
+    m.read_ledger = lambda: ({"data": {"events": ""}}, [])  # the claim's re-read before a push (none claimed here)
     m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged", "tip") if x in k}) \
         or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
@@ -760,6 +761,51 @@ check("its claim released meanwhile: refused, nothing written",
 check("released, and another phase claimed it: refused", recorded(
     [f"{S47} start merge infra host:1:aa", f"{S47} end merge released host:1:aa", f"{S47} start preview host:2:bb"]),
     ("refused", 0))
+# the merge re-reads its claim right before the push: one released by hand during the yes, the pre-pull or Tempo's
+# flush (its run looked dead) pushes nothing - the next write would refuse only after the change went live
+def merged_by(released_at_confirm):
+    calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "proof_problems", "registry_problems", "step_apps",
+                                                  "merged_base", "pushed_base", "run", "confirm", "prepull_images",
+                                                  "step_info", "settled", "record", "read_ledger")}
+    claimed = f"{S47} start merge infra host:1:aa"
+    text = [claimed]
+    class Out:
+        def __init__(self, stdout=""):
+            self.returncode, self.stdout = 0, stdout
+    def run(argv, **_):
+        calls.append(os.path.basename(argv[0]) if argv[0].endswith((".sh", ".py")) else argv[0])
+        return Out("c" * 40 if "rev-parse" in argv else "")
+    def confirm(_):
+        if released_at_confirm:
+            text.append(f"{S47} end merge released host:1:aa")
+        return True
+    def ledger_for(step, phase, arg=None):
+        m.CLAIMED.append((step, phase, "host:1:aa"))
+        return names, ev(claimed), None
+    m.ledger_for, m.run, m.confirm = ledger_for, run, confirm
+    m.proof_problems = m.registry_problems = lambda *a, **k: []
+    m.step_apps, m.prepull_images = lambda *a: ["app"], lambda *a: []
+    m.merged_base = m.pushed_base = lambda *a: None
+    m.step_info = lambda s: {"tempo_flush": [], "settle": 1, "base_backup_after_merge": False, "branches": ["infra"]}
+    m.settled = lambda *a: (True, {m.URLS["infra"]: "r"}, True)
+    m.record = lambda st, e, *a, **k: calls.append(e)
+    lines = lambda: "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(text))
+    m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": lines()}},
+                             m.parse_events(lines()))
+    m.CLAIMED.clear()
+    try:
+        m.merge(S47, "infra")
+        got = "merged"
+    except SystemExit as e:
+        got = "refused" if "closed meanwhile" in str(e) else str(e)
+    finally:
+        m.CLAIMED.clear()
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return got, "upgrade-merge-step.sh" in calls, "merged" in calls
+check("its claim open through the yes: pushed, recorded", merged_by(False), ("merged", True, True))
+check("its claim released during the yes: refused before the push, nothing pushed or recorded", merged_by(True),
+      ("refused", False, False))
 # release closes a start only when the run that made it is gone - not one alive on this host (a process this test
 # starts, its command line naming the script, and stops)
 import socket, subprocess, time
