@@ -6,6 +6,10 @@ vars:
   TARGET_HOST: '{{.TARGET_HOST | default "192.168.11.2"}}'
   TARGET_USER: '{{.TARGET_USER | default "sm"}}'
   SRC_DIR: '{{.SRC_DIR | default "../"}}'
+  # the full run's deciding settles after the build and each step: a 120 s quiet window, green held 2 polls 5 s apart -
+  # a step's restarts are judged again by the next step's settle (its proof recorded only then), the last step's by
+  # test:upgrade:final-settle at production's own values (scripts/upgrade-production.py settle-values)
+  STEP_SETTLE: -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
 
 tasks:
   default:
@@ -454,7 +458,7 @@ tasks:
       # 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up, and each restart began 300 s
       # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by the restart history once two
       # steps have recorded it (step 00's settle records only)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e record_apps=true {{.STEP_SETTLE}}
       # data every upgrade step must keep (verified after each: test:upgrade:step)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/data-check.yml -e mode=seed
       # data of the one-way observability steps (ClickHouse rows, Grafana dashboards, a Tempo trace, Mimir's past)
@@ -567,7 +571,7 @@ tasks:
       # its quiet window 120 s, held green for 2 polls of 5 s (production's own settle keeps 300 s and 4 polls of 10 s):
       # it took 2.3 of a step's 5.4 minutes (full run 2026-10-06), mostly waiting out 300 s after a restart; a crash
       # loop slower than 120 s settles here once, and the restart history fails the next step on it
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}} -e restarts_expected={{.RESTARTS_CONTROL_PLANE}} -e restart_quiet=120 -e stable_polls=2 -e poll_seconds=5
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}} -e restarts_expected={{.RESTARTS_CONTROL_PLANE}} {{.STEP_SETTLE}}
       # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke
       # (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
       - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}'
@@ -732,8 +736,11 @@ tasks:
     vars:
       OUT_OF_SYNC:
         sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
+      # production's own values, from where its settle reads them
+      SETTLE:
+        sh: scripts/upgrade-production.py settle-values
     cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step=final -e restart_quiet=300 -e stable_polls=4 -e poll_seconds=10
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step=final {{.SETTLE}}
 
   test:clickhouse-pin:
     desc: "The ClickHouse rollback pin with the real images, in docker here: steps 59 and 61's newer image pinned to the older version writes and merges parts, the older reads every row back; unpinned it must not"

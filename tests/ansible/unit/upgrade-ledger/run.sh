@@ -533,11 +533,11 @@ a42, a47 = settle_args(S42), settle_args(S47)
 check("the deciding check of 42: its restarts expected", (a42["restart_step"], a42["restarts_expected"]), (S42, True))
 check("the deciding check of 47: its restarts judged", (a47["restart_step"], a47["restarts_expected"]), (S47, False))
 first = settle_args(S47, deciding=False)
-check("the first check: no restart history, the 300 s window, no since",
-      (first.get("restart_step"), first["quiet"], first.get("restarted_since")), (None, 300, None))
+check("the first check: no restart history, no since", (first.get("restart_step"), first.get("restarted_since")),
+      (None, None))
 at = T0 + datetime.timedelta(minutes=20)
 check("the deciding check: restarts judged since the first green check's time, not a window before it",
-      (settle_args(S47, at)["restarted_since"], settle_args(S47, at)["quiet"]), (at, 300))
+      settle_args(S47, at)["restarted_since"], at)
 
 
 REVS = {m.URLS["infra"]: "infra-sha", m.URLS["platform"]: "platform-sha"}
@@ -553,7 +553,7 @@ def settled_cmd(apps_seen="", returned=None, **kw):
     m.main_revisions = lambda: dict(REVS)
     m.run = lambda cmd, **k: seen.append(cmd[-1]) or _Out()
     try:
-        got = m.settled(1, 4, 300, [], **kw)
+        got = m.settled(1, [], **kw)
         if returned is not None:
             returned.extend(got[2])
     finally:
@@ -565,6 +565,9 @@ def settled_cmd(apps_seen="", returned=None, **kw):
 check("settled: --restarts-expected when expected", "--restarts-expected" in settled_cmd(restart_step=S42,
                                                                                          restarts_expected=True), True)
 check("settled: none otherwise", "--restarts-expected" in settled_cmd(restart_step=S47), False)
+# production's settle, every call of it: green held 4 polls 10 s apart, no container restarted in the last 300 s
+# (CrashLoopBackOff's longest back-off) - no phase can pass a shorter window
+check("settled: production's values", "--poll 10 --stable-polls 4 --restart-quiet 300" in settled_cmd(), True)
 # Argo judged on the commits main has now - each repo's own (with none, any commit passed the settle)
 import json, re, shlex
 check("settled: Argo judged against main's commits, each repo's",
@@ -659,7 +662,7 @@ revs = iter([dict.fromkeys(m.URLS.values(), "a"), dict.fromkeys(m.URLS.values(),
 m.main_revisions = lambda: next(revs)
 m.run = lambda cmd, **k: _Out()
 try:
-    m.settled(1, 4, 300, [])
+    m.settled(1, [])
     got = "returned"
 except SystemExit as e:
     got = str(e)
@@ -671,7 +674,7 @@ saved = {k: getattr(m, k) for k in ("main_revisions", "run")}
 m.main_revisions = lambda: dict.fromkeys(m.URLS.values(), "a")
 m.run = lambda cmd, **k: _Out()
 try:
-    got = m.settled(1, 4, 300, [])[0]
+    got = m.settled(1, [])[0]
 finally:
     for k, v in saved.items():
         setattr(m, k, v)

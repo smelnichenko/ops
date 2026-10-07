@@ -65,16 +65,46 @@ case_ "(again, for the digests' files)" none 0 \
   "step 01-a;digests;step 02-b;digests;proof 01-a;step 03-c;digests;proof 02-b;final-settle 03-c;proof 03-c"
 check "each step's digests in a file of its own" "$(ls "$W/run/.upgrade/step-digests" | paste -sd' ')" \
   "01-a.txt 02-b.txt 03-c.txt"
-# the final settle as the Taskfile holds it: production's quiet window and polls, a restart-history label of its own
-python3 - <<'PY' || fails=$((fails + 1))
-import sys, yaml
-t = yaml.safe_load(open("Taskfile.yml"))["tasks"].get("test:upgrade:final-settle")
-cmd = " ".join(c.get("cmd", "") if isinstance(c, dict) else str(c) for c in (t or {}).get("cmds") or [])
-want = ["restart_quiet=300", "stable_polls=4", "poll_seconds=10", "restart_step=final", "argo-settled.yml"]
-missing = [w for w in want if w not in cmd]
-print(("PASS" if not missing else "FAIL") + " the final settle at production's values, its own history label"
-      + (f": missing {missing}" if missing else ""))
-sys.exit(1 if missing else 0)
+# the final settle as the Taskfile holds it: production's own values - what scripts/upgrade-production.py settle-values
+# prints, the values its settle sends argo-settled.py on ten - and a restart-history label of its own; the step settles
+# one set of values (STEP_SETTLE), shorter
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' || fails=$((fails + 1))
+import contextlib, importlib.machinery, importlib.util, io, re, subprocess, sys
+import yaml
+l = importlib.machinery.SourceFileLoader("up", "scripts/upgrade-production.py")
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", l))
+l.exec_module(m)
+bad = []
+tf = yaml.safe_load(open("Taskfile.yml"))
+t = tf["tasks"].get("test:upgrade:final-settle") or {}
+cmd = " ".join(c.get("cmd", "") if isinstance(c, dict) else str(c) for c in t.get("cmds") or [])
+used = re.findall(r"\{\{\s*\.(\w+)\s*\}\}", cmd)
+values = [v for v in used if (t.get("vars") or {}).get(v, {}) == {"sh": "scripts/upgrade-production.py settle-values"}]
+if not values:
+    bad.append("the final settle does not take scripts/upgrade-production.py settle-values")
+if "restart_step=final" not in cmd or "argo-settled.yml" not in cmd:
+    bad.append("the final settle: argo-settled.yml with a restart_step of its own")
+if re.search(r"restart_quiet=|stable_polls=|poll_seconds=", cmd):
+    bad.append("the final settle restates a value")
+printed = subprocess.run(["scripts/upgrade-production.py", "settle-values"], capture_output=True, text=True).stdout.split()
+sent = []
+m.main_revisions = lambda: {u: "r" for u in m.URLS.values()}
+m.remote = lambda host, command, stdin=None, timeout=None, capture=True: sent.append(command) or type(
+    "R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+with contextlib.redirect_stdout(io.StringIO()):
+    m.settled(1, [])
+flags = dict(re.findall(r"--(poll|stable-polls|restart-quiet) (\S+)", sent[0]))
+want = ["-e", f"restart_quiet={flags.get('restart-quiet')}", "-e", f"stable_polls={flags.get('stable-polls')}", "-e",
+        f"poll_seconds={flags.get('poll')}"]
+if printed != want:
+    bad.append(f"settle-values prints {printed}, production's settle sends {want}")
+steps = [c.get("cmd", "") for n in ("test:upgrade:argo", "test:upgrade:step") for c in tf["tasks"][n]["cmds"]
+         if isinstance(c, dict) and "argo-settled.yml" in c.get("cmd", "") and "stable_polls=1" not in c.get("cmd", "")]
+if len(steps) != 2 or any("{{.STEP_SETTLE}}" not in c or re.search(r"restart_quiet=|stable_polls=", c) for c in steps):
+    bad.append(f"the build's (test:upgrade:argo) and the steps' deciding settles take STEP_SETTLE alone: {steps}")
+print(("PASS" if not bad else "FAIL") + " the final settle at production's own values, the step settles one set"
+      + "".join("\n  " + b for b in bad))
+sys.exit(1 if bad else 0)
 PY
 echo "full-run-proof-order: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

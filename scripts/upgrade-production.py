@@ -46,6 +46,8 @@ Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py record-proof <step> <infra sha> <platform sha>
        scripts/upgrade-production.py prepull-images <step>   (the images the merge pre-pulls, by the branches' pins:
                                                              the Vagrant step runs the pre-pull with them)
+       scripts/upgrade-production.py settle-values           (production's settle as argo-settled.yml's -e: the full
+                                                             run's final settle takes them)
 """
 import base64
 import datetime
@@ -77,6 +79,9 @@ URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https:/
 TEST_NAMESPACES = "schnappy-test"
 SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
 SETTLE_MINUTES = 30
+# production's settle: green held SETTLE_STABLE polls SETTLE_POLL s apart, no container restarted in the last
+# SETTLE_QUIET s (CrashLoopBackOff's longest back-off) - the full run's final settle takes the same (settle-values)
+SETTLE_POLL, SETTLE_STABLE, SETTLE_QUIET = 10, 4, 300
 # preview environments come and go (an Argo app per pull request): never part of the app set a step must keep
 PREVIEW_APPS = r"^pr-\d+-"
 PREVIEW_NAMESPACES = r"^schnappy-pr-\d+$"  # ...and their pods
@@ -374,10 +379,9 @@ def main_revisions():
     return revs
 
 
-def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=None, restarts_expected=False,
-            restarted_since=None):
+def settled(minutes, allow_out_of_sync, apps=None, restart_step=None, restarts_expected=False, restarted_since=None):
     """argo-settled.py on ten, with ten's own kubeconfig: every app Synced (or allowed) and Healthy on main's commits,
-    every pod ready, held for `stable` polls, no container restarted in the last `quiet` seconds nor at or after
+    every pod ready, held for SETTLE_STABLE polls, no container restarted in the last SETTLE_QUIET seconds nor at or after
     `restarted_since`; with `apps`, exactly those apps (preview environments aside); with `restart_step`, no pod
     restarting in this step and the done one before it - unless `restarts_expected` (the step restarts the control
     plane: recorded, not judged). (green, main's revisions, the apps it saw - preview environments left out). Red with
@@ -386,7 +390,7 @@ def settled(minutes, stable, quiet, allow_out_of_sync, apps=None, restart_step=N
     revs = main_revisions()
     script = open(os.path.join(inv.UPGRADE, "files", "argo-settled.py")).read()
     cmd = (f"MIRROR_REVISIONS={shlex.quote(json.dumps(revs))} python3 - --kubeconfig \"$HOME/.kube/config\" "
-           f"--minutes {minutes} --poll 10 --stable-polls {stable} --restart-quiet {int(quiet)} "
+           f"--minutes {minutes} --poll {SETTLE_POLL} --stable-polls {SETTLE_STABLE} --restart-quiet {SETTLE_QUIET} "
            f"--allow-out-of-sync {shlex.quote(','.join(allow_out_of_sync))} --print-apps "
            f"--allow-extra-apps {shlex.quote(PREVIEW_APPS)} --ignore-namespaces {shlex.quote(PREVIEW_NAMESPACES)}")
     if apps:
@@ -862,7 +866,7 @@ def begin(step):
     ok = inventory_check(applied_steps(events))
     # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
     before = [a for _, s, e, a in events if e == "apps" and s != step]
-    ok_settled, _, seen = settled(15, 4, 300, last_done_out_of_sync(events),
+    ok_settled, _, seen = settled(15, last_done_out_of_sync(events),
                                   before[-1][0].split(",") if before else None)
     refuse([] if ok and ok_settled and seen else ["production is not as the done steps leave it (above)"])
     # the app set first: a begin cut short between the two writes runs again (not begun), it is not stranded
@@ -952,7 +956,7 @@ def merge(step, repo):
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
     info = step_info(step)
-    ok, revs, _ = settled(info["settle"], 4, 300, [], apps)
+    ok, revs, _ = settled(info["settle"], [], apps)
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
     # a barman-after-merge step (PostgreSQL 18): its base backup as soon as the merge that makes the new major live
@@ -1041,7 +1045,7 @@ def check(step, since=None, deciding=False):
     ok = inventory_check(sorted(set(applied_steps(events)) | {step}))
     apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
     info = step_info(step)
-    ok_settled, _, _ = settled(CHECK_MINUTES, 4, 300, info["out_of_sync"], apps, step if deciding else None,
+    ok_settled, _, _ = settled(CHECK_MINUTES, info["out_of_sync"], apps, step if deciding else None,
                                info["restarts_expected"], since)
     return ok and ok_settled
 
@@ -1124,7 +1128,9 @@ def main():
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof,
-               ("prepull-images", 1): lambda step: print(",".join(prepull_images(step, proven=False)))}
+               ("prepull-images", 1): lambda step: print(",".join(prepull_images(step, proven=False))),
+               ("settle-values", 0): lambda: print(f"-e restart_quiet={SETTLE_QUIET} -e stable_polls={SETTLE_STABLE} "
+                                                   f"-e poll_seconds={SETTLE_POLL}")}
     if a[:1] == ["check"] and len(a) == 2:
         sys.exit(0 if check(a[1]) else 1)
     fn = actions.get((a[0] if a else "", len(a) - 1))
