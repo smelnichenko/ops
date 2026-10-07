@@ -25,16 +25,12 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: vagrant-only.yml
 
-    # read once, from a public resolver - the LAN's resolves pmon.dev to production's LAN address
-    - name: Production's public address
+    # read once, from a public resolver (the LAN's resolves pmon.dev to production's LAN address): every A record,
+    # each a public address off the LAN - else refused (public-addresses.py): an empty lookup dropped nothing, a
+    # DNS-intercepting router's LAN answer made the proof probe an address dropped already
+    - name: Production's public addresses
       ansible.builtin.set_fact:
-        production_public: "{{ lookup('ansible.builtin.pipe', 'dig +short @1.1.1.1 pmon.dev A | tail -n 1') }}"
-
-    - name: It is an address (an empty or failed lookup would drop nothing)
-      ansible.builtin.assert:
-        that: production_public is match('^[0-9]{1,3}([.][0-9]{1,3}){3}$')
-        fail_msg: "REFUSED: pmon.dev's public address read as '{{ production_public }}'"
-        quiet: true
+        production_public: "{{ lookup('ansible.builtin.pipe', 'python3 ' ~ playbook_dir ~ '/public-addresses.py pmon.dev ' ~ production_lan) | split }}"
 
     - name: The names the Pis serve resolve to the Vagrant VIP (any other pmon.dev name goes to production and is dropped)
       ansible.builtin.blockinfile:
@@ -64,7 +60,7 @@
           table inet vagrant_isolation
           delete table inet vagrant_isolation
           table inet vagrant_isolation {
-            chain output { type filter hook output priority 0; ip daddr { {{ production_lan }}, {{ production_public }} } drop; }
+            chain output { type filter hook output priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; }
           }
     - name: Apply the Pi guard now and at boot
       ansible.builtin.systemd_service:
@@ -86,12 +82,15 @@
           if [ "$r" = 28 ] && [ "$n" = 0 ]; then echo "$2-blocked"; else echo "$2-REACHABLE (curl exit $r, $n connects)"; fi
         }
         blocked https://{{ production_vip }}:8200/v1/sys/health production
-        blocked https://{{ production_public }}:443/ public
+        {% for a in production_public %}
+        blocked https://{{ a }}:443/ public
+        {% endfor %}
       args:
         executable: /bin/bash
       register: _pi_probe
       changed_when: false
       failed_when: >-
-        _pi_probe.rc != 0 or 'production-blocked' not in _pi_probe.stdout_lines or 'public-blocked' not in _pi_probe.stdout_lines
+        _pi_probe.rc != 0 or 'production-blocked' not in _pi_probe.stdout_lines
+        or _pi_probe.stdout_lines | select('eq', 'public-blocked') | list | length != production_public | length
         or (_pi_probe.stdout_lines | select('match', '^[^ ]+\\.pmon\\.dev ')
             | reject('match', '^[^ ]+ ' ~ (keepalived_vip | regex_escape) ~ '$') | list | length) > 0
