@@ -95,6 +95,11 @@ check("the facts the unit needs derived (its URL's among them), every task setti
        [t.get("name") for t in setters + guards if not tagged(t)]), (True, True, []))
 unit_task = next(t for t in every if (t.get("ansible.builtin.copy") or {}).get("dest") == "/etc/systemd/system/keycloak.service")
 named = re.findall(r"(?m)^EnvironmentFile=(?!-)(\S+)$", unit_task["ansible.builtin.copy"]["content"])
+# started after what its database URL goes through - PgBouncer (6432, where it runs) as Patroni and HAProxy: at a
+# boot it met no PgBouncer yet and failed its first connections
+after = " ".join(re.findall(r"(?m)^After=(.*)$", unit_task["ansible.builtin.copy"]["content"])).split()
+check("Keycloak's unit ordered after PgBouncer, Patroni and HAProxy",
+      sorted({"pgbouncer.service", "patroni.service", "haproxy.service"} - set(after)), [])
 writers = {f: [t for t in every for m, v in actions(t) if isinstance(v, dict) and v.get("dest") == f] for f in named}
 check("every file the unit names by EnvironmentFile= written by a tagged task, its directory too",
       (bool(named), {f: [tagged(t) for t in w] for f, w in writers.items()},

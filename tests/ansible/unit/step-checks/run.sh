@@ -67,9 +67,10 @@ check "the failing one named, the run failed" "$rc $(grep -o 'STEP CHECKS FAILED
 check "it ends once its checks have: the bound's watchdog not waited out" "$([ "$took" -lt 15 ] && echo prompt || echo "$took s")" \
   prompt
 # the bound: a whole number of seconds (no number: sleep fails at once - no bound at all), above every check's own -
-# each check playbook's until retries and delays summed, the play's vars rendered, and each try's own time (PER_TRY: a
-# try is one command over ssh - kubectl, psql, curl - its seconds; none of them carries a timeout of its own, and the
-# delays alone left the data check 2 s a try under the old bound); the smoke's own 15 minutes
+# each check playbook's until retries and delays summed, the play's vars rendered, and each try's own time: PER_TRY for
+# a command over ssh (kubectl, psql, curl - its seconds; the slowest whole check of 240 took 158 s) and what a try
+# waits by its own word on top (a Kafka consumer's --timeout-ms: 60 s a try, left out the bound was 350 s short); the
+# smoke's own 15 minutes
 out=$(STEP_CHECKS_SECONDS=30m PATH="$T/bin:$PATH" timeout -k 5 30 bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 \
   schnappy < /dev/null 2>&1); rc=$?
 check "a bound that is no whole number of seconds: refused before any check" \
@@ -93,10 +94,11 @@ for c in ("data", "survival", "storage", "metrics"):
         v = {k: trust_as_template(x) if isinstance(x, str) else x for k, x in (p.get("vars") or {}).items()}
         for t in walk(p.get("tasks")):
             if "until" in t:
+                own = sum(int(ms) / 1000 for ms in re.findall(r"--timeout-ms\s+(\d+)", str(t)))
                 total += (int(render(str(t.get("retries", 3)), **v)) + 1) * (int(render(str(t.get("delay", 5)), **v))
-                                                                              + PER_TRY)
+                                                                              + PER_TRY + own)
     worst = max(worst, total)
-print(worst)')
+print(int(worst))')
 default=$(grep -oP 'bound=\$\{STEP_CHECKS_SECONDS:-\K[0-9]+' "$ROOT/scripts/upgrade-step-checks.sh")
 check "the bound by default above every check's own (the longest: $budget s)" \
   "$([ -n "$budget" ] && [ -n "$default" ] && [ "$default" -gt "$budget" ] && echo above || echo "${default:-none} vs ${budget:-none}")" \
@@ -144,6 +146,18 @@ check "the copy with the bound's act after the loop made" "$(grep -c '^: > "\$lo
 out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/late.sh" i p 24.8 schnappy < /dev/null 2>&1); rc=$?
 check "the bound reached after every check was judged: the verdict stands (passed), nothing said not judged" \
   "$rc $(grep -c '^STEP CHECKS PASSED' <<< "$out") $(grep -c 'NOT JUDGED\|not ended within' <<< "$out")" "0 1 0"
+# the bound reached as a failed check is judged (its TERM right after its log is printed): that check named - failed or
+# not judged, never neither (judged, its failure not yet counted, it was in no line). The storage check runs on, so
+# the metrics one is not the last. Forced in a copy
+sed 's|^      cat "\$logs/\${names\[\$i\]}"$|&\n      [ "${names[$i]}" != metrics ] \|\| { : > "$logs/timed-out"; kill -TERM $$; }|' \
+  "$T/scripts/upgrade-step-checks.sh" > "$T/scripts/judging.sh"
+check "the copy with the bound's act as the metrics check is judged made" \
+  "$(grep -c '^      \[ "\${names\[\$i\]}" != metrics \]' "$T/scripts/judging.sh")" 1
+rm -f "$T/long.pid" "$T/long.pid.finished"
+out=$(LONG="$T/long.pid" STOP_GRACE=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/judging.sh" i p 24.8 schnappy \
+  < /dev/null 2>&1); rc=$?
+check "the bound reached as the failed metrics check is judged: it is named (failed or not judged), the run fails" \
+  "$rc $(grep -E '^STEP CHECKS (NOT JUDGED|FAILED):' <<< "$out" | grep -c '[: ]metrics\b')" "1 1"
 # the script killed outright (no cleanup runs): its watchdog, left behind, signals nothing when its bound comes - its
 # parent gone, the PID may be another process's. Forced in a copy that waits after starting its checks
 sed 's|^watchdog=\$!$|&\necho "$watchdog" > "$logs/watchdog.pid"; sleep 6|' "$T/scripts/upgrade-step-checks.sh" \

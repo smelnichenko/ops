@@ -33,7 +33,7 @@ echo "  File: \"$p\""
 STUB
 chmod +x "$W/bin/findmnt" "$W/bin/stat"
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM'
-import os, subprocess, sys
+import os, re, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import condition, render, trust_as_template  # noqa: E402
@@ -60,6 +60,14 @@ def end_hung():
 check("no play gathers the mounts' facts (network, or none)",
       [p.get("name") for p in plays if p.get("gather_facts", True)
        and not (isinstance(p.get("gather_subset"), list) and not {"all", "hardware"} & set(p["gather_subset"]))], [])
+# nor any other playbook's play on the Pis (they hold the Gluster mounts): Keycloak's, Patroni's, Vault's... - each needs
+# the platform's and the network's facts alone (architecture, the default address)
+import glob  # noqa: E402
+pi_plays = [(f, q.get("name") or q.get("hosts")) for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml"))
+            for q in (yaml.safe_load(open(f)) or []) if isinstance(q, dict) and "hosts" in q
+            and re.search(r"\bpi|\ball\b|gluster", str(q["hosts"])) and q.get("gather_facts", True)
+            and not (isinstance(q.get("gather_subset"), list) and not {"all", "hardware"} & set(q["gather_subset"]))]
+check("no playbook's play on the Pis gathers the mounts' facts", pi_plays, [])
 mounting = next(p for p in plays if p.get("name") == "Mount backup GlusterFS volumes")
 vols = mounting["vars"]["backup_volumes"]
 t = next((t for t in mounting["tasks"] if "findmnt" in str(t.get("ansible.builtin.shell", "")) and "NOT MOUNTED" in str(t)),
@@ -167,6 +175,17 @@ before = plays[:plays.index(mounting)]
 inside = [t.get("name") for p in before for t in flat(p.get("tasks")) for m in mounts
           if m + "/" in str(t.get("ansible.builtin.shell", "")) + str(t.get("ansible.builtin.command", ""))]
 check("no task before the answer check reaches inside a backup volume's mount", inside, [])
+# nor walks into one, or into the repos' volume, from a directory above it: a find from there descends into every mount
+# under it unless it prunes it (-not -path still descends - Forgejo's UID alignment walked repos/ and data/ so)
+gmounts = mounts + sorted({str((p.get("vars") or {}).get("gluster_mount")) for p in plays
+                           if (p.get("vars") or {}).get("gluster_mount")})
+walks = sorted({(t.get("name"), m) for p in before for t in flat(p.get("tasks")) for m in gmounts
+                for text in [str(t.get("ansible.builtin.shell", "")) + str(t.get("ansible.builtin.command", ""))]
+                for root in re.findall(r"\bfind\s+(/[^\s;|&)]*)", text)
+                if (m + "/").startswith(root.rstrip("/") + "/") and m != root.rstrip("/")
+                and not (f"-path {m} " in text and "-prune" in text)})
+check("no task before the answer check finds from above a volume's mount without pruning it (repos' among them: "
+      f"{'/var/lib/forgejo/repos' in gmounts})", walks, [])
 # a remount a run before did not finish (its task's timeout) left its service stopped; the re-run sees the source right,
 # stops nothing, starts nothing - the volumes' own services enabled here and not running are started all the same
 # (keepalived's - autostart false - never)

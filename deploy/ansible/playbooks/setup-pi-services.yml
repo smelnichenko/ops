@@ -10,6 +10,7 @@
   hosts: pis
   become: true
   gather_facts: true
+  gather_subset: [network]  # the mounts' facts stat every Gluster mount: a hung client's held the play
   strategy: linear
   # a restart notified before a later task failed still happens: a re-run would find nothing changed and leave the new
   # config unloaded
@@ -620,7 +621,9 @@
         content: |
           [Unit]
           Description=Keycloak SSO
-          After=network-online.target patroni.service haproxy.service
+          After=network-online.target patroni.service haproxy.service pgbouncer.service
+          # After PgBouncer too: its database URL goes through it (6432)
+          # where it runs - at a boot it met none yet.
           # Wants (soft) rather than Requires (hard): orders start AFTER
           # patroni+haproxy when they exist, but doesn't block keycloak
           # from starting if those units aren't installed yet (fresh

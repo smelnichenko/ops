@@ -58,7 +58,9 @@
         state: started
 
     # Forgejo UID alignment only on the data nodes — ten doesn't run Forgejo
-    # and doesn't need the local user.
+    # and doesn't need the local user. Its two Gluster volumes under it (repos,
+    # data) pruned, never walked: a hung client held the find for good, and a
+    # volume's ownership is its own plays' (data's: "Fix Forgejo data ownership")
     - name: Align Forgejo UID/GID across nodes
       ansible.builtin.shell: |
         CURRENT_UID=$(id -u forgejo)
@@ -66,7 +68,8 @@
           systemctl stop forgejo 2>/dev/null || true
           groupmod -g {{ forgejo_gid }} forgejo
           usermod -u {{ forgejo_uid }} -g {{ forgejo_gid }} forgejo
-          find /var/lib/forgejo -not -path '/var/lib/forgejo/repos/*' -exec chown -h {{ forgejo_uid }}:{{ forgejo_gid }} {} +
+          find /var/lib/forgejo \( -path /var/lib/forgejo/repos -o -path /var/lib/forgejo/data \) -prune \
+            -o -exec chown -h {{ forgejo_uid }}:{{ forgejo_gid }} {} +
           echo "changed"
         else
           echo "ok"

@@ -14,6 +14,7 @@
   hosts: pi1,pi2
   become: true
   gather_facts: true
+  gather_subset: [network]  # the mounts' facts stat every Gluster mount: a hung client's held the play
   vars_files:
     - ../vars/patroni.yml
 

@@ -33,6 +33,7 @@
   hosts: pi1,pi2
   become: true
   gather_facts: true
+  gather_subset: [network]  # the mounts' facts stat every Gluster mount: a hung client's held the play
 
   vars:
     caddy_version: "2.10.0"

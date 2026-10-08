@@ -21,23 +21,33 @@ cd "$ops" || exit 1
 # own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 # the checks' own bound (below): above every check's own - data-check's retries alone wait up to ~3085 s (each until's
-# retries and delays, summed), its 257 tries a few seconds each besides (the slowest check of 240 took 158 s) - so it
-# stops only what none of them bounds; a value that is no number would make its sleep fail at once and leave no bound
-bound=${STEP_CHECKS_SECONDS:-4500}
+# retries and delays, summed), its 257 tries a few seconds each besides (the slowest check of 240 took 158 s) and what
+# a try waits by its own word (a Kafka consumer's 60 s: 4850 s in all) - so it stops only what none of them bounds; a
+# value that is no number would make its sleep fail at once and leave no bound
+bound=${STEP_CHECKS_SECONDS:-5400}
 [[ $bound =~ ^[1-9][0-9]*$ ]] || { echo "STEP_CHECKS_SECONDS=$bound: not a whole number of seconds"; exit 1; }
 # the stop's grace too: a fraction aborted the cleanup's arithmetic - nothing KILLed, the checks left running
 [[ ${STOP_GRACE:-0} =~ ^(0|[1-9][0-9]*)$ ]] || { echo "STOP_GRACE=$STOP_GRACE: not a whole number of seconds"; exit 1; }
 mkdir -p .upgrade
 logs=$(mktemp -d "$ops/.upgrade/step-checks.XXXX")
-names=() pids=() done_=() failed=() watchdog=""
+# done_[i]: check i's exit once judged - judged and failed in one assignment (a signal between two left a judged
+# failure out of every line)
+names=() pids=() done_=() watchdog=""
+failures() {  # failures <array>: the checks judged failed, by name
+  local -n _failed=$1
+  local i
+  _failed=()
+  for i in "${!done_[@]}"; do [ "${done_[$i]}" = 0 ] || _failed+=("${names[$i]}"); done
+}
 not_judged() {  # the checks not judged named, each with its log, and the failures judged before; the run fails
-  local i unjudged=()
+  local i unjudged=() failed
   for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || unjudged+=("${names[$i]}"); done
   echo "STEP CHECKS NOT JUDGED: ${unjudged[*]}"
   for n in "${unjudged[@]}"; do
     echo "===== check $n (not judged)"
     cat "$logs/$n" 2> /dev/null || echo "(no log)"
   done
+  failures failed
   [ "${#failed[@]}" -eq 0 ] || echo "STEP CHECKS FAILED: ${failed[*]}"
   exit 1
 }
@@ -129,10 +139,9 @@ while [ "$left" -gt 0 ]; do
       # has its status still known to `wait` - judged; one it never knew (127) is not
       wait "${pids[$i]}" 2> /dev/null; r=$?
       if [ "$r" != 127 ]; then
-        done_[i]=1
         echo "===== check ${names[$i]} (exit $r, its status read after)"
         cat "$logs/${names[$i]}"
-        [ "$r" = 0 ] || failed+=("${names[$i]}")
+        done_[i]=$r
       fi
     done
     # every one judged: the verdict as ever; otherwise those not judged said
@@ -141,10 +150,10 @@ while [ "$left" -gt 0 ]; do
   fi
   for i in "${!pids[@]}"; do
     if [ "${pids[$i]}" = "$ended" ]; then
-      done_[i]=1
+      # printed, then judged: a signal between says it again as not judged - never judged and in no line
       echo "===== check ${names[$i]} (exit $rc, after $(( $(date +%s) - t0 )) s)"
       cat "$logs/${names[$i]}"
-      [ "$rc" = 0 ] || failed+=("${names[$i]}")
+      done_[i]=$rc
     fi
   done
   left=$((left - 1))
@@ -153,6 +162,7 @@ done
 # reaped: its PID may be another process's)
 own_jobs left_
 [[ " ${left_[*]} " != *" $watchdog "* ]] || stop_groups 5 "$watchdog"
+failures failed
 if [ "${#failed[@]}" -gt 0 ]; then
   echo "STEP CHECKS FAILED: ${failed[*]}"
   exit 1

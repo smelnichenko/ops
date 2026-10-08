@@ -83,16 +83,35 @@ if lived:
     check("Tempo 2 replaced 100 s after the second trace: proven; 400 s after: not proven, fails",
           [made_after(100), min(made_after(400), 1)], [0, 1])
     # a pod made before the push is the Tempo that held it, never replaced; none running is nothing read (date -d ""
-    # is today's midnight: a negative lifetime read as proven) - neither proves anything. 10 s before: the clocks' slack
+    # is today's midnight: a negative lifetime read as proven) - neither proves anything. 10 s before: the clocks' slack.
+    # In the push's own second: which came first is unknown (both times whole seconds) - not proven
     def made(text, pushed):
         return min(subprocess.run(["bash", "-c", sh], capture_output=True, text=True, env=dict(
             os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], MADE=text,
             **{**env, "PUSHED": pushed})).returncode, 1)
     now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     check("a Tempo made an hour before the push (never replaced): not proven, fails; none running: fails (date -d \"\" "
-          "is today's midnight); 10 s before: not proven (one clock - no slack); in its second and after: proven",
-          [min(made_after(-3600), 1), made("", now), min(made_after(-10), 1), made_after(0), made_after(1)],
-          [1, 1, 1, 0, 0])
+          "is today's midnight); 10 s before: not proven (one clock - no slack); in its second: not proven (which came "
+          "first unknown); a second after: proven",
+          [min(made_after(-3600), 1), made("", now), min(made_after(-10), 1), min(made_after(0), 1), made_after(1)],
+          [1, 1, 1, 1, 0])
+    # an ID file an older seed wrote (the second line with no time), or one with no second line: the push's time read
+    # as none - "seed again" said, not a templating error
+    def env_of(content):
+        f = os.path.join(W, "old-ids")
+        open(f, "w").write(content)
+        try:
+            return {k: str(render(str(v), id_file=f)) for k, v in (lived.get("environment") or {}).items()}
+        except Exception as e:  # noqa: BLE001 - what the templar raises is what Ansible fails the task with
+            return {"error": type(e).__name__}
+    def run_env(e):
+        r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True, env=dict(
+            os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], MADE="1970-01-01T00:18:20Z", **e))
+        return min(r.returncode, 1), "seed again" in r.stdout
+    olds = [env_of("a" * 32 + " upgrade-preflush\n" + "b" * 32 + " upgrade-postflush\n"),
+            env_of("a" * 32 + " upgrade-preflush\n")]
+    check("an ID file with no push time (an older seed's, or no second line): read as none - fails, says seed again",
+          [(e.get("PUSHED"), run_env(e) if "PUSHED" in e else None) for e in olds], [("", (1, True))] * 2)
     # date(1) reads "1000" as today 10:00: a Tempo made a minute after that read as replaced - never read as a time
     ten = subprocess.run(["date", "-u", "-d", "@" + str(int(subprocess.run(["date", "-d", "1000", "+%s"],
                           capture_output=True, text=True).stdout) + 60), "+%Y-%m-%dT%H:%M:%SZ"],
