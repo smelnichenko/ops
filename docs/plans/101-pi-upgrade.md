@@ -136,8 +136,8 @@ each step with the operator's go:
 6. prod-inventory.txt's Pi lines and pi-baseline.yml moved to what production then runs - plan 100's proof covered
    the Pis at the old versions, so a full run proves plan 100 again before its first production step (unless that
    full run already pinned the Pis to these targets: the operator's choice).
-Keycloak's root-only secrets file reaches production with the next setup-pi-services run (it restarts Keycloak):
-with phase 2's Keycloak upgrade.
+Keycloak's root-only secrets file reaches production with plan 100's step 00 (setup-pi-services --tags
+keycloak-db-url: the file, the unit naming it, Keycloak restarted - the Pi without the VIP first).
 
 ## Phase 2 - after plan 100's rollout (majors and migrating minors)
 

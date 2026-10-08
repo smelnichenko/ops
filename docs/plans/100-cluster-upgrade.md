@@ -302,7 +302,7 @@ The steps (generated from tests/ansible/upgrade/steps - the step files are the s
 
 | # | Step | Changes | Where | Wave 0 |
 |---|---|---|---|---|
-| 00 | gluster-boot | The Pis' and ten's Gluster setup as ops main has it (setup-gluster.yml), before any upgrade | playbook | - |
+| 00 | gluster-boot | The Pis' and ten's Gluster setup as ops main has it (setup-gluster.yml), before any upgrade; Keycloak's unit as ops main has it (its URL takes any server, its passwords in a root-only file) - auth.pmon.dev down while the VIP Pi's Keycloak restarts | playbook | - |
 | 01 | argocd-root-retry | What a fresh install of the cluster needs from Argo CD, in git (infra) | infra | - |
 | 02 | istio-chart-repo | Istio's charts from blob.istio.io, same 1.25.2 | - | - |
 | 03 | istio-1.26 | Istio 1.25.2 -> 1.26.8, in place (one minor: Istio's in-place rule) | infra + playbook | - |
@@ -1110,6 +1110,51 @@ whether the mirror's failure is alerted (pi-backup-check reading its last-succes
 on production (Consul open to the LAN); `task deploy:vault-eso` before step 1; a step-down-only Vault token for the
 Consul handover; a patroni_is_paused alert; pi2's /etc/vault-unseal at 0755 and its missing 8200-from-ten rule (a
 setup-vault-pi run); PgBouncer's superusers; Sonar's hotspots and S3776.
+
+## Eighth full review 2026-10-08 (ops a88c887..1db7ce3) and full run 1217
+
+Nine passes (architecture, correctness of the scripts and of the playbooks, security, platform reliability,
+concurrency, test quality - 30 of my reverts re-run, same verdicts; Sonar). Full run 1217 ran f9f36c7: its step 00
+rehearsed a Keycloak unit production does not have - no proof for production; the next full run is.
+
+Critical (mine, 2b931df): step 00's `--tags keycloak-db-url` wrote the playbook's unit - EnvironmentFile
+/etc/keycloak/secrets.env - over production's, whose passwords are inline (both Pis, read 2026-10-08) and which has no
+/etc/keycloak: pi1's restart failed, the VIP moved, pi2's unit left broken on disk for the next reboot. My comparison
+of production's unit dropped its PASSWORD lines and hid it. Now the tagged run writes the secrets file with its check,
+restarts where pending by content (a refused restart is made by the next run), the Pi without the VIP first, and
+refuses where a file the unit names is missing; the copy gets production's whole unit (980ed9b).
+
+Warnings fixed: vault-eso's DR switch could never prove (ESO writes no synced version before a first sync) (1fb29c6);
+the mirror's Pi-side root root:root 0755 on production - the sync's writes refused there (00e0df3); git-commit-push
+pushed a rename staged from outside and another session's commit (a07d974); `--diff` printed KC_DB_PASSWORD beside the
+URL (357c4c6); setup-gluster looked inside a backup mount before its answer check (5534f70) and left a timed-out
+remount's service stopped (0a3c452); the digests after each step unbounded and unstoppable (3df63c1); step 00's outage
+and abort lines; consul-handover flaky (whole seconds) (27febca); curls in written scripts unbounded (bc7a1e6); the
+mirror's admin tokens unpaged (d382250); the mount points' 0755/0750 flip (1db7ce3).
+
+Suggestions fixed: step-checks' cleanup ended by a dead reader, a reused watchdog PID (d5bae59, e22f5d6); the stop's
+named kill during the grace, a lost process's catching child, a KILL that did not end named (2b86eb4); the stamper's
+grace on the clock, 0 refused, a signal before the task, its output gone (2b86eb4); the Pis' plays gather network
+facts alone, Forgejo's UID find prunes its volumes, Keycloak after PgBouncer, the step checks' bound 5400 s (a Kafka
+consumer's own 60 s), a judged failure in no line, Tempo's same-second proof (45cfdf1); no credential follows a
+redirect (94 uri tasks), a token delete takes 404 (cd8adf9); destroy-environment's env_name, one path list, Forgejo's
+reset tokens paged, the realm seed waits for Keycloak (3ce88c5); check-mode-lint's json_query and zip reads, Sonar
+S1192/S3358 (8f7e423); secrets off argv - the realm seed, the copy's GitOps mirror, test-cicd's probe; the put-back
+hint on stdin; Argo CD's client secret judged before any write (f229ca4); the mirror's helper Forgejo's URL's alone,
+no redirects, the old mirror's ssh setting and remote removed, setup-vault-pi off the mirror's mount (684f9c4); the
+host-key detectors read ssh's arguments as ssh does (512e59f); Helm pinned to ten's v3.20.0 with its sum (2caa696); a
+Secret's read printed by no message, the Secret-read lint's gaps (9060abf); Argo CD's single sign-on proven against
+Keycloak (63bd89b); vault-eso's outage told from DR by the CA (82bc6be); tests for the survivors (0e52007, 2cad9a3,
+987e27f, 0b5e9b5). Every fix's revert run through the unit fence: red.
+
+Left, with why: the mirror play's home (setup-velero) - a move, no behaviour; the stall bounds against 4 GiB parts
+never measured at production's size; 55 test-playbook tasks outside the full run with a secret on a command line, and
+7 in-pod ClickHouse and Grafana clients (named in secrets-off-argv) - each needs its own run.
+
+The operator's: rotate Argo CD's Keycloak client secret (a review agent printed it from `helm get values` on ten;
+every argocd Helm revision holds it in clear); Keycloak's admin and database passwords are one value; the mirror's
+failure alerted or not (last-success has no reader); Caddy's peer fallback for auth.pmon.dev, keepalived's priority
+arithmetic (150-50 ties 100, nopreempt); Sonar's hotspots and S3776; and the seventh's list.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
