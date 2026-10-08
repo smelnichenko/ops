@@ -19,6 +19,12 @@ cat > "$W/bin/kubectl" <<'STUB'
 #!/bin/bash
 case "$*" in
   *delete*) d=$(( $(cat "$W/d" 2> /dev/null || echo 0) + 1 )); echo $d > "$W/d"
+    # REASK_HANGS: a delete asked again hangs (a finalizer stuck, the API server holding the call) - unless it neither
+    # waits (--wait=false) nor outlives its own bound (--request-timeout): then it fails at once, as one timed out
+    if [ -n "${REASK_HANGS:-}" ] && [ "$d" -gt 1 ]; then
+      case "$*" in *--wait=false*) case "$*" in *--request-timeout=*) echo "timed out" >&2; exit 1 ;; esac ;; esac
+      sleep 30; exit 1
+    fi
     [ "$d" -gt "${DELETE_FAIL_FOR:-0}" ] || { echo "the server is currently unable to handle the request" >&2; exit 1; }
     touch "$W/deleted"; exit 0 ;;
   *"get pods,pvc"*)
@@ -65,6 +71,23 @@ for name, env, want_rc, words in (("gone at once", {}, 0, ""),
     ok = min(r.returncode, 1) == want_rc and words in r.stdout + r.stderr and once
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f" (rc {r.returncode}, {asked} deletes: {r.stdout}{r.stderr})"))
+# the delete asked again bounded - neither waiting for its end nor outliving its own timeout: a hung one held the task
+# past side_gone_seconds
+import time
+for f in ("n", "d", "deleted"):
+    os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
+t = time.monotonic()
+try:
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=20,
+                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W,
+                                DELETE_FAIL_FOR="1", REASK_HANGS="1"))
+    got = (min(r.returncode, 1), time.monotonic() - t < 10)
+except subprocess.TimeoutExpired:
+    got = ("hung", False)
+ok = got == (1, True)
+fails += not ok
+print(f"{'PASS' if ok else 'FAIL'} the delete asked again, hanging: each ask bounded - the task ends at its bound, failing"
+      + ("" if ok else f" (got {got})"))
 # the read as bash reads it (its continuation joined), up to its redirection
 get = task["ansible.builtin.shell"].replace("\\\n", " ").split("get pods,pvc")[1].split("2>")[0] \
     if "get pods,pvc" in task["ansible.builtin.shell"] else ""
