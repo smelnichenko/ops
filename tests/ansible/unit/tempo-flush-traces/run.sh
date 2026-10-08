@@ -40,7 +40,14 @@ check("each found held before it is kept - its own span in a good answer", [
     for t, (_, v), other in zip(held, pushes, ("upgrade-postflush", "upgrade-preflush"))],
       [[True, False, False]] * 2)
 keep = next(t for t in flush if "ansible.builtin.copy" in t)
-ids = {"_trace": "a" * 32, "_after": "b" * 32, "_after_at": "1000"}
+# the second push's time by the API server's clock (the pods' times are its): read after the push, by a server-side
+# dry run - nothing written - its object's creationTimestamp; the controller's clock needed 20 s of slack, and a Tempo
+# made in it before the push (the one that held the trace, never replaced) passed
+clock = next((t for t in flush if "--dry-run=server" in str(t.get("ansible.builtin.command", ""))
+              and "creationTimestamp" in str(t.get("ansible.builtin.command", ""))), None)
+check("the second push's time read from the API server's clock after it, by a dry run (nothing written)",
+      clock is not None and flush.index(clock) > pushes[1][0] and clock.get("register") in str(keep), True)
+ids = {"_trace": "a" * 32, "_after": "b" * 32, (clock or {}).get("register", "_after_clock"): {"stdout": "1970-01-01T00:16:40Z"}}
 path = os.path.join(W, "ids")
 open(path, "w").write(render(keep["ansible.builtin.copy"]["content"], **ids))
 verify = next(t for t in play["tasks"] if t.get("when") == "mode == 'verify'" and "loop" in t)
@@ -77,14 +84,17 @@ if lived:
           [made_after(100), min(made_after(400), 1)], [0, 1])
     # a pod made before the push is the Tempo that held it, never replaced; none running is nothing read (date -d ""
     # is today's midnight: a negative lifetime read as proven) - neither proves anything. 10 s before: the clocks' slack
-    def made(text, pushed=None):  # the push now, as in a run (date -d "" is today's midnight: before it)
+    def made(text, pushed):
         return min(subprocess.run(["bash", "-c", sh], capture_output=True, text=True, env=dict(
             os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], MADE=text,
-            **{**env, "PUSHED": str(pushed or int(__import__("time").time()))})).returncode, 1)
-    midnight = int(subprocess.run(["date", "-d", "", "+%s"], capture_output=True, text=True).stdout)
-    check("a Tempo made an hour before the push (never replaced): not proven, fails; none running: fails - pushed 5 s "
-          "after midnight too (that midnight within the clocks' slack); 10 s before (the slack): proven",
-          [min(made_after(-3600), 1), made(""), made("", midnight + 5), made_after(-10)], [1, 1, 1, 0])
+            **{**env, "PUSHED": pushed})).returncode, 1)
+    now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    check("a Tempo made an hour before the push (never replaced): not proven, fails; none running: fails (date -d \"\" "
+          "is today's midnight); 10 s before: not proven (one clock - no slack); in its second and after: proven",
+          [min(made_after(-3600), 1), made("", now), min(made_after(-10), 1), made_after(0), made_after(1)],
+          [1, 1, 1, 0, 0])
+    check("a push time not the API server's (an epoch an older seed wrote, none): fails",
+          [made("1970-01-01T00:18:20Z", "1000"), made("1970-01-01T00:18:20Z", "")], [1, 1])
 print("tempo-flush-traces: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYTFT

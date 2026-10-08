@@ -59,10 +59,9 @@
 
         # what arrives after the flush, until Tempo 2 is replaced: written to the store by its stop
         # (flush_all_on_shutdown) - Tempo 3 does not replay 2's WAL
-        - name: A second trace ID, for a trace pushed after the flush, and when
+        - name: A second trace ID, for a trace pushed after the flush
           ansible.builtin.set_fact:
             _after: "{{ lookup('ansible.builtin.pipe', 'date +%s%N | sha256sum | cut -c1-32') }}"
-            _after_at: "{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
 
         - name: The second trace, pushed after the flush
           ansible.builtin.include_tasks: tasks/tempo-push.yml
@@ -70,6 +69,17 @@
             push_trace_id: "{{ _after }}"
             push_span_id: "{{ _after[:16] }}"
             push_name: upgrade-postflush
+
+        # when, by the API server's clock - the pods' times are its (the controller's needed 20 s of slack, and a
+        # Tempo made in it before the push, the one that held the trace, passed as replaced): a server-side dry run
+        # writes nothing, its object's creationTimestamp the server's now - read after the push, never before it
+        - name: The second trace's push time, by the API server's clock
+          ansible.builtin.command: >-
+            kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra create configmap tempo-flush-clock
+            --dry-run=server -o jsonpath={.metadata.creationTimestamp}
+          register: _after_clock
+          changed_when: false
+          failed_when: _after_clock.rc != 0 or _after_clock.stdout is not match('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$')
 
         - name: Tempo has it (in its ingester - only its stop writes it to the store)
           ansible.builtin.command: >-
@@ -82,7 +92,7 @@
 
         - name: Both IDs kept for the check after the step, each with its span's name (the second's push time too)
           ansible.builtin.copy:
-            content: "{{ _trace }} upgrade-preflush\n{{ _after }} upgrade-postflush {{ _after_at }}\n"
+            content: "{{ _trace }} upgrade-preflush\n{{ _after }} upgrade-postflush {{ _after_clock.stdout }}\n"
             dest: "{{ id_file }}"
             mode: '0644'
           delegate_to: localhost
@@ -90,8 +100,8 @@
 
     # the second trace proves flush_all_on_shutdown only if Tempo 2 stopped while it still held it: within its
     # max_block_duration (5 min) of the push - later, Tempo 2 wrote it to the store itself and finding it proves nothing.
-    # Tempo is replaced by Recreate: its new pod made after the old one stopped (20 s of slack for the clocks) - one
-    # made before the push is the Tempo that held it, never replaced; none running is nothing read: neither proves it
+    # Tempo is replaced by Recreate: its new pod made after the old one stopped - one made before the push (both times
+    # the API server's) is the Tempo that held it, never replaced; none running is nothing read: neither proves it
     - name: Tempo 2 stopped within 5 minutes of the trace pushed after the flush (else its check proves nothing)
       when: mode == 'verify'
       ansible.builtin.shell:
@@ -102,9 +112,11 @@
             --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.creationTimestamp}' | tr ' ' '\n' \
             | sort | tail -1)
           [ -n "$made" ] || { echo "NOT PROVEN: no Tempo pod running"; exit 1; }
-          lived=$(( $(date -d "$made" +%s) - PUSHED ))
+          [[ $PUSHED =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] \
+            || { echo "NOT PROVEN: the push's time not the API server's ('$PUSHED') - seed again"; exit 1; }
+          lived=$(( $(date -d "$made" +%s) - $(date -d "$PUSHED" +%s) ))
           echo "Tempo 2 replaced $lived s after the trace pushed after the flush"
-          [ "$lived" -ge -20 ] || { echo "NOT PROVEN: Tempo made $(( -lived )) s before it - never replaced"; exit 1; }
+          [ "$lived" -ge 0 ] || { echo "NOT PROVEN: Tempo made $(( -lived )) s before it - never replaced"; exit 1; }
           [ "$lived" -le 280 ] || { echo "NOT PROVEN: Tempo 2 lived $lived s after it - over its 5-minute blocks"; exit 1; }
       environment:
         PUSHED: "{{ (lookup('ansible.builtin.file', id_file).splitlines() | select('search', ' upgrade-postflush ') | first).split()[2] }}"
