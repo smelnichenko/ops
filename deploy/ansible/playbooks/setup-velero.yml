@@ -2,7 +2,7 @@
 # Setup Velero + Backup MinIO for k8s cluster backups - the install from before Argo CD owned Velero (infra's velero
 # app; the backup store is the Pis'). Where that Application exists the first play ends at once: its pinned chart and
 # in-cluster MinIO would roll Velero back under Argo and bring back a retired store. The second play, the offsite git
-# mirror of the monitor repo to the Pis (a daily timer on ten), runs either way.
+# mirror of the Forgejo organisation's repositories to the Pis (a daily timer on ten), runs either way.
 #
 # Prerequisites:
 #   - kubeadm cluster running (setup-kubeadm.yml)
@@ -445,18 +445,35 @@
   vars:
     git_mirror_enabled: true
     git_mirror_host: "git.pmon.dev"
-    git_mirror_repo: "{{ forgejo_admin_user | default('forgejo_admin') }}/monitor"
+    # every repository of this Forgejo organisation, listed at each run (a new one mirrored the day it appears) - the
+    # code lives there; forgejo_admin/monitor, mirrored until 2026-10, was no repository production has
+    git_mirror_org: schnappy
     git_mirror_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
-    git_mirror_local_path: "/var/lib/git-mirror/monitor.git"
+    git_mirror_dir: /var/lib/git-mirror
     git_mirror_host_alias: pi-vip
     git_mirror_known_hosts: "/var/lib/git-mirror/known_hosts"
-    # Forgejo read with a token of read:repository alone, never the admin's password - that sat in the origin's URL,
-    # on git-remote-https's argv at each fetch (any local user reads those in /proc). The token in a file of the
-    # mirror's user's alone, git's credential helper reading it (the credential protocol: its stdin), the URL bare
-    git_mirror_url: "https://{{ git_mirror_host }}/{{ git_mirror_repo }}.git"
+    # Forgejo read with a token of read:repository and read:organization alone, never the admin's password - that sat
+    # in the old mirror's origin URL, on git-remote-https's argv at each fetch (any local user reads those in /proc).
+    # The token in a file of the mirror's user's alone: git's credential helper reads it (the credential protocol),
+    # the sync's API call takes it on curl's config
     git_mirror_credentials_file: "/var/lib/git-mirror/credentials"
-    _git_mirror_helper: "store --file={{ git_mirror_credentials_file }}"
+    # each repository pushed to a bare one of its own on the Pi at the VIP; the run's last-success beside them
+    git_mirror_pi_dir: /mnt/backups/git-mirror
     _git_mirror_owner: "{{ offsite_backup_user | default('sm') }}"
+    _git_mirror_pi: "{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default(keepalived_vip) }}"
+    _git_mirror_api: "https://{{ git_mirror_host }}/api/v1/orgs/{{ git_mirror_org }}/repos"
+    # whether the token in the file reads the organisation's repositories: HTTP 200 it does; 401 or 403 (or no
+    # token) it does not - a new one is made; anything else (Forgejo or the network down) proves nothing either way:
+    # the play fails, no token made
+    _git_mirror_probe: |
+      set -uo pipefail
+      [ -s "$CREDS" ] || { echo "NO TOKEN"; exit 0; }
+      token=$(python3 -c 'import sys, urllib.parse
+      print(urllib.parse.urlsplit(open(sys.argv[1]).read().strip()).password or "")' "$CREDS") || token=""
+      [ -n "$token" ] || { echo "NO TOKEN"; exit 0; }
+      code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
+        -K <(printf 'header = "Authorization: token %s"\n' "$token") "$API?limit=1")
+      echo "HTTP $code"
 
   tasks:
     - name: Install git
@@ -467,30 +484,32 @@
 
     - name: Create local git mirror directory
       ansible.builtin.file:
-        path: "{{ git_mirror_local_path | dirname }}"
+        path: "{{ git_mirror_dir }}"
         state: directory
         owner: "{{ _git_mirror_owner }}"
         group: "{{ _git_mirror_owner }}"
         mode: '0750'
       when: git_mirror_enabled | default(true) | bool
 
-    # the token kept while it still reads the repository: a read with no prompt (none: it fails), as the mirror's user
-    - name: The mirror's token reads the repository
-      ansible.builtin.command:
-        argv: [git, -c, "credential.helper={{ _git_mirror_helper }}", ls-remote, "{{ git_mirror_url }}", HEAD]
+    # the token kept while it still reads the organisation's repositories
+    - name: The mirror's token reads the organisation's repositories
+      ansible.builtin.shell:
+        cmd: "{{ _git_mirror_probe }}"
+        executable: /bin/bash
+      environment:
+        CREDS: "{{ git_mirror_credentials_file }}"
+        API: "{{ _git_mirror_api }}"
       become: true
       become_user: "{{ _git_mirror_owner }}"
-      environment:
-        GIT_TERMINAL_PROMPT: "0"
       check_mode: false  # a read: a preview judges the token too
       register: _git_mirror_read
       changed_when: false
-      failed_when: false  # judged: a token that does not read is replaced below
+      failed_when: _git_mirror_read.stdout not in ['HTTP 200', 'HTTP 401', 'HTTP 403', 'NO TOKEN']
       when: git_mirror_enabled | default(true) | bool
 
     - name: Whether the kept token reads
       ansible.builtin.set_fact:
-        _git_mirror_token_works: "{{ _git_mirror_read.rc | default(1) == 0 }}"
+        _git_mirror_token_works: "{{ _git_mirror_read.stdout | default('') == 'HTTP 200' }}"
       when: git_mirror_enabled | default(true) | bool
 
     - name: Forgejo's tokens of the admin
@@ -509,7 +528,7 @@
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
 
-    - name: A new token for the mirror - read:repository alone, under a new name (the old ones stay until it reads)
+    - name: A new token for the mirror - its two reads alone, under a new name (the old ones stay until it reads)
       ansible.builtin.uri:
         url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens"
         method: POST
@@ -521,6 +540,7 @@
           name: "git-mirror-{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%S') }}"
           scopes:
             - "read:repository"
+            - "read:organization"
         status_code: 201
       register: _git_mirror_token
       changed_when: true
@@ -530,32 +550,50 @@
         - not _git_mirror_token_works | bool
         - not ansible_check_mode
 
-    - name: The token where git's credential helper reads it
-      ansible.builtin.copy:
-        dest: "{{ git_mirror_credentials_file }}"
-        content: "https://{{ git_mirror_user }}:{{ _git_mirror_token.json.sha1 }}@{{ git_mirror_host }}\n"
-        owner: "{{ _git_mirror_owner }}"
-        group: "{{ _git_mirror_owner }}"
-        mode: "0600"
-      no_log: true
+    # a new token that does not read is deleted again (one more left behind at every run otherwise), the play failed
+    - name: The new token in place, proven
       when:
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
         - not ansible_check_mode
+      block:
+        # written on ten from the task's stdin (copy's content passes a temp file on the controller first)
+        - name: The token where git's credential helper reads it
+          ansible.builtin.command:
+            argv: [install, -m, "0600", -o, "{{ _git_mirror_owner }}", -g, "{{ _git_mirror_owner }}", /dev/stdin,
+                   "{{ git_mirror_credentials_file }}"]
+            stdin: "https://{{ git_mirror_user }}:{{ _git_mirror_token.json.sha1 }}@{{ git_mirror_host }}"
+          changed_when: true
+          no_log: true
 
-    - name: The new token reads the repository
-      ansible.builtin.command:
-        argv: [git, -c, "credential.helper={{ _git_mirror_helper }}", ls-remote, "{{ git_mirror_url }}", HEAD]
-      become: true
-      become_user: "{{ _git_mirror_owner }}"
-      environment:
-        GIT_TERMINAL_PROMPT: "0"
-      check_mode: false
-      changed_when: false
-      when:
-        - git_mirror_enabled | default(true) | bool
-        - not _git_mirror_token_works | bool
-        - not ansible_check_mode
+        - name: The new token reads the organisation's repositories
+          ansible.builtin.shell:
+            cmd: "{{ _git_mirror_probe }}"
+            executable: /bin/bash
+          environment:
+            CREDS: "{{ git_mirror_credentials_file }}"
+            API: "{{ _git_mirror_api }}"
+          become: true
+          become_user: "{{ _git_mirror_owner }}"
+          register: _git_mirror_new_read
+          changed_when: false
+          failed_when: _git_mirror_new_read.stdout != 'HTTP 200'
+      rescue:
+        - name: The new token deleted - it does not read
+          ansible.builtin.uri:
+            url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens/{{ _git_mirror_token.json.id }}"
+            method: DELETE
+            user: "{{ git_mirror_user }}"
+            password: "{{ forgejo_admin_password }}"
+            force_basic_auth: true
+            status_code: 204
+          no_log: true
+
+        - name: The mirror's token - none reads
+          ansible.builtin.fail:
+            msg: >-
+              REFUSED: a new token for the mirror does not read {{ _git_mirror_api }}
+              ({{ _git_mirror_new_read.stdout | default('not read') }}) - deleted again
 
     - name: The mirror's older tokens deleted (the new one reads)
       ansible.builtin.uri:
@@ -573,50 +611,6 @@
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
         - not ansible_check_mode
-
-    - name: The mirror there (a first run has none yet)
-      ansible.builtin.stat:
-        path: "{{ git_mirror_local_path }}/HEAD"
-      register: _git_mirror_head
-      when: git_mirror_enabled | default(true) | bool
-
-    - name: Initialize local bare mirror from Forgejo
-      ansible.builtin.shell: |
-        set -euo pipefail
-        if [ ! -f "{{ git_mirror_local_path }}/HEAD" ]; then
-          git -c credential.helper='{{ _git_mirror_helper }}' clone --mirror "{{ git_mirror_url }}" "{{ git_mirror_local_path }}"
-          # Add Pi as push target
-          git -C "{{ git_mirror_local_path }}" remote add pi \
-            "{{ _git_mirror_owner }}@{{ offsite_backup_host | default(keepalived_vip) }}:/mnt/backups/git-mirror/monitor.git"
-          echo "CLONED"
-        fi
-      args:
-        executable: /bin/bash
-      become: true
-      become_user: "{{ _git_mirror_owner }}"
-      environment:
-        GIT_TERMINAL_PROMPT: "0"
-      register: git_mirror_init
-      changed_when: "'CLONED' in git_mirror_init.stdout"
-      when: git_mirror_enabled | default(true) | bool
-
-    # each set only where it differs - an older mirror's origin URL (the admin's password in it) rewritten
-    - name: The mirror's settings - the origin's URL bare, the credential helper
-      community.general.git_config:
-        repo: "{{ git_mirror_local_path }}"
-        scope: local
-        name: "{{ item.name }}"
-        value: "{{ item.value }}"
-      loop:
-        - { name: remote.origin.url, value: "{{ git_mirror_url }}" }
-        - { name: credential.helper, value: "{{ _git_mirror_helper }}" }
-      loop_control:
-        label: "{{ item.name }}"
-      become: true
-      become_user: "{{ _git_mirror_owner }}"
-      when:  # a preview of a first run: no mirror to set yet
-        - git_mirror_enabled | default(true) | bool
-        - _git_mirror_head.stat.exists or not ansible_check_mode
 
     # the push goes to the VIP - pi1's or pi2's address, as keepalived has it: both Pis' own host keys (read from them
     # over Ansible's checked connections) known under one alias, and checked - never "no" (a host answering at the VIP
@@ -636,27 +630,12 @@
           {% for k in _pi_host_keys.results %}
           {{ git_mirror_host_alias }} {{ (k.content | b64decode).split()[:2] | join(' ') }}
           {% endfor %}
-        owner: "{{ offsite_backup_user | default('sm') }}"
-        group: "{{ offsite_backup_user | default('sm') }}"
+        owner: "{{ _git_mirror_owner }}"
+        group: "{{ _git_mirror_owner }}"
         mode: '0644'
       when: git_mirror_enabled | default(true) | bool
 
-    # set where it differs, not only at the first clone: a mirror made before kept its old command
-    - name: The push's ssh - its key, the VIP's host keys checked
-      community.general.git_config:
-        repo: "{{ git_mirror_local_path }}"
-        scope: local
-        name: core.sshCommand
-        value: >-
-          ssh -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
-          -o StrictHostKeyChecking=yes -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}
-      become: true
-      become_user: "{{ _git_mirror_owner }}"
-      when:  # a preview of a first run: no mirror to set yet
-        - git_mirror_enabled | default(true) | bool
-        - _git_mirror_head.stat.exists or not ansible_check_mode
-
-    - name: Write offsite backup rsync script
+    - name: Write offsite backup sync script
       ansible.builtin.copy:
         dest: /usr/local/bin/offsite-backup-sync.sh
         mode: '0755'
@@ -664,26 +643,61 @@
         group: root
         content: |
           #!/bin/bash
-          # Push git mirror to Pi for offsite code backup.
-          # Velero backs up to the in-cluster minio-backup; this rsync
-          # is the separate offsite copy.
-          set -euo pipefail
-
-          # A failed fetch or push fails the unit (each was a warning in the journal, the unit green); the push is
-          # tried after a failed fetch all the same - the copy it has is still a copy
-          MIRROR="{{ git_mirror_local_path }}"
-          [ -d "$MIRROR" ] || { logger -t git-mirror "FAILED: no mirror at $MIRROR"; exit 1; }
-          logger -t git-mirror "Starting git mirror sync"
+          # offsite-backup-sync.sh - every repository of the Forgejo organisation {{ git_mirror_org }} mirrored to the
+          # Pis daily (offsite-backup.timer): a copy of the code off the Gluster pair that serves it. The repositories
+          # listed from Forgejo's API at each run (a new one mirrored the day it appears); each cloned bare when new,
+          # fetched, and pushed whole to a bare repository of its own on the Pi at the VIP (made when new). Forgejo read
+          # with the mirror's token - git's credential helper, curl's config: never a command line; the Pi's host keys
+          # checked. A repository that fails is named and the rest still go; any failure fails the unit. A good run
+          # writes last-success (its time) on the Pi, last.
+          set -uo pipefail
+          dir={{ git_mirror_dir }}
+          creds={{ git_mirror_credentials_file }}
+          api={{ _git_mirror_api }}
+          pi={{ _git_mirror_pi }}
+          pidir={{ git_mirror_pi_dir }}
+          say() { logger -t git-mirror "$*"; echo "$*"; }
+          export GIT_TERMINAL_PROMPT=0
+          ssh_opts=(-o BatchMode=yes -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
+                    -o StrictHostKeyChecking=yes -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }})
+          export GIT_SSH_COMMAND="ssh ${ssh_opts[*]}"
+          helper=(-c credential.helper= -c "credential.helper=store --file=$creds")
+          token=$(python3 -c 'import sys, urllib.parse
+          print(urllib.parse.urlsplit(open(sys.argv[1]).read().strip()).password or "")' "$creds") || token=""
+          [ -n "$token" ] || { say "FAILED: no token in $creds"; exit 1; }
+          repos="" page=1
+          while :; do
+            out=$(curl -sf --max-time 60 -K <(printf 'header = "Authorization: token %s"\n' "$token") \
+              "$api?limit=50&page=$page") || { say "FAILED: the organisation's repositories not listed"; exit 1; }
+            names=$(python3 -c 'import json, sys
+          print("\n".join(r["name"] for r in json.load(sys.stdin)))' <<< "$out") || { say "FAILED: its listing not read"; exit 1; }
+            [ -n "$names" ] || break
+            repos+="$names"$'\n'
+            page=$((page + 1))
+          done
+          [ -n "$repos" ] || { say "FAILED: no repository listed"; exit 1; }
           failed=""
-          GIT_TERMINAL_PROMPT=0 sudo -u {{ _git_mirror_owner }} git -C "$MIRROR" fetch --prune origin 2>&1 \
-            | logger -t git-mirror || failed+=" fetch-from-Forgejo"
-          sudo -u {{ _git_mirror_owner }} git -C "$MIRROR" push --mirror pi 2>&1 | logger -t git-mirror \
-            || failed+=" push-to-the-Pis"
+          for r in $repos; do
+            [[ $r =~ ^[A-Za-z0-9._-]+$ ]] || { failed+=" $r(its name)"; continue; }
+            d=$dir/$r.git
+            url=https://{{ git_mirror_host }}/{{ git_mirror_org }}/$r.git
+            if [ ! -f "$d/HEAD" ]; then
+              git "${helper[@]}" clone -q --mirror "$url" "$d" 2>&1 | logger -t git-mirror || { failed+=" $r(clone)"; continue; }
+            fi
+            # its origin the organisation's, bare (a mirror made before pointed elsewhere, a password in its URL)
+            git -C "$d" remote set-url origin "$url" || { failed+=" $r(origin)"; continue; }
+            git "${helper[@]}" -C "$d" fetch -q --prune origin 2>&1 | logger -t git-mirror || failed+=" $r(fetch)"
+            ssh "${ssh_opts[@]}" "$pi" "test -f $pidir/$r.git/HEAD || git init -q --bare $pidir/$r.git" 2>&1 \
+              | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
+            git -C "$d" push -q --mirror "$pi:$pidir/$r.git" 2>&1 | logger -t git-mirror || failed+=" $r(push)"
+          done
           if [ -n "$failed" ]; then
-            logger -t git-mirror "FAILED:$failed"
+            say "FAILED:$failed"
             exit 1
           fi
-          logger -t git-mirror "Git mirror sync complete"
+          ssh "${ssh_opts[@]}" "$pi" "date -u +%Y%m%dT%H%M%SZ > $pidir/last-success" \
+            || { say "FAILED: its last-success not written on the Pi"; exit 1; }
+          say "mirrored:" $repos
       when: git_mirror_enabled | default(true) | bool
 
     - name: Create offsite backup systemd service
@@ -692,12 +706,13 @@
         mode: '0644'
         content: |
           [Unit]
-          Description=Rsync backups to Vault Pi (offsite copy)
+          Description=Mirror the Forgejo organisation's repositories to the Pis (offsite copy)
           After=network-online.target
           Wants=network-online.target
 
           [Service]
           Type=oneshot
+          User={{ _git_mirror_owner }}
           ExecStart=/usr/local/bin/offsite-backup-sync.sh
           TimeoutStartSec=1800
       when: offsite_backup_enabled | default(true) | bool
@@ -727,8 +742,19 @@
         daemon_reload: true
       when: offsite_backup_enabled | default(true) | bool
 
+    # proven now, not at 4 AM: the sync run once (a oneshot: the start waits for its end, a failure fails the play)
+    - name: The mirror synced now
+      ansible.builtin.systemd:
+        name: offsite-backup.service
+        state: started
+        daemon_reload: true
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - offsite_backup_enabled | default(true) | bool
+        - not ansible_check_mode
+
     - name: The mirror
       ansible.builtin.debug:
         msg: >-
-          Git mirror of {{ git_mirror_repo }}: {{ git_mirror_local_path }}, pushed daily at 4 AM (offsite-backup.timer)
-          to {{ offsite_backup_host | default(keepalived_vip) }}:/mnt/backups/git-mirror/monitor.git
+          Every repository of {{ git_mirror_org }} mirrored in {{ git_mirror_dir }}, pushed daily at 4 AM
+          (offsite-backup.timer) to {{ _git_mirror_pi }}:{{ git_mirror_pi_dir }}
