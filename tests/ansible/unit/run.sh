@@ -11,7 +11,7 @@ H=$(cd "${1:-$(dirname "$0")}" && pwd) || exit 1
 # FENCED line unseen). FENCE exported: a harness that rebuilds its PATH puts it first again
 FENCE=$(mktemp -d)
 export FENCE
-trap 'rm -rf "$FENCE"' EXIT
+trap 'rm -rf "$FENCE" "${scratch:-}"' EXIT
 for tool in ssh kubectl vagrant; do
   printf '#!/bin/sh\necho "FENCED: a unit harness ran %s $*" >&2\necho "%s $*" >> "%s/hits"\nexit 97\n' \
     "$tool" "$tool" "$FENCE" > "$FENCE/$tool"
@@ -24,16 +24,20 @@ harnesses=("$H"/*/run.sh)
 rc=0
 for r in "${harnesses[@]}"; do
   echo "== $(basename "$(dirname "$r")")"
+  # a temp directory of its own, removed after it: what it leaves goes with it (eleven left Python temp directories
+  # in /tmp - RAM here - on every run)
+  scratch=$(mktemp -d)
   # each harness started as CI's container and a terminal start it: no signal blocked (a tool's shell blocks SIGCHLD -
   # harmless to bash's traps, measured 2026-10-08, but not how CI runs them); every signal a harness's cases send at
   # its default - an ignored one survives the exec and cannot be trapped by bash (a caller's `nohup` or background job
   # ignoring INT made a stop case pass on nothing); SIGPIPE and SIGXFSZ too: Python ignores them (a write to a closed
   # pipe then no longer ends a shell - vagrant-smoke's heartbeat case)
-  python3 -c 'import os, signal, sys
+  TMPDIR=$scratch python3 -c 'import os, signal, sys
 signal.pthread_sigmask(signal.SIG_SETMASK, [])
 for s in (signal.SIGPIPE, signal.SIGXFSZ, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT, signal.SIGTERM):
     signal.signal(s, signal.SIG_DFL)
 os.execvp("bash", ["bash", sys.argv[1]])' "$r" || rc=1
+  rm -rf "$scratch"
   if [ -s "$FENCE/hits" ]; then
     echo "FENCED: $(basename "$(dirname "$r")") reached a real host: $(tr '\n' ';' < "$FENCE/hits")"
     rc=1

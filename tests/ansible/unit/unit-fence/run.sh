@@ -36,5 +36,12 @@ exit 1
 ' > "$W/suite-int/traps/run.sh"
 out=$( (trap '' INT; env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-int") 2>&1); rc=$?
 check "a runner started with INT ignored: each harness gets it at its default (its trap runs)" "$rc" 0
+# what a harness leaves in its temp directory goes with it: each runs with a TMPDIR of its own, removed after it (eleven
+# left Python temp directories in /tmp - RAM here - on every run)
+mkdir -p "$W/suite-tmp/leaks" "$W/tmproot"
+printf '#!/bin/bash\nmktemp -d > /dev/null; mktemp > /dev/null\nexit 0\n' > "$W/suite-tmp/leaks/run.sh"
+out=$(TMPDIR="$W/tmproot" env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-tmp" 2>&1); rc=$?
+check "a harness leaving temp files: gone with it, nothing left in the caller's temp directory" \
+  "$rc $(ls -A "$W/tmproot" | wc -l)" "0 0"
 echo "unit-fence: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
