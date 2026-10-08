@@ -106,6 +106,10 @@ VALUE_FILE = re.compile(r"^(?P<indent>\s*)- (?P<q>['\"]?)(?P<path>\$values/.+?)\
 HELM_KEY = re.compile(r"^(?P<indent>\s*)helm:\s*$")
 
 
+# git's credential helper answering a get from its environment (git's credential protocol: no command line)
+CRED_HELPER = ('!f() { test "$1" = get && printf \'username=%s\\npassword=%s\\n\' "$MIRROR_USER" "$MIRROR_PASSWORD"; }; f')
+
+
 def run(*cmd, cwd=None):
     subprocess.run(cmd, cwd=cwd, check=True)
 
@@ -271,8 +275,11 @@ def main():
             run("git", "-C", repo, "add", "-A")
             run("git", "-C", repo, "-c", "user.name=vagrant-mirror", "-c", "user.email=mirror@vagrant.test",
                 "commit", "-q", "--allow-empty", "-m", f"vagrant overlay on {name} {ref} {head}")
-            url = f"http://{user}:{password}@{a.forgejo}/schnappy/{name}.git"
-            run("git", "-C", repo, "push", "-q", "--force", url, "HEAD:main")
+            # the credentials from git's credential helper, read from its environment - in the URL they were on
+            # git's and git-remote-http's command lines (any local user reads those)
+            subprocess.run(["git", "-C", repo, "-c", "credential.helper=", "-c", "credential.helper=" + CRED_HELPER,
+                            "push", "-q", "--force", f"http://{a.forgejo}/schnappy/{name}.git", "HEAD:main"],
+                           check=True, env=dict(os.environ, MIRROR_USER=user, MIRROR_PASSWORD=password))
             pushed[f"http://{a.forgejo}/schnappy/{name}.git"] = subprocess.run(
                 ["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
             print(f"{name}: {ref} {head} + vagrant overlay pushed as main to http://{a.forgejo}/schnappy/{name}.git")

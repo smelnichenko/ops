@@ -311,19 +311,28 @@
             cat /etc/containerd/certs.d/{{ forgejo_host }}/hosts.toml
             echo "=== containerd config_path active? ==="
             grep -A2 "registry" /etc/containerd/config.toml | head -10
-            # the answer of the registry to the credentials (on the curl config, from the environment: never on a command line
-            # or in this log - curl -v printed the Authorization header)
-            echo "=== node-side registry probe: HTTP status ==="
-            printf 'user = "%s:%s"\n' "$REGISTRY_USER" "$REGISTRY_TOKEN" | curl -s -m 5 -K - -o /dev/null -w '%{http_code}\n' \
-              "http://{{ forgejo_host }}/v2/{{ forgejo_admin_user }}/monitor/manifests/{{ test_image_tag }}" || echo "(no answer)"
-          environment:
-            REGISTRY_USER: "{{ forgejo_admin_user }}"
-            REGISTRY_TOKEN: "{{ registry_token }}"
           changed_when: false
           register: _pull_diag
         - name: DIAG output
           ansible.builtin.debug:
             var: _pull_diag.stdout_lines
+        # the answer of the registry to the credentials: its HTTP status alone. Its credentials on curl's config from
+        # the task's stdin, no_log - in environment:, Ansible put them on the module's command line (and printed them
+        # at -vvv, no_log or not); curl -v printed the Authorization header
+        - name: DIAG node-side registry probe
+          ansible.builtin.shell:
+            cmd: >-
+              curl -s -m 5 -K - -o /dev/null -w '%{http_code}'
+              "http://{{ forgejo_host }}/v2/{{ forgejo_admin_user }}/monitor/manifests/{{ test_image_tag }}"
+              || echo "(no answer)"
+            stdin: 'user = "{{ forgejo_admin_user }}:{{ registry_token }}"'
+          changed_when: false
+          failed_when: false
+          register: _pull_probe
+          no_log: true
+        - name: DIAG node-side registry probe - its HTTP status
+          ansible.builtin.debug:
+            msg: "{{ _pull_probe.stdout | default('(not run)') }}"
         - name: Fail after diag
           ansible.builtin.fail:
             msg: "Pod image pull failing — see DIAG above"

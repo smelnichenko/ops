@@ -21,6 +21,17 @@ def check(name, got, want):
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got!r}, want {want!r}"))
 play = yaml.safe_load(open("deploy/ansible/playbooks/setup-argocd.yml"))[0]
 tasks = play["tasks"]
+# the client secret judged before anything is written - the namespace, Forgejo's token and Argo CD's repo credentials
+# among them (made, rotated, a token deleted, then single sign-on refused); only reads and checks before it
+names = [t.get("name") for t in tasks]
+judge = names.index("The client secret this run writes - set, and the one in use") \
+    if "The client secret this run writes - set, and the one in use" in names else len(names)
+READS = ("k8s_info", "assert", "fail", "set_fact", "debug", "command", "shell")
+writes = [t.get("name") for t in tasks[:judge]
+          if not any(k.split(".")[-1] in READS for k in t)
+          and not any(k.split(".")[-1] == "uri" and str(t[k].get("method", "GET")).upper() == "GET" for k in t)
+          or (any(k.split(".")[-1] in ("command", "shell") for k in t) and t.get("changed_when") is not False)]
+check("the client secret judged before anything is written (only reads and checks before it)", writes, [])
 helm = next(t for t in tasks if t.get("name") == "Deploy Argo CD")
 values = helm["kubernetes.core.helm"]["values"]
 check("the Helm install not no_log (its preview and its failures seen)", helm.get("no_log", False), False)

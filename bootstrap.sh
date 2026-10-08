@@ -363,7 +363,7 @@ eso_say_before() {
   [[ -s $before ]] || return 0
   err "Vault's config before this run (auth/kubernetes/config on $pi) - to put back by hand: its data below," \
     "token_reviewer_jwt the token of external-secrets/vault-token-reviewer in place of token_reviewer_jwt_set, then" \
-    "as root on $pi: vault write auth/kubernetes/config @<that JSON>"
+    "as root on $pi: vault write auth/kubernetes/config - (that JSON on its stdin - never in a file on the Pi)"
   python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("data") or {}, indent=1))' \
     "$before" >&2 || cat "$before" >&2
 }

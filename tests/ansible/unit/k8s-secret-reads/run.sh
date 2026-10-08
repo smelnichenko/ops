@@ -28,17 +28,18 @@ PUBLIC = {
     ("tests/ansible/upgrade/production-state.yml",
      "The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day"):
         ("the certificate (tls.crt) alone",
-         lambda x: bool(re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))
+         lambda x, t: bool(re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))
          and all(r == r"{.data.tls\.crt}" for r in re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))),
     ("tests/ansible/test-keycloak.yml", "DIAG events + describe + eso + secret"):
         ("the Secret's key names alone",
-         lambda x: all(re.search(r"-o json\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"data\"", line)
+         lambda x, t: all(re.search(r"-o json\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"data\"", line)
                        for line in norm(x).splitlines() if re.search(r"get secret", line))),
     ("tests/ansible/test-cicd.yml", "DIAG pod pull failure"):
-        ("the registry hosts of its credentials alone - its token on no command line, in no script",
-         lambda x: all(re.search(r"base64 -d\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"auths\"", line)
-                       for line in norm(x).splitlines() if re.search(r"get secret", line))
-         and "registry_token" not in x and not re.search(r"curl [^\n]*(-u |--user|-sv|-v )", norm(x))),
+        ("the registry hosts of its credentials alone - its token on no command line, in no script, in no "
+         "environment (Ansible puts that on the module's command line, and prints it at -vvv, no_log or not)",
+         lambda x, t: all(re.search(r"base64 -d\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"auths\"", line)
+                          for line in norm(x).splitlines() if re.search(r"get secret", line))
+         and "registry_token" not in str(t) and not re.search(r"curl [^\n]*(-u |--user|-sv|-v )", norm(x))),
 }
 CLI = re.compile(r"\bget\s+secrets?\b[^\n|;&]*?(-o|--output)[ =]*(?!name\b)\S")
 found, public_seen = [], set()
@@ -67,7 +68,7 @@ for f in files():
             key = (f, t.get("name"))
             if key in PUBLIC:
                 public_seen.add(key)
-                if not PUBLIC[key][1](str(val.get("cmd", val) if isinstance(val, dict) else val)):
+                if not PUBLIC[key][1](str(val.get("cmd", val) if isinstance(val, dict) else val), t):
                     found.append((f, t.get("name"), "named public, prints more: " + PUBLIC[key][0], None))
                 continue
             found.append((f, t.get("name"), what, t.get("no_log")))

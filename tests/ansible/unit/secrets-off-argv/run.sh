@@ -156,7 +156,11 @@ ARGV_SECRET = re.compile(r"(Bearer|Authorization:\s*(token|Basic))\s+\$"
                          r"|(^|\s)-p\s*\"?\$\{?\w*(pass|pw|secret|token)"
                          r"|(^|\s)(?-i:-u|--user)[= ]*[\"']?[^\s\"':]*:[\"']?\$"
                          r"|(?<=\blogin\s)[\"']?(token=)?\$"
-                         r"|://[^/\s:@]+:\$\{?\w+\}?@", re.I)
+                         r"|://[^/\s:@]+:\$\{?\w+\}?@"
+                         # Vault's token header, curl's bearer option, a -token= flag; a secret store's answer
+                         # (vault kv get, vault read) handed over as an argument
+                         r"|X-Vault-Token:\s*\$|--oauth2-bearer[= ]+\"?\$|(^|\s)-token[= ]+\"?\$"
+                         r"|\$\(\s*vault\s+(kv\s+get|read)\b", re.I)
 
 
 def argv_reads(script):
@@ -205,9 +209,16 @@ check("a run-time token on another program's argv: named; on a builtin's, a desc
        bool(argv_reads('git clone "https://u:${token}@git.example.org/r.git"')),
        bool(argv_reads('psql -U postgres -c "select 1"')),
        bool(argv_reads('vault login -method=userpass username=admin')),
-       bool(argv_reads('git clone "https://git.example.org/r.git"'))],
+       bool(argv_reads('git clone "https://git.example.org/r.git"')),
+       # once missed: Vault's token header, curl's bearer, a -token= flag, a secret store's answer as an argument -
+       # and the same read into a variable (no argv)
+       bool(argv_reads('curl -sf -H "X-Vault-Token: $VAULT_TOKEN" "$addr/v1/x"')),
+       bool(argv_reads('curl -sf --oauth2-bearer "$t" "$api"')),
+       bool(argv_reads('consul acl token read -token="$CONSUL_HTTP_TOKEN"')),
+       bool(argv_reads('python3 -c "x" "$(vault kv get -format=json secret/a)"')),
+       bool(argv_reads('s=$(vault kv get -format=json secret/a)'))],
       [True, True, True, False, False, False, False, False, True, True, True, True, False, False,
-       True, True, True, True, True, False, False, False])
+       True, True, True, True, True, False, False, False, True, True, True, True, False])
 
 
 def scripts(doc):
@@ -227,17 +238,68 @@ reads = [f"{f}: {n}: {line[:120]}" for f in files("deploy/ansible") for n, sc in
          for line in argv_reads(sc)]
 reads += [f"{f}: {line[:120]}" for f in sorted(glob.glob("deploy/ansible/playbooks/scripts/*") + glob.glob("scripts/*.sh")
                                                + ["bootstrap.sh"]) for line in argv_reads(open(f, errors="replace").read())]
-check("no secret read onto another program's command line in a playbook's scripts, the ops scripts, bootstrap.sh",
-      reads, [])
+# the full run's own playbooks (tests/ansible/upgrade: every step runs them, on a copy holding production's
+# secrets) too - each read named below in a pod's own shell (kubectl exec ... sh -c), the pod's env var on its client's
+# argv in that pod: whether its ClickHouse client reads the password from its environment is not known here (24.8 to
+# 25.x, not measured), Grafana's curl the same - left, each named, none more
+POD_READS = {
+    ("tests/ansible/upgrade/metrics-check.yml", "Container logs reach ClickHouse (Fluent Bit -> logs.podlogs, rows of the last two minutes)"),
+    ("tests/ansible/upgrade/survival-check.yml", "ClickHouse - the canary table, its rows written and merged into one part (seed)"),
+    ("tests/ansible/upgrade/survival-check.yml", "ClickHouse - exactly the seeded rows, the compatibility setting as the step files say, the version"),
+    ("tests/ansible/upgrade/survival-check.yml", "Grafana - the canary dashboard (seed)"),
+    ("tests/ansible/upgrade/survival-check.yml", "Grafana - every dashboard UID, and the canary's content"),
+    ("tests/ansible/upgrade/survival-check.yml", "Grafana - every datasource healthy"),
+    ("tests/ansible/upgrade/wave0-rehearsal.yml", "ClickHouse - the canary's frozen parts restored into a new table of its schema"),
+}
+pod_seen = set()
+for f in files("tests/ansible/upgrade"):
+    for n, sc in scripts(load(f)):
+        for line in argv_reads(sc):
+            if (f, n) in POD_READS:
+                pod_seen.add((f, n))
+            else:
+                reads.append(f"{f}: {n}: {line[:120]}")
+# Python scripts: a URL carrying a credential (f"http://{user}:{password}@...") lands on git's argv
+PY_URL = re.compile(r"://\{[^}]+\}:\{[^}]*(pass|token|secret)[^}]*\}@", re.I)
+reads += [f"{f}: {line.strip()[:120]}" for f in sorted(glob.glob("scripts/*.py") + glob.glob("deploy/ansible/playbooks/scripts/*.py"))
+          for line in open(f, errors="replace") if PY_URL.search(line)]
+check("no secret read onto another program's command line in a playbook's scripts, the full run's playbooks, the ops "
+      "scripts (Python's among them), bootstrap.sh", reads, [])
+check("every in-pod read left still there (one gone is dropped from the list, not kept)", sorted(POD_READS - pod_seen), [])
+# the mirror's push: its credentials from a helper reading its environment - git asked as a push asks, the password
+# with a quote and a $ given back exactly (git's credential protocol: no command line)
+import importlib.util, os, subprocess  # noqa: E401,E402
+spec = importlib.util.spec_from_file_location("mirror", "scripts/vagrant-gitops-mirror.py")
+mirror = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mirror)
+r = subprocess.run(["git", "-c", "credential.helper=", "-c", "credential.helper=" + mirror.CRED_HELPER, "credential", "fill"],
+                   input="protocol=http\nhost=x\n\n", capture_output=True, text=True,
+                   env=dict(os.environ, MIRROR_USER="u1", MIRROR_PASSWORD="p'w$x", GIT_TERMINAL_PROMPT="0"))
+check("the mirror's credential helper: git given the user and the password from its environment, exactly",
+      (r.returncode, "username=u1" in r.stdout.splitlines(), "password=p'w$x" in r.stdout.splitlines()), (0, True, True))
+# the realm seed's two Vault answers read one after the other from stdin - its parse on two documents as vault prints them
+seed = next(t for p in load("tests/ansible/upgrade/keycloak-realm.yml") if isinstance(p, dict)
+            for t in p.get("tasks") or [] if t.get("name") == "Read the Keycloak and Grafana secrets from the Vagrant Vault")
+code = str(seed["ansible.builtin.shell"]).split("python3 -c '", 1)[1].rsplit("'", 1)[0]
+doc = lambda d: json.dumps({"request_id": "x", "data": {"data": d, "metadata": {}}}, indent=2) + "\n"
+import json  # noqa: E402
+r = subprocess.run(["python3", "-c", "\n".join(l[8:] if l.startswith(" " * 8) else l for l in code.splitlines())],
+                   input=doc({"admin_password": "a"}) + doc({"admin_password": "g"}), capture_output=True, text=True)
+check("the realm seed's two Vault answers parsed from stdin, each its own",
+      json.loads(r.stdout or "{}") if r.returncode == 0 else r.stderr[-200:],
+      {"keycloak": {"admin_password": "a"}, "grafana": {"admin_password": "g"}})
+check("a Python URL with a credential: named; one without: not",
+      [bool(PY_URL.search('url = f"http://{user}:{password}@{host}/r.git"')),
+       bool(PY_URL.search('url = f"http://{host}/schnappy/{name}.git"'))], [True, False])
 bad, used = [], set()
-for f in files("deploy/ansible"):
+for f in files("deploy/ansible", "tests/ansible/upgrade"):
     for t, scope in judged(load(f)):
         for n in named(t, scope):
             if (f, t.get("name")) in ALLOWED:
                 used.add((f, t.get("name")))
             else:
                 bad.append(f"{f}: {t.get('name')}: {n}")
-check("no secret on a command line in deploy/ansible (beyond the excepted)", bad, [])
+check("no secret on a command line in deploy/ansible or the full run's playbooks (beyond the excepted)", bad, [])
 check("every exception still needed (one whose task changed is dropped, not kept)", sorted(set(ALLOWED) - used), [])
 print("secrets-off-argv: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
