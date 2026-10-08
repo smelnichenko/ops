@@ -13,6 +13,7 @@ import re
 import sys
 sys.path.insert(0, "tests/ansible/unit")
 from plays import actions, files, load, tasks  # noqa: E402
+from templar import condition  # noqa: E402
 fails = 0
 def check(name, got, want):
     global fails
@@ -42,25 +43,110 @@ for f, found in sorted(urls.items()):
         q = u.split("?", 1)[1] if "?" in u else ""
         check(f"{f}: {u} - the driver takes any server, no other server type",
               re.findall(r"(?:^|&)targetServerType=([^&\"']*)", q), ["any"])
-# the copy given production's unit (tests/ansible/upgrade/production-state.yml): its URL as production's Pis have it,
-# before the fix - step 00 moves it
-state = [u for t in tasks(load("tests/ansible/upgrade/production-state.yml")) for _, v in actions(t) for s in strings(v)
-         for u in re.findall(r"Environment=KC_DB_URL=([^\n]+)", s)]
-check("the copy's production state: production's URL (no server type), step 00 moving it to the playbooks'",
-      (state, any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
-                  for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt"))),
-      (["jdbc:postgresql://127.0.0.1:6432/keycloak"], True))
-# step 00's tagged run (--tags keycloak-db-url) reaches the unit, its restart and every fact its URL is made of - one
-# left out is undefined there (the run fails), or read from nothing
+# the copy given production's whole unit (tests/ansible/upgrade/production-state.yml), as read on both Pis
+# 2026-10-08: its URL without a server type, its passwords inline, no EnvironmentFile, no /etc/keycloak, no restart
+# stamp - its masked text (each password's value ***MASKED***) md5 80d478b8... on both; step 00 moves it. A copy
+# given the URL alone ran step 00 green on a unit production does not have (the secrets file it needs was not there)
+import hashlib  # noqa: E402
+PROD_MASKED_MD5 = "80d478b881e8f4a768f6b58200eacaae"
+ps = list(tasks(load("tests/ansible/upgrade/production-state.yml")))
+unit = next((v.get("content") for t in ps for m, v in actions(t) if isinstance(v, dict)
+             and v.get("dest") == "/etc/systemd/system/keycloak.service"), None)
+masked = re.sub(r"(?m)^(Environment=KC_[A-Z_]*PASSWORD=).*$", r"\1***MASKED***", unit or "")
+check("the copy's Keycloak unit is production's, masked md5 as read on both Pis",
+      hashlib.md5(masked.encode()).hexdigest(), PROD_MASKED_MD5)
+gone = sorted(str(x) for t in ps for m, v in actions(t) if isinstance(v, dict) and v.get("state") == "absent"
+              for x in (t.get("loop") if v.get("path") == "{{ item }}" else [v.get("path")]))
+check("the copy without /etc/keycloak and Keycloak's restart stamp, as production",
+      gone, ["/etc/keycloak", "/var/lib/config-loaded/keycloak.sha256"])
+check("step 00 runs the tagged playbook", any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
+                                              for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt")), True)
+# step 00's tagged run (--tags keycloak-db-url) reaches everything the unit needs: the facts its URL is made of, the
+# credentials' check, every file it names by EnvironmentFile=, the unit, its start and its restart - one left out is
+# undefined there, or the unit names a file the run never wrote (production's Keycloak failed to start)
 doc = load("deploy/ansible/playbooks/setup-pi-services.yml")
+every = list(tasks(doc))
+tagged = lambda t: "keycloak-db-url" in (t.get("tags") or [])  # noqa: E731
 facts = {"_patroni_state", "_pgbouncer_state", "_patroni_installed", "_db_port", "keycloak_db_host_effective"}
 def makes(t):
     sf = t.get("ansible.builtin.set_fact") or {}
     return ({t.get("register")} | set(sf if isinstance(sf, dict) else {})) & facts
-needed = [t for t in tasks(doc) if makes(t) or t.get("name") in ("Install Keycloak systemd service", "Restart Keycloak")]
-check("the tag on the unit, its restart and every task making a fact of its URL (none untagged)",
-      (sorted(set().union(*(makes(t) for t in needed))) == sorted(facts), len(needed) >= 2 + len(facts) - 1,
-       [t.get("name") for t in needed if "keycloak-db-url" not in (t.get("tags") or [])]), (True, True, []))
+fact_tasks = [t for t in every if makes(t)]
+check("every task making a fact of its URL tagged", (sorted(set().union(*(makes(t) for t in fact_tasks))),
+      [t.get("name") for t in fact_tasks if not tagged(t)]), (sorted(facts), []))
+unit_task = next(t for t in every if (t.get("ansible.builtin.copy") or {}).get("dest") == "/etc/systemd/system/keycloak.service")
+named = re.findall(r"(?m)^EnvironmentFile=(?!-)(\S+)$", unit_task["ansible.builtin.copy"]["content"])
+writers = {f: [t for t in every for m, v in actions(t) if isinstance(v, dict) and v.get("dest") == f] for f in named}
+check("every file the unit names by EnvironmentFile= written by a tagged task, its directory too",
+      (bool(named), {f: [tagged(t) for t in w] for f, w in writers.items()},
+       [tagged(t) for t in every for m, v in actions(t) if isinstance(v, dict) and v.get("state") == "directory"
+        and any(f.startswith(str(v.get("path")) + "/") for f in named)]),
+      (True, {f: [True] for f in named}, [True]))
+check("the unit, its start and the credentials' check tagged",
+      [tagged(t) for t in (unit_task, next(t for t in every if t.get("name") == "Enable and start Keycloak"),
+                           next(t for t in every if t.get("name") == "Its credentials are all there"))], [True] * 3)
+# its restart pending by content (tasks/restart-pending.yml: a restart that failed or was refused stays pending and the
+# next run makes it - a handler fired once and a re-run left the old process running), the Pi without the VIP first
+# (only the VIP's Caddy serves logins: the other's restart costs nothing, and a unit that does not start is found there),
+# never in a preview (which wrote neither file)
+check("no handler restarts Keycloak, nothing notifies one",
+      ([t.get("name") for p in doc for t in p.get("handlers") or [] if "Keycloak" in str(t.get("name"))],
+       [t.get("name") for t in every if "Keycloak" in str(t.get("notify", ""))]), ([], []))
+pend = next((t for t in every if "restart-pending.yml" in str(t.get("ansible.builtin.include_tasks"))), None)
+rec = next((t for t in every if "restart-recorded.yml" in str(t.get("ansible.builtin.include_tasks"))), None)
+check("its restart pending by its unit and secrets file, recorded after - both tagged, in no preview",
+      (pend is not None and sorted((pend.get("vars") or {}).get("loaded_files") or []) ==
+       sorted(["/etc/systemd/system/keycloak.service"] + named) and tagged(pend), rec is not None and tagged(rec),
+       [condition(x.get("when", True), ansible_check_mode=True) for x in (pend or {}, rec or {})]),
+      (True, True, [False, False]))
+restarts = [t for t in every if str(t.get("name", "")).startswith("Keycloak restarted where pending")]
+check("two restarts: the Pi without the VIP, then the one with it - both tagged",
+      ([every.index(t) for t in restarts] == sorted(every.index(t) for t in restarts), len(restarts),
+       [tagged(t) for t in restarts]), (True, 2, [True, True]))
+if len(restarts) == 2:
+    vip_reg = next(t.get("register") for t in every if "keepalived_vip" in str(t.get("ansible.builtin.command", "")))
+    def runs(t, pending, vip, check_mode=False):
+        return condition(t.get("when", True), ansible_check_mode=check_mode,
+                         _restart_pending={"stdout_lines": [pending, "h"]}, **{vip_reg: {"stdout": vip}})
+    check("the first only where pending without the VIP, the second only where pending with it; none in a preview",
+          [[runs(t, "pending", ""), runs(t, "pending", "2: eth0 inet 10.0.0.5/32"), runs(t, "current", ""),
+            runs(t, "pending", "", True)] for t in restarts],
+          [[True, False, False, False], [False, True, False, False]])
+    # the restart's own script: a file the unit names missing - refused, nothing restarted; the peer not serving while
+    # this one does - refused; else restarted and serving
+    import os, subprocess, tempfile  # noqa: E401,E402
+    from templar import render  # noqa: E402
+    W = tempfile.mkdtemp()
+    os.makedirs(os.path.join(W, "bin"))
+    open(os.path.join(W, "bin", "systemctl"), "w").write('#!/bin/bash\necho "systemctl $*" >> "$W/calls"\n')
+    open(os.path.join(W, "bin", "curl"), "w").write(
+        '#!/bin/bash\ncase "$*" in *127.0.0.1*) [ -z "${HERE_DOWN:-}" ] ;; *) [ -z "${PEER_DOWN:-}" ] ;; esac\n')
+    for b in ("systemctl", "curl"):
+        os.chmod(os.path.join(W, "bin", b), 0o755)
+    def restart(t, have_file=True, **env):
+        sh = t["ansible.builtin.shell"]
+        script = render(sh if isinstance(sh, str) else sh["cmd"], inventory_hostname="pi1", peer_ip="10.0.0.2")
+        u = os.path.join(W, "keycloak.service")
+        f = os.path.join(W, "secrets.env")
+        open(u, "w").write(f"[Service]\nEnvironmentFile={f}\nEnvironmentFile=-{W}/optional.env\n")
+        if have_file:
+            open(f, "w").write("KC_DB_PASSWORD=x\n")
+        elif os.path.exists(f):
+            os.remove(f)
+        open(os.path.join(W, "calls"), "w").close()
+        r = subprocess.run(["bash", "-c", script.replace("/etc/systemd/system/keycloak.service", u)],
+                           capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
+        return r.returncode, "REFUSED" in r.stderr, "systemctl restart keycloak" in open(os.path.join(W, "calls")).read()
+    check("its restart: the unit's secrets file missing - refused, nothing restarted (an optional one's absence fine); "
+          "the peer down while this serves - refused; else restarted",
+          [restart(restarts[0], have_file=False), restart(restarts[0], PEER_DOWN="1"), restart(restarts[0])],
+          [(1, True, False), (1, True, False), (0, False, True)])
+# step 00 says what it costs and how it is undone
+text = open("tests/ansible/upgrade/steps/00-gluster-boot.txt").read()
+check("step 00's outage names logins down while the VIP's Keycloak restarts; its abort puts the old URL back, "
+      "PgBouncer restarted first", ("auth.pmon.dev" in text and "VIP" in text,
+                                    bool(re.search(r"abort:.*\n(#.*\n)*?#.*pgbouncer", text, re.I))), (True, True))
 # one URL's query on every writer: two that differ restart Keycloak on each other's every run
 check("the same query from every writer", len({u.split("?", 1)[-1] for found in urls.values() for u in found}), 1)
 print("keycloak-db-url: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

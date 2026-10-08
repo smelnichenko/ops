@@ -1,6 +1,7 @@
 #!/bin/bash
-# The Pis' restarts never take the last serving copy of a service down (setup-pi-services' Forgejo, Keycloak and
-# HAProxy handlers, tasks/versitygw.yml's restart loop): throttle and a loop run the second Pi even after the first
+# The Pis' restarts never take the last serving copy of a service down (setup-pi-services' Forgejo and HAProxy
+# handlers, its Keycloak restarts where pending, tasks/versitygw.yml's restart loop): throttle and a loop run the second
+# Pi even after the first
 # one's restart failed. Each command as the playbook holds it, run with curl answering for the hosts set up, systemctl
 # and sleep stubbed: serving here and not on the other Pi - refused, nothing restarted; serving on both - restarted;
 # serving on neither (a first install, a service down already) - restarted.
@@ -31,7 +32,12 @@ pb = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-services.yml"))
 handlers = {h["name"]: h["ansible.builtin.shell"] for h in pb[0]["handlers"] if "ansible.builtin.shell" in h}
 vgw = next(t for t in yaml.safe_load(open("deploy/ansible/playbooks/tasks/versitygw.yml"))
            if t.get("name", "").startswith("Restart versitygw"))["ansible.builtin.shell"]
-cmds = {n: handlers[n] for n in ("Restart Forgejo", "Restart Keycloak", "Restart HAProxy")}
+cmds = {n: handlers[n] for n in ("Restart Forgejo", "Restart HAProxy")}
+# Keycloak's: the restart where pending (both tasks run the one script), its unit naming no secrets file here
+kc = next(t for t in pb[0]["tasks"] if t.get("name") == "Keycloak restarted where pending - the Pi without the VIP")
+unit = os.path.join(work, "keycloak.service")
+open(unit, "w").write("[Service]\n")
+cmds["Restart Keycloak"] = kc["ansible.builtin.shell"]["cmd"].replace("/etc/systemd/system/keycloak.service", unit)
 cmds["Restart versitygw (loop)"] = vgw
 SUBST = {"{{ peer_ip }}": "10.0.0.2", "{{ _peer }}": "10.0.0.2", "{{ inventory_hostname }}": "pi1", "{{ item }}": "pi1",
          "{{ vgw_port }}": "9000"}

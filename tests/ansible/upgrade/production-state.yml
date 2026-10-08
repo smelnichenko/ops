@@ -134,10 +134,12 @@
         _wildcard_check.rc != 0 or "Let's Encrypt" not in _wildcard_check.stdout
         or 'DNS:*.pmon.dev' not in _wildcard_check.stdout
 
-# Keycloak's unit as production's Pis have it (read 2026-10-08: its URL without targetServerType) - the file only: the
-# Keycloak running keeps the URL it booted with (the playbooks' own, any server), so nothing on the copy meets
-# PgBouncer's kept startup parameters with it; step 00 writes the playbook's URL and restarts Keycloak one Pi at a time,
-# as it will on production
+# Keycloak's unit as production's Pis have it (read 2026-10-08, both alike): its URL without a server type, its
+# passwords inline (the copy's own here), no EnvironmentFile, no /etc/keycloak, no restart stamp - the file only: the
+# Keycloak running keeps what it booted with (the playbooks' unit and secrets file), so nothing on the copy meets
+# PgBouncer's kept startup parameters with it. Step 00 writes the playbook's unit and secrets file and restarts Keycloak,
+# the Pi without the VIP first, as it will on production. Given the URL alone, step 00 ran green on a unit production
+# does not have
 - name: Keycloak's unit as production's Pis have it
   hosts: pis
   become: true
@@ -146,8 +148,43 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
-    - name: Its database URL as production's (no restart)
-      ansible.builtin.lineinfile:
-        path: /etc/systemd/system/keycloak.service
-        regexp: '^Environment=KC_DB_URL='
-        line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:6432/keycloak"
+    - name: Its unit as production's (no restart)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/keycloak.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Keycloak SSO
+          After=network-online.target patroni.service haproxy.service
+          # Wants (soft) rather than Requires (hard): orders start AFTER
+          # patroni+haproxy when they exist, but doesn't block keycloak
+          # from starting if those units aren't installed yet (fresh
+          # vagrant run where playbook order matters). Keycloak retries
+          # its DB connection internally so eventual-consistency is fine.
+          Wants=network-online.target patroni.service haproxy.service
+          [Service]
+          Type=exec
+          User=keycloak
+          Group=keycloak
+          Environment=KC_DB=postgres
+          Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:6432/keycloak
+          Environment=KC_DB_USERNAME=postgres
+          Environment=KC_DB_PASSWORD={{ postgres_admin_password }}
+          Environment=KC_HOSTNAME=auth.pmon.dev
+          Environment=KC_PROXY_HEADERS=xforwarded
+          Environment=KC_HTTP_ENABLED=true
+          Environment=KC_HTTP_PORT=8080
+          Environment=KC_BOOTSTRAP_ADMIN_USERNAME=admin
+          Environment=KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
+          ExecStart=/opt/keycloak/bin/kc.sh start-dev
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+      no_log: true
+
+    - name: No secrets file, no restart stamp - as production
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: [/etc/keycloak, /var/lib/config-loaded/keycloak.sha256]

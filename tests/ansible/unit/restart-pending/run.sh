@@ -82,9 +82,10 @@ for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml")):
             svc = [(t2.get("ansible.builtin.systemd") or t2.get("ansible.builtin.systemd_service") or {}).get("name")
                    for t2 in ts if t2.get("register") == reg]
             users[os.path.basename(f)] = (v["loaded_service"], svc)
-check("loaded_started_now in consul, keepalived, patroni, vault: each its own service's systemd register",
+check("loaded_started_now in consul, keepalived, patroni, vault, keycloak: each its own service's systemd register",
       users, {f"setup-{n}.yml": (s_, [s_]) for n, s_ in (("consul", "consul"), ("keepalived", "keepalived"),
-                                                        ("patroni", "patroni"), ("vault-pi", "vault"))})
+                                                        ("patroni", "patroni"), ("vault-pi", "vault"),
+                                                        ("pi-services", "keycloak"))})
 # and each one's expression, as Ansible renders it, for what its start task can find: started now from inactive or
 # failed; not when it ran already (active, activating), nor when the status is not there (a default of "running")
 STATES = (("inactive", True), ("failed", True), ("active", False), ("activating", False), (None, False))

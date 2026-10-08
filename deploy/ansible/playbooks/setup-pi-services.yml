@@ -35,6 +35,7 @@
     # a key missing from .env wrote empty passwords and secrets (Forgejo's PASSWD, KC_DB_PASSWORD, SECRET_KEY, the
     # gateway's root key) and restarted the services on them
     - name: Its credentials are all there
+      tags: [keycloak-db-url]
       ansible.builtin.assert:
         that:
           - postgres_admin_password | default('') | length > 0
@@ -590,26 +591,27 @@
     # the passwords in a root-only file systemd reads before it drops to the keycloak user - a unit file is
     # world-readable (and `systemctl show` prints its Environment= lines to anyone)
     - name: Keycloak's secrets directory, root only
+      tags: [keycloak-db-url]
       ansible.builtin.file:
         path: /etc/keycloak
         state: directory
         mode: '0700'
 
     - name: Keycloak's secrets, root only
+      tags: [keycloak-db-url]
       ansible.builtin.copy:
         dest: /etc/keycloak/secrets.env
         mode: '0600'
         content: |
           KC_DB_PASSWORD={{ keycloak_db_password }}
           KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
-      notify: Restart Keycloak
       no_log: true
 
     # targetServerType=any: PgBouncer hands every client the startup parameters of its first server connection, never
-    # (--tags keycloak-db-url: this unit, the facts its URL is made of and its restart alone - one Pi at a time)
     # read again - one made to the replica (HAProxy's servers start up, before their first check) says in_hot_standby=on
     # for good, and Keycloak's default (primary) then refused every connection until PgBouncer restarted. HAProxy's
-    # /primary check picks the primary. setup-patroni.yml writes the same URL when the port changes
+    # /primary check picks the primary. setup-patroni.yml writes the same URL when the port changes. --tags
+    # keycloak-db-url: this unit and all it needs - the facts its URL is made of, the secrets file it names, its restart
     - name: Install Keycloak systemd service
       tags: [keycloak-db-url]
       ansible.builtin.copy:
@@ -643,15 +645,90 @@
           RestartSec=5
           [Install]
           WantedBy=multi-user.target
-      notify: Restart Keycloak
       no_log: true
 
     - name: Enable and start Keycloak
+      tags: [keycloak-db-url]
       ansible.builtin.systemd:
         name: keycloak
         enabled: true
         state: started
         daemon_reload: true
+      register: _keycloak_start
+
+    # Keycloak restarted where its unit or secrets file differ from what it last loaded (a stamp, by content): a restart
+    # that failed or was refused stays pending and the next run makes it - a handler fired once, and a re-run left the
+    # old process running. Not in a preview: it wrote neither file
+    - name: Keycloak's restart pending here - its unit and secrets against the ones it last loaded
+      tags: [keycloak-db-url]
+      ansible.builtin.include_tasks:
+        file: tasks/restart-pending.yml
+        apply:
+          tags: [keycloak-db-url]
+      vars:
+        loaded_service: keycloak
+        loaded_files: [/etc/systemd/system/keycloak.service, /etc/keycloak/secrets.env]
+        # its status as the start found it: not running, it started on these files just now
+        loaded_started_now: "{{ _keycloak_start.status.ActiveState | default('active') not in ['active', 'activating'] }}"
+      when: not ansible_check_mode
+
+    # only the VIP's Caddy serves logins (each Pi's proxies auth.pmon.dev to its own Keycloak): the other Pi's restart
+    # costs nothing and a unit that does not start is found there - the VIP's last, logins down while it starts
+    - name: Whether this Pi holds the VIP
+      tags: [keycloak-db-url]
+      ansible.builtin.command:
+        argv: [ip, -o, addr, show, to, "{{ keepalived_vip }}"]
+      register: _keycloak_vip
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: Keycloak restarted where pending - the Pi without the VIP
+      tags: [keycloak-db-url]
+      ansible.builtin.shell:
+        executable: /bin/bash
+        # every file the unit loads its environment from there (one missing failed its start: "Failed to load
+        # environment files" - production's Keycloak down); the other Pi serving while this one does
+        cmd: &keycloak_restart |
+          set -euo pipefail
+          up() { curl -sf -o /dev/null --max-time 10 "http://$1:8080/realms/master"; }
+          for f in $(sed -n 's/^EnvironmentFile=\([^-].*\)$/\1/p' /etc/systemd/system/keycloak.service); do
+            [ -s "$f" ] || { echo "REFUSED on {{ inventory_hostname }}: $f (the unit's EnvironmentFile) is missing - Keycloak not restarted" >&2; exit 1; }
+          done
+          if up 127.0.0.1 && ! up {{ peer_ip }}; then
+            echo "REFUSED on {{ inventory_hostname }}: Keycloak serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
+          fi
+          systemctl daemon-reload
+          systemctl restart keycloak
+          for _ in $(seq 120); do up 127.0.0.1 && exit 0; sleep 2; done
+          echo "Keycloak on {{ inventory_hostname }} not serving 240 s after its restart" >&2; exit 1
+      changed_when: true
+      when:
+        - not ansible_check_mode
+        - _restart_pending.stdout_lines[0] == 'pending'
+        - _keycloak_vip.stdout | length == 0
+
+    - name: Keycloak restarted where pending - the Pi with the VIP (logins down while it starts)
+      tags: [keycloak-db-url]
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: *keycloak_restart
+      changed_when: true
+      when:
+        - not ansible_check_mode
+        - _restart_pending.stdout_lines[0] == 'pending'
+        - _keycloak_vip.stdout | length > 0
+
+    # what the next run compares with: restarted (a failure ends this Pi's run before here), or current
+    - name: Keycloak's config as it runs it, recorded
+      tags: [keycloak-db-url]
+      ansible.builtin.include_tasks:
+        file: tasks/restart-recorded.yml
+        apply:
+          tags: [keycloak-db-url]
+      vars:
+        loaded_service: keycloak
+        loaded_hash: "{{ _restart_pending.stdout_lines[1] }}"
+      when: not ansible_check_mode
 
     - name: Wait for Keycloak
       ansible.builtin.uri:
@@ -706,23 +783,6 @@
         systemctl restart forgejo
         for _ in $(seq 90); do curl -sf --max-time 10 -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0; sleep 2; done
         echo "Forgejo on {{ inventory_hostname }} not serving 180 s after its restart" >&2; exit 1
-      args:
-        executable: /bin/bash
-      throttle: 1
-      changed_when: true
-
-    - name: Restart Keycloak
-      tags: [keycloak-db-url]
-      ansible.builtin.shell: |
-        set -euo pipefail
-        up() { curl -sf -o /dev/null --max-time 10 "http://$1:8080/realms/master"; }
-        if up 127.0.0.1 && ! up {{ peer_ip }}; then
-          echo "REFUSED on {{ inventory_hostname }}: Keycloak serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
-        fi
-        systemctl daemon-reload
-        systemctl restart keycloak
-        for _ in $(seq 120); do curl -sf --max-time 10 -o /dev/null http://127.0.0.1:8080/realms/master && exit 0; sleep 2; done
-        echo "Keycloak on {{ inventory_hostname }} not serving 240 s after its restart" >&2; exit 1
       args:
         executable: /bin/bash
       throttle: 1

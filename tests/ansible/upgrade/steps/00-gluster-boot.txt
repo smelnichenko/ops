@@ -12,9 +12,15 @@
 # each Pi: `systemctl disable gluster-volumes-ready`, `,x-systemd.after=gluster-volumes-ready.service` taken out of the
 # glusterfs lines' options in /etc/fstab, `systemctl daemon-reload` - not rehearsed
 playbook setup-gluster.yml
-# Keycloak's database URL as ops main has it (?targetServerType=any): PgBouncer keeps its first server connection's
-# startup parameters, and one made to the replica (HAProxy's servers up before their first check - a Pi's reboot)
-# kept in_hot_standby=on - Keycloak's default, a primary, refused every connection until PgBouncer restarted (Vagrant
-# full run, 2026-10-08). Production's Pis run the URL without it (read 2026-10-08; the copy's production-state writes
-# it so): the unit rewritten, Keycloak restarted one Pi at a time, the other serving logins meanwhile
+# Keycloak's unit as ops main has it: its database URL taking any server (?targetServerType=any - PgBouncer keeps its
+# first server connection's startup parameters, and one made to the replica, HAProxy's servers up before their first
+# check after a Pi's reboot, kept in_hot_standby=on: Keycloak's default, a primary, refused every connection until
+# PgBouncer restarted - Vagrant full run, 2026-10-08), its passwords in the root-only /etc/keycloak/secrets.env - not
+# inline in the world-readable unit (production's both, read 2026-10-08; the copy's production-state writes it so).
+# Restarted where pending, the Pi without the VIP first, refused where the secrets file is missing.
+# outage: auth.pmon.dev (every login, a new pod's key fetch) down while the VIP Pi's Keycloak restarts - each Pi's Caddy
+# proxies it to its own Keycloak, only the VIP's serves (about a minute); the other Pi's restart costs nothing
+# abort: by hand on each Pi, the Pi with the VIP last - the unit's URL without ?targetServerType=any (the secrets file
+# stays: the unit reads it), `systemctl restart pgbouncer` first (a stale startup parameter is what this step fixes),
+# then `systemctl daemon-reload && systemctl restart keycloak`
 playbook setup-pi-services.yml --tags keycloak-db-url
