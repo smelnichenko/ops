@@ -7,10 +7,12 @@
 # (one was: anyone reading it was External Secrets, every secret it may read); Vault verified against its CA, not
 # skipped; a failure on the Pi fails the step (it warned and went on). Only on the cluster that Vault serves: a kube
 # context on another refuses before any write. Then External Secrets' login on that config proven - one ExternalSecret,
-# Ready before the switch (picked before any write: none Ready, nothing is written), refreshed after it, Ready - before
-# production's old reviewer token (a non-expiring token of External Secrets' own account, one that reads every Secret)
-# is deleted. Not proven: Vault's config as it was put back - read before the write, its reviewer token from the kept
-# Secret - and External Secrets' login on it proven again. Every read checked: a failed one is never "nothing there".
+# Ready before the switch (picked before any write), refreshed after it, Ready - before production's old reviewer token
+# (a non-expiring token of External Secrets' own account, one that reads every Secret) is deleted. Not proven: Vault's
+# config as it was put back - read before the write, its reviewer token from the kept Secret - and External Secrets'
+# login on it proven again. None Ready before (a rebuilt cluster, DR step 5: Vault's config names the old cluster's CA,
+# every ExternalSecret fails): nothing logs in to lose - switched all the same, proven by any ExternalSecret, nothing
+# put back (the old config did not work either). Every read checked: a failed one is never "nothing there".
 # tests/ansible/upgrade/isolate-cluster.yml writes the same configuration to the Vagrant Vault.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
@@ -35,12 +37,15 @@ case "\$*" in
     n=\$(( \$(cat "$W/es-reads" 2> /dev/null || echo 0) + 1 )); echo \$n > "$W/es-reads"
     [ "\${ES_READ_FAILS_AT:-0}" != "\$n" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
     # after the rollback (Vault's config written back), the login works again unless ROLLBACK_LOGIN=no
+    # "<refresh time> <syncedResourceVersion> <Ready>": the version changes once a reconcile saw the force-sync annotation
+    # (Inflight: one already running refreshes - a new time - with the version from before the annotation)
     if [ -e "$W/rolled-back" ] && [ -e "$W/annotated-again" ]; then
-      [ "\${ROLLBACK_LOGIN:-yes}" = yes ] && echo "2026-10-08T03:00:00Z True" || echo "2026-10-08T01:00:00Z False"
-    elif [ ! -e "$W/annotated" ] || [ "\${ES_READY:-True}" = Stale ]; then echo "2026-10-08T01:00:00Z True"
-    elif [ "\${ES_READY:-True}" = True ]; then echo "2026-10-08T02:00:00Z True"
-    elif [ "\${ES_READY:-True}" = Moved ]; then echo "2026-10-08T02:00:00Z False"
-    else echo "2026-10-08T01:00:00Z False"; fi ;;
+      [ "\${ROLLBACK_LOGIN:-yes}" = yes ] && echo "2026-10-08T03:00:00Z 1-ccc True" || echo "2026-10-08T01:00:00Z 1-aaa False"
+    elif [ ! -e "$W/annotated" ] || [ "\${ES_READY:-True}" = Stale ]; then echo "2026-10-08T01:00:00Z 1-aaa True"
+    elif [ "\${ES_READY:-True}" = True ]; then echo "2026-10-08T02:00:00Z 1-bbb True"
+    elif [ "\${ES_READY:-True}" = Inflight ]; then echo "2026-10-08T02:00:00Z 1-aaa True"
+    elif [ "\${ES_READY:-True}" = Moved ]; then echo "2026-10-08T02:00:00Z 1-bbb False"
+    else echo "2026-10-08T01:00:00Z 1-aaa False"; fi ;;
   "-n "*" annotate externalsecret "*" force-sync="*" --overwrite")
     [ ! -e "$W/annotated" ] || touch "$W/annotated-again"; touch "$W/annotated"; echo "\$2/\$5" >> "$W/annotated-es" ;;
   "-n external-secrets get secret vault-token-reviewer --ignore-not-found -o name")
@@ -151,10 +156,14 @@ check "the config before not read (an error, not 'none'): the step fails before 
 run ES_FIRST=False
 check "the first ExternalSecret not Ready before the switch: the next Ready one proves it" \
   "$rc $(cat "$W/annotated-es" 2> /dev/null)" "0 argocd/x"
-run ES_FIRST=False ES_SECOND=False
-check "none Ready before the switch: the step fails before any write, said, the old token kept" \
-  "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'delete secret' "$W/kubectl-calls") \
-$(grep -c 'Ready' <<< "$out")" "1 0 0 1"
+# none Ready before the switch - a rebuilt cluster (DR step 5): switched all the same, proven by an ExternalSecret
+run ES_FIRST=False ES_SECOND=False NO_TOKEN_SECRET=1
+check "none Ready before the switch (a rebuilt cluster): switched, proven by one of them refreshed and Ready; passes" \
+  "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c '^vault write auth/kubernetes/config' "$W/vault-argv") \
+$(cat "$W/annotated-es" 2> /dev/null | head -1)" "0 1 1 cert-manager/porkbun-secret-es"
+run ES_FIRST=False ES_SECOND=False ES_READY=False
+check "none Ready before, not proven after: the step fails, said - nothing put back (the old config did not work either)" \
+  "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(grep -c 'NOT proven' <<< "$out")" "1 none 1"
 run ES_LIST_FAILS=1
 check "the ExternalSecrets not listed (an error, not 'none'): the step fails before any write, the token kept" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0 0"
@@ -169,6 +178,8 @@ check "not refreshed (Ready from before, its refresh time unchanged): the step f
   "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
 run ES_READY=Moved
 check "refreshed but not Ready: the step fails, the old token kept" "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
+run ES_READY=Inflight
+check "a sync already running at the write refreshing (a new time, the version before the annotation): no proof, fails" "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
 run ES_NONE=1 NO_TOKEN_SECRET=1
 check "no ExternalSecret yet (a fresh cluster), no old token: passes, said" \
   "$rc $(grep -c 'delete secret' "$W/kubectl-calls") $(grep -c 'no ExternalSecret' <<< "$out")" "0 0 1"

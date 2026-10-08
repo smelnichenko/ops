@@ -168,11 +168,15 @@ setup_vault_eso() {
   }
   # base64 alone: it goes into the script run as root on the Pi (a line of its own would end that heredoc)
   [[ $K8S_CA =~ ^[A-Za-z0-9+/]+=*$ ]] || { err "The cluster's CA (certificate-authority-data) is not base64"; return 1; }
-  # the ExternalSecret that proves External Secrets' login on the new config, Ready now: picked before anything is
-  # written - none Ready, nothing is switched
-  local es
-  es=$(eso_proof_target) || return 1
+  # the ExternalSecret that proves External Secrets' login on the new config - one Ready now, picked before anything
+  # is written. None Ready (a rebuilt cluster, DR step 5: Vault's config names the old cluster's CA): nothing logs in
+  # to lose - switched all the same, proven by one of them, nothing put back
+  local es was picked
+  picked=$(eso_proof_target) || return 1
+  read -r es was <<< "$picked"
   [[ -n $es ]] || log "no ExternalSecret on the store yet (a fresh cluster) - the login is proven when Argo makes them"
+  [[ -z $es || $was == ready ]] || warn "no ExternalSecret on the store Ready now (a rebuilt cluster?) - switching" \
+    "all the same, proven by $es"
   local work
   work=$(mktemp -d) || return 1
   # this run's own directory, removed however the step ends
@@ -258,14 +262,14 @@ REMOTE
     return 1
   fi
   if [[ -n $es ]]; then
-    eso_switch_proven "$es" "$work/config-before.json" "$VAULT_PI" || return 1
+    eso_switch_proven "$es" "$was" "$work/config-before.json" "$VAULT_PI" || return 1
   fi
   log "ESO → Pi Vault configured"
 }
 
-# The ExternalSecret proving External Secrets' login on Vault's new config: one of the store, Ready before the switch
-# - printed; nothing printed on a fresh cluster (no ExternalSecret, no old reviewer token). A read that fails is an
-# error, never "none"
+# The ExternalSecret proving External Secrets' login on Vault's new config, printed with whether it was Ready: one of
+# the store Ready before the switch ("<ns/name> ready"), else the first ("<ns/name> none-ready"); nothing printed on a
+# fresh cluster (no ExternalSecret, no old reviewer token). A read that fails is an error, never "none"
 eso_proof_target() {
   local store=vault-backend  # infra's clusters/production/cluster-config/cluster-secret-store.yaml
   local list es token
@@ -282,20 +286,21 @@ eso_proof_target() {
     return 0
   fi
   es=$(awk '$2 == "True" {print $1; exit}' <<< "$list")
-  if [[ -z $es ]]; then
-    err "no ExternalSecret on $store Ready now to prove the switch with - nothing switched (kubectl get externalsecret -A)"
-    return 1
+  if [[ -n $es ]]; then
+    printf '%s ready\n' "$es"
+  else
+    printf '%s none-ready\n' "$(awk 'NF {print $1; exit}' <<< "$list")"
   fi
-  printf '%s\n' "$es"
 }
 
 # External Secrets' login on Vault's config as just written, proven before the old reviewer token goes: the
 # ExternalSecret picked before the switch refreshed (External Secrets keeps no Vault token between syncs - each logs
 # in), then production's old reviewer token deleted - a non-expiring token of External Secrets' own account (it reads
 # and updates every Secret), kept in Vault's config until the write. Not proven: Vault's config as it was read before
-# the write put back with that token, and the login on it proven again
+# the write put back with that token, and the login on it proven again - unless none was Ready before (nothing logged
+# in on the config before either: nothing to put back)
 eso_switch_proven() {
-  local es=$1 before=$2 pi=$3 gone
+  local es=$1 was=$2 before=$3 pi=$4 gone
   if eso_refreshed "$es"; then
     log "External Secrets logged in on the new config ($es refreshed)"
     gone=$(kubectl -n external-secrets delete secret vault-token-reviewer --ignore-not-found) \
@@ -305,6 +310,10 @@ eso_switch_proven() {
   fi
   err "External Secrets' login on the new config NOT proven - the old reviewer token kept; kubectl -n ${es%/*}" \
     "describe externalsecret ${es#*/}"
+  if [[ $was != ready ]]; then
+    err "nothing put back: no ExternalSecret logged in on the config before either"
+    return 1
+  fi
   eso_put_back "$before" "$pi" || return 1
   if eso_refreshed "$es"; then
     log "External Secrets logs in on the config put back ($es refreshed)"
@@ -314,27 +323,28 @@ eso_switch_proven() {
   return 1
 }
 
-# One refresh of the ExternalSecret asked for and waited for (ESO_PROOF_SECONDS): a refresh time other than the one
-# before the ask, and Ready. Vault's writes settle first (ESO_SETTLE_SECONDS): a sync running through them logged in
-# before them. The time before not read fails it - never "refreshed"
+# One refresh of the ExternalSecret asked for and waited for (ESO_PROOF_SECONDS): its syncedResourceVersion (the
+# generation and a hash of its labels and annotations) changed from before the force-sync annotation - the reconcile
+# that saw it began after the annotation, so after Vault's write; a sync already running when Vault was written
+# refreshes with the version from before - and Ready. The version before not read fails it - never "refreshed"
 eso_refreshed() {
   local es=$1 line before now ready end
-  sleep "${ESO_SETTLE_SECONDS:-5}"
-  if ! line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}') \
-      || ! read -r before _ <<< "$line" || [[ -z $before ]]; then
-    err "ExternalSecret $es's refresh time not read - nothing proven"
+  local path='{.status.syncedResourceVersion} {.status.conditions[?(@.type=="Ready")].status}'
+  if ! line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath="{.status.refreshTime} $path") \
+      || ! read -r _ before _ <<< "$line" || [[ -z $before ]]; then
+    err "ExternalSecret $es's synced version not read - nothing proven"
     return 1
   fi
   kubectl -n "${es%/*}" annotate externalsecret "${es#*/}" force-sync="$(date +%s)" --overwrite > /dev/null \
     || { err "Cannot ask ExternalSecret $es to refresh"; return 1; }
   end=$((SECONDS + ${ESO_PROOF_SECONDS:-90}))
   while :; do
-    if line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}'); then
-      read -r now ready <<< "$line"
+    if line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath="{.status.refreshTime} $path"); then
+      read -r _ now ready <<< "$line"
       [[ $now != "$before" && $ready == True ]] && return 0
     fi
     if ((SECONDS >= end)); then
-      err "ExternalSecret $es not refreshed (Ready ${ready:-unread}, refreshed ${now:-unread})"
+      err "ExternalSecret $es not refreshed since asked (Ready ${ready:-unread}, synced version ${now:-unread})"
       return 1
     fi
     sleep 2
