@@ -19,7 +19,7 @@ exec > >(trap '' INT TERM HUP; exec python3 -u -c 'import sys, time
 for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
 build_job="" pin="" signalled=""
-# own_jobs, kill_named, stop_groups
+# own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 # the stop's grace a whole number of seconds, before any job starts: a fraction aborted the stop's arithmetic - nothing
 # KILLed, the jobs left running
@@ -37,8 +37,7 @@ stop() {
   # go-task KILLed at once: it ran the build's next command once the running one ended, the grace still running. Each
   # job's processes - every group of its session - given STOP_GRACE seconds to end (the pin's trap removes its
   # containers), then killed, said: one that ignored the TERM held the stop for good
-  for j in "${own[@]}"; do kill_named "$j" task; done
-  [ "${#own[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${own[@]}"
+  [ "${#own[@]}" -eq 0 ] || stop_groups -n task "${STOP_GRACE:-60}" "${own[@]}"
   for j in "${own[@]}"; do wait "$j" 2> /dev/null; done
   [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
 }

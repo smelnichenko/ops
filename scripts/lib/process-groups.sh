@@ -100,26 +100,39 @@ term_default() {  # term_default <pid>
 
 # the stop's TERM sent again where it was lost: a process of the job's there when it was sent (the snapshot) still
 # running with TERM at its default never got it - a job just forked loses one (its signals still its parent's
-# handlers until it resets them; the step's checks' stop waited out their bound) - and with it what it started since,
-# at its default too. Never to one that catches the TERM (its handler runs once), nor to what a handler started
-# (a cleanup's own commands)
-resend_term() {  # resend_term <pgid> <snapshot: " <pid> <pid> ... ">
-  local g=$1 snap=$2 procs x p lost=" " changed=1
+# handlers until it resets them; the step's checks' stop waited out their bound) - and with it what it started since:
+# at its default, or catching it and not there when it was sent (it never got one - sent once, then counted sent).
+# With a name, every process of the job of that name KILLed (go-task: one a command started during the grace swallowed
+# the TERM and ran the step's next command), what it started since the TERM a lost process's. Never again to one that
+# catches the TERM (its handler runs once), nor to what a handler started (a cleanup's own commands)
+resend_term() {  # resend_term <pgid> <snapshot variable: " <pid> <pid> ... "> [<command name>]
+  local g=$1 name=${3:-} procs x p comm lost=" " changed=1
+  local -n _sent=$2
   local -A parent=() deflt=()
   job_processes "$g" procs
   for x in "${procs[@]}"; do
     p=${x% *}
     parent[$p]=${x#* }
     term_default "$p" && deflt[$p]=1
+    if [ -n "$name" ] && read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ]; then
+      kill -KILL "$p" 2> /dev/null
+      lost+="$p "
+    fi
   done
-  for p in "${!deflt[@]}"; do [[ $snap != *" $p "* ]] || lost+="$p "; done
+  for p in "${!deflt[@]}"; do [[ $_sent != *" $p "* ]] || lost+="$p "; done
   while ((changed)); do
     changed=0
-    for p in "${!deflt[@]}"; do
-      [[ $lost != *" $p "* ]] && [[ $lost == *" ${parent[$p]} "* ]] && { lost+="$p "; changed=1; }
+    for p in "${!parent[@]}"; do
+      [[ $lost != *" $p "* ]] && [[ $lost == *" ${parent[$p]} "* ]] || continue
+      [ -n "${deflt[$p]:-}" ] || [[ $_sent != *" $p "* ]] || continue
+      lost+="$p "
+      changed=1
     done
   done
-  for p in $lost; do kill -TERM "$p" 2> /dev/null; done
+  for p in $lost; do
+    kill -TERM "$p" 2> /dev/null
+    [ -n "${deflt[$p]:-}" ] || [[ $_sent == *" $p "* ]] || _sent+="$p "
+  done
 }
 
 # every process of the session the job leads with that command name KILLed at once - no other of the session, none
@@ -137,11 +150,15 @@ kill_named() {  # kill_named <sid> <name>
 }
 
 # each job TERMed and continued whole (a stopped group acts on no TERM until then; a TERM lost sent again) - given
-# <grace> seconds for every process of it to end - not only its leader: a shell's subshell dies at once, the program under it may not - then
-# KILLed whole, again until none is left (one forked during a pass), and only then said: a write to an output whose
-# reader is gone (a tee ended by the Ctrl-C) may end the caller, and the KILL must be sent by then
-stop_groups() {  # stop_groups <grace seconds> <pgid>...
-  local grace=$1 g end now pass snap=" " procs x
+# <grace> seconds for every process of it to end - not only its leader: a shell's subshell dies at once, the program
+# under it may not - then KILLed whole, again until none is left (one forked during a pass), and only then said: a
+# write to an output whose reader is gone (a tee ended by the Ctrl-C) may end the caller, and the KILL must be sent by
+# then. One the KILL did not end (uninterruptible, in the kernel) named, not said killed. -n <name>: every process of
+# that name KILLed at once, before the TERM and at each look during the grace (go-task: kill_named)
+stop_groups() {  # stop_groups [-n <command name>] <grace seconds> <pgid>...
+  local name="" grace g end now pass snap=" " procs x left
+  [ "$1" != -n ] || { name=$2; shift 2; }
+  grace=$1
   shift
   # the processes the TERM is sent to, read before it: one forked after is no process that lost it
   for g; do
@@ -149,6 +166,7 @@ stop_groups() {  # stop_groups <grace seconds> <pgid>...
     for x in "${procs[@]}"; do snap+="${x% *} "; done
   done
   for g; do
+    [ -z "$name" ] || kill_named "$g" "$name"
     signal_job TERM "$g"
     signal_job CONT "$g"
   done
@@ -157,7 +175,7 @@ stop_groups() {  # stop_groups <grace seconds> <pgid>...
   for g; do
     while group_alive "$g" && uptime_cs now && ((now < end)); do
       sleep 0.2
-      resend_term "$g" "$snap"
+      resend_term "$g" snap "$name"
     done
     if group_alive "$g"; then
       for ((pass = 0; pass < 10; pass++)); do
@@ -165,7 +183,14 @@ stop_groups() {  # stop_groups <grace seconds> <pgid>...
         sleep 0.1
         group_alive "$g" || break
       done
-      echo "job $g's processes outlived the stop by $grace s - killed"
+      job_processes "$g" procs
+      if [ "${#procs[@]}" -eq 0 ]; then
+        echo "job $g's processes outlived the stop by $grace s - killed"
+      else
+        left=""
+        for x in "${procs[@]}"; do left+=" ${x% *}"; done
+        echo "job $g's processes outlived the stop by $grace s - KILL sent, still there:$left"
+      fi
     fi
   done
 }

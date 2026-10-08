@@ -32,7 +32,8 @@ STUB
 # it says so and writes five more over half a second (its children ending), then ends 143 - DEAF: it ignores the TERM
 # (and a closed pipe); ZERO_ON_TERM: it ends 0 on it; ENDS: it ends of its own accord, 0. HOLDER: a sleep in a session
 # of its own holding its output (as a daemon would), its PID recorded; LEFTOVER: a sleep left in its group, holding it;
-# SESSION_CHECK: a check in a group of its own (set -m), in the step's session, that ignores the TERM
+# SESSION_CHECK: a check in a group of its own (set -m), in the step's session, that ignores the TERM. Its own end
+# leaves said.ran
 cat > "$W/command" <<'STUB'
 case "$1" in
   test:upgrade:final-settle*) what="settle line" ends=${FINAL_ENDS:-1} said="settle done"; echo $$ > "$W/final.pid" ;;
@@ -52,6 +53,7 @@ fi
 i=0
 while [ "$i" -lt "$ends" ]; do echo "$what $i"; i=$((i + 1)); sleep 0.1; done
 echo "$said"
+: > "$W/said.ran"
 STUB
 # python3 as the run finds it: the stamper's (SLOW_STAMPER) takes a second to start, saying so - a signal then reaches
 # it before python's own start (which ignores them); every other call the real one's
@@ -75,6 +77,14 @@ else
 fi
 STUB
 printf '#!/bin/bash\necho "sha-${@: -1}"\n' > "$W/bin/git"
+# sleep as the run finds it: SLOW_SLEEP - each takes four times what it asks (a loaded host)
+REAL_SLEEP=$(command -v sleep)
+export REAL_SLEEP
+cat > "$W/bin/sleep" <<'STUB'
+#!/bin/bash
+[ -z "${SLOW_SLEEP:-}" ] || exec "$REAL_SLEEP" "$(awk -v s="$1" 'BEGIN { print s * 4 }')"
+exec "$REAL_SLEEP" "$@"
+STUB
 printf '#!/bin/bash\necho "upgrade/$2 main"\n' > "$W/run/scripts/upgrade-expected-inventory.py"
 printf '#!/bin/bash\necho "proof $2" >> "$LOG"\n' > "$W/run/scripts/upgrade-production.py"
 # the digests read after a step: DIGESTS_HANG - it hangs (a stalled VM), its PID recorded
@@ -95,7 +105,7 @@ run() {  # run <signal or none> <env...>: the script (SCRIPT: another copy) in a
   # test's): what to wait for before the signal - re:<a line of its output> (default: the step's line 3) or file:<name>
   local sig=$1 wait_for=${WAIT_FOR:-'re:^[0-9:]\{8\} line 3$'}; shift
   rm -f "$W/rc" "$W/step.pid" "$W/final.pid" "$W/task.pid" "$W/next.ran" "$W/stamper.starting" "$W/check.pid" \
-    "$W/leftover.pid" "$W/digests.pid"
+    "$W/leftover.pid" "$W/digests.pid" "$W/said.ran"
   : > "$W/log"; : > "$W/out"
   (cd "$W/run" && exec env STOP_GRACE=1 "$@" W="$W" LOG="$W/log" PATH="$W/bin:$PATH" python3 -c 'import os, signal
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE): signal.signal(s, signal.SIG_DFL)
@@ -109,7 +119,17 @@ os.execvp("bash", ["bash", os.environ["W"] + "/wrapper"])') &
     esac
     sleep 0.05
   done
-  if [ "${sig#script:}" != "$sig" ]; then
+  if [ "$sig" = reader ]; then
+    # the output's reader alone (PIPED: the wrapper's cat), no signal to the run: its process in this test's session
+    local f st c
+    for f in /proc/[0-9]*/stat; do
+      read -r st 2> /dev/null < "$f" || continue
+      set -- ${st##*) }
+      [ "$2" = "$pg" ] && [ "$4" = "$pg" ] && read -r c 2> /dev/null < "${f%stat}comm" && [ "$c" = cat ] || continue
+      c=${f#/proc/}
+      kill "${c%/stat}"
+    done
+  elif [ "${sig#script:}" != "$sig" ]; then
     # the script alone (not its group): its process in this test's session, read from /proc
     local sp="" f c st
     for f in /proc/[0-9]*/cmdline; do
@@ -133,7 +153,9 @@ os.execvp("bash", ["bash", os.environ["W"] + "/wrapper"])') &
   falive=$([ -n "$final" ] && [ -e "/proc/$final" ] && echo alive || echo gone)
   # a step or a final settle left running by a failure here: its own process, a process this test's stub started -
   # ended (the task's session: this test's; its check, one of that session)
-  for p in "$step" "$final"; do [ -z "$p" ] || [ ! -e "/proc/$p" ] || kill -KILL "$p" 2> /dev/null; done
+  for p in "$step" "$final"; do
+    [ -n "$p" ] && [[ $(tr '\0' ' ' 2> /dev/null < "/proc/$p/cmdline") == "bash $W/command "* ]] && kill -KILL "$p"
+  done
 }
 in_session() {  # in_session <pid file> <sid file>: the process runs (no zombie) in the session the other one led
   local st pid sid
@@ -183,10 +205,13 @@ $(grep -c '^=== STOPPED BY A SIGNAL' "$W/out") $(grep -c '^proof 01-a$' "$W/log"
   "143 gone 5 1 1 0"
 # the graces whole seconds, refused before any step otherwise: a fraction aborted the stop's arithmetic - nothing
 # KILLed, the step left running
-for g in STOP_GRACE=1.5 STAMPER_GRACE=0.5 STOP_GRACE=08; do
+# STAMPER_GRACE 1 at least: 0 KILLed the stamper at every step's end, every step failed
+for g in STOP_GRACE=1.5 STAMPER_GRACE=0.5 STOP_GRACE=08 STAMPER_GRACE=0; do
+  want="not a whole number of seconds"
+  [ "${g%%=*}" = STOP_GRACE ] || want+=", 1 or more"
   run none ENDS=3 "$g"
   check "$g: refused before any step, said" \
-    "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c "^${g%%=*}=${g#*=}: not a whole number of seconds$" "$W/out") \
+    "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c "^${g%%=*}=${g#*=}: $want$" "$W/out") \
 $(grep -c 'test:upgrade:step' "$W/log")" "1 1 0"
 done
 # a signal while the stamper starts (before python's own start ignores them): it survives - every line of the step,
@@ -244,5 +269,37 @@ dp=$(cat "$W/digests.pid" 2> /dev/null)
 check "a TERM while the digests are read: the run stopped at once (143), the read ended with it" \
   "$(cat "$W/rc" 2> /dev/null || echo none) $([ -n "$dp" ] && [ -e "/proc/$dp" ] && echo alive || echo gone)" "143 gone"
 if [ -n "$dp" ] && [ "$(tr '\0' ' ' 2> /dev/null < "/proc/$dp/cmdline")" = "sleep 30 " ]; then kill "$dp"; fi
+cs() {  # cs <variable>: hundredths of a second since boot
+  local u
+  read -r u _ < /proc/uptime
+  u=${u/./}
+  printf -v "$1" '%s' "$((10#$u))"
+}
+# the stamper's grace on the clock, not counted in sleeps: a loaded host (each sleep four times its length) held a 2 s
+# grace 8 s
+cs t0
+WAIT_FOR=file:rc run none ENDS=3 HOLDER=1 STAMPER_GRACE=2 SLOW_SLEEP=1
+cs t1
+holder=$(cat "$W/holder.pid" 2> /dev/null)
+check "a held output on a slow host: the stamper ended at its grace on the clock (well under 4 x 2 s), said; failed" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'output still held' "$W/out") $(( t1 - t0 < 650 ))" "1 1 1"
+if [ -n "$holder" ] && [ "$(tr '\0' ' ' 2> /dev/null < "/proc/$holder/cmdline")" = "sleep 60 " ]; then kill "$holder"; fi
+# a TERM after the stamper's start, before the step's task: nothing holds the output - none started (the stamper waits
+# for a writer): the stop not held the stamper's grace, no process outside said to hold it. Forced in a copy
+sed 's|^  setsid task "\$@" .* &$|  kill -TERM $$\n&|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/unstarted.sh"
+check "the copy with a TERM before the step's task started" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/unstarted.sh")" 1
+cs t0
+WAIT_FOR=file:rc run none SCRIPT=scripts/unstarted.sh STAMPER_GRACE=5
+cs t1
+check "a TERM before the step's task started: the stop at once (not the stamper's 5 s), nothing said held; ended 143" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'output still held' "$W/out") $(( t1 - t0 < 350 )) \
+$(grep -c 'test:upgrade:step' "$W/log")" "143 0 1 0"
+# the run's output reader gone, no signal to the run (a tee killed alone): the stamper reads on, its lines lost - the
+# step runs to its own end (dead, the stamper's FIFO ended the step's next write: SIGPIPE in the middle of a step); the
+# run then ends at its next word (141), no step after it
+PIPED=1 run reader ENDS=20
+check "the output's reader gone mid-step: the step ran to its own end; the run ended 141, no step after it" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $([ -e "$W/said.ran" ] && echo ended || echo cut) \
+$(grep -c 'STEP=02-b' "$W/log")" "141 ended 0"
 echo "step-stamper: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

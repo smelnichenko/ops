@@ -13,22 +13,28 @@
 # Usage: scripts/upgrade-full-steps.sh   (test:upgrade:full)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
-# own_jobs, child_alive, group_alive, kill_named, stop_groups
+# own_jobs, child_alive, group_alive, stop_groups
 source scripts/lib/process-groups.sh
 # the graces whole seconds, before anything starts: a fraction aborted the stop's arithmetic - nothing KILLed, the step
-# left running
-for g in STOP_GRACE STAMPER_GRACE; do
-  [[ ${!g:-0} =~ ^(0|[1-9][0-9]*)$ ]] || { echo "$g=${!g}: not a whole number of seconds"; exit 1; }
-done
+# left running. The stamper's 1 or more: 0 ended it at every step's end, its last lines unread
+[[ ${STOP_GRACE:-0} =~ ^(0|[1-9][0-9]*)$ ]] || { echo "STOP_GRACE=$STOP_GRACE: not a whole number of seconds"; exit 1; }
+[[ ${STAMPER_GRACE:-1} =~ ^[1-9][0-9]*$ ]] ||
+  { echo "STAMPER_GRACE=$STAMPER_GRACE: not a whole number of seconds, 1 or more"; exit 1; }
 stop_grace=${STOP_GRACE:-60} stamper_grace=${STAMPER_GRACE:-30}
 mkdir -p .upgrade
 work=$(mktemp -d "$PWD/.upgrade/full-steps.XXXX") || exit 1
 step_job="" stamper="" signalled=""
 # the stamper ends when what it reads does - all of it read; something outside the step still holding that (a daemon
-# it started) holds it STAMPER_GRACE seconds at most, then it is ended, said - 1 then (the step's log is not whole)
+# it started) holds it STAMPER_GRACE seconds at most (on the clock: counted in sleeps, a loaded host stretched it), then
+# it is ended, said - 1 then (the step's log is not whole). One still waiting for its first writer (a signal between
+# its start and the task's: none came) given one and its end at once - the FIFO opened and closed here, which waits for
+# nothing, and ends nothing a writer still holds (the task's output is closed by now: it ended, or the stop ended it)
 end_stamper() {
-  local i held=0
-  for ((i = 0; i < stamper_grace * 10; i++)); do child_alive "$stamper" || break; sleep 0.1; done
+  local held=0 now end w
+  exec {w}<> "$work/out" && exec {w}>&-
+  uptime_cs now
+  end=$((now + stamper_grace * 100))
+  while child_alive "$stamper" && uptime_cs now && ((now < end)); do sleep 0.1; done
   if child_alive "$stamper"; then
     kill -KILL "$stamper"
     held=1
@@ -49,8 +55,7 @@ stop() {
   own_jobs own
   for j in "${own[@]}"; do [ "$j" = "$stamper" ] || steps_+=("$j"); done
   [ -z "$step_job" ] || [[ " ${steps_[*]} " == *" $step_job "* ]] || steps_+=("$step_job")
-  for j in "${steps_[@]}"; do kill_named "$j" task; done
-  [ "${#steps_[@]}" -eq 0 ] || stop_groups "$stop_grace" "${steps_[@]}"
+  [ "${#steps_[@]}" -eq 0 ] || stop_groups -n task "$stop_grace" "${steps_[@]}"
   [ -z "$stamper" ] || end_stamper
   [ -z "$signalled" ] || echo "=== STOPPED BY A SIGNAL $(date +%T) - the step stopped, no step after it"
   rm -rf "$work"
@@ -64,13 +69,15 @@ trap 'trap "" INT TERM HUP; signalled=129; exit 129' HUP
 # one task (a step, the final settle): a session of its own - no terminal signal reaches it but through this script's
 # stop - every line of it stamped with its time (where a step's minutes go stays measurable) by a stamper deaf to the
 # signals from its start (ignored before its exec: python's own start was a window), ending when the task's output does,
-# all of it read. Its exit in task_rc; a process of its session outliving its end stopped, said, and the task failed
-# (1), as when something outside it held its output
+# all of it read - its own output gone (a tee killed alone), it reads on, the lines lost: dead, it ended the step's next
+# write (SIGPIPE in the middle of a step). Its exit in task_rc; a process of its session outliving its end stopped,
+# said, and the task failed (1), as when something outside it held its output
 run_task() {  # run_task <task arguments...>
-  ( trap '' INT TERM HUP; exec python3 -u -c 'import signal, sys, time
+  ( trap '' INT TERM HUP; exec python3 -u -c 'import os, signal, sys, time
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(s, signal.SIG_IGN)
-for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()' \
-    < "$work/out" ) &
+for line in sys.stdin.buffer:
+    try: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()
+    except OSError: os.dup2(os.open(os.devnull, os.O_WRONLY), 1)' < "$work/out" ) &
   stamper=$!
   setsid task "$@" < /dev/null > "$work/out" 2>&1 &
   step_job=$!

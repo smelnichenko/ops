@@ -235,5 +235,64 @@ if mine "$h"; then stop_groups 3 "$h" > "$W/cont.out"; fi
 wait "$h" 2> /dev/null; rc=$?
 check "a stopped job: continued with the TERM - its own stop run, ended 143, nothing killed" \
   "$rc $(cat "$W/cont.ready.done" 2> /dev/null) $(grep -c killed "$W/cont.out")" "143 stopped-cleanly 0"
+# what a lost process starts after the TERM never got one: sent it once - one that catches it too (its handler runs
+# once), not KILLed after the grace with its handler never run. Here the job, deaf at the TERM, starts a child that
+# catches it (its TERM at its default before its exec), then turns its own to its default
+set -m
+bash -c 'trap "" TERM; echo ready > "$0"; sleep 0.5
+  ( trap - TERM; exec bash -c "trap \"echo caught >> \\\"\$0\\\"; exit 143\" TERM; echo \$\$ > \"\$0.pid\"; while :; do sleep 0.1; done" "$0.n" ) &
+  until [ -s "$0.n.pid" ]; do sleep 0.05; done; trap - TERM; wait' "$W/after.ready" & h=$!
+set +m
+ready "$W/after.ready"
+t0=$SECONDS
+if mine "$h"; then stop_groups 5 "$h" > "$W/after.out"; fi
+wait "$h" 2> /dev/null; rc=$?
+check "a lost process's child started after the TERM, catching it: TERMed once - its handler run once, nothing killed" \
+  "$rc $((SECONDS - t0 < 3)) $(grep -c '^caught$' "$W/after.ready.n" 2> /dev/null) $(grep -c killed "$W/after.out")" \
+  "143 1 1 0"
+# -n <name>: every process of that name in the job KILLed at once - one that appears during the grace (go-task run by
+# a command after the TERM: it swallows one and runs the step's next command) too, at the next look, not at the
+# grace's end - and what it started since the TERM TERMed once (its handler run, not KILLed)
+mkdir -p "$W/late"
+cat > "$W/late/task" <<'TASK'
+#!/bin/bash
+trap '' TERM
+echo $$ > "$1"
+( trap - TERM; exec bash -c 'trap "echo caught >> \"$0\"; exit 143" TERM; echo $$ > "$0.pid"; while :; do sleep 0.1; done' "$1.n" ) &
+wait
+TASK
+chmod +x "$W/late/task"
+cat > "$W/late-job" <<'JOB'
+#!/bin/bash
+trap 'term=1' TERM
+echo $$ > "$1/late.ready"
+term=""
+while [ -z "$term" ]; do sleep 0.1; done
+"$1/late/task" "$1/late.pid"
+JOB
+setsid bash "$W/late-job" "$W" < /dev/null > /dev/null 2>&1 & s=$!
+ready "$W/late.ready"
+t0=$SECONDS
+if mine "$s"; then stop_groups -n task 5 "$s" > "$W/late.out"; fi
+wait "$s" 2> /dev/null
+lt=$(cat "$W/late.pid" 2> /dev/null)
+check "-n task: a task started during the grace KILLed at once, what it started TERMed once; nothing killed at the end" \
+  "$((SECONDS - t0 < 3)) $(gone_or_zombie "${lt:-none}") $(grep -c '^caught$' "$W/late.pid.n" 2> /dev/null) \
+$(grep -c killed "$W/late.out")" "1 gone 1 0"
+for f in "$W/late.pid" "$W/late.pid.n.pid"; do
+  x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
+done
+# a process the KILL does not end (uninterruptible - here every KILL lost): not said killed - its PIDs named
+set -m
+bash -c 'trap "" TERM; echo $$ > "$0"; while :; do sleep 0.1; done' "$W/stuck.pid" & h=$!
+set +m
+ready "$W/stuck.pid"
+if mine "$h"; then
+  ( kill() { [ "$1" = -KILL ] || builtin kill "$@"; }; stop_groups 1 "$h" ) > "$W/stuck.out"
+fi
+check "a process the KILL did not end: named, not said killed" \
+  "$(grep -c 'killed$' "$W/stuck.out") $(grep -c "still there: .*\b$h\b" "$W/stuck.out")" "0 1"
+mine "$h" && kill -KILL -- "-$h"
+wait "$h" 2> /dev/null
 echo "process-groups: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
