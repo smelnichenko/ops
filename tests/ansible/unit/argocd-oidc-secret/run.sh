@@ -86,11 +86,18 @@ if pre and now:
     check("checked with Keycloak on, in a preview too (a read: the preview refuses what the run would)",
           [condition(pre[0].get("when", True), keycloak_enabled=k, ansible_check_mode=c)
            for k, c in ((True, False), (True, True), (False, False))], [True, True, False])
-# the Vagrant copy runs them: step 31 and 33 rehearsed with the checks production's run makes
-inv = yaml.safe_load(open("deploy/ansible/inventory/vagrant.yml"))
-flat_vars = {k: v for g in inv.values() for k, v in ((g or {}).get("vars") or {}).items()}
-check("the Vagrant copy checks single sign-on as production does (argocd_keycloak_enabled not off)",
-      flat_vars.get("argocd_keycloak_enabled", True), True)
+# the Vagrant copy runs them: step 31 and 33 rehearsed with the checks production's run makes - its value as Ansible
+# gives it to every host setup-argocd runs on (a host var or a child group's turned it off unseen)
+from ansible.inventory.manager import InventoryManager  # noqa: E402
+from ansible.parsing.dataloader import DataLoader  # noqa: E402
+from ansible.vars.manager import VariableManager  # noqa: E402
+loader = DataLoader()
+im = InventoryManager(loader=loader, sources=["deploy/ansible/inventory/vagrant.yml"])
+vm = VariableManager(loader=loader, inventory=im)
+hosts = im.get_hosts(play["hosts"])
+check("the Vagrant copy checks single sign-on as production does (argocd_keycloak_enabled not off on its hosts)",
+      (bool(hosts), [vm.get_vars(host=h, include_hostvars=False).get("argocd_keycloak_enabled", True) for h in hosts]),
+      (True, [True] * len(hosts)))
 print("argocd-oidc-secret: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

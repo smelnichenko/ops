@@ -19,13 +19,26 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got}, want {want}"))
-# what prints only what is public: (file, task) - why
+# what prints only what is public: (file, task) - why, and what its script must hold so (continuations joined): a read
+# of the whole data, a credential back on curl's command line or in the script - put back unseen otherwise
+def norm(x):
+    """Continuations joined, comment lines out (their words are no command)."""
+    return "\n".join(l for l in re.sub(r"\\\n\s*", " ", x).splitlines() if not l.lstrip().startswith("#"))
 PUBLIC = {
     ("tests/ansible/upgrade/production-state.yml",
      "The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day"):
-        "the certificate (tls.crt) alone",
-    ("tests/ansible/test-keycloak.yml", "DIAG events + describe + eso + secret"): "the Secret's key names alone",
-    ("tests/ansible/test-cicd.yml", "DIAG pod pull failure"): "the registry hosts of its credentials alone",
+        ("the certificate (tls.crt) alone",
+         lambda x: bool(re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))
+         and all(r == r"{.data.tls\.crt}" for r in re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))),
+    ("tests/ansible/test-keycloak.yml", "DIAG events + describe + eso + secret"):
+        ("the Secret's key names alone",
+         lambda x: all(re.search(r"-o json\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"data\"", line)
+                       for line in norm(x).splitlines() if re.search(r"get secret", line))),
+    ("tests/ansible/test-cicd.yml", "DIAG pod pull failure"):
+        ("the registry hosts of its credentials alone - its token on no command line, in no script",
+         lambda x: all(re.search(r"base64 -d\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"auths\"", line)
+                       for line in norm(x).splitlines() if re.search(r"get secret", line))
+         and "registry_token" not in x and not re.search(r"curl [^\n]*(-u |--user|-sv|-v )", norm(x))),
 }
 CLI = re.compile(r"\bget\s+secrets?\b[^\n|;&]*?(-o|--output)[ =]*(?!name\b)\S")
 found, public_seen = [], set()
@@ -54,6 +67,8 @@ for f in files():
             key = (f, t.get("name"))
             if key in PUBLIC:
                 public_seen.add(key)
+                if not PUBLIC[key][1](str(val.get("cmd", val) if isinstance(val, dict) else val)):
+                    found.append((f, t.get("name"), "named public, prints more: " + PUBLIC[key][0], None))
                 continue
             found.append((f, t.get("name"), what, t.get("no_log")))
 bad = [x for x in found if x[3] is not True]
