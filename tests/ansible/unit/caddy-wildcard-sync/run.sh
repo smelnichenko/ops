@@ -10,7 +10,8 @@ PY=python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/etc/caddy/certs"
-echo "THE-CLUSTER-TOKEN" > "$W/etc/caddy/cluster-token"
+# as production's is (read 2026-10-08: 950 bytes, no newline at its end - the API's token as written)
+printf '%s' "THE-CLUSTER-TOKEN" > "$W/etc/caddy/cluster-token"
 echo "CA" > "$W/etc/caddy/cluster-ca.crt"
 # curl: its argv recorded, the config it reads from -K too; answers the Secret (CRT/KEY from the environment)
 cat > "$W/bin/curl" <<'STUB'
@@ -68,6 +69,13 @@ r, argv, calls = run()
 check("the pull: the token on curl's descriptor, never its command line; the wildcard installed, Caddy restarted",
       (r.returncode, "THE-CLUSTER-TOKEN" in argv, content(crt), content(key), "systemctl restart caddy" in calls),
       (0, False, "crt1", "key1", True))
+tok = os.path.join(W, "etc/caddy/cluster-token")
+open(tok, "w").write("THE-CLUSTER-TOKEN\n")
+r, argv, calls = run(CRT="crt0")
+check("a token file with a newline at its end (written by hand): pulled the same", (r.returncode, content(crt)),
+      (0, "crt0"))
+open(tok, "w").write("THE-CLUSTER-TOKEN")
+r, argv, calls = run()
 r, argv, calls = run()
 check("the same again: nothing restarted", (r.returncode, "restart" in calls), (0, False))
 r, argv, calls = run(KEY="key2")
