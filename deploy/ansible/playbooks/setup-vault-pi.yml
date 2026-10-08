@@ -803,20 +803,25 @@
         quiet: true
 
     # the shares go to the host pi2 is: its host key checked - by Ansible (host_key_checking, as this run has it) and
-    # by ssh (no argument of this run's turning it off). The Vagrant copy's VMs, rebuilt each run with new keys, check
-    # none: said by its inventory alone (host_keys_unchecked_rebuilt_vms)
+    # by ssh (no argument of this run's turning it off, in any of ssh's spellings: =no/off/false/accept-new, the space
+    # form, a known-hosts file of /dev/null, a KnownHostsCommand, another config by -F). The Vagrant copy's VMs, rebuilt
+    # each run with new keys, check none: said by its inventory (host_keys_unchecked_rebuilt_vms) and taken only for a
+    # pi2 on the Vagrant network - a production inventory saying it would send the shares unchecked. No backslash in
+    # the patterns: a conditional's string literals are read as Jinja reads escapes
     - name: Host keys checked - the shares only to pi2 itself
       ansible.builtin.assert:
         that:
           - >-
-            host_keys_unchecked_rebuilt_vms | default(false) | bool
+            (host_keys_unchecked_rebuilt_vms | default(false) | bool
+            and hostvars['pi2']['ansible_host'] is match('^192[.]168[.]56[.]'))
             or lookup('ansible.builtin.config', 'host_key_checking', plugin_type='connection', plugin_name='ssh') | bool
           - >-
-            host_keys_unchecked_rebuilt_vms | default(false) | bool
+            (host_keys_unchecked_rebuilt_vms | default(false) | bool
+            and hostvars['pi2']['ansible_host'] is match('^192[.]168[.]56[.]'))
             or (lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_common_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_extra_args', plugin_type='connection', plugin_name='ssh'))
-            is not search('StrictHostKeyChecking[= ]*(no|off|accept-new)|UserKnownHostsFile[= ]*/dev/null', ignorecase=True)
+            is not search('StrictHostKeyChecking[= ]+"?(no|off|false|accept-new)|(User|Global)KnownHostsFile[= ]+"?/dev/null|KnownHostsCommand|(^|[ ])-F[ ]', ignorecase=True)
         fail_msg: "REFUSED: host keys not checked - a host answering as pi2 would get every key share"
         quiet: true
 

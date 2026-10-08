@@ -157,8 +157,10 @@ if dist:
               f"(got {got})", got == ["True"] + ["False"] * 6)
         # the Vagrant copy's VMs, rebuilt each run with new keys, check none - said by its inventory alone (the
         # assert failed its build: my defect, 2026-10-08)
-        got = piped(ansible_ssh_common_args="-o StrictHostKeyChecking=no", host_keys_unchecked_rebuilt_vms=True)
-        check(f"the Vagrant copy's rebuilt VMs, said by its inventory: passes (got {got})", got == "True")
+        got = [piped(ansible_ssh_common_args="-o StrictHostKeyChecking=no", host_keys_unchecked_rebuilt_vms=True,
+                     hostvars={"pi2": {"ansible_host": a}}) for a in ("192.168.56.21", "192.168.11.6")]
+        check(f"the Vagrant copy's rebuilt VMs, said by its inventory: passes for a pi2 on the Vagrant network - not for "
+              f"one elsewhere (a production inventory saying it) (got {got})", got == ["True", "False"])
     ino = os.stat(k).st_ino
     r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
                         os.path.join(W, "vu"))], input="k1\nk2\nk3\n", env=env, capture_output=True, text=True)
