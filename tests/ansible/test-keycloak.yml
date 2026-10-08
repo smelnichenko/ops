@@ -198,6 +198,7 @@
             type: Opaque
             stringData:
               MAIL_PASSWORD: test-mail-password-not-used
+      no_log: true
 
     - name: Deploy test postgres (for keycloak DB)
       kubernetes.core.k8s:
@@ -308,8 +309,10 @@
             kubectl get rs -n {{ ns }} -l app.kubernetes.io/component=keycloak -o yaml | tail -60
             echo "--- ExternalSecret ---"
             kubectl get externalsecret -n {{ ns }} schnappy-keycloak -o yaml | tail -40
+            # the names of its keys - never their values (this log is kept)
             echo "--- Secret keys ---"
-            kubectl get secret -n {{ ns }} schnappy-keycloak -o jsonpath='{.data}' 2>&1 | head -5
+            kubectl get secret -n {{ ns }} schnappy-keycloak -o json \
+              | python3 -c 'import json, sys; print(sorted(json.load(sys.stdin).get("data", {})))' || echo "(not read)"
             echo "--- Node capacity + allocatable ---"
             kubectl describe nodes | grep -E "Capacity:|Allocatable:|cpu:|memory:" | head -20
             echo "--- schnappy-postgres CNPG cluster ---"

@@ -278,6 +278,7 @@
           stringData:
             MINIO_ROOT_USER: minioadmin
             MINIO_ROOT_PASSWORD: minioadmin
+      no_log: true
 
     - name: Stand up in-cluster test postgres + per-service DB Secrets
       ansible.builtin.import_tasks: tasks/setup-test-postgres.yml
@@ -303,6 +304,7 @@
           stringData:
             POSTGRES_USER: postgres
             POSTGRES_PASSWORD: vagrant
+      no_log: true
 
     - name: Deploy schnappy-auth (Keycloak) for DR test
       kubernetes.core.helm:
@@ -820,6 +822,7 @@
               [default]
               aws_access_key_id=minioadmin
               aws_secret_access_key=minioadmin
+      no_log: true
 
     - name: "DR: Install Velero CRDs"
       ansible.builtin.shell: |
@@ -1120,6 +1123,7 @@
           stringData:
             MINIO_ROOT_USER: minioadmin
             MINIO_ROOT_PASSWORD: minioadmin
+      no_log: true
 
     - name: "DR: Recover Postgres via CNPG bootstrap.recovery"
       kubernetes.core.k8s:
@@ -1514,6 +1518,7 @@
           stringData:
             MINIO_ROOT_USER: minioadmin
             MINIO_ROOT_PASSWORD: minioadmin
+      no_log: true
 
     - name: "OFFSITE: Recover Postgres via CNPG bootstrap.recovery"
       kubernetes.core.k8s:

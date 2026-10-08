@@ -118,6 +118,7 @@
           -o jsonpath='{.data.EXTRA}' | base64 -d
       register: _k8s_extra
       changed_when: false
+      no_log: true
 
     - name: Assert EXTRA field synced too
       ansible.builtin.assert:
@@ -149,6 +150,7 @@
         exit 1
       register: _rotation
       changed_when: false
+      no_log: true
 
     - name: Rotation confirmed
       ansible.builtin.assert:

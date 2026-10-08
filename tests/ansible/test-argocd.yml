@@ -232,6 +232,7 @@
             url: "http://{{ forgejo_host }}"
             username: "{{ forgejo_admin_user }}"
             password: "{{ forgejo_admin_password }}"
+      no_log: true
 
     - name: Create test Application
       kubernetes.core.k8s:

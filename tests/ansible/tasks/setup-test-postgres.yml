@@ -86,6 +86,7 @@
           DB_NAME: masi
           DB_USERNAME: masi
           DB_PASSWORD: vagrant
+  no_log: true
 
 - name: Ephemeral CNPG Cluster `schnappy-postgres`
   kubernetes.core.k8s:

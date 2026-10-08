@@ -288,6 +288,7 @@
             namespace: external-secrets
           data:
             ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
+      no_log: true
 
     # as bootstrap.sh: no reviewer token - Vault reviews the token External Secrets logs in with by that same token
     - name: External Secrets' account may review tokens (as bootstrap.sh)

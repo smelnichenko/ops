@@ -86,6 +86,7 @@
       stringData:
         ROOT_ACCESS_KEY: "minioadmin"
         ROOT_SECRET_KEY: "minioadmin"
+  no_log: true
 
 - name: "DR: Deploy test versitygw — Deployment"
   kubernetes.core.k8s:

@@ -53,6 +53,7 @@
         namespace: schnappy-production
         name: schnappy-production-postgres-app
       register: _app_secret
+      no_log: true
 
     - name: CNPG owner secret schnappy-production-postgres-app as ten has it (username app)
       kubernetes.core.k8s:

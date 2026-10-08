@@ -298,6 +298,7 @@
       retries: 12
       delay: 10
       until: velero_secret.resources | length > 0
+      no_log: true
 
     - name: Install Velero CRDs
       ansible.builtin.shell: |

@@ -224,6 +224,7 @@
                       'auth': (forgejo_admin_user ~ ':' ~ registry_token) | b64encode
                     }
                   } } | to_json }}
+      no_log: true
 
     - name: Deploy via Helm with registry images
       kubernetes.core.helm:
@@ -301,20 +302,22 @@
             kubectl describe pod -n {{ ns }} -l app.kubernetes.io/component=site | tail -50
             echo "=== events (last 30) ==="
             kubectl get events -n {{ ns }} --sort-by=.lastTimestamp | tail -30
-            echo "=== forgejo-registry secret ==="
-            kubectl get secret forgejo-registry -n {{ ns }} -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d
-            echo
+            # the registries it holds credentials for - never the credentials (this log is kept)
+            echo "=== forgejo-registry secret: its registries ==="
+            kubectl get secret forgejo-registry -n {{ ns }} -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d \
+              | python3 -c 'import json, sys; print(sorted(json.load(sys.stdin).get("auths", {})))' || echo "(not read)"
             echo "=== containerd hosts.toml ==="
             cat /etc/containerd/certs.d/{{ forgejo_host }}/hosts.toml
             echo "=== containerd config_path active? ==="
             grep -A2 "registry" /etc/containerd/config.toml | head -10
-            echo "=== node-side registry probe ==="
-            curl -sv -m 5 -u {{ forgejo_admin_user }}:{{ registry_token }} \
-              "http://{{ forgejo_host }}/v2/{{ forgejo_admin_user }}/monitor/manifests/{{ test_image_tag }}" 2>&1 | tail -20
-            echo "=== node-side direct ctr pull (with creds) ==="
-            ctr -n k8s.io image pull --plain-http \
-              --user "{{ forgejo_admin_user }}:{{ registry_token }}" \
-              "{{ forgejo_host }}/{{ forgejo_admin_user }}/monitor:{{ test_image_tag }}" 2>&1 | tail -10 || echo "(ctr pull failed)"
+            # the answer of the registry to the credentials (on the curl config, from the environment: never on a command line
+            # or in this log - curl -v printed the Authorization header)
+            echo "=== node-side registry probe: HTTP status ==="
+            printf 'user = "%s:%s"\n' "$REGISTRY_USER" "$REGISTRY_TOKEN" | curl -s -m 5 -K - -o /dev/null -w '%{http_code}\n' \
+              "http://{{ forgejo_host }}/v2/{{ forgejo_admin_user }}/monitor/manifests/{{ test_image_tag }}" || echo "(no answer)"
+          environment:
+            REGISTRY_USER: "{{ forgejo_admin_user }}"
+            REGISTRY_TOKEN: "{{ registry_token }}"
           changed_when: false
           register: _pull_diag
         - name: DIAG output
