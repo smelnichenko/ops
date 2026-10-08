@@ -188,3 +188,9 @@
         path: "{{ item }}"
         state: absent
       loop: [/etc/keycloak, /var/lib/config-loaded/keycloak.sha256]
+
+    # systemd reads it so (no restart): kept in memory, the playbook's unit named the file just removed - a crash
+    # restart before step 00 failed to load it
+    - name: systemd reads production's unit (no restart)
+      ansible.builtin.systemd:
+        daemon_reload: true

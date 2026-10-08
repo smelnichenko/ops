@@ -59,6 +59,16 @@ gone = sorted(str(x) for t in ps for m, v in actions(t) if isinstance(v, dict) a
               for x in (t.get("loop") if v.get("path") == "{{ item }}" else [v.get("path")]))
 check("the copy without /etc/keycloak and Keycloak's restart stamp, as production",
       gone, ["/etc/keycloak", "/var/lib/config-loaded/keycloak.sha256"])
+# and systemd reads it so (daemon-reload, no restart): kept in memory, the playbook's unit named the removed file - a
+# crash restart before step 00 failed "Failed to load environment files"
+reload_ = [i for i, t in enumerate(ps) if (t.get("ansible.builtin.systemd") or t.get("ansible.builtin.systemd_service")
+                                           or {}).get("daemon_reload") is True]
+removal = max((i for i, t in enumerate(ps) if "/etc/keycloak" in str((t.get("ansible.builtin.file") or {}).get("path", ""))
+               + str(t.get("loop", ""))), default=None)
+check("the copy's systemd reloads production's unit after it and the removal, restarting nothing",
+      (bool(reload_) and removal is not None and reload_[-1] > removal,
+       [(ps[i].get("ansible.builtin.systemd") or ps[i].get("ansible.builtin.systemd_service")).get("state") for i in reload_]),
+      (True, [None] * len(reload_)))
 check("step 00 runs the tagged playbook", any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
                                               for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt")), True)
 # step 00's tagged run (--tags keycloak-db-url) reaches everything the unit needs: the facts its URL is made of, the
