@@ -157,6 +157,13 @@ check("the mount points made for the volumes about to be mounted alone, after th
       (mp is not None and str(mp.get("loop", "")).replace(" ", "") == "{{backup_remount}}",
        mp is not None and names.index("Unmount what another source has mounted there") < names.index("Create mount points")
        < names.index("Mount backup volumes")), (True, True))
+# no play before the mount play's answer check reaches inside a mounted backup volume (a lookup there held for good
+# by a hung client - the old MinIO symlinks' cleanup did): the mounts from the play's own list
+mounts = [v["mount"] for v in vols]
+before = plays[:plays.index(mounting)]
+inside = [t.get("name") for p in before for t in flat(p.get("tasks")) for m in mounts
+          if m + "/" in str(t.get("ansible.builtin.shell", "")) + str(t.get("ansible.builtin.command", ""))]
+check("no task before the answer check reaches inside a backup volume's mount", inside, [])
 # the volumes Forgejo and Nexus write have their root's owner kept by Gluster (storage.owner-uid/gid): a heal or a
 # remount set it back to the arbiter brick's root:root otherwise - forgejo-repos had none (a re-run after a full run
 # found its root changed, 2026-10-08)

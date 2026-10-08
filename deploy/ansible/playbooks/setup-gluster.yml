@@ -538,16 +538,8 @@
       register: rmdir_leftovers
       changed_when: "'removed:' in rmdir_leftovers.stdout"
 
-    - name: Remove MinIO symlinks (replaced by GlusterFS mount)
-      ansible.builtin.shell: |
-        for link in /var/lib/minio/data/postgres-backups /var/lib/minio/data/scylla-backups /var/lib/minio/data/velero; do
-          if [ -L "$link" ]; then
-            rm "$link"
-            echo "removed $link"
-          fi
-        done
-      register: remove_symlinks
-      changed_when: "'removed' in remove_symlinks.stdout"
+    # (the old volumes' symlinks under /var/lib/minio/data, 0682f66's migration, are gone from both Pis - read
+    # 2026-10-08; their cleanup looked inside the backup-minio mount before any answer check, held by a hung client)
 
 - name: Stop old backups volume
   hosts: pi1
