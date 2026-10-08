@@ -23,7 +23,7 @@ PY
 cat > "$W/bin/task" <<'STUB'
 #!/bin/bash
 echo "task $*" >> "$LOG"
-[ "$*" != "test:upgrade:step STEP=$FAIL_AT" ]
+case "$*" in "test:upgrade:step STEP=$FAIL_AT "*) exit 1 ;; esac
 STUB
 cat > "$W/bin/git" <<'STUB'
 #!/bin/bash
@@ -52,17 +52,18 @@ case_() {  # case_ <name> <step that fails, or none> <want rc 0|1> <want log, ; 
   if [ "$rc" = "$3" ] && [ "$got" = "$4" ]; then echo "PASS $1"; return; fi
   echo "FAIL $1 (rc $rc)"; echo "    got:  $got"; echo "    want: $4"; fails=$((fails + 1))
 }
+# each step given the one before it, green in this run (PREV_STEP: what it need not check again), the first none
 case_ "three steps green: each proof after the next step, the last after the final settle; digests after each step" \
-  none 0 "step 01-a;digests;step 02-b;digests;proof 01-a;step 03-c;digests;proof 02-b;final-settle 03-c;proof 03-c"
+  none 0 "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c"
 case_ "the second step fails: the first one unproven (its restarts not judged by a passing step)" 02-b 1 \
-  "step 01-a;digests;step 02-b"
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a"
 case_ "the last step fails: the one before unproven, no final settle" 03-c 1 \
-  "step 01-a;digests;step 02-b;digests;proof 01-a;step 03-c"
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b"
 check() {
   if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got $2, want $3"; fails=$((fails + 1)); fi
 }
 case_ "(again, for the digests' files)" none 0 \
-  "step 01-a;digests;step 02-b;digests;proof 01-a;step 03-c;digests;proof 02-b;final-settle 03-c;proof 03-c"
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c"
 check "each step's digests in a file of its own" "$(ls "$W/run/.upgrade/step-digests" | paste -sd' ')" \
   "01-a.txt 02-b.txt 03-c.txt"
 # the final settle as the Taskfile holds it: production's own values - what scripts/upgrade-production.py settle-values
