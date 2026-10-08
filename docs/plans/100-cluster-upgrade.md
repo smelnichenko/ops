@@ -1193,10 +1193,14 @@ task's vars as Ansible loads them; an apostrophe in destroy-environment's free-f
 at 5d7caf2; full run 10 started 18:08.
 
 Full run 10 failed in its build (18:21): the shared Keycloak restart (92079ee) refused on pi1 - pi2's Keycloak not
-serving. The restore play had started Keycloak on both Pis and gone on; 39 s later pi2's was still starting, and the
-guard reads a Keycloak starting as one down. Mine. The guard stays as strict; a Keycloak a play starts is waited for
-before anything reads it: the restore's on both Pis (a0e0d7d), and setup-pi-services' where it started one that was
-down - the same defect, there in production too (8554aa5).
+serving. Mine. My first fix (a wait after the restore's start, a0e0d7d) was wrong: a first install's Keycloak uses its
+own Pi's Postgres, and the replica's cannot serve until its restart loads the primary's port - full run 11 (18:38)
+failed on that wait in its build; reverted (fc48d89). The cause was the order: the VIP on neither Pi, pi1 (serving)
+went first and its guard found pi2 down. Now whether Keycloak serves is read on both Pis before any restart, and a Pi
+where it does not restarts first (nothing to lose there), then the one without the VIP, the VIP's last; the guard as
+strict (c8dce26). Tested by the order a run makes, each restart through its own script. Besides, setup-pi-services
+waits for a Keycloak it started (one that was down) before the restarts, else the other Pi's guard reads it starting
+as down (8554aa5).
 
 Left, with why:
 - 55 test-playbook tasks outside the full run, and test-ephemeral-env's `http://admin:<pw>@` URLs: a secret on a
