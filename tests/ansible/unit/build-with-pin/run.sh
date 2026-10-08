@@ -137,20 +137,21 @@ out=$(cat "$T/ign.out")
 check "a job ignoring TERM: killed after the grace, said so; both gone, the stop said, well before the bound" \
   "$(gone "$T/.upgrade/build.pid") $(gone "$T/.upgrade/pin.pid") $(grep -c 'outlived the stop' <<< "$out") \
 $(grep -c 'STOPPED BY A SIGNAL' <<< "$out") $((SECONDS - t0 < 10))" "gone gone 1 1 1"
-# a second signal while the stop waits for a job that takes its time to end (a Ctrl-C pressed twice): the stop goes on
-# to its end - the job's own stop finished, both gone, the stop said
+# a second signal while the stop waits for a job that takes its time to end - a Ctrl-C pressed twice: INT to the
+# whole group, the script itself included, twice: the stop goes on to its end - the job's own stop finished, both
+# gone, the stop said (unguarded, the second ran the trap again inside the stop and ended it there - measured)
 rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished" \
   "$T/.upgrade/build.slow"
 (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 SLOW_TERM=1 PATH="$T/bin:$PATH" timeout -k 5 30 \
   bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/twice.out" 2>&1) &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
-if [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ]; then
-  kill -TERM "$sp"; sleep 0.3; kill -TERM "$sp" 2> /dev/null
+if [ "$(proc_info "$sp" | awk '{print $1, $2}')" = "$$ $sp" ]; then
+  kill -INT -- "-$sp"; sleep 0.3; kill -INT -- "-$sp" 2> /dev/null
 fi
 wait "$sp"
 out=$(cat "$T/twice.out")
-check "a second TERM during the stop: the stop goes on - the slow job's own stop done, both gone, the stop said" \
+check "a Ctrl-C pressed twice, the second during the stop: the stop goes on - the slow job's own stop done, both gone, the stop said" \
   "$([ -e "$T/.upgrade/build.slow" ] && echo slow-done || echo cut) $(gone "$T/.upgrade/build.pid") \
 $(gone "$T/.upgrade/pin.pid") $(grep -c 'STOPPED BY A SIGNAL' <<< "$out")" "slow-done gone gone 1"
 # a signal between a job's start and the line that keeps its PID: the job stopped all the same - every job of the
