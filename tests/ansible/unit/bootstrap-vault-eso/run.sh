@@ -216,5 +216,11 @@ print(sorted((c["roleRef"]["name"], s["kind"], s.get("namespace"), s["name"]) fo
 check "isolate-cluster.yml: the Vagrant Vault verified against its CA, as ten's; the cluster CA in no fixed /tmp file" \
   "$(grep -c 'VAULT_SKIP_VERIFY' "$iso") $(grep -c 'VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem' "$iso") \
 $(sed -n '/Configure Kubernetes auth in the Vagrant Vault/,$p' "$iso" | grep -c '/tmp/')" "0 1 0"
+# the task that runs it on production: said so, asked first (it switches every ExternalSecret's login)
+check "deploy:vault-eso: says PRODUCTION, asks first, runs this step" "$(python3 -c '
+import yaml
+t = yaml.safe_load(open("Taskfile.yml"))["tasks"]["deploy:vault-eso"]
+print(str(t.get("desc", "")).startswith("PRODUCTION"), "PRODUCTION" in str(t.get("prompt", "")),
+      [str(c) for c in t.get("cmds", [])] == ["./bootstrap.sh vault-eso"])')" "True True True"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
