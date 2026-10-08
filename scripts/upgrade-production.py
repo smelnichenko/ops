@@ -63,6 +63,7 @@ import subprocess
 import socket
 import sys
 import tempfile
+import termios
 import urllib.error
 import urllib.request
 
@@ -804,12 +805,14 @@ def pushed_base(repo_dir, step, tip=None):
 # ---- the phases -----------------------------------------------------------------------------------------------------
 
 def confirm(question):
-    """The operator's yes on the terminal, as the Taskfile's prompts ask it; no terminal is a no."""
+    """The operator's yes on the terminal, as the Taskfile's prompts ask it; no terminal is a no. Unbuffered binary: a
+    text "r+" needs a seekable file and a terminal is none - it raised, and every question read as a no. What was typed
+    before the question is discarded: input typed ahead is no answer to it."""
     try:
-        with open("/dev/tty", "r+") as tty:
-            tty.write(f"{question} [y/N] ")
-            tty.flush()
-            return tty.readline().strip().lower() in ("y", "yes")
+        with open("/dev/tty", "rb+", buffering=0) as tty:
+            termios.tcflush(tty.fileno(), termios.TCIFLUSH)
+            tty.write(f"{question} [y/N] ".encode())
+            return tty.readline().decode(errors="replace").strip().lower() in ("y", "yes")
     except OSError:
         return False
 
