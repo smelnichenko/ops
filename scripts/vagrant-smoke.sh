@@ -8,7 +8,10 @@
 # a stopped check never deletes another's), no hook annotations, no retries.
 # It reads the client secret the chart's ExternalSecret already made. TLS is verified as in production: the Vagrant
 # copy serves production's own *.pmon.dev certificate (tests/ansible/upgrade/production-state.yml). Prints k6's checks;
-# exit 0 only if k6 passed (set -e + pipefail carry the remote shell's exit 1 out).
+# exit 0 only if k6 passed (set -e + pipefail carry the remote shell's exit 1 out). One failure alone runs it once more:
+# its latency threshold crossed with every check passed and no request failed - the first requests after a step
+# restarted every pod (Istio's sidecar steps: 2 of 449 runs, p95 2.9 and 3.1 s over 12 requests); that run decides.
+# Any other failure stands (production's own Job retries every failure three times; this one, none but that).
 #
 # Leaves nothing behind: the remote shell deletes the run's Job and ConfigMap when it ends - also when its connection
 # is gone (a heartbeat it writes fails then), its caller stopped.
@@ -55,7 +58,6 @@ if len(mounts) != 1:
 mounts[0]["configMap"]["name"] = name
 print(yaml.safe_dump_all([cm, job], sort_keys=False))
 EOF
-python3 "$work/pick.py" "$work/rendered.yaml" "$name" > "$work/smoke.yaml"
 
 cd "$ops"
 # plain ssh with the VMs' config when the caller has it (VAGRANT_SSH_CONFIG, scripts/upgrade-step-checks.sh): Vagrant
@@ -68,11 +70,15 @@ vssh() {
     vagrant ssh "$1" -c "$2" 2> >(grep -v '^Connection to .* closed\.' >&2)
   fi
 }
-vssh kubeadm "cat > /tmp/$name.yaml" < "$work/smoke.yaml"
+# one run of the Job under its own name: its output said, and kept ($work/out); its exit the run's
+smoke() {
+local name=$1
+python3 "$work/pick.py" "$work/rendered.yaml" "$name" > "$work/smoke.yaml" || return 1
+vssh kubeadm "cat > /tmp/$name.yaml" < "$work/smoke.yaml" || return 1
 # One remote shell does the whole run, polling the Job's end itself: no waiter to stop, none to outlive it. Each poll
 # writes a heartbeat (a carriage return, dropped here): once the connection is gone the write fails and the shell ends
 # - its EXIT trap deletes the run's Job and ConfigMap, silently (a write would end it at once).
-vssh kubeadm "sudo bash -s $name $SMOKE_SECONDS $SMOKE_POLL" <<'SH' | tr -d '\r'
+vssh kubeadm "sudo bash -s $name $SMOKE_SECONDS $SMOKE_POLL" <<'SH' | tr -d '\r' | tee "$work/out"
 set -u
 NAME=$1 SMOKE_SECONDS=$2 SMOKE_POLL=$3
 # every call bounded: a hung API server held the poll for good
@@ -118,3 +124,21 @@ passed=$($K get job "$NAME" -o jsonpath='{.status.succeeded}')
 # EXIT trap deletes the Job and its ConfigMap
 if [ "$passed" = 1 ]; then echo "SMOKE PASSED"; else echo "SMOKE FAILED${ended:+ ($ended)}"; exit 1; fi
 SH
+}
+
+# the run failed on its latency alone, as k6 printed it: its one error the http_req_duration threshold crossed, every
+# check passed (the checks' threshold among them), no request failed
+latency_only() {
+  awk '
+    /level=error/ { if ($0 ~ /thresholds on metrics .http_req_duration. have been crossed/) dur = 1; else other = 1 }
+    /✗/ { if ($0 ~ /✗ .p\(95\)<[0-9]+. /) lat = 1; else other = 1 }
+    /✓/ { passed = 1 }
+    /http_req_failed[.]*: 0\.00% / { none_failed = 1 }
+    END { exit !(dur && lat && passed && none_failed && !other) }' "$1"
+}
+
+if smoke "$name"; then exit 0; fi
+latency_only "$work/out" || exit 1
+echo "SMOKE: its latency threshold alone crossed (the first requests after a restart) - once more, that run decides"
+name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+smoke "$name"

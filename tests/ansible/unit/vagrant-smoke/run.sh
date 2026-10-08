@@ -160,6 +160,62 @@ STUB
 chmod +x "$E/bin/helm" "$E/bin/ssh"
 out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null bash scripts/vagrant-smoke.sh 2>&1); rc=$?
 check "the smoke failing on the VM: the script fails, said" "$((rc != 0)) $(grep -c '^SMOKE FAILED' <<< "$out")" "1 1"
+# its latency threshold alone crossed - every check passed, no request failed (the first requests after a step
+# restarted every pod): one more run under a name of its own, and that run decides; any other failure stands, no
+# second run. The VM answers each run in turn (answer.N, its exit rc.N), as k6's checks print
+cat > "$E/bin/ssh" <<'STUB'
+#!/bin/bash
+cat > /dev/null
+case "${@: -1}" in
+  *"bash -s"*) n=$(( $(cat "$E/n" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$E/n"; echo "${@: -1}" >> "$E/runs"
+    cat "$E/answer.$n" 2> /dev/null; exit "$(cat "$E/rc.$n" 2> /dev/null || echo 1)" ;;
+esac
+exit 0
+STUB
+chmod +x "$E/bin/ssh"
+DUR="time=\"x\" level=error msg=\"thresholds on metrics 'http_req_duration' have been crossed\""
+answer() {  # answer <name> <exit> <lines...>
+  local n=$1 r=$2; shift 2
+  printf '%s\n' "--- k6 checks" "$@" > "$E/$n"; echo "$r" > "$E/$n.rc"
+}
+answer pass 0 "    ✓ 'rate==1.0' rate=100.00%" "    ✓ 'p(95)<2000' p(95)=812.00ms" "    ✓ health 200" \
+  "    http_req_failed................: 0.00%  0 out of 12" "SMOKE PASSED"
+answer latency 1 "$DUR" "    ✓ 'rate==1.0' rate=100.00%" "    ✗ 'p(95)<2000' p(95)=2.88s" "    ✓ health 200" \
+  "    http_req_failed................: 0.00%  0 out of 12" "SMOKE FAILED (FailureTarget Failed)"
+answer check 1 "time=\"x\" level=error msg=\"thresholds on metrics 'checks, http_req_duration' have been crossed\"" \
+  "    ✗ 'rate==1.0' rate=91.66%" "    ✗ 'p(95)<2000' p(95)=2.88s" "    ✗ health 200" \
+  "    http_req_failed................: 0.00%  0 out of 12" "SMOKE FAILED (FailureTarget Failed)"
+answer request 1 "$DUR" "    ✓ 'rate==1.0' rate=100.00%" "    ✗ 'p(95)<2000' p(95)=2.88s" "    ✓ health 200" \
+  "    http_req_failed................: 8.33%  1 out of 12" "SMOKE FAILED (FailureTarget Failed)"
+answer warning 1 "$DUR" "time=\"x\" level=error msg=\"setup failed\"" "    ✓ 'rate==1.0' rate=100.00%" \
+  "    ✗ 'p(95)<2000' p(95)=2.88s" "    http_req_failed................: 0.00%  0 out of 12" "SMOKE FAILED (Failed)"
+answer silent 1 "SMOKE FAILED (Failed)"
+# what was printed of k6 cut short: its latency line without its error, or no check passed among it - not known to be
+# the latency alone
+answer no-error 1 "    ✓ 'rate==1.0' rate=100.00%" "    ✗ 'p(95)<2000' p(95)=2.88s" \
+  "    http_req_failed................: 0.00%  0 out of 12" "SMOKE FAILED (Failed)"
+answer no-check 1 "$DUR" "    ✗ 'p(95)<2000' p(95)=2.88s" "    http_req_failed................: 0.00%  0 out of 12" \
+  "SMOKE FAILED (Failed)"
+runs() {  # runs <answers...>: the script's exit, its runs on the VM, their distinct names
+  rm -f "$E/n" "$E/runs" "$E"/answer.* "$E"/rc.*; local i=0 a
+  for a; do i=$((i + 1)); cp "$E/$a" "$E/answer.$i"; cp "$E/$a.rc" "$E/rc.$i"; done
+  out=$(cd "$E/ops" && PATH="$E/bin:$PATH" E="$E" VAGRANT_SSH_CONFIG=/dev/null bash scripts/vagrant-smoke.sh 2>&1)
+  echo "$? $(wc -l < "$E/runs") $(grep -oE 'vagrant-k6-smoke-[0-9a-f]+' "$E/runs" | sort -u | wc -l)"
+}
+check "its latency alone crossed, then passed: passed, two runs under two names" "$(runs latency pass)" "0 2 2"
+check "its latency alone crossed twice: failed, two runs" "$(runs latency latency)" "1 2 2"
+check "passed: one run" "$(runs pass)" "0 1 1"
+check "a check failed (its latency with it): failed, no second run" "$(runs check pass)" "1 1 1"
+check "a request failed: failed, no second run" "$(runs request pass)" "1 1 1"
+check "another error beside the latency: failed, no second run" "$(runs warning pass)" "1 1 1"
+check "failed with nothing of k6's printed: failed, no second run" "$(runs silent pass)" "1 1 1"
+check "its latency line without k6's error: failed, no second run" "$(runs no-error pass)" "1 1 1"
+check "no check printed as passed: failed, no second run" "$(runs no-check pass)" "1 1 1"
+out=$(runs latency pass > /dev/null; cd "$E/ops" && rm -f "$E/n" "$E/runs" && cp "$E/latency" "$E/answer.1" && \
+  cp "$E/latency.rc" "$E/rc.1" && cp "$E/pass" "$E/answer.2" && cp "$E/pass.rc" "$E/rc.2" && \
+  PATH="$E/bin:$PATH" E="$E" VAGRANT_SSH_CONFIG=/dev/null bash scripts/vagrant-smoke.sh 2>&1)
+check "both runs said: the first's latency, why once more, the second's pass" \
+  "$(grep -c "p(95)=2.88s" <<< "$out") $(grep -c 'once more' <<< "$out") $(grep -c '^SMOKE PASSED$' <<< "$out")" "1 1 1"
 # the caller's bound and poll reach the remote shell, on its command line - numbers only (that line is a shell's)
 printf '#!/bin/bash\necho "${@: -1}" >> "%s/ssh-cmds"\ncat > /dev/null\ncase "${@: -1}" in *"bash -s"*) echo "SMOKE PASSED" ;; esac\n' \
   "$E" > "$E/bin/ssh"
