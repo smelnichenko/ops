@@ -19,7 +19,8 @@ cat > "$W/bin/kubectl" <<STUB
 #!/bin/bash
 echo "kubectl \$*" >> "$W/kubectl-calls"
 case "\$*" in
-  "apply -f -") { cat; echo ---; } >> "$W/applied" ;;
+  "apply -f -") [ -z "\${APPLY_FAILS:-}" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
+    { cat; echo ---; } >> "$W/applied" ;;
   *certificate-authority-data*) if [ -n "\${CA_RAW:-}" ]; then printf '%s' "\$CA_RAW"
     else printf '%s' "\$(printf 'THE CLUSTER CA' | base64 -w0)"; fi ;;
   *cluster.server*) printf '%s' "\${SERVER:-https://192.168.11.2:6443}" ;;
@@ -81,11 +82,16 @@ check "its work directory gone when it ends" "$(ls -A "$W/tmp" | wc -l)" 0
 run CA_RAW=$'QUJD\nB64\n'"touch $W/pwned-by-ca"$'\n'
 check "a cluster CA that is not base64: the step fails, nothing sent to the Pi, nothing run" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(ls "$W"/pwned-* 2> /dev/null | wc -l)" "1 0 0"
+# a step that fails says so and goes no further: under set -e (a direct call) it ended unsaid; called by `all` (set -e
+# off in its || context) a failed apply went by unnoticed
+run APPLY_FAILS=1
+check "the cluster's apply failing: the step fails, said so, nothing sent to the Pi" \
+  "$rc $(grep -c "vault-pi-ca\|vault-eso failed" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 2 0"
 run SERVER="https://192.168.11.2:6443' ; touch $W/pwned-by-server ; '"
 check "a server that is not a plain https URL: the step fails, nothing sent to the Pi, nothing run" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(ls "$W"/pwned-* 2> /dev/null | wc -l)" "1 0 0"
 run VAULT_FAIL=1
-check "a failure on the Pi: the step fails, said so" "$rc $(grep -c 'failed' <<< "$out")" "1 1"
+check "a failure on the Pi: the step fails, said so" "$rc $(grep -c "Kubernetes auth on the Pi failed" <<< "$out")" "1 1"
 # the Vagrant Vault configured as ten's: the same keys in the same write, the same account bound, no token Secret
 keys() { grep -oE '(kubernetes_host|kubernetes_ca_cert|token_reviewer_jwt|disable_local_ca_jwt|issuer|pem_keys)=' | sort -u | tr -d '\n'; }
 iso=tests/ansible/upgrade/isolate-cluster.yml

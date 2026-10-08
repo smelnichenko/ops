@@ -164,11 +164,13 @@ setup_vault_eso() {
     return 1
   fi
 
+  # each step checked and said: no set -e holds here (`all` calls this in a || context), and a failed apply went by
+  # unnoticed - the Pi's Vault then configured for a cluster that does not trust it
   local VAULT_CA_B64
-  VAULT_CA_B64=$(base64 -w0 < "$work/vault-ca.pem")
+  VAULT_CA_B64=$(base64 -w0 < "$work/vault-ca.pem") || { err "Cannot encode Vault's CA"; return 1; }
 
   # Create Vault CA secret in external-secrets namespace
-  kubectl apply -f - <<EOF
+  if ! kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -177,11 +179,15 @@ metadata:
 data:
   ca.crt: ${VAULT_CA_B64}
 EOF
+  then
+    err "Cannot apply Secret external-secrets/vault-pi-ca (Vault's CA for ESO)"
+    return 1
+  fi
 
   # External Secrets' account may review tokens: Vault (no reviewer token of its own) reviews the short-lived token ESO
   # logs in with by that same token - a non-expiring token of this account, kept in Vault's config, was anyone's who
   # read it to use as External Secrets
-  kubectl apply -f - <<EOF
+  if ! kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -195,10 +201,16 @@ subjects:
     name: external-secrets
     namespace: external-secrets
 EOF
+  then
+    err "Cannot apply ClusterRoleBinding vault-token-reviewer (ESO's tokens reviewed by Vault)"
+    return 1
+  fi
 
   local K8S_CA K8S_HOST
-  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')
-  K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}') \
+    || { err "Cannot read the cluster's CA from the kubeconfig"; return 1; }
+  K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}') \
+    || { err "Cannot read the cluster's server from the kubeconfig"; return 1; }
   [[ $K8S_HOST =~ ^https://[A-Za-z0-9.:-]+$ ]] \
     || { err "The cluster's server is not a plain https URL: $K8S_HOST"; return 1; }
   # base64 alone: it goes into the script run as root on the Pi (a line of its own would end that heredoc)
@@ -282,7 +294,7 @@ main() {
     cert-manager)       install_cert_manager ;;
     porkbun-webhook)    install_porkbun_webhook ;;
     external-secrets)   install_external_secrets ;;
-    vault-eso)          setup_vault_eso ;;
+    vault-eso)          setup_vault_eso || { err "vault-eso failed"; exit 1; } ;;
     istio)              install_istio ;;
     velero)             install_velero ;;
     cluster-config)     install_cluster_config ;;
