@@ -216,5 +216,22 @@ if mine "$h"; then stop_groups 5 "$h" > /dev/null; fi
 wait "$h" 2> /dev/null; rc=$?
 check "a job catching the TERM: its handler run once, its cleanup's command run to its end, it ends of it (143)" \
   "$rc $(grep -c '^stop$' "$W/caught.ready.n") $(grep -c '^cleaned$' "$W/caught.ready.n")" "143 1 1"
+# a stopped job (SIGSTOP: a Ctrl-Z, a debugger) acts on no TERM until continued: continued with it - its own stop runs,
+# it ends of the TERM (143); not KILLed after the grace, its stop never run
+set -m
+bash -c 'trap "echo stopped-cleanly > \"\$0.done\"; exit 143" TERM; echo ready > "$0"; while :; do sleep 0.1; done' \
+  "$W/cont.ready" & h=$!
+set +m
+ready "$W/cont.ready"
+state=""
+if mine "$h"; then
+  kill -STOP -- "-$h"
+  for _ in $(seq 50); do read -r st < "/proc/$h/stat"; set -- ${st##*) }; state=$1; [ "$state" = T ] && break; sleep 0.05; done
+fi
+check "the job stopped (state T) before the stop" "$state" T
+if mine "$h"; then stop_groups 3 "$h" > "$W/cont.out"; fi
+wait "$h" 2> /dev/null; rc=$?
+check "a stopped job: continued with the TERM - its own stop run, ended 143, nothing killed" \
+  "$rc $(cat "$W/cont.ready.done" 2> /dev/null) $(grep -c killed "$W/cont.out")" "143 stopped-cleanly 0"
 echo "process-groups: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

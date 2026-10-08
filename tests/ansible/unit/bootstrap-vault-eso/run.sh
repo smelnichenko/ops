@@ -49,14 +49,16 @@ case "\$*" in
   "-n "*" annotate externalsecret "*" force-sync="*" --overwrite")
     [ ! -e "$W/annotated" ] || touch "$W/annotated-again"; touch "$W/annotated"; echo "\$2/\$5" >> "$W/annotated-es" ;;
   "-n external-secrets get secret vault-token-reviewer --ignore-not-found -o name")
+    [ -z "\${TOKEN_READ_FAILS:-}" ] || { echo "error: etcdserver: request timed out" >&2; exit 1; }
     [ -n "\${NO_TOKEN_SECRET:-}" ] || echo "secret/vault-token-reviewer" ;;
   "-n external-secrets delete secret vault-token-reviewer --ignore-not-found")
+    [ -z "\${DELETE_FAILS:-}" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
     [ -n "\${NO_TOKEN_SECRET:-}" ] || echo 'secret "vault-token-reviewer" deleted' ;;
   *certificate-authority-data*) if [ -n "\${CA_RAW:-}" ]; then printf '%s' "\$CA_RAW"
     else printf '%s' "\$(printf 'THE CLUSTER CA' | base64 -w0)"; fi ;;
   *cluster.server*) printf '%s' "\${SERVER:-https://192.168.11.2:6443}" ;;
   *"get secret vault-token-reviewer"*) [ -z "\${NO_TOKEN_SECRET:-}" ] || exit 1
-    printf '%s' "\$(printf '%s' "$JWT" | base64 -w0)" ;;
+    printf '%s' "\$(printf '%s' "\${JWT_RAW:-$JWT}" | base64 -w0)" ;;
 esac
 exit 0
 STUB
@@ -155,6 +157,12 @@ check "... no reviewer token to put back: nothing written back, said, the step f
 # what this step could not put back, said with how to by hand: the config before (none of it secret - Vault reads back
 # no reviewer token) - its file was this run's, removed as the step ended
 check "... and the config before said, with how to put it back by hand" "$(said_before)" "1 1 1"
+# the token Secret holding no JWT (a line break, a quote - it goes into the script run as root on the Pi): nothing put
+# back, said
+run ES_READY=False JWT_RAW="eyJ.x'; touch $W/pwned-by-jwt; '"
+check "... the kept token no JWT: nothing written back, nothing of it run, said, the step fails" \
+  "$rc $(test -e "$W/vault-json" && echo written || echo none) $(ls "$W"/pwned-* 2> /dev/null | wc -l) \
+$(grep -c 'NOT put back' <<< "$out")" "1 none 0 1"
 run ES_READY=False OLD_CONFIG=none
 check "... no config there before (a fresh Vault): nothing to put back, said, the step fails" \
   "$rc $(test -e "$W/vault-json" && echo written || echo none) $(grep -c 'NOT put back' <<< "$out")" "1 none 1"
@@ -218,6 +226,15 @@ check "the cluster's apply failing: the step fails, said so, nothing sent to the
 run SERVER="https://192.168.11.2:6443' ; touch $W/pwned-by-server ; '"
 check "a server that is not a plain https URL: the step fails, nothing sent to the Pi, nothing run" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(ls "$W"/pwned-* 2> /dev/null | wc -l)" "1 0 0"
+# every read checked, never "nothing there": the old token's Secret not read (no ExternalSecret to prove with) - nothing
+# switched; the old token not deleted after the proof - said, the step fails
+run ES_NONE=1 TOKEN_READ_FAILS=1
+check "the old reviewer token's Secret not read: the step fails, said - nothing sent to the Pi" \
+  "$rc $(grep -c "old reviewer token's Secret not read" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" \
+  "1 1 0"
+run DELETE_FAILS=1
+check "the old reviewer token not deleted after the proof: the step fails, said" \
+  "$rc $(grep -c 'old reviewer token (external-secrets/vault-token-reviewer) not deleted' <<< "$out")" "1 1"
 run VAULT_FAIL=1
 check "a failure on the Pi: the step fails, said so" "$rc $(grep -c "Kubernetes auth on the Pi failed" <<< "$out")" "1 1"
 check "... the config before said, with how to put it back by hand (the write's fate unknown here)" "$(said_before)" "1 1 1"

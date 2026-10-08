@@ -31,7 +31,9 @@ if "create" in a:
     print("generated random password is 'Rnd0mPw4tEst'")
     print("New user 'admin' has been successfully created!")
 if "generate-access-token" in a:
-    print("0123456789abcdef0123456789abcdef01234567")
+    # TOKEN_GARBAGE: an answer that is no token (a warning, an error said on stdout with exit 0)
+    print("2026/10/08 11:00:00 ...s/setting/setting.go:42:loadRunModeFrom() [W] running as root" if os.environ.get(
+        "TOKEN_GARBAGE") else "0123456789abcdef0123456789abcdef01234567")
 STUB
 # curl: each call's argv, the config it reads from -K, and its body from stdin (--data @-), one JSON line each (the
 # last also in curl.json); a GET of the user's tokens answers two - one an earlier retry left, one of the user's own
@@ -144,6 +146,13 @@ for book in ("tasks/forgejo-admin",):
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, EXISTS="1",
                                 TOKENS_FAIL="1"))
     check(f"{book}: a retry whose reset tokens are not read: fails", r.returncode != 0, True)
+    # the CLI's answer no token: fails, said - nothing sent to the API with it
+    fresh()
+    r = subprocess.run(["bash", "-c", script], input=data, capture_output=True, text=True,
+                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, EXISTS="1",
+                                TOKEN_GARBAGE="1"))
+    check(f"{book}: a retry whose CLI answers no token: fails, said - nothing sent to the API",
+          (r.returncode != 0, "no token in Forgejo's answer" in r.stdout + r.stderr, calls()), (True, True, []))
     # a create failing otherwise (not "already exists"): the task fails, said - no token made, nothing sent
     fresh()
     r = subprocess.run(["bash", "-c", script], input=data, capture_output=True, text=True,

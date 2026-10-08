@@ -85,6 +85,24 @@ check("not the terminal's foreground: no, at once (not stopped at the question),
 # moved to the terminal's background between the check and the read (Ctrl-Z, bg): the read stopped it there (SIGTTIN),
 # its claim held - it answers no, never stopped
 check("moved to the background after the check: no, not stopped at the read", ask("", "y\n", "moved"), "False")
+# its SIGTTIN and SIGTTOU handlers put back as they were, whatever its answer (left ignored, the caller's own job
+# control changed under it) - here with no terminal at all (a session of its own): a no
+import subprocess  # noqa: E402
+code = """
+import importlib.machinery, importlib.util, signal
+l = importlib.machinery.SourceFileLoader("up", "scripts/upgrade-production.py")
+m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", l))
+l.exec_module(m)
+mine = lambda *a: None
+signal.signal(signal.SIGTTIN, mine)
+signal.signal(signal.SIGTTOU, signal.SIG_DFL)
+got = m.confirm("merge?")
+print(got, signal.getsignal(signal.SIGTTIN) is mine, signal.getsignal(signal.SIGTTOU) == signal.SIG_DFL)
+"""
+r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, start_new_session=True,
+                   stdin=subprocess.DEVNULL, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+check("its SIGTTIN and SIGTTOU handlers put back as they were (no terminal: a no)", r.stdout.strip() or r.stderr[-200:],
+      "False True True")
 print("confirm-typeahead: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCT

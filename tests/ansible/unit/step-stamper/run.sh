@@ -159,9 +159,11 @@ check "steps ending of their own accord: each line stamped, both green, the firs
   "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c '^[0-9:]\{8\} step done$' "$W/out") $(grep -c 'GREEN' "$W/out") \
 $(grep -c '^proof 01-a$' "$W/log")" "0 2 2 1"
 check "the final settle run as a step: its lines stamped" "$(grep -c '^[0-9:]\{8\} settle done$' "$W/out")" 1
+check "its work directory (the fifo) removed at its end" "$(ls -d "$W/run/.upgrade"/full-steps.* 2> /dev/null | wc -l)" 0
 # a signal during the final settle: stopped as a step is - whole, its stop's lines stamped, said; no proof of the last
 # step (it ran in the foreground, where go-task swallowed a Ctrl-C and the script's trap waited for it)
 WAIT_FOR='re:^[0-9:]\{8\} settle line 3$' run TERM ENDS=3 FINAL_ENDS=300
+check "... and on a stop: its work directory removed" "$(ls -d "$W/run/.upgrade"/full-steps.* 2> /dev/null | wc -l)" 0
 check "a TERM during the final settle: it stopped whole (gone), its stop's lines stamped, said; the last step unproven" \
   "$(cat "$W/rc" 2> /dev/null || echo none) $falive $(grep -c '^[0-9:]\{8\} after the signal' "$W/out") \
 $(grep -c '^=== STOPPED BY A SIGNAL' "$W/out") $(grep -c '^proof 01-a$' "$W/log") $(grep -c '^proof 02-b$' "$W/log")" \

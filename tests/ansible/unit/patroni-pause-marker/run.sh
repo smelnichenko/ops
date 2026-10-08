@@ -80,6 +80,8 @@ elif op == "get":
         print(open(f(key)).read())
 elif op == "delete":
     key = a[0]
+    if os.environ.get("DELETE_FAILS"):  # Consul answering 500 to the delete alone
+        sys.exit(f"Error! Failed to delete key {key}: Unexpected response code: 500")
     if "cas" in flags and os.path.exists(f(key)) and open(f(key) + ".idx").read() != flags["modify-index"]:
         sys.exit(f"Error! Did not delete key {key}: CAS failed")
     for x in ("", ".idx", ".key"):
@@ -281,6 +283,10 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
     r, calls, kv = run(rs, env=renv("MARKER 7"), fresh=False)
     check(f"{book}: ... and its retry resumes, the marker deleted",
           r.returncode == 0 and kv is None and dcs() == (False, [False, False]), (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env={**renv("MARKER 7"), "DELETE_FAILS": "1"}, paused=True, marker=mine, idx=7)
+    check(f"{book}: resumed, its marker not deleted: fails, said (the next run's pause refuses until it is gone)",
+          r.returncode != 0 and "RESUMED" in r.stdout and "consul kv delete" in r.stdout and kv == mine
+          and dcs() == (False, [False, False]), (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(rs, env=renv("MARKER 7"), paused=True, marker="setup-patroni 2026-10-08T02:00:00Z ef56ab78", idx=9)
     check(f"{book}: a marker put since (not its own): refused - nothing resumed, the marker left",
           r.returncode != 0 and kv == "setup-patroni 2026-10-08T02:00:00Z ef56ab78" and "patronictl resume" not in acts(calls)

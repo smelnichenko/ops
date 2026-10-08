@@ -180,7 +180,7 @@ def urlopen(url, timeout=None):
         raise urllib.error.HTTPError(url, 404, "no sum served here", None, None)
     if serve["fails"]:
         serve["fails"] -= 1
-        raise urllib.error.HTTPError(url, 502, "Bad Gateway", None, None)
+        raise urllib.error.HTTPError(url, serve.get("code", 502), "an error", None, None)
     return Resp(serve["blob"])
 urllib.request.urlopen = urlopen
 class Cut:
@@ -229,11 +229,22 @@ try:
         got = "pinned" in str(e)
     fails += not check_("the server's archive not the pinned one: refused", got is True, got)
     serve["blob"] = blob
-    # a transient failure of the archive's fetch (a 502): tried again
-    serve["fails"], fetched[:] = 1, []
-    got_path = fresh.helm_binary("9.9.9")
-    fails += not check_("the archive's fetch failing once (502): tried again, the binary from it",
-                        (open(got_path, "rb").read(), len(fetched)) == (HELM, 2), (len(fetched), fetched))
+    # a transient failure of the archive's fetch (a 502, a 429): tried again; a refusal (a 404) is none - not tried
+    # again; each case's exception a failure said here, never a crash of the test (no summary line)
+    def fetch_case(code):
+        serve["fails"], serve["code"], fetched[:] = 1, code, []
+        try:
+            return fresh.fetch("https://get.helm.sh/x.tar.gz") == serve["blob"], len(fetched)
+        except urllib.error.HTTPError as e:
+            return f"HTTP {e.code} raised", len(fetched)
+        finally:
+            serve["fails"], serve["code"] = 0, 502
+    got = fetch_case(502)
+    fails += not check_("the archive's fetch failing once (502): tried again, its data returned", got == (True, 2), got)
+    got = fetch_case(429)
+    fails += not check_("... once with a 429 (too many requests): tried again", got == (True, 2), got)
+    got = fetch_case(404)
+    fails += not check_("... a 404: no transient failure - not tried again, raised", got == ("HTTP 404 raised", 1), got)
     # a version with no sum pinned: refused before any fetch
     fetched.clear()
     try:
