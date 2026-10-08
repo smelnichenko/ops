@@ -21,6 +21,8 @@
   vars:
     production_lan: 192.168.11.0/24
     production_vip: 192.168.11.5
+    # production's LAN's IPv6 prefix (ten's ULA, read 2026-10-08)
+    production_lan6: fd0a:94e6:20b4:9f6b::/64
     # the positive control's target: the other Pi (its ssh port)
     peer: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first].ansible_host }}"
   tasks:
@@ -62,7 +64,7 @@
           table inet vagrant_isolation
           delete table inet vagrant_isolation
           table inet vagrant_isolation {
-            chain output { type filter hook output priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; }
+            chain output { type filter hook output priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; ip6 daddr {{ production_lan6 }} drop; }
           }
     - name: Apply the Pi guard now and at boot
       ansible.builtin.systemd_service:
@@ -72,16 +74,20 @@
         daemon_reload: true
       changed_when: false
 
-    # the guard drops production's LAN by IPv4 only, and that LAN carries an IPv6 prefix too (ten's ULA,
-    # fd0a:94e6:20b4:9f6b::/64): no IPv6 beyond link-local here - failing closed the day a box or a libvirt network
-    # gives the VM one
-    - name: No IPv6 beyond link-local (the guard drops IPv4 only)
+    # the guard drops production's IPv6 prefix too (ten's ULA), but no other IPv6 belongs here: none beyond link-local -
+    # failing closed the day a box or a libvirt network gives the VM some; an `ip` that fails is no answer (it read as
+    # "no IPv6"), a kernel with no IPv6 is
+    - name: No IPv6 beyond link-local
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          routes=$(ip -6 route show | grep -vE '^(fe80::/64 |multicast ff00::/8 )' || true)
-          addrs=$(ip -6 addr show scope global | grep inet6 || true)
+          [ -e /proc/net/if_inet6 ] || { echo "no IPv6 in this kernel"; exit 0; }
+          r=$(ip -6 route show)
+          a=$(ip -6 addr show scope global)
+          # grep: 1 is nothing selected, more an error
+          routes=$(grep -vE '^(fe80::/64 |multicast ff00::/8 )' <<< "$r") || [ $? = 1 ]
+          addrs=$(grep inet6 <<< "$a") || [ $? = 1 ]
           if [ -n "$routes$addrs" ]; then echo "IPv6 BEYOND LINK-LOCAL: $routes $addrs"; exit 1; fi
           echo "no IPv6 beyond link-local"
       changed_when: false

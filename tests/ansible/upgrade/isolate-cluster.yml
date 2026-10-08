@@ -37,6 +37,8 @@
     kubeconfig: /etc/kubernetes/admin.conf
     production_lan: 192.168.11.0/24
     production_vip: 192.168.11.5
+    # production's LAN's IPv6 prefix (ten's ULA, read 2026-10-08)
+    production_lan6: fd0a:94e6:20b4:9f6b::/64
     vagrant_vip: "{{ keepalived_vip }}"
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
 
@@ -144,8 +146,8 @@
           table inet vagrant_isolation
           delete table inet vagrant_isolation
           table inet vagrant_isolation {
-            chain output { type filter hook output priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; }
-            chain forward { type filter hook forward priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; }
+            chain output { type filter hook output priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; ip6 daddr {{ production_lan6 }} drop; }
+            chain forward { type filter hook forward priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; ip6 daddr {{ production_lan6 }} drop; }
           }
     - name: Apply the node guard now and at boot
       ansible.builtin.systemd_service:
@@ -172,24 +174,29 @@
             egressDeny:
               - toCIDR: "{{ [production_lan] + production_public | map('regex_replace', '$', '/32') | list }}"
 
-    # blocked means the TCP connect never completed - a dropped SYN: curl exit 28 with no connect made. Exit 28 alone
-    # is no proof: the connect timeout also covers the TLS handshake, and -m the rest, so a VIP that took the connect
-    # and then stalled timed out the same way. Any other result (an answer, a refusal, a reset) fails too. Production's
-    # VIP, were it reachable, accepts the connect in milliseconds, so 1 s for the connect proves the drop
-    # the guard drops production's LAN by IPv4 only, and that LAN carries an IPv6 prefix too (ten's ULA,
-    # fd0a:94e6:20b4:9f6b::/64): no IPv6 beyond link-local here - failing closed the day a box or a libvirt network
-    # gives the VM one
-    - name: No IPv6 beyond link-local (the guard drops IPv4 only)
+    # the guard drops production's IPv6 prefix too (ten's ULA), but no other IPv6 belongs here: none beyond link-local -
+    # failing closed the day a box or a libvirt network gives the VM some; an `ip` that fails is no answer (it read as
+    # "no IPv6"), a kernel with no IPv6 is
+    - name: No IPv6 beyond link-local
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          routes=$(ip -6 route show | grep -vE '^(fe80::/64 |multicast ff00::/8 )' || true)
-          addrs=$(ip -6 addr show scope global | grep inet6 || true)
+          [ -e /proc/net/if_inet6 ] || { echo "no IPv6 in this kernel"; exit 0; }
+          r=$(ip -6 route show)
+          a=$(ip -6 addr show scope global)
+          # grep: 1 is nothing selected, more an error
+          routes=$(grep -vE '^(fe80::/64 |multicast ff00::/8 )' <<< "$r") || [ $? = 1 ]
+          addrs=$(grep inet6 <<< "$a") || [ $? = 1 ]
           if [ -n "$routes$addrs" ]; then echo "IPv6 BEYOND LINK-LOCAL: $routes $addrs"; exit 1; fi
           echo "no IPv6 beyond link-local"
       changed_when: false
       check_mode: false  # a read
+
+    # blocked means the TCP connect never completed - a dropped SYN: curl exit 28 with no connect made. Exit 28 alone
+    # is no proof: the connect timeout also covers the TLS handshake, and -m the rest, so a VIP that took the connect
+    # and then stalled timed out the same way. Any other result (an answer, a refusal, a reset) fails too. Production's
+    # VIP, were it reachable, accepts the connect in milliseconds, so 1 s for the connect proves the drop
 
     - name: Prove it - the node cannot reach production's VIP nor its public addresses, and can reach the Vagrant VIP
       ansible.builtin.shell: |
