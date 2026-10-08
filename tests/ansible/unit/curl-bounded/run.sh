@@ -41,6 +41,7 @@ forms = {"curl -s --max-time 30 https://x": [], "curl -sm 10 https://x": [], "cu
 check("each curl read with its bound (or none): the whole time, a stall's, a timeout before it, across a continuation",
       {f: unbounded(f) for f in forms}, forms)
 bad = []
+seen_vars, seen_scripts = set(), set()
 for f in files("deploy/ansible"):
     doc = load(f)
     # a play's string vars (a script a task templates in: the mirror's probe) - each run by a task (the play's own)
@@ -49,6 +50,8 @@ for f in files("deploy/ansible"):
             for k, v in (p.get("vars") or {}).items():
                 if isinstance(v, str):
                     bad += [f"{f}: vars {k}: {c}" for c in unbounded(v)]
+                    if CURL.search(v):
+                        seen_vars.add(k)
     for t in tasks(doc):
         if isinstance(t.get("timeout"), int):
             continue
@@ -60,7 +63,14 @@ for f in files("deploy/ansible"):
             elif m in ("copy", "template") and isinstance(val, dict) and str(val.get("content", "")).startswith("#!"):
                 # a script it writes (a timer's or a cron's run of it has no task timeout around it)
                 bad += [f"{f}: {t.get('name')} (writes {val.get('dest')}): {c}" for c in unbounded(val["content"])]
+                if CURL.search(val["content"]):
+                    seen_scripts.add(str(val.get("dest")))
 check("every curl a production playbook runs, templates in or writes as a script bounded", len(bad), 0)
+# what it reads, found: the mirror's probe a task templates in, the scripts a timer and a cron run (a scan that
+# finds none passes with nothing read)
+check("the curls it reads found: the mirror's probe var, Caddy's wildcard sync, Vault's health check",
+      ("_git_mirror_probe" in seen_vars, any("caddy-wildcard-sync" in x for x in seen_scripts),
+       any("vault-health-check" in x for x in seen_scripts)), (True, True, True))
 for b in bad:
     print("    " + b)
 print("curl-bounded: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

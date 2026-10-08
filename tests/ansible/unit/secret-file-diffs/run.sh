@@ -32,6 +32,10 @@ for f in files("deploy/ansible"):
 check("secret files found by the playbooks' own no_log or diff: false (Keycloak's unit, Forgejo's app.ini among them)",
       {"/etc/systemd/system/keycloak.service", "/var/lib/forgejo/custom/conf/app.ini"} <= secret, True)
 bad = [(f, n, p) for f, n, p, quiet in edits if p in secret and not quiet]
+# the edits it judges found: setup-patroni's of Keycloak's unit and Forgejo's app.ini (a scan that finds none passes)
+check("the secret files' edits found (setup-patroni's KC_DB_URL and HOST)",
+      sorted(n for f, n, p, quiet in edits if p in secret and n in ("Update Keycloak KC_DB_URL", "Update Forgejo HOST directive")),
+      ["Update Forgejo HOST directive", "Update Keycloak KC_DB_URL"])
 check("every edit of a secret file no_log or diff: false", len(bad), 0)
 for f, n, p in bad:
     print(f"    {f}: {n} ({p})")
