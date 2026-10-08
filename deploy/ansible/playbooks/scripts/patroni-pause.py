@@ -7,10 +7,13 @@ it reads and writes through Consul, as patronictl does).
                         Ctrl-C skips Ansible's always:), named by its marker
   pause <run>           a marker naming the run, check-and-set (one only: a marker there refuses before any pause),
                         then the pause; "MARKER <index>" once the config and every member show it paused. A failure
-                        after the marker undoes what this run's pause may have done, then deletes the marker
-  resume <run>          this run's marker deleted, check-and-set by its index (the "MARKER <index>" line of its pause's
-                        output, in PAUSED_OUT) - a marker not its own, or none, means the pause is not its own: refused,
-                        nothing resumed - then the resume, proven the same way
+                        after the marker (a DCS unread after the request among them) undoes what this run's pause may
+                        have done, then deletes the marker
+  resume <run>          this run's marker read, by its index (the "MARKER <index>" line of its pause's output, in
+                        PAUSED_OUT: ansible.builtin.script runs under ssh -tt, its lines end CR LF) - a marker not its
+                        own, or none, means the pause is not its own: refused, nothing resumed - then the resume,
+                        proven the same way, and only then the marker deleted, check-and-set: a resume not proven
+                        keeps the marker as it was, so a retry of the same task resumes
 
 patronictl's exit proves nothing: Patroni 4.1 exits 0 after "Failed: pause cluster management status code=...", after
 "... didn't recognized pause state", and prints "Success" with a member still unpaused (ctl.py toggle_pause and
@@ -40,6 +43,10 @@ CLEAN_UP = (f"patronictl list; if no run is running, patronictl resume and consu
 class Unread(Exception):
     """The DCS not read: nothing can be proven."""
 
+    def __init__(self, msg, advice=CLEAN_UP):
+        super().__init__(msg)
+        self.advice = advice
+
 
 def run(*cmd):
     return subprocess.run(cmd, capture_output=True, text=True)
@@ -67,7 +74,8 @@ def state(pre):
         key, _, value = line.partition(":")
         members[key.rsplit("/", 1)[-1]] = json.loads(value).get("pause") is True
     if not members:
-        raise Unread(f"no Patroni member in the DCS ({pre}/members/)")
+        raise Unread(f"no Patroni member in the DCS ({pre}/members/): Patroni runs on no Pi",
+                     "start it (systemctl start patroni on each Pi), then run this again")
     return json.loads(c.stdout).get("pause") is True, members
 
 
@@ -162,7 +170,10 @@ def pause(pre, who):
     text = (out.stdout + out.stderr).strip()
     ok, shown = False, ""
     if out.returncode == 0 and "Success: cluster management is paused" in out.stdout:
-        ok, shown = settled(pre, True)
+        try:
+            ok, shown = settled(pre, True)
+        except Unread as e:  # the request may have landed: undone below, as any pause not proven
+            shown = f"nothing ({e})"
     if ok:
         print(f"PAUSED: {shown}")
         print(f"MARKER {idx}")
@@ -183,24 +194,29 @@ def pause(pre, who):
     return 1
 
 
-def resume(pre, who, idx):
+def resume(pre, idx):
     if not idx.isdigit():
         print(f"REFUSED: this run's pause marker index is {idx!r} - its pause said no MARKER; the cluster may be"
               f" paused: {CLEAN_UP}")
         return 1
-    problem = delete_marker(idx)
+    # read, not deleted, first: a resume not proven (a DCS unread among them - main's) keeps the marker as it is, its
+    # index the one the pause said, and the task's retry resumes; only this run deletes a marker by its index
+    value, now = read_marker()
+    problem = ("this run's pause marker is gone already (deleted by hand?)" if value is None
+               else None if now == idx else f"the pause marker is not this run's any more ({value!r})")
     if problem:
         print(f"REFUSED: {problem} - the pause is not this run's: left as it is ({CLEAN_UP})")
         return 1
     ok, shown = unpaused(pre)
-    if ok:
-        print(f"RESUMED: {shown}")
-        return 0
-    # still paused, its marker gone: put again, naming this run - the next run's check says whose it is
-    again = run("consul", "kv", "put", "-cas", "-modify-index=0", KEY, marker(who))
-    print(f"STILL PAUSED after the resume ({shown}) - " + ("a marker naming this run put again" if again.returncode == 0
-          else f"no marker put again ({again.stderr.strip()})") + f": {CLEAN_UP}")
-    return 1
+    if not ok:
+        print(f"STILL PAUSED after the resume ({shown}) - its marker kept, naming this run: {CLEAN_UP}")
+        return 1
+    problem = delete_marker(idx)
+    if problem:
+        print(f"RESUMED: {shown} - but {problem}: the next run's pause refuses until it is gone (consul kv delete {KEY})")
+        return 1
+    print(f"RESUMED: {shown}")
+    return 0
 
 
 def main(argv):
@@ -209,14 +225,14 @@ def main(argv):
     elif argv[:1] == ["pause"] and len(argv) == 2 and argv[1] in RUNS:
         act = lambda pre: pause(pre, argv[1])  # noqa: E731
     elif argv[:1] == ["resume"] and len(argv) == 2 and argv[1] in RUNS:
-        idx = re.search(r"^MARKER (.*)$", os.environ.get("PAUSED_OUT", ""), re.M)
-        act = lambda pre: resume(pre, argv[1], idx.group(1) if idx else "")  # noqa: E731
+        idx = re.search(r"^MARKER (.*?)\r?$", os.environ.get("PAUSED_OUT", ""), re.M)
+        act = lambda pre: resume(pre, idx.group(1) if idx else "")  # noqa: E731
     else:
         sys.exit(__doc__)
     try:
         return act(prefix())
     except Unread as e:
-        print(f"REFUSED: {e} - nothing proven: {CLEAN_UP}")
+        print(f"REFUSED: {e} - nothing proven: {e.advice}")
         return 1
 
 

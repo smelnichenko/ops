@@ -8,11 +8,13 @@
 # Each pause puts a marker naming the playbook, the time and a nonce, check-and-set - one only: a marker there already
 # refuses the run before any pause. A pause is proven by the DCS - the config and every member paused - not by
 # patronictl's exit or its "Success": one not proven undoes what it may have done, then deletes its marker; one someone
-# else made meanwhile ("already paused") is left as it is. The resume deletes the run's own marker first - a marker not
-# its own, or none, means the pause is not its own: refused, nothing resumed - then resumes, proven the same way; one
-# that does not take puts a marker naming the run again. The not-paused check refuses a paused config or member and a
-# DCS it cannot read, naming the run a marker names (a Ctrl-C skips Ansible's always:); a marker of another shape is not
-# echoed.
+# else made meanwhile ("already paused") is left as it is; a DCS unread after the request is not proven either. The
+# resume reads the run's own marker first - a marker not its own, or none, means the pause is not its own: refused,
+# nothing resumed - then resumes, proven the same way, and only then deletes its marker, check-and-set: one that does not
+# take, or a DCS unread meanwhile, keeps the marker as it was (its index the pause said), so a retry resumes. The index
+# is read from the pause's output as Ansible gives it - ansible.builtin.script runs under ssh -tt, its lines ending CR LF.
+# The not-paused check refuses a paused config or member and a DCS it cannot read, naming the run a marker names (a
+# Ctrl-C skips Ansible's always:); a marker of another shape is not echoed; no member at all says Patroni runs nowhere.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -27,6 +29,12 @@ cat > "$W/bin/consul" <<'STUB'
 import os, sys
 W = os.environ["W"]
 open(os.path.join(W, "calls"), "a").write("consul " + " ".join(sys.argv[1:]) + "\n")
+# CONSUL_BLIP_AFTER: the first call after that one (e.g. "patronictl resume") fails - once
+blip = os.environ.get("CONSUL_BLIP_AFTER")
+if blip and not os.path.exists(os.path.join(W, "blipped")) and any(
+        c.startswith(blip) for c in open(os.path.join(W, "calls")).read().splitlines()):
+    open(os.path.join(W, "blipped"), "w").close()
+    sys.exit("Error querying Consul agent: Unexpected response code: 500 (No cluster leader)")
 if os.environ.get("CONSUL_DOWN"):
     sys.exit("Error querying Consul agent: Get \"http://127.0.0.1:8500/v1/kv/x\": dial tcp 127.0.0.1:8500: connect: "
              "connection refused")
@@ -153,13 +161,14 @@ def kv_put(key, value, idx):
     open(p, "w").write(value)
     open(p + ".idx", "w").write(str(idx))
     open(p + ".key", "w").write(key)
-def state(paused=False, members_paused=None, marker=None, idx=7):
+def state(paused=False, members_paused=None, marker=None, idx=7, members=("pi1", "pi2")):
     """The DCS: the config's pause, each member's (pi1, pi2: as `paused` unless given); the marker at index `idx`."""
     for f in os.listdir(KV):
         os.remove(os.path.join(KV, f))
     open(os.path.join(W, "calls"), "w").close()
+    os.path.exists(os.path.join(W, "blipped")) and os.remove(os.path.join(W, "blipped"))
     kv_put("service/pg/config", json.dumps({"ttl": 30, "loop_wait": 10, **({"pause": True} if paused else {})}), 3)
-    for name, p in zip(("pi1", "pi2"), members_paused or (paused, paused)):
+    for name, p in zip(members, members_paused or (paused, paused)):
         kv_put(f"service/pg/members/{name}", json.dumps({"role": "primary" if name == "pi1" else "replica",
                                                          **({"pause": True} if p else {})}), 4)
     if marker is not None:
@@ -169,9 +178,13 @@ def dcs():
     get = lambda k: json.loads(open(os.path.join(KV, k.replace("/", "_"))).read())  # noqa: E731
     return bool(get("service/pg/config").get("pause")), [bool(get(f"service/pg/members/{n}").get("pause"))
                                                           for n in ("pi1", "pi2")]
-def run(task, env=None, **st):
-    """The task as Ansible runs it: a shell's text, rendered; a script's command line, rendered, on python3."""
-    state(**st)
+def run(task, env=None, fresh=True, **st):
+    """The task as Ansible runs it: a shell's text, rendered; a script's command line, rendered, on python3. `fresh`
+    False: on the DCS the last run left (a retry)."""
+    if fresh:
+        state(**st)
+    else:
+        open(os.path.join(W, "calls"), "w").close()
     cmd = render(text(task), patronictl=f"patronictl -c {W}/patroni.yml", playbook_dir="deploy/ansible/playbooks")
     argv = ["bash", "-c", cmd] if "ansible.builtin.script" not in task else ["python3", *shlex.split(cmd)]
     r = subprocess.run(argv, capture_output=True, text=True, env=dict(
@@ -179,6 +192,8 @@ def run(task, env=None, **st):
         PATRONI_PAUSE_WAIT="0.3", PATRONI_PAUSE_POLL="0.05", **(env or {})))
     calls = open(os.path.join(W, "calls")).read().splitlines()
     return r, calls, open(KEY).read() if os.path.exists(KEY) else None
+def marker_idx():
+    return open(KEY + ".idx").read() if os.path.exists(KEY + ".idx") else None
 def acts(calls):
     """patronictl's pause/resume and consul's KV writes, in their order."""
     return [" ".join(c.split()[:2]) if c.startswith("patronictl") else " ".join(c.split()[:3]) for c in calls
@@ -228,6 +243,10 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
               r.returncode != 0 and kv is None and dcs() == (False, [False, False])
               and acts(calls)[-2:] == ["patronictl resume", "consul kv delete"],
               (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, env={"CONSUL_BLIP_AFTER": "patronictl pause"})
+    check(f"{book}: the DCS unread once after the pause request: not proven - undone (resumed, every member), then its "
+          "marker deleted", r.returncode != 0 and kv is None and dcs() == (False, [False, False])
+          and acts(calls)[-2:] == ["patronictl resume", "consul kv delete"], (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(p, env={"PAUSE_MODE": "lags", "RESUME_MODE": "failed"})
     check(f"{book}: a failed pause whose undoing fails too: its marker kept (it names the run), said so",
           r.returncode != 0 and kv is not None and kv.startswith(book + " ") and "STILL PAUSED" in r.stdout,
@@ -235,9 +254,21 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
     # --- the resume, given the pause's output
     mine = f"{book} 2026-10-08T01:00:00Z ab12cd34"
     r, calls, kv = run(rs, env=renv("PAUSED: ...\nMARKER 7"), paused=True, marker=mine, idx=7)
-    check(f"{book}: the resume deletes its own marker first, then resumes - every member",
+    check(f"{book}: the resume, its own marker read first: resumes - every member - then deletes the marker",
           r.returncode == 0 and kv is None and dcs() == (False, [False, False])
-          and acts(calls) == ["consul kv delete", "patronictl resume"], (r.returncode, r.stdout, r.stderr, calls, kv))
+          and acts(calls) == ["patronictl resume", "consul kv delete"], (r.returncode, r.stdout, r.stderr, calls, kv))
+    # ansible.builtin.script runs under ssh -tt: the pause's stdout as the register holds it ends its lines CR LF
+    r, calls, kv = run(rs, env=renv("PAUSED: config paused, pi1 paused, pi2 paused\r\nMARKER 7\r\n"), paused=True,
+                       marker=mine, idx=7)
+    check(f"{book}: the pause's output with CR LF line ends (ssh -tt): its index read, resumed",
+          r.returncode == 0 and kv is None and dcs() == (False, [False, False]), (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env={**renv("MARKER 7"), "CONSUL_BLIP_AFTER": "patronictl resume"}, paused=True, marker=mine,
+                       idx=7)
+    check(f"{book}: the DCS unread once after the resume request: fails, its marker kept as it was (its index)",
+          r.returncode != 0 and kv == mine and marker_idx() == "7", (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env=renv("MARKER 7"), fresh=False)
+    check(f"{book}: ... and its retry resumes, the marker deleted",
+          r.returncode == 0 and kv is None and dcs() == (False, [False, False]), (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(rs, env=renv("MARKER 7"), paused=True, marker="setup-patroni 2026-10-08T02:00:00Z ef56ab78", idx=9)
     check(f"{book}: a marker put since (not its own): refused - nothing resumed, the marker left",
           r.returncode != 0 and kv == "setup-patroni 2026-10-08T02:00:00Z ef56ab78" and "patronictl resume" not in acts(calls)
@@ -252,8 +283,8 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
           and dcs()[0],
           (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(rs, env={**renv("MARKER 7"), "RESUME_MODE": "lags"}, paused=True, marker=mine, idx=7)
-    check(f"{book}: a resume a member does not take (exit 0): fails, a marker naming the run put again",
-          r.returncode != 0 and kv is not None and kv.startswith(book + " ") and "STILL PAUSED" in r.stdout,
+    check(f"{book}: a resume a member does not take (exit 0): fails, its marker kept as it was (its index)",
+          r.returncode != 0 and kv == mine and marker_idx() == "7" and "STILL PAUSED" in r.stdout,
           (r.returncode, r.stdout, r.stderr, calls, kv))
     # --- the not-paused check
     r, calls, kv = run(ck, paused=True, marker="upgrade-patroni 2026-10-07T23:00:00Z")
@@ -278,6 +309,9 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
           and "REFUSED" in r.stdout, (r.returncode, r.stdout))
     r, calls, kv = run(ck, env={"CONSUL_DOWN": "1"})
     check(f"{book}: the DCS not readable: refused", r.returncode == 1 and "REFUSED" in r.stdout, (r.returncode, r.stdout))
+    r, calls, kv = run(ck, members=())
+    check(f"{book}: no Patroni member in the DCS: refused, saying Patroni runs on no Pi - no resume advised",
+          r.returncode == 1 and "runs on no Pi" in r.stdout and "patronictl resume" not in r.stdout, (r.returncode, r.stdout))
     r, calls, kv = run(ck)
     check(f"{book}: not paused: passes", r.returncode == 0, (r.returncode, r.stdout))
 print("patroni-pause-marker: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
