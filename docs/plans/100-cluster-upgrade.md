@@ -1027,6 +1027,43 @@ Vault login by a reviewer account of its own with audience-bound tokens (the sec
 its own, with a run); production's 6-day-old Error pod of Tempo (schnappy-tempo-844f8df5f5-zjqmd). With the earlier
 open items.
 
+## Sixth full review 2026-10-08 - what it fixed, what is the operator's
+
+Six passes over ops ce0fa58..2a473bf and platform 7f537fb (security, architecture, correctness twice, platform
+reliability, concurrency, test quality - 70 of its 77 reverts red, the rest made to bite). Full run 07:30 (on 2a473bf)
+was green through steps 00-13 when it was stopped for the fixed commit. Three Critical, none on the full run's path:
+
+- Consul's rolling restart, Vault's step-down: it read the root token on the Pi being restarted - only pi1 has one.
+  On production pi1 steps down first, pi2 becomes active, and at pi2's turn the step failed every time, the roll half
+  done. Now run from the Pi Vault was initialised on, against both Pis' addresses (Vault's API opened Pi to Pi); a
+  status not read refused, never taken for a standby; each read bounded (5 s, no retries), each wait by the clock;
+  Patroni paused after Vault's handover, before Consul's; the tier-0 backup's lock read right before the restart.
+- Patroni's pause: ansible.builtin.script runs under ssh -tt, its output CR LF - the resume read its own index as
+  "7\r" and refused: Patroni left paused. Read through CR LF; the marker deleted only once resumed (a retry
+  resumes); a DCS read failing after the pause request undone; the marker's read-back retried.
+- Caddy's wildcard sync: `read` of the cluster token (no newline at its end) returned 1 and set -e ended every daily
+  sync - the Pis would serve the certificate until it expired (2026-11-09).
+
+Fixed besides (ops 59d1b17..cfd7751, each test-first, each mechanism reverted and seen red): deploy:vault-eso picks a
+Ready ExternalSecret before any write, checks every read, reads Vault's config first and puts it back (with the old
+reviewer token) when the login is not proven, asks first; environments' infra push rebases onto the moving main and
+pushes what an earlier run could not; check-mode-lint reads a looped register's items however they are read; Helm's
+sha256 pinned per version; jobs stopped whole (one not recorded yet, one leading no group yet), the grace on
+/proc/uptime in hundredths; step-checks' bound above every check's own (data-check's retries alone ~3085 s);
+tempo-flush and metrics-check without their false results; the Pis' isolation applied again after a step's playbook
+lines; ten's git mirror reads Forgejo with a read:repository token, not the admin's password on git's argv, its sync
+failing the unit; Forgejo's admin retry by a token, not a throwaway password on argv (proven on Forgejo 15.0.9);
+setup-istio waits for the gateway production has; host-key checks catch every spelling; vagrant-smoke's bound
+reaches the VM; setup-argocd verifies single sign-on after its install (step 31 moves production off argocd-secret's
+key); setup-gluster's mount check cannot be held by a hung client; the full run's steps in a script of their own -
+go-task swallowed a Ctrl-C and ran a step's remaining commands; a stop's grace measured in hundredths of a second.
+Not changed: platform's 123-character comment (platform has no line limit; 17 branches to restack).
+
+The operator's: rotate the Forgejo admin password (a reviewer's read printed it), then re-run the mirror play on ten;
+run setup-consul on production (Consul is open to the LAN - 8300/8301/8500 Anywhere) once rerun-guards has proven the
+transition; `task deploy:vault-eso` before step 1; the mirror's push key restricted; PgBouncer's superusers; Sonar's
+hotspots and S3776.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
