@@ -437,7 +437,8 @@
                   - protocol: TCP
                     port: 9000
 
-# The monitor repo mirrored from Forgejo and pushed to the Pis daily (offsite-backup.timer), an extra copy of the code
+# Every repository of the schnappy organisation mirrored from Forgejo and pushed to the Pis daily (offsite-backup.timer),
+# an extra copy of the code
 - name: Offsite git mirror to the Pis
   hosts: target
   become: true
@@ -680,10 +681,13 @@
           ssh_opts=(-o BatchMode=yes -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
                     -o StrictHostKeyChecking=yes -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }})
           export GIT_SSH_COMMAND="ssh ${ssh_opts[*]}"
-          # git's other helpers reset; this one answers "get" alone - storing or erasing (after a 401) changes nothing
+          # git's other helpers reset; this one answers "get" alone - storing or erasing (after a 401) changes nothing -
+          # and for Forgejo's URL alone (credential.<url>.helper), no redirect followed: a redirect off the host (a
+          # misconfigured proxy) asked it for the new host, and it answered any with the token
           mirror_user={{ git_mirror_user }}
-          helper=(-c credential.helper=
-                  -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username=$mirror_user; echo \"password=\$(cat $tokenf)\"; }; f")
+          forgejo_helper="credential.https://{{ git_mirror_host }}.helper"
+          helper=(-c http.followRedirects=false -c credential.helper=
+                  -c "$forgejo_helper=!f() { [ \"\$1\" = get ] || return 0; echo username=$mirror_user; echo \"password=\$(cat $tokenf)\"; }; f")
           token=$(cat "$tokenf" 2> /dev/null) || token=""
           [ -n "$token" ] || { say "FAILED: no token in $tokenf"; exit 1; }
           repos="" page=1
@@ -707,6 +711,13 @@
             fi
             # its origin the organisation's, bare (a mirror made before pointed elsewhere, a password in its URL)
             git -C "$d" remote set-url origin "$url" || { failed+=" $r(origin)"; continue; }
+            # the old mirror's own settings gone (monitor.git's on ten): an ssh with no host-key check, a remote of the Pi
+            if git -C "$d" config --get core.sshCommand > /dev/null; then
+              git -C "$d" config --unset-all core.sshCommand || { failed+=" $r(its old ssh setting)"; continue; }
+            fi
+            if git -C "$d" remote | grep -qx pi; then
+              git -C "$d" remote remove pi || { failed+=" $r(its old remote)"; continue; }
+            fi
             git "${helper[@]}" -C "$d" fetch -q --prune origin 2>&1 | logger -t git-mirror || failed+=" $r(fetch)"
             # only where the volume is mounted: a bare mount point is the Pi's own disk (what is pushed there is lost
             # with the next mount)

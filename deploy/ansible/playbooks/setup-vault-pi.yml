@@ -923,29 +923,14 @@
         group: "{{ ansible_user }}"
         mode: '0750'
 
-    # ── Git-mirror bare repo ───────────────────────────────────────────
+    # ── Git mirror: the Pi's side ──────────────────────────────────────
+    # git, for the daily mirror's pushes from ten (setup-velero). Its volume is setup-gluster's (mounted there), its
+    # root and repositories the mirror's own (setup-velero, each checked mounted and bounded): made here through the
+    # mount, unbounded and unchecked, a hung client held the play and an unmounted Pi got them on its own disk
     - name: Install git
       ansible.builtin.apt:
         name: git
         state: present
-
-    - name: Create git mirror dir
-      ansible.builtin.file:
-        path: /mnt/backups/git-mirror
-        state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0750'
-
-    - name: Initialise bare git mirror for monitor repo
-      ansible.builtin.shell: |
-        if [ ! -f /mnt/backups/git-mirror/monitor.git/HEAD ]; then
-          git init --bare /mnt/backups/git-mirror/monitor.git
-          chown -R {{ ansible_user }}:{{ ansible_user }} /mnt/backups/git-mirror/monitor.git
-          echo created
-        fi
-      register: _git_init
-      changed_when: "'created' in _git_init.stdout"
 
     # ── Daily vault data backup ────────────────────────────────────────
     - name: Write vault-backup script

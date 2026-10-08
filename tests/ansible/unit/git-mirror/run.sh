@@ -48,6 +48,12 @@ done
 case "$*" in *" fetch "*) [ -n "${FETCH_FAILS:-}" ] && [[ $* == *"/$FETCH_FAILS.git"* ]] && exit 128 ;; esac
 # PUSH_FAILS=<repo>: the Pi refuses its push (a full disk, a permission)
 case "$*" in *" push "*) [ -n "${PUSH_FAILS:-}" ] && [[ $* == *"/$PUSH_FAILS.git"* ]] && exit 1 ;; esac
+# OLD_CONFIG=<repo>: the old mirror's settings in it - an ssh command (no host-key check) and a remote named pi
+old=""; [ -n "${OLD_CONFIG:-}" ] && [[ $* == *"/$OLD_CONFIG.git "* ]] && old=1
+case "$*" in
+  *" config --get core.sshCommand"*) [ -n "$old" ] && { echo "ssh -o StrictHostKeyChecking=no"; exit 0; }; exit 1 ;;
+  *" remote") echo origin; [ -z "$old" ] || echo pi; exit 0 ;;
+esac
 exit 0
 STUB
 # ssh: its argv recorded; INIT_FAILS=<repo>: the Pi's repository for it not made (a full disk, a permission)
@@ -209,6 +215,22 @@ if root:
     check("its changed: only where it changed",
           [condition(root.get("changed_when", True), **{root.get("register", "_r"): {"stdout": o}})
            for o in ("changed from root:root 755", "")], [True, False])
+# the mirror's volume on the Pis touched by no other playbook's task (setup-gluster mounts it) but where it is checked
+# mounted and bounded: setup-vault-pi made its root and monitor.git through the mount, unbounded, with no check - a
+# hung client held the play, an unmounted Pi got them on its own disk; the sync makes each repository itself
+from plays import files as _files, load as _load, plays as _plays  # noqa: E402
+def _walk(ts):
+    for t in ts or []:
+        if isinstance(t, dict):
+            yield t
+            for k in ("block", "rescue", "always"):
+                yield from _walk(t.get(k))
+on_pi = lambda play, t: bool(re.search(r"\bpi", str(t.get("delegate_to", play.get("hosts")))))  # noqa: E731
+touch = [(f, t.get("name")) for f in _files("deploy/ansible") if not f.endswith("setup-gluster.yml")
+         for play in _plays(_load(f)) for k in ("pre_tasks", "tasks", "post_tasks", "handlers")
+         for t in _walk(play.get(k)) if on_pi(play, t) and ("/mnt/backups/git-mirror" in str(t) or "git_mirror_pi_dir" in str(t))
+         and not ("mountpoint -q" in str(t) and (t.get("timeout") or "timeout " in str(t)))]
+check("the mirror's volume touched by no task but one that checks it mounted, bounded", touch, [])
 # the daily sync, as the playbook writes it
 sync = next(t for t in tasks if (t.get("ansible.builtin.copy") or {}).get("dest") == "/usr/local/bin/offsite-backup-sync.sh")
 body = R(sync["ansible.builtin.copy"]["content"]).replace(R("{{ git_mirror_token_file }}"), creds) \
@@ -239,16 +261,28 @@ check("two repositories (one new): the new cloned, both origins set bare, fetche
        sum("last-success" in l for l in sh)),
       (0, 1, 1, [f"https://git.pmon.dev/{org}/infra.git", f"https://git.pmon.dev/{org}/ops.git"], 2, 2,
        ["infra.git", "ops.git"], 1))
-check("its git: no prompt (none to answer), the Pi's host keys checked, the credential helper reset before its own",
+# its own helper for Forgejo's URL alone (git's credential.<url>.helper) and no redirect followed: a redirect off the
+# host (a misconfigured proxy) asked the helper for the new host, and it answered any with the token
+check("its git: no prompt (none to answer), the Pi's host keys checked, the credential helper reset before its own - "
+      "Forgejo's URL's alone; no redirect followed",
       (all("PROMPT=0" in l for l in g), all("StrictHostKeyChecking=yes" in l and "UserKnownHostsFile=" in l for l in push),
-       all(" -c credential.helper= -c credential.helper=!" in l for l in g if " fetch " in l or " clone " in l)),
-      (True, True, True))
+       all(" -c credential.helper= -c credential.https://git.pmon.dev.helper=!" in l for l in g
+           if " fetch " in l or " clone " in l),
+       all(" -c http.followRedirects=false " in l for l in g if " fetch " in l or " clone " in l)),
+      (True, True, True, True))
+# the old mirror's own settings (monitor.git on ten: core.sshCommand with no host-key check, a remote holding the Pi)
+# gone from the repository that holds them, the others left as they are
+rc, out, g, sh, cu = run([["ops", "infra"]], existing=["ops", "infra"], OLD_CONFIG="ops")
+check("the old mirror's ssh setting and its pi remote removed where they are, nowhere else; the run 0",
+      (rc, [l.split(" PROMPT=")[0].split("/mirror/")[1] for l in g if "--unset-all core.sshCommand" in l or "remote remove pi" in l]),
+      (0, ["ops.git config --unset-all core.sshCommand", "ops.git remote remove pi"]))
 # the helper as git runs it (its action an argument): "get" answers the token; "erase" and "store" (git's after a 401,
 # a success) leave the file as it is - no store helper anywhere
 fetch_line = next((l for l in g if " fetch " in l), "")
-helper = re.search(r"credential\.helper=(!f\(\) \{.*?\}; f)(?= )", fetch_line)  # as git is given it
+# as git is given it: its key (credential.helper, or a URL's credential.<url>.helper) and the helper
+helper = re.search(r"(credential\.\S*?helper)=(!f\(\) \{.*?\}; f)(?= )", fetch_line)
 def helper_run(action):
-    r = subprocess.run(["sh", "-c", helper.group(1)[1:] + " " + action], input="protocol=https\nhost=git.pmon.dev\n\n",
+    r = subprocess.run(["sh", "-c", helper.group(2)[1:] + " " + action], input="protocol=https\nhost=git.pmon.dev\n\n",
                        capture_output=True, text=True)
     return r.stdout, open(creds).read()
 check("its credential helper: get answers the token; erase and store leave it be; git's store helper used nowhere",
@@ -257,6 +291,15 @@ check("its credential helper: get answers the token; erase and store leave it be
       ((f"username=admin\npassword=0123456789abcdef0123456789abcdef01234567\n",
         "0123456789abcdef0123456789abcdef01234567"), "0123456789abcdef0123456789abcdef01234567",
        "0123456789abcdef0123456789abcdef01234567", False))
+# git itself asked as a fetch asks - for Forgejo's host, and for another (where a redirect went): only Forgejo's answered
+def fill(host):
+    r = subprocess.run(["git", "-c", "credential.helper=", "-c",
+                        f"{helper.group(1)}={helper.group(2)}" if helper else "x.y=", "credential", "fill"],
+                       input=f"protocol=https\nhost={host}\n\n", capture_output=True, text=True,
+                       env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    return "password=0123456789abcdef0123456789abcdef01234567" in r.stdout
+check("git asks its helper: Forgejo's host given the token, another host (a redirect's) nothing",
+      (fill("git.pmon.dev"), fill("other.example.org")), (True, False))
 check("the token on no command line (curl's config, git's credential helper)",
       any("0123456789abcdef" in l for l in g + sh) or any("0123456789abcdef" in json.loads(c)["argv"].__str__() for c in cu),
       False)
