@@ -728,43 +728,10 @@ tasks:
       - cmd: echo "=== BOOT build $(date +%T)"
       - cmd: scripts/upgrade-build-with-pin.sh
       - cmd: echo "=== BOOT done $(date +%T)"
-      # an empty step list is a failure, not a green run (the loop just did nothing)
-      - cmd: |
-          set -euo pipefail
-          steps=$(ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V)
-          [ -n "$steps" ] || { echo "no upgrade steps in tests/ansible/upgrade/steps"; exit 1; }
-          echo "=== $(echo "$steps" | wc -l) steps"
-          # a step's proof is recorded once the next step's deciding settle has judged its restarts too: that settle's
-          # quiet window is 120 s, and a crash loop slower than that settles once - the restart history fails it a step
-          # later, so a step proven at once was proven with it. The last step is judged once more at production's own
-          # settle (test:upgrade:final-settle), then proven
-          prev=
-          for step in $steps; do
-            echo "=== STEP $step $(date +%T)"
-            # the commits the step mirrors, before it: the proof refuses them if a branch moved meanwhile
-            refs=$(scripts/upgrade-expected-inventory.py --refs "$step")
-            infra_sha=$(git -C ../infra rev-parse "${refs% *}")
-            platform_sha=$(git -C ../platform rev-parse "${refs#* }")
-            # every line of the step stamped with its time: where a step's minutes go stays measurable. A Ctrl-C, TERM or
-            # HUP to the group does not end the stamper (it ends with its input): it died first, and go-task - stopping
-            # the step's commands - of the closed pipe, its children left running unwaited. It keeps the signal and ends
-            # 128+signal: a step that survived it and ended 0 passed for green, the run going on
-            # the step before it in this run, green: what the step need not check again (PREV_STEP)
-            task test:upgrade:step STEP="$step" PREV_STEP="${prev%% *}" 2>&1 \
-              | python3 -u -c 'import signal, sys, time
-          got = []
-          for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(s, lambda n, f: got.append(n))
-          for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()
-          sys.exit(128 + got[0] if got else 0)'
-            # the digests the copy runs now, right after the step: its proof (recorded a step later) keeps its images'
-            mkdir -p .upgrade/step-digests
-            scripts/vagrant-image-digests.sh > ".upgrade/step-digests/$step.txt"
-            [ -z "$prev" ] || scripts/upgrade-production.py record-proof $prev
-            prev="$step $infra_sha $platform_sha"
-            echo "=== STEP $step GREEN $(date +%T)"
-          done
-          task test:upgrade:final-settle STEP="${prev%% *}"
-          scripts/upgrade-production.py record-proof $prev
+      # every step in order, each its own task test:upgrade:step, its lines stamped; stops at the first that fails - a
+      # script of its own: go-task swallows a Ctrl-C or a TERM, and ran a step's remaining commands after one its
+      # running command survived
+      - cmd: scripts/upgrade-full-steps.sh
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
       - task: test:upgrade:restore-check
 

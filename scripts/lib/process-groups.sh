@@ -1,12 +1,14 @@
 # process-groups.sh - a script's own jobs' process groups stopped, whole and bounded (sourced by
 # upgrade-build-with-pin.sh and upgrade-step-checks.sh; each passes only groups of jobs it started itself).
 
-# whole seconds since boot into the variable named: a clock no wall-clock step moves (bash's SECONDS follows the wall
-# clock - a step back held a deadline for the step's length, one forward ended a grace at once); no subshell
-uptime_s() {  # uptime_s <variable>
+# hundredths of a second since boot into the variable named: a clock no wall-clock step moves (bash's SECONDS follows
+# the wall clock - a step back held a deadline for the step's length, one forward ended a grace at once), finer than a
+# second (whole seconds made a 1 s grace anything from none to a second); no subshell
+uptime_cs() {  # uptime_cs <variable>
   local _up
   read -r _up _ < /proc/uptime
-  printf -v "$1" '%s' "${_up%.*}"
+  _up=${_up/./}
+  printf -v "$1" '%s' "$((10#$_up))"
 }
 
 # this shell's jobs still its own children (running, stopped, or ended and not reaped) into the array named: `jobs -p`
@@ -48,10 +50,10 @@ stop_groups() {  # stop_groups <grace seconds> <pgid>...
     kill -TERM -- "-$g" 2> /dev/null || kill -TERM "$g" 2> /dev/null
     kill -CONT -- "-$g" 2> /dev/null || kill -CONT "$g" 2> /dev/null
   done
-  uptime_s now
-  end=$((now + grace))
+  uptime_cs now
+  end=$((now + grace * 100))
   for g; do
-    while group_alive "$g" && uptime_s now && ((now < end)); do sleep 0.5; done
+    while group_alive "$g" && uptime_cs now && ((now < end)); do sleep 0.2; done
     if group_alive "$g"; then
       echo "job $g's processes outlived the stop by $grace s - killed"
       kill -KILL -- "-$g" 2> /dev/null || kill -KILL "$g" 2> /dev/null
