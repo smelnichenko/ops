@@ -65,7 +65,9 @@ check "the failing one named, the run failed" "$rc $(grep -o 'STEP CHECKS FAILED
 check "it ends once its checks have: the bound's watchdog not waited out" "$([ "$took" -lt 15 ] && echo prompt || echo "$took s")" \
   prompt
 # the bound: a whole number of seconds (no number: sleep fails at once - no bound at all), above every check's own -
-# each check playbook's until retries and delays summed, the play's vars rendered; the smoke's own 15 minutes
+# each check playbook's until retries and delays summed, the play's vars rendered, and each try's own time (PER_TRY: a
+# try is one command over ssh - kubectl, psql, curl - its seconds; none of them carries a timeout of its own, and the
+# delays alone left the data check 2 s a try under the old bound); the smoke's own 15 minutes
 out=$(STEP_CHECKS_SECONDS=30m PATH="$T/bin:$PATH" timeout -k 5 30 bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 \
   schnappy < /dev/null 2>&1); rc=$?
 check "a bound that is no whole number of seconds: refused before any check" \
@@ -81,6 +83,7 @@ def walk(ts):
         yield t
         for k in ("block", "rescue", "always"):
             yield from walk(t.get(k))
+PER_TRY = 5
 worst = int(re.search(r"SMOKE_SECONDS:-(\d+)", open("scripts/vagrant-smoke.sh").read()).group(1))
 for c in ("data", "survival", "storage", "metrics"):
     total = 0
@@ -88,7 +91,8 @@ for c in ("data", "survival", "storage", "metrics"):
         v = {k: trust_as_template(x) if isinstance(x, str) else x for k, x in (p.get("vars") or {}).items()}
         for t in walk(p.get("tasks")):
             if "until" in t:
-                total += (int(render(str(t.get("retries", 3)), **v)) + 1) * int(render(str(t.get("delay", 5)), **v))
+                total += (int(render(str(t.get("retries", 3)), **v)) + 1) * (int(render(str(t.get("delay", 5)), **v))
+                                                                              + PER_TRY)
     worst = max(worst, total)
 print(worst)')
 default=$(grep -oP 'bound=\$\{STEP_CHECKS_SECONDS:-\K[0-9]+' "$ROOT/scripts/upgrade-step-checks.sh")
