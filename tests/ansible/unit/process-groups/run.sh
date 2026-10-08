@@ -282,6 +282,38 @@ $(grep -c killed "$W/late.out")" "1 gone 1 0"
 for f in "$W/late.pid" "$W/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
+# a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
+# between that read and the TERM (here as -n's named kill runs: the job forks it then) that lost the TERM - deaf at it,
+# at its default half a second later - is sent it again, ends at once; read so, it was KILLed at the grace, said
+cat > "$W/gap-job" <<'JOB'
+trap 'bash -c "trap \"\" TERM; echo \$\$ > \"\$0\"; sleep 0.5; trap - TERM; sleep 30; :" "$1.child" &' USR1
+echo $$ > "$1"
+for _ in $(seq 600); do sleep 0.1; done
+JOB
+setsid bash "$W/gap-job" "$W/gap.pid" < /dev/null > /dev/null 2>&1 & s=$!
+ready "$W/gap.pid"
+t0=$SECONDS
+if mine "$s"; then
+  # (the TERM a clock tick after the child's start at least: a start is counted in ticks, and one in the TERM's own
+  # tick counts as after it - a handler's cleanup command started then is never sent it again)
+  after_start() {
+    local c st now
+    c=$(cat "$W/gap.pid.child")
+    for _ in $(seq 100); do
+      read -r st < "/proc/$c/stat" || return
+      set -- ${st##*) }
+      uptime_cs now
+      (( now > ${20} * 100 / _clk_tck )) && return
+      sleep 0.01
+    done
+  }
+  ( kill_named() { kill -USR1 "$s"; ready "$W/gap.pid.child"; after_start; }; stop_groups -n none 5 "$s" ) > "$W/gap.out"
+fi
+wait "$s" 2> /dev/null
+gchild=$(cat "$W/gap.pid.child" 2> /dev/null)
+check "a process forked just before the TERM, losing it: sent it again - ended at once, nothing killed" \
+  "$((SECONDS - t0 < 3)) $(gone_or_zombie "${gchild:-none}") $(grep -c killed "$W/gap.out")" "1 gone 0"
+[ -n "$gchild" ] && in_session "$gchild" "$s" && kill -KILL "$gchild"
 # a process the KILL does not end (uninterruptible - here every KILL lost): not said killed - its PIDs named
 set -m
 bash -c 'trap "" TERM; echo $$ > "$0"; while :; do sleep 0.1; done' "$W/stuck.pid" & h=$!
