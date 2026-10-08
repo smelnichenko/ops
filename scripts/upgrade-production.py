@@ -65,6 +65,7 @@ import socket
 import sys
 import tempfile
 import termios
+import traceback
 import urllib.error
 import urllib.request
 
@@ -311,6 +312,10 @@ def claim_problems(step, obj):
     return [f"this run's claim on {step} was closed meanwhile (deploy:upgrade:release?)"]
 
 
+class LedgerConflict(SystemExit):
+    """A ledger write kubectl refused on a Conflict: the ledger changed since its read, nothing written."""
+
+
 def record(step, event, *args, obj=None, at=None):
     """Append one event - kubectl replace with the read resourceVersion (`obj`'s, when given: the read a decision was
     made on): a concurrent change refuses. `at`: the event's time (now, by this machine's clock, without)."""
@@ -325,7 +330,8 @@ def record(step, event, *args, obj=None, at=None):
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
     out = ten("kubectl replace -f -", stdin=json.dumps(obj), check=False)
     if out.returncode and ("Conflict" in out.stderr or "has been modified" in out.stderr):
-        sys.exit(f"REFUSED: the ledger changed since it was read (another phase at work?): {out.stderr.strip()}")
+        raise LedgerConflict(f"REFUSED: the ledger changed since it was read (another phase at work?): "
+                             f"{out.stderr.strip()}")
     if out.returncode:
         # the connection gone after the server took it: the event may stand (a start then waits for its release)
         sys.exit("the ledger write failed - it may have been made all the same (task deploy:upgrade:status): "
@@ -1168,6 +1174,9 @@ def main():
         result = "passed" if e.code in (None, 0) else "failed"
         reason = e.code if isinstance(e.code, str) else None
         raise
+    except BaseException:  # a defect, a Ctrl-C: its traceback kept - an end that cannot be written replaces it
+        reason = traceback.format_exc().rstrip()
+        raise
     finally:
         # an end that cannot be written fails the run, whatever the phase's result (the next start then refuses on the
         # open claim); a claim released meanwhile has its end written already
@@ -1176,18 +1185,22 @@ def main():
             # committed, another phase's record) made nothing: read again, the claim checked, written again - three
             # times at most. One that may have been made (its connection gone) is not written twice
             for attempt in range(3):
-                obj = read_ledger()[0]
-                lost = claim_problems(step, obj)
-                if lost:
-                    print(f"{lost[0]} - its end not recorded")
-                    break
                 try:
+                    obj = read_ledger()[0]
+                    lost = claim_problems(step, obj)
+                    if lost:
+                        print(f"{lost[0]} - its end not recorded")
+                        break
                     record(step, "end", phase, result, token, obj=obj)
                     break
-                except SystemExit as e:
-                    if attempt < 2 and "the ledger changed since it was read" in str(e.code):
+                except LedgerConflict:
+                    if attempt < 2:
                         continue
-                    if reason:  # the write's failure becomes the exit: the phase's own reason said first
+                    if reason:
+                        print(reason, file=sys.stderr)
+                    raise
+                except SystemExit:  # the read's or the write's failure becomes the exit: the phase's own reason first
+                    if reason:
                         print(reason, file=sys.stderr)
                     raise
 

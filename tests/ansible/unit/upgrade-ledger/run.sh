@@ -799,23 +799,27 @@ check("the write failing otherwise: said so - it may have been made", ("may have
 # main records the claimed phase's end, passed or failed - an end it could not write fails the run (the phase's own
 # result aside); a claim released meanwhile has its end written already: nothing written, said so
 MAIN_OUT = {}  # main_ends' last run: its stderr and its exit
-def main_ends(code, released=False, write_fails=False, conflicts=0):
+def main_ends(code, released=False, write_fails=False, read_fails=False):
     ends, saved = [], {k: getattr(m, k) for k in ("record", "begin", "read_ledger")}
     tries = []
     def fake_record(st, e, *a, **k):
         tries.append(e)
         if write_fails:
             sys.exit("the ledger write failed - it may have been made all the same")
-        if len(tries) <= conflicts:
-            sys.exit("REFUSED: the ledger changed since it was read (another phase at work?): Conflict")
         ends.append((st, e, *a))
     MAIN_OUT["tries"] = tries
     m.record = fake_record
     lines = [f"{S47} start begin host:1:aa"] + ([f"{S47} end begin released host:1:aa"] if released else [])
     text = "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(lines))
-    m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text))
+    def fake_read():
+        if read_fails:  # ten unreachable when the end is read
+            sys.exit("reading the ledger: Unable to connect to the server: dial tcp: i/o timeout")
+        return {"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text)
+    m.read_ledger = fake_read
     def fake_begin(step):
         m.CLAIMED.append((step, "begin", "host:1:aa"))
+        if isinstance(code, BaseException):
+            raise code
         if code:
             sys.exit(code)
     m.begin = fake_begin
@@ -829,6 +833,8 @@ def main_ends(code, released=False, write_fails=False, conflicts=0):
             m.main()
     except SystemExit as e:
         exit_code = e.code
+    except Exception as e:  # a phase's exception, its end written: main raises it on
+        exit_code = repr(e)
     finally:
         MAIN_OUT.update(err=err.getvalue(), exit=exit_code)
         sys.argv = argv
@@ -841,18 +847,54 @@ check("a phase that passes: its end recorded passed, with its claim's token", ma
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
       ([(S47, "end", "begin", "failed", "host:1:aa")], False))
 check("a phase that passes, its end not written: the run fails", main_ends(0, write_fails=True), ([], False))
-# the end's write refused on a Conflict (the ledger changed since its read - the run's own late write that committed,
-# another phase's record): read again, its claim checked, written again - a few times; a write that may have been made
-# (its connection gone) is not written twice
-check("the end's write in conflict once: read and written again, recorded", (main_ends(0, conflicts=1),
-      MAIN_OUT["tries"]), (([(S47, "end", "begin", "passed", "host:1:aa")], True), ["end", "end"]))
-check("in conflict every time: the run fails after three", (main_ends(0, conflicts=99)[1], len(MAIN_OUT["tries"])),
-      (False, 3))
+# a write that may have been made (its connection gone) is not written twice (a Conflict's retry: main_conflicts)
 check("a write that may have been made: not written again", (main_ends(0, write_fails=True)[1], len(MAIN_OUT["tries"])),
       (False, 1))
 main_ends("REFUSED: the phase's own reason", write_fails=True)
 check("a phase refused, its end not written: both said - the phase's reason, then the write's",
       ("REFUSED: the phase's own reason" in MAIN_OUT["err"], "ledger write failed" in str(MAIN_OUT["exit"])), (True, True))
+main_ends("REFUSED: the phase's own reason", read_fails=True)
+check("a phase refused, ten unreachable when its end is read: both said - the phase's reason, then the read's",
+      ("REFUSED: the phase's own reason" in MAIN_OUT["err"], "reading the ledger" in str(MAIN_OUT["exit"])), (True, True))
+main_ends(RuntimeError("the phase's own defect"), write_fails=True)
+check("a phase dying of an exception, its end not written: its traceback said, then the write's failure",
+      ("RuntimeError: the phase's own defect" in MAIN_OUT["err"], "Traceback" in MAIN_OUT["err"],
+       "ledger write failed" in str(MAIN_OUT["exit"])), (True, True, True))
+check("a phase dying of an exception: its end recorded failed", main_ends(RuntimeError("x"))[0],
+      [(S47, "end", "begin", "failed", "host:1:aa")])
+# the end's write refused on a Conflict (the ledger changed since its read - the run's own late write that committed,
+# another phase's record) made nothing: read again, its claim checked, written again - three times at most. Through the
+# real record(): ten refuses the replace as kubectl does
+def main_conflicts(n):
+    sent, saved = [], {k: getattr(m, k) for k in ("begin", "read_ledger", "ten")}
+    text = f"2026-10-06T08:00:00Z {S47} start begin host:1:aa"
+    m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text))
+    def fake_ten(command, stdin=None, check=True):
+        sent.append(stdin)
+        if len(sent) <= n:
+            return _Rc(1, 'Error from server (Conflict): Operation cannot be fulfilled on configmaps "upgrade-ledger": '
+                          "the object has been modified; please apply your changes to the latest version and try again")
+        return _Rc(0)
+    m.ten = fake_ten
+    m.begin = lambda step: m.CLAIMED.append((step, "begin", "host:1:aa"))
+    m.CLAIMED.clear()
+    argv, sys.argv = sys.argv, ["x", "begin", S47]
+    code = None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            m.main()
+    except SystemExit as e:
+        code = e.code
+    finally:
+        sys.argv = argv
+        m.CLAIMED.clear()
+        for k, v in saved.items():
+            setattr(m, k, v)
+    last = json.loads(sent[-1])["data"]["events"].splitlines()[-1].split()[2:] if sent else []
+    return code in (None, 0), len(sent), last
+check("kubectl's Conflict on the end's write, twice: written the third time", main_conflicts(2),
+      (True, 3, ["end", "begin", "passed", "host:1:aa"]))
+check("kubectl's Conflict every time: the run fails after three writes", main_conflicts(99)[:2], (False, 3))
 check("a phase whose claim was released meanwhile: no end written (its release is), the phase's result",
       main_ends(0, released=True), ([], True))
 # a run whose claim was closed meanwhile (released by hand, its run still alive) records nothing more: its events would
