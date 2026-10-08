@@ -30,6 +30,12 @@ check("keywords Ansible's own: a task's action is the rest",
       [m for m, _ in actions({"name": "x", "listen": "y", "throttle": 1, "timeout": 5, "with_items": [1],
                                "ansible.builtin.debug": {"msg": 1}})], ["ansible.builtin.debug"])
 check("a block: no action", actions({"name": "b", "block": []}), [])
+# an import by its full name is a play too (31 files write it so), never a task; an action: key names its module
+check("ansible.builtin.import_playbook: a play, not a task", ([p for p in plays([{"ansible.builtin.import_playbook": "o.yml"}])] != [],
+      list(tasks([{"name": "i", "ansible.builtin.import_playbook": "o.yml"}]))), (True, []))
+check("action: its module (free form, or a mapping)",
+      [m for t in ({"action": "ansible.builtin.shell echo x"}, {"action": {"module": "ansible.builtin.shell", "cmd": "x"}})
+       for m, _ in actions(t)], ["ansible.builtin.shell", "ansible.builtin.shell"])
 check("local_action: its module", [m for m, _ in actions({"local_action": "ansible.builtin.command echo"})],
       ["ansible.builtin.command"])
 bad = tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False)

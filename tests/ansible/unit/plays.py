@@ -28,8 +28,12 @@ def load(path):
         return yaml.safe_load(f)
 
 
+IMPORT_PLAYBOOK = ("import_playbook", "ansible.builtin.import_playbook", "ansible.legacy.import_playbook")
+
+
 def is_play(node):
-    return isinstance(node, dict) and ("hosts" in node or "import_playbook" in node)
+    """A play, or an import of a playbook (by any of its names - 31 files use the full one)."""
+    return isinstance(node, dict) and ("hosts" in node or any(k in node for k in IMPORT_PLAYBOOK))
 
 
 def plays(doc):
@@ -62,9 +66,10 @@ def _tasks(items):
 def actions(task):
     """The task's actions as written: [(module, value)] - one for a task, none for a block; more is a mistake (a
     keyword misspelt reads as a second action)."""
-    if isinstance(task.get("local_action"), dict):
-        return [(task["local_action"].get("module"), task["local_action"])]
-    if "local_action" in task:
-        words = str(task["local_action"]).split(None, 1)
-        return [(words[0], words[1] if len(words) > 1 else "")]
+    for key in ("local_action", "action"):  # the action named by a keyword: a mapping with its module, or free form
+        if isinstance(task.get(key), dict):
+            return [(task[key].get("module"), task[key])]
+        if key in task:
+            words = str(task[key]).split(None, 1)
+            return [(words[0], words[1] if len(words) > 1 else "")]
     return [(k, v) for k, v in task.items() if k not in KEYWORDS and not str(k).startswith("with_")]
