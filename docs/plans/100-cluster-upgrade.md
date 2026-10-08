@@ -997,6 +997,22 @@ Fixed (ops 79145b2.., each test-first, each mechanism reverted and seen red):
 - Run time: the VMs' readiness and the isolation's re-apply only after a step that changed a host - the isolation's
   proof every step (about 18 minutes of 62 steps).
 - Platform: step 45's Tempo comments no longer name the plan's step (46-61 restacked, two lines each).
+- Later the same morning, each test-first and reverted red (by exit code: a hung harness reads as no FAIL line):
+  Forgejo's admin made with a random password and its own set through the API - never on a command line (proven
+  against Forgejo 15.0.9, first run and retry); keepalived reloads a unit systemd says needs it (an apt upgrade failed
+  every run); Gluster's mounts proven answering (stat -f); Vault's cluster port 8201 no more open to the LAN;
+  PgBouncer's lookup with its search_path fixed; setup-consul refuses an inactive UFW where Consul runs; side-cluster-
+  delete passes only once a delete reached the cluster; confirm() asks from the terminal's foreground only; the step
+  stamper keeps a signal; the copy flushes Tempo where production does and its proof fails as not proven past Tempo
+  2's 5-minute blocks; vagrant-smoke keeps a concurrent run's Job, its 15 minutes the clock's; argo-helm-diff retries
+  a chart fetch's transient failure (blob.istio.io's 502 ended run 06:24 at its boot) and runs no cached helm on its
+  word; check-mode-lint without two false positives; every playbook's script: path exists (create/destroy-
+  environment's git-commit-push.sh had never been committed); production's LAN said once (vars/production-lan.yml);
+  each unit harness a temp directory of its own; the secret lints' scopes and test-quality's weak cases pinned.
+- My own defects, found by the runs: run 06:37 stopped in its build on my host-key assert (the Vagrant inventory turns
+  key checking off for its rebuilt VMs - it now says so itself, production's inventory pinned never to); my "UFW
+  active" assert would have refused every fresh install (setup-consul runs before setup-vault-pi enables UFW) -
+  refused now only where Consul runs. My pause commit had broken a test playbook's YAML: every YAML is parsed in CI.
 Refuted by measurement: a blocked SIGCHLD stopping bash's traps (my own claim of the fourth review).
 Equivalent, measured: the pause's Success-text check (the DCS check catches it later); the stop's zombie test; each of
 the two ignore layers alone in build-with-pin's and step-checks' stops (both together: red).
@@ -1005,7 +1021,11 @@ The operator's, before the upgrade starts: `task deploy:vault-eso` on production
 refreshes one ExternalSecret, deletes external-secrets/vault-token-reviewer); rotate the caddy-cert-reader token (it
 was on curl's command line daily on both Pis); remove pi1's stray pi2-key.pem and *.bak in /etc/vault.d/tls and pi2's
 ca-cert.srl; retire ten's offsite-backup.timer (a March script, failing daily) or decide to keep the playbook's;
-setup-velero's legacy first play (the in-cluster MinIO, retired) - keep or delete. With the earlier open items.
+setup-velero's legacy first play (the in-cluster MinIO, retired) - keep or delete; whether PgBouncer's lookup refuses
+superusers' hashes (its admin and stats users are postgres - their reliance on auth_query unknown); External Secrets'
+Vault login by a reviewer account of its own with audience-bound tokens (the security pass's S7 - an auth change of
+its own, with a run); production's 6-day-old Error pod of Tempo (schnappy-tempo-844f8df5f5-zjqmd). With the earlier
+open items.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
