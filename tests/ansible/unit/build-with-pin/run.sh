@@ -12,18 +12,30 @@ mkdir -p "$T/scripts" "$T/tests/clickhouse-pin" "$T/bin" "$T/.upgrade"
 mkdir -p "$T/scripts/lib"; cp "$ROOT/scripts/lib/process-groups.sh" "$T/scripts/lib/"
 cp "$ROOT/scripts/upgrade-build-with-pin.sh" "$T/scripts/" 2> /dev/null \
   || { echo "FAIL scripts/upgrade-build-with-pin.sh missing"; echo "build-with-pin: 1 FAILED"; exit 1; }
-# task test:upgrade:build: BUILD (its exit), after BUILD_SECONDS; IGNORE_TERM: it ignores a TERM (its sleep too);
-# SLOW_TERM: a TERM ends it a second later, said in .upgrade/build.slow
+# go-task (task test:upgrade:build): its PID in .upgrade/task.pid, the build's command its child (in its group), a TERM
+# swallowed (go-task leaves it to the command); the command failing fails the task, ending 0 (NEXT_CMD) the task's next
+# command runs - as go-task ran a step's remaining commands after one its running command survived
 cat > "$T/bin/task" <<'STUB'
 #!/bin/bash
+echo $$ > .upgrade/task.pid
+trap 'echo "task: signal received"' TERM
+bash "$BUILD_COMMAND" || exit $?
+[ -z "${NEXT_CMD:-}" ] || echo next > .upgrade/build.next
+exit 0
+STUB
+# the build's command: BUILD (its exit), after BUILD_SECONDS; IGNORE_TERM: it ignores a TERM (its sleep too);
+# SLOW_TERM: a TERM ends it a second later, said in .upgrade/build.slow; ZERO_ON_TERM: a TERM ends it 0
+cat > "$T/build-command" <<'STUB'
 echo $$ > .upgrade/build.pid
 [ -z "${IGNORE_TERM:-}" ] || trap '' TERM
 [ -z "${SLOW_TERM:-}" ] || trap 'sleep 1; echo slow > .upgrade/build.slow; exit 143' TERM
+[ -z "${ZERO_ON_TERM:-}" ] || trap 'exit 0' TERM
 sleep "${BUILD_SECONDS:-0}" &
 wait $!
 echo build; echo > .upgrade/build.finished
 exit "${BUILD:-0}"
 STUB
+export BUILD_COMMAND=$T/build-command
 # the pin: PIN (its exit) after PIN_SECONDS, its PID first, "finished" when it ran its course
 cat > "$T/tests/clickhouse-pin/run.sh" <<'STUB'
 #!/bin/bash
@@ -42,7 +54,7 @@ proc_info() {  # proc_info <pid>: "<ppid> <pgid> <sid> <comm>" - nothing for no 
 }
 fails=0
 run() {  # run <env...>: the script's output in $out, its exit in $rc, its seconds in $took
-  rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+  rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/task.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
   local t0=$SECONDS
   # bounded: a cleanup that waited on its own output's process hung the run for good
   out=$(cd "$T" && env "$@" PATH="$T/bin:$PATH" timeout -k 5 30 bash scripts/upgrade-build-with-pin.sh < /dev/null 2>&1)
@@ -101,7 +113,7 @@ $(gone "$T/.upgrade/pin.pid")" "stopped stopped 1 gone"
 # and the pin are in sessions of their own). The stamper ignores it: what the script says while it stops reaches the
 # log, and nothing it writes then dies of a closed pipe. Each job with no terminal: one that reads it (an ssh asking
 # for a host key) fails instead of stopping, and the wait with it.
-rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/task.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
 t0=$SECONDS
 (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
   bash scripts/upgrade-build-with-pin.sh \
@@ -112,7 +124,7 @@ own_session() {  # own_session <pid file>: "own" when the process it names leads
   local pid info; pid=$(cat "$1" 2> /dev/null) && info=$(proc_info "$pid") || { echo "no-process"; return; }
   [ "$(awk '{print $3}' <<< "$info")" = "$pid" ] && echo own || echo shared
 }
-sessions="$(own_session "$T/.upgrade/build.pid") $(own_session "$T/.upgrade/pin.pid")"
+sessions="$(own_session "$T/.upgrade/task.pid") $(own_session "$T/.upgrade/pin.pid")"
 # the whole group of timeout (it leads one), as the terminal's Ctrl-C reaches it - this test's own child, checked so
 [ "$(proc_info "$sp" | awk '{print $1, $2}')" = "$$ $sp" ] && kill -INT -- "-$sp"
 wait "$sp"
@@ -125,7 +137,7 @@ $(gone "$T/.upgrade/pin.pid") $(gone "$T/.upgrade/build.pid") $(grep -c '^[0-9:]
 # a TERM or a HUP to the whole group (a closed terminal, a kill of the group): the stamper ignores them too - the stop is
 # said in the log (it died of the TERM, and the stop's line of a closed pipe)
 for sig in TERM HUP; do
-  rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+  rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/task.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
   (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
     bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/grp.out" 2>&1) &
   sp=$!
@@ -138,7 +150,7 @@ for sig in TERM HUP; do
     "gone gone 1"
 done
 # a job ignoring the stop's TERM: killed after the stop's grace, said - it held the stop for good
-rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/task.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
 t0=$SECONDS
 (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 IGNORE_TERM=1 STOP_GRACE=2 PATH="$T/bin:$PATH" timeout -k 5 30 \
   bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/ign.out" 2>&1) &
@@ -153,7 +165,7 @@ $(grep -c 'STOPPED BY A SIGNAL' <<< "$out") $((SECONDS - t0 < 10))" "gone gone 1
 # a second signal while the stop waits for a job that takes its time to end - a Ctrl-C pressed twice: INT to the
 # whole group, the script itself included, twice: the stop goes on to its end - the job's own stop finished, both
 # gone, the stop said (unguarded, the second ran the trap again inside the stop and ended it there - measured)
-rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished" \
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/task.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished" \
   "$T/.upgrade/build.slow"
 (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 SLOW_TERM=1 PATH="$T/bin:$PATH" timeout -k 5 30 \
   bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/twice.out" 2>&1) &
@@ -181,6 +193,50 @@ wait "$sp"
 out=$(settled "$T/unkept.out")
 check "a job whose PID was not kept yet: stopped with the rest, its process gone" \
   "$(pin_end) $(gone "$T/.upgrade/pin.pid")" "stopped gone"
+# the stop's grace a whole number of seconds, refused before any job starts: a fraction aborted the stop's arithmetic
+run STOP_GRACE=1.5
+check "STOP_GRACE=1.5: refused before the build and the pin, said" \
+  "$rc $(grep -c 'STOP_GRACE=1.5: not a whole number of seconds' <<< "$out") \
+$([ -e "$T/.upgrade/build.pid" ] || [ -e "$T/.upgrade/pin.pid" ] && echo started || echo none)" "1 1 none"
+# go-task KILLed at once: its command ending 0 on the TERM, go-task ran the build's next command during the stop
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.next"
+(cd "$T" && exec env NEXT_CMD=1 ZERO_ON_TERM=1 BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 bash scripts/upgrade-build-with-pin.sh \
+  < /dev/null > "$T/next.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
+[ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
+wait "$sp"
+out=$(settled "$T/next.out")
+check "a TERM, the build's command ending 0 on it: no next command of the build's ran; both gone" \
+  "$([ -e "$T/.upgrade/build.next" ] && echo ran || echo none) $(gone "$T/.upgrade/build.pid") $(gone "$T/.upgrade/pin.pid")" \
+  "none gone gone"
+# the stamper gone before the stop (its output's reader): the job deaf to the TERM KILLed all the same and the stop
+# goes on to its end - a write first ended it (SIGPIPE, 141)
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/task.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 IGNORE_TERM=1 STOP_GRACE=1 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/pipe.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
+script=""
+for f in /proc/[0-9]*/stat; do  # the script: timeout's child (timeout is this test's)
+  read -r st 2> /dev/null < "$f" || continue
+  set -- ${st##*) }
+  [ "$2" = "$sp" ] && { script=${f#/proc/}; script=${script%/stat}; }
+done
+stamper=""
+for f in /proc/[0-9]*/stat; do  # its stamper: its python child reading the time
+  read -r st 2> /dev/null < "$f" || continue
+  set -- ${st##*) }
+  p=${f#/proc/}; p=${p%/stat}
+  [ -n "$script" ] && [ "$2" = "$script" ] && grep -q strftime "/proc/$p/cmdline" 2> /dev/null && stamper=$p
+done
+check "the script and its stamper found" "$([ -n "$script" ] && [ -n "$stamper" ] && echo found || echo missing)" found
+[ -n "$stamper" ] && kill -KILL "$stamper"
+[ -n "$script" ] && [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$script"
+wait "$sp"; rc=$?
+out=$(cat "$T/pipe.out")
+check "the stamper gone: the deaf build KILLed all the same, the pin gone, the stop ended 130" \
+  "$rc $(gone "$T/.upgrade/build.pid") $(gone "$T/.upgrade/pin.pid")" "130 gone gone"
 # the traps set before the jobs start: a signal between a job's start and its trap left that job running
 check "the traps set before the first job starts" \
   "$(awk '/^trap stop EXIT/ {t = NR} /&$/ && !j {j = NR} END {print (t && j && t < j)}' \

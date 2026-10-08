@@ -132,7 +132,7 @@ for at in storage watchdog; do
 done
 # the bound reached just as the last check ended (its TERM after the verdict's loop): every check judged - the verdict
 # stands, nothing "not judged". Forced in a copy: the watchdog's act right after the loop
-sed 's|^stop_groups 5 "\$watchdog"$|: > "$logs/timed-out"; kill -TERM $$\n&|' "$T/scripts/upgrade-step-checks.sh" \
+sed 's|^own_jobs left_$|: > "$logs/timed-out"; kill -TERM $$\n&|' "$T/scripts/upgrade-step-checks.sh" \
   > "$T/scripts/late.sh"
 check "the copy with the bound's act after the loop made" "$(grep -c '^: > "\$logs/timed-out"; kill -TERM \$\$$' "$T/scripts/late.sh")" 1
 out=$(ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/late.sh" i p 24.8 schnappy < /dev/null 2>&1); rc=$?
@@ -172,6 +172,34 @@ out=$(cat "$T/ignore.out")
 check "a check ignoring the TERM: killed after the grace, said; its process gone, the run ended at once after" \
   "$rc $(grep -c 'outlived the stop by 1 s - killed' <<< "$out") $(gone "$T/long.pid") $([ "$took" -lt 8 ] && echo prompt || echo "$took s")" \
   "130 1 gone prompt"
+
+# the stop's grace a whole number of seconds, refused before any check otherwise: a fraction aborted the cleanup's
+# arithmetic - nothing KILLed, the checks left running
+out=$(STOP_GRACE=1.5 PATH="$T/bin:$PATH" timeout -k 5 30 bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy \
+  < /dev/null 2>&1); rc=$?
+check "STOP_GRACE=1.5: refused before any check, said" \
+  "$rc $(grep -c '^STOP_GRACE=1.5: not a whole number of seconds$' <<< "$out") $(grep -c '^===== check' <<< "$out")" "1 1 0"
+# the output's reader gone before the TERM (a tee a Ctrl-C ended): the check ignoring the TERM KILLed all the same, the
+# run's work directory removed - a write first ended the cleanup (SIGPIPE) with the check left running
+rm -f "$T/long.pid" "$T/long.pid.finished"; rm -rf "$T/.upgrade"/step-checks.*
+mkfifo "$T/pipe"
+cat "$T/pipe" > /dev/null & reader=$!
+LONG="$T/long.pid" IGNORE_TERM=1 STOP_GRACE=1 PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 \
+  schnappy < /dev/null > "$T/pipe" 2>&1 &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
+[ "$(proc_info "$reader" | awk '{print $1, $4}')" = "$$ cat" ] && kill "$reader"
+wait "$reader" 2> /dev/null
+if [ "$(proc_info "$sp" | awk '{print $1, $4}')" = "$$ bash" ]; then
+  kill -TERM "$sp"
+fi
+wait "$sp"; rc=$?
+out=""
+check "the output's reader gone: the check ignoring the TERM KILLed all the same, the work directory gone, 130" \
+  "$rc $(gone "$T/long.pid") $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "130 gone 0"
+pid=$(cat "$T/long.pid" 2> /dev/null)
+if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playbook ]; then kill -KILL "$pid"; fi
+rm -f "$T/pipe"
 
 # a check bash collected outside wait -n (a `jobs` reported it ended - out of the job table, wait -n returns 127, `wait
 # <pid>` still has its status): judged by that status - a failure failed, all passing passed (measured on bash 5.2)

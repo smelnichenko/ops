@@ -18,13 +18,15 @@ set -uo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 infra_ref=$1 platform_ref=$2 clickhouse_compat=$3 clickhouse_users=$4
 cd "$ops" || exit 1
-# own_jobs, group_alive, stop_groups, uptime_s
+# own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 # the checks' own bound (below): above every check's own - data-check's retries alone wait up to ~3085 s (each until's
 # retries and delays, summed) - so it stops only what none of them bounds; a value that is no number would make its
 # sleep fail at once and leave no bound
 bound=${STEP_CHECKS_SECONDS:-3600}
 [[ $bound =~ ^[1-9][0-9]*$ ]] || { echo "STEP_CHECKS_SECONDS=$bound: not a whole number of seconds"; exit 1; }
+# the stop's grace too: a fraction aborted the cleanup's arithmetic - nothing KILLed, the checks left running
+[[ ${STOP_GRACE:-0} =~ ^(0|[1-9][0-9]*)$ ]] || { echo "STOP_GRACE=$STOP_GRACE: not a whole number of seconds"; exit 1; }
 mkdir -p .upgrade
 logs=$(mktemp -d "$ops/.upgrade/step-checks.XXXX")
 names=() pids=() done_=() failed=() watchdog=""
@@ -41,8 +43,9 @@ not_judged() {  # the checks not judged named, each with its log, and the failur
 }
 cleanup() {
   local groups
-  # no signal cuts it short (a Ctrl-C pressed twice: the second ran the trap again inside it, its checks unwaited)
-  trap '' INT TERM HUP
+  # no signal cuts it short (a Ctrl-C pressed twice: the second ran the trap again inside it, its checks unwaited);
+  # a write to an output whose reader is gone (a tee the Ctrl-C ended) fails, not the cleanup (its work left behind)
+  trap '' INT TERM HUP PIPE
   # every job of this script's still its child - a check or the watchdog whose PID was not kept yet (a signal between
   # its start and its record) among them: never a PID it did not start (1 is `kill -- -1`, every process of the user;
   # 2026-10-07 a test's PID 1 ended the operator's session), nor one the system gave to another process after the job
@@ -53,7 +56,7 @@ cleanup() {
   rm -rf "$logs"
 }
 on_signal() {  # on_signal <exit>: a signal's first act - no other cuts the stop short; the checks' bound said
-  trap '' INT TERM HUP
+  trap '' INT TERM HUP PIPE
   if [ -e "$logs/timed-out" ]; then
     # the bound reached as the last check ended: every one judged, nothing to stop - the verdict goes on
     if [ "${#done_[@]}" -eq "${#pids[@]}" ]; then
@@ -146,8 +149,10 @@ while [ "$left" -gt 0 ]; do
   done
   left=$((left - 1))
 done
-# every check judged: the bound has nothing left to stop
-stop_groups 5 "$watchdog"
+# every check judged: the bound has nothing left to stop - while it is this script's job still (one that ended and was
+# reaped: its PID may be another process's)
+own_jobs left_
+[[ " ${left_[*]} " != *" $watchdog "* ]] || stop_groups 5 "$watchdog"
 if [ "${#failed[@]}" -gt 0 ]; then
   echo "STEP CHECKS FAILED: ${failed[*]}"
   exit 1

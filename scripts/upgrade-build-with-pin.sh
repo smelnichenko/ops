@@ -19,20 +19,25 @@ exec > >(trap '' INT TERM HUP; exec python3 -u -c 'import sys, time
 for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
 build_job="" pin="" signalled=""
-# own_jobs, stop_groups
+# own_jobs, kill_named, stop_groups
 source scripts/lib/process-groups.sh
+# the stop's grace a whole number of seconds, before any job starts: a fraction aborted the stop's arithmetic - nothing
+# KILLed, the jobs left running
+[[ ${STOP_GRACE:-0} =~ ^(0|[1-9][0-9]*)$ ]] || { echo "STOP_GRACE=$STOP_GRACE: not a whole number of seconds"; exit 1; }
 stop() {
   local j own
+  # no signal cuts it short (on a stop of its own - a failed build - one may arrive); a write to an output whose reader
+  # is gone (the stamper ended) fails, not the stop
+  trap '' INT TERM HUP PIPE
   # every job of this script's still its child, each a session of its own (setsid) - never a PID it did not start, nor
   # one bash reaped already: one whose PID was not kept yet (a signal between its start and `pin=$!`) is stopped with
-  # the rest. The time-stamping process is no
-  # job (a process substitution - `jobs -p` never lists it, measured on bash 5.2): waiting for it would wait for this
-  # script's own end
-  # nor here, on a stop of its own (a failed build) a signal arrives
-  trap '' INT TERM HUP
+  # the rest. The time-stamping process is no job (a process substitution - `jobs -p` never lists it, measured on bash
+  # 5.2): waiting for it would wait for this script's own end
   own_jobs own
-  # each job's processes given STOP_GRACE seconds to end (the pin's trap removes its containers), then killed, said:
-  # one that ignored the TERM held the stop for good
+  # go-task KILLed at once: it ran the build's next command once the running one ended, the grace still running. Each
+  # job's processes - every group of its session - given STOP_GRACE seconds to end (the pin's trap removes its
+  # containers), then killed, said: one that ignored the TERM held the stop for good
+  for j in "${own[@]}"; do kill_named "$j" task; done
   [ "${#own[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${own[@]}"
   for j in "${own[@]}"; do wait "$j" 2> /dev/null; done
   [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
