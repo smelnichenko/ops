@@ -130,8 +130,8 @@ check "only the ClusterRoleBinding's apply failing: the step fails, said so, not
 run CA_RAW=$'QUJD\nB64\n'"touch $W/pwned-by-ca"$'\n'
 check "a cluster CA that is not base64: the step fails, nothing sent to the Pi, nothing run" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(ls "$W"/pwned-* 2> /dev/null | wc -l)" "1 0 0"
-# a step that fails says so and goes no further: under set -e (a direct call) it ended unsaid; called by `all` (set -e
-# off in its || context) a failed apply went by unnoticed
+# a step that fails says so and goes no further: bootstrap.sh runs without set -e, and a failed apply went by
+# unnoticed - the step went on
 run APPLY_FAILS=1
 check "the cluster's apply failing: the step fails, said so, nothing sent to the Pi" \
   "$rc $(grep -c "vault-pi-ca\|vault-eso failed" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 2 0"

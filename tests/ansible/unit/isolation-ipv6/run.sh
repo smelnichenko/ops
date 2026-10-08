@@ -1,6 +1,6 @@
 #!/bin/bash
-# The Vagrant copy's isolation drops production's LAN by IPv4 only (nftables), and production's LAN carries an IPv6
-# prefix too (ten: fd0a:94e6:20b4:9f6b::/64, read 2026-10-08) - so both isolations (the Pis', the cluster node's) prove
+# The Vagrant copy's isolation drops production's LAN (nftables), and production's LAN carries an IPv6 prefix too
+# (ten: fd0a:94e6:20b4:9f6b::/64, read 2026-10-08) - so both isolations (the Pis', the cluster node's) prove
 # the VM has no IPv6 beyond link-local, failing closed the day a box or a libvirt network gives it one. Their checks as
 # the playbooks hold them, `ip` a stub: link-local only passes; a ULA route, a global address each fail; `ip` failing
 # fails (it read as "no IPv6"); a kernel with no IPv6 passes. And each guard drops production's IPv6 prefix as well.

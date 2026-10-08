@@ -181,8 +181,8 @@ setup_vault_eso() {
     return 1
   fi
 
-  # each step checked and said: no set -e holds here (`all` calls this in a || context), and a failed apply went by
-  # unnoticed - the Pi's Vault then configured for a cluster that does not trust it
+  # each step checked and said: bootstrap.sh runs without set -e (`all` goes on past a failed component), and a
+  # failed apply went by unnoticed - the Pi's Vault then configured for a cluster that does not trust it
   local VAULT_CA_B64
   VAULT_CA_B64=$(base64 -w0 < "$work/vault-ca.pem") || { err "Cannot encode Vault's CA"; return 1; }
 

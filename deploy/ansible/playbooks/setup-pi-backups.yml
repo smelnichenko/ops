@@ -101,8 +101,9 @@
             # the clock synchronized first: after a boot the timer's catch-up run (Persistent) can start on the time a
             # Pi kept without a battery - the day read below, the backup's name and the retention's cutoff all wrong.
             # Ten minutes allowed (chrony or timesyncd, either sets it), then nothing done. Synchronized once since this
-            # boot is enough (timesyncd's mark in /run, chrony's leap status): an internet outage turns
-            # NTPSynchronized to no after some 9 h (the kernel's error bound past 16 s) and stopped every backup
+            # boot is enough - timesyncd's mark in /run says so (production's Pis run timesyncd); chrony keeps no such
+            # mark, its leap status says synchronized now: an internet outage turns NTPSynchronized to no after some
+            # 9 h (the kernel's error bound past 16 s) and stopped every backup
             for i in $(seq 60); do
               [ "$(timedatectl show -p NTPSynchronized --value 2> /dev/null)" = yes ] && break
               if [ -e /run/systemd/timesync/synchronized ] \
