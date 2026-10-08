@@ -58,6 +58,21 @@ except SystemExit:
     pass
 check("CNPG's own step (no major of its own): done's base backup takes any", [c for c in calls if "postgres-base-backup" in c[0]],
       [["playbooks/postgres-base-backup.yml", "-e", "pg_major="]])
+# the step's major from its step file - CNPG's own image line alone (another registry's postgresql is no cluster of
+# ours); the CLI the Taskfile reads it with
+import os, subprocess, tempfile
+li = importlib.machinery.SourceFileLoader("inv", "scripts/upgrade-expected-inventory.py")
+inv = importlib.util.module_from_spec(importlib.util.spec_from_loader("inv", li))
+li.exec_module(inv)
+cli = lambda st: subprocess.run(["scripts/upgrade-expected-inventory.py", "--pg-major", st], capture_output=True,
+                                text=True).stdout.strip()
+check("the CLI: 47's major 18, CNPG's own step none", (cli("47-postgres-18"), cli("24-cnpg")), ("18", ""))
+fx = tempfile.mkdtemp()
+open(os.path.join(fx, "x.txt"), "w").write("image docker.io/bitnami/postgresql 16 => image docker.io/bitnami/postgresql 17\n")
+open(os.path.join(fx, "y.txt"), "w").write("image ghcr.io/cloudnative-pg/postgresql 17 => "
+                                           "image ghcr.io/cloudnative-pg/postgresql 18.6-system-bullseye\n")
+inv.STEPS = fx
+check("another registry's postgresql: no major; CNPG's: its new one", (inv.pg_major("x"), inv.pg_major("y")), ("", "18"))
 tf = open("Taskfile.yml").read()
 runs = re.findall(r"barman-check\.yml[^\n]*", tf)
 check("the Vagrant runner's barman checks pass the step's major", (len(runs), all("pg_major={{.PG_MAJOR}}" in r for r in runs)),

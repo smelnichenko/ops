@@ -230,10 +230,12 @@ def ref(repo, step_no, names):
 
 
 def pg_major(step):
-    """The PostgreSQL major the step moves the cluster to (its postgresql image line's new tag), "" for none - its base
-    backup is taken on it: the old major's backups do not replay into the new one."""
+    """The PostgreSQL major the step moves the cluster to (its CNPG postgresql image line's new tag - another registry's
+    postgresql is no cluster of ours), "" for none - its base backup is taken on it: the old major's backups do not
+    replay into the new one."""
+    cnpg = re.escape("ghcr.io/cloudnative-pg/postgresql")
     for line in open(os.path.join(STEPS, step + ".txt")):
-        m = re.fullmatch(r"image \S+ \S+ => image \S+/postgresql (\d+)\b\S*", line.strip())
+        m = re.fullmatch(rf"image {cnpg} \S+ => image {cnpg} (\d+)\b\S*", line.strip())
         if m:
             return m[1]
     return ""
