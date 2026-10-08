@@ -51,7 +51,7 @@ running=(PID_versitygw=9999901 EXE_9999901=/usr/bin/versitygw PID_vault=9999902 
 fails=0
 case_() { # name, expected output; the rest: VAR=value for this case
   local name=$1 want=$2; shift 2
-  out=$(env -i PATH="$W/bin:/usr/local/bin:/usr/bin:/bin" "$@" bash scripts/version-inventory-pi.sh 2>&1); rc=$?
+  out=$(env -i PATH="$W/bin:${FENCE:+$FENCE:}/usr/local/bin:/usr/bin:/bin" "$@" bash scripts/version-inventory-pi.sh 2>&1); rc=$?
   if [ "$rc" = 0 ] && [ "$out" = "$want" ]; then echo "PASS $name"
   else echo "FAIL $name (rc $rc)"; diff <(printf '%s\n' "$want") <(printf '%s\n' "$out") | sed 's/^/    /'; fails=$((fails + 1)); fi
 }
