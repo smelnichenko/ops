@@ -106,6 +106,17 @@
       no_log: true
       when: keycloak_enabled | bool
 
+    # where step 31 moved it: at steps 33 and 34 argocd-secret holds none, this one the secret in use
+    - name: The client secret Argo CD's own Secret holds now
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Secret
+        name: argocd-oidc-keycloak
+        namespace: "{{ argocd_namespace }}"
+      register: _argocd_oidc_now
+      no_log: true
+      when: keycloak_enabled | bool
+
     - name: The client secret this run writes - set, and the one in use
       ansible.builtin.assert:
         that:
@@ -113,10 +124,109 @@
           - >-
             ((_argocd_secret_now.resources | default([]) | first | default({})).data | default({}))
             .get('oidc.keycloak.clientSecret', '') in ['', argocd_keycloak_client_secret | b64encode]
+          - >-
+            ((_argocd_oidc_now.resources | default([]) | first | default({})).data | default({}))
+            .get('clientSecret', '') in ['', argocd_keycloak_client_secret | b64encode]
         fail_msg: >-
           REFUSED: Argo CD's Keycloak client secret (argocd_keycloak_client_secret, KEYCLOAK_ARGOCD_CLIENT_SECRET in
-          ops/.env) is empty, or not the one Argo CD signs in with now (argocd-secret's oidc.keycloak.clientSecret) -
-          nothing written; single sign-on would break
+          ops/.env) is empty, or not the one Argo CD signs in with now (argocd-secret's oidc.keycloak.clientSecret, or
+          argocd-oidc-keycloak's clientSecret) - nothing written; single sign-on would break
+        quiet: true
+      when: keycloak_enabled | bool
+
+    # and Keycloak takes it - asked before anything is written: the secret this run writes given to the realm's token
+    # endpoint for Argo CD's client with a user that is none, and a secret it cannot take given the same way. Keycloak's
+    # answer to a wrong client secret is measured, not assumed: the right one's must differ from it, and be about the
+    # user or the grant (invalid_grant; unauthorized_client where direct grants are off, "not allowed") - never
+    # "Invalid client". Asked from the first Pi, Keycloak's name there checked first to be this inventory's VIP: the
+    # copy's kubeadm node resolves auth.pmon.dev to production's (only the copy's Pis and pods map it to the copy);
+    # production's Pis and ten resolve it to their VIP (read 2026-10-08). Never another Keycloak asked
+    - name: Keycloak's name on the Pi that asks it
+      ansible.builtin.command: getent ahostsv4 {{ keycloak_host }}
+      delegate_to: "{{ groups['pis'] | first }}"
+      register: _argocd_kc_name
+      check_mode: false  # a read: a preview judges it too
+      changed_when: false
+      failed_when: false
+      when: keycloak_enabled | bool
+
+    - name: Keycloak's name there is this inventory's VIP
+      ansible.builtin.assert:
+        that:
+          - (_argocd_kc_name.stdout_lines | default([]) | first | default('')).split() | first | default('') == keepalived_vip
+        fail_msg: >-
+          REFUSED: {{ keycloak_host }} resolves on {{ groups['pis'] | first }} to
+          '{{ (_argocd_kc_name.stdout_lines | default([]) | first | default('none')).split() | first | default('none') }}',
+          not this inventory's VIP {{ keepalived_vip }} - Keycloak not asked (it would be another's)
+        quiet: true
+      when: keycloak_enabled | bool
+
+    - name: Keycloak asked with a client secret it cannot take
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "https://{{ keycloak_host }}/realms/schnappy/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: argocd
+          client_secret: "not-the-secret-{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}"
+          grant_type: password
+          username: argocd-client-secret-probe-no-such-user
+          password: none
+        status_code: [400, 401]
+        validate_certs: "{{ validate_certs }}"
+      delegate_to: "{{ groups['pis'] | first }}"
+      register: _argocd_sso_wrong
+      # a Keycloak or a Caddy still starting (a 502) waited for, two minutes
+      retries: 12
+      delay: 10
+      until: _argocd_sso_wrong.status in [400, 401]
+      check_mode: false  # a read: a preview judges it too
+      no_log: true
+      when: keycloak_enabled | bool
+
+    - name: Keycloak asked with the client secret this run writes
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "https://{{ keycloak_host }}/realms/schnappy/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: argocd
+          client_secret: "{{ argocd_keycloak_client_secret }}"
+          grant_type: password
+          username: argocd-client-secret-probe-no-such-user
+          password: none
+        status_code: [400, 401]
+        validate_certs: "{{ validate_certs }}"
+      delegate_to: "{{ groups['pis'] | first }}"
+      register: _argocd_sso_right
+      retries: 12
+      delay: 10
+      until: _argocd_sso_right.status in [400, 401]
+      check_mode: false  # a read: a preview judges it too
+      no_log: true
+      when: keycloak_enabled | bool
+
+    # Keycloak's two answers, said: their status, error and description - neither secret is in them
+    - name: Keycloak's answers
+      ansible.builtin.set_fact:
+        _sso_answers:
+          wrong: "{{ [_argocd_sso_wrong.status | default(-1), (_argocd_sso_wrong.json | default({})).error | default(''),
+                    (_argocd_sso_wrong.json | default({})).error_description | default('')] }}"
+          right: "{{ [_argocd_sso_right.status | default(-1), (_argocd_sso_right.json | default({})).error | default(''),
+                    (_argocd_sso_right.json | default({})).error_description | default('')] }}"
+      when: keycloak_enabled | bool
+
+    - name: Keycloak takes the client secret this run writes
+      ansible.builtin.assert:
+        that:
+          - _sso_answers.right != _sso_answers.wrong
+          - _sso_answers.right[1] in ['invalid_grant', 'unauthorized_client']
+          - "'invalid client' not in (_sso_answers.right[2] | lower)"
+        fail_msg: >-
+          REFUSED: Keycloak does not take Argo CD's client secret (KEYCLOAK_ARGOCD_CLIENT_SECRET in ops/.env) - its
+          answers (status, error, description) {{ _sso_answers }} - nothing written; single sign-on would break
         quiet: true
       when: keycloak_enabled | bool
 
@@ -711,45 +821,6 @@
           the argocd-oidc-keycloak Secret) - kubectl -n {{ argocd_namespace }} get cm argocd-cm -o yaml
         quiet: true
       when:  # a preview wrote no Secret
-        - keycloak_enabled | bool
-        - not ansible_check_mode
-
-    # and Keycloak takes it: the secret this run wrote given to Keycloak's token endpoint for Argo CD's client with a
-    # user that is none - a right secret is answered about the user or the grant (invalid_grant, unauthorized_client),
-    # a wrong one invalid_client. The checks above see a value there, not one Keycloak takes
-    - name: Keycloak takes Argo CD's client secret
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "https://{{ keycloak_host }}/realms/schnappy/protocol/openid-connect/token"
-        method: POST
-        body_format: form-urlencoded
-        body:
-          client_id: argocd
-          client_secret: "{{ argocd_keycloak_client_secret }}"
-          grant_type: password
-          username: argocd-client-secret-probe-no-such-user
-          password: none
-        status_code: [400, 401]
-        validate_certs: "{{ validate_certs }}"
-      register: _argocd_sso_probe
-      # a Keycloak or a Caddy still starting (a 502) waited for, a minute
-      retries: 6
-      delay: 10
-      until: _argocd_sso_probe.status in [400, 401]
-      no_log: true
-      when:
-        - keycloak_enabled | bool
-        - not ansible_check_mode
-
-    - name: Keycloak takes Argo CD's client secret - not refused
-      ansible.builtin.assert:
-        that:
-          - (_argocd_sso_probe.json | default({})).error | default('') != 'invalid_client'
-        fail_msg: >-
-          REFUSED: Keycloak refuses Argo CD's client secret (invalid_client) - single sign-on is broken; the one this
-          run wrote (KEYCLOAK_ARGOCD_CLIENT_SECRET in ops/.env) is not the argocd client's in the schnappy realm
-        quiet: true
-      when:
         - keycloak_enabled | bool
         - not ansible_check_mode
 
