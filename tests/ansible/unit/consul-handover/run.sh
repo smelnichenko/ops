@@ -141,11 +141,11 @@ check("no root token where it should be: refused, saying so - no step-down", (rc
       (1, True, False))
 rc, out, calls = run(vault, here=None, other=standby)
 check("Vault running here, its status not read: refused (never taken for a standby)", (rc, "REFUSED" in out), (1, True))
-# a slow Vault (each status 1 s): the wait ends by the clock - 4 s after the step-down, give or take a round of reads
-# (2 s) - not after 4 rounds (12 s and more)
+# a slow Vault (each status 1 s; a round while this one stays active reads it alone, then sleeps 1 s): the wait ends
+# by the clock - two reads before it, 4 s of rounds: about 6 s - not after 4 rounds (10 s)
 rc, out, calls = run(vault, here=active, other=standby, seconds=4, STATUS_DELAY="1")
 check("a step-down not taken, each read slow: refused when its time is up, not after its count of tries",
-      (rc, run.took < 11), (1, True))
+      (rc, run.took < 8.5), (1, True))
 rc, out, calls = run(vault, here=standby, other=active)
 check("Vault not active here: nothing done", (rc, "step-down" in calls), (0, False))
 rc, out, calls = run(vault, here=active, other={**standby, "sealed": True})

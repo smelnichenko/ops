@@ -387,9 +387,8 @@
                   export VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem VAULT_CLIENT_TIMEOUT=5 VAULT_MAX_RETRIES=0
                   here=https://{{ hostvars[inventory_hostname]['ansible_host'] }}:8200
                   other=https://{{ hostvars[_other_pi]['ansible_host'] }}:8200
-                  # a status: exit 0 unsealed, 2 sealed - anything else (unreachable, timed out) is none
-                  st() { local out rc; out=$(VAULT_ADDR=$1 vault status -format=json 2> /dev/null); rc=$?
-                    if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then printf '%s' "$out"; fi; }
+                  # a status: its JSON, unsealed (exit 0) or sealed (2); none (unreachable, timed out) reads UNREAD
+                  st() { VAULT_ADDR=$1 vault status -format=json 2> /dev/null; }
                   get() { python3 -c 'import json, sys
                   try:
                       print(json.loads(sys.stdin.read()).get(sys.argv[1]))
