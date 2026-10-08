@@ -29,10 +29,7 @@ JINJA = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.S)
 ARGV_ARGS = {"ansible.builtin.expect": ("command",), "ansible.builtin.git": ("repo",),
              "kubernetes.core.helm": ("set_values",), "ansible.builtin.pip": ("extra_args",)}
 # (file, task name): why it cannot go another way
-ALLOWED = {
-    ("deploy/ansible/playbooks/setup-velero.yml", "Initialize local bare mirror from Forgejo"):
-        "the mirror's clone URL (ten's old Velero mirror; to move to a credential helper)",
-}
+ALLOWED = {}
 
 
 def holders(scope):
