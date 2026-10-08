@@ -146,8 +146,13 @@ iso=tests/ansible/upgrade/isolate-cluster.yml
 check "isolate-cluster.yml writes Vault's Kubernetes auth with bootstrap.sh's keys" \
   "$(sed -n '/vault write auth\/kubernetes\/config/,/> \/dev\/null/p' "$iso" | keys)" \
   "$(sed -n '/^vault write auth\/kubernetes\/config/,/> \/dev\/null/p' bootstrap.sh | keys)"
-check "isolate-cluster.yml: no non-expiring token Secret, none read; the account bound to system:auth-delegator" \
-  "$(grep -c 'service-account-token\|get secret vault-token-reviewer' "$iso") $(grep -c 'name: system:auth-delegator' "$iso")" "0 1"
+check "isolate-cluster.yml: no non-expiring token Secret, none read; External Secrets' account bound to system:auth-delegator" \
+  "$(grep -c 'service-account-token\|get secret vault-token-reviewer' "$iso") $(python3 -c '
+import sys, yaml
+crbs = [t["kubernetes.core.k8s"]["definition"] for p in yaml.safe_load(open(sys.argv[1])) for t in p.get("tasks") or []
+        if (t.get("kubernetes.core.k8s") or {}).get("definition", {}).get("kind") == "ClusterRoleBinding"]
+print(sorted((c["roleRef"]["name"], s["kind"], s.get("namespace"), s["name"]) for c in crbs for s in c["subjects"]))' "$iso")" \
+  "0 [('system:auth-delegator', 'ServiceAccount', 'external-secrets', 'external-secrets')]"
 check "isolate-cluster.yml: the Vagrant Vault verified against its CA, as ten's; the cluster CA in no fixed /tmp file" \
   "$(grep -c 'VAULT_SKIP_VERIFY' "$iso") $(grep -c 'VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem' "$iso") \
 $(sed -n '/Configure Kubernetes auth in the Vagrant Vault/,$p' "$iso" | grep -c '/tmp/')" "0 1 0"
