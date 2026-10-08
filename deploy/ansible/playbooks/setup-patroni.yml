@@ -636,7 +636,9 @@
         line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:{{ _db_port }}/keycloak?targetServerType=any"
       diff: false  # a unit still holding its passwords inline (production's) has KC_DB_PASSWORD two lines below
       register: _keycloak_cfg
-      notify: [Database port changed, Restart Keycloak]
+      # its restart in the play after this one, both Pis in it (tasks/keycloak-restart.yml): the Pi without the VIP
+      # first, guarded, recorded - restarted here one Pi at a time, the VIP's went first, unguarded, unrecorded
+      notify: [Database port changed]
 
     # the restarts now, on this Pi, before its waits below (and before the next Pi: serial)
     - name: The reconfigured services restarted
@@ -690,21 +692,16 @@
         name: forgejo
         state: restarted
 
-    - name: Restart Keycloak
-      ansible.builtin.systemd:
-        name: keycloak
-        state: restarted
-        daemon_reload: true
-      notify: Keycloak serving again
+# Keycloak restarted where its unit changed (its database port, above): both Pis in one play - the Pi without the VIP
+# first, one at a time, guarded, its stamp recorded (setup-pi-services' own restart, the same file)
+- name: Keycloak restarted where its unit changed
+  hosts: pi1,pi2
+  become: true
+  gather_facts: false
 
-    - name: Keycloak serving again
-      ansible.builtin.uri:
-        url: http://localhost:8080/realms/master
-        status_code: 200
-      register: _keycloak_back
-      retries: 60
-      delay: 5
-      until: _keycloak_back.status == 200
+  tasks:
+    - name: Keycloak restarted where pending
+      ansible.builtin.import_tasks: tasks/keycloak-restart.yml
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Patroni cluster

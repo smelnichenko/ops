@@ -34,7 +34,11 @@ vgw = next(t for t in yaml.safe_load(open("deploy/ansible/playbooks/tasks/versit
            if t.get("name", "").startswith("Restart versitygw"))["ansible.builtin.shell"]
 cmds = {n: handlers[n] for n in ("Restart Forgejo", "Restart HAProxy")}
 # Keycloak's: the restart where pending (both tasks run the one script), its unit naming no secrets file here
-kc = next(t for t in pb[0]["tasks"] if t.get("name") == "Keycloak restarted where pending - the Pi without the VIP")
+# (tasks/keycloak-restart.yml - setup-pi-services and setup-patroni import it), each restart one Pi at a time
+kr = yaml.safe_load(open("deploy/ansible/playbooks/tasks/keycloak-restart.yml"))
+kc = next(t for t in kr if t.get("name") == "Keycloak restarted where pending - the Pi without the VIP")
+check("Keycloak's two restarts one Pi at a time (throttle)",
+      [t.get("throttle") for t in kr if str(t.get("name", "")).startswith("Keycloak restarted where pending")], [1, 1])
 unit = os.path.join(work, "keycloak.service")
 open(unit, "w").write("[Service]\n")
 cmds["Restart Keycloak"] = kc["ansible.builtin.shell"]["cmd"].replace("/etc/systemd/system/keycloak.service", unit)

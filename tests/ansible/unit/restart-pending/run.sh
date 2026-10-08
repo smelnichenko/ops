@@ -72,32 +72,42 @@ def tasks_of(node):
         yield node
         for k in ("tasks", "pre_tasks", "post_tasks", "handlers", "block", "rescue", "always"):
             yield from tasks_of(node.get(k))
-users = {}
+def as_run(f):
+    """A playbook's tasks as run: a statically imported task file's in its place."""
+    out = []
+    for t in tasks_of(yaml.safe_load(open(f))):
+        ref = t.get("ansible.builtin.import_tasks")
+        out += list(tasks_of(yaml.safe_load(open(os.path.join(os.path.dirname(f), str(ref)))))) if ref else [t]
+    return out
+def start_reg(expr):
+    return re.search(r"\b(_\w+)\b", expr).group(1)
+users, exprs = {}, {}
 for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml")):
-    ts = list(tasks_of(yaml.safe_load(open(f))))
+    ts = as_run(f)
     for t in ts:
         v = t.get("vars") or {}
         if "restart-pending" in str(t.get("ansible.builtin.include_tasks", "")) and "loaded_started_now" in v:
-            reg = re.match(r"\{\{ (\w+)\.status\.ActiveState", v["loaded_started_now"]).group(1)
+            reg = start_reg(v["loaded_started_now"])
             svc = [(t2.get("ansible.builtin.systemd") or t2.get("ansible.builtin.systemd_service") or {}).get("name")
                    for t2 in ts if t2.get("register") == reg]
-            users[os.path.basename(f)] = (v["loaded_service"], svc)
+            users[(os.path.basename(f), v["loaded_service"])] = svc
+            exprs[(os.path.basename(f), v["loaded_service"])] = v["loaded_started_now"]
+# (setup-patroni's Keycloak: it starts no Keycloak - the restart's, through tasks/keycloak-restart.yml, takes the
+# default: not started now)
 check("loaded_started_now in consul, keepalived, patroni, vault, keycloak: each its own service's systemd register",
-      users, {f"setup-{n}.yml": (s_, [s_]) for n, s_ in (("consul", "consul"), ("keepalived", "keepalived"),
-                                                        ("patroni", "patroni"), ("vault-pi", "vault"),
-                                                        ("pi-services", "keycloak"))})
+      users, {**{(f"setup-{n}.yml", s_): [s_] for n, s_ in (("consul", "consul"), ("keepalived", "keepalived"),
+                                                           ("patroni", "patroni"), ("vault-pi", "vault"),
+                                                           ("pi-services", "keycloak"))},
+              ("setup-patroni.yml", "keycloak"): []})
 # and each one's expression, as Ansible renders it, for what its start task can find: started now from inactive or
 # failed; not when it ran already (active, activating), nor when the status is not there (a default of "running")
 STATES = (("inactive", True), ("failed", True), ("active", False), ("activating", False), (None, False))
-for f in sorted(users):
-    expr = None
-    for t in tasks_of(yaml.safe_load(open(os.path.join("deploy/ansible/playbooks", f)))):
-        v = t.get("vars") or {}
-        if "restart-pending" in str(t.get("ansible.builtin.include_tasks", "")) and "loaded_started_now" in v:
-            expr = v["loaded_started_now"]
-    reg = re.match(r"\{\{ (\w+)\.", expr).group(1)
+for f, svc_ in sorted(exprs):
+    expr = exprs[(f, svc_)]
+    reg = start_reg(expr)
     got = [render(expr, **{reg: {"status": {"ActiveState": st}} if st else {}}) for st, _ in STATES]
-    check(f"{f}: started now - inactive, failed: yes; active, activating, no status: no", got, [w for _, w in STATES])
+    check(f"{f} ({svc_}): started now - inactive, failed: yes; active, activating, no status: no", got,
+          [w for _, w in STATES])
 print("restart-pending: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

@@ -65,7 +65,19 @@ check("step 00 runs the tagged playbook", any("playbook setup-pi-services.yml --
 # credentials' check, every file it names by EnvironmentFile=, the unit, its start and its restart - one left out is
 # undefined there, or the unit names a file the run never wrote (production's Keycloak failed to start)
 doc = load("deploy/ansible/playbooks/setup-pi-services.yml")
-every = list(tasks(doc))
+def expand(ts):
+    """The tasks as run: a statically imported task file's in its place, each with the import's tags."""
+    out = []
+    for t in ts:
+        ref = t.get("ansible.builtin.import_tasks")
+        if ref:
+            for x in tasks(load(os.path.join("deploy/ansible/playbooks", str(ref)))):
+                out.append(dict(x, tags=list(t.get("tags") or []) + list(x.get("tags") or [])))
+        else:
+            out.append(t)
+    return out
+import os  # noqa: E402
+every = expand(list(tasks(doc)))
 tagged = lambda t: "keycloak-db-url" in (t.get("tags") or [])  # noqa: E731
 # the facts derived, not listed: the names the unit's and its secrets file's templates read, back through every task
 # that sets one (its register, its set_fact) to the names that task reads - a guard reading them (an assert, a fail:
@@ -106,9 +118,12 @@ check("every file the unit names by EnvironmentFile= written by a tagged task, i
        [tagged(t) for t in every for m, v in actions(t) if isinstance(v, dict) and v.get("state") == "directory"
         and any(f.startswith(str(v.get("path")) + "/") for f in named)]),
       (True, {f: [True] for f in named}, [True]))
-check("the unit, its start and the credentials' check tagged",
-      [tagged(t) for t in (unit_task, next(t for t in every if t.get("name") == "Enable and start Keycloak"),
-                           next(t for t in every if t.get("name") == "Its credentials are all there"))], [True] * 3)
+check("the unit, its start, Keycloak's wait tagged; the credentials' check on every run (always: another tag's run "
+      "wrote an empty secret - step 25's --tags versitygw)",
+      ([tagged(t) for t in (unit_task, next(t for t in every if t.get("name") == "Enable and start Keycloak"),
+                            next(t for t in every if t.get("name") == "Wait for Keycloak"))],
+       "always" in (next(t for t in every if t.get("name") == "Its credentials are all there").get("tags") or [])),
+      ([True] * 3, True))
 # its restart pending by content (tasks/restart-pending.yml: a restart that failed or was refused stays pending and the
 # next run makes it - a handler fired once and a re-run left the old process running), the Pi without the VIP first
 # (only the VIP's Caddy serves logins: the other's restart costs nothing, and a unit that does not start is found there),
@@ -124,9 +139,30 @@ check("its restart pending by its unit and secrets file, recorded after - both t
        [condition(x.get("when", True), ansible_check_mode=True) for x in (pend or {}, rec or {})]),
       (True, True, [False, False]))
 restarts = [t for t in every if str(t.get("name", "")).startswith("Keycloak restarted where pending")]
-check("two restarts: the Pi without the VIP, then the one with it - both tagged",
+check("two restarts: the Pi without the VIP, then the one with it - both tagged, each one Pi at a time (no VIP on "
+      "either, or on both: the same task on both at once)",
       ([every.index(t) for t in restarts] == sorted(every.index(t) for t in restarts), len(restarts),
-       [tagged(t) for t in restarts]), (True, 2, [True, True]))
+       [tagged(t) for t in restarts], [t.get("throttle") for t in restarts]), (True, 2, [True, True], [1, 1]))
+# the VIP's restart only with both Pis still in the play: one dropped by an earlier failure leaves the VIP's first
+# and alone (the peer guard passes on the old Keycloak still serving there)
+both = next((t for t in every if "ansible_play_hosts_all" in str(t.get("ansible.builtin.assert", ""))), None)
+check("both Pis still in the play before the VIP's restart: checked between the two, tagged; one dropped - refused",
+      (both is not None and len(restarts) == 2 and every.index(restarts[0]) < every.index(both) < every.index(restarts[1]),
+       both is not None and tagged(both),
+       [condition((both or {}).get("ansible.builtin.assert", {}).get("that", "false"), ansible_play_hosts=h,
+                  ansible_play_hosts_all=["pi1", "pi2"]) for h in (["pi1", "pi2"], ["pi1"])]),
+      (True, True, [True, False]))
+# setup-patroni moves its database port: the same restart, both Pis in one play (its own play is one Pi at a time -
+# it restarted pi1, the VIP's, first, with no guard, no stamp: the next setup-pi-services restarted both again)
+pat = load("deploy/ansible/playbooks/setup-patroni.yml")
+pat_every = list(tasks(pat))
+imp = [i for i, q in enumerate(pat) if any("keycloak-restart.yml" in str(t.get("ansible.builtin.import_tasks", ""))
+                                          for t in q.get("tasks") or [])]
+recon = next((i for i, q in enumerate(pat) if "Reconfigure Forgejo + Keycloak" in str(q.get("name"))), None)
+check("setup-patroni: no Keycloak handler or notify; the shared restart in a play of both Pis after its reconfigure",
+      ([t.get("name") for t in pat_every if "Keycloak" in str(t.get("notify", "")) or t.get("name") == "Restart Keycloak"],
+       len(imp) == 1 and recon is not None and imp[0] > recon and not pat[imp[0]].get("serial")
+       and str(pat[imp[0]].get("hosts")) in ("pi1,pi2", "pis")), ([], True))
 if len(restarts) == 2:
     vip_reg = next(t.get("register") for t in every if "keepalived_vip" in str(t.get("ansible.builtin.command", "")))
     def runs(t, pending, vip, check_mode=False):
