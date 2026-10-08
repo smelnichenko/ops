@@ -60,12 +60,12 @@ all:
     # Override the hardcoded prod URLs from setup-pi-services.yml so the
     # registry's WWW-Authenticate redirect points back at the same host.
     forgejo_domain: "192.168.56.20"
-    # setup-argocd: the Vagrant Forgejo (its port, plain http), no certificate check, no Keycloak login, no ingress -
-    # the Vagrant copy's own, never a step's argument (production's run would carry them to ten)
+    # setup-argocd: the Vagrant Forgejo (its port, plain http), no certificate check, no ingress - the Vagrant copy's
+    # own, never a step's argument (production's run would carry them to ten). Single sign-on configured and checked as
+    # production's (argocd_keycloak_enabled: its default) - steps 31 and 33 rehearsed with production's checks
     argocd_forgejo_host: "192.168.56.20:3000"
     forgejo_scheme: http
     argocd_validate_certs: false
-    argocd_keycloak_enabled: false
     argocd_ingress_enabled: false
     forgejo_root_url: "http://192.168.56.20:3000/"
     # Wave 0 files go to the Pi store in parts this small here, so the rehearsal puts them together from several

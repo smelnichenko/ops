@@ -64,6 +64,33 @@ if sso:
     check("checked only with Keycloak on, not in a preview (which wrote no Secret)",
           [condition(sso[0].get("when", True), keycloak_enabled=k, ansible_check_mode=c)
            for k, c in ((True, False), (False, False), (True, True))], [True, False, False])
+# before the Secret is written and the install runs: the client secret this run writes is set, and is the one Argo CD
+# signs in with now while argocd-secret holds it (production's earlier shape) - empty or another, single sign-on broke,
+# found only after the Helm upgrade had switched to it (review 7)
+pre = [t for t in tasks if "ansible.builtin.assert" in t and "argocd_keycloak_client_secret" in str(t["ansible.builtin.assert"])]
+now = next((t for t in tasks if (t.get("kubernetes.core.k8s_info") or {}).get("name") == "argocd-secret"), None)
+check("the client secret checked before its Secret is written and before the install, argocd-secret read before",
+      len(pre) == 1 and now is not None and bool(writes) and tasks.index(now) < tasks.index(pre[0]) < tasks.index(writes[0])
+      < tasks.index(helm), True)
+check("argocd-secret's read no_log (it holds the secrets)", (now or {}).get("no_log"), True)
+if pre and now:
+    def pre_ok(configured, in_use=None, there=True):
+        sec = {"resources": [{"data": dict({"admin.password": "eA=="}, **({} if in_use is None else
+                                           {"oidc.keycloak.clientSecret": base64.b64encode(in_use).decode()}))}]}
+        return condition(pre[0]["ansible.builtin.assert"]["that"], argocd_keycloak_client_secret=configured,
+                         **{now["register"]: sec if there else {"resources": []}})
+    check("set and the one in use: on; set, none in use (moved already, or a new install): on; empty, or another than "
+          "the one in use: refused",
+          [pre_ok("s3cret", b"s3cret"), pre_ok("s3cret"), pre_ok("s3cret", there=False), pre_ok(""),
+           pre_ok("other", b"s3cret")], [True, True, True, False, False])
+    check("checked with Keycloak on, in a preview too (a read: the preview refuses what the run would)",
+          [condition(pre[0].get("when", True), keycloak_enabled=k, ansible_check_mode=c)
+           for k, c in ((True, False), (True, True), (False, False))], [True, True, False])
+# the Vagrant copy runs them: step 31 and 33 rehearsed with the checks production's run makes
+inv = yaml.safe_load(open("deploy/ansible/inventory/vagrant.yml"))
+flat_vars = {k: v for g in inv.values() for k, v in ((g or {}).get("vars") or {}).items()}
+check("the Vagrant copy checks single sign-on as production does (argocd_keycloak_enabled not off)",
+      flat_vars.get("argocd_keycloak_enabled", True), True)
 print("argocd-oidc-secret: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK

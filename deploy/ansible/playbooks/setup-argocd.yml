@@ -17,10 +17,8 @@
 #   ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml \
 #     -e @vars/vault.yml
 #
-#   # Vagrant (no Keycloak SSO, no TLS):
-#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml \
-#     -e forgejo_domain=localhost -e argocd_validate_certs=false \
-#     -e argocd_keycloak_enabled=false -e argocd_ingress_enabled=false
+#   # Vagrant (its inventory holds the copy's own values: its Forgejo, no TLS, no ingress):
+#   ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
 #
 - name: Setup Argo CD
   hosts: target
@@ -231,6 +229,34 @@
     - name: "PHASE 3: Deploy Argo CD controllers"
       ansible.builtin.debug:
         msg: "Installing Argo CD via Helm"
+
+    # single sign-on kept across the switch, judged before anything is written: the client secret this run writes is
+    # set (an unset KEYCLOAK_ARGOCD_CLIENT_SECRET gives none), and is the one Argo CD signs in with now while
+    # argocd-secret holds it (production's earlier shape: $argocd-secret:oidc.keycloak.clientSecret, step 31 moves it) -
+    # empty or another, the Helm upgrade had switched single sign-on to it before the check after it found out
+    - name: The client secret Argo CD signs in with now
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Secret
+        name: argocd-secret
+        namespace: "{{ argocd_namespace }}"
+      register: _argocd_secret_now
+      no_log: true
+      when: keycloak_enabled | bool
+
+    - name: The client secret this run writes - set, and the one in use
+      ansible.builtin.assert:
+        that:
+          - argocd_keycloak_client_secret | default('') | length > 0
+          - >-
+            ((_argocd_secret_now.resources | default([]) | first | default({})).data | default({}))
+            .get('oidc.keycloak.clientSecret', '') in ['', argocd_keycloak_client_secret | b64encode]
+        fail_msg: >-
+          REFUSED: Argo CD's Keycloak client secret (argocd_keycloak_client_secret, KEYCLOAK_ARGOCD_CLIENT_SECRET in
+          ops/.env) is empty, or not the one Argo CD signs in with now (argocd-secret's oidc.keycloak.clientSecret) -
+          nothing written; single sign-on would break
+        quiet: true
+      when: keycloak_enabled | bool
 
     # Keycloak's client secret for Argo CD (the inventory's) in a Secret of its own, named by the OIDC config below
     # ($argocd-oidc-keycloak:clientSecret; Argo CD resolves references only in Secrets labelled part-of argocd): the
