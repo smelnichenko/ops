@@ -38,10 +38,14 @@ check("every firewall rule on each Pi, none on ten", [(runs(t, "pi1", True), run
 check("every firewall rule on a Pi whatever it finds (never skipped for want of UFW)",
       all(runs(t, "pi2", False) for t in rules), True)
 need = [t for t in every if "ansible.builtin.assert" in t and "_ufw" in str(t["ansible.builtin.assert"].get("that"))]
-check("a Pi without UFW refused, ten passes", bool(need) and [
+# UFW there and active: one installed but inactive enforces none of the rules below
+check("a Pi without UFW, or with it inactive, refused; ten passes", bool(need) and [
     condition(need[0]["ansible.builtin.assert"]["that"], inventory_hostname=h, groups={"pis": ["pi1", "pi2"]},
-              _ufw={"stat": {"exists": u}}) for h, u in (("pi1", True), ("pi1", False), ("ten", False))]
-      == [True, False, True], True)
+              _ufw={"stat": {"exists": u}}, _ufw_status=st)
+    for h, u, st in (("pi1", True, {"stdout": "Status: active\n\nTo  Action  From"}),
+                     ("pi1", True, {"stdout": "Status: inactive"}), ("pi1", False, {"skipped": True}),
+                     ("ten", False, {"skipped": True}))]
+      == [True, False, False, True], True)
 print("consul-ports: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCP

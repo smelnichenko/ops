@@ -142,11 +142,24 @@
         path: /usr/sbin/ufw
       register: _ufw
 
-    # the rules below are a Pi's: one without UFW skipped them, RPC and Serf left open to the LAN
-    - name: UFW on every Pi
+    - name: Whether UFW is active here
+      ansible.builtin.command: ufw status
+      register: _ufw_status
+      changed_when: false
+      failed_when: false  # judged below: a status not read is no active firewall
+      check_mode: false  # a read
+      when: _ufw.stat.exists
+
+    # the rules below are a Pi's: one without UFW skipped them, RPC and Serf left open to the LAN - and one with UFW
+    # inactive enforces none of them
+    - name: UFW on every Pi, active
       ansible.builtin.assert:
-        that: inventory_hostname not in groups['pis'] or _ufw.stat.exists
-        fail_msg: "REFUSED: no UFW on {{ inventory_hostname }} - Consul's RPC and Serf would stay open to the LAN"
+        that: >-
+          inventory_hostname not in groups['pis']
+          or (_ufw.stat.exists and (_ufw_status.stdout | default('')) is search('^Status: active', multiline=True))
+        fail_msg: >-
+          REFUSED: no active UFW on {{ inventory_hostname }} - Consul's RPC and Serf would stay open to the LAN
+          ({{ _ufw_status.stdout_lines[0] | default('no ufw') }})
         quiet: true
 
     # RPC and Serf LAN from the three servers only: the RPC port serves what the HTTP API does - the keyring, KV,
