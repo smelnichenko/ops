@@ -29,7 +29,7 @@ def strings(v):
         yield v
 # every URL a task writes into Keycloak's unit (a reader - a grep of the unit - carries no Environment=)
 urls = {}
-for f in files():
+for f in files("deploy/ansible"):
     for t in tasks(load(f)):
         for _, value in actions(t):
             for s in strings(value):
@@ -42,6 +42,14 @@ for f, found in sorted(urls.items()):
         q = u.split("?", 1)[1] if "?" in u else ""
         check(f"{f}: {u} - the driver takes any server, no other server type",
               re.findall(r"(?:^|&)targetServerType=([^&\"']*)", q), ["any"])
+# the copy given production's unit (tests/ansible/upgrade/production-state.yml): its URL as production's Pis have it,
+# before the fix - step 00 moves it
+state = [u for t in tasks(load("tests/ansible/upgrade/production-state.yml")) for _, v in actions(t) for s in strings(v)
+         for u in re.findall(r"Environment=KC_DB_URL=([^\n]+)", s)]
+check("the copy's production state: production's URL (no server type), step 00 moving it to the playbooks'",
+      (state, any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
+                  for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt"))),
+      (["jdbc:postgresql://127.0.0.1:6432/keycloak"], True))
 # one URL's query on every writer: two that differ restart Keycloak on each other's every run
 check("the same query from every writer", len({u.split("?", 1)[-1] for found in urls.values() for u in found}), 1)
 print("keycloak-db-url: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))

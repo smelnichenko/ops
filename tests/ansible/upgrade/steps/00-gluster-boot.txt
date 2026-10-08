@@ -12,3 +12,9 @@
 # each Pi: `systemctl disable gluster-volumes-ready`, `,x-systemd.after=gluster-volumes-ready.service` taken out of the
 # glusterfs lines' options in /etc/fstab, `systemctl daemon-reload` - not rehearsed
 playbook setup-gluster.yml
+# Keycloak's database URL as ops main has it (?targetServerType=any): PgBouncer keeps its first server connection's
+# startup parameters, and one made to the replica (HAProxy's servers up before their first check - a Pi's reboot)
+# kept in_hot_standby=on - Keycloak's default, a primary, refused every connection until PgBouncer restarted (Vagrant
+# full run, 2026-10-08). Production's Pis run the URL without it (read 2026-10-08; the copy's production-state writes
+# it so): the unit rewritten, Keycloak restarted one Pi at a time, the other serving logins meanwhile
+playbook setup-pi-services.yml --tags keycloak-db-url

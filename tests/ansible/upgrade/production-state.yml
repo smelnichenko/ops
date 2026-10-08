@@ -133,3 +133,21 @@
       failed_when: >-
         _wildcard_check.rc != 0 or "Let's Encrypt" not in _wildcard_check.stdout
         or 'DNS:*.pmon.dev' not in _wildcard_check.stdout
+
+# Keycloak's unit as production's Pis have it (read 2026-10-08: its URL without targetServerType) - the file only: the
+# Keycloak running keeps the URL it booted with (the playbooks' own, any server), so nothing on the copy meets
+# PgBouncer's kept startup parameters with it; step 00 writes the playbook's URL and restarts Keycloak one Pi at a time,
+# as it will on production
+- name: Keycloak's unit as production's Pis have it
+  hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Its database URL as production's (no restart)
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/keycloak.service
+        regexp: '^Environment=KC_DB_URL='
+        line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:6432/keycloak"
