@@ -760,6 +760,8 @@
   gather_facts: true
 
   vars:
+    # how long a mounted volume has to answer a stat before its client is said hung
+    mount_answer_seconds: 10
     node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
@@ -907,20 +909,31 @@
     # started here, the store's gateway met pi2's copy still unhealed and crash-looped until the heal landed
 
     # each volume mounted at its own mount point, from itself (one line matching any of them passed: two of three
-    # unmounted passed), and answering - a dead FUSE client stays listed in mountinfo (each read bounded: a hung one
-    # held the play). What the play did: skipped in a preview, which mounts nothing
+    # unmounted passed), and answering - a dead FUSE client stays listed in mountinfo. Each answer bounded without
+    # waiting on it: a stat a hung client holds waits in the kernel, deaf to every signal, and `timeout` waits for its
+    # child all the same - held, the play with it. Polled until its deadline, then left, said; the task's own timeout
+    # the outer bound. What the play did: skipped in a preview, which mounts nothing
     - name: Each backup volume mounted here from itself
       when: not ansible_check_mode
+      timeout: 120
       ansible.builtin.shell: |
         set -uo pipefail
         bad=""
+        d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
         while read -r name mnt; do
           src=$(findmnt -rn -t fuse.glusterfs -o SOURCE -M "$mnt" || true)
           echo "$mnt ${src:-not mounted}"
           if [[ $src != *":/$name" ]]; then
             bad+=" $name ($mnt: ${src:-not mounted})"
-          elif ! err=$(timeout 10 stat -f "$mnt" 2>&1 > /dev/null); then
-            bad+=" $name ($mnt: mounted, not answering: ${err:-no answer in 10 s})"
+            continue
+          fi
+          stat -f "$mnt" < /dev/null > /dev/null 2> "$d/$name" &
+          sp=$!
+          for _ in $(seq $(( {{ mount_answer_seconds }} * 10 ))); do kill -0 "$sp" 2> /dev/null || break; sleep 0.1; done
+          if kill -0 "$sp" 2> /dev/null; then
+            bad+=" $name ($mnt: mounted, no answer in {{ mount_answer_seconds }} s - its client hung)"
+          elif ! wait "$sp"; then
+            bad+=" $name ($mnt: mounted, not answering: $(< "$d/$name"))"
           fi
         done <<< "$VOLUMES"
         [ -z "$bad" ] || { echo "NOT MOUNTED:$bad"; exit 1; }
