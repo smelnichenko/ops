@@ -907,7 +907,8 @@
     # started here, the store's gateway met pi2's copy still unhealed and crash-looped until the heal landed
 
     # each volume mounted at its own mount point, from itself (one line matching any of them passed: two of three
-    # unmounted passed). What the play did: skipped in a preview, which mounts nothing
+    # unmounted passed), and answering - a dead FUSE client stays listed in mountinfo (each read bounded: a hung one
+    # held the play). What the play did: skipped in a preview, which mounts nothing
     - name: Each backup volume mounted here from itself
       when: not ansible_check_mode
       ansible.builtin.shell: |
@@ -916,7 +917,11 @@
         while read -r name mnt; do
           src=$(findmnt -rn -t fuse.glusterfs -o SOURCE -M "$mnt" || true)
           echo "$mnt ${src:-not mounted}"
-          [[ $src == *":/$name" ]] || bad+=" $name ($mnt: ${src:-not mounted})"
+          if [[ $src != *":/$name" ]]; then
+            bad+=" $name ($mnt: ${src:-not mounted})"
+          elif ! err=$(timeout 10 stat -f "$mnt" 2>&1 > /dev/null); then
+            bad+=" $name ($mnt: mounted, not answering: ${err:-no answer in 10 s})"
+          fi
         done <<< "$VOLUMES"
         [ -z "$bad" ] || { echo "NOT MOUNTED:$bad"; exit 1; }
       args:

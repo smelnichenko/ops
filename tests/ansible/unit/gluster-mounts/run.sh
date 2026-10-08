@@ -18,7 +18,14 @@ while [ $# -gt 0 ]; do case "$1" in -M|--mountpoint) mp=$2; shift ;; esac; shift
 src=$(sed -n "s|^$mp=||p" <<< "$MOUNTS")
 [ -n "$src" ] && echo "$src" || exit 1
 STUB
-chmod +x "$W/bin/findmnt"
+# stat -f on a mount point: DEAD="<mount point>" - its FUSE client gone (the kernel answers at once: ENOTCONN), the
+# mount still listed in mountinfo
+cat > "$W/bin/stat" <<'STUB'
+#!/bin/bash
+for a; do [ "$a" != "${DEAD:-}" ] || { echo "stat: cannot read file system information for '$a': Transport endpoint is not connected" >&2; exit 1; }; done
+echo "  File: \"${@: -1}\""
+STUB
+chmod +x "$W/bin/findmnt" "$W/bin/stat"
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM'
 import os, subprocess, sys
 import yaml
@@ -40,10 +47,10 @@ if t:
     sh = t["ansible.builtin.shell"]
     script = render(sh if isinstance(sh, str) else sh["cmd"], backup_volumes=vols)
     env = {k: str(render(str(v), backup_volumes=vols)) for k, v in (t.get("environment") or {}).items()}
-    def run(mounts):
+    def run(mounts, dead=""):
         r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                            env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"],
-                                    MOUNTS="\n".join(mounts), **env))
+                                    MOUNTS="\n".join(mounts), DEAD=dead, **env))
         return r.returncode, r.stdout
     own = [f"{v['mount']}=10.0.0.1:/{v['name']}" for v in vols]
     check("each mounted from itself: passes", run(own)[0], 0)
@@ -53,6 +60,10 @@ if t:
     rc, out = run([own[0].replace(f":/{vols[0]['name']}", f":/{vols[1]['name']}")] + own[1:])
     check(f"{vols[0]['name']}'s mount point serving another volume: fails, named", (rc != 0, vols[0]["name"] in out),
           (True, True))
+    rc, out = run(own, dead=vols[0]["mount"])
+    check(f"{vols[0]['name']} mounted from itself, its client dead (listed, not answering): fails, named",
+          (rc != 0, vols[0]["name"] in out and "NOT MOUNTED" in out), (True, True))
+    check("each mount's answer bounded (a hung one held the play)", "timeout " in script, True)
     check("skipped in a preview (it checks what the play did)",
           [condition(t.get("when", True), ansible_check_mode=cm) for cm in (False, True)], [True, False])
 # the volumes Forgejo and Nexus write have their root's owner kept by Gluster (storage.owner-uid/gid): a heal or a
