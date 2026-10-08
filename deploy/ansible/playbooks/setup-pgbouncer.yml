@@ -90,9 +90,10 @@
         content: "{{ auth_user_password }}"
       no_log: true
 
-    # the superuser's password on stdin, the role's read by psql from its root-only file and quoted by the server
-    # (format %L): neither on a command line (any local user reads those) nor templated into this root shell, where a
-    # quote in either broke out of the SQL
+    # the superuser's password on stdin; the role's sent as a SCRAM-SHA-256 verifier made here from its file (the
+    # postgres user's, 0600) - Postgres logs a failed statement's text (log_min_error_statement), and the password
+    # would be in it - read by psql from its environment and quoted by the server (format %L): neither on a command
+    # line (any local user reads those) nor templated into this root shell, where a quote in either broke out of the SQL
     - name: Provision auth_user role + lookup function in Patroni (run_once)
       ansible.builtin.shell:
         executable: /bin/bash
@@ -100,8 +101,20 @@
         cmd: |
           set -eo pipefail
           read -r PGPASSWORD; export PGPASSWORD
+          PW_VERIFIER=$(python3 - {{ auth_secret_dir }}/auth_user.password <<'PY'
+          import base64, hashlib, hmac, os, sys
+          password = open(sys.argv[1]).read().strip().encode()
+          salt = os.urandom(16)
+          salted = hashlib.pbkdf2_hmac("sha256", password, salt, 4096)
+          stored = hashlib.sha256(hmac.new(salted, b"Client Key", hashlib.sha256).digest()).digest()
+          server = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
+          b64 = lambda x: base64.b64encode(x).decode()
+          print(f"SCRAM-SHA-256$4096:{b64(salt)}${b64(stored)}:{b64(server)}")
+          PY
+          )
+          export PW_VERIFIER
           psql -w -h 127.0.0.1 -p {{ haproxy_port }} -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
-          \set pw `cat {{ auth_secret_dir }}/auth_user.password`
+          \getenv pw PW_VERIFIER
           SELECT 'CREATE ROLE pgbouncer LOGIN' WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer')
           \gexec
           SELECT format('ALTER ROLE pgbouncer WITH PASSWORD %L', :'pw')
