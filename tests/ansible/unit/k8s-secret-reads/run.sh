@@ -41,10 +41,35 @@ PUBLIC = {
                           for line in norm(x).splitlines() if re.search(r"get secret", line))
          and "registry_token" not in str(t) and not re.search(r"curl [^\n]*(-u |--user|-sv|-v )", norm(x))),
 }
-CLI = re.compile(r"\bget\s+secrets?\b[^\n|;&]*?(-o|--output)[ =]*(?!name\b)\S")
-found, public_seen = [], set()
+# kubectl get of a Secret printing more than its name: the resource where it stands among get's flags (-n x secret),
+# quoted, by kind/name, in a list (configmap,secret), its output (-o/--output other than name, a --template) before or
+# after it; the API read straight (get --raw, curl) at a secrets path
+# the API's own path to Secrets (a uri task's url)
+API = re.compile(r"/api/v1/(?:namespaces/[^/\s]+/)?secrets\b")
+RES = r"['\"]?(?:[\w.-]+,)*secrets?(?:\.v1)?(?:,[\w.-]+)*['\"]?(?:/\S+)?(?=[\s'\"]|$)"
+OUT = r"(?:(?:-o|--output)[ =]*['\"]?(?!name\b)\w|--template\b)"
+CLI = re.compile(rf"\bget\b(?:\s+-{{1,2}}[\w-]+(?:[ =][^\s-]\S*)?)*\s+{RES}[^\n|;&]*?{OUT}"
+                 rf"|\bget\b[^\n|;&]*?{OUT}[^\n|;&]*?\s{RES}"
+                 r"|\bget\s+--raw[ =]+['\"]?/api/v1/\S*/secrets\b|\bcurl\b[^\n]*?/api/v1/\S*/secrets\b")
+# the forms it reads, each alone: a Secret's data printed - named; its name alone, another kind - not
+FORMS = ["kubectl get secret x -o json", "kubectl get -n ns secret x -o yaml", "kubectl -n ns get secret x -ojsonpath='{.data}'",
+         "kubectl get -o yaml secret x", "kubectl get 'secret' x -o json", "kubectl get secret/x -o json",
+         "kubectl get configmap,secret -n x -o yaml", "kubectl get secret.v1 x --template '{{.data}}'",
+         "kubectl get --raw /api/v1/namespaces/x/secrets/y", "curl -sf https://k:6443/api/v1/namespaces/x/secrets/y",
+         "kubectl get secrets -n x -o=json"]
+QUIET = ["kubectl get secret x -o name", "kubectl get secrets -n x", "kubectl get configmap x -o yaml",
+         "kubectl get pods -o yaml | grep secret", "kubectl get -n x secret x -o name", "kubectl get secretstores -o yaml"]
+check("a uri task reading the API's Secrets path: read as one; its ConfigMaps' not",
+      [bool(API.search(u)) for u in ("https://k:6443/api/v1/namespaces/x/secrets/y", "https://k:6443/api/v1/secrets",
+                                     "https://k:6443/api/v1/namespaces/x/configmaps/y")], [True, True, False])
+check("each way a Secret's data is printed read as one; its name alone, another kind not",
+      ([f for f in FORMS if not CLI.search(f)], [f for f in QUIET if CLI.search(f)]), ([], []))
+found, public_seen, printed = [], set(), []
+MSG = ("assert", "fail", "debug")
 for f in files():
-    for t in tasks(load(f)):
+    ts = list(tasks(load(f)))
+    secret_regs = set()
+    for t in ts:
         for mod, val in actions(t):
             m = str(mod).split(".")[-1]
             kind = ""
@@ -63,6 +88,8 @@ for f in files():
             elif m in ("shell", "command") and CLI.search(re.sub(r"\\\n\s*", " ", str(
                     val.get("cmd", val.get("argv", val)) if isinstance(val, dict) else val))):
                 what = "prints a Secret"
+            elif m == "uri" and isinstance(val, dict) and API.search(str(val.get("url", ""))) and t.get("register"):
+                what = "reads a Secret through the API"
             if what is None:
                 continue
             key = (f, t.get("name"))
@@ -72,6 +99,20 @@ for f in files():
                     found.append((f, t.get("name"), "named public, prints more: " + PUBLIC[key][0], None))
                 continue
             found.append((f, t.get("name"), what, t.get("no_log")))
+            if what != "writes a Secret" and t.get("register"):
+                secret_regs.add(t["register"])
+    # what such a read registered is printed by no message: an assert's fail_msg, a fail's, a debug's - no_log hid the
+    # task's own output, the message printed the value (test-eso's said the Secret's API_KEY on a mismatch)
+    for t in ts:
+        for mod, val in actions(t):
+            if str(mod).split(".")[-1] in MSG and isinstance(val, dict):
+                msg = " ".join(str(val.get(k, "")) for k in ("fail_msg", "msg", "success_msg", "var"))
+                for r in secret_regs:
+                    for j in re.findall(r"\{\{(.*?)\}\}", msg, re.S) + ([msg] if "var" in val else []):
+                        if re.search(r"\b" + re.escape(r) + r"(\.(stdout|stdout_lines|json|resources|content)\b|\s*(\||$))",
+                                     j.strip()):
+                            printed.append(f"{f}: {t.get('name')}: {r}")
+check("no message prints what a Secret's read registered", sorted(set(printed)), [])
 bad = [x for x in found if x[3] is not True]
 check("every task reading, writing or printing a Secret's data is no_log", len(bad), 0)
 for f, n, w, _ in bad:

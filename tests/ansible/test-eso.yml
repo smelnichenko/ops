@@ -109,7 +109,8 @@
       ansible.builtin.assert:
         that:
           - _k8s_api_key.stdout == initial_value
-        fail_msg: "ESO sync mismatch — expected {{ initial_value }}, k8s Secret has {{ _k8s_api_key.stdout }}"
+        # neither value in the message: the read is no_log, and the message would print it
+        fail_msg: "ESO sync mismatch - the Secret's API_KEY is not the value seeded in Vault (neither printed)"
         success_msg: "ESO synced initial value correctly"
 
     - name: Read k8s Secret EXTRA field
@@ -146,8 +147,8 @@
           fi
           sleep 5
         done
-        echo "rotation timeout: k8s Secret still has $VAL"
-        exit 1
+        # judged below, with no value (the task is no_log - its own failure message was hidden)
+        echo "rotation timeout"
       register: _rotation
       changed_when: false
       no_log: true
@@ -156,6 +157,7 @@
       ansible.builtin.assert:
         that:
           - "'rotated-ok' in _rotation.stdout"
+        fail_msg: "ESO did not pick up the rotation within 90 s - the Secret's API_KEY still not the rotated value"
 
     # ── Cleanup ───────────────────────────────────────────────────────
     - name: Delete ExternalSecret
