@@ -9,7 +9,17 @@ set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 source scripts/lib/process-groups.sh
 W=$(mktemp -d)
-trap 'rm -rf "$W"' EXIT
+sessions=()
+end_sessions() {  # each session this test started (setsid), still leading it - KILLed whole; then its files
+  local x st
+  for x in "${sessions[@]}"; do
+    read -r st 2> /dev/null < "/proc/$x/stat" || continue
+    set -- ${st##*) }
+    [ "$4" = "$x" ] && kill -KILL -- "-$x" 2> /dev/null
+  done
+  rm -rf "$W"
+}
+trap end_sessions EXIT
 fails=0
 check() {  # check <name> <got> <want>
   if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
@@ -141,13 +151,14 @@ check "child_alive: a child reaped" "$(child_alive "$c" && echo child || echo no
 cat > "$W/session-job" <<'JOB'
 #!/bin/bash
 set -m
-bash -c 'trap "" TERM; echo $$ > "$0"; while :; do sleep 0.1; done' "$1.deaf" &
+bash -c 'trap "" TERM; echo $$ > "$0"; for _ in $(seq 600); do sleep 0.1; done' "$1.deaf" &
 set +m
 trap 'exit 143' TERM
 echo $$ > "$1"
-while :; do sleep 0.1; done
+for _ in $(seq 600); do sleep 0.1; done
 JOB
 setsid bash "$W/session-job" "$W/sess" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
 ready "$W/sess" "$W/sess.deaf"
 deaf=$(cat "$W/sess.deaf" 2> /dev/null)
 in_session() {  # in_session <pid> <sid>: the process runs in that session
@@ -166,15 +177,16 @@ in_session "${deaf:-none}" "$s" && kill -KILL "$deaf"
 # kill_named: within a job's session every process of that name KILLed at once (go-task, which would run the step's
 # next command once the running one ended) - not another process of the session, not one of that name outside it
 mkdir -p "$W/named"
-printf '#!/bin/bash\necho $$ > "$1"\nwhile :; do sleep 0.1; done\n' > "$W/named/task"
+printf '#!/bin/bash\necho $$ > "$1"\nfor _ in $(seq 600); do sleep 0.1; done\n' > "$W/named/task"
 chmod +x "$W/named/task"
 cat > "$W/named-job" <<'JOB'
 #!/bin/bash
 "$1/named/task" "$1/in.pid" &
-bash -c 'echo $$ > "$0"; while :; do sleep 0.1; done' "$1/other.pid" &
-while :; do sleep 0.1; done
+bash -c 'echo $$ > "$0"; for _ in $(seq 600); do sleep 0.1; done' "$1/other.pid" &
+for _ in $(seq 600); do sleep 0.1; done
 JOB
 setsid bash "$W/named-job" "$W" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
 "$W/named/task" "$W/out.pid" & o=$!
 ready "$W/in.pid" "$W/other.pid" "$W/out.pid"
 inner=$(cat "$W/in.pid" 2> /dev/null) other=$(cat "$W/other.pid" 2> /dev/null)
@@ -208,7 +220,7 @@ check "a TERM lost: sent again once the job's TERM is at its default - ended by 
 cat > "$W/caught-job" <<'JOB'
 trap 'echo stop >> "$1.n"; bash -c "sleep 1; echo cleaned >> \"\$0.n\"" "$1"; exit 143' TERM
 echo ready > "$1"
-while :; do sleep 0.1; done
+for _ in $(seq 600); do sleep 0.1; done
 JOB
 set -m
 bash "$W/caught-job" "$W/caught.ready" & h=$!
@@ -221,7 +233,7 @@ check "a job catching the TERM: its handler run once, its cleanup's command run 
 # a stopped job (SIGSTOP: a Ctrl-Z, a debugger) acts on no TERM until continued: continued with it - its own stop runs,
 # it ends of the TERM (143); not KILLed after the grace, its stop never run
 set -m
-bash -c 'trap "echo stopped-cleanly > \"\$0.done\"; exit 143" TERM; echo ready > "$0"; while :; do sleep 0.1; done' \
+bash -c 'trap "echo stopped-cleanly > \"\$0.done\"; exit 143" TERM; echo ready > "$0"; for _ in $(seq 600); do sleep 0.1; done' \
   "$W/cont.ready" & h=$!
 set +m
 ready "$W/cont.ready"
@@ -240,7 +252,7 @@ check "a stopped job: continued with the TERM - its own stop run, ended 143, not
 # catches it (its TERM at its default before its exec), then turns its own to its default
 set -m
 bash -c 'trap "" TERM; echo ready > "$0"; sleep 0.5
-  ( trap - TERM; exec bash -c "trap \"echo caught >> \\\"\$0\\\"; exit 143\" TERM; echo \$\$ > \"\$0.pid\"; while :; do sleep 0.1; done" "$0.n" ) &
+  ( trap - TERM; exec bash -c "trap \"echo caught >> \\\"\$0\\\"; exit 143\" TERM; echo \$\$ > \"\$0.pid\"; for _ in \$(seq 600); do sleep 0.1; done" "$0.n" ) &
   until [ -s "$0.n.pid" ]; do sleep 0.05; done; trap - TERM; wait' "$W/after.ready" & h=$!
 set +m
 ready "$W/after.ready"
@@ -254,23 +266,29 @@ check "a lost process's child started after the TERM, catching it: TERMed once -
 # a command after the TERM: it swallows one and runs the step's next command) too, at the next look, not at the
 # grace's end - and what it started since the TERM TERMed once (its handler run, not KILLed)
 mkdir -p "$W/late"
-cat > "$W/late/task" <<'TASK'
+# (it is "task" only once its child has set its trap: the named KILL, at once, otherwise found the child at its
+# default - TERMed so, no handler run; 1 in 12 at one CPU. A copy of sleep named task, the TERM ignored before its exec)
+mkdir -p "$W/late/bin"
+cp "$(command -v sleep)" "$W/late/bin/task"
+cat > "$W/late/start-task" <<'TASK'
 #!/bin/bash
 trap '' TERM
 echo $$ > "$1"
-( trap - TERM; exec bash -c 'trap "echo caught >> \"$0\"; exit 143" TERM; echo $$ > "$0.pid"; while :; do sleep 0.1; done' "$1.n" ) &
-wait
+( trap - TERM; exec bash -c 'trap "echo caught >> \"$0\"; exit 143" TERM; echo $$ > "$0.pid"; for _ in $(seq 600); do sleep 0.1; done' "$1.n" ) &
+for _ in $(seq 100); do [ -s "$1.n.pid" ] && break; sleep 0.05; done
+exec "$(dirname "$0")/bin/task" 60
 TASK
-chmod +x "$W/late/task"
+chmod +x "$W/late/start-task"
 cat > "$W/late-job" <<'JOB'
 #!/bin/bash
 trap 'term=1' TERM
 echo $$ > "$1/late.ready"
 term=""
-while [ -z "$term" ]; do sleep 0.1; done
-"$1/late/task" "$1/late.pid"
+for _ in $(seq 600); do [ -z "$term" ] || break; sleep 0.1; done
+"$1/late/start-task" "$1/late.pid"
 JOB
 setsid bash "$W/late-job" "$W" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
 ready "$W/late.ready"
 t0=$SECONDS
 if mine "$s"; then stop_groups -n task 5 "$s" > "$W/late.out"; fi
@@ -291,6 +309,7 @@ echo $$ > "$1"
 for _ in $(seq 600); do sleep 0.1; done
 JOB
 setsid bash "$W/gap-job" "$W/gap.pid" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
 ready "$W/gap.pid"
 t0=$SECONDS
 if mine "$s"; then
@@ -316,7 +335,7 @@ check "a process forked just before the TERM, losing it: sent it again - ended a
 [ -n "$gchild" ] && in_session "$gchild" "$s" && kill -KILL "$gchild"
 # a process the KILL does not end (uninterruptible - here every KILL lost): not said killed - its PIDs named
 set -m
-bash -c 'trap "" TERM; echo $$ > "$0"; while :; do sleep 0.1; done' "$W/stuck.pid" & h=$!
+bash -c 'trap "" TERM; echo $$ > "$0"; for _ in $(seq 600); do sleep 0.1; done' "$W/stuck.pid" & h=$!
 set +m
 ready "$W/stuck.pid"
 if mine "$h"; then
