@@ -109,6 +109,27 @@ hosts = im.get_hosts(play["hosts"])
 check("the Vagrant copy checks single sign-on as production does (argocd_keycloak_enabled not off on its hosts)",
       (bool(hosts), [vm.get_vars(host=h, include_hostvars=False).get("argocd_keycloak_enabled", True) for h in hosts]),
       (True, [True] * len(hosts)))
+# and Keycloak takes it: the secret this run wrote given to Keycloak's token endpoint for Argo CD's client (its clientID
+# as the OIDC config names it) with no such user - a right secret answered about the user or the grant, a wrong one
+# invalid_client; refused then. A value merely there passed a secret Keycloak refuses (single sign-on broken, unseen)
+names = [t.get("name") for t in tasks]
+probe = next((t for t in tasks if t.get("name") == "Keycloak takes Argo CD's client secret"), None)
+taken = next((t for t in tasks if t.get("name") == "Keycloak takes Argo CD's client secret - not refused"), None)
+cfg_client = re.search(r"clientID: ([\w-]+)", str(tasks))
+u = (probe or {}).get("ansible.builtin.uri") or {}
+check("Keycloak asked for Argo CD's client with the secret this run wrote, after the install; no_log, no redirect",
+      (probe is not None and names.index(probe["name"]) > names.index("Single sign-on configured - the OIDC config's client "
+                                                                      "secret where it points"),
+       str(u.get("url", "")).endswith("/realms/schnappy/protocol/openid-connect/token"),
+       (u.get("body") or {}).get("client_id") == (cfg_client.group(1) if cfg_client else None),
+       "argocd_keycloak_client_secret" in str((u.get("body") or {}).get("client_secret")),
+       (probe or {}).get("no_log"), u.get("follow_redirects")),
+      (True, True, True, True, True, "none"))
+reg = (probe or {}).get("register", "_x")
+that = ((taken or {}).get("ansible.builtin.assert") or {}).get("that") or ["false"]
+judged = lambda err: all(condition(c, **{reg: {"status": 401, "json": {"error": err}}}) for c in that)  # noqa: E731
+check("its answer judged: invalid_client refused; invalid_grant, unauthorized_client taken",
+      [judged(e) for e in ("invalid_client", "invalid_grant", "unauthorized_client")], [False, True, True])
 print("argocd-oidc-secret: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK
