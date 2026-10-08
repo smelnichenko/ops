@@ -1192,6 +1192,12 @@ start - a task var's text is a template, the assert failed on reading it - now `
 task's vars as Ansible loads them; an apostrophe in destroy-environment's free-form shell (5239852, 5d7caf2). Pushed
 at 5d7caf2; full run 10 started 18:08.
 
+Full run 10 failed in its build (18:21): the shared Keycloak restart (92079ee) refused on pi1 - pi2's Keycloak not
+serving. The restore play had started Keycloak on both Pis and gone on; 39 s later pi2's was still starting, and the
+guard reads a Keycloak starting as one down. Mine. The guard stays as strict; a Keycloak a play starts is waited for
+before anything reads it: the restore's on both Pis (a0e0d7d), and setup-pi-services' where it started one that was
+down - the same defect, there in production too (8554aa5).
+
 Left, with why:
 - 55 test-playbook tasks outside the full run, and test-ephemeral-env's `http://admin:<pw>@` URLs: a secret on a
   command line; each needs its own run.
