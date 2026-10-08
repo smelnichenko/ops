@@ -38,14 +38,19 @@ check("every firewall rule on each Pi, none on ten", [(runs(t, "pi1", True), run
 check("every firewall rule on a Pi whatever it finds (never skipped for want of UFW)",
       all(runs(t, "pi2", False) for t in rules), True)
 need = [t for t in every if "ansible.builtin.assert" in t and "_ufw" in str(t["ansible.builtin.assert"].get("that"))]
-# UFW there and active: one installed but inactive enforces none of the rules below
-check("a Pi without UFW, or with it inactive, refused; ten passes", bool(need) and [
-    condition(need[0]["ansible.builtin.assert"]["that"], inventory_hostname=h, groups={"pis": ["pi1", "pi2"]},
-              _ufw={"stat": {"exists": u}}, _ufw_status=st)
-    for h, u, st in (("pi1", True, {"stdout": "Status: active\n\nTo  Action  From"}),
-                     ("pi1", True, {"stdout": "Status: inactive"}), ("pi1", False, {"skipped": True}),
-                     ("ten", False, {"skipped": True}))]
-      == [True, False, False, True], True)
+# UFW there, and active where Consul runs already: an inactive one enforces none of the rules below - Consul open to
+# the LAN now. A first install's (Consul not running yet) is enabled later in the same deploy (setup-vault-pi: the
+# build, a rebuild) - refused, it failed every fresh install
+ACTIVE, INACTIVE, NONE = {"stdout": "Status: active\n\nTo  Action  From"}, {"stdout": "Status: inactive"}, {"skipped": True}
+RUNS, FIRST = {"status": {"ActiveState": "active"}}, {"status": {"ActiveState": "inactive"}}
+check("a Pi without UFW refused; one with it inactive refused where Consul runs, not on a first install; ten passes",
+      bool(need) and [condition(need[0]["ansible.builtin.assert"]["that"], inventory_hostname=h,
+                                groups={"pis": ["pi1", "pi2"]}, _ufw={"stat": {"exists": u}}, _ufw_status=st,
+                                _consul_before=before)
+                      for h, u, st, before in (("pi1", True, ACTIVE, RUNS), ("pi1", True, INACTIVE, RUNS),
+                                               ("pi1", True, INACTIVE, FIRST), ("pi1", False, NONE, FIRST),
+                                               ("ten", False, NONE, RUNS))]
+      == [True, False, True, False, True], True)
 print("consul-ports: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCP

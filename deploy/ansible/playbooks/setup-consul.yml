@@ -151,12 +151,14 @@
       when: _ufw.stat.exists
 
     # the rules below are a Pi's: one without UFW skipped them, RPC and Serf left open to the LAN - and one with UFW
-    # inactive enforces none of them
-    - name: UFW on every Pi, active
+    # inactive enforces none of them where Consul runs already (open to the LAN now). A first install's is enabled later
+    # in the same deploy (setup-vault-pi): refused, it failed every fresh install
+    - name: UFW on every Pi, active where Consul runs
       ansible.builtin.assert:
         that: >-
           inventory_hostname not in groups['pis']
-          or (_ufw.stat.exists and (_ufw_status.stdout | default('')) is search('^Status: active', multiline=True))
+          or (_ufw.stat.exists and ((_ufw_status.stdout | default('')) is search('^Status: active', multiline=True)
+          or _consul_before.status.ActiveState | default('') != 'active'))
         fail_msg: >-
           REFUSED: no active UFW on {{ inventory_hostname }} - Consul's RPC and Serf would stay open to the LAN
           ({{ _ufw_status.stdout_lines[0] | default('no ufw') }})
