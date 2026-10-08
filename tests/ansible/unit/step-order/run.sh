@@ -1,6 +1,6 @@
 #!/bin/bash
 # test:upgrade:step's commands in the order production's procedure takes them (scripts/upgrade-production.py merge):
-# Wave 0 and Tempo's flush, then the images on the node (the copy's preload, production's pre-pull) - all before the
+# Wave 0, the images on the node (the copy's preload, production's pre-pull), then Tempo's flush - all before the
 # step's commits reach Argo (the mirror push, production's merge) - then the settles. The pre-pull after the push let
 # Argo's own poll start the rollout before it, which production never does.
 set -u
@@ -29,6 +29,12 @@ if all(v is not None for v in idx.values()):
           [idx["test:upgrade:wave0"] < push, idx["tempo-flush.yml -e mode=flush"] < push,
            idx["vagrant-preload-images.sh"] < push, idx["prepull-images"] < push, push < idx["argo-settled.yml"]],
           [True] * 5)
+    # Tempo flushed right before the push, as production's merge flushes after its pre-pull: a flush first left the
+    # pre-pull's minutes of spans in Tempo 2's WAL, which Tempo 3 does not replay
+    check("Tempo's flush after the preload and the pre-pull, right before the push",
+          [idx["vagrant-preload-images.sh"] < idx["tempo-flush.yml -e mode=flush"],
+           idx["prepull-images"] < idx["tempo-flush.yml -e mode=flush"], idx["tempo-flush.yml -e mode=flush"] + 1 == push],
+          [True] * 3)
 print("step-order: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYSO

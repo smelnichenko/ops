@@ -549,12 +549,6 @@ tasks:
             echo "=== WAVE 0 $store"
             task test:upgrade:wave0 STORES="$store"
           done
-      # a step that replaces Tempo's major (tempo-flush line): a trace pushed and Tempo flushed before the push, as
-      # production's merge flushes - the trace wanted back after the step (below)
-      - cmd: |
-          if [ -n "{{.TEMPO_FLUSH}}" ]; then
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=flush
-          fi
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # production's pre-pull (playbooks/upgrade-prepull.yml, at the step's merges) on the copy's node, with the images
       # it would pull: the preload's found there, anything else pulled, the image store's room read - the playbook run on
@@ -564,6 +558,12 @@ tasks:
           imgs=$(scripts/upgrade-production.py prepull-images {{.STEP}})
           if [ -n "$imgs" ]; then
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/upgrade-prepull.yml -e "images=$imgs"
+          fi
+      # a step that replaces Tempo's major (tempo-flush line): a trace pushed and Tempo flushed right before the push, as
+      # production's merge flushes after its pre-pull - the trace wanted back after the step (below)
+      - cmd: |
+          if [ -n "{{.TEMPO_FLUSH}}" ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=flush
           fi
       # then the step's commits to Argo (production's merge): the images are on the node by now - a pre-pull after the push
       # raced Argo's own poll
