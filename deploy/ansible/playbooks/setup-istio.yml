@@ -2,7 +2,8 @@
 # Setup Istio sidecar mesh on kubeadm cluster
 #
 # Installs:
-#   - Istio sidecar (base, istiod, cni) - a pod injected by its own label (sidecar.istio.io/inject), no namespace's
+#   - Istio sidecar (base, istiod, cni) - injected per namespace (istio.io/rev=default), a pod opting out by its own
+#     label (sidecar.istio.io/inject: "false")
 #
 # Gateway uses ClusterIP + externalIPs (192.168.11.2) — no LB controller needed.
 #
@@ -123,8 +124,9 @@
       ansible.builtin.debug:
         msg: "istiod and CNI running"
 
-    # no namespace labelled for injection: a pod is injected by its own label (sidecar.istio.io/inject: "true", the
-    # webhook's object selector); production's namespaces carry none (read 2026-10-08)
+    # injection per namespace: production's schnappy-production, schnappy-infra, schnappy-test and kagent carry
+    # istio.io/rev=default (infra's cluster-config; read on ten 2026-10-08), a pod opting out by its own label
+    # (sidecar.istio.io/inject: "false" - the observability charts' and Kafka's)
 
     # ================================================================
     # Phase 2: Verify
