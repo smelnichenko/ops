@@ -174,6 +174,8 @@ kill_named() {  # kill_named <sid> <name>
 stop_groups() {  # stop_groups [-n <command name>] <grace seconds> <pgid>...
   local name="" grace g end now t pass sent=" " procs x left
   local -A term_at=()
+  # the jobs a KILL did not end, for the caller: a wait for one never ends (in the kernel)
+  stop_left=""
   [ "$1" != -n ] || { name=$2; shift 2; }
   grace=$1
   shift
@@ -205,6 +207,7 @@ stop_groups() {  # stop_groups [-n <command name>] <grace seconds> <pgid>...
         left=""
         for x in "${procs[@]}"; do left+=" ${x% *}"; done
         echo "job $g's processes outlived the stop by $grace s - KILL sent, still there:$left"
+        stop_left+=" $g"
       fi
     fi
   done

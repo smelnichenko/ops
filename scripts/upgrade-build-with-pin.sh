@@ -38,7 +38,8 @@ stop() {
   # job's processes - every group of its session - given STOP_GRACE seconds to end (the pin's trap removes its
   # containers), then killed, said: one that ignored the TERM held the stop for good
   [ "${#own[@]}" -eq 0 ] || stop_groups -n task "${STOP_GRACE:-60}" "${own[@]}"
-  for j in "${own[@]}"; do wait "$j" 2> /dev/null; done
+  # (but a job the KILL did not end: a wait for it never ends)
+  for j in "${own[@]}"; do [[ " $stop_left " == *" $j "* ]] || wait "$j" 2> /dev/null; done
   [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
 }
 # the traps before the jobs: a signal between a job's start and its trap left the job running

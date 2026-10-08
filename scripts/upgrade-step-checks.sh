@@ -62,7 +62,8 @@ cleanup() {
   # ended. Each whole - the playbook under a check's subshell too - bounded
   own_jobs groups
   [ "${#groups[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${groups[@]}"
-  wait 2> /dev/null
+  # each job waited for but one the KILL did not end (a wait for it never ends)
+  for j in "${groups[@]}"; do [[ " $stop_left " == *" $j "* ]] || wait "$j" 2> /dev/null; done
   rm -rf "$logs"
 }
 on_signal() {  # on_signal <exit>: a signal's first act - no other cuts the stop short; the checks' bound said

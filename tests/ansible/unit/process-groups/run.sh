@@ -324,6 +324,16 @@ if mine "$h"; then
 fi
 check "a process the KILL did not end: named, not said killed" \
   "$(grep -c 'killed$' "$W/stuck.out") $(grep -c "still there: .*\b$h\b" "$W/stuck.out")" "0 1"
+# and left for its caller in stop_left: a wait for it never ends (in the kernel - every caller's wait after the stop
+# hung on it); each caller waits for its jobs but those
+if mine "$h"; then
+  left_=$( ( kill() { [ "$1" = -KILL ] || builtin kill "$@"; }; stop_groups 1 "$h" > /dev/null; echo "$stop_left" ) )
+fi
+check "the job the KILL did not end left in stop_left" "$([[ " $left_ " == *" $h "* ]] && echo left || echo "[$left_]")" left
+check "every caller's wait after a stop skips stop_left's" \
+  "$(grep -c '\[\[ " \$stop_left " == \*" \$j "\* \]\] || wait "\$j"' scripts/upgrade-build-with-pin.sh \
+     scripts/upgrade-step-checks.sh | tr '\n' ' ')" \
+  "scripts/upgrade-build-with-pin.sh:1 scripts/upgrade-step-checks.sh:1 "
 mine "$h" && kill -KILL -- "-$h"
 wait "$h" 2> /dev/null
 echo "process-groups: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
