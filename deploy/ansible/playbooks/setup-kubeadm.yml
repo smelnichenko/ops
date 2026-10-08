@@ -578,10 +578,24 @@
     # Phase 5b: Install Helm
     # ================================================================
 
-    - name: Install Helm  # noqa: command-instead-of-module risky-shell-pipe
-      ansible.builtin.shell: |
-        curl -fsSL --max-time 120 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-      args:
+    # a pinned release - ten's own (its binary's sha256 read on ten 2026-10-08, equal to this release's) - its sum
+    # checked before anything is installed: get-helm-3 from main piped to bash gave the copy's kubeadm VM, made at each
+    # full run, whatever Helm it installed, unchecked
+    - name: Install Helm
+      vars:
+        helm_version: v3.20.0
+        helm_sha256: dbb4c8fc8e19d159d1a63dda8db655f9ffa4aac1b9a6b188b34a40957119b286
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          [ "$(uname -m)" = x86_64 ] || { echo "REFUSED: Helm's pinned release is amd64's - this host is $(uname -m)"; exit 1; }
+          d=$(mktemp -d)
+          trap 'rm -rf "$d"' EXIT
+          curl -fsSL --max-time 120 -o "$d/helm.tgz" "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+          echo "{{ helm_sha256 }}  $d/helm.tgz" | sha256sum -c --quiet
+          tar -xzf "$d/helm.tgz" -C "$d" linux-amd64/helm
+          install -m 0755 "$d/linux-amd64/helm" /usr/local/bin/helm
         creates: /usr/local/bin/helm
 
     # ================================================================
