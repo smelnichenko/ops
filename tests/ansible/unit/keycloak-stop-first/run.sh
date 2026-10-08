@@ -52,6 +52,12 @@ said = [x for x in (blk or {}).get("rescue") or [] if "KEYCLOAK" in str(x.get("a
 check("the stop and the creation in one block, a failure saying Keycloak is left stopped",
       (blk is not None and any(x is tasks[create] for x in blk["block"]), len(said) == 1,
        any("ansible.builtin.fail" in x for x in (blk or {}).get("rescue") or [])), (True, True, True))
+# said only where Keycloak was stopped: not where the stop was skipped (no dump waiting), nor where it never ran
+if said:
+    stop_reg = tasks[stop].get("register") if stop is not None else None
+    check("the message only where Keycloak was stopped (the stop ran; skipped or never reached: nothing said)",
+          [condition(said[0].get("when", True), **ctx) for ctx in
+           ({stop_reg: {"changed": True}}, {stop_reg: {"skipped": True}}, {})], [True, False, False])
 print("keycloak-stop-first: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK
