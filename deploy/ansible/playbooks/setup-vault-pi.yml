@@ -190,6 +190,15 @@
         - "{{ hostvars['pi1']['ansible_host'] }}"
         - "{{ hostvars['pi2']['ansible_host'] }}"
 
+    # the rule that opened the cluster port to the whole LAN (an older playbook's; production's in both families, read
+    # 2026-10-08) - removed after the narrow ones above, as setup-consul closes Consul's
+    - name: Vault's cluster port no more open to the LAN
+      community.general.ufw:
+        rule: allow
+        port: "8201"
+        proto: tcp
+        delete: true
+
     # ── Vault binary ───────────────────────────────────────────────────
     - name: Check current Vault version
       ansible.builtin.command: /usr/local/bin/vault version
