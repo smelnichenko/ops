@@ -29,6 +29,8 @@ case "${VAULT_ADDR:-}" in
 esac
 case "$*" in
   "status -format=json") sleep "${STATUS_DELAY:-0}"
+    # FAKE_CLOCK: the host's uptime 100 s on at each status read
+    [ -z "${FAKE_CLOCK:-}" ] || { read -r u _ < "$W/uptime"; echo "$(( ${u%.*} + 100 )).00 0.00" > "$W/uptime"; }
     [ -e "$W/$f.json" ] || { echo "Error checking seal status: connection refused" >&2; exit 1; }
     cat "$W/$f.json"; grep -q '"sealed": true' "$W/$f.json" && exit 2; exit 0 ;;
   "operator step-down") [ "$f" = here ] && [ "$VAULT_TOKEN" = ROOT-TOKEN ] || exit 2
@@ -42,10 +44,16 @@ cat > "$W/bin/consul" <<'STUB'
 #!/bin/bash
 echo "consul $*" >> "$W/calls"
 case "$*" in
-  "operator raft list-peers") sleep "${LIST_DELAY:-0}"; l=$(cat "$W/leader")
+  "operator raft list-peers") sleep "${LIST_DELAY:-0}"
+    [ -z "${FAKE_CLOCK:-}" ] || { read -r u _ < "$W/uptime"; echo "$(( ${u%.*} + 100 )).00 0.00" > "$W/uptime"; }
+    # LIST_FAILS_ONCE: the first read after the transfer fails (the election under way)
+    if [ -n "${LIST_FAILS_ONCE:-}" ] && [ -e "$W/transferred" ] && [ ! -e "$W/list-failed" ]; then
+      touch "$W/list-failed"; echo "Error getting peers: Unexpected response code: 500 (No cluster leader)" >&2; exit 1
+    fi
+    l=$(cat "$W/leader")
     echo "Node    ID    Address            State     Voter  RaftProtocol  Commit Index  Trails Leader By"
     for n in pi1 pi2 target; do s=follower; [ "$n" = "$l" ] && s=leader; echo "$n  id-$n  10.0.0.$n:8300  $s  true  3  100  -"; done ;;
-  "operator raft transfer-leader") [ -z "${TRANSFER_TAKES:-}" ] || echo pi2 > "$W/leader" ;;
+  "operator raft transfer-leader") touch "$W/transferred"; [ -z "${TRANSFER_TAKES:-}" ] || echo pi2 > "$W/leader" ;;
   "kv get -detailed pi-tier0-backup/.lock")
     case "${LOCK:-free}" in
       held) printf 'CreateIndex      5\nFlags            3304740253564472344\nKey              pi-tier0-backup/.lock\nLockIndex        1\nModifyIndex      5\nSession          0b1e2f3a-aaaa-bbbb-cccc-1234567890ab\nValue            \n' ;;
@@ -103,7 +111,7 @@ def run(task, here=None, other=None, leader_is="pi1", me="pi1", seconds=2, **env
     v["inventory_hostname"], v["_other_pi"] = me, "pi2" if me == "pi1" else "pi1"
     v["consul_handover_seconds"] = seconds
     env = {"HERE_IP": HOSTS[me], "OTHER_IP": HOSTS[v["_other_pi"]], **env}
-    for f in ("calls", "here.json", "other.json"):
+    for f in ("calls", "here.json", "other.json", "transferred", "list-failed"):
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     for f, d in (("here.json", here), ("other.json", other)):
@@ -112,6 +120,9 @@ def run(task, here=None, other=None, leader_is="pi1", me="pi1", seconds=2, **env
     open(os.path.join(W, "leader"), "w").write(leader_is)
     sh = task["ansible.builtin.shell"]
     sh = render(sh if isinstance(sh, str) else sh["cmd"], **v).replace("/etc/vault-unseal", os.path.join(W, "vu"))
+    if env.get("FAKE_CLOCK"):  # the host's uptime a file the stubs move on
+        sh = sh.replace("/proc/uptime", os.path.join(W, "uptime"))
+        open(os.path.join(W, "uptime"), "w").write("1000.00 0.00")
     t0 = time.monotonic()
     r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
@@ -163,6 +174,16 @@ rc, out, calls = run(leader, leader_is="pi2")
 check("not the leader: nothing done", (rc, "transfer-leader" in calls), (0, False))
 rc, out, calls = run(leader, leader_is="pi1")
 check("a transfer that does not take: refused", (rc, "REFUSED" in out), (1, True))
+rc, out, calls = run(leader, leader_is="pi1", TRANSFER_TAKES="1", LIST_FAILS_ONCE="1")
+check("a read of the peers failing once during the election: read again - moved, passes (never an exit unsaid)",
+      (rc, "LEADERSHIP MOVED" in out), (0, True))
+# the waits on the host's uptime (no wall-clock step moves it): a clock 100 s on at each read ends a 20 s wait at once
+rc, out, calls = run(vault, here=active, other=standby, seconds=20, FAKE_CLOCK="1")
+check("Vault's wait on the host's uptime: past its time at the first round - refused at once, not after 20 s",
+      (rc, "REFUSED" in out, run.took < 5), (1, True, True))
+rc, out, calls = run(leader, leader_is="pi1", seconds=20, FAKE_CLOCK="1")
+check("Consul's wait on the host's uptime: past its time at the first round - refused at once, not after 20 s",
+      (rc, "REFUSED" in out, run.took < 5), (1, True, True))
 rc, out, calls = run(leader, leader_is="pi1", seconds=6, LIST_DELAY="1")
 check("a transfer not taken, each read slow: refused when its time is up, not after its count of tries",
       (rc, run.took < 11), (1, True))
