@@ -15,7 +15,9 @@ unset ANSIBLE_CONFIG
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 W=$W "$PY" - <<'PY' || { echo "FAIL the play could not be built"; exit 1; }
-import os, yaml
+import os, sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition  # noqa: E402
 W = os.environ["W"]
 LOG = os.path.join(W, "log")
 counts = 0
@@ -38,7 +40,11 @@ def stub(t):
     # each Pi's own Keycloak asked on that Pi (delegated to the loop's Pi), for as long as a start takes (240 s, as
     # its restart waits): logged as that Pi serving - any other shape left as written, and it fails here
     if (uri and t.get("delegate_to") == "{{ item }}" and str(uri.get("url", "")) == "http://127.0.0.1:8080/realms/master"
-            and t.get("until") and int(t.get("retries", 0)) * int(t.get("delay", 0)) >= 240):
+            and int(t.get("retries", 0)) * int(t.get("delay", 0)) >= 240
+            # its until as Ansible evaluates it: Keycloak's 200 alone ends the wait - not a refused connection (-1), a
+            # 503 while it starts, no answer
+            and [condition(t.get("until", "false"), **{t.get("register", "_r"): r})
+                 for r in ({"status": 200}, {"status": -1}, {"status": 503}, {})] == [True, False, False, False]):
         return {**keep, "ansible.builtin.shell": f"echo \"{{{{ item }}}} keycloak serving\" >> {LOG}"}
     if "psql" in str(t.get("ansible.builtin.shell", "")):
         # the restore as the case says: done, or failed (psql's error, the database left empty - one transaction)
