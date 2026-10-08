@@ -38,6 +38,21 @@
           - env_name != "production"
         fail_msg: "Cannot destroy production (got: '{{ env_name | default('undefined') }}')"
 
+    # before the infra checkout is read or written: on main, nothing uncommitted or untracked (pushed with this
+    # environment's change otherwise), up to date - the check below reads it, the tasks after write it
+    - name: The infra checkout ready
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/scripts/git-commit-push.sh ready '{{ infra_dir }}' '{{ infra_git_url }}'"
+      delegate_to: localhost
+      become: false
+      changed_when: "'UPDATED' in _infra_ready.stdout"
+      register: _infra_ready
+      environment:
+        GIT_AUTHOR_NAME: "env-automation"
+        GIT_AUTHOR_EMAIL: "automation@pmon.dev"
+        GIT_COMMITTER_NAME: "env-automation"
+        GIT_COMMITTER_EMAIL: "automation@pmon.dev"
+
     - name: Check environment exists
       ansible.builtin.stat:
         path: "{{ cluster_dir }}/{{ env_ns }}-data/values.yaml"
