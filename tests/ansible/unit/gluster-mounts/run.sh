@@ -26,7 +26,10 @@ cat > "$W/bin/stat" <<'STUB'
 #!/bin/bash
 for a; do [ "$a" != "${HUNG:-}" ] || { echo $$ > "$W/hung.pid"; trap '' TERM; while :; do sleep 1; done; }; done
 for a; do [ "$a" != "${DEAD:-}" ] || { echo "stat: cannot read file system information for '$a': Transport endpoint is not connected" >&2; exit 1; }; done
-echo "  File: \"${@: -1}\""
+# a path nothing is mounted at: a new Pi's mount point not made yet - none there
+p=${@: -1}
+grep -q "^$p=" <<< "${MOUNTS:-}" || { echo "stat: cannot read file system information for '$p': No such file or directory" >&2; exit 1; }
+echo "  File: \"$p\""
 STUB
 chmod +x "$W/bin/findmnt" "$W/bin/stat"
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM'

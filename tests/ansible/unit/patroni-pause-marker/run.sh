@@ -299,6 +299,12 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
     check(f"{book}: its marker gone, the cluster not paused (resumed and cleared already): nothing to do - passes, said",
           r.returncode == 0 and "NOTHING TO RESUME" in r.stdout and "patronictl resume" not in acts(calls),
           (r.returncode, r.stdout, r.stderr, calls, kv))
+    # its marker gone, the config resumed, a member still paused (Patroni's resume half taken): no "nothing to resume" -
+    # refused, the member named
+    r, calls, kv = run(rs, env=renv("MARKER 7"), members_paused=(False, True))
+    check(f"{book}: its marker gone, a member still paused: refused - never 'nothing to resume'",
+          r.returncode != 0 and "NOTHING TO RESUME" not in r.stdout and "patronictl resume" not in acts(calls),
+          (r.returncode, r.stdout, r.stderr, calls, kv))
     # the task retried: one failed read (a Consul blip, likely while the block's own failure is Consul's) is no paused
     # cluster for good - the marker kept until the resume is proven makes a retry safe
     got = (bool(rs.get("register")), int(rs.get("retries", 0)) >= 3,

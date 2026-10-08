@@ -193,7 +193,9 @@ wait "$s" 2> /dev/null
 # nor ignored - alive so, the TERM never reached it. Here a job deaf at the first TERM, at its default after: it ends of
 # that TERM at once - not KILLed after the grace
 set -m
-bash -c 'trap "" TERM; echo ready > "$0"; sleep 0.5; trap - TERM; sleep 30' "$W/late.ready" & h=$!
+# (`sleep 30; :` - its last command not exec'd in bash's place: bash stays its parent, the sleep one the job started
+# after the TERM - sent again too, as a lost process's own)
+bash -c 'trap "" TERM; echo ready > "$0"; sleep 0.5; trap - TERM; sleep 30; :' "$W/late.ready" & h=$!
 set +m
 ready "$W/late.ready"
 t0=$SECONDS
