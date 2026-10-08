@@ -40,34 +40,33 @@ _loader.exec_module(mo)
 
 
 def helm_binary(version):
-    """The official linux-amd64 binary of that Helm version, verified against its published sha256. One cached here is
-    used only as what it says it is - the version asked for; anything else (left by hand, another build) fetched again."""
+    """The official linux-amd64 binary of that Helm version, from its archive verified against the published sha256 at
+    each use: the archive kept here, fetched again when it is not the published one; the binary taken from it afresh.
+    Nothing cached is run on its word - a binary left in its place (by hand, a wrong build, a plant) said the version
+    asked for and was trusted."""
     path = os.path.join(BIN, version, "helm")
-    if os.path.exists(path):
-        try:
-            said = subprocess.run([path, "version", "--template", "{{.Version}}"], capture_output=True, text=True,
-                                  timeout=30).stdout.strip()
-        except (OSError, subprocess.TimeoutExpired):
-            said = ""
-        if said == f"v{version}":
-            return path
-        os.remove(path)
-    url = f"https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz"
-    archive = urllib.request.urlopen(url, timeout=120).read()
+    name = f"helm-v{version}-linux-amd64.tar.gz"
+    url = f"https://get.helm.sh/{name}"
     want = urllib.request.urlopen(url + ".sha256sum", timeout=60).read().decode().split()[0]
+    kept = os.path.join(BIN, version, name)
+    archive = open(kept, "rb").read() if os.path.exists(kept) else b""
     if hashlib.sha256(archive).hexdigest() != want:
-        sys.exit(f"helm {version}: the archive's sha256 is not the published one")
+        archive = urllib.request.urlopen(url, timeout=120).read()
+        if hashlib.sha256(archive).hexdigest() != want:
+            sys.exit(f"helm {version}: the archive's sha256 is not the published one")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    # written beside it and moved into place whole: one cut short left a partial helm that every later run used
-    fd, part = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".helm-")
-    try:
-        with os.fdopen(fd, "wb") as f, tarfile.open(fileobj=io.BytesIO(archive)) as t:
-            f.write(t.extractfile("linux-amd64/helm").read())
-        os.chmod(part, 0o755)
-        os.replace(part, path)
-    finally:
-        if os.path.exists(part):
-            os.remove(part)
+    # each written beside its place and moved there whole: one cut short left a partial helm that every later run used
+    for dest, data in ((kept, lambda: archive), (path, lambda: tarfile.open(fileobj=io.BytesIO(archive))
+                                                 .extractfile("linux-amd64/helm").read())):
+        fd, part = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".helm-")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data())
+            os.chmod(part, 0o755 if dest == path else 0o644)
+            os.replace(part, dest)
+        finally:
+            if os.path.exists(part):
+                os.remove(part)
     return path
 
 

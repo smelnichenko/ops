@@ -182,21 +182,33 @@ try:
     except KeyboardInterrupt:
         pass
     left = sorted(os.listdir(os.path.join(bins, "9.9.9"))) if os.path.isdir(os.path.join(bins, "9.9.9")) else []
-    fails += not check_("a download cut short leaves no helm, no partial file", left == [], left)
+    fails += not check_("a download cut short leaves no helm, no partial file (the verified archive, whole, may stay)",
+                        [f for f in left if f == "helm" or f.startswith(".helm-")] == [], left)
     tarfile.TarFile.extractfile = saved[2]
     path = fresh.helm_binary("9.9.9")
     fails += not check_("the next run downloads it whole, executable", (open(path, "rb").read(), os.access(path, os.X_OK))
                         == (HELM, True), path)
-    # a cached binary is used only as what it says it is: the version asked for - another (a file left by hand, a
-    # wrong build) fetched again
+    # nothing cached is run on its word: the archive kept, checked against the published sha256 at each use (only that
+    # fetched), the binary taken from it afresh - one left in its place (by hand, a wrong build, a plant) never run
     fetched.clear()
     fresh.helm_binary("9.9.9")
-    fails += not check_("the cached binary, the version asked for: used, nothing fetched", fetched == [], fetched)
-    open(path, "wb").write(b'#!/bin/sh\necho v1.0.0\n')
+    fails += not check_("the cached archive, its published sha256 matching: only the sum fetched",
+                        [u.endswith(".sha256sum") for u in fetched] == [True], fetched)
+    ran = os.path.join(bins, "ran")
+    open(path, "wb").write(f'#!/bin/sh\ntouch {ran}\necho v9.9.9\n'.encode())
     os.chmod(path, 0o755)
-    fresh.helm_binary("9.9.9")
-    got = (len(fetched) > 0, open(path, "rb").read())
-    fails += not check_("a cached binary of another version: fetched again", got == (True, HELM), got)
+    fetched.clear()
+    got_path = fresh.helm_binary("9.9.9")
+    got = (open(got_path, "rb").read(), os.path.exists(ran), [u.endswith(".sha256sum") for u in fetched])
+    fails += not check_("a binary left in its place (saying the version asked for): never run, replaced from the archive",
+                        got == (HELM, False, [True]), got)
+    arc = [f for f in os.listdir(os.path.join(bins, "9.9.9")) if f.endswith(".tar.gz")]
+    open(os.path.join(bins, "9.9.9", arc[0]), "wb").write(archive(b"#!/bin/sh\necho planted\n"))
+    fetched.clear()
+    got_path = fresh.helm_binary("9.9.9")
+    got = (open(got_path, "rb").read(), sorted(u.rsplit("/", 1)[1] for u in fetched))
+    fails += not check_("a cached archive not the published one: fetched again, verified, the binary from it",
+                        got == (HELM, ["helm-v9.9.9-linux-amd64.tar.gz", "helm-v9.9.9-linux-amd64.tar.gz.sha256sum"]), got)
 finally:
     fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile = saved
 print("argo-helm-diff: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
