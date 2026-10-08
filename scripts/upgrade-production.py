@@ -806,7 +806,8 @@ def package_status(name, version):
         if sep:
             fields[key] = value
     request = urllib.request.Request(f"https://git.pmon.dev/api/v1/packages/schnappy/container/{name}/{version}")
-    request.add_header("Authorization", "Basic " + base64.b64encode(
+    # off any redirect: urllib keeps an ordinary header on one, to whatever host it names
+    request.add_unredirected_header("Authorization", "Basic " + base64.b64encode(
         f"{fields['username']}:{fields['password']}".encode()).decode())
     try:
         with urllib.request.urlopen(request, timeout=30) as response:

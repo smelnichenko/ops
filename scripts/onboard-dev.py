@@ -100,12 +100,15 @@ def http(url, method="GET", token=None, basic=None, data=None):
     if data is not None:
         body = json.dumps(data).encode()
         headers["Content-Type"] = "application/json"
+    auth = None
     if token:
-        headers["Authorization"] = "Bearer " + token
+        auth = "Bearer " + token
     if basic:
-        headers["Authorization"] = "Basic " + base64.b64encode(
-            f"{basic[0]}:{basic[1]}".encode()).decode()
+        auth = "Basic " + base64.b64encode(f"{basic[0]}:{basic[1]}".encode()).decode()
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    if auth:
+        # off any redirect: urllib keeps an ordinary header on one, to whatever host it names
+        req.add_unredirected_header("Authorization", auth)
     try:
         resp = urllib.request.urlopen(req, timeout=20)
         raw = resp.read()

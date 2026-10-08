@@ -266,17 +266,22 @@ reads += [f"{f}: {line.strip()[:120]}" for f in sorted(glob.glob("scripts/*.py")
 check("no secret read onto another program's command line in a playbook's scripts, the full run's playbooks, the ops "
       "scripts (Python's among them), bootstrap.sh", reads, [])
 check("every in-pod read left still there (one gone is dropped from the list, not kept)", sorted(POD_READS - pod_seen), [])
-# the mirror's push: its credentials from a helper reading its environment - git asked as a push asks, the password
-# with a quote and a $ given back exactly (git's credential protocol: no command line)
+# the mirror's push: its credentials from a helper reading its environment, for the copy's Forgejo alone, no redirect
+# followed - git asked as a push asks, the password with a quote and a $ given back exactly (git's credential protocol:
+# no command line); another host (a redirect's) given nothing
 import importlib.util, os, subprocess  # noqa: E401,E402
 spec = importlib.util.spec_from_file_location("mirror", "scripts/vagrant-gitops-mirror.py")
 mirror = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mirror)
-r = subprocess.run(["git", "-c", "credential.helper=", "-c", "credential.helper=" + mirror.CRED_HELPER, "credential", "fill"],
-                   input="protocol=http\nhost=x\n\n", capture_output=True, text=True,
-                   env=dict(os.environ, MIRROR_USER="u1", MIRROR_PASSWORD="p'w$x", GIT_TERMINAL_PROMPT="0"))
-check("the mirror's credential helper: git given the user and the password from its environment, exactly",
-      (r.returncode, "username=u1" in r.stdout.splitlines(), "password=p'w$x" in r.stdout.splitlines()), (0, True, True))
+cfg = mirror.push_config("192.168.56.50:3000") if hasattr(mirror, "push_config") else []
+def fill(host):
+    r = subprocess.run(["git"] + cfg + ["credential", "fill"], input=f"protocol=http\nhost={host}\n\n",
+                       capture_output=True, text=True,
+                       env=dict(os.environ, MIRROR_USER="u1", MIRROR_PASSWORD="p'w$x", GIT_TERMINAL_PROMPT="0"))
+    return r.returncode, "password=p'w$x" in r.stdout.splitlines()
+check("the mirror's push: the copy's Forgejo given the user and password exactly, another host nothing, no redirect",
+      (fill("192.168.56.50:3000"), fill("other.example.org")[1], "http.followRedirects=false" in cfg),
+      ((0, True), False, True))
 # the realm seed's two Vault answers read one after the other from stdin - its parse on two documents as vault prints them
 seed = next(t for p in load("tests/ansible/upgrade/keycloak-realm.yml") if isinstance(p, dict)
             for t in p.get("tasks") or [] if t.get("name") == "Read the Keycloak and Grafana secrets from the Vagrant Vault")

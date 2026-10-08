@@ -110,6 +110,13 @@ HELM_KEY = re.compile(r"^(?P<indent>\s*)helm:\s*$")
 CRED_HELPER = ('!f() { test "$1" = get && printf \'username=%s\\npassword=%s\\n\' "$MIRROR_USER" "$MIRROR_PASSWORD"; }; f')
 
 
+def push_config(forgejo):
+    """git's -c options for a push to the copy's Forgejo: other helpers reset, this one for that URL alone, no redirect
+    followed (one off the host would be asked for, and given, the credentials)."""
+    return ["-c", "credential.helper=", "-c", f"credential.http://{forgejo}.helper=" + CRED_HELPER,
+            "-c", "http.followRedirects=false"]
+
+
 def run(*cmd, cwd=None):
     subprocess.run(cmd, cwd=cwd, check=True)
 
@@ -117,7 +124,8 @@ def run(*cmd, cwd=None):
 def api(base, user, password, method, path, body=None, ok=(200, 201)):
     req = urllib.request.Request(f"http://{base}/api/v1{path}", method=method,
                                  data=json.dumps(body).encode() if body is not None else None)
-    req.add_header("Authorization", "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode())
+    # off any redirect: urllib keeps an ordinary header on one, to whatever host it names
+    req.add_unredirected_header("Authorization", "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode())
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
@@ -277,7 +285,7 @@ def main():
                 "commit", "-q", "--allow-empty", "-m", f"vagrant overlay on {name} {ref} {head}")
             # the credentials from git's credential helper, read from its environment - in the URL they were on
             # git's and git-remote-http's command lines (any local user reads those)
-            subprocess.run(["git", "-C", repo, "-c", "credential.helper=", "-c", "credential.helper=" + CRED_HELPER,
+            subprocess.run(["git", "-C", repo] + push_config(a.forgejo) + [
                             "push", "-q", "--force", f"http://{a.forgejo}/schnappy/{name}.git", "HEAD:main"],
                            check=True, env=dict(os.environ, MIRROR_USER=user, MIRROR_PASSWORD=password))
             pushed[f"http://{a.forgejo}/schnappy/{name}.git"] = subprocess.run(
