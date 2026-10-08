@@ -124,8 +124,9 @@ if dist:
             code = ("import json, sys; sys.path.insert(0, 'tests/ansible/unit'); from templar import condition; "
                     "from ansible.plugins.loader import init_plugin_loader; init_plugin_loader(); "
                     "print(condition(json.loads(sys.argv[1]), **json.loads(sys.argv[2])))")
+            # the task's own vars, as Ansible gives the assert them
             r = subprocess.run([sys.executable, "-c", code, json.dumps(gate["ansible.builtin.assert"]["that"]),
-                                json.dumps(hv)], capture_output=True, text=True,
+                                json.dumps({**(gate.get("vars") or {}), **hv})], capture_output=True, text=True,
                                env={"HOME": os.environ["HOME"], "PATH": os.environ["PATH"], "ANSIBLE_CONFIG": cfg,
                                     "PYTHONDONTWRITEBYTECODE": "1", **(env or {})})
             return r.stdout.strip() or r.stderr.strip()[-200:]

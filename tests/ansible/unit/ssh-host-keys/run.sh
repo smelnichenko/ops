@@ -78,10 +78,16 @@ for name, var in (("its own word", "host_keys_unchecked_rebuilt_vms: true"),
 import glob
 srcs = sorted(glob.glob("playbooks/**/*.yml", recursive=True) + glob.glob("playbooks/scripts/*")
               + glob.glob("../../scripts/*") + ["../../bootstrap.sh"])
-# a comment's words, and setup-vault-pi's own detector (its pattern) aside
+# a comment's words, and setup-vault-pi's own detector (its list of the spellings) aside
+detector = {e for p in yaml.safe_load(open("playbooks/setup-vault-pi.yml")) for t in p.get("tasks") or []
+            for e in (t.get("vars") or {}).get("_unchecked_ssh") or []}
+def own_entry(line):
+    x = line.strip()
+    return x.startswith("- ") and x[2:].strip().strip("'\"") in detector
 hits = [f"{os.path.relpath(f, '../..')}:{n}" for f in srcs if os.path.isfile(f)
         for n, line in enumerate(open(f, errors="replace"), 1)
-        if OFF.search(line) and not line.lstrip().startswith("#") and "is not search(" not in line]
+        if OFF.search(line) and not line.lstrip().startswith("#") and not own_entry(line)]
+check("the detector's spellings found to set aside", len(detector), 4)
 # the Taskfile's production tasks (deploy:*, or any on the production inventory) - its Vagrant ones reach the copy's VMs
 tf = yaml.safe_load(open("../../Taskfile.yml"))["tasks"]
 for name, t in tf.items():
@@ -94,11 +100,12 @@ check(f"nothing production runs turns ssh's key check off ({len(srcs)} files, th
 vp = [t for p in yaml.safe_load(open("playbooks/setup-vault-pi.yml")) for t in p.get("tasks") or []
       if t.get("name") == "Host keys checked - the shares only to pi2 itself"]
 that = vp[0]["ansible.builtin.assert"]["that"] if vp else []
-pat = re.search(r"is not search\('(.*?)', ignorecase=True\)", " ".join(that))
-check("the assert's ssh-argument pattern refuses every spelling, passes checked ones",
-      ([f for f in forms + ["-F /etc/x"] if not re.search(pat.group(1), f, re.I)] if pat else None,
-       [f for f in ["-o StrictHostKeyChecking=yes", "-o ServerAliveInterval=15"] if re.search(pat.group(1), f, re.I)]
-       if pat else None), ([], []))
+unchecked = "|".join((vp[0].get("vars") or {}).get("_unchecked_ssh") or []) if vp else ""
+check("the assert's ssh-argument pattern (its list, joined) read by it, refuses every spelling, passes checked ones",
+      ("is not search(_unchecked_ssh | join('|'), ignorecase=True)" in " ".join(" ".join(that).split()),
+       [f for f in forms + ["-F /etc/x"] if not (unchecked and re.search(unchecked, f, re.I))],
+       [f for f in ["-o StrictHostKeyChecking=yes", "-o ServerAliveInterval=15"] if unchecked and re.search(unchecked, f, re.I)]),
+      (True, [], []))
 # Ansible's own check off, as the copy's run has it (its config lookup put as that value)
 LOOKUP = "lookup('ansible.builtin.config', 'host_key_checking', plugin_type='connection', plugin_name='ssh') | bool"
 first = " ".join(str(that[0]).split()) if that else ""

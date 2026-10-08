@@ -810,6 +810,13 @@
     # pi2 on the Vagrant network - a production inventory saying it would send the shares unchecked. No backslash in
     # the patterns: a conditional's string literals are read as Jinja reads escapes
     - name: Host keys checked - the shares only to pi2 itself
+      vars:
+        # ssh's ways to take a host's key unchecked, any one of them
+        _unchecked_ssh:
+          - 'StrictHostKeyChecking[= ]+"?(no|off|false|accept-new)'
+          - '(User|Global)KnownHostsFile[= ]+"?/dev/null'
+          - KnownHostsCommand
+          - '(^|[ ])-F[ ]'
       ansible.builtin.assert:
         that:
           - >-
@@ -822,7 +829,7 @@
             or (lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_common_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_extra_args', plugin_type='connection', plugin_name='ssh'))
-            is not search('StrictHostKeyChecking[= ]+"?(no|off|false|accept-new)|(User|Global)KnownHostsFile[= ]+"?/dev/null|KnownHostsCommand|(^|[ ])-F[ ]', ignorecase=True)
+            is not search(_unchecked_ssh | join('|'), ignorecase=True)
         fail_msg: "REFUSED: host keys not checked - a host answering as pi2 would get every key share"
         quiet: true
 
