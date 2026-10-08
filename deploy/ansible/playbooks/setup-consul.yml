@@ -142,6 +142,13 @@
         path: /usr/sbin/ufw
       register: _ufw
 
+    # the rules below are a Pi's: one without UFW skipped them, RPC and Serf left open to the LAN
+    - name: UFW on every Pi
+      ansible.builtin.assert:
+        that: inventory_hostname not in groups['pis'] or _ufw.stat.exists
+        fail_msg: "REFUSED: no UFW on {{ inventory_hostname }} - Consul's RPC and Serf would stay open to the LAN"
+        quiet: true
+
     # RPC and Serf LAN from the three servers only: the RPC port serves what the HTTP API does - the keyring, KV,
     # sessions (the backups' lock), snapshots of Vault's storage - and no ACLs guard it. The narrow rules first, then
     # the open ones removed: Serf never loses its peers in between
@@ -158,7 +165,7 @@
           - { port: "8300", proto: "tcp", name: "RPC" }
           - { port: "8301", proto: "tcp", name: "Serf LAN" }
           - { port: "8301", proto: "udp", name: "Serf LAN UDP" }
-      when: _ufw.stat.exists
+      when: inventory_hostname in groups['pis']
 
     # the rules that opened RPC and Serf to the whole LAN, the WAN ports (one datacenter - nothing joins over WAN) and
     # the HTTP API (on the node itself only, client_addr below: Vault, Patroni, HAProxy's resolver and the backups'
@@ -176,7 +183,7 @@
         - { port: "8302", proto: "tcp" }
         - { port: "8302", proto: "udp" }
         - { port: "8500", proto: "tcp" }
-      when: _ufw.stat.exists
+      when: inventory_hostname in groups['pis']
 
     - name: Write Consul config
       ansible.builtin.copy:
@@ -196,6 +203,10 @@
           # its HTTP API and DNS for this node only - every caller is local (Vault, Patroni, HAProxy, the backups'
           # lock); open to the LAN, anyone there read the gossip keyring, wrote KV and took the backups' lock
           client_addr = "127.0.0.1"
+          # one datacenter: no WAN serf (its port is closed above - left on, every server logged its WAN peers failed)
+          ports {
+            serf_wan = -1
+          }
 
           retry_join = ["{{ pi1_ip }}", "{{ pi2_ip }}", "{{ ten_ip }}"]
 
