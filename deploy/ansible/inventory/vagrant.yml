@@ -10,6 +10,10 @@ all:
   vars:
     ansible_user: vagrant
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+    # the VMs are rebuilt each run, each with a new host key: none is checked - said here, the copy's alone, for the
+    # asserts that require it elsewhere (setup-vault-pi's key shares); production's inventory never sets it
+    # (tests/ansible/unit/ssh-host-keys)
+    host_keys_unchecked_rebuilt_vms: true
     # Override default IP (Vagrant NAT) with private network IP for service binding
     node_ip_override: "{{ ansible_host }}"
     # setup-pi-services runs BEFORE Patroni, so Forgejo/Keycloak talk to raw

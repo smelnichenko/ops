@@ -790,13 +790,17 @@
         quiet: true
 
     # the shares go to the host pi2 is: its host key checked - by Ansible (host_key_checking, as this run has it) and
-    # by ssh (no argument of this run's turning it off)
+    # by ssh (no argument of this run's turning it off). The Vagrant copy's VMs, rebuilt each run with new keys, check
+    # none: said by its inventory alone (host_keys_unchecked_rebuilt_vms)
     - name: Host keys checked - the shares only to pi2 itself
       ansible.builtin.assert:
         that:
-          - lookup('ansible.builtin.config', 'host_key_checking', plugin_type='connection', plugin_name='ssh') | bool
           - >-
-            (lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
+            host_keys_unchecked_rebuilt_vms | default(false) | bool
+            or lookup('ansible.builtin.config', 'host_key_checking', plugin_type='connection', plugin_name='ssh') | bool
+          - >-
+            host_keys_unchecked_rebuilt_vms | default(false) | bool
+            or (lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_common_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_extra_args', plugin_type='connection', plugin_name='ssh'))
             is not search('StrictHostKeyChecking[= ]*(no|off|accept-new)|UserKnownHostsFile[= ]*/dev/null', ignorecase=True)

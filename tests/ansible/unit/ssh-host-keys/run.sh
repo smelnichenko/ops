@@ -37,6 +37,9 @@ def offs(inventory):
                   "ansible_sftp_extra_args"):
             if OFF.search(str(v.get(k, ""))):
                 out.add(h.name)
+        # the Vagrant copy's own word that its VMs' keys go unchecked (setup-vault-pi's key-share assert takes it)
+        if str(v.get("host_keys_unchecked_rebuilt_vms", "")).lower() in ("true", "yes", "1", "on"):
+            out.add(h.name)
         for k in ("ansible_host_key_checking", "ansible_ssh_host_key_checking"):
             if k in v and str(v[k]).lower() in ("false", "no", "0", "off"):
                 out.add(h.name)
