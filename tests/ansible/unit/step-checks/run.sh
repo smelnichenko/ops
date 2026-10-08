@@ -94,6 +94,8 @@ check "wait -n with no check ended: the guard says so, the run fails" \
   "$rc $(grep -c 'with no check ended - the rest not judged' <<< "$out")" "1 1"
 check "the checks not judged named, each with its log (the ghost has none)" \
   "$(grep -c '^STEP CHECKS NOT JUDGED: ghost$' <<< "$out") $(grep -c '^===== check ghost (not judged)$' <<< "$out")" "1 1"
+check "the failures judged before it summarized too (metrics, its stub failing)" \
+  "$(grep -c '^STEP CHECKS FAILED: metrics$' <<< "$out")" 1
 check "its cleanup signalled only its own jobs: the foreign process lives" \
   "$(proc_info "$ghost" | awk '{print $4}')" sleep
 if [ "$fails" = 0 ]; then echo "step-checks: ALL-PASS"; else echo "step-checks: $fails FAILED"; exit 1; fi

@@ -73,12 +73,27 @@ while [ "$left" -gt 0 ]; do
   if [ -z "${ended:-}" ]; then
     echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"
     unjudged=()
-    for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || unjudged+=("${names[$i]}"); done
+    for i in "${!pids[@]}"; do
+      [ -z "${done_[$i]:-}" ] || continue
+      # none of them runs (wait -n would wait): a check bash collected outside wait -n has its status still known to
+      # `wait` - judged; one it never knew (127) is not
+      wait "${pids[$i]}" 2> /dev/null; r=$?
+      if [ "$r" != 127 ]; then
+        done_[i]=1
+        echo "===== check ${names[$i]} (exit $r, its status read after)"
+        cat "$logs/${names[$i]}"
+        [ "$r" = 0 ] || failed+=("${names[$i]}")
+      else
+        unjudged+=("${names[$i]}")
+      fi
+    done
     echo "STEP CHECKS NOT JUDGED: ${unjudged[*]}"
     for n in "${unjudged[@]}"; do
       echo "===== check $n (not judged)"
       cat "$logs/$n" 2> /dev/null || echo "(no log)"
     done
+    # and what was judged before: the failures said too
+    [ "${#failed[@]}" -eq 0 ] || echo "STEP CHECKS FAILED: ${failed[*]}"
     exit 1
   fi
   for i in "${!pids[@]}"; do
