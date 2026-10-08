@@ -218,10 +218,11 @@ def lint(path, select=None, text=None):
                 own = {k: v for k, v in t.items() if k not in ("register", "__head__")}
                 if t.get("__head__"):
                     # a block's or an include's own when, as Ansible evaluates a list: in order, stopping at the first
-                    # false - what follows `not ansible_check_mode` is never read in a preview
+                    # false - what follows `not ansible_check_mode` is never read in a preview, nor its vars or loop
+                    # (rendered only once its when holds)
                     w = whens(t)
                     cut = next((i for i, c in enumerate(w) if never_in_check([c])), len(w))
-                    own["when"] = w[:cut]
+                    own = {"when": w[:cut]} if cut < len(w) else dict(own, when=w)
                 texts = list(strings(own))
                 # its own register aside: a task check mode skips evaluates no until/failed_when on it
                 reads = [(reg, empty, looped) for reg, (empty, looped) in sorted(skipped.items())

@@ -201,6 +201,18 @@ check("a handler flushed after tasks reads the probe tasks left skipped: named",
 check("a block's own when reads a skipped probe: named",
       play(PROBE + "    - name: blk\n      when: _p.rc != 0\n      block:\n        - name: x\n"
                    "          ansible.builtin.debug:\n            msg: hi\n"), ["_p.rc"])
+# an include whose own when says it never runs in a preview: its vars and loop are never rendered there - not named;
+# the same include without that when: named
+NOPREV = """    - name: rec
+      ansible.builtin.include_tasks: inc3.yml
+      vars:
+        h: "{{ _p.stdout }}"
+      when: not ansible_check_mode
+"""
+check("an include under not ansible_check_mode reading a skipped probe in its vars: not named; without it: named",
+      play(PROBE + NOPREV, extra={"inc3.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"})
+      + play(PROBE + NOPREV.replace("      when: not ansible_check_mode\n", ""),
+             extra={"inc3.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"}), ["_p.stdout"])
 check("an include's own loop reads a skipped probe: named",
       play(PROBE + "    - name: inc\n      ansible.builtin.include_tasks: inc2.yml\n      loop: '{{ _p.stdout_lines }}'\n",
            extra={"inc2.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"}), ["_p.stdout_lines"])
