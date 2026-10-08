@@ -804,8 +804,9 @@
         quiet: true
 
     # the shares go to the host pi2 is: its host key checked - by Ansible (host_key_checking, as this run has it) and
-    # by ssh (no argument of this run's turning it off, in any of ssh's spellings: =no/off/false/accept-new, the space
-    # form, a known-hosts file of /dev/null, a KnownHostsCommand, another config by -F). The Vagrant copy's VMs, rebuilt
+    # by ssh (no argument of this run's turning it off, in any of ssh's spellings: no/off/false/accept-new after any
+    # separator - =, spaces, a tab, quotes - a known-hosts file of /dev/null, a KnownHostsCommand, another config by -F
+    # with or without a space; never -f, ssh's background flag). The Vagrant copy's VMs, rebuilt
     # each run with new keys, check none: said by its inventory (host_keys_unchecked_rebuilt_vms) and taken only for a
     # pi2 on the Vagrant network - a production inventory saying it would send the shares unchecked. No backslash in
     # the patterns: a conditional's string literals are read as Jinja reads escapes
@@ -813,10 +814,10 @@
       vars:
         # ssh's ways to take a host's key unchecked, any one of them
         _unchecked_ssh:
-          - 'StrictHostKeyChecking[= ]+"?(no|off|false|accept-new)'
-          - '(User|Global)KnownHostsFile[= ]+"?/dev/null'
+          - 'StrictHostKeyChecking[^a-z0-9/]+(no|off|false|accept-new)'
+          - '(User|Global)KnownHostsFile[^a-z0-9/~]+/dev/null'
           - KnownHostsCommand
-          - '(^|[ ])-F[ ]'
+          - '(^|[^a-z0-9-])(?-i:-F)'
       ansible.builtin.assert:
         that:
           - >-

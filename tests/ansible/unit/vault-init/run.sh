@@ -153,9 +153,14 @@ if dist:
                piped(ansible_ssh_host_key_checking=False),
                piped(ansible_ssh_common_args="-o StrictHostKeyChecking=no"),
                piped({"ANSIBLE_SSH_ARGS": "-C -o ControlMaster=auto -o UserKnownHostsFile=/dev/null"}),
-               piped(ansible_ssh_extra_args="-o StrictHostKeyChecking=accept-new")]
-        check(f"host keys: checked as ansible.cfg has it; off by the environment, a host var or ssh's arguments "
-              f"(got {got})", got == ["True"] + ["False"] * 6)
+               piped(ansible_ssh_extra_args="-o StrictHostKeyChecking=accept-new"),
+               piped(ansible_ssh_common_args="-o StrictHostKeyChecking\tno"),
+               piped(ansible_ssh_common_args="-o StrictHostKeyChecking='no'"),
+               piped(ansible_ssh_extra_args="-F/home/x/ssh_config")]
+        check(f"host keys: checked as ansible.cfg has it; off by the environment, a host var or ssh's arguments - a tab, "
+              f"quotes, -F with no space among them (got {got})", got == ["True"] + ["False"] * 9)
+        got = piped(ansible_ssh_extra_args="-f -N")
+        check(f"ssh's -f (its background flag) no other config (got {got})", got == "True")
         # the Vagrant copy's VMs, rebuilt each run with new keys, check none - said by its inventory alone (the
         # assert failed its build: my defect, 2026-10-08)
         got = [piped(ansible_ssh_common_args="-o StrictHostKeyChecking=no", host_keys_unchecked_rebuilt_vms=True,

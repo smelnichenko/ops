@@ -32,15 +32,23 @@ cfg = os.path.abspath("ansible.cfg")
 check("ansible.cfg: host keys checked, said in the file",
       ConfigManager(cfg).get_config_value_and_origin("HOST_KEY_CHECKING"), (True, cfg))
 # ssh's ways to accept a host's key unchecked; in ssh's arguments another config file (-F) too
-OFF = re.compile(r"StrictHostKeyChecking[= ]+\"?(no|off|false|accept-new)\b|(User|Global)KnownHostsFile[= ]+\"?/dev/null"
-                 r"|KnownHostsCommand", re.I)
-OFF_ARGS = re.compile(OFF.pattern + r"|(^|\s)-F\s", re.I)
+# any separator between the key and its value (=, spaces, a tab, quotes - ssh reads each so); -F with or without a space
+# after it, and never -f (ssh's background flag)
+OFF = re.compile(r"StrictHostKeyChecking[^a-z0-9/]+(no|off|false|accept-new)\b"
+                 r"|(User|Global)KnownHostsFile[^a-z0-9/~]+/dev/null|KnownHostsCommand", re.I)
+OFF_ARGS = re.compile(OFF.pattern + r"|(^|[^a-z0-9-])(?-i:-F)", re.I)
 forms = ["-o StrictHostKeyChecking=no", "-o StrictHostKeyChecking=false", "-o 'StrictHostKeyChecking no'",
          "-o StrictHostKeyChecking=accept-new", "-o UserKnownHostsFile=/dev/null", "-o GlobalKnownHostsFile=/dev/null",
-         "-o KnownHostsCommand=/bin/echo", "-o \"StrictHostKeyChecking off\""]
+         "-o KnownHostsCommand=/bin/echo", "-o \"StrictHostKeyChecking off\"",
+         # a tab between, quotes around the value, no space after -o (ssh reads each as =no - review 7)
+         "-o StrictHostKeyChecking\tno", "-o StrictHostKeyChecking='no'", "-oStrictHostKeyChecking=no",
+         "-o UserKnownHostsFile='/dev/null'"]
 check("every spelling of an unchecked key read as one", [f for f in forms if not OFF.search(f)], [])
 check("checked ones not", [f for f in ["-o StrictHostKeyChecking=yes", "-o UserKnownHostsFile=/var/lib/x/known_hosts",
-                                       "-o ServerAliveInterval=15"] if OFF_ARGS.search(f)], [])
+                                       "-o ServerAliveInterval=15", "-f -N", "-o ForwardAgent=no"] if OFF_ARGS.search(f)],
+      [])
+check("another config by -F, a space after it or none", [f for f in ["-F /etc/x", "-F/etc/x", "-C -F/x"]
+                                                         if not OFF_ARGS.search(f)], [])
 def offs(inventory):
     loader = DataLoader()
     inv = InventoryManager(loader=loader, sources=[inventory])
@@ -87,7 +95,10 @@ def own_entry(line):
 hits = [f"{os.path.relpath(f, '../..')}:{n}" for f in srcs if os.path.isfile(f)
         for n, line in enumerate(open(f, errors="replace"), 1)
         if OFF.search(line) and not line.lstrip().startswith("#") and not own_entry(line)]
-check("the detector's spellings found to set aside", len(detector), 4)
+# found (an empty set would exempt nothing and say nothing): each of its entries a line of setup-vault-pi
+vp_lines = [line for line in open("playbooks/setup-vault-pi.yml") if own_entry(line)]
+check("the detector's spellings found to set aside, each its own line of setup-vault-pi",
+      (bool(detector), len(vp_lines) == len(detector)), (True, True))
 # the Taskfile's production tasks (deploy:*, or any on the production inventory) - its Vagrant ones reach the copy's VMs
 tf = yaml.safe_load(open("../../Taskfile.yml"))["tasks"]
 for name, t in tf.items():
@@ -103,8 +114,9 @@ that = vp[0]["ansible.builtin.assert"]["that"] if vp else []
 unchecked = "|".join((vp[0].get("vars") or {}).get("_unchecked_ssh") or []) if vp else ""
 check("the assert's ssh-argument pattern (its list, joined) read by it, refuses every spelling, passes checked ones",
       ("is not search(_unchecked_ssh | join('|'), ignorecase=True)" in " ".join(" ".join(that).split()),
-       [f for f in forms + ["-F /etc/x"] if not (unchecked and re.search(unchecked, f, re.I))],
-       [f for f in ["-o StrictHostKeyChecking=yes", "-o ServerAliveInterval=15"] if unchecked and re.search(unchecked, f, re.I)]),
+       [f for f in forms + ["-F /etc/x", "-F/etc/x"] if not (unchecked and re.search(unchecked, f, re.I))],
+       [f for f in ["-o StrictHostKeyChecking=yes", "-o ServerAliveInterval=15", "-f -N"]
+        if unchecked and re.search(unchecked, f, re.I)]),
       (True, [], []))
 # Ansible's own check off, as the copy's run has it (its config lookup put as that value)
 LOOKUP = "lookup('ansible.builtin.config', 'host_key_checking', plugin_type='connection', plugin_name='ssh') | bool"
