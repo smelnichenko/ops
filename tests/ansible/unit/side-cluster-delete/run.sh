@@ -37,6 +37,7 @@ case "$*" in
     [ "$n" -gt "${GET_FAIL_FOR:-0}" ] || { echo "connection refused" >&2; exit 1; }
     # a read that answers and logs besides (an aggregated API down: discovery's line on stderr)
     [ -z "${STDERR_NOTE:-}" ] || echo "E1008 memcache.go:265] couldn't get resource list for metrics.k8s.io/v1beta1" >&2
+    [ -z "${NO_PODS:-}" ] || exit 0
     if [ ! -e "$W/deleted" ] || [ "$n" -le "${LEFT_FOR:-0}" ]; then echo pod/side-1; fi ;;
 esac
 STUB
@@ -64,7 +65,11 @@ for name, env, want_rc, words in (("gone at once", {}, 0, ""),
                                   ("the delete's own call failing once (an API blip): asked again, gone: passes",
                                    {"DELETE_FAIL_FOR": "1"}, 0, ""),
                                   ("the delete failing to the bound: fails, naming what is left",
-                                   {"DELETE_FAIL_FOR": "999"}, 1, "pod/side-1")):
+                                   {"DELETE_FAIL_FOR": "999"}, 1, "pod/side-1"),
+                                  # no pod nor volume yet (the Cluster just made), its delete not taken: no pass on an
+                                  # empty read - the Cluster itself is still there; asked again, then gone
+                                  ("no pods yet, the delete's first call failing: asked again before any pass",
+                                   {"DELETE_FAIL_FOR": "1", "NO_PODS": "1"}, 0, "")):
     for f in ("n", "d", "deleted"):
         os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,

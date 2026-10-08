@@ -20,7 +20,9 @@
       # stderr apart: a read that answers can log besides (discovery, an aggregated API down) - no leftover
       if left=$({{ side_kubectl }} get pods,pvc -l cnpg.io/cluster={{ side_cluster }} -o name \
           --request-timeout=30s 2> "$err"); then
-        [ -n "$left" ] || exit 0
+        # nothing left passes only once a delete reached the cluster: a Cluster with no pod or volume yet is still one
+        [ -n "$left" ] || [ "$asked" = 0 ] || exit 0
+        [ -n "$left" ] || left="the Cluster itself (its delete not taken yet)"
       else
         left="not read: $(cat "$err")"
       fi
