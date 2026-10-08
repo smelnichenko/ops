@@ -24,6 +24,8 @@
   hosts: pis
   become: true
   gather_facts: true
+  vars_files:
+    - ../vars/production-lan.yml
 
   vars:
     # the inventory's, not a fact the Pi reports: pi1's CA signs it into the other Pi's certificate
@@ -145,17 +147,17 @@
     - name: UFW allow SSH from LAN IPv4
       community.general.ufw:
         rule: allow
-        from_ip: "{{ vault_pi_ssh_allow_ipv4 | default('192.168.11.0/24') }}"
+        from_ip: "{{ vault_pi_ssh_allow_ipv4 | default(production_lan) }}"
         port: "22"
         proto: tcp
 
     - name: UFW allow SSH from LAN IPv6
       community.general.ufw:
         rule: allow
-        from_ip: "{{ vault_pi_ssh_allow_ipv6 | default('fd0a:94e6:20b4:9f6b::/64') }}"
+        from_ip: "{{ vault_pi_ssh_allow_ipv6 | default(production_lan6) }}"
         port: "22"
         proto: tcp
-      when: (vault_pi_ssh_allow_ipv6 | default('fd0a:94e6:20b4:9f6b::/64')) | length > 0
+      when: (vault_pi_ssh_allow_ipv6 | default(production_lan6)) | length > 0
 
     - name: UFW allow SSH from extra range (Vagrant NAT)
       community.general.ufw:
@@ -168,17 +170,17 @@
     - name: UFW allow Vault from kubeadm node IPv4
       community.general.ufw:
         rule: allow
-        from_ip: "{{ vault_cluster_ip | default('192.168.11.2') }}"
+        from_ip: "{{ vault_cluster_ip | default(production_ten_ip) }}"
         port: "8200"
         proto: tcp
 
     - name: UFW allow Vault from kubeadm node IPv6
       community.general.ufw:
         rule: allow
-        from_ip: "{{ vault_cluster_ipv6 | default('fd0a:94e6:20b4:9f6b::2') }}"
+        from_ip: "{{ vault_cluster_ipv6 | default(production_ten_ipv6) }}"
         port: "8200"
         proto: tcp
-      when: (vault_cluster_ipv6 | default('fd0a:94e6:20b4:9f6b::2')) | length > 0
+      when: (vault_cluster_ipv6 | default(production_ten_ipv6)) | length > 0
 
     - name: UFW allow Vault peer-to-peer (Pi↔Pi cluster port)
       community.general.ufw:

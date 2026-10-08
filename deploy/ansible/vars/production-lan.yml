@@ -1,0 +1,9 @@
+---
+# Production's LAN: ten and the Pis (read on ten 2026-10-08) - what production's firewalls open to (setup-nexus,
+# setup-vault-pi, setup-keepalived) and what the Vagrant copy's isolations drop (isolate-pis, isolate-cluster). Said
+# here once: tests/ansible/unit/production-lan holds every playbook to it.
+production_lan: 192.168.11.0/24
+production_lan6: fd0a:94e6:20b4:9f6b::/64
+production_vip: 192.168.11.5
+production_ten_ip: 192.168.11.2
+production_ten_ipv6: fd0a:94e6:20b4:9f6b::2

@@ -26,6 +26,8 @@
   hosts: pis
   become: true
   gather_facts: true
+  vars_files:
+    - ../vars/production-lan.yml
 
   vars:
     nexus_version: "3.90.1-01"
@@ -266,28 +268,28 @@
         rule: allow
         port: "{{ nexus_port | string }}"
         proto: tcp
-        from_ip: 192.168.11.0/24
+        from_ip: "{{ production_lan }}"
 
     - name: UFW allow Nexus docker port IPv4
       community.general.ufw:
         rule: allow
         port: "{{ nexus_docker_port | string }}"
         proto: tcp
-        from_ip: 192.168.11.0/24
+        from_ip: "{{ production_lan }}"
 
     - name: UFW allow Nexus web port IPv6
       community.general.ufw:
         rule: allow
         port: "{{ nexus_port | string }}"
         proto: tcp
-        from_ip: fd0a:94e6:20b4:9f6b::/64
+        from_ip: "{{ production_lan6 }}"
 
     - name: UFW allow Nexus docker port IPv6
       community.general.ufw:
         rule: allow
         port: "{{ nexus_docker_port | string }}"
         proto: tcp
-        from_ip: fd0a:94e6:20b4:9f6b::/64
+        from_ip: "{{ production_lan6 }}"
 
   handlers:
     - name: Reload systemd

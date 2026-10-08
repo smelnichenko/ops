@@ -14,6 +14,8 @@
   hosts: pi1,pi2
   become: true
   gather_facts: true
+  vars_files:
+    - ../vars/production-lan.yml
 
   vars:
     vip: "{{ keepalived_vip }}"
@@ -63,7 +65,7 @@
       community.general.ufw:
         rule: allow
         proto: vrrp
-        from_ip: 192.168.11.0/24
+        from_ip: "{{ production_lan }}"
         comment: "VRRP protocol"
 
     - name: Create health check script

@@ -57,7 +57,13 @@ for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/upgrade/isolate-clu
     # the guard's nft rules drop production's IPv6 prefix too (every output chain; the cluster's forward chain as well)
     sys.path.insert(0, "tests/ansible/unit")
     from templar import render  # noqa: E402
-    play_vars = next(p.get("vars") or {} for p in yaml.safe_load(open(book)) if "production_lan" in (p.get("vars") or {}))
+    # the play's own vars over its vars_files' (production's LAN: deploy/ansible/vars/production-lan.yml)
+    def with_files(p):
+        out = {}
+        for f in p.get("vars_files") or []:
+            out.update(yaml.safe_load(open(os.path.join(os.path.dirname(book), f))) or {})
+        return {**out, **(p.get("vars") or {})}
+    play_vars = next(with_files(p) for p in yaml.safe_load(open(book)) if "production_lan" in with_files(p))
     nft = next(t for t in tasks if "table inet vagrant_isolation {" in str(t))
     body = nft.get("ansible.builtin.copy", {}).get("content") or str(nft.get("ansible.builtin.shell", ""))
     text = render(body, **{k: v for k, v in play_vars.items()}, production_public=["203.0.113.1"])
