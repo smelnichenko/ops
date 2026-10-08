@@ -291,6 +291,15 @@ check("the realm seed's two Vault answers parsed from stdin, each its own",
 check("a Python URL with a credential: named; one without: not",
       [bool(PY_URL.search('url = f"http://{user}:{password}@{host}/r.git"')),
        bool(PY_URL.search('url = f"http://{host}/schnappy/{name}.git"'))], [True, False])
+# nor a Taskfile command handing ansible-playbook a secret as an extra variable (-e "X_PASSWORD=$X"): the controller's
+# argv for the whole play - the inventory reads each from the environment go-task loads (.env)
+TF_SECRET = re.compile(r"(?:-e|--extra-vars)[ =]+['\"]?[A-Za-z_]*(?:PASSWORD|SECRET|TOKEN|_KEY)[A-Za-z_]*=\$", re.I)
+tf = yaml.safe_load(open("Taskfile.yml"))["tasks"]
+tf_hits = [n for n, t in tf.items() for c in (t or {}).get("cmds") or []
+           if TF_SECRET.search(str(c.get("cmd", "") if isinstance(c, dict) else c))]
+check("no Taskfile command hands ansible-playbook a secret on its command line; the form read: -e X_PASSWORD=$X named, "
+      "a non-secret -e not", (tf_hits, bool(TF_SECRET.search('x -e "DB_PASSWORD=$P"')),
+                              bool(TF_SECRET.search("x -e external_secrets_by_helm_override=false"))), ([], True, False))
 bad, used = [], set()
 for f in files("deploy/ansible", "tests/ansible/upgrade"):
     for t, scope in judged(load(f)):

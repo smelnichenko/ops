@@ -1310,9 +1310,8 @@ tasks:
     dir: deploy/ansible
     dotenv: ['../../.env']
     cmds:
-      - >-
-        venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pgbouncer.yml
-        -e "KEYCLOAK_DB_PASSWORD=$KEYCLOAK_DB_PASSWORD"
+      # its password the inventory's, from the environment (.env) - an extra variable put it on the command line
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pgbouncer.yml
 
   deploy:istio:
     desc: Install Istio ambient mesh + HAProxy
