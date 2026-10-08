@@ -29,11 +29,18 @@ case "${VAULT_ADDR:-}" in
 esac
 case "$*" in
   "status -format=json") sleep "${STATUS_DELAY:-0}"
-    # FAKE_CLOCK: the host's uptime 100 s on at each status read
+    # FAKE_CLOCK: the host's uptime 100 s on at each status read; FAKE_CLOCK_STEP: that many hundredths on
     [ -z "${FAKE_CLOCK:-}" ] || { read -r u _ < "$W/uptime"; echo "$(( ${u%.*} + 100 )).00 0.00" > "$W/uptime"; }
+    [ -z "${FAKE_CLOCK_STEP:-}" ] || { read -r u _ < "$W/uptime"; c=${u/./}; c=$((10#$c + FAKE_CLOCK_STEP))
+      printf '%d.%02d 0.00\n' $((c / 100)) $((c % 100)) > "$W/uptime"; }
+    # STEP_AFTER=<n>: the step-down seen only n status reads after it (the other Pi's election under way)
+    if [ -e "$W/step-after" ]; then n=$(( $(cat "$W/step-after") - 1 )); echo "$n" > "$W/step-after"
+      [ "$n" -gt 0 ] || { sed -i 's/"is_self": true/"is_self": false/' "$W/here.json"
+        sed -i 's/"is_self": false/"is_self": true/' "$W/other.json"; rm "$W/step-after"; }; fi
     [ -e "$W/$f.json" ] || { echo "Error checking seal status: connection refused" >&2; exit 1; }
     cat "$W/$f.json"; grep -q '"sealed": true' "$W/$f.json" && exit 2; exit 0 ;;
   "operator step-down") [ "$f" = here ] && [ "$VAULT_TOKEN" = ROOT-TOKEN ] || exit 2
+    [ -z "${STEP_AFTER:-}" ] || echo "$STEP_AFTER" > "$W/step-after"
     [ -z "${STEP_TAKES:-}${STEP_HALF:-}" ] || sed -i 's/"is_self": true/"is_self": false/' "$W/here.json"
     [ -z "${STEP_TAKES:-}" ] || sed -i 's/"is_self": false/"is_self": true/' "$W/other.json" ;;
 esac
@@ -121,7 +128,7 @@ def run(task, here=None, other=None, leader_is="pi1", me="pi1", seconds=2, **env
     v["inventory_hostname"], v["_other_pi"] = me, "pi2" if me == "pi1" else "pi1"
     v["consul_handover_seconds"] = seconds
     env = {"HERE_IP": HOSTS[me], "OTHER_IP": HOSTS[v["_other_pi"]], **env}
-    for f in ("calls", "here.json", "other.json", "transferred", "list-failed"):
+    for f in ("calls", "here.json", "other.json", "transferred", "list-failed", "step-after"):
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
     for f, d in (("here.json", here), ("other.json", other)):
@@ -201,6 +208,13 @@ rc, out, calls = run(leader, leader_is="pi1", seconds=2, TRANSFER_TAKES="1", LIS
                      FAKE_CLOCK_START="999.86")
 check("the wait in hundredths: begun at 1000.98, a read at 1002.10 within its 2 s - moved, passes",
       (rc, "LEADERSHIP MOVED" in out), (0, True))
+# Vault's wait the same: in hundredths - begun late in a second (the clock 0.55 s on at each status read, from
+# 997.85: the wait's own begins at 999.50), its third read within its 2 s finds the handover (whole seconds ended it a
+# read early: the step-down seen by none, refused - measured both ways)
+rc, out, calls = run(vault, here=active, other=standby, seconds=2, STEP_AFTER="3", FAKE_CLOCK_STEP="55",
+                     FAKE_CLOCK_START="997.85")
+check("Vault's wait in hundredths: begun late in a second, its third read within its 2 s - stepped down",
+      (rc, "STEPPED DOWN" in out), (0, True))
 rc, out, calls = run(leader, leader_is="pi1", seconds=6, LIST_DELAY="1")
 check("a transfer not taken, each read slow: refused when its time is up, not after its count of tries",
       (rc, run.took < 11), (1, True))
