@@ -152,8 +152,9 @@ def lint(path, select=None, text=None):
     """The reads of a result check mode never made, in the playbook at `path` (its text `text`, if given) run with
     --tags `select` (None: every task)."""
     out, base = [], os.path.dirname(os.path.abspath(path))
-    # register -> whether its fields are there, empty (EMPTY's) - else absent; across the plays: a register lives on in
-    # its host's later plays, and the others read it through hostvars
+    # register -> (whether its fields are there, empty (EMPTY's) - else absent; whether its task looped: its results
+    # then there, each item skipped alike); across the plays: a register lives on in its host's later plays, and the
+    # others read it through hostvars
     skipped = {}
     for play in yaml.safe_load(text if text is not None else open(path)) or []:
         if not isinstance(play, dict) or not any(k in play for k in SECTIONS):
@@ -170,24 +171,36 @@ def lint(path, select=None, text=None):
                 break
             runs = not never_in_check(conds)  # a block's or an include's own when is read: its conditions are its parents'
             if runs:
-                texts = list(strings({k: v for k, v in t.items() if k not in ("register", "__head__")}))
+                own = {k: v for k, v in t.items() if k not in ("register", "__head__")}
+                if t.get("__head__"):
+                    # a block's or an include's own when, as Ansible evaluates a list: in order, stopping at the first
+                    # false - what follows `not ansible_check_mode` is never read in a preview
+                    w = whens(t)
+                    cut = next((i for i, c in enumerate(w) if never_in_check([c])), len(w))
+                    own["when"] = w[:cut]
+                texts = list(strings(own))
                 # its own register aside: a task check mode skips evaluates no until/failed_when on it
-                reads = [(reg, empty) for reg, empty in sorted(skipped.items()) if reg != t.get("register")]
-                # a loop over a skipped looped register's results: its items, each a skipped item
+                reads = [(reg, empty, looped) for reg, (empty, looped) in sorted(skipped.items())
+                         if reg != t.get("register")]
+                # a loop over a skipped looped register's results: its items, each skipped alike (one not looped has no
+                # results: that read is the one named)
                 loop = str(t.get("loop", "")) + str(t.get("with_items", ""))
-                if any(read_of(reg, loop, "results") for reg, empty in reads if not empty):
-                    reads.append(("item", False))
-                for reg, empty in reads:
+                over = [empty for reg, empty, looped in reads if looped and read_of(reg, loop, "results")]
+                if over:
+                    reads.append(("item", over[0], False))
+                for reg, empty, looped in reads:
+                    fine = FINE | ({"item", "false_condition", "ansible_loop_var"} if reg == "item" else set()) \
+                        | ({"results"} if looped else set())
                     hit = next((f for x in texts for f, defaulted in read_of(reg, x)
-                                if f not in FINE | ({"item", "false_condition", "ansible_loop_var"} if reg == "item"
-                                                    else set()) and (empty or not defaulted)), None)
+                                if f not in fine and (empty or not defaulted)), None)
                     if hit:
                         out.append(f"{path}: '{t.get('name')}' reads {reg}.{hit} - skipped in check mode")
             if "register" in t:
+                looped = any(k in t for k in ("loop", "with_items", "with_dict", "with_list", "with_together"))
                 if not runs:
-                    skipped[t["register"]] = False
+                    skipped[t["register"]] = (False, looped)
                 elif module(t) in SKIPPED and t.get("check_mode") is not False:
-                    skipped[t["register"]] = module(t) in EMPTY
+                    skipped[t["register"]] = (module(t) in EMPTY, looped)
                 else:
                     skipped.pop(t["register"], None)
     return list(dict.fromkeys(out))  # a handler run after each section names a read once

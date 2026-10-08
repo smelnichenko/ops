@@ -49,6 +49,35 @@ check("a uri result: named", play(PROBE.replace("ansible.builtin.command: cat /x
                                   + READ), ["_p.stdout"])
 check("in a block: named", play("    - block:\n" + "\n".join("    " + x for x in (PROBE + READ).splitlines()) + "\n"),
       ["_p.stdout"])
+# a block's own when, as Ansible evaluates a list - in its order, stopping at the first false: `not ansible_check_mode`
+# first, the rest never read in a preview; after a read, that read is made
+BLOCK = """    - name: a block
+      when:
+        - {first}
+        - {second}
+      block:
+        - name: inside
+          ansible.builtin.debug:
+            msg: hi
+"""
+check("a block's own when: not ansible_check_mode first, then a read - not named",
+      play(PROBE + BLOCK.format(first="not ansible_check_mode", second="_p.stdout == 'x'")), [])
+check("a block's own when: a read, then not ansible_check_mode - named",
+      play(PROBE + BLOCK.format(first="_p.stdout == 'x'", second="not ansible_check_mode")), ["_p.stdout"])
+# a loop over a skipped register's results: a looped one's are skipped items (each read named as item's); one not looped
+# has no results at all - that read is the one named, no item reads besides
+LOOPED = PROBE.replace("ansible.builtin.command: cat /x", "ansible.builtin.command: cat {{ item }}\n      loop: [a, b]")
+OVER = """    - name: over
+      ansible.builtin.debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ _p.results }}"
+"""
+check("a loop over a skipped looped register's results: its items' reads named", play(LOOPED + OVER), ["item.stdout"])
+check("over a skipped register not looped: its .results named, no item reads besides", play(PROBE + OVER),
+      ["_p.results"])
+# a register's name inside another one's (x._p, hostvars-free): no read of it
+check("another object's field named like the register (x._p.stdout): not named",
+      play(PROBE + READ.replace("_p.stdout", "x._p.stdout")), [])
 END = """    - name: the preview ends here
       when: ansible_check_mode
       block:
