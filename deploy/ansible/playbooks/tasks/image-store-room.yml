@@ -3,7 +3,8 @@
 # their rollout are unused until it, and past imageGCHighThresholdPercent its GC deletes unused images - these first;
 # past imagefs.available<15% it evicts pods. The threshold the kubelet runs with - its configz, read for this node
 # through the API server: a config file need not hold it (ten's does not), nor be what the kubelet started with.
-# Unread, refused. Read and reported always; refused only with room_needed (something is pulled).
+# Read three times (the API server a moment away); unread, refused when something is pulled - with nothing to pull
+# there is no room to judge. Read and reported always; refused only with room_needed (something is pulled).
 # Expects: room_when (before | after the pulls), room_needed, kubeconfig, image_store.
 # Tested: tests/ansible/unit/prepull.
 - name: "The image store under the kubelet's image GC threshold: {{ room_when }}"
@@ -11,10 +12,22 @@
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      high=$(kubectl --kubeconfig {{ kubeconfig | quote }} --request-timeout=30s \
-        get --raw "/api/v1/nodes/$(hostname)/proxy/configz" \
-        | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["kubeletconfig"]["imageGCHighThresholdPercent"]))')
+      high=""
+      for i in 1 2 3; do
+        if high=$(kubectl --kubeconfig {{ kubeconfig | quote }} --request-timeout=30s \
+            get --raw "/api/v1/nodes/$(hostname)/proxy/configz" \
+            | python3 -c 'import json, sys; print(int(json.load(sys.stdin)["kubeletconfig"]["imageGCHighThresholdPercent"]))'); then
+          break
+        fi
+        high=""
+        [ "$i" = 3 ] || sleep 5
+      done
       used=$(df --output=pcent {{ image_store | quote }} | tail -n 1 | tr -dc 0-9)
+      if [ -z "$high" ]; then
+        echo "the image store {{ image_store }} ${used}% used, the kubelet's image GC threshold unread (configz, 3 tries)"
+        [ "$NEEDED" = True ] || { echo "(nothing to pull here)"; exit 0; }
+        echo "refused: the room cannot be judged"; exit 1
+      fi
       echo "the image store {{ image_store }} ${used}% used, the kubelet's image GC at ${high}%"
       [ "$used" -lt $(( high - 5 )) ] || {
         echo "too full: GC would delete pulled images before their rollout"

@@ -40,14 +40,16 @@ IFS=, read -r -a used <<< "${USED:-50,50}"
 echo "Use%"; echo " ${used[$((n - 1))]:-${used[-1]}}%"
 STUB
 # the running kubelet's configuration (configz through the API server), its image GC threshold GC_HIGH (85, its
-# default, without); CONFIGZ_FAILS: unreadable
+# default, without); CONFIGZ_FAILS=<n>: the first n reads fail (the API server a moment away)
 cat > "$W/bin/kubectl" <<'STUB'
 #!/bin/bash
 echo "kubectl $*" >> "$W/kubectl-calls"
-[ -z "${CONFIGZ_FAILS:-}" ] || { echo "Error from server (ServiceUnavailable)" >&2; exit 1; }
+[ "$(grep -c configz "$W/kubectl-calls")" -gt "${CONFIGZ_FAILS:-0}" ] \
+  || { echo "Error from server (ServiceUnavailable)" >&2; exit 1; }
 echo "{\"kubeletconfig\": {\"imageGCHighThresholdPercent\": ${GC_HIGH:-85}, \"imageGCLowThresholdPercent\": 80}}"
 STUB
-chmod +x "$W/bin/crictl" "$W/bin/df" "$W/bin/kubectl"
+printf '#!/bin/bash\n' > "$W/bin/sleep"
+chmod +x "$W/bin/crictl" "$W/bin/df" "$W/bin/kubectl" "$W/bin/sleep"
 W=$W "$PY" - <<'PY'
 import os, yaml
 W = os.environ["W"]
@@ -96,7 +98,13 @@ USED=70,81 case_ "at 81% after the pulls: the run fails" 1 "$E pull x:1" -e imag
 GC_HIGH=70 USED=66,66 case_ "the running kubelet's own threshold (70): 66% refused, nothing pulled" 1 "" -e images=x:1
 if grep -q "get --raw /api/v1/nodes/$(hostname)/proxy/configz" "$W/kubectl-calls"; then echo "PASS read for this node"
 else echo "FAIL read for this node: $(cat "$W/kubectl-calls")"; fails=$((fails + 1)); fi
-CONFIGZ_FAILS=1 case_ "the kubelet's configuration unreadable: refused, nothing pulled" 1 "" -e images=x:1
+CONFIGZ_FAILS=99 case_ "the kubelet's configuration unreadable: refused, nothing pulled" 1 "" -e images=x:1
+# one failed read is read again (one refused a step's pre-pull for an API server a moment away)
+CONFIGZ_FAILS=1 USED=65,66 case_ "the kubelet's configuration read at the second try: pulled" 0 "$E pull x:1" \
+  -e images=x:1
+# unread with nothing to pull: no room to judge, none needed - not refused
+CONFIGZ_FAILS=99 PRESENT="x:1" case_ "unreadable, every image on the node already: nothing pulled, not refused" \
+  0 "" -e images=x:1
 # the room needed only for what is pulled: images all on the node already (a two-repo step's second merge, the
 # Vagrant copy's preload) pull nothing and are not refused over a full image store; one missing is
 USED=82,82 PRESENT="x:1 y:2" case_ "every image on the node already, the store at 82%: nothing pulled, not refused" \
