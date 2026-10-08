@@ -15,7 +15,7 @@
     # the delete call failing (an API blip) is no verdict: asked again at each poll until a call reaches the cluster,
     # the polls judging what is left
     asked=0
-    if del --wait=true --timeout=600s; then asked=1; else echo "the delete returned $? - asked again below"; fi
+    if del --wait=true --timeout=600s --request-timeout=60s; then asked=1; else echo "the delete returned $? - asked again below"; fi
     for i in $(seq 1 {{ [1, ((side_gone_seconds | default(300)) / (side_poll | default(5))) | int] | max }}); do
       # stderr apart: a read that answers can log besides (discovery, an aggregated API down) - no leftover
       if left=$({{ side_kubectl }} get pods,pvc -l cnpg.io/cluster={{ side_cluster }} -o name \

@@ -21,6 +21,11 @@ case "$*" in
   *delete*) d=$(( $(cat "$W/d" 2> /dev/null || echo 0) + 1 )); echo $d > "$W/d"
     # REASK_HANGS: a delete asked again hangs (a finalizer stuck, the API server holding the call) - unless it neither
     # waits (--wait=false) nor outlives its own bound (--request-timeout): then it fails at once, as one timed out
+    # FIRST_HANGS: the first call hangs (the API server holding it) unless it carries its own request bound
+    if [ -n "${FIRST_HANGS:-}" ] && [ "$d" = 1 ]; then
+      case "$*" in *--request-timeout=*) echo "timed out" >&2; exit 1 ;; esac
+      sleep 30; exit 1
+    fi
     if [ -n "${REASK_HANGS:-}" ] && [ "$d" -gt 1 ]; then
       case "$*" in *--wait=false*) case "$*" in *--request-timeout=*) echo "timed out" >&2; exit 1 ;; esac ;; esac
       sleep 30; exit 1
@@ -87,6 +92,20 @@ except subprocess.TimeoutExpired:
 ok = got == (1, True)
 fails += not ok
 print(f"{'PASS' if ok else 'FAIL'} the delete asked again, hanging: each ask bounded - the task ends at its bound, failing"
+      + ("" if ok else f" (got {got})"))
+# the first call too: its wait bounded (--timeout), its request as well - a hung call held the task past its bound
+for f in ("n", "d", "deleted"):
+    os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
+t = time.monotonic()
+try:
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=20,
+                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, FIRST_HANGS="1"))
+    got = (min(r.returncode, 1), time.monotonic() - t < 10)
+except subprocess.TimeoutExpired:
+    got = ("hung", False)
+ok = got == (0, True)
+fails += not ok
+print(f"{'PASS' if ok else 'FAIL'} the first delete hanging: bounded, asked again, the side cluster gone"
       + ("" if ok else f" (got {got})"))
 # the read as bash reads it (its continuation joined), up to its redirection
 get = task["ansible.builtin.shell"].replace("\\\n", " ").split("get pods,pvc")[1].split("2>")[0] \
