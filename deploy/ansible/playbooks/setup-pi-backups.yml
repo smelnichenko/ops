@@ -53,8 +53,8 @@
         state: directory
         mode: '0700'
 
-    # an empty one (a key missing from .env) would overwrite the working file, and the backups stop until the late
-    # check fires a day later
+    # an empty one (a key missing from .env) would overwrite the working file, and the backups stop - with nothing to
+    # say so but the unit's failure (no check watches the backups' age yet)
     - name: Its credentials are all there
       ansible.builtin.assert:
         that:
@@ -205,7 +205,7 @@
             Type=oneshot
             EnvironmentFile=/etc/pi-backup/env
             ExecStart=/usr/local/sbin/pi-tier0-backup.sh
-            # a hung run must not block the next day's (the late-backup check reports it)
+            # a hung run must not block the next day's (its unit's failure says so; no check watches the backups' age)
             TimeoutStartSec=3600
         - name: pi-tier0-backup.timer
           content: |

@@ -349,7 +349,7 @@
 
     # the entry alone where the repos are mounted already: the mount module remounts a mounted volume when its entry
     # changes
-    - name: The repos' fstab entry  # noqa: syntax-check[unknown-module]
+    - name: The repos' fstab entry
       ansible.posix.mount:
         path: "{{ gluster_mount }}"
         src: "{{ node_ip }}:/forgejo-repos"
@@ -375,7 +375,7 @@
             name: forgejo
             state: stopped
 
-        - name: Unmount what is mounted there now  # noqa: syntax-check[unknown-module]
+        - name: Unmount what is mounted there now
           ansible.posix.mount:
             path: "{{ gluster_mount }}"
             state: unmounted

@@ -4,7 +4,7 @@ collections:
     version: ">=2.4.0"
   - name: community.general
     version: ">=5.0.0"
-  # ansible.builtin.mount, authorized_key and synchronize resolve to ansible.posix; the Vault playbooks use
-  # community.hashi_vault's modules (both came only with the full ansible package before)
+  # ansible.posix: mount, authorized_key and synchronize (the playbooks name them ansible.posix.*); community.hashi_vault:
+  # the Vault playbooks' modules (both came only with the full ansible package before)
   - name: ansible.posix
   - name: community.hashi_vault

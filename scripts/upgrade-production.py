@@ -30,7 +30,8 @@ records its end (passed or failed, Ctrl-C included); a run killed outright leave
 closes it, once nothing runs. Step 02 (the Istio chart repository) went to production on 2026-10-03, before the
 ledger: init records it done.
 
-The proof (record-proof, run by test:upgrade:full after each green step; proof-start at the run's start): each repo's
+The proof (record-proof, run by test:upgrade:full once the next step's deciding settle has judged the step's restarts
+too - the last step's after a final settle at production's values; proof-start at the run's start): each repo's
 branch SHA and own change (its changed lines and files against the repo's ref at the step before), the ops commit the
 run ran from - refused if deploy/, scripts/, tests/ or Taskfile.yml differ from it. Production's merge wants the same
 own change and every step up to N proven by one run; its phases want the same tree (deploy/, scripts/, tests/,
