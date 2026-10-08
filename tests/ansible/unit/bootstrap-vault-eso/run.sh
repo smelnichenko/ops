@@ -83,7 +83,8 @@ for a; do case "\$a" in *=@*) echo "\${a%%=@*} \$(cat "\${a#*=@}")" >> "$W/vault
   @*) cat "\${a#@}" >> "$W/vault-json"; echo >> "$W/vault-json"; touch "$W/rolled-back" ;; esac; done
 if [ "\$*" = "read -format=json auth/kubernetes/config" ]; then
   case "\${OLD_CONFIG:-there}" in
-    there) echo '{"data": {"kubernetes_host": "https://192.168.11.2:6443", "kubernetes_ca_cert": "OLD CA",'
+    # OLD_CA: the CA the config before names (default another cluster's: a rebuilt one's, DR)
+    there) echo '{"data": {"kubernetes_host": "https://192.168.11.2:6443", "kubernetes_ca_cert": "'"\${OLD_CA:-OLD CA}"'",'
       echo '  "disable_local_ca_jwt": false, "issuer": "", "pem_keys": [], "token_reviewer_jwt_set": true}}' ;;
     none) echo "No value found at auth/kubernetes/config" >&2; exit 2 ;;
     error) echo "Error reading auth/kubernetes/config: 403 permission denied" >&2; exit 2 ;;
@@ -187,6 +188,11 @@ run ES_FIRST=False ES_SECOND=False NO_TOKEN_SECRET=1 NEVER_SYNCED=1 ES_READY=Fal
 check "none Ready, none synced, not proven after: the step fails, said - nothing put back, no old token said kept" \
   "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(grep -c 'NOT proven' <<< "$out") \
 $(grep -c 'reviewer token kept' <<< "$out")" "1 none 1 0"
+# none Ready on this same cluster (a long Vault or ESO outage, not a rebuild: the config before names this cluster's
+# CA), not proven after: its config before put back - read as a rebuild (none Ready), it was left as written
+run ES_FIRST=False ES_SECOND=False ES_READY=False OLD_CA="THE CLUSTER CA"
+check "none Ready on this cluster (its CA the config's before - an outage), not proven: the config before put back" \
+  "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(grep -c 'put back as it was' <<< "$out")" "1 put-back 1"
 run ES_LIST_FAILS=1
 check "the ExternalSecrets not listed (an error, not 'none'): the step fails before any write, the token kept" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0 0"

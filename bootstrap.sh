@@ -264,7 +264,7 @@ REMOTE
     return 1
   fi
   if [[ -n $es ]]; then
-    eso_switch_proven "$es" "$was" "$work/config-before.json" "$VAULT_PI" || return 1
+    eso_switch_proven "$es" "$was" "$work/config-before.json" "$VAULT_PI" "$K8S_CA" || return 1
   fi
   log "ESO → Pi Vault configured"
 }
@@ -299,10 +299,11 @@ eso_proof_target() {
 # ExternalSecret picked before the switch refreshed (External Secrets keeps no Vault token between syncs - each logs
 # in), then production's old reviewer token deleted - a non-expiring token of External Secrets' own account (it reads
 # and updates every Secret), kept in Vault's config until the write. Not proven: Vault's config as it was read before
-# the write put back with that token, and the login on it proven again - unless none was Ready before (nothing logged
-# in on the config before either: nothing to put back)
+# the write put back with that token, and the login on it proven again - unless none was Ready before and the config
+# before named another cluster's CA (a rebuilt cluster, DR: nothing logged in on it, its cluster gone - nothing to put
+# back). None Ready on this same cluster (its CA the config's: a long Vault or ESO outage) is put back as any
 eso_switch_proven() {
-  local es=$1 was=$2 before=$3 pi=$4 gone
+  local es=$1 was=$2 before=$3 pi=$4 ca=$5 gone
   if eso_refreshed "$es"; then
     log "External Secrets logged in on the new config ($es refreshed)"
     gone=$(kubectl -n external-secrets delete secret vault-token-reviewer --ignore-not-found) \
@@ -312,8 +313,9 @@ eso_switch_proven() {
   fi
   err "External Secrets' login on the new config NOT proven - nothing deleted; kubectl -n ${es%/*}" \
     "describe externalsecret ${es#*/}"
-  if [[ $was != ready ]]; then
-    err "nothing put back: no ExternalSecret logged in on the config before either"
+  if [[ $was != ready ]] && ! eso_same_cluster "$before" "$ca"; then
+    err "nothing put back: no ExternalSecret logged in on the config before either, and it named another cluster's CA" \
+      "(a rebuilt cluster's)"
     return 1
   fi
   eso_put_back "$before" "$pi" || { eso_say_before "$before" "$pi"; return 1; }
@@ -323,6 +325,15 @@ eso_switch_proven() {
     err "External Secrets' login NOT even on the config put back - kubectl -n ${es%/*} describe externalsecret ${es#*/}"
   fi
   return 1
+}
+
+# Vault's config before the write named this cluster's CA (the kubeconfig's, base64): the same cluster, not a rebuilt
+# one - a read that fails, no config, another CA: not the same
+eso_same_cluster() {  # eso_same_cluster <config before (vault read -format=json)> <the cluster's CA, base64>
+  python3 -c 'import base64, json, sys
+d = json.load(open(sys.argv[1])).get("data") or {}
+sys.exit(0 if (d.get("kubernetes_ca_cert") or "").strip() == base64.b64decode(sys.argv[2]).decode().strip() else 1)' \
+    "$1" "$2" 2> /dev/null
 }
 
 # One refresh of the ExternalSecret asked for and waited for (ESO_PROOF_SECONDS): its syncedResourceVersion (the
