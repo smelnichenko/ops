@@ -1,10 +1,10 @@
 ---
 # Keycloak restarted where its unit or secrets file differ from what it last loaded (a stamp, by content: a restart that
 # failed or was refused stays pending and the next run makes it - a handler fired once, and a re-run left the old
-# process running), one Pi at a time: a Pi where it does not serve first, then the Pi without the VIP, the VIP's last. setup-pi-services (its unit and secrets written)
-# and setup-patroni (its database port moved) import these - in a play of both Pis: the order by the VIP needs both in
-# it (a play one Pi at a time restarted the VIP's first). Not in a preview: it wrote neither file. Needs keepalived_vip;
-# _keycloak_start (the start task's result) where the play has one.
+# process running), one Pi at a time: a Pi where it does not serve first, then the Pi without the VIP, the VIP's
+# last. setup-pi-services (its unit and secrets written) and setup-patroni (its database port moved) import these - in
+# a play of both Pis: the order needs both in it (a play one Pi at a time restarted the VIP's first). Not in a preview:
+# it wrote neither file. Needs keepalived_vip; _keycloak_start (the start task's result) where the play has one.
 - name: Keycloak's restart pending here - its unit and secrets against the ones it last loaded
   ansible.builtin.include_tasks:
     file: restart-pending.yml
