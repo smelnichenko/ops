@@ -225,6 +225,17 @@ own = next((t for p in plays for t in p.get("tasks") or [] if "storage.owner-uid
 items = {(x["name"], str(x.get("uid")), str(x.get("gid"))) for x in (own or {}).get("loop") or []}
 check("the owner kept by Gluster on forgejo-repos and forgejo-data (900), nexus-data (901)",
       {("forgejo-repos", "900", "900"), ("forgejo-data", "900", "900"), ("nexus-data", "901", "901")} <= items, True)
+# Forgejo's data re-owned where its UID was just aligned too (the alignment prunes the mounted volumes: their content
+# left the old UID's - Forgejo then read none of it), as where the volume was remounted or new
+ptasks_all = [t for p in plays for t in flat(p.get("tasks"))]
+fix = next((t for t in ptasks_all if t.get("name") == "Fix Forgejo data ownership (heal/ownership can lag on a new volume)"),
+           None)
+align = next((t for t in ptasks_all if t.get("name") == "Align Forgejo UID/GID across nodes"), None)
+areg = (align or {}).get("register", "_none")
+w = lambda changed: condition((fix or {}).get("when", "false"), backup_remount=[],  # noqa: E731
+                              hostvars={"pi1": {"gluster_new_volumes": []}}, **{areg: {"changed": changed}})
+check("Forgejo's data re-owned after its UID's alignment; not without it (nothing remounted, nothing new)",
+      [w(True), w(False)], [True, False])
 # and the git mirror's volume by its user (the daily sync writes there as it - root:root 0755 on production, read
 # 2026-10-08, every repository refused), its ids read on each Pi and required the same on both (another user's uid on
 # one Pi would own the mirror there)

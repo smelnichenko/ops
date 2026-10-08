@@ -994,9 +994,12 @@
         executable: /bin/bash
       register: _forgejo_owner
       changed_when: _forgejo_owner.stdout | trim != '0'
+      # also where Forgejo's UID was just aligned (the alignment prunes the mounted volumes: their content was left the
+      # old UID's)
       when: >-
         'forgejo-data' in (backup_remount | map(attribute='name'))
         or 'forgejo-data' in (hostvars['pi1']['gluster_new_volumes'] | default([]))
+        or (uid_result | default({})) is changed
 
     # Nexus ownership is handled by setup-nexus.yml (which runs after and
     # creates the nexus user with a fixed UID first).
