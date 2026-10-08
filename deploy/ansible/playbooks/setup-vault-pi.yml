@@ -218,21 +218,25 @@
             dest: /tmp/vault.zip
             checksum: "sha256:{{ vault_checksums[vault_arch] }}"
             mode: '0644'
+        # a preview's download fetched nothing: what reads the zip skipped then (it failed on a fresh host's preview)
         - name: Unzip Vault
           ansible.builtin.unarchive:
             src: /tmp/vault.zip
             dest: /usr/local/bin/
             remote_src: true
+          when: not ansible_check_mode
         - name: Vault binary mode
           ansible.builtin.file:
             path: /usr/local/bin/vault
             mode: '0755'
             owner: root
             group: root
+          when: not ansible_check_mode
         - name: Remove Vault zip
           ansible.builtin.file:
             path: /tmp/vault.zip
             state: absent
+          when: not ansible_check_mode
 
     # ── TLS: one CA, per-Pi certs signed by it (production's layout) ────
     # Production's Vault certs (2026-04-04) are signed by one CA and carry the node IP, the keepalived VIP and

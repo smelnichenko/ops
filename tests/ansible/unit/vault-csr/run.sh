@@ -25,7 +25,7 @@ W=$W "$PY" - <<'PY'
 import base64, os, shlex, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render
+from templar import condition, render
 W = os.environ["W"]
 plays = yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
 tasks = [t for p in plays for t in p.get("tasks") or []]
@@ -206,6 +206,13 @@ if other:
     r = subprocess.run(["bash", "-c", sh2], capture_output=True, text=True)
     got = (r.returncode != 0, "REFUSED" in r.stdout + r.stderr, os.path.exists(os.path.join(tls, "ca-key.pem")))
     check("one there: refused, left as it is", got == (True, True, True), got)
+# a preview on a host without Vault: the download is check mode's (nothing fetched), so what reads the zip after it is
+# skipped - the unzip failed on a file the preview never wrote
+inst = next((t for t in tasks if t.get("name") == "Install Vault binary"), None)
+after = [x for x in (inst or {}).get("block", []) if not str(x.get("name", "")).startswith("Download")]
+check("the install's unzip and what follows it skipped in a preview, run otherwise", bool(after) and all(
+    [condition(x.get("when", True), ansible_check_mode=cm) for cm in (True, False)] == [False, True] for x in after),
+      [(x.get("name"), x.get("when")) for x in after])
 # both Pis' certificates signed on pi1 against one serial file: one at a time (at once, two read the same serial)
 sign = next((t for t in tasks if "-CAserial" in str(t.get("ansible.builtin.shell", ""))), {})
 check("the signing one Pi at a time (one serial file)", sign.get("throttle") == 1 and sign.get("delegate_to") == "pi1",
