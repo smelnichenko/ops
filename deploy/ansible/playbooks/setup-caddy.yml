@@ -389,7 +389,7 @@
           # token reads the wildcard's private key); read whole - the file has no newline at its end, so `read`
           # returns 1 on it and set -e ended the script there
           token=$(< /etc/caddy/cluster-token)
-          curl -sf --cacert "$ca" \
+          curl -sf --max-time 60 --cacert "$ca" \
             -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") \
             "$api/api/v1/namespaces/schnappy-infra/secrets/pmon-dev-wildcard-tls" \
             -o "$tmp/secret.json"

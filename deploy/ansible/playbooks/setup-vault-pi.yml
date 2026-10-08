@@ -898,7 +898,7 @@
           #!/bin/bash
           # its own file: a fixed /tmp path a local user created first would have answered for Vault
           out=$(mktemp); trap 'rm -f "$out"' EXIT
-          HEALTH=$(curl -s --cacert /etc/vault.d/tls/ca-cert.pem \
+          HEALTH=$(curl -s --max-time 10 --cacert /etc/vault.d/tls/ca-cert.pem \
             https://127.0.0.1:8200/v1/sys/health \
             -o "$out" -w "%{http_code}" 2>/dev/null)
           SEALED=$(jq -r '.sealed // true' "$out" 2>/dev/null)

@@ -18,7 +18,7 @@ def check(name, got, want):
     global fails
     fails += got != want
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got}, want {want}"))
-CURL = re.compile(r"(?<![\w-])curl\b")
+CURL = re.compile(r"(?<![\w./-])curl\b(?!')")
 BOUND = re.compile(r"--max-time\b|(^|[\s'\",])-[A-Za-z]*m['\",\s]*\d|--speed-time\b")
 def unbounded(text):
     """The curls of a task's text with no bound of their own: each from its name to the end of its command (a pipe,
@@ -26,6 +26,8 @@ def unbounded(text):
     text = re.sub(r"\\\n\s*", " ", text)
     out = []
     for line in text.splitlines():
+        if line.lstrip().startswith("#"):  # a comment's word
+            continue
         for m in CURL.finditer(line):
             seg = re.split(r"[|;&]", line[m.start():])[0]
             if not BOUND.search(seg) and not re.search(r"\btimeout\s+(-\S+\s+)*\d", line[:m.start()]):
@@ -34,20 +36,31 @@ def unbounded(text):
 forms = {"curl -s --max-time 30 https://x": [], "curl -sm 10 https://x": [], "curl -fsSL https://x": ["curl -fsSL https://x"],
          "curl -s -m 10 https://x": [], "curl -fsS --speed-limit 1024 --speed-time 60 -T f https://x": [],
          "timeout 60 curl -s https://x": [], "curl -s https://x | jq .": ["curl -s https://x"],
+         "  # curl's config, never its command line": [], "cfg={{ d }}/.store-credentials.curl": [],
          "curl -s \\\n  --max-time 5 https://x": [], "x=$(curl -s https://x); curl --max-time 3 y": ["curl -s https://x)"]}
 check("each curl read with its bound (or none): the whole time, a stall's, a timeout before it, across a continuation",
       {f: unbounded(f) for f in forms}, forms)
 bad = []
 for f in files("deploy/ansible"):
-    for t in tasks(load(f)):
+    doc = load(f)
+    # a play's string vars (a script a task templates in: the mirror's probe) - each run by a task (the play's own)
+    for p in (doc if isinstance(doc, list) else []):
+        if isinstance(p, dict):
+            for k, v in (p.get("vars") or {}).items():
+                if isinstance(v, str):
+                    bad += [f"{f}: vars {k}: {c}" for c in unbounded(v)]
+    for t in tasks(doc):
         if isinstance(t.get("timeout"), int):
             continue
         for mod, val in actions(t):
-            if str(mod).split(".")[-1] not in ("shell", "command", "raw"):
-                continue
-            text = str(val.get("cmd", val.get("argv", val)) if isinstance(val, dict) else val)
-            bad += [f"{f}: {t.get('name')}: {c}" for c in unbounded(text)]
-check("every curl a production playbook runs bounded", len(bad), 0)
+            m = str(mod).split(".")[-1]
+            if m in ("shell", "command", "raw"):
+                text = str(val.get("cmd", val.get("argv", val)) if isinstance(val, dict) else val)
+                bad += [f"{f}: {t.get('name')}: {c}" for c in unbounded(text)]
+            elif m in ("copy", "template") and isinstance(val, dict) and str(val.get("content", "")).startswith("#!"):
+                # a script it writes (a timer's or a cron's run of it has no task timeout around it)
+                bad += [f"{f}: {t.get('name')} (writes {val.get('dest')}): {c}" for c in unbounded(val["content"])]
+check("every curl a production playbook runs, templates in or writes as a script bounded", len(bad), 0)
 for b in bad:
     print("    " + b)
 print("curl-bounded: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
