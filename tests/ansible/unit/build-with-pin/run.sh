@@ -11,9 +11,18 @@ trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/scripts" "$T/tests/clickhouse-pin" "$T/bin" "$T/.upgrade"
 cp "$ROOT/scripts/upgrade-build-with-pin.sh" "$T/scripts/" 2> /dev/null \
   || { echo "FAIL scripts/upgrade-build-with-pin.sh missing"; echo "build-with-pin: 1 FAILED"; exit 1; }
-# task test:upgrade:build: BUILD (its exit), after BUILD_SECONDS
-printf '#!/bin/bash\necho $$ > .upgrade/build.pid\nsleep "${BUILD_SECONDS:-0}"; echo build; echo > .upgrade/build.finished
-exit "${BUILD:-0}"\n' > "$T/bin/task"
+# task test:upgrade:build: BUILD (its exit), after BUILD_SECONDS; IGNORE_TERM: it ignores a TERM (its sleep too);
+# SLOW_TERM: a TERM ends it a second later, said in .upgrade/build.slow
+cat > "$T/bin/task" <<'STUB'
+#!/bin/bash
+echo $$ > .upgrade/build.pid
+[ -z "${IGNORE_TERM:-}" ] || trap '' TERM
+[ -z "${SLOW_TERM:-}" ] || trap 'sleep 1; echo slow > .upgrade/build.slow; exit 143' TERM
+sleep "${BUILD_SECONDS:-0}" &
+wait $!
+echo build; echo > .upgrade/build.finished
+exit "${BUILD:-0}"
+STUB
 # the pin: PIN (its exit) after PIN_SECONDS, its PID first, "finished" when it ran its course
 cat > "$T/tests/clickhouse-pin/run.sh" <<'STUB'
 #!/bin/bash
@@ -115,6 +124,35 @@ for sig in TERM HUP; do
     "$(gone "$T/.upgrade/pin.pid") $(gone "$T/.upgrade/build.pid") $(grep -c '^[0-9:]\{8\} STOPPED BY A SIGNAL' <<< "$out")" \
     "gone gone 1"
 done
+# a job ignoring the stop's TERM: killed after the stop's grace, said - it held the stop for good
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+t0=$SECONDS
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 IGNORE_TERM=1 STOP_GRACE=2 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/ign.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
+[ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
+wait "$sp"
+out=$(cat "$T/ign.out")
+check "a job ignoring TERM: killed after the grace, said so; both gone, the stop said, well before the bound" \
+  "$(gone "$T/.upgrade/build.pid") $(gone "$T/.upgrade/pin.pid") $(grep -c 'outlived the stop' <<< "$out") \
+$(grep -c 'STOPPED BY A SIGNAL' <<< "$out") $((SECONDS - t0 < 10))" "gone gone 1 1 1"
+# a second signal while the stop waits for a job that takes its time to end (a Ctrl-C pressed twice): the stop goes on
+# to its end - the job's own stop finished, both gone, the stop said
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished" \
+  "$T/.upgrade/build.slow"
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 SLOW_TERM=1 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/twice.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
+if [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ]; then
+  kill -TERM "$sp"; sleep 0.3; kill -TERM "$sp" 2> /dev/null
+fi
+wait "$sp"
+out=$(cat "$T/twice.out")
+check "a second TERM during the stop: the stop goes on - the slow job's own stop done, both gone, the stop said" \
+  "$([ -e "$T/.upgrade/build.slow" ] && echo slow-done || echo cut) $(gone "$T/.upgrade/build.pid") \
+$(gone "$T/.upgrade/pin.pid") $(grep -c 'STOPPED BY A SIGNAL' <<< "$out")" "slow-done gone gone 1"
 # a signal between a job's start and the line that keeps its PID: the job stopped all the same - every job of the
 # script's, not the PIDs it kept (a copy without `pin=$!` stands for one that landed there)
 sed '/^pin=\$!$/d' "$T/scripts/upgrade-build-with-pin.sh" > "$T/scripts/unkept.sh"
