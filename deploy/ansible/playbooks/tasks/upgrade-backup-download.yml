@@ -13,7 +13,7 @@
       set -euo pipefail
       out={{ download_file | quote }}; key={{ download_key | quote }}
       url="{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}"
-      get() { curl -fsS --retry 3 -K {{ store_curl }} "$url/$1"; }
+      get() { curl -fsS --retry 3 --connect-timeout 30 --speed-limit 10240 --speed-time 120 -K {{ store_curl }} "$url/$1"; }
       parts=$(get "$key.parts")
       [ -n "$parts" ] || { echo "$key: no parts listed"; exit 1; }
       trap 'rm -f "$out.part"' EXIT

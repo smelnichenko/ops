@@ -114,6 +114,12 @@
       - --silent
       - --show-error
       - --fail-with-body
+      - --connect-timeout
+      - "30"
+      - --speed-limit
+      - "10240"
+      - --speed-time
+      - "120"
       - --config
       - "-"
       - --form

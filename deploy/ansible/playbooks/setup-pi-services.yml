@@ -696,7 +696,7 @@
           echo "REFUSED on {{ inventory_hostname }}: Forgejo serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
         fi
         systemctl restart forgejo
-        for _ in $(seq 90); do curl -sf -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0; sleep 2; done
+        for _ in $(seq 90); do curl -sf --max-time 10 -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0; sleep 2; done
         echo "Forgejo on {{ inventory_hostname }} not serving 180 s after its restart" >&2; exit 1
       args:
         executable: /bin/bash
@@ -712,7 +712,7 @@
         fi
         systemctl daemon-reload
         systemctl restart keycloak
-        for _ in $(seq 120); do curl -sf -o /dev/null http://127.0.0.1:8080/realms/master && exit 0; sleep 2; done
+        for _ in $(seq 120); do curl -sf --max-time 10 -o /dev/null http://127.0.0.1:8080/realms/master && exit 0; sleep 2; done
         echo "Keycloak on {{ inventory_hostname }} not serving 240 s after its restart" >&2; exit 1
       args:
         executable: /bin/bash
@@ -731,7 +731,7 @@
         systemctl restart haproxy
         for _ in $(seq 90); do
           systemctl is-active --quiet haproxy \
-            && { ! systemctl is-enabled --quiet forgejo || curl -sf -o /dev/null http://127.0.0.1:3000/api/v1/version; } \
+            && { ! systemctl is-enabled --quiet forgejo || curl -sf --max-time 10 -o /dev/null http://127.0.0.1:3000/api/v1/version; } \
             && exit 0
           sleep 2
         done

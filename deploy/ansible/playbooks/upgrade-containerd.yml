@@ -195,7 +195,7 @@
       check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
-        curl -fsSL https://download.docker.com/linux/debian/dists/{{ ansible_facts.distribution_release }}/stable/binary-amd64/Packages \
+        curl -fsSL --max-time 120 https://download.docker.com/linux/debian/dists/{{ ansible_facts.distribution_release }}/stable/binary-amd64/Packages \
           | awk '/^Package: /{p=$2} /^Version: /{if (p=="containerd.io") print $2}' \
           | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
       args:

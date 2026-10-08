@@ -401,7 +401,7 @@
               echo "admin.password file found"
               exit 0
             fi
-            HTTP=$(curl -sf -o /dev/null -w '%{http_code}' -K "$cfg" \
+            HTTP=$(curl -sf --max-time 30 -o /dev/null -w '%{http_code}' -K "$cfg" \
               "http://localhost:{{ nexus_port }}/service/rest/v1/status")
             if [ "$HTTP" = "200" ]; then
               echo "auth works with configured password"
@@ -442,7 +442,7 @@
           IFS= read -r cur; IFS= read -r new
           cur=${cur//\\/\\\\}; cur=${cur//\"/\\\"}
           printf 'user = "admin:%s"\n' "$cur" > "$cfg"
-          HTTP_CODE=$(printf '%s' "$new" | curl -sf -o /dev/null -w '%{http_code}' -K "$cfg" \
+          HTTP_CODE=$(printf '%s' "$new" | curl -sf --max-time 60 -o /dev/null -w '%{http_code}' -K "$cfg" \
             -X PUT -H "Content-Type: text/plain" --data-binary @- \
             "http://localhost:{{ nexus_port }}/service/rest/v1/security/users/admin/change-password")
           echo "Password change HTTP status: $HTTP_CODE"

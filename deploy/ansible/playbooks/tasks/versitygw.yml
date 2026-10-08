@@ -160,7 +160,7 @@
     fi
     systemctl restart versitygw
     for _ in $(seq 30); do
-      if curl -fsS -o /dev/null http://localhost:{{ vgw_port }}/health; then
+      if curl -fsS -o /dev/null --max-time 10 http://localhost:{{ vgw_port }}/health; then
         exit 0
       fi
       sleep 2
@@ -182,7 +182,7 @@
   when: not ansible_check_mode
   ansible.builtin.shell: |
     set -euo pipefail
-    curl -fsS -o /dev/null http://localhost:{{ vgw_port }}/health
+    curl -fsS -o /dev/null --max-time 10 http://localhost:{{ vgw_port }}/health
     pid=$(systemctl show -p MainPID --value versitygw)
     echo "running $(readlink /proc/$pid/exe)"
     versitygw --version

@@ -433,7 +433,7 @@
         roles=("leader","master","primary")
         print(next((m["name"] for m in d.get("members",[]) if m.get("role") in roles), ""))'
         for i in $(seq 1 60); do
-          LEADER=$(curl -sf http://localhost:8008/cluster 2>/dev/null \
+          LEADER=$(curl -sf --max-time 10 http://localhost:8008/cluster 2>/dev/null \
             | python3 -c "$PYEXTRACT" 2>/dev/null) || true
           [ -n "$LEADER" ] && echo "$LEADER" && exit 0
           sleep 5
@@ -573,7 +573,7 @@
         states=[m.get("state") for m in d.get("members",[])]
         ok=all(s in ("running","streaming") for s in states) and len(states) >= 2
         sys.exit(0 if ok else 1)'
-        curl -sf http://localhost:8008/cluster 2>/dev/null | python3 -c "$PYCHECK"
+        curl -sf --max-time 10 http://localhost:8008/cluster 2>/dev/null | python3 -c "$PYCHECK"
       register: _cluster_ready
       retries: 60
       delay: 5

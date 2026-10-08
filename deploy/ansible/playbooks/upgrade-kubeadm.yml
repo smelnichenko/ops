@@ -134,7 +134,7 @@
             set -euo pipefail
             tmp=$(mktemp -d)
             trap 'rm -rf "$tmp"' EXIT
-            curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key -o "$tmp/Release.key"
+            curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key -o "$tmp/Release.key"
             gpg --batch --dearmor -o "$tmp/keyring.gpg" "$tmp/Release.key"
             install -m 0644 "$tmp/keyring.gpg" /etc/apt/keyrings/kubernetes-apt-keyring.gpg
           args:
@@ -154,7 +154,7 @@
           check_mode: false
           ansible.builtin.shell: |
             set -o pipefail
-            curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Packages \
+            curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Packages \
               | awk '/^Package: /{p=$2} /^Version: /{if (p=="kubeadm") print $2}' \
               | grep -E '^{{ target | regex_escape }}-' | sort -V | tail -1
           args:

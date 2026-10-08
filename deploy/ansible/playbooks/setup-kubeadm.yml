@@ -193,7 +193,7 @@
         set -e
         ARCH=$(dpkg --print-architecture)
         VERSION=2.0.3
-        curl -fsSL -o /tmp/nerdctl-full.tar.gz \
+        curl -fsSL --connect-timeout 30 --speed-limit 10240 --speed-time 120 -o /tmp/nerdctl-full.tar.gz \
           "https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
         tar -C /usr/local -xzf /tmp/nerdctl-full.tar.gz
         rm -f /tmp/nerdctl-full.tar.gz
@@ -331,7 +331,7 @@
         set -euo pipefail
         tmp=$(mktemp -d)
         trap 'rm -rf "$tmp"' EXIT
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key -o "$tmp/Release.key"
+        curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key -o "$tmp/Release.key"
         gpg --batch --dearmor -o "$tmp/keyring.gpg" "$tmp/Release.key"
         install -m 0644 "$tmp/keyring.gpg" /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       args:
@@ -580,7 +580,7 @@
 
     - name: Install Helm  # noqa: command-instead-of-module risky-shell-pipe
       ansible.builtin.shell: |
-        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        curl -fsSL --max-time 120 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
       args:
         creates: /usr/local/bin/helm
 

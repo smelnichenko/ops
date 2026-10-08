@@ -17,8 +17,8 @@
       set -euo pipefail
       f={{ upload_file | quote }}; key={{ upload_key | quote }}; part={{ upload_part_bytes | int }}
       url="{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}"
-      put() { curl -fsS --retry 3 -K {{ store_curl }} -T "$1" "$url/$2"; }
-      get() { curl -fsS --retry 3 -K {{ store_curl }} "$url/$1"; }
+      put() { curl -fsS --retry 3 --connect-timeout 30 --speed-limit 10240 --speed-time 120 -K {{ store_curl }} -T "$1" "$url/$2"; }
+      get() { curl -fsS --retry 3 --connect-timeout 30 --speed-limit 10240 --speed-time 120 -K {{ store_curl }} "$url/$1"; }
       [ "$part" -gt 0 ] || { echo "upload_part_bytes: $part"; exit 1; }
       size=$(stat -c %s "$f")
       n=$(( size == 0 ? 1 : (size + part - 1) / part ))

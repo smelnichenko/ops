@@ -81,7 +81,7 @@
             cmd: |
               set -euo pipefail
               url="{{ upgrade_backup_endpoint }}/{{ upgrade_backup_bucket }}"
-              s() { curl -sS -K {{ store_curl }} -o /dev/null -w '%{http_code}' "$@"; }
+              s() { curl -sS --max-time 60 -K {{ store_curl }} -o /dev/null -w '%{http_code}' "$@"; }
               code=$(s -I "$url")
               if [ "$code" = 200 ]; then echo exists; exit 0; fi
               [ "$code" = 404 ] || { echo "HEAD $url: $code"; exit 1; }
