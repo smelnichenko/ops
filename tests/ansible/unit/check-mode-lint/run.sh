@@ -103,6 +103,16 @@ INC = {"inc.yml": "- name: probe\n  ansible.builtin.command: cat /x\n  register:
                   "- name: read\n  ansible.builtin.debug:\n    msg: '{{ _p.stdout }}'\n"}
 check("an include_tasks tagged b, its untagged tasks under --tags b: not run, not named",
       play("    - ansible.builtin.include_tasks: inc.yml\n      tags: [b]\n", {"b"}, extra=INC), [])
+# a play's tags reach an include's tasks (their block's parent is the play); the include's own do not
+open(os.path.join(work, "inc.yml"), "w").write(INC["inc.yml"])
+open(os.path.join(work, "p4.yml"), "w").write("- hosts: x\n  tags: [b]\n  tasks:\n"
+                                              "    - ansible.builtin.include_tasks: inc.yml\n")
+check("a play tagged b, an untagged include_tasks, --tags b: its tasks run, named",
+      [x.split("reads ")[1].split(" -")[0] for x in c.lint(os.path.join(work, "p4.yml"), {"b"})], ["_p.stdout"])
+open(os.path.join(work, "p5.yml"), "w").write("- hosts: x\n  tasks:\n    - tags: [b]\n      block:\n"
+                                              "        - ansible.builtin.include_tasks: inc.yml\n")
+check("a block tagged b around an untagged include_tasks, --tags b: its tasks run, named (measured, ansible-core 2.20)",
+      [x.split("reads ")[1].split(" -")[0] for x in c.lint(os.path.join(work, "p5.yml"), {"b"})], ["_p.stdout"])
 check("an import_tasks tagged b: its tasks inherit it, named",
       play("    - ansible.builtin.import_tasks: inc.yml\n      tags: [b]\n", {"b"}, extra=INC), ["_p.stdout"])
 check("an include_tasks with apply tags b: its tasks run, named",

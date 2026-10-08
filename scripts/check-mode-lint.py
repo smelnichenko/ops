@@ -112,8 +112,9 @@ def flat(tasks, base, conds=(), tags=frozenset(), seen=(), select=None):
             if mod == "include_tasks":
                 if not selected(tg, select):
                     continue
+                # its tasks take its parents' tags (the play's, its blocks') and apply:'s - never its own
                 apply_tags = apply.get("tags", [])
-                tg = set(apply_tags if isinstance(apply_tags, list) else [apply_tags])
+                tg = set(tags) | set(apply_tags if isinstance(apply_tags, list) else [apply_tags])
             path = os.path.normpath(os.path.join(base, str(ref).replace("{{ playbook_dir }}", base)))
             if "{{" in path or not os.path.exists(path):
                 yield {"__not_followed__": ref}, c, tg
