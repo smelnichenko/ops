@@ -30,6 +30,14 @@ if mine "$j"; then stop_groups 5 "$j" > "$W/stop.out"; fi
 wait "$j"; rc=$?
 check "a job leading no group yet: TERMed by its PID, ended at once - nothing killed after the grace" \
   "$rc $((SECONDS - t0 < 3)) $(grep -c killed "$W/stop.out")" "143 1 0"
+# one leading no group yet that ignores the TERM: still counted alive by its PID - KILLed after the grace, said (read
+# as gone at once, it ran on)
+bash -c 'trap "" TERM; sleep 30' & j=$!
+sleep 0.2
+if mine "$j"; then stop_groups 1 "$j" > "$W/stop.out"; fi
+wait "$j"; rc=$?
+check "a job leading no group yet, ignoring the TERM: counted alive, KILLed after the grace, said" \
+  "$rc $(grep -c 'outlived the stop by 1 s - killed' "$W/stop.out")" "137 1"
 # a live group read alive with no external command at hand
 set -m
 sleep 30 & g=$!
@@ -44,6 +52,12 @@ wait "$r"
 sleep 30 & k=$!
 own_jobs got
 check "own_jobs: the running job, not one reaped already" "${got[*]}" "$k"
+# `jobs -p` naming a live process that is no child of this shell (a reaped job's PID the system gave another - here
+# this test's own parent): never listed
+jobs() { echo "$PPID"; echo "$k"; }
+own_jobs got
+unset -f jobs
+check "own_jobs: a PID jobs names that is no child of this shell (another process's now) - not listed" "${got[*]}" "$k"
 mine "$k" && kill "$k"
 wait "$k" 2> /dev/null
 # the grace on uptime_s's clock: one that jumps 100 s at each read ends a 30 s grace at its second read - a TERM-
