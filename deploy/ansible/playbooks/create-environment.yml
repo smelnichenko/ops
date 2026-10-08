@@ -85,13 +85,9 @@
       changed_when: false
       failed_when: false
 
-    # The generated values and the external keys (from .env via lookup('env'), like
-    # seed-vault-secrets.yml) reach the script through the task environment and go
-    # to Vault as JSON on stdin — no secret on the command line, no K=V parsing
-    # (a value starting with `@` or `-` would be read as a file or stdin by the CLI),
-    # no shell re-parsing of quotes or `$`. An absent key is skipped visibly, never
-    # written as a placeholder. Caveat: at -vvv Ansible prints a task's environment
-    # in the EXEC line, so never run this at that verbosity on a shared terminal.
+    # The generated values and the external keys (from .env via lookup('env'), like seed-vault-secrets.yml) go to Vault
+    # as JSON - no K=V parsing (a value starting with `@` or `-` would be read as a file or stdin by the CLI), no shell
+    # re-parsing of quotes or `$`; an absent key is skipped visibly, never written as a placeholder.
     # every value on stdin as one JSON document, each handed to jq as a here-string: none on a command line - the
     # environment Ansible passes reaches sudo's, jq's --arg values its own, and any local user reads those
     - name: Seed Vault secrets for {{ env_ns }}
