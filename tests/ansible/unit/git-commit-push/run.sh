@@ -18,43 +18,88 @@ check() {  # check <name> <got> <want>
   if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
   echo "FAIL $1: got '$2', want '$3'"; fails=$((fails + 1))
 }
-export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t GIT_CONFIG_NOSYSTEM=1 HOME=$W
+# the script's commits by the environments' automation (its playbooks' identity); another's by someone
+export GIT_AUTHOR_NAME=env-automation GIT_AUTHOR_EMAIL=a@a GIT_COMMITTER_NAME=env-automation GIT_COMMITTER_EMAIL=a@a
+export GIT_CONFIG_NOSYSTEM=1 HOME=$W
+someone() { GIT_AUTHOR_NAME=someone GIT_COMMITTER_NAME=someone git "$@"; }
 git init -q --bare -b main "$W/remote.git"
 git init -q -b main "$W/infra" && git -C "$W/infra" remote add origin "$W/remote.git"
-echo a > "$W/infra/a" && git -C "$W/infra" add a && git -C "$W/infra" commit -qm base && git -C "$W/infra" push -q origin main
+mkdir -p "$W/infra/env" && echo a > "$W/infra/a" && echo e > "$W/infra/env/base" && git -C "$W/infra" add -A \
+  && someone -C "$W/infra" commit -qm base && git -C "$W/infra" push -q origin main
 if [ ! -x "$S" ]; then
   check "the script there, executable" "missing" "there"
 else
-  echo b > "$W/infra/b"
-  out=$(bash "$S" "$W/infra" "env: create x" 2>&1); rc=$?
-  check "a change: committed with the message, pushed to origin's main" \
+  # commit mode: the environment's paths after --, relative to the checkout
+  push() { bash "$S" "$W/infra" "$1" "${2:-}" -- env/x env/y 2>&1; }
+  echo b > "$W/infra/env/x"
+  out=$(push "env: create x"); rc=$?
+  check "a change in the environment's paths: committed with the message, pushed to origin's main" \
     "$rc $(git -C "$W/remote.git" log -1 --format=%s main)" "0 env: create x"
-  out=$(bash "$S" "$W/infra" "env: create y" 2>&1); rc=$?
+  out=$(push "env: create y"); rc=$?
   check "nothing changed: nothing committed or pushed, said" \
     "$rc $(git -C "$W/remote.git" log -1 --format=%s main) $(grep -c 'NOTHING TO COMMIT' <<< "$out")" "0 env: create x 1"
+  out=$(bash "$S" "$W/infra" "env: create z" "" 2>&1); rc=$?
+  check "no paths given: refused (it would stage the whole checkout)" "$rc $(grep -c 'REFUSED' <<< "$out")" "1 1"
   git init -q --bare -b main "$W/other.git"
   git -C "$W/other.git" fetch -q "$W/remote.git" main:main
-  rm "$W/infra/b"
-  out=$(bash "$S" "$W/infra" "env: destroy x" "$W/other.git" 2>&1); rc=$?
-  check "a URL given: pushed there" "$rc $(git -C "$W/other.git" log -1 --format=%s main)" "0 env: destroy x"
+  rm "$W/infra/env/x"
+  out=$(push "env: destroy x" "$W/other.git"); rc=$?
+  check "a URL given: pushed there (a removal staged too)" "$rc $(git -C "$W/other.git" log -1 --format=%s main)" \
+    "0 env: destroy x"
+  # another session's edit outside the environment's paths: refused - nothing staged, committed or pushed
+  echo y > "$W/infra/env/y" && echo theirs-wip > "$W/infra/a"
+  out=$(push "env: create w"); rc=$?
+  check "a change outside the environment's paths (another's work): refused, named - nothing staged, committed, pushed" \
+    "$rc $(grep -c 'REFUSED.* a' <<< "$out") $(git -C "$W/infra" diff --cached --name-only | wc -l) \
+$(git -C "$W/remote.git" log -1 --format=%s main)" "1 1 0 env: create x"
+  git -C "$W/infra" checkout -q a
+  out=$(push "env: create w"); rc=$?
+  check "... its change gone: the environment's committed, pushed" "$rc $(git -C "$W/remote.git" log -1 --format=%s main)" \
+    "0 env: create w"
   # the remote's main moved meanwhile (another clone's push)
   git clone -q "$W/remote.git" "$W/elsewhere" && echo t > "$W/elsewhere/tag" && git -C "$W/elsewhere" add tag \
-    && git -C "$W/elsewhere" commit -qm "cd: image tag" && git -C "$W/elsewhere" push -q origin main
-  echo q > "$W/infra/q"
-  out=$(bash "$S" "$W/infra" "env: create q" 2>&1); rc=$?
+    && someone -C "$W/elsewhere" commit -qm "cd: image tag" && git -C "$W/elsewhere" push -q origin main
+  echo q > "$W/infra/env/x"
+  out=$(push "env: create q"); rc=$?
   check "the remote's main moved meanwhile: rebased onto it, pushed - both there, this run's on top" \
     "$rc $(git -C "$W/remote.git" log -1 --format=%s main) $(git -C "$W/remote.git" log --format=%s main | grep -c '^cd: image tag$')" \
     "0 env: create q 1"
   # a commit an earlier run made and could not push (rejected): the next run pushes it
-  echo p > "$W/infra/p" && git -C "$W/infra" add p && git -C "$W/infra" commit -qm "env: create p"
-  out=$(bash "$S" "$W/infra" "env: create p" 2>&1); rc=$?
-  check "a commit an earlier run could not push: pushed by the next, nothing new to commit" \
+  echo p > "$W/infra/env/y" && git -C "$W/infra" add env/y && git -C "$W/infra" commit -qm "env: create p"
+  out=$(push "env: create p"); rc=$?
+  check "a commit an earlier run could not push (the automation's): pushed by the next, nothing new to commit" \
     "$rc $(git -C "$W/remote.git" log -1 --format=%s main)" "0 env: create p"
+  # a commit of another's ahead (held back, another session's): refused - in both modes - nothing pushed
+  echo h > "$W/infra/held" && git -C "$W/infra" add held && someone -C "$W/infra" commit -qm "WIP: held back"
+  echo r > "$W/infra/env/x"
+  out=$(push "env: create r"); rc=$?
+  check "a commit not the automation's ahead: refused, named - nothing pushed" \
+    "$rc $(grep -c 'REFUSED.*WIP: held back' <<< "$out") $(git -C "$W/remote.git" log --format=%s main | grep -c 'WIP')" "1 1 0"
+  out=$(bash "$S" ready "$W/infra" 2>&1); rc=$?
+  check "... ready refuses it too" "$rc $(grep -c 'REFUSED.*WIP: held back' <<< "$out")" "1 1"
+  git -C "$W/infra" checkout -q env/x
+  git -C "$W/infra" reset -q --hard "$(git -C "$W/remote.git" rev-parse main)"
+  # the remote's main read into a ref of the script's own: a fetch of another branch in between (FETCH_HEAD) is no base
+  git -C "$W/elsewhere" pull -q --rebase origin main && git -C "$W/elsewhere" checkout -qb other \
+    && echo o > "$W/elsewhere/o" && git -C "$W/elsewhere" add o && someone -C "$W/elsewhere" commit -qm "other branch" \
+    && git -C "$W/elsewhere" push -q origin other && git -C "$W/elsewhere" checkout -q main
+  mkdir -p "$W/wrap" && cat > "$W/wrap/git" <<'WRAP'
+#!/bin/bash
+/usr/bin/git "$@"; rc=$?
+# another fetch right after the script's own, in the same checkout - FETCH_HEAD then the other branch
+case "$*" in *" fetch "*" main"*) /usr/bin/git -C "$INFRA" fetch -q origin other ;; esac
+exit $rc
+WRAP
+  chmod +x "$W/wrap/git"
+  echo f > "$W/infra/env/x"
+  out=$(INFRA=$W/infra PATH="$W/wrap:$PATH" push "env: create f"); rc=$?
+  check "another fetch between the script's fetch and its rebase: rebased onto the remote's main, never that branch" \
+    "$rc $(git -C "$W/remote.git" log --format=%s main | grep -c '^other branch$')" "0 0"
   # the same line changed on both sides: refused, nothing pushed, the checkout not left mid-rebase
-  git -C "$W/elsewhere" pull -q --rebase origin main && echo theirs > "$W/elsewhere/a" \
-    && git -C "$W/elsewhere" commit -qam "theirs" && git -C "$W/elsewhere" push -q origin main
-  echo ours > "$W/infra/a"
-  out=$(bash "$S" "$W/infra" "env: create c" 2>&1); rc=$?
+  git -C "$W/elsewhere" pull -q --rebase origin main && echo theirs > "$W/elsewhere/env/x" \
+    && someone -C "$W/elsewhere" commit -qam "theirs" && git -C "$W/elsewhere" push -q origin main
+  echo ours > "$W/infra/env/x"
+  out=$(push "env: create c"); rc=$?
   check "a conflict with the remote's main: refused, nothing pushed, no rebase left in progress" \
     "$rc $(grep -c 'REFUSED' <<< "$out") $(git -C "$W/remote.git" log -1 --format=%s main) \
 $(ls -d "$(git -C "$W/infra" rev-parse --absolute-git-dir)"/rebase-* 2> /dev/null | wc -l) \
@@ -68,15 +113,15 @@ $(git -C "$W/infra" branch --show-current)" "1 1 theirs 0 main"
   out=$(bash "$S" ready "$W/infra" 2>&1); rc=$?
   check "ready, a file not tracked: refused" "$rc $(grep -c 'REFUSED' <<< "$out")" "1 1"
   rm "$W/infra/untracked"
-  echo n > "$W/elsewhere/n" && git -C "$W/elsewhere" add n && git -C "$W/elsewhere" commit -qm "newer" \
+  echo n > "$W/elsewhere/n" && git -C "$W/elsewhere" add n && someone -C "$W/elsewhere" commit -qm "newer" \
     && git -C "$W/elsewhere" push -q origin main
   out=$(bash "$S" ready "$W/infra" 2>&1); rc=$?
   check "ready, clean and behind: brought up to date, said (a change)" \
     "$rc $(git -C "$W/infra" log -1 --format=%s main) $(grep -c 'READY.*UPDATED' <<< "$out")" "0 newer 1"
   out=$(bash "$S" ready "$W/infra" 2>&1); rc=$?
   check "ready, up to date already: no change said" "$rc $(grep -c READY <<< "$out") $(grep -c UPDATED <<< "$out")" "0 1 0"
-  git -C "$W/infra" checkout -qb side && echo c > "$W/infra/c"
-  out=$(bash "$S" "$W/infra" "env: create z" 2>&1); rc=$?
+  git -C "$W/infra" checkout -qb side && echo c > "$W/infra/env/x"
+  out=$(push "env: create z"); rc=$?
   check "a checkout not on main: refused, nothing staged" \
     "$rc $(grep -c 'REFUSED' <<< "$out") $(git -C "$W/infra" diff --cached --name-only | wc -l)" "1 1 0"
   out=$(bash "$S" ready "$W/infra" 2>&1); rc=$?
@@ -90,11 +135,21 @@ for book in ("create-environment", "destroy-environment"):
     infra = [t for t in tasks if "cluster_dir" in str(t) or "infra_dir" in str(t)]
     first, last = (str((t.get("ansible.builtin.script") or {}).get("cmd", "")) for t in (infra[0], infra[-1]))
     ident = all("GIT_COMMITTER_NAME" in (t.get("environment") or {}) for t in (infra[0], infra[-1]))
-    print(book, "git-commit-push.sh ready" in first, "git-commit-push.sh ready" not in last and "git-commit-push.sh" in last,
-          ident, end=" ")
+    # the paths it commits: every one a task of it writes, relative to the checkout
+    play = yaml.safe_load(open(book + ".yml"))[0]
+    paths = [str(x) for x in play["vars"].get("_infra_env_paths") or []]
+    written = {str((t.get(m) or {}).get(k)).replace("{{ item }}", str(i)) for t in tasks
+               for m in ("ansible.builtin.copy", "ansible.builtin.file", "ansible.builtin.lineinfile",
+                         "ansible.builtin.template") for k in ("dest", "path")
+               if isinstance(t.get(m), dict) and (t.get(m) or {}).get(k) for i in (t.get("loop") or ["{{ item }}"])}
+    rel = lambda w: w.replace("{{ cluster_dir }}", "clusters/production")
+    covered = all(any(rel(w) == p or rel(w).startswith(p + "/") for p in paths) or rel(w) in (
+        "clusters/production/cluster-config", "clusters/production/argocd/apps") for w in written)  # dirs made, no file
+    print(book, "git-commit-push.sh ready" in first, "git-commit-push.sh ready" not in last and "git-commit-push.sh" in last
+          and " -- " in last and "_infra_env_paths" in last, ident, bool(paths) and covered, end=" ")
 ')
-check "both playbooks: ready first, before reading or writing the checkout; committed last; git's identity on both" \
-  "$order" "create-environment True True True destroy-environment True True True "
+check "both playbooks: ready first; committed last with the environment's paths (every one a task writes); identity" \
+  "$order" "create-environment True True True True destroy-environment True True True True "
 # every script a production playbook runs by the script module exists (its path as Ansible renders playbook_dir)
 missing=$(cd "$ROOT/deploy/ansible/playbooks" && python3 -c '
 import glob, re, shlex, yaml

@@ -18,6 +18,19 @@
     env_ns: "schnappy-{{ env_name }}"
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
     cluster_dir: "{{ infra_dir }}/clusters/production"
+    # what this playbook writes in the infra checkout, relative to it: only these are committed (the checkout is the
+    # operator's own - other work there is refused, never pushed with the environment's)
+    _infra_env_paths:
+      - "clusters/production/{{ env_ns }}-data"
+      - "clusters/production/{{ env_ns }}-apps"
+      - "clusters/production/{{ env_ns }}-mesh"
+      - "clusters/production/cluster-config/{{ env_ns }}-namespace.yaml"
+      - "clusters/production/cluster-config/{{ env_ns }}-default-deny.yaml"
+      - clusters/production/cluster-config/forgejo-registry-secret.yaml
+      - clusters/production/schnappy-mesh/values.yaml
+      - clusters/production/argocd/apps/schnappy-data-envs.yaml
+      - clusters/production/argocd/apps/schnappy-apps-envs.yaml
+      - clusters/production/argocd/apps/schnappy-mesh-envs.yaml
     vault_addr: "https://127.0.0.1:8200"
     keycloak_url: "http://localhost:8080"
     infra_git_url: "{{ infra_git_url_override | default('') }}"
@@ -213,7 +226,9 @@
 
     - name: Commit and push infra changes
       ansible.builtin.script:
-        cmd: "{{ playbook_dir }}/scripts/git-commit-push.sh '{{ infra_dir }}' 'env: destroy {{ env_ns }}' '{{ infra_git_url }}'"
+        cmd: >-
+          {{ playbook_dir }}/scripts/git-commit-push.sh '{{ infra_dir }}' 'env: destroy {{ env_ns }}' '{{ infra_git_url }}'
+          -- {{ _infra_env_paths | map('quote') | join(' ') }}
       delegate_to: localhost
       become: false
       changed_when: true
