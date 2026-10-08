@@ -131,6 +131,14 @@ check("the unseal keys on stdin without no_log, a token file's content read by a
       [bool(named({"ansible.builtin.shell": {"cmd": "cat > f", "stdin": "{{ _unseal_keys.content | b64decode }}"}})),
        bool(named({"ansible.builtin.shell": "vault login {{ lookup('ansible.builtin.file', vault_token_file) }}"})),
        bool(named({"ansible.builtin.shell": "cat {{ vault_token_file }}"}))], [True, True, False])
+# a chain of three variables: each holds the one before (the holders' fixpoint followed to its end)
+check("through a chain of three variables: named", bool([n for t, sc in judged([{"hosts": "all", "vars": {
+    "a": "{{ a_password }}", "b": "x {{ a }}", "c": "y {{ b }}"}, "tasks": [{"ansible.builtin.shell": "run {{ c }}"}]}])
+    for n in named(t, sc)]), True)
+# every section a play runs: pre_tasks, tasks, post_tasks, handlers
+check("a secret in each section a play runs - pre_tasks, post_tasks, handlers: named",
+      [bool([n for t, sc in judged([{"hosts": "all", k: [{"ansible.builtin.shell": "x {{ db_password }}"}]}])
+             for n in named(t, sc)]) for k in ("pre_tasks", "post_tasks", "handlers")], [True, True, True])
 check("a variable holding no secret, one named alike in plain text: not named",
       named({"vars": {"k": "{{ minio_url }}"}, "ansible.builtin.shell": "echo k {{ k }}"}), [])
 check("a module that puts an argument on a command line (git's repo): named; a passphrase too",

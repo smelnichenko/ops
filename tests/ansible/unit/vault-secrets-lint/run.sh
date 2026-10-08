@@ -98,6 +98,24 @@ def problems(path, task):
     return out
 
 
+def scan(f, used):
+    """What a playbook or task file does wrong: its plays' vars and environment, every task; the exceptions it uses
+    added to `used`."""
+    out, doc = [], load(f)
+    for p in plays(doc):
+        if "VAULT_SKIP_VERIFY" in yaml.safe_dump(p.get("vars") or {}, width=10000):
+            out.append(f"{f}: play '{p.get('name')}' sets VAULT_SKIP_VERIFY in its vars")
+        if INSECURE.search(yaml.safe_dump(p.get("environment") or {}, width=10000)):
+            out.append(f"{f}: play '{p.get('name')}' does not verify a server's certificate in its environment")
+    for t in tasks(doc):
+        out += problems(f, t)
+        if (f, str(t.get("register", ""))) in NOT_A_TOKEN:
+            used.add((f, str(t.get("register"))))
+        if (f, t.get("name")) in NOT_A_SECRET_TASK:
+            used.add((f, t.get("name")))
+    return out
+
+
 fails = 0
 def check(name, got, want):
     global fails
@@ -153,22 +171,16 @@ check("a fact named as a secret, a generated key registered: named",
        len(problems("f", {"name": "w", "ansible.builtin.set_fact": {"_token_works": "{{ r.status == 200 }}"}}))],
       [1, 1, 0, 0])
 check("curl's flags combined (-sk): named", len(problems("f", {"name": "c", "ansible.builtin.shell": "curl -sk https://x"})), 1)
+# a play's environment reaches every task of it: Vault's verify switched off there is named
+import tempfile as _tf, os as _os
+_d = _tf.mkdtemp()
+_p = _os.path.join(_d, "p.yml")
+open(_p, "w").write("- hosts: all\n  environment: {VAULT_SKIP_VERIFY: '1'}\n  tasks:\n    - ansible.builtin.debug: {msg: x}\n")
+check("a play's environment switching Vault's verify off: named", len(scan(_p, set())), 1)
 found, used = [], set()
 paths = files("deploy/ansible/playbooks")
 for f in paths:
-    doc = load(f)
-    for p in plays(doc):
-        if "VAULT_SKIP_VERIFY" in yaml.safe_dump(p.get("vars") or {}, width=10000):
-            found.append(f"{f}: play '{p.get('name')}' sets VAULT_SKIP_VERIFY in its vars")
-    for p in plays(doc):
-        if INSECURE.search(yaml.safe_dump(p.get("environment") or {}, width=10000)):
-            found.append(f"{f}: play '{p.get('name')}' does not verify a server's certificate in its environment")
-    for t in tasks(doc):
-        found += problems(f, t)
-        if (f, str(t.get("register", ""))) in NOT_A_TOKEN:
-            used.add((f, str(t.get("register"))))
-        if (f, t.get("name")) in NOT_A_SECRET_TASK:
-            used.add((f, t.get("name")))
+    found += scan(f, used)
 check(f"{len(paths)} playbook and task files: Vault verified, tokens out of the log", found, [])
 check("every exception still needed", sorted((set(NOT_A_TOKEN) | set(NOT_A_SECRET_TASK)) - used), [])
 print("vault-secrets-lint: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
