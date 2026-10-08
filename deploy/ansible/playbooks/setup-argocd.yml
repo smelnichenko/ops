@@ -7,10 +7,11 @@
 #   - cert-manager installed (for TLS to cd.pmon.dev)
 #   - Vault + ESO running (for secrets)
 #
-# Vault secrets required:
-#   secret/schnappy/argocd:
-#     admin_password  — Argo CD admin password (bcrypt hash)
-#     client_secret   — Keycloak OIDC client secret
+# Secrets it takes (production's inventory, from ops/.env - none from Vault):
+#   argocd_keycloak_client_secret (KEYCLOAK_ARGOCD_CLIENT_SECRET) - Keycloak's OIDC client secret, into the
+#     argocd-oidc-keycloak Secret the Helm values reference ($argocd-oidc-keycloak:clientSecret)
+#   forgejo_admin_password - to make Argo CD's own Forgejo token (read:repository) for its git access
+# Argo CD's admin password is its own (the chart's argocd-initial-admin-secret); none is set here.
 #
 # Usage:
 #   ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml \
@@ -466,7 +467,7 @@
         - argocd_controller_rollout.resources[0].status.updatedReplicas | default(0) == argocd_controller_rollout.resources[0].spec.replicas
 
     # ================================================================
-    # Phase 4: Read Keycloak OIDC secret from Vault (used in Helm values above)
+    # Phase 4: Keycloak OIDC - its client secret in argocd-oidc-keycloak, referenced by the Helm values (Phase 3)
     # ================================================================
 
     - name: "PHASE 4: Keycloak OIDC"

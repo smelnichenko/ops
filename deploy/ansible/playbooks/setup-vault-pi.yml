@@ -231,7 +231,8 @@
             dest: /tmp/vault.zip
             checksum: "sha256:{{ vault_checksums[vault_arch] }}"
             mode: '0644'
-        # a preview's download fetched nothing: what reads the zip skipped then (it failed on a fresh host's preview)
+        # a preview's download fetched nothing: what reads the zip skipped then (it failed there). A fresh Pi's preview
+        # fails later all the same - on the CA and the CSR it would have made - no flow previews one
         - name: Unzip Vault
           ansible.builtin.unarchive:
             src: /tmp/vault.zip
