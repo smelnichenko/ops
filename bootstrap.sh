@@ -168,6 +168,11 @@ setup_vault_eso() {
   }
   # base64 alone: it goes into the script run as root on the Pi (a line of its own would end that heredoc)
   [[ $K8S_CA =~ ^[A-Za-z0-9+/]+=*$ ]] || { err "The cluster's CA (certificate-authority-data) is not base64"; return 1; }
+  # the ExternalSecret that proves External Secrets' login on the new config, Ready now: picked before anything is
+  # written - none Ready, nothing is switched
+  local es
+  es=$(eso_proof_target) || return 1
+  [[ -n $es ]] || log "no ExternalSecret on the store yet (a fresh cluster) - the login is proven when Argo makes them"
   local work
   work=$(mktemp -d) || return 1
   # this run's own directory, removed however the step ends
@@ -225,8 +230,10 @@ EOF
 
   # Vault's Kubernetes auth on the Pi: the script on ssh's stdin, the root token read there (on no command line - any
   # local user reads those in /proc), Vault verified against its CA (its certificate names 127.0.0.1); no
-  # token_reviewer_jwt - each client's own token reviews itself. A failure fails the step
-  if ! ssh "sm@${VAULT_PI}" "sudo bash -s" <<REMOTE; then
+  # token_reviewer_jwt - each client's own token reviews itself. The config before printed first - kept here, to put
+  # back if External Secrets' login on the new one is not proven (a read failing otherwise than "none" writes
+  # nothing); the role before the config, so a failure leaves the config as it was. A failure fails the step
+  if ! ssh "sm@${VAULT_PI}" "sudo bash -s" > "$work/config-before.json" <<REMOTE; then
 set -euo pipefail
 umask 077
 d=\$(mktemp -d)
@@ -237,54 +244,139 @@ B64
 export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
 VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
 export VAULT_TOKEN
-vault write auth/kubernetes/config kubernetes_host='${K8S_HOST}' kubernetes_ca_cert=@"\$d/ca.pem" \\
-  disable_local_ca_jwt=true > /dev/null
+if ! before=\$(vault read -format=json auth/kubernetes/config 2> "\$d/err"); then
+  grep -q 'No value found' "\$d/err" || { cat "\$d/err" >&2; exit 1; }
+  before='{}'
+fi
+printf '%s\n' "\$before"
 vault write auth/kubernetes/role/eso-role bound_service_account_names=external-secrets \\
   bound_service_account_namespaces=external-secrets policies=eso-reader ttl=1h > /dev/null
+vault write auth/kubernetes/config kubernetes_host='${K8S_HOST}' kubernetes_ca_cert=@"\$d/ca.pem" \\
+  disable_local_ca_jwt=true > /dev/null
 REMOTE
     err "Configuring Vault's Kubernetes auth on the Pi failed (above)"
     return 1
   fi
-  eso_login_proven || return 1
+  if [[ -n $es ]]; then
+    eso_switch_proven "$es" "$work/config-before.json" "$VAULT_PI" || return 1
+  fi
   log "ESO → Pi Vault configured"
 }
 
-# External Secrets' login on Vault's config as just written, proven before the old reviewer token goes: one
-# ExternalSecret of the store refreshed now (External Secrets keeps no Vault token between syncs - each logs in), its
-# refresh newer and Ready. Then production's old reviewer token deleted - a non-expiring token of External Secrets' own
-# account (it reads and updates every Secret), kept in Vault's config until the write above; not proven, it is kept.
-# A fresh cluster has neither yet: Argo makes the ExternalSecrets later.
-eso_login_proven() {
+# The ExternalSecret proving External Secrets' login on Vault's new config: one of the store, Ready before the switch
+# - printed; nothing printed on a fresh cluster (no ExternalSecret, no old reviewer token). A read that fails is an
+# error, never "none"
+eso_proof_target() {
   local store=vault-backend  # infra's clusters/production/cluster-config/cluster-secret-store.yaml
-  local es before now ready end
-  es=$(kubectl get externalsecret -A -o jsonpath="{range .items[?(@.spec.secretStoreRef.name==\"$store\")]}{.metadata.namespace}/{.metadata.name}{'\n'}{end}" | head -1)
-  if [[ -z $es ]]; then
-    if [[ -n $(kubectl -n external-secrets get secret vault-token-reviewer --ignore-not-found -o name) ]]; then
-      err "no ExternalSecret on $store to prove External Secrets' login with - the old reviewer token kept"
+  local list es token
+  list=$(kubectl get externalsecret -A -o jsonpath="{range .items[?(@.spec.secretStoreRef.name==\"$store\")]}{.metadata.namespace}/{.metadata.name} {.status.conditions[?(@.type==\"Ready\")].status}{'\n'}{end}") \
+    || { err "The ExternalSecrets of $store not listed - nothing switched"; return 1; }
+  if [[ -z $list ]]; then
+    token=$(kubectl -n external-secrets get secret vault-token-reviewer --ignore-not-found -o name) \
+      || { err "The old reviewer token's Secret not read - nothing switched"; return 1; }
+    if [[ -n $token ]]; then
+      err "no ExternalSecret on $store to prove External Secrets' login with - nothing switched, the old reviewer" \
+        "token kept"
       return 1
     fi
-    log "no ExternalSecret on $store yet (a fresh cluster) - the login is proven when Argo makes them"
     return 0
   fi
-  read -r before _ < <(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}')
+  es=$(awk '$2 == "True" {print $1; exit}' <<< "$list")
+  if [[ -z $es ]]; then
+    err "no ExternalSecret on $store Ready now to prove the switch with - nothing switched (kubectl get externalsecret -A)"
+    return 1
+  fi
+  printf '%s\n' "$es"
+}
+
+# External Secrets' login on Vault's config as just written, proven before the old reviewer token goes: the
+# ExternalSecret picked before the switch refreshed (External Secrets keeps no Vault token between syncs - each logs
+# in), then production's old reviewer token deleted - a non-expiring token of External Secrets' own account (it reads
+# and updates every Secret), kept in Vault's config until the write. Not proven: Vault's config as it was read before
+# the write put back with that token, and the login on it proven again
+eso_switch_proven() {
+  local es=$1 before=$2 pi=$3 gone
+  if eso_refreshed "$es"; then
+    log "External Secrets logged in on the new config ($es refreshed)"
+    gone=$(kubectl -n external-secrets delete secret vault-token-reviewer --ignore-not-found) \
+      || { err "the old reviewer token (external-secrets/vault-token-reviewer) not deleted"; return 1; }
+    [[ -z $gone ]] || log "the old reviewer token (external-secrets/vault-token-reviewer) deleted"
+    return 0
+  fi
+  err "External Secrets' login on the new config NOT proven - the old reviewer token kept; kubectl -n ${es%/*}" \
+    "describe externalsecret ${es#*/}"
+  eso_put_back "$before" "$pi" || return 1
+  if eso_refreshed "$es"; then
+    log "External Secrets logs in on the config put back ($es refreshed)"
+  else
+    err "External Secrets' login NOT even on the config put back - kubectl -n ${es%/*} describe externalsecret ${es#*/}"
+  fi
+  return 1
+}
+
+# One refresh of the ExternalSecret asked for and waited for (ESO_PROOF_SECONDS): a refresh time other than the one
+# before the ask, and Ready. Vault's writes settle first (ESO_SETTLE_SECONDS): a sync running through them logged in
+# before them. The time before not read fails it - never "refreshed"
+eso_refreshed() {
+  local es=$1 line before now ready end
+  sleep "${ESO_SETTLE_SECONDS:-5}"
+  if ! line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}') \
+      || ! read -r before _ <<< "$line" || [[ -z $before ]]; then
+    err "ExternalSecret $es's refresh time not read - nothing proven"
+    return 1
+  fi
   kubectl -n "${es%/*}" annotate externalsecret "${es#*/}" force-sync="$(date +%s)" --overwrite > /dev/null \
     || { err "Cannot ask ExternalSecret $es to refresh"; return 1; }
   end=$((SECONDS + ${ESO_PROOF_SECONDS:-90}))
   while :; do
-    read -r now ready < <(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}')
-    [[ $now != "$before" && $ready == True ]] && break
+    if line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}'); then
+      read -r now ready <<< "$line"
+      [[ $now != "$before" && $ready == True ]] && return 0
+    fi
     if ((SECONDS >= end)); then
-      err "External Secrets' login on the new config NOT proven: ExternalSecret $es not refreshed (Ready $ready," \
-        "refreshed $now) - the old reviewer token kept; kubectl -n ${es%/*} describe externalsecret ${es#*/}"
+      err "ExternalSecret $es not refreshed (Ready ${ready:-unread}, refreshed ${now:-unread})"
       return 1
     fi
     sleep 2
   done
-  log "External Secrets logged in on the new config ($es refreshed $now)"
-  local gone
-  gone=$(kubectl -n external-secrets delete secret vault-token-reviewer --ignore-not-found) \
-    || { err "the old reviewer token (external-secrets/vault-token-reviewer) not deleted"; return 1; }
-  [[ -z $gone ]] || log "the old reviewer token (external-secrets/vault-token-reviewer) deleted"
+}
+
+# Vault's config put back as it was read before the write, the old reviewer token (the kept Secret's) with it - both
+# on ssh's stdin, on no command line
+eso_put_back() {
+  local before=$1 pi=$2 jwt payload
+  if ! jwt=$(kubectl -n external-secrets get secret vault-token-reviewer -o jsonpath='{.data.token}' | base64 -d) \
+      || [[ ! $jwt =~ ^[A-Za-z0-9._-]+$ ]]; then
+    err "Vault's config NOT put back: no old reviewer token to put back (external-secrets/vault-token-reviewer)"
+    return 1
+  fi
+  if ! payload=$(python3 -c 'import base64, json, sys
+d = json.load(open(sys.argv[1])).get("data") or {}
+if not d:
+    sys.exit(1)
+d.pop("token_reviewer_jwt_set", None)
+d["token_reviewer_jwt"] = sys.stdin.read().strip()
+print(base64.b64encode(json.dumps(d).encode()).decode())' "$before" <<< "$jwt"); then
+    err "Vault's config NOT put back: none was read before the write"
+    return 1
+  fi
+  if ! ssh "sm@${pi}" "sudo bash -s" <<REMOTE; then
+set -euo pipefail
+umask 077
+d=\$(mktemp -d)
+trap 'rm -rf "\$d"' EXIT
+base64 -d > "\$d/config.json" <<'B64'
+${payload}
+B64
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
+export VAULT_TOKEN
+vault write auth/kubernetes/config @"\$d/config.json" > /dev/null
+REMOTE
+    err "Vault's config NOT put back: the write on the Pi failed (above)"
+    return 1
+  fi
+  log "Vault's config put back as it was before the write, its reviewer token with it"
 }
 
 # --- cluster-config (static resources) ---
