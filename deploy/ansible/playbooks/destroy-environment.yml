@@ -166,7 +166,7 @@
                 doc = yaml.safe_load(f)
             first = (doc['spec'].get('generators') or [{}])[0]
             dirs = [d.get('path', '') for d in (first.get('git') or {}).get('directories') or []]
-            # listed by its own directories (production's since 2026-04-10): their removal unlists it
+            # listed by its own directories (as production is since 2026-04-10): their removal unlists it
             if any(fnmatch.fnmatch('clusters/production/{{ env_ns }}-' + chart, d) for d in dirs):
                 continue
             if 'list' not in first:

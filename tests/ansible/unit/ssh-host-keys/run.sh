@@ -16,7 +16,7 @@ env -i HOME="$HOME" PATH="$PATH" ANSIBLE_CONFIG=ansible.cfg PYTHONDONTWRITEBYTEC
 import os, re, sys
 import yaml
 sys.path.insert(0, "../../tests/ansible/unit")
-from templar import condition, render  # noqa: E402
+from templar import as_loaded, condition, render  # noqa: E402
 from ansible.config.manager import ConfigManager
 from ansible.inventory.manager import InventoryManager
 from ansible.parsing.dataloader import DataLoader
@@ -151,7 +151,9 @@ check("the assert's ssh-argument pattern (its list, joined) read by it on the ar
 second = " ".join(str(that[1]).split()) if len(that) > 1 else ""
 args_expr = re.search(r"\(lookup\('ansible\.builtin\.config', 'ssh_args'.*?plugin_name='ssh'\)\)", second)
 clause = second.replace(args_expr.group(0), "(_args)") if args_expr else "false"
-tv = vp[0].get("vars") or {} if vp else {}
+# the task's vars as Ansible loads them (their text a template, rendered when read); ssh's arguments as a lookup
+# returns them (not)
+tv = as_loaded(vp[0].get("vars") or {}) if vp else {}
 judge = lambda a: condition(clause, _args=a, host_keys_unchecked_rebuilt_vms=False,  # noqa: E731
                             hostvars={"pi2": {"ansible_host": "192.168.11.6"}}, **tv)
 check("the assert as Ansible evaluates it: a value its lookup returns untemplated ({{ x }}, {% %}) refused - what it "

@@ -19,6 +19,18 @@ except ImportError:
         return text
 
 
+def as_loaded(value):
+    """A playbook's value as Ansible loads it: its text trusted as a template (a {{ }} or {% %} in a task's vars
+    rendered when read) - a plain string passed as a variable is not, as a lookup's answer is not."""
+    if isinstance(value, str):
+        return trust_as_template(value)
+    if isinstance(value, dict):
+        return {k: as_loaded(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [as_loaded(v) for v in value]
+    return value
+
+
 def render(text, **variables):
     return Templar(loader=DataLoader(), variables=variables).template(trust_as_template(text))
 
