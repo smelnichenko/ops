@@ -136,5 +136,19 @@ expect "the install failed and a container lost: the kubelet stays stopped, the 
 fresh; run takeup RUNNING="aaa" EXITED=""
 expect "the kubelet down after it ran on the swap (no list): said so, not started" 1 "kubelet=untouched list=gone" \
   "ran on it since"
+# the download waits for dpkg's lock (unattended-upgrades holds it at times): one at once failed the step
+lock=$(python3 - <<'PYLOCK'
+import yaml
+for p in yaml.safe_load(open("deploy/ansible/playbooks/upgrade-containerd.yml")):
+    for t in p.get("tasks") or []:
+        argv = (t.get("ansible.builtin.command") or {}).get("argv") if isinstance(t.get("ansible.builtin.command"), dict) \
+            else None
+        if argv and "--download-only" in argv:
+            waits = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "-o" and argv[i + 1].startswith("DPkg::Lock::Timeout=")]
+            print("waits" if waits and int(waits[0].split("=")[1]) > 0 else "no-wait")
+PYLOCK
+)
+if [ "$lock" = waits ]; then echo "PASS the download waits for dpkg's lock"
+else echo "FAIL the download waits for dpkg's lock: got '$lock'"; fails=$((fails + 1)); fi
 echo "containerd-list: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
