@@ -52,7 +52,7 @@
         set -euo pipefail
         export VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=1
         VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
-        # both answers on python's stdin, one after the other - never its arguments (any local user reads those)
+        # both answers on the stdin of python3, one after the other - never its arguments (any local user reads those)
         { vault kv get -format=json secret/schnappy/keycloak; vault kv get -format=json secret/schnappy/grafana; } \
           | python3 -c 'import json, sys
         s, d = sys.stdin.read(), json.JSONDecoder()
