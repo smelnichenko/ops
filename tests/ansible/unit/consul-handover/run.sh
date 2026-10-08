@@ -46,6 +46,9 @@ echo "consul $*" >> "$W/calls"
 case "$*" in
   "operator raft list-peers") sleep "${LIST_DELAY:-0}"
     [ -z "${FAKE_CLOCK:-}" ] || { read -r u _ < "$W/uptime"; echo "$(( ${u%.*} + 100 )).00 0.00" > "$W/uptime"; }
+    # FAKE_CLOCK_STEP: the host's uptime that many hundredths on at each read
+    [ -z "${FAKE_CLOCK_STEP:-}" ] || { read -r u _ < "$W/uptime"; c=${u/./}; c=$((10#$c + FAKE_CLOCK_STEP))
+      printf '%d.%02d 0.00\n' $((c / 100)) $((c % 100)) > "$W/uptime"; }
     # LIST_FAILS_ONCE: the first read after the transfer fails (the election under way)
     if [ -n "${LIST_FAILS_ONCE:-}" ] && [ -e "$W/transferred" ] && [ ! -e "$W/list-failed" ]; then
       touch "$W/list-failed"; echo "Error getting peers: Unexpected response code: 500 (No cluster leader)" >&2; exit 1
@@ -127,9 +130,9 @@ def run(task, here=None, other=None, leader_is="pi1", me="pi1", seconds=2, **env
     open(os.path.join(W, "leader"), "w").write(leader_is)
     sh = task["ansible.builtin.shell"]
     sh = render(sh if isinstance(sh, str) else sh["cmd"], **v).replace("/etc/vault-unseal", os.path.join(W, "vu"))
-    if env.get("FAKE_CLOCK"):  # the host's uptime a file the stubs move on
+    if env.get("FAKE_CLOCK") or env.get("FAKE_CLOCK_STEP"):  # the host's uptime a file the stubs move on
         sh = sh.replace("/proc/uptime", os.path.join(W, "uptime"))
-        open(os.path.join(W, "uptime"), "w").write("1000.00 0.00")
+        open(os.path.join(W, "uptime"), "w").write(env.get("FAKE_CLOCK_START", "1000.00") + " 0.00")
     t0 = time.monotonic()
     r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
@@ -191,6 +194,13 @@ check("Vault's wait on the host's uptime: past its time at the first round - ref
 rc, out, calls = run(leader, leader_is="pi1", seconds=20, FAKE_CLOCK="1")
 check("Consul's wait on the host's uptime: past its time at the first round - refused at once, not after 20 s",
       (rc, "REFUSED" in out, run.took < 5), (1, True, True))
+# its wait measured in hundredths: begun late in a second (1000.98, after the read that finds the leader here), 2 s
+# are to 1002.98 - the read at 1002.10 is in time (whole seconds ended it at 1002: the leadership moved unseen,
+# refused - the test failed 2 of 8 under load)
+rc, out, calls = run(leader, leader_is="pi1", seconds=2, TRANSFER_TAKES="1", LIST_FAILS_ONCE="1", FAKE_CLOCK_STEP="112",
+                     FAKE_CLOCK_START="999.86")
+check("the wait in hundredths: begun at 1000.98, a read at 1002.10 within its 2 s - moved, passes",
+      (rc, "LEADERSHIP MOVED" in out), (0, True))
 rc, out, calls = run(leader, leader_is="pi1", seconds=6, LIST_DELAY="1")
 check("a transfer not taken, each read slow: refused when its time is up, not after its count of tries",
       (rc, run.took < 11), (1, True))

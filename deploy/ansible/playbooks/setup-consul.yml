@@ -417,8 +417,9 @@
                     exit 1
                   fi
                   # the wait on the host's uptime (a wall-clock step - chrony's on a Pi without a clock - moves SECONDS)
-                  up() { local u; read -r u _ < /proc/uptime; echo "${u%.*}"; }
-                  end=$(( $(up) + {{ consul_handover_seconds }} ))
+                  # hundredths: whole seconds cut a wait begun late in a second to just over its length less one
+                  up() { local u; read -r u _ < /proc/uptime; u=${u/./}; echo "$((10#$u))"; }
+                  end=$(( $(up) + {{ consul_handover_seconds }} * 100 ))
                   while [ "$(up)" -lt "$end" ]; do
                     if [ "$(st $here | get is_self)" != True ] && [ "$(st $other | get is_self)" = True ]; then
                       echo "STEPPED DOWN: {{ _other_pi }}'s Vault active"
@@ -460,8 +461,9 @@
                   consul operator raft transfer-leader > /dev/null
                   # the wait on the host's uptime (a wall-clock step moves SECONDS); a read failing during the election
                   # is read again, never an exit unsaid
-                  up() { local u; read -r u _ < /proc/uptime; echo "${u%.*}"; }
-                  end=$(( $(up) + {{ consul_handover_seconds }} ))
+                  # hundredths: whole seconds cut a wait begun late in a second to just over its length less one
+                  up() { local u; read -r u _ < /proc/uptime; u=${u/./}; echo "$((10#$u))"; }
+                  end=$(( $(up) + {{ consul_handover_seconds }} * 100 ))
                   while [ "$(up)" -lt "$end" ]; do
                     l=$(leader) || l=""
                     if [ -n "$l" ] && [ "$l" != "{{ inventory_hostname }}" ]; then echo "LEADERSHIP MOVED to $l"; exit 0; fi
