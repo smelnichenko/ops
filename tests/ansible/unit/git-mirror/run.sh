@@ -139,6 +139,15 @@ pages = {"results": [{"json": admin_tokens[:3]}, {"json": admin_tokens[3:]}, {"j
 check("the older tokens: the mirror's own (git-mirror-*) alone, from every page - Argo CD's, Woodpecker's, a name "
       "merely holding it kept", [x["id"] for x in render(dele[0]["loop"], _git_mirror_tokens=pages)] if dele else None,
       [1, 4])
+# a token gone already (deleted meanwhile - a run cut short after its delete, by hand) is what the delete wants: 404
+# fails no play whose new token is in place by then - the new token's own, on its failure, too
+# - Argo CD's token rotation (setup-argocd) as this one
+from plays import actions, files, load, tasks as all_tasks  # noqa: E402
+deletes = [(f, t.get("name"), v.get("status_code")) for f in files("deploy/ansible") for t in all_tasks(load(f))
+           for m, v in actions(t) if str(m).split(".")[-1] == "uri" and isinstance(v, dict)
+           and str(v.get("method", "")).upper() == "DELETE" and "/tokens/" in str(v.get("url"))]
+check("every Forgejo token delete (the mirror's, Argo CD's) takes 404 (gone already) as done",
+      ([x[1] for x in deletes if 404 not in (x[2] if isinstance(x[2], list) else [x[2]])], len(deletes) >= 3), ([], True))
 check("the older tokens: none read (the kept token reads) - none deleted",
       list(render(dele[0]["loop"], _git_mirror_tokens={"results": [{"skipped": True}] * 3})) if dele else None, [])
 listing = next((t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "GET"

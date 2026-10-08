@@ -137,6 +137,7 @@
     - name: Does its token still read the root app's repository
       check_mode: false
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/repos/{{ argocd_root_repo }}"
         method: GET
         headers:
@@ -154,6 +155,7 @@
     - name: Forgejo's tokens of this user
       check_mode: false
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: GET
         user: "{{ _forgejo_user }}"
@@ -167,6 +169,7 @@
 
     - name: A new token for Argo CD, under a new name (the old one stays until the secret holds the new one)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
         method: POST
         user: "{{ _forgejo_user }}"
@@ -208,13 +211,14 @@
 
     - name: Delete the older Argo CD tokens (the secret holds the new one now)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ item.id }}"
         method: DELETE
         user: "{{ _forgejo_user }}"
         password: "{{ _forgejo_password }}"
         force_basic_auth: true
         validate_certs: "{{ validate_certs }}"
-        status_code: 204
+        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
       loop: >-
         {{ existing_tokens.json | default([])
            | selectattr('name', 'match', '^argocd(-[0-9T]+)?$') | list }}

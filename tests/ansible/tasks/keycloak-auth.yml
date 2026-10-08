@@ -96,6 +96,7 @@
 
 - name: "AUTH: Get access token via token endpoint"
   ansible.builtin.uri:
+    follow_redirects: none
     url: "http://{{ kc_ip.stdout }}:8080/realms/schnappy/protocol/openid-connect/token"
     method: POST
     body_format: form-urlencoded

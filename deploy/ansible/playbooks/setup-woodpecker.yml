@@ -56,6 +56,7 @@
 
     - name: Check if Woodpecker OAuth app already exists
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: GET
         user: "{{ forgejo_admin_user }}"
@@ -72,6 +73,7 @@
 
     - name: Create Woodpecker OAuth2 application in Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: POST
         user: "{{ forgejo_admin_user }}"
@@ -131,6 +133,7 @@
 
     - name: Check existing Forgejo tokens for infra repo PAT
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
         method: GET
         user: "{{ forgejo_admin_user }}"
@@ -147,18 +150,20 @@
 
     - name: Delete existing woodpecker-infra token (to get fresh secret)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/{{ existing_infra_token.id }}"
         method: DELETE
         user: "{{ forgejo_admin_user }}"
         password: "{{ forgejo_admin_password }}"
         force_basic_auth: true
         validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
-        status_code: 204
+        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
       when: existing_infra_token is not none
 
     - name: Create Forgejo PAT for Woodpecker infra repo push
       no_log: true  # its result is a token
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
         method: POST
         user: "{{ forgejo_admin_user }}"

@@ -518,6 +518,7 @@
       check_mode: false
       loop: "{{ range(1, 11) | list }}"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens?limit=50&page={{ item }}"
         method: GET
         user: "{{ git_mirror_user }}"
@@ -542,6 +543,7 @@
 
     - name: A new token for the mirror - its two reads alone, under a new name (the old ones stay until it reads)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens"
         method: POST
         user: "{{ git_mirror_user }}"
@@ -594,12 +596,13 @@
       rescue:
         - name: The new token deleted - it does not read
           ansible.builtin.uri:
+            follow_redirects: none
             url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens/{{ _git_mirror_token.json.id }}"
             method: DELETE
             user: "{{ git_mirror_user }}"
             password: "{{ forgejo_admin_password }}"
             force_basic_auth: true
-            status_code: 204
+            status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
           no_log: true
 
         - name: The mirror's token - none reads
@@ -610,12 +613,13 @@
 
     - name: The mirror's older tokens deleted (the new one reads)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens/{{ item.id }}"
         method: DELETE
         user: "{{ git_mirror_user }}"
         password: "{{ forgejo_admin_password }}"
         force_basic_auth: true
-        status_code: 204
+        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
       loop: >-
         {{ _git_mirror_tokens.results | default([]) | map(attribute='json', default=[]) | flatten
            | selectattr('name', 'match', '^git-mirror-') | list }}

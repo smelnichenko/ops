@@ -61,6 +61,7 @@
 
     - name: Get Keycloak admin token
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
         method: POST
         body_format: form-urlencoded
@@ -76,6 +77,7 @@
     - name: Look up each app realm role
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/{{ item.name }}"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -88,6 +90,7 @@
     - name: Create the missing app realm roles
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
         method: POST
         headers:
@@ -104,6 +107,7 @@
     - name: Read the realm roles
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -117,6 +121,7 @@
     - name: Read the Admins composite
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/Admins/composites"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -125,6 +130,7 @@
     - name: Add the app roles the Admins composite lacks
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles/Admins/composites"
         method: POST
         headers:

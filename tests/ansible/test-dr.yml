@@ -453,6 +453,7 @@
 
     - name: "SEED: Create page monitor"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/config"
         method: POST
         body_format: json
@@ -491,6 +492,7 @@
 
     - name: "SEED: Trigger manual check"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
         method: POST
         headers:
@@ -502,6 +504,7 @@
 
     - name: "SEED: Verify monitors list"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -560,6 +563,7 @@
 
     - name: "POD-RECOVERY: Verify data after app restart"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -616,6 +620,7 @@
 
     - name: "POD-RECOVERY: Verify data after postgres restart"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -779,6 +784,7 @@
 
     - name: "POD-RECOVERY: Verify data after killing all pods"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -941,6 +947,7 @@
 
     - name: "DR: Verify monitors before backup"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -1224,6 +1231,7 @@
 
     - name: "DR: Verify monitors after restore"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -1239,6 +1247,7 @@
 
     - name: "DR: Verify monitor config preserved"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/config"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -1256,6 +1265,7 @@
 
     - name: "DR: Trigger manual check after restore"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
         method: POST
         headers:
@@ -1613,6 +1623,7 @@
 
     - name: "OFFSITE: Verify monitors after offsite restore"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -1628,6 +1639,7 @@
 
     - name: "OFFSITE: Verify monitor config preserved"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/config"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -1643,6 +1655,7 @@
 
     - name: "OFFSITE: Trigger manual check after offsite restore"
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/check/{{ test_monitor_name }}"
         method: POST
         headers:

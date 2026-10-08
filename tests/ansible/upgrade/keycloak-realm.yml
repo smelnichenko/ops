@@ -63,6 +63,7 @@
 
     - name: Keycloak admin token
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
         method: POST
         body_format: form-urlencoded
@@ -76,6 +77,7 @@
 
     - name: Does the realm exist?
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/{{ realm }}"
         headers: { Authorization: "Bearer {{ _token.json.access_token }}" }
         status_code: [200, 404]
@@ -83,6 +85,7 @@
 
     - name: Create the realm (client secrets from Vault, SMTP to a dead end)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms"
         method: POST
         headers: { Authorization: "Bearer {{ _token.json.access_token }}" }

@@ -94,6 +94,7 @@
     # removes the secret completely (all versions + metadata).
     - name: Purge each key (metadata + all versions)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ vault_addr }}/v1/secret/metadata/{{ vault_prefix }}/{{ item }}"
         method: DELETE
         headers:

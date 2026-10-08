@@ -23,6 +23,7 @@
 
 - name: List repositories
   ansible.builtin.uri:
+    follow_redirects: none
     url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
     url_username: admin
     url_password: "{{ nexus_admin_password }}"
@@ -33,6 +34,7 @@
 
 - name: Create pytorch-cpu hosted repository
   ansible.builtin.uri:
+    follow_redirects: none
     url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/hosted"
     method: POST
     url_username: admin
@@ -50,6 +52,7 @@
 
 - name: Read the pypi-public group
   ansible.builtin.uri:
+    follow_redirects: none
     url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group/pypi-public"
     url_username: admin
     url_password: "{{ nexus_admin_password }}"
@@ -60,6 +63,7 @@
 
 - name: Add pytorch-cpu to the pypi-public group
   ansible.builtin.uri:
+    follow_redirects: none
     url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group/pypi-public"
     method: PUT
     url_username: admin

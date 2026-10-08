@@ -59,6 +59,7 @@
 
     - name: Delete existing test token (idempotent)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/registry-test"
         method: DELETE
         user: "{{ forgejo_admin_user }}"
@@ -354,6 +355,7 @@
     # ── Cleanup: drop the registry-test token from Pi Forgejo ──────────
     - name: Cleanup — delete registry-test token from Pi Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/registry-test"
         method: DELETE
         user: "{{ forgejo_admin_user }}"

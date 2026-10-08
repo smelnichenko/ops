@@ -101,6 +101,7 @@
 
     - name: Get Keycloak admin token
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
         method: POST
         body_format: form-urlencoded
@@ -116,6 +117,7 @@
     - name: Get app client config
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/schnappy/clients?clientId=app&first=0&max=1"
         headers:
           Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -125,6 +127,7 @@
     - name: Remove redirect URI
       no_log: true  # a token in its headers: the module logs its arguments on its host
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ keycloak_url }}/admin/realms/schnappy/clients/{{ kc_app_client.json[0].id }}"
         method: PUT
         headers:

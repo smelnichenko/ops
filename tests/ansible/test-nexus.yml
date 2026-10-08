@@ -111,6 +111,7 @@
 
     - name: List repositories (11 expected)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/repositories"
         url_username: admin
         url_password: "{{ nexus_admin_password }}"
@@ -143,6 +144,7 @@
 
     - name: DockerToken realm active
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ vip }}:{{ nexus_port }}/service/rest/v1/security/realms/active"
         url_username: admin
         url_password: "{{ nexus_admin_password }}"
@@ -283,6 +285,7 @@
   tasks:
     - name: Fetch sentinel via VIP (new active Pi is serving)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ hostvars['pi1']['_sentinel_url'] }}"
         url_username: admin
         url_password: "{{ nexus_admin_password }}"

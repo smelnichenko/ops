@@ -32,6 +32,7 @@
 
 - name: Verify Pi Forgejo admin auth
   ansible.builtin.uri:
+    follow_redirects: none
     url: "http://{{ forgejo_host }}/api/v1/user"
     user: "{{ forgejo_admin_user }}"
     password: "{{ forgejo_admin_password }}"

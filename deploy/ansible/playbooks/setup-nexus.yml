@@ -461,6 +461,7 @@
 
     - name: Get EULA status
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/system/eula"
         method: GET
         url_username: admin
@@ -472,6 +473,7 @@
 
     - name: Accept EULA
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/system/eula"
         method: POST
         url_username: admin
@@ -486,6 +488,7 @@
 
     - name: Enable anonymous read
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/anonymous"
         method: PUT
         url_username: admin
@@ -500,6 +503,7 @@
 
     - name: Get active realms
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
         method: GET
         url_username: admin
@@ -511,6 +515,7 @@
 
     - name: Enable Docker Bearer Token Realm
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/security/realms/active"
         method: PUT
         url_username: admin
@@ -523,6 +528,7 @@
 
     - name: List existing repositories
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
         method: GET
         url_username: admin
@@ -538,6 +544,7 @@
 
     - name: Create docker-hub proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
         url_username: admin
@@ -562,6 +569,7 @@
 
     - name: Create docker-elastic proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
         url_username: admin
@@ -582,6 +590,7 @@
 
     - name: Create docker-quay proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/proxy"
         method: POST
         url_username: admin
@@ -602,6 +611,7 @@
 
     - name: Create docker-group
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/docker/group"
         method: POST
         url_username: admin
@@ -619,6 +629,7 @@
 
     - name: Create maven-central proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/proxy"
         method: POST
         url_username: admin
@@ -638,6 +649,7 @@
 
     - name: Create maven-public group
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/maven/group"
         method: POST
         url_username: admin
@@ -655,6 +667,7 @@
 
     - name: Create npm-registry proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/npm/proxy"
         method: POST
         url_username: admin
@@ -673,6 +686,7 @@
 
     - name: Create npm-public group
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/npm/group"
         method: POST
         url_username: admin
@@ -689,6 +703,7 @@
 
     - name: Create pypi-proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/proxy"
         method: POST
         url_username: admin
@@ -707,6 +722,7 @@
 
     - name: Create pypi-public group
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/pypi/group"
         method: POST
         url_username: admin
@@ -723,6 +739,7 @@
 
     - name: Create gradle-distributions raw proxy
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories/raw/proxy"
         method: POST
         url_username: admin
@@ -741,6 +758,7 @@
 
     - name: Create cleanup policy for cached content
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/cleanup-policies"
         method: POST
         url_username: admin
@@ -759,6 +777,7 @@
 
     - name: Show repository status
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://localhost:{{ nexus_port }}/service/rest/v1/repositories"
         method: GET
         url_username: admin

@@ -31,6 +31,7 @@
 
     - name: Delete prior test repo if it exists (idempotent)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}"
         method: DELETE
         user: "{{ forgejo_admin_user }}"
@@ -41,6 +42,7 @@
 
     - name: Create fresh test repo in Pi Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/user/repos"
         method: POST
         user: "{{ forgejo_admin_user }}"
@@ -434,6 +436,7 @@
 
     - name: Cleanup — delete test repo from Pi Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}"
         method: DELETE
         user: "{{ forgejo_admin_user }}"

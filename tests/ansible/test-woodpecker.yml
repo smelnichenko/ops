@@ -47,6 +47,7 @@
 
     - name: Delete prior test repo if it exists (idempotent)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}"
         method: DELETE
         user: "{{ forgejo_admin_user }}"
@@ -57,6 +58,7 @@
 
     - name: Create fresh test repo in Pi Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/user/repos"
         method: POST
         user: "{{ forgejo_admin_user }}"
@@ -114,6 +116,7 @@
 
     - name: Register Woodpecker OAuth2 app in Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/user/applications/oauth2"
         method: POST
         user: "{{ forgejo_admin_user }}"
@@ -373,6 +376,7 @@
     - name: Get Forgejo API token (from Pi Forgejo via API)
       # Pi Forgejo: no kubectl exec, all via REST. Delete-if-exists then create.
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/woodpecker-test-token"
         method: DELETE
         user: "{{ forgejo_admin_user }}"
@@ -383,6 +387,7 @@
 
     - name: Create Forgejo API token for Woodpecker
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
         method: POST
         user: "{{ forgejo_admin_user }}"
@@ -968,6 +973,7 @@
     # Cleanup Pi Forgejo state created by this test (idempotent)
     - name: Cleanup — delete test repo + token from Pi Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ item }}"
         method: DELETE
         user: "{{ forgejo_admin_user }}"

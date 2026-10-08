@@ -5,6 +5,7 @@
 - name: "Get client UUID for {{ client_config.client_id }}"
   no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
+    follow_redirects: none
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/clients?clientId={{ client_config.client_id }}"
     headers:
       Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -13,6 +14,7 @@
 - name: "Get service account user for {{ client_config.client_id }}"
   no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
+    follow_redirects: none
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/clients/{{ kc_client.json[0].id }}/service-account-user"
     headers:
       Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -21,6 +23,7 @@
 - name: "Get realm roles"
   no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
+    follow_redirects: none
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/roles"
     headers:
       Authorization: "Bearer {{ kc_token.json.access_token }}"
@@ -34,6 +37,7 @@
 - name: "Assign roles to service account"  # {{ client_config.client_id }}
   no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
+    follow_redirects: none
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
     method: POST
     headers:
@@ -47,6 +51,7 @@
 - name: "Read the service account's realm role mappings"
   no_log: true  # a token in its headers: the module logs its arguments on its host
   ansible.builtin.uri:
+    follow_redirects: none
     url: "{{ keycloak_url }}/admin/realms/{{ realm }}/users/{{ kc_sa_user.json.id }}/role-mappings/realm"
     headers:
       Authorization: "Bearer {{ kc_token.json.access_token }}"

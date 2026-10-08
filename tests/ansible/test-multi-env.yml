@@ -96,6 +96,7 @@
 
     - name: Create schnappy org in Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_url }}/api/v1/orgs"
         method: POST
         user: "{{ forgejo_admin_user }}"
@@ -110,6 +111,7 @@
 
     - name: Create repos in Forgejo
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ forgejo_url }}/api/v1/orgs/schnappy/repos"
         method: POST
         user: "{{ forgejo_admin_user }}"

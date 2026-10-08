@@ -55,6 +55,7 @@
 
     - name: Verify authenticated access
       ansible.builtin.uri:
+        follow_redirects: none
         url: "{{ app_url }}/api/monitor/pages"
         headers:
           Authorization: "Bearer {{ auth_token }}"
@@ -301,6 +302,7 @@
 
         - name: "S3: Verify monitors endpoint still responds (Kafka down)"
           ansible.builtin.uri:
+            follow_redirects: none
             url: "{{ app_url }}/api/monitor/pages"
             headers:
               Authorization: "Bearer {{ auth_token }}"

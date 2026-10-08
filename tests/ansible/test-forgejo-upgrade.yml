@@ -121,6 +121,7 @@
 
     - name: A marker repository, one commit
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://127.0.0.1:3000/api/v1/user/repos"
         method: POST
         url_username: "{{ forgejo_admin_user }}"
@@ -135,6 +136,7 @@
 
     - name: Its commit
       ansible.builtin.uri:
+        follow_redirects: none
         url: "http://127.0.0.1:3000/api/v1/repos/{{ forgejo_admin_user }}/upgrade-marker-{{ _t0 }}/branches/main"
         url_username: "{{ forgejo_admin_user }}"
         url_password: "{{ forgejo_admin_password }}"

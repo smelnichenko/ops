@@ -309,6 +309,7 @@
 
     - name: Fetch admin password from Pi Vault (if default no longer works)
       ansible.builtin.uri:
+        follow_redirects: none
         url: "https://{{ hostvars['pi1']['ansible_host'] }}:8200/v1/secret/data/schnappy/sonarqube"
         method: GET
         validate_certs: false
