@@ -883,9 +883,23 @@ def last_done_out_of_sync(events):
     return step_info(done[-1])["out_of_sync"] if done and done[-1] != BEFORE_LEDGER else []
 
 
+def vault_login_problems():
+    """Production's External Secrets logging into Vault the way the copy proves every step on: without the old reviewer
+    token (a non-expiring token of its own account in Vault's config) - task deploy:vault-eso deletes it once the
+    login without it is proven."""
+    out = ten("kubectl -n external-secrets get secret vault-token-reviewer --ignore-not-found -o name", check=False)
+    if out.returncode:
+        return [f"production's Vault login not read: {out.stderr.strip()}"]
+    if out.stdout.strip():
+        return ["production's External Secrets still logs into Vault with the old reviewer token "
+                "(external-secrets/vault-token-reviewer) - the copy proves every step without it: task deploy:vault-eso "
+                "first"]
+    return []
+
+
 def begin(step):
     names, events, _ = ledger_for(step, "begin")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)) + vault_login_problems())
     ok = inventory_check(applied_steps(events))
     # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
     before = [a for _, s, e, a in events if e == "apps" and s != step]

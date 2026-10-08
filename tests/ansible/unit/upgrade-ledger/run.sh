@@ -324,16 +324,17 @@ ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its argument
 
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
-                pushed=None, revs=None, ten_out="abc1234"):
+                pushed=None, revs=None, ten_out="abc1234", vault=()):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
-                       "ten", "image_pins", "read_ledger")
+                       "ten", "image_pins", "read_ledger", "vault_login_problems")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.read_ledger = lambda: ({"data": {"events": ""}}, [])  # the claim's re-read before a push (none claimed here)
     m.proof_problems = lambda *a, **k: PROOF_KW.append({x: k[x] for x in ("partly", "merged", "tip") if x in k}) \
         or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
+    m.vault_login_problems = lambda: list(vault)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
         calls.append(("run", "tempo-flush.py" if flush else os.path.basename(cmd[0])))
@@ -378,6 +379,26 @@ for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "p
     did = [c for c in got if c != ("run", "git")]
     check(f"{name}: refused by the proof, nothing done", (len(did), did[-1][0], "PROOF-X" in did[-1][1]),
           (1, "refused", True))
+# production's External Secrets on the Vault login the copy proves every step on - no old reviewer token: a begin with
+# it there refuses before anything is done or recorded
+got = phase_calls(m.begin, S47, vault=["VAULT-X"])
+check("begin: refused while production logs into Vault with the old reviewer token, nothing done",
+      (len(got), got[-1][0], "VAULT-X" in got[-1][1]), (1, "refused", True))
+def vault_login(rc, out, err=""):
+    saved = m.ten
+    sent = []
+    m.ten = lambda command, **k: sent.append(command) or type("R", (), {"returncode": rc, "stdout": out, "stderr": err})()
+    try:
+        return m.vault_login_problems(), sent
+    finally:
+        m.ten = saved
+got, sent = vault_login(0, "secret/vault-token-reviewer\n")
+check("the old reviewer token there: a problem naming task deploy:vault-eso; asked by name, its data never read",
+      (len(got), "deploy:vault-eso" in got[0], sent),
+      (1, True, ["kubectl -n external-secrets get secret vault-token-reviewer --ignore-not-found -o name"]))
+check("no old reviewer token: none", vault_login(0, "")[0], [])
+got, _ = vault_login(1, "", "Unable to connect to the server")
+check("not read: a problem (never read as none)", (len(got), "not read" in got[0] if got else False), (1, True))
 # the proof read as production stands at each merge: a two-repo step's second merge judges the images between them
 PROOF_KW.clear()
 phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"))

@@ -151,6 +151,23 @@ setup_vault_eso() {
   log "Configuring ESO → Pi Vault connection..."
 
   local VAULT_PI="${VAULT_PI:-192.168.11.4}"
+  # the cluster that Vault serves (K8S_EXPECTED: another pairing): a kube context left on another wrote that one into
+  # production's Vault, and the applies below landed there
+  local K8S_EXPECTED="${K8S_EXPECTED:-https://192.168.11.2:6443}"
+  local K8S_CA K8S_HOST
+  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}') \
+    || { err "Cannot read the cluster's CA from the kubeconfig"; return 1; }
+  K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}') \
+    || { err "Cannot read the cluster's server from the kubeconfig"; return 1; }
+  [[ $K8S_HOST =~ ^https://[A-Za-z0-9.:-]+$ ]] \
+    || { err "The cluster's server is not a plain https URL: $K8S_HOST"; return 1; }
+  [[ $K8S_HOST == "$K8S_EXPECTED" ]] || {
+    err "REFUSED: the kube context's cluster is $K8S_HOST, not $K8S_EXPECTED - the one Vault on $VAULT_PI serves" \
+      "(kubectl config use-context; K8S_EXPECTED names another pairing)"
+    return 1
+  }
+  # base64 alone: it goes into the script run as root on the Pi (a line of its own would end that heredoc)
+  [[ $K8S_CA =~ ^[A-Za-z0-9+/]+=*$ ]] || { err "The cluster's CA (certificate-authority-data) is not base64"; return 1; }
   local work
   work=$(mktemp -d) || return 1
   # this run's own directory, removed however the step ends
@@ -206,16 +223,6 @@ EOF
     return 1
   fi
 
-  local K8S_CA K8S_HOST
-  K8S_CA=$(kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}') \
-    || { err "Cannot read the cluster's CA from the kubeconfig"; return 1; }
-  K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}') \
-    || { err "Cannot read the cluster's server from the kubeconfig"; return 1; }
-  [[ $K8S_HOST =~ ^https://[A-Za-z0-9.:-]+$ ]] \
-    || { err "The cluster's server is not a plain https URL: $K8S_HOST"; return 1; }
-  # base64 alone: it goes into the script run as root on the Pi (a line of its own would end that heredoc)
-  [[ $K8S_CA =~ ^[A-Za-z0-9+/]+=*$ ]] || { err "The cluster's CA (certificate-authority-data) is not base64"; return 1; }
-
   # Vault's Kubernetes auth on the Pi: the script on ssh's stdin, the root token read there (on no command line - any
   # local user reads those in /proc), Vault verified against its CA (its certificate names 127.0.0.1); no
   # token_reviewer_jwt - each client's own token reviews itself. A failure fails the step
@@ -238,8 +245,46 @@ REMOTE
     err "Configuring Vault's Kubernetes auth on the Pi failed (above)"
     return 1
   fi
-
+  eso_login_proven || return 1
   log "ESO → Pi Vault configured"
+}
+
+# External Secrets' login on Vault's config as just written, proven before the old reviewer token goes: one
+# ExternalSecret of the store refreshed now (External Secrets keeps no Vault token between syncs - each logs in), its
+# refresh newer and Ready. Then production's old reviewer token deleted - a non-expiring token of External Secrets' own
+# account (it reads and updates every Secret), kept in Vault's config until the write above; not proven, it is kept.
+# A fresh cluster has neither yet: Argo makes the ExternalSecrets later.
+eso_login_proven() {
+  local store=vault-backend  # infra's clusters/production/cluster-config/cluster-secret-store.yaml
+  local es before now ready end
+  es=$(kubectl get externalsecret -A -o jsonpath="{range .items[?(@.spec.secretStoreRef.name==\"$store\")]}{.metadata.namespace}/{.metadata.name}{'\n'}{end}" | head -1)
+  if [[ -z $es ]]; then
+    if [[ -n $(kubectl -n external-secrets get secret vault-token-reviewer --ignore-not-found -o name) ]]; then
+      err "no ExternalSecret on $store to prove External Secrets' login with - the old reviewer token kept"
+      return 1
+    fi
+    log "no ExternalSecret on $store yet (a fresh cluster) - the login is proven when Argo makes them"
+    return 0
+  fi
+  read -r before _ < <(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}')
+  kubectl -n "${es%/*}" annotate externalsecret "${es#*/}" force-sync="$(date +%s)" --overwrite > /dev/null \
+    || { err "Cannot ask ExternalSecret $es to refresh"; return 1; }
+  end=$((SECONDS + ${ESO_PROOF_SECONDS:-90}))
+  while :; do
+    read -r now ready < <(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath='{.status.refreshTime} {.status.conditions[?(@.type=="Ready")].status}')
+    [[ $now != "$before" && $ready == True ]] && break
+    if ((SECONDS >= end)); then
+      err "External Secrets' login on the new config NOT proven: ExternalSecret $es not refreshed (Ready $ready," \
+        "refreshed $now) - the old reviewer token kept; kubectl -n ${es%/*} describe externalsecret ${es#*/}"
+      return 1
+    fi
+    sleep 2
+  done
+  log "External Secrets logged in on the new config ($es refreshed $now)"
+  local gone
+  gone=$(kubectl -n external-secrets delete secret vault-token-reviewer --ignore-not-found) \
+    || { err "the old reviewer token (external-secrets/vault-token-reviewer) not deleted"; return 1; }
+  [[ -z $gone ]] || log "the old reviewer token (external-secrets/vault-token-reviewer) deleted"
 }
 
 # --- cluster-config (static resources) ---

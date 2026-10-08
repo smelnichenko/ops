@@ -5,8 +5,11 @@
 # to plant); no reviewer token - Vault reviews External Secrets' short-lived token with that token itself (its account
 # bound to system:auth-delegator), so no non-expiring token of that account is made, read or kept in Vault's config
 # (one was: anyone reading it was External Secrets, every secret it may read); Vault verified against its CA, not
-# skipped; a failure on the Pi fails the step (it warned and went on). tests/ansible/upgrade/isolate-cluster.yml writes
-# the same configuration to the Vagrant Vault.
+# skipped; a failure on the Pi fails the step (it warned and went on). Only on the cluster that Vault serves: a kube
+# context on another refuses before any write. Then External Secrets' login on that config proven - one ExternalSecret
+# refreshed now, Ready - before production's old reviewer token (a non-expiring token of External Secrets' own account,
+# one that reads every Secret) is deleted; not proven, it is kept. tests/ansible/upgrade/isolate-cluster.yml writes the
+# same configuration to the Vagrant Vault.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -19,8 +22,20 @@ cat > "$W/bin/kubectl" <<STUB
 #!/bin/bash
 echo "kubectl \$*" >> "$W/kubectl-calls"
 case "\$*" in
-  "apply -f -") [ -z "\${APPLY_FAILS:-}" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
+  "apply -f -") n=\$(( \$(cat "$W/applies" 2> /dev/null || echo 0) + 1 )); echo \$n > "$W/applies"
+    if [ -n "\${APPLY_FAILS:-}" ] || [ "\${APPLY_FAILS_AT:-0}" = "\$n" ]; then
+      echo "error: the server is currently unable to handle the request" >&2; exit 1
+    fi
     { cat; echo ---; } >> "$W/applied" ;;
+  "get externalsecret -A -o jsonpath="*) [ -n "\${ES_NONE:-}" ] || printf 'cert-manager/porkbun-secret-es\nargocd/x\n' ;;
+  "-n cert-manager get externalsecret porkbun-secret-es -o jsonpath="*)
+    if [ -e "$W/annotated" ] && [ "\${ES_READY:-True}" = True ]; then echo "2026-10-08T02:00:00Z True"
+    elif [ -e "$W/annotated" ]; then echo "2026-10-08T01:00:00Z False"; else echo "2026-10-08T01:00:00Z True"; fi ;;
+  "-n cert-manager annotate externalsecret porkbun-secret-es force-sync="*" --overwrite") touch "$W/annotated" ;;
+  "-n external-secrets get secret vault-token-reviewer --ignore-not-found -o name")
+    [ -n "\${NO_TOKEN_SECRET:-}" ] || echo "secret/vault-token-reviewer" ;;
+  "-n external-secrets delete secret vault-token-reviewer --ignore-not-found")
+    [ -n "\${NO_TOKEN_SECRET:-}" ] || echo 'secret "vault-token-reviewer" deleted' ;;
   *certificate-authority-data*) if [ -n "\${CA_RAW:-}" ]; then printf '%s' "\$CA_RAW"
     else printf '%s' "\$(printf 'THE CLUSTER CA' | base64 -w0)"; fi ;;
   *cluster.server*) printf '%s' "\${SERVER:-https://192.168.11.2:6443}" ;;
@@ -52,8 +67,9 @@ check() {  # check <name> <got> <want>
   echo "FAIL $1: got '$2', want '$3'"; fails=$((fails + 1))
 }
 run() {  # run <env...>: bootstrap.sh vault-eso, its exit in $rc; its temp files under $W/tmp
-  rm -rf "$W"/{kubectl-calls,applied,ssh-argv,vault-argv,vault-env,vault-files,tmp} "$W"/pwned-*; mkdir "$W/tmp"
-  out=$(env "$@" PATH="$W/bin:$PATH" INFRA_DIR="$W/infra" VAULT_PI=pi.test TMPDIR="$W/tmp" \
+  rm -rf "$W"/{kubectl-calls,applied,applies,annotated,ssh-argv,vault-argv,vault-env,vault-files,tmp} "$W"/pwned-*
+  mkdir "$W/tmp"
+  out=$(env "$@" PATH="$W/bin:$PATH" INFRA_DIR="$W/infra" VAULT_PI=pi.test TMPDIR="$W/tmp" ESO_PROOF_SECONDS=1 \
     bash bootstrap.sh vault-eso 2>&1); rc=$?
 }
 # first, and without running it otherwise: a step that keeps anything in /tmp would write the real one here
@@ -65,7 +81,8 @@ check "the step passes" "$rc" 0
 check "the cluster trusts the CA read from the Pi now" \
   "$(grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")" "$W/applied")" 1
 check "no non-expiring token of External Secrets' account made, none read" \
-  "$(grep -c 'kubernetes.io/service-account-token' "$W/applied") $(grep -c 'get secret' "$W/kubectl-calls")" "0 0"
+  "$(grep -c 'kubernetes.io/service-account-token' "$W/applied") $(grep 'get secret' "$W/kubectl-calls" | grep -vc ' -o name$')" \
+  "0 0"
 check "its account may review tokens (system:auth-delegator) - Vault reviews its token with that token" \
   "$(sed -n '/kind: ClusterRoleBinding/,/^---$/p' "$W/applied" | tr -d ' ' | grep -cE '^name:(system:auth-delegator|external-secrets)$|^namespace:external-secrets$')" 3
 check "Vault's config: no reviewer token, the client's own used (disable_local_ca_jwt), the cluster's CA from a file" \
@@ -77,6 +94,30 @@ check "Vault verified against its CA, never skipped" \
   "0 2"
 check "the role written" "$(grep -c 'auth/kubernetes/role/eso-role' "$W/vault-argv")" 1
 check "its work directory gone when it ends" "$(ls -A "$W/tmp" | wc -l)" 0
+# the switch: External Secrets' login on the new config proven, then the old reviewer token deleted - in that order
+order() { grep -nE 'annotate externalsecret|delete secret vault-token-reviewer' "$W/kubectl-calls" | cut -d' ' -f2-4 | tr '\n' ','; }
+check "after Vault's write: one ExternalSecret refreshed now (force-sync), then the old reviewer token deleted, said" \
+  "$(order) $(grep -c 'old reviewer token .*deleted' <<< "$out")" \
+  "-n cert-manager annotate,-n external-secrets delete, 1"
+run ES_READY=False
+check "External Secrets not logging in on the new config: the step fails, said so, the old token kept" \
+  "$rc $(grep -c 'delete secret' "$W/kubectl-calls") $(grep -c 'NOT proven' <<< "$out")" "1 0 1"
+run ES_NONE=1 NO_TOKEN_SECRET=1
+check "no ExternalSecret yet (a fresh cluster), no old token: passes, said" \
+  "$rc $(grep -c 'delete secret' "$W/kubectl-calls") $(grep -c 'no ExternalSecret' <<< "$out")" "0 0 1"
+run ES_NONE=1
+check "no ExternalSecret to prove the login with, the old token there: fails, the token kept" \
+  "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
+# only on the cluster Vault serves: a kube context left on another wrote that one into production's Vault
+run SERVER=https://10.9.9.9:6443
+check "a kube context on another cluster: refused before any write - nothing applied, nothing sent to the Pi" \
+  "$rc $(cat "$W/applies" 2> /dev/null || echo 0) $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'REFUSED' <<< "$out")" \
+  "1 0 0 1"
+run SERVER=https://10.9.9.9:6443 K8S_EXPECTED=https://10.9.9.9:6443
+check "another pairing named (K8S_EXPECTED): passes" "$rc" 0
+run APPLY_FAILS_AT=2
+check "only the ClusterRoleBinding's apply failing: the step fails, said so, nothing sent to the Pi" \
+  "$rc $(grep -c "ClusterRoleBinding" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 1 0"
 # what goes into the script run as root on the Pi, checked first: the cluster CA as base64 alone (a line of its own
 # ended the script's heredoc, the rest ran as root), the server a plain https URL
 run CA_RAW=$'QUJD\nB64\n'"touch $W/pwned-by-ca"$'\n'

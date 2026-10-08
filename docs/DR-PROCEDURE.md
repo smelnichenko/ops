@@ -53,6 +53,15 @@ task deploy:argocd
 
 ArgoCD connects to Forgejo and syncs all Tier 1 apps automatically via the root app-of-apps.
 
+Then External Secrets' login to the Pi Vault - the one thing Argo cannot make: Vault's Kubernetes auth written for this
+cluster (its API server and CA - a rebuilt cluster has a new CA) and Vault's CA in `external-secrets/vault-pi-ca`, once
+Argo has installed External Secrets (its namespace exists). It refuses a kube context on another cluster than
+`https://192.168.11.2:6443` and proves the login by refreshing one ExternalSecret:
+
+```bash
+task deploy:vault-eso
+```
+
 ### 6. Verify
 
 ```bash

@@ -197,6 +197,13 @@ tasks:
     cmds:
       - ./bootstrap.sh all
 
+  # bootstrap's vault-eso alone: Vault's Kubernetes auth written for the kube context's cluster (refused unless it is
+  # the one the Pi Vault serves), External Secrets' login on it proven, then the old reviewer token deleted
+  deploy:vault-eso:
+    desc: "External Secrets' login to the Pi Vault: written, proven, the old reviewer token deleted"
+    cmds:
+      - ./bootstrap.sh vault-eso
+
   deploy:full:
     desc: Full deployment - kubeadm + consul + pi services + patroni + vault + argocd
     dir: deploy/ansible
