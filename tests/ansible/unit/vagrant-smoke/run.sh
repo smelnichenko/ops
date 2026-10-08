@@ -36,9 +36,10 @@ Y
 picked=$(python3 "$W/pick.py" "$W/rendered.yaml" vagrant-k6-smoke-ab12 | python3 -c '
 import sys, yaml
 d = list(yaml.safe_load_all(sys.stdin))
-print(" ".join([x["metadata"]["name"] for x in d if x] + [d[1]["spec"]["template"]["spec"]["volumes"][0]["configMap"]["name"]]))')
-check "the render: the ConfigMap, the Job and its mount named for the run" "$picked" \
-  "vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12"
+print(" ".join([x["metadata"]["name"] for x in d if x] + [d[1]["spec"]["template"]["spec"]["volumes"][0]["configMap"]["name"]]
+               + [x["metadata"].get("labels", {}).get("app.kubernetes.io/name", "-") for x in d if x]))')
+check "the render: the ConfigMap, the Job and its mount named for the run, both labelled as a smoke run's" "$picked" \
+  "vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12 vagrant-k6-smoke-ab12 vagrant-k6-smoke vagrant-k6-smoke"
 # kubectl: every call recorded; ENDED: the Job's condition (none: still running)
 cat > "$W/kubectl" <<'STUB'
 #!/bin/bash
@@ -47,6 +48,8 @@ case "$*" in
   *jsonpath*conditions*) echo "${ENDED:-}" ;;
   *jsonpath*succeeded*) [ "${ENDED:-}" = Complete ] && echo 1 ;;
   *" logs "*) echo "✓ status is 200" ;;
+  *"delete job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke"*)  # as kubectl 1.34 answers (read on ten)
+    if [ -n "${LEFTOVER:-}" ]; then echo 'job.batch "vagrant-k6-smoke-0ld" deleted'; else echo "No resources found"; fi ;;
 esac
 exit 0
 STUB
@@ -74,6 +77,17 @@ t0=$SECONDS
 remote | head -c 0
 check "its connection gone: it ends at its next heartbeat, its Job and ConfigMap deleted" \
   "$((SECONDS - t0 < 10)) $(deleted)" "1 2"
+# an earlier run's leftovers (one whose connection and cleanup were both cut) removed before this run's apply, said so;
+# none, nothing said; every call bounded (a hung API server held the poll for good)
+out=$(remote ENDED=Complete LEFTOVER=1 | tr -d '\r')
+first_delete=$(grep -n 'delete job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke' "$W/calls" | head -1 | cut -d: -f1)
+apply=$(grep -n ' apply ' "$W/calls" | head -1 | cut -d: -f1)
+check "an earlier run's leftovers removed by label before the apply, said so" \
+  "$([ -n "$first_delete" ] && [ -n "$apply" ] && [ "$first_delete" -lt "$apply" ] && echo before) $(grep -c 'earlier run.s leftovers removed' <<< "$out")" \
+  "before 1"
+out=$(remote ENDED=Complete | tr -d '\r')
+check "none left: nothing said" "$(grep -c 'leftovers' <<< "$out")" 0
+check "every kubectl call bounded (--request-timeout)" "$(grep -vc -- '--request-timeout=' "$W/calls")" 0
 # the heartbeat is the poll's own write: no process of its own (one left behind signalled a PID that may be another's)
 check "no background process in the remote shell" "$(grep -cE '&( |$)' "$W/remote.sh")" 0
 echo "vagrant-smoke: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"

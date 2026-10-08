@@ -37,8 +37,10 @@ jobs = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].ends
 if len(cms) != 1 or len(jobs) != 1:
     sys.exit(f"smoke render: expected one k6 Job and its script ConfigMap, got {len(jobs)} and {len(cms)}")
 cm, job = cms[0], jobs[0]
-cm["metadata"] = {"name": name}
-job["metadata"] = {"name": name}
+# a smoke run's by its label: the next run removes what one left behind (its connection and its cleanup both cut)
+labels = {"app.kubernetes.io/name": "vagrant-k6-smoke"}
+cm["metadata"] = {"name": name, "labels": labels}
+job["metadata"] = {"name": name, "labels": labels}
 job["spec"]["backoffLimit"] = 0
 mounts = [v for v in job["spec"]["template"]["spec"]["volumes"]
           if v.get("configMap", {}).get("name") == "schnappy-k6-smoke"]
@@ -67,7 +69,8 @@ vssh kubeadm "cat > /tmp/$name.yaml" < "$work/smoke.yaml"
 vssh kubeadm "sudo bash -s $name" <<'SH' | tr -d '\r'
 set -u
 NAME=$1
-K="kubectl --kubeconfig /etc/kubernetes/admin.conf -n schnappy-production"
+# every call bounded: a hung API server held the poll for good
+K="kubectl --kubeconfig /etc/kubernetes/admin.conf --request-timeout=30s -n schnappy-production"
 cleanup() {
   $K delete job "$NAME" --ignore-not-found --wait=false > /dev/null 2>&1
   $K delete configmap "$NAME" --ignore-not-found > /dev/null 2>&1
@@ -75,6 +78,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM PIPE
+# what an earlier run left (its connection and its cleanup both cut - its own end deletes it otherwise), said so
+# (kubectl says "No resources found" when there are none)
+left=$($K delete job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke --ignore-not-found --wait=false 2>&1) \
+  || echo "an earlier run's leftovers not removed: $(tr '\n' ' ' <<< "$left")"
+gone=$(grep ' deleted$' <<< "$left" | tr '\n' ' ') || true
+[ -z "$gone" ] || echo "an earlier run's leftovers removed: $gone"
 $K apply -f "/tmp/$NAME.yaml" || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
 rm -f "/tmp/$NAME.yaml"
 ended=""
