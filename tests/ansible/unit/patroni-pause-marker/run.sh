@@ -58,7 +58,9 @@ elif op == "get":
     key = a[0]
     if not os.path.exists(f(key)):
         sys.exit(f"Error! No key exists at: {key}")
-    if "detailed" in flags:
+    if "detailed" in flags and os.environ.get("CONSUL_SWAPPED"):
+        print(f"ModifyIndex      99\nValue            setup-patroni 2026-10-08T02:00:00Z ef56ab78")
+    elif "detailed" in flags:
         print(f"CreateIndex      {open(f(key) + '.idx').read()}\nFlags            0\nKey              {key}\n"
               f"LockIndex        0\nModifyIndex      {open(f(key) + '.idx').read()}\nSession          -\n"
               f"Value            {open(f(key)).read()}")
@@ -203,6 +205,10 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
           "member paused; its index said", r.returncode == 0 and kv is not None and kv.startswith(book + " ")
           and len(kv.split()) == 3 and f"MARKER 11" in r.stdout and acts(calls)[:2] == ["consul kv put", "patronictl pause"]
           and dcs() == (True, [True, True]), (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, env={"CONSUL_SWAPPED": "1"})
+    check(f"{book}: the marker read back is not the one it put: refused - nothing paused",
+          r.returncode != 0 and "not the one this run put" in r.stdout and "patronictl pause" not in acts(calls),
+          (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(p, marker="setup-consul 2026-10-08T01:00:00Z ab12cd34")
     check(f"{book}: a marker there already: refused before any pause, the marker left as it was",
           r.returncode != 0 and "REFUSED" in r.stdout + r.stderr and "patronictl pause" not in acts(calls)
@@ -238,11 +244,12 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
           and dcs()[0], (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(rs, env=renv("MARKER 7"), paused=True)
     check(f"{book}: its marker gone (deleted by hand): refused - nothing resumed (Consul's CAS delete of a missing key "
-          "succeeds)", r.returncode != 0 and "patronictl resume" not in acts(calls) and dcs()[0],
+          "succeeds)", r.returncode != 0 and "gone" in r.stdout and "patronictl resume" not in acts(calls) and dcs()[0],
           (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(rs, env=renv("PAUSE FAILED: ..."), paused=True, marker=mine, idx=7)
     check(f"{book}: no MARKER in the pause's output: refused - nothing resumed, nothing deleted",
-          r.returncode != 0 and kv == mine and "patronictl resume" not in acts(calls) and dcs()[0],
+          r.returncode != 0 and "no MARKER" in r.stdout and kv == mine and "patronictl resume" not in acts(calls)
+          and dcs()[0],
           (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(rs, env={**renv("MARKER 7"), "RESUME_MODE": "lags"}, paused=True, marker=mine, idx=7)
     check(f"{book}: a resume a member does not take (exit 0): fails, a marker naming the run put again",
