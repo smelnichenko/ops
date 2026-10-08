@@ -172,5 +172,17 @@ check "the caller's SMOKE_SECONDS and SMOKE_POLL given to the remote shell" \
 out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null SMOKE_SECONDS='9; reboot' \
   bash scripts/vagrant-smoke.sh 2>&1); rc=$?
 check "a bound that is no number: refused, nothing sent to the VM" "$((rc != 0)) $(wc -l < "$E/ssh-cmds")" "1 0"
+# a poll of no time: refused (sleep 0 polled the API server without a pause); a fraction of a second taken
+for poll in 0 0.0 00; do
+  : > "$E/ssh-cmds"
+  out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null SMOKE_POLL=$poll bash scripts/vagrant-smoke.sh 2>&1)
+  rc=$?
+  check "SMOKE_POLL=$poll: refused, nothing sent to the VM" "$((rc != 0)) $(wc -l < "$E/ssh-cmds")" "1 0"
+done
+: > "$E/ssh-cmds"
+out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null SMOKE_POLL=0.5 bash scripts/vagrant-smoke.sh 2>&1)
+rc=$?
+check "SMOKE_POLL=0.5: taken, given to the remote shell" \
+  "$rc $(grep -cE '^sudo bash -s vagrant-k6-smoke-[0-9a-f]+ 900 0.5$' "$E/ssh-cmds")" "0 1"
 echo "vagrant-smoke: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

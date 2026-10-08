@@ -24,9 +24,10 @@ work=$(mktemp -d "$ops/.upgrade/smoke.XXXX")
 trap 'rm -rf "$work"' EXIT
 name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 # the run's bound (15 minutes) and its poll, given to the remote shell as its arguments - ssh forwards no environment and
-# sudo resets it (the caller's were read on the VM as unset); numbers only: they go on that shell's command line
+# sudo resets it (the caller's were read on the VM as unset); numbers only: they go on that shell's command line. A
+# poll of some time (0 polled the API server without a pause)
 SMOKE_SECONDS=${SMOKE_SECONDS:-900} SMOKE_POLL=${SMOKE_POLL:-5}
-[[ $SMOKE_SECONDS =~ ^[1-9][0-9]*$ && $SMOKE_POLL =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+[[ $SMOKE_SECONDS =~ ^[1-9][0-9]*$ && $SMOKE_POLL =~ ^([1-9][0-9]*(\.[0-9]+)?|0?\.[0-9]*[1-9][0-9]*)$ ]] \
   || { echo "SMOKE_SECONDS=$SMOKE_SECONDS SMOKE_POLL=$SMOKE_POLL: not numbers of seconds"; exit 1; }
 
 git -C "$ops/../platform" archive "$platform_ref" helm/schnappy | tar -x -C "$work"
