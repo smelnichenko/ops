@@ -291,8 +291,10 @@ pg-no-prompt catch the class. Full run 15:56: its build failed in setup-vault-pi
 which Python 3.13's strict X.509 check refuses (production's certificates were made by an older OpenSSL and pass that
 check on both Pis, read-only); the CA is made with keyUsage since. Full run 16:28: steps 00-13 green, 14 failed - the
 apt module has no download-only mode; the containerd package is fetched with apt-get --download-only since. Steps
-14-61 on that copy green in 2 h 49 min (18:48-21:37). The third full review ran on that tree; full run 21:40 on it
-(the review's fixes not in it) green through 06 at 23:08.
+14-61 on that copy green in 2 h 49 min (18:48-21:37). The third full review ran on that tree; full run 21:40 on its
+fixes green - all 61 steps, 4 h 58 min (the build 50 min; the steps 4 h 4 min: settles 1 h 13 min, the step checks 45,
+the step playbooks 36, Wave 0 12, the Velero backup checks 22, the isolation and readiness 23). The fourth full review
+ran on those fixes; full run 2026-10-08 03:22 on its fixes (ops d76ae14).
 
 **Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
@@ -912,11 +914,56 @@ Then the review's Suggestions, each fixed the same way (ops e3d6e33.., platform'
 Running a deploy: stop it with Ctrl-C at its terminal (the whole process group gets it - go-task forwards no signal,
 so a kill of task's own PID leaves ansible-playbook running: checked 2026-10-08, it logs the signal and waits for its
 command). A Ctrl-C skips the playbook's always: - a Patroni pause (its marker names the run) or a stopped Keycloak is
-the next run's to report.
+the next run's to report. Ansible pipelines: a task running on its host when the Ctrl-C lands runs to
+its end there, its result unread - the next run's checks find its effect.
 
 Open, the operator's: ten's Consul ports (no UFW on ten); infra feat/pi-backup-check (the stale-backup alert
 setup-pi-backups names) to push; Sonar's 23 complexity findings (S3776) after the run; pi2's stray ca-cert.srl in
 /etc/vault.d/tls (an old signing's, unused - to remove by hand or leave).
+
+## Fourth full review 2026-10-08 - what it fixed
+
+Seven passes over ops a19d595..d76ae14's predecessor (the third review's fixes) and platform's step 45; then two Pi
+hand tests on the copy as the old code left it. Each fix has a test that fails first and again when its mechanism is
+reverted (ops a7d8c4b..d76ae14, then ..HEAD after the 03:22 run started; platform aebdec0 on step 45, 46-61 restacked):
+- Production's procedure: `confirm()` read every answer on a real terminal as a no (a text "r+" on /dev/tty raises -
+  no merge could have been confirmed), and took input typed ahead; the merge's take-up compares the checked tip first
+  and a step tagged already is refused (the tag never forced); the soak runs from the first green check's end, its
+  restarts judged from its start; a phase's end retried on a Conflict; a refusal's reason kept when the end's write
+  fails; the base backup's major read from CNPG's image line.
+- The full run: the metrics check reads each target's last down sample (no fixed 2-minute wait - it would have added
+  2 h - and the allowed-down targets by their job label: the smartctl exporter failed every step); the copy pre-pulls
+  before its push to Argo; the per-step and the build's stampers outlive Ctrl-C, TERM and HUP, build-with-pin's stop
+  is not cut short by a second signal and stops every job of its own; vagrant-smoke cleans and names an earlier run's
+  leftovers, every call bounded; side clusters' cleanup survives a failed Backup removal and a failed delete call;
+  Tempo 2 has 120 s to flush on stop, and a trace pushed after the flush must reach Tempo 3.
+- The Pis: Keycloak stopped early only when its database is absent; Consul's WAN serf off (its port closed), its
+  rules on every Pi (one without UFW refused); keepalived's unit read from systemd on every run; Vault: pi2's shares
+  sent only when they differ, read by its own play, their mode kept, pipelining asserted, the CA key never left in
+  Vault's directory, certificates signed one at a time; the backups go on after a sync since boot (an internet outage
+  stopped them); forgejo-repos' root owner kept by Gluster; each backup volume checked mounted from itself.
+- Security: no reviewer token for Vault's Kubernetes auth (ESO's short-lived token reviews itself); host keys checked;
+  Forgejo's admin password on stdin (root's shell ran `$( )` in it); PgBouncer's password sent as a SCRAM verifier;
+  bootstrap.sh refuses a cluster CA that is not base64 (a heredoc line ran as root on the Pi) and fails a failed apply;
+  the Velero bucket pod's keys from its Secret; secrets lints follow variables, stdin and every logging module.
+- The harnesses: run as CI starts them (a tool shell's blocked SIGCHLD broke bash's traps); the fence fails a harness
+  that tolerated a fenced call; check-mode-lint reads blocks' own conditions, plays after plays, hostvars and loop
+  items (three preview crashes found); and the gaps the test-quality pass measured, each now biting.
+Refuted by measurement: Tempo's `/api/traces` mixing modes (`?mode=blocks` honoured); a Serf source from the VIP (the
+VIP is pi1's secondary address, its routes leave from the node's).
+Pi hand tests on the copy after full run 21:40: test:pi:rerun-guards green (03:16, with the Pis' versitygw version
+passed; its Consul case now models production's unrecorded config), test:pi-backups green (03:17).
+
+The run's time: 4 h 58 min against the 3 h target. The steps are production's procedure - Argo's settles (1 h 13 min),
+the step playbooks, Wave 0, the backup and restore proofs - and the build (50 min, 15 of them Argo's first settle). The
+test-side work left is under half an hour (isolation re-applied and the readiness checks each step, the step checks'
+slowest of three): cutting it all leaves the run over 4 h.
+
+Open, the operator's: the Vault CA key in no backup (back it up - the tier-0 store is not encrypted - or re-issue
+certificates that do not verify against a new CA); no alert on the Pi tier-0 backups' age; Patroni's REST API
+unauthenticated and port 8008 open on the LAN; ten's Consul ports and Consul ACLs; secret rotation (old values in
+pi1's logs); UFW 8200 open to the LAN; Sonar's S3776 findings; pi2's stray ca-cert.srl; the Velero mirror's URL
+credential; and, with the 3 h target, whether to cut production's own steps (the settles, Wave 0's stores).
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
