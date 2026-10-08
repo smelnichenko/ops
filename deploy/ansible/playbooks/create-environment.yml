@@ -655,7 +655,8 @@
           -- {{ _infra_env_paths | map('quote') | join(' ') }}
       delegate_to: localhost
       become: false
-      changed_when: true
+      register: _infra_pushed
+      changed_when: "'PUSHED' in _infra_pushed.stdout"
       environment:
         GIT_AUTHOR_NAME: "env-automation"
         GIT_AUTHOR_EMAIL: "automation@pmon.dev"

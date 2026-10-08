@@ -36,8 +36,9 @@ else
   check "a change in the environment's paths: committed with the message, pushed to origin's main" \
     "$rc $(git -C "$W/remote.git" log -1 --format=%s main)" "0 env: create x"
   out=$(push "env: create y"); rc=$?
-  check "nothing changed: nothing committed or pushed, said" \
-    "$rc $(git -C "$W/remote.git" log -1 --format=%s main) $(grep -c 'NOTHING TO COMMIT' <<< "$out")" "0 env: create x 1"
+  check "nothing changed: nothing committed or pushed, said - nothing said pushed (the playbooks' changed reads it)" \
+    "$rc $(git -C "$W/remote.git" log -1 --format=%s main) $(grep -c 'NOTHING TO COMMIT' <<< "$out") \
+$(grep -c 'NOTHING TO PUSH' <<< "$out") $(grep -c 'PUSHED' <<< "$out")" "0 env: create x 1 1 0"
   out=$(bash "$S" "$W/infra" "env: create z" "" 2>&1); rc=$?
   check "no paths given: refused (it would stage the whole checkout)" "$rc $(grep -c 'REFUSED' <<< "$out")" "1 1"
   git init -q --bare -b main "$W/other.git"
@@ -177,6 +178,23 @@ for book in ("create-environment", "destroy-environment"):
 ')
 check "both playbooks: ready first; committed last with the environment's paths (every one a task writes); identity" \
   "$order" "create-environment True True True True destroy-environment True True True True "
+# the commit reported changed when it pushed alone (it said "changed" on every run, nothing pushed among them)
+PY=python3
+"$PY" -c 'import ansible, yaml' 2> /dev/null || PY=$ROOT/deploy/ansible/venv/bin/python3
+changed=$(cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$PY" -c '
+import sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition
+for book in ("create-environment", "destroy-environment"):
+    tasks = [t for p in yaml.safe_load(open(f"deploy/ansible/playbooks/{book}.yml")) for k in ("pre_tasks", "tasks")
+             for t in p.get(k) or []]
+    t = next(t for t in tasks if " -- " in str((t.get("ansible.builtin.script") or {}).get("cmd", "")))
+    reg = t.get("register", "_none")
+    print(book, [condition(t.get("changed_when", True), **{reg: {"stdout": out}})
+                 for out in ("PUSHED: env: create x\n", "NOTHING TO COMMIT\nNOTHING TO PUSH\n")], end=" ")
+')
+check "both playbooks' commit: changed when it pushed, not when nothing was" "$changed" \
+  "create-environment [True, False] destroy-environment [True, False] "
 # every script a production playbook runs by the script module exists (its path as Ansible renders playbook_dir)
 missing=$(cd "$ROOT/deploy/ansible/playbooks" && python3 -c '
 import glob, re, shlex, yaml
