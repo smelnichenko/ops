@@ -112,6 +112,24 @@
         - not ansible_check_mode
         - _restored is not defined or _restored is skipped or _restored.rc | default(0) == 0
 
+    # each serving before the play goes on: one still starting was read as down by the next restart's guard on the
+    # other Pi, which refused (a full run's build, 2026-10-08)
+    - name: Keycloak serving again on both Pis
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/realms/master
+        status_code: 200
+        timeout: 10
+        follow_redirects: none
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      register: _keycloak_serving
+      until: _keycloak_serving.status | default(0) == 200
+      retries: 120
+      delay: 2
+      when:
+        - not ansible_check_mode
+        - _restored is not defined or _restored is skipped or _restored.rc | default(0) == 0
+
     - name: Keycloak left stopped
       ansible.builtin.debug:
         msg: >-
