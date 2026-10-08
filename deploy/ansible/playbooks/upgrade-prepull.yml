@@ -24,7 +24,8 @@
         fail_msg: "-e images=<name:tag[@sha256:digest]>,... - got {{ images | default('') }}"
         quiet: true
       vars:
-        _reference: '^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9._-]+)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$'
+        # to the end of the value (\Z: $ matches before a trailing newline)
+        _reference: '^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9._-]+)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?\Z'
 
     # what the node has already (a two-repo step's second merge, the Vagrant copy's preload): only the rest is pulled,
     # and room is needed only for that - a store at 80-85% refused a merge that pulled nothing

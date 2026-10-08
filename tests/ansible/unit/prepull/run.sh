@@ -90,6 +90,11 @@ case_ "two words for an image: refused, nothing pulled" 1 "" -e '{"images": "a/b
 case_ "a tag in upper case with underscores, a registry's port: pulled" 0 \
   "$E pull quay.io/a/b:V1.2_RC3;$E pull registry.local:5000/c/d:2" -e images=quay.io/a/b:V1.2_RC3,registry.local:5000/c/d:2
 case_ "a name in upper case: refused, nothing pulled" 1 "" -e images=Docker.io/a/b:1
+# the whole value: a trailing newline is no part of a reference ($ matched before it); a tag at most 128 characters
+case_ "a reference with a trailing newline: refused, nothing pulled" 1 "" -e '{"images": "x:1\n"}'
+T128=$(printf 'a%.0s' {1..128})
+case_ "a 128-character tag: pulled" 0 "$E pull x:$T128" -e images=x:$T128
+case_ "a 129-character tag: refused, nothing pulled" 1 "" -e images=x:${T128}b
 USED=65,66 case_ "the image store at 65%, then 66% (GC at 85): pulled" 0 "$E pull x:1" -e images=x:1
 USED=80,80 case_ "at 80% before (GC at 85, less 5): refused, nothing pulled" 1 "" -e images=x:1
 USED=70,81 case_ "at 81% after the pulls: the run fails" 1 "$E pull x:1" -e images=x:1
