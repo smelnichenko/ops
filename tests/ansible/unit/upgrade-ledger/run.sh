@@ -471,6 +471,29 @@ check("merge 47 platform, the backup taken at the infra merge: not again",
       [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])
 check("47's new major, read from its image line", m.postgres_target(S47),
       "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye")
+# the cluster's image line only - CNPG's postgresql, as pg_major reads it (one pattern): another registry's postgresql
+# (a tool's, an exporter's) is no cluster of ours
+import tempfile as _tf
+_steps = _tf.mkdtemp()
+open(os.path.join(_steps, "99-x.txt"), "w").write(
+    "image docker.io/bitnami/postgresql 16.4.0 => image docker.io/bitnami/postgresql 17.2.0\n"
+    "image ghcr.io/cloudnative-pg/postgresql 17.6 => image ghcr.io/cloudnative-pg/postgresql 18.1-system-trixie\n")
+open(os.path.join(_steps, "98-y.txt"), "w").write(
+    "image docker.io/bitnami/postgresql 16.4.0 => image docker.io/bitnami/postgresql 17.2.0\n")
+_saved = m.inv.STEPS
+m.inv.STEPS = _steps
+try:
+    got = [m.postgres_target("99-x"), m.inv.pg_major("99-x")]
+    try:
+        m.postgres_target("98-y")
+        got.append("taken")
+    except SystemExit:
+        got.append("refused")
+finally:
+    m.inv.STEPS = _saved
+    __import__("shutil").rmtree(_steps)
+check("the cluster's image line only - another registry's postgresql no cluster of ours (one pattern with pg_major)",
+      got, ["ghcr.io/cloudnative-pg/postgresql:18.1-system-trixie", "18", "refused"])
 got = phase_calls(m.merge, "24-cnpg", "infra", events=ev("24-cnpg apps app"))
 check("merge 24 infra (barman-check, not after the merge): no base backup - done takes it",
       [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])

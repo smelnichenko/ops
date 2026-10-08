@@ -1020,12 +1020,12 @@ def merge(step, repo):
 
 
 def postgres_target(step):
-    """The PostgreSQL image a barman-after-merge step moves production's cluster to (its image line), name:tag."""
-    for line in open(os.path.join(inv.STEPS, step + ".txt")):
-        m = re.fullmatch(r"image \S+ \S+ => image (\S+/postgresql) (\S+)", line.strip())
-        if m:
-            return f"{m[1]}:{m[2]}"
-    sys.exit(f"{step}: barman-after-merge with no PostgreSQL image line - which merge makes it live is unknown")
+    """The PostgreSQL image a barman-after-merge step moves production's cluster to (its CNPG image line, as
+    pg_major reads it), name:tag."""
+    image = inv.pg_image(step)
+    if image is None:
+        sys.exit(f"{step}: barman-after-merge with no PostgreSQL image line - which merge makes it live is unknown")
+    return f"{image[0]}:{image[1]}"
 
 
 def cluster_runs(image):
