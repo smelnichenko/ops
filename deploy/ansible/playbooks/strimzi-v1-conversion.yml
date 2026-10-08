@@ -153,8 +153,9 @@
             # whichever wait ends first (a timeout ends both with an error); the status of the Job below decides
             first=0
             wait -n -p ended $ok $failed || first=$?
-            # the other wait, still running - not the one wait -n reaped: that PID is no process of this shell any more
-            for p in $ok $failed; do [ "$p" = "${ended:-}" ] || kill "$p" 2> /dev/null || true; done
+            # the other wait, if it still runs - a job this shell has running (jobs -r): one that ended, the one
+            # wait -n reaped or one bash collected meanwhile, is no process of it any more (its PID free for another)
+            for p in $(jobs -rp); do kill "$p" 2> /dev/null || true; done
             $K logs job/$job --tail=40
             [ "$($K get job $job -o jsonpath='{.status.succeeded}')" = 1 ] \
               || { echo "$job did not succeed (the first wait ended with $first)"; exit 1; }

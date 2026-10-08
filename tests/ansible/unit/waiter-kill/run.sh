@@ -44,5 +44,24 @@ do
     fi
   done
 done
+# both conditions at once: the other wait has ended too - bash collected it (a pause after wait -n lets it), its PID
+# free for another process: nothing signalled
+cat > "$W/kubectl" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+for f in deploy/ansible/playbooks/strimzi-v1-conversion.yml tests/ansible/upgrade/backup-check.yml; do
+  block=$(sed -n '/--for=condition=Complete/,/^[^#]*kill /p' "$f" | sed 's/^ *//' | sed '/^wait -n /a sleep 0.5')
+  {
+    echo 'kill() { echo "$*" >> "$W/killed"; }'
+    echo "K=$W/kubectl job=x"
+    printf '%s\n' "$block"
+  } > "$W/block.sh"
+  : > "$W/killed"
+  out=$(W=$W timeout 20 bash "$W/block.sh" 2>&1)
+  if [ ! -s "$W/killed" ]; then echo "PASS $f, both at once: the other wait ended - nothing signalled"
+  else echo "FAIL $f, both at once: signalled '$(tr '\n' ' ' < "$W/killed")' - a PID bash already collected"
+    fails=$((fails + 1)); fi
+done
 echo "waiter-kill: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
