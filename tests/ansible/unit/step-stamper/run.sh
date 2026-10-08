@@ -5,7 +5,9 @@
 # what it says while it stops among them), the stop said, the run ended 128+signal - no step after it, no proof for
 # it. A step deaf to the TERM KILLed after STOP_GRACE, said. (In the Taskfile, go-task swallowed the first signals and,
 # its command surviving one, ran the step's remaining commands and ended 0.) Each line of a step that ends of its own
-# accord stamped, the script ending 0.
+# accord stamped, the script ending 0. A signal between the step's start and its record (its PID not kept yet) stops it
+# all the same; a process outside the step's session holding its output (a daemon it started) holds the stop no
+# longer than STAMPER_GRACE - the stamper then ended, said.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -14,12 +16,14 @@ mkdir -p "$W/run/tests/ansible/upgrade/steps" "$W/run/scripts/lib" "$W/bin"
 for s in 01-a 02-b; do : > "$W/run/tests/ansible/upgrade/steps/$s.txt"; done
 cp scripts/upgrade-full-steps.sh "$W/run/scripts/" && cp scripts/lib/process-groups.sh "$W/run/scripts/lib/"
 # the step: its PID recorded, lines written; on TERM it says so and writes five more over half a second (its children
-# ending), then ends 143 - or, DEAF, ignores it; ENDS: it ends of its own accord, 0
+# ending), then ends 143 - or, DEAF, ignores it; ENDS: it ends of its own accord, 0; HOLDER: it starts a sleep in a
+# session of its own holding its output (as a daemon would), that sleep's PID recorded
 cat > "$W/bin/task" <<'STUB'
 #!/bin/bash
 echo "task $*" >> "$LOG"
 case "$*" in test:upgrade:step*) ;; *) exit 0 ;; esac
 echo $$ > "$W/step.pid"
+[ -z "${HOLDER:-}" ] || { setsid sleep 60 & echo $! > "$W/holder.pid"; }
 if [ -n "${DEAF:-}" ]; then trap '' TERM; else
   trap 'echo "stopping on the signal"; for j in 1 2 3 4 5; do echo "after the signal $j"; sleep 0.1; done; exit 143' TERM
 fi
@@ -42,14 +46,14 @@ proc_ok() {  # proc_ok <pid> <ppid>: the process is that one's child
   set -- ${st##*) }
   [ "$2" = "$want" ]
 }
-run() {  # run <signal or none> <env...>: the script in a session of its own (a terminal's foreground group), its exit
+run() {  # run <signal or none> <env...>: the script (SCRIPT: another copy) in a session of its own, its exit
   # read by a shell that, as go-task, outlives the signal (a handler: the script starts with every signal at its default)
   local sig=$1; shift
   rm -f "$W/rc" "$W/step.pid"; : > "$W/log"; : > "$W/out"
   (cd "$W/run" && exec env "$@" W="$W" LOG="$W/log" PATH="$W/bin:$PATH" STOP_GRACE=1 python3 -c 'import os, signal, sys
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE): signal.signal(s, signal.SIG_DFL)
 os.setsid()
-os.execvp("bash", ["bash", "-c", "trap : INT TERM HUP; bash scripts/upgrade-full-steps.sh > \"$W/out\" 2>&1; echo $? > \"$W/rc\""])') &
+os.execvp("bash", ["bash", "-c", "trap : INT TERM HUP; bash ${SCRIPT:-scripts/upgrade-full-steps.sh} > \"$W/out\" 2>&1; echo $? > \"$W/rc\""])') &
   local pg=$!
   for _ in $(seq 100); do grep -q '^[0-9:]\{8\} line 3$' "$W/out" 2> /dev/null && break; sleep 0.05; done
   if [ "$sig" != none ]; then
@@ -76,6 +80,19 @@ done
 run INT DEAF=1
 check "a step deaf to the TERM: KILLed after the grace, said; the run ended 130" \
   "$(cat "$W/rc" 2> /dev/null || echo none) $alive $(grep -c 'outlived the stop by 1 s - killed' "$W/out")" "130 gone 1"
+# a TERM between the step's start and its record (forced in a copy: sent right after the start)
+sed 's|^  setsid task test:upgrade:step .* &$|&\n  kill -TERM $$|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/unkept.sh"
+check "the copy with a TERM before the step's record made" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/unkept.sh")" 1
+run none SCRIPT=scripts/unkept.sh
+check "a TERM before the step's PID was kept: the step stopped all the same (gone), the run ended 143" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $alive $(grep -c '^=== STOPPED BY A SIGNAL' "$W/out")" "143 gone 1"
+# a daemon of the step's, a session of its own, holding its output: the stop held STAMPER_GRACE at most, said
+run TERM HOLDER=1 STAMPER_GRACE=1
+holder=$(cat "$W/holder.pid" 2> /dev/null)
+check "a process outside the step holding its output: the stop not held past the stamper's grace, said; ended 143" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'output still held' "$W/out")" "143 1"
+# the holder: a sleep this test's stub started - ended here
+if [ -n "$holder" ] && [ "$(tr '\0' ' ' < "/proc/$holder/cmdline" 2> /dev/null)" = "sleep 60 " ]; then kill "$holder"; fi
 run none ENDS=3
 check "steps ending of their own accord: each line stamped, both green, the first proven after the second, the run 0" \
   "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c '^[0-9:]\{8\} step done$' "$W/out") $(grep -c 'GREEN' "$W/out") \

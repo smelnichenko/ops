@@ -19,11 +19,23 @@ mkdir -p .upgrade
 work=$(mktemp -d "$PWD/.upgrade/full-steps.XXXX") || exit 1
 step_job="" stamper="" signalled=""
 stop() {
-  local rc=$? own
+  local rc=$? own j steps_=() i
   trap '' INT TERM HUP
-  # the step's task, a session of its own: every process of it, bounded; the stamper ends when what it reads does
-  [ -z "$step_job" ] || { own_jobs own; [[ " ${own[*]} " != *" $step_job "* ]] || stop_groups "${STOP_GRACE:-60}" "$step_job"; }
-  [ -z "$stamper" ] || wait "$stamper" 2> /dev/null
+  # every job of this script's but the stamper - the step's task, a session of its own, one whose PID was not kept yet
+  # (a signal between its start and its record) among them: every process of it, bounded
+  own_jobs own
+  for j in "${own[@]}"; do [ "$j" = "$stamper" ] || steps_+=("$j"); done
+  [ "${#steps_[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${steps_[@]}"
+  # the stamper ends when what it reads does - all of it read; something outside the step still holding that (a daemon
+  # it started) holds the stop STAMPER_GRACE seconds at most
+  if [ -n "$stamper" ]; then
+    for ((i = 0; i < ${STAMPER_GRACE:-30} * 10; i++)); do kill -0 "$stamper" 2> /dev/null || break; sleep 0.1; done
+    if kill -0 "$stamper" 2> /dev/null; then
+      echo "=== the step's output still held after ${STAMPER_GRACE:-30} s (a process outside it) - its stamper ended"
+      kill -KILL "$stamper"
+    fi
+    wait "$stamper" 2> /dev/null
+  fi
   [ -z "$signalled" ] || echo "=== STOPPED BY A SIGNAL $(date +%T) - the step stopped, no step after it"
   rm -rf "$work"
   exit "${signalled:-$rc}"
