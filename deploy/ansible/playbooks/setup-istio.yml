@@ -165,9 +165,10 @@
         gateway_vip_addr: "{{ gateway_svc.resources[0].spec.externalIPs[0] }}"
 
     - name: Test Istio gateway  # noqa: command-instead-of-module
-      # curl --resolve pins pmon.dev to the gateway VIP; uri module has no equivalent.
+      # curl --resolve pins pmon.dev to the gateway VIP; uri module has no equivalent. Verified: the gateway serves the
+      # public *.pmon.dev certificate
       ansible.builtin.shell: |
-        curl -sk -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:{{ gateway_vip_addr }} https://pmon.dev/api/health
+        curl -s -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:{{ gateway_vip_addr }} https://pmon.dev/api/health
       register: gateway_test
       changed_when: false
       failed_when: false

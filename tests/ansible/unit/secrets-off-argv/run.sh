@@ -18,9 +18,12 @@ from ansible.parsing.mod_args import FREEFORM_ACTIONS
 sys.path.insert(0, "tests/ansible/unit")
 import yaml  # noqa: E402
 from plays import actions, files, load, plays  # noqa: E402
-SECRET = re.compile(r"\{\{[^}]*\b\w*(password|passwd|passphrase|secret|token|api_key|apikey|private_key|credentials?)"
-                    r"\w*\b[^}]*\}\}", re.I)
-NOT_A_SECRET = re.compile(r"_(dir|file|path|name|ttl|policy|role)\b", re.I)  # where a secret is, not the secret
+SECRET = re.compile(r"\{\{[^}]*\b\w*(password|passwd|passphrase|secret|token|api_key|apikey|private_key|credentials?"
+                    r"|encrypt\w*_key|unseal\w*|jwt)\w*\b[^}]*\}\}", re.I)
+# a file lookup reads the file: what it names is the secret, not a path to one
+FILE_LOOKUP = re.compile(r"lookup\(\s*['\"](ansible\.builtin\.)?file['\"]")
+# where a secret is, how many - not the secret
+NOT_A_SECRET = re.compile(r"_(dir|file|path|name|ttl|policy|role|shares|threshold)\b", re.I)
 JINJA = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.S)
 # arguments a module puts on a command line
 ARGV_ARGS = {"ansible.builtin.expect": ("command",), "ansible.builtin.git": ("repo",),
@@ -48,7 +51,8 @@ def refers(text, names):
 
 
 def secrets(text, held=()):
-    found = [m.group(0) for m in SECRET.finditer(str(text or "")) if not NOT_A_SECRET.search(m.group(0))]
+    found = [m.group(0) for m in SECRET.finditer(str(text or ""))
+             if not NOT_A_SECRET.search(m.group(0)) or FILE_LOOKUP.search(m.group(0))]
     return found + ([f"(a variable holding one: {sorted(n for n in held if refers(text, [n]))})"]
                     if held and refers(text, held) else [])
 
@@ -123,6 +127,10 @@ check("one through a variable - the task's, a block's, the play's, through anoth
        bool([n for t, sc in judged([{"hosts": "all", "vars": {"k": "{{ a_token }}", "o": {"cmd": ["sh", "{{ k }}"]}},
                                      "tasks": [{"ansible.builtin.shell": "run '{{ o | to_json }}'"}]}])
              for n in named(t, sc)])], [True, True, True])
+check("the unseal keys on stdin without no_log, a token file's content read by a lookup onto a script: named",
+      [bool(named({"ansible.builtin.shell": {"cmd": "cat > f", "stdin": "{{ _unseal_keys.content | b64decode }}"}})),
+       bool(named({"ansible.builtin.shell": "vault login {{ lookup('ansible.builtin.file', vault_token_file) }}"})),
+       bool(named({"ansible.builtin.shell": "cat {{ vault_token_file }}"}))], [True, True, False])
 check("a variable holding no secret, one named alike in plain text: not named",
       named({"vars": {"k": "{{ minio_url }}"}, "ansible.builtin.shell": "echo k {{ k }}"}), [])
 check("a module that puts an argument on a command line (git's repo): named; a passphrase too",

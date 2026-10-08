@@ -16,22 +16,37 @@ import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from plays import actions, files, load, plays, tasks  # noqa: E402
 TOKEN_SENT = re.compile(r"X-Vault-Token|Bearer \{\{")
-SECRET = re.compile(r"\{\{[^}]*\b\w*(password|passwd|secret|token|api_key|apikey)\w*\b[^}]*\}\}", re.I)
+SECRET = re.compile(r"\{\{[^}]*\b\w*(password|passwd|secret|token|api_key|apikey|encrypt\w*_key|unseal\w*|jwt)\w*\b"
+                    r"[^}]*\}\}", re.I)
+# a variable named as a secret (a fact set_fact makes: its name says what it holds, its expression may not)
+SECRET_NAME = re.compile(r"(password|passwd|secret|token|api_key|apikey|encrypt\w*_key|unseal\w*|jwt)", re.I)
+# a command that prints a new secret: its result holds it
+GENERATES = re.compile(r"\b(consul keygen|openssl rand|pwgen|vault operator init(?! -status))\b")
 # where a secret is, or what a result says of it - not the secret
-NOT_A_SECRET = re.compile(r"_(dir|file|path|name|ttl|policy|role|version)\b|\.(status|rc|changed|failed|skipped|id)\b", re.I)
+NOT_A_SECRET = re.compile(r"_(dir|file|path|name|ttl|policy|role|version|works|exists|shares|threshold)\b"
+                          r"|\.(status|rc|changed|failed|skipped|id)\b", re.I)
 # modules that log their arguments on their host ("Invoked with") or print them (set_fact's facts at -v), with the
 # arguments each keeps out of its log itself (no_log in its own spec)
 LOGGED = {"kubernetes.core.k8s": set(), "kubernetes.core.helm": set(), "ansible.builtin.uri": {"url_password", "password"},
-          "community.hashi_vault.vault_kv2_write": {"data", "token"}, "ansible.builtin.set_fact": set(),
-          "set_fact": set()}
+          "community.hashi_vault.vault_kv2_write": {"data", "token"}, "community.hashi_vault.vault_write": {"token"},
+          "ansible.builtin.set_fact": set(), "set_fact": set(), "ansible.builtin.debug": set(),
+          "ansible.builtin.lineinfile": set(), "ansible.builtin.blockinfile": set(), "ansible.builtin.replace": set()}
+# modules whose --diff prints what they write (copy keeps its content out of the log, not out of the diff): a secret in
+# it needs diff: false (or no_log)
+DIFFED = {"ansible.builtin.copy": "content", "ansible.builtin.lineinfile": "line", "ansible.builtin.blockinfile": "block",
+          "ansible.builtin.replace": "replace"}
 # (file, task name): why what it templates is no secret
 NOT_A_SECRET_TASK = {
     ("deploy/ansible/playbooks/setup-woodpecker.yml", "Find existing woodpecker-infra token"):
         "Forgejo's token list holds names and ids, never a token",
     ("deploy/ansible/playbooks/setup-nexus.yml", "Enable Docker Bearer Token Realm"): "a realm's name (DockerToken)",
+    ("deploy/ansible/playbooks/seed-vault-secrets.yml", "Secrets seeded"):
+        "a fixed text chosen by whether the API key is empty (its length), never the key",
+    ("deploy/ansible/playbooks/setup-vault-cleanup-policy.yml", "Report"):
+        "a fixed text chosen by whether the token task was skipped, never the token",
 }
 INSECURE = re.compile(r"VAULT_SKIP_VERIFY|validate_certs: (?:(?:false|no)\b|'(?:false|no)'|\"(?:false|no)\")"
-                      r"|curl\b[^\n]* (-k|--insecure)\b")
+                      r"|curl\b[^\n]* (-[a-zA-Z]*k[a-zA-Z]*|--insecure)\b")
 # a cat of an unseal file whose output is the task's (not one inside $(...) feeding a variable)
 CAT_UNSEAL = re.compile(r"(^|[;&|\n])\s*cat\s+/etc/vault-unseal/")
 # (file, register): why its result holds no secret
@@ -63,9 +78,18 @@ def problems(path, task):
             for k, val in v.items():
                 hits = [x.group(0) for x in SECRET.finditer(yaml.safe_dump(val, width=10000))
                         if not NOT_A_SECRET.search(x.group(0))] if k not in LOGGED[m] else []
+                if m.endswith("set_fact") and SECRET_NAME.search(k) and not NOT_A_SECRET.search(k):
+                    hits.append(k)
                 if hits:
                     out.append(f"{path}: '{name}' puts a secret in {m}'s {k} (logged or printed) without no_log")
                     break
+    for m, v in actions(task):
+        field = DIFFED.get(m)
+        if field and isinstance(v, dict) and v.get("diff") is not False and task.get("diff") is not False \
+                and [x for x in SECRET.finditer(str(v.get(field) or "")) if not NOT_A_SECRET.search(x.group(0))]:
+            out.append(f"{path}: '{name}' writes a secret a --diff prints, without diff: false")
+    if GENERATES.search(text) and "register" in task:
+        out.append(f"{path}: '{name}' registers a new secret without no_log")
     if TOKEN_SENT.search(text):
         out.append(f"{path}: '{name}' sends a token without no_log")
     reg = str(task.get("register", ""))
@@ -109,6 +133,26 @@ check("a password set as a fact: named", len(problems("f", {"name": "f", "ansibl
 check("uri's url_password (no_log in its own spec), a chart's version: not named",
       problems("f", uri(url_password="{{ admin_password }}")) + problems("f", {"name": "v", "kubernetes.core.helm": {
           "chart_version": "{{ external_secrets_chart_version }}"}}), [])
+check("a secret a module logs or a --diff prints: named - debug's msg, lineinfile's line, vault_write's data, a copy "
+      "without diff: false, a gossip key or unseal keys by name",
+      [len(problems("f", {"name": n, **t})) for n, t in (
+          ("d", {"ansible.builtin.debug": {"msg": "{{ db_password }}"}}),
+          ("l", {"ansible.builtin.lineinfile": {"path": "/x", "line": "pw={{ db_password }}"}}),
+          ("w", {"community.hashi_vault.vault_write": {"path": "x", "data": {"v": "{{ a_secret }}"}}}),
+          ("c", {"ansible.builtin.copy": {"dest": "/x", "content": "encrypt = {{ consul_encrypt_key }}"}}),
+          ("f", {"ansible.builtin.set_fact": {"k": "{{ _unseal_keys.content }}"}}))], [1, 2, 1, 1, 1])
+check("the same no_log, or the copy with diff: false: not named",
+      problems("f", {"name": "c", "ansible.builtin.copy": {"dest": "/x", "content": "{{ consul_encrypt_key }}"},
+                     "diff": False})
+      + problems("f", {"name": "l", "ansible.builtin.lineinfile": {"path": "/x", "line": "{{ db_password }}"},
+                       "no_log": True}), [])
+check("a fact named as a secret, a generated key registered: named",
+      [len(problems("f", {"name": "k", "ansible.builtin.set_fact": {"consul_encrypt_key": "{{ x.stdout }}"}})),
+       len(problems("f", {"name": "g", "ansible.builtin.command": "consul keygen", "register": "g"})),
+       len(problems("f", {"name": "s", "ansible.builtin.command": "vault operator init -status", "register": "s"})),
+       len(problems("f", {"name": "w", "ansible.builtin.set_fact": {"_token_works": "{{ r.status == 200 }}"}}))],
+      [1, 1, 0, 0])
+check("curl's flags combined (-sk): named", len(problems("f", {"name": "c", "ansible.builtin.shell": "curl -sk https://x"})), 1)
 found, used = [], set()
 paths = files("deploy/ansible/playbooks")
 for f in paths:
