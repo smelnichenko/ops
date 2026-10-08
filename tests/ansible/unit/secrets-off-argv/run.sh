@@ -146,7 +146,11 @@ check("a module that puts an argument on a command line (git's repo): named; a p
 # read) never reach an exec: curl takes the header from a descriptor (-K <(printf ...)), a file (-H @f) or stdin.
 BUILTINS = {"printf", "echo", "read", "local", "export", "declare", "readonly", "set", "test", "[", "[[", "return"}
 KEYWORDS = {"if", "elif", "while", "until", "!", "then", "do", "else", "time"}
-ARGV_SECRET = re.compile(r"Bearer \$|\$\(\s*(cat|<)\s*[^)]*(token|password|passwd|secret|private|\.key)\b[^)]*\)", re.I)
+# a secret on the command line: a bearer header, a file's secret read in place by $( ), or an option for one given a
+# variable (--password "$x", --token=${T}, -p"$db_pass" - a variable named for one: -p is a port's too)
+ARGV_SECRET = re.compile(r"Bearer \$|\$\(\s*(cat|<)\s*[^)]*(token|password|passwd|secret|private|\.key)\b[^)]*\)"
+                         r"|--(password|passwd|token|secret)[= ]+\"?\$"
+                         r"|(^|\s)-p\s*\"?\$\{?\w*(pass|pw|secret|token)", re.I)
 
 
 def argv_reads(script):
@@ -180,8 +184,14 @@ check("a run-time token on another program's argv: named; on a builtin's, a desc
        bool(argv_reads('cat /etc/caddy/cluster-token > /dev/null')),
        bool(argv_reads('VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)')),
        bool(argv_reads('if ! VAULT_TOKEN=$(cat /etc/vault-unseal/root-token 2> /dev/null); then exit 1; fi')),
-       bool(argv_reads('if ! vault login "$(cat /etc/vault-unseal/root-token)"; then exit 1; fi'))],
-      [True, True, True, False, False, False, False, False, True])
+       bool(argv_reads('if ! vault login "$(cat /etc/vault-unseal/root-token)"; then exit 1; fi')),
+       # a secret read at run time into a variable, then given as an option's value
+       bool(argv_reads('forgejo admin user change-password --username "$user" --password "$rnd"')),
+       bool(argv_reads('mysql -u root -p"$db_pass" -e "select 1"')),
+       bool(argv_reads('x --token="${TOKEN}" y')),
+       bool(argv_reads('ssh -p "$port" host')),
+       bool(argv_reads('docker login --password-stdin -u u < "$f"'))],
+      [True, True, True, False, False, False, False, False, True, True, True, True, False, False])
 
 
 def scripts(doc):
