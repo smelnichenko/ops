@@ -20,9 +20,9 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
   done       ten's inventory as step N leaves it and Argo settled (after a step that changes cert-manager - its
              cert-renew line - first a throwaway certificate issued through production's ACME solver: acme-check.yml;
              a barman-check step whose merge took no base backup - declined or failed there - takes it here).
-             The first green call records checked; a call at
+             The first green call records checked as it ends (and when it began); a call at
              least the step's soak later (its soak line; else 60 minutes after a wave0 step, 15 otherwise) that is
-             green again with no container restarted since records done. A red call after checked records
+             green again with no container restarted since the first began records done. A red call after checked records
              check-failed: the soak starts again from the next green call.
 A phase that fails records nothing of its own. Every phase claims the step first - start <phase> <host:pid>, written
 against the same read of the ledger that cleared it, so a second run of any phase of the step refuses until the first
@@ -214,6 +214,19 @@ def open_start(mine):
         elif e == "end" and started and (len(a) < 3 or a[2] == started[1][-1]):
             started = None
     return started
+
+
+def checked_since(events, step):
+    """Where the deciding check judges restarts from: the first green check's start (its since=, read before it ran -
+    a restart as it ran counts), or, for one recorded before the two were apart, its own time; None when no soak."""
+    since = None
+    for at, s, e, args in events:
+        if s == step and e == "checked":
+            since = next((datetime.datetime.fromisoformat(a[6:].replace("Z", "+00:00")) for a in args
+                          if a.startswith("since=")), at)
+        elif s == step and e == "check-failed":
+            since = None
+    return since
 
 
 def soak_state(events, step, soak_minutes, now):
@@ -1078,14 +1091,18 @@ def done(step):
                else ["no fresh Postgres base backup (above)"])
         # recorded: a red check later starts the soak again, and its next first call does not take another
         record(step, "base-backup")
-    # the soak's start, read before the first check by ten's clock (the restarts' times are its): this machine's,
-    # after the check, let a restart as the check ran, or within the clocks' skew, slip past the deciding check
+    # where the restarts are judged from, read before the first check by ten's clock (the restarts' times are its):
+    # this machine's, after the check, let a restart as the check ran, or within the clocks' skew, slip past the
+    # deciding check
     started = ten_now() if checked is None else None
-    # after the soak: no container may have restarted since the first green check
-    green = check(step, checked, deciding=checked is not None)
+    # after the soak: no container may have restarted since the first green check began
+    green = check(step, (checked_since(events, step) or checked) if checked is not None else None,
+                  deciding=checked is not None)
     if checked is None:
         refuse([] if green else ["not green - nothing recorded (fix, or the step's abort line)"])
-        record(step, "checked", at=started)
+        # the soak from now, ten's time after the check (it ran up to CHECK_MINUTES - timed from its start, the soak ran
+        # short by it); the restarts from its start
+        record(step, "checked", f"since={started}", at=ten_now())
         print(f"the soak runs {info['soak']} minutes - deploy:upgrade:done again after it")
         return
     if not green:

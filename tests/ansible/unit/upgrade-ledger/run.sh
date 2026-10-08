@@ -236,17 +236,18 @@ check("done 47 with no base backup at its merges (declined): done takes it", don
 
 # done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done; the
 # first green check recorded at ten's time (the restarts' clock) read before it ran
-def done_run(step, soak, green):
+def done_run(step, soak, green, events=(), clock=("2026-10-07T10:00:00Z",)):
     calls, checks, saved = [], [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible",
                                                                "check", "record", "proof_problems", "ten_now")}
-    m.ten_now = lambda: calls.append("ten's clock") or "2026-10-07T10:00:00Z"
-    m.ledger_for = lambda st, ph, arg=None: (names, [], info[st])
+    times = list(clock)
+    m.ten_now = lambda: calls.append("ten's clock") or (times.pop(0) if len(times) > 1 else times[0])
+    m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: soak
     m.confirm = lambda q: True
     m.ansible = lambda *a: True
     m.check = lambda *a, **k: checks.append((a, k)) or calls.append("check") or green
-    m.record = lambda st, ev, *a, **k: calls.append(ev + (f" at {k['at']}" if k.get("at") else ""))
+    m.record = lambda st, ev, *a, **k: calls.append(" ".join([ev, *a]) + (f" at {k['at']}" if k.get("at") else ""))
     try:
         m.done(step)
     except SystemExit as e:
@@ -263,10 +264,20 @@ check("done after the soak, green: done, judged since the first green check, dec
 calls, checks = done_run(S42, (T0, 0), False)
 check("done after the soak, red: check-failed, refused - not done", calls,
       ["ten's clock", "check", "check-failed", "refused: REFUSED"])
-calls, checks = done_run(S42, (None, None), True)
-check("done's first call: ten's clock read (the soak's, then its start), then the check (no since, not deciding), "
-      "checked recorded at ten's time", (calls, checks),
-      (["ten's clock", "ten's clock", "check", "checked at 2026-10-07T10:00:00Z"], [((S42, None), {"deciding": False})]))
+# the soak runs from the first green check's end (that check runs up to CHECK_MINUTES - timed from its start, the soak
+# ran short by it); its restarts are judged from its start (one as it ran slipped past the deciding check otherwise)
+calls, checks = done_run(S42, (None, None), True,
+                         clock=("2026-10-07T10:00:00Z", "2026-10-07T10:01:00Z", "2026-10-07T10:13:00Z"))
+check("done's first call: ten's clock read (the soak's, the restarts' start), the check (no since, not deciding), then "
+      "checked recorded at ten's time after it, since its start", (calls, checks),
+      (["ten's clock", "ten's clock", "check", "ten's clock", "checked since=2026-10-07T10:01:00Z at 2026-10-07T10:13:00Z"],
+       [((S42, None), {"deciding": False})]))
+SINCE = datetime.datetime(2026, 10, 6, 7, 45, tzinfo=datetime.timezone.utc)
+calls, checks = done_run(S42, (T0, 0), True, events=ev(f"{S42} checked since=2026-10-06T07:45:00Z"))
+check("the deciding check judges restarts from the first check's start (its since=)", checks,
+      [((S42, SINCE), {"deciding": True})])
+calls, checks = done_run(S42, (T0, 0), True, events=ev(f"{S42} checked"))
+check("a checked recorded before the two were apart: its own time for both", checks, [((S42, T0), {"deciding": True})])
 
 # the soak's time left by ten's clock, the one its first green check was recorded by: this machine's, ahead of ten's,
 # ended the soak early by the skew
