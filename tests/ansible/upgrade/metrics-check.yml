@@ -25,6 +25,10 @@
     scrape_pools_file: "{{ playbook_dir }}/../../../.upgrade/scrape-pools.json"
     # how long each target must have been up after a step: from its last sample down, or its first
     up_for_seconds: 120
+    # how long after t0 a target not yet up that long is waited for: a target first seen late (a pod the settle
+    # replaced, a Job's) gets its own 2 minutes - a count of tries from the first poll cut one seen 40 s in; past it,
+    # one that never stays up is given up on
+    up_wait_seconds: 360
     # each active target's last sample down, and its first, over RANGE - sample times: timestamp() of an expression
     # (up == 0) gives the subquery's step times instead (a down sample at 90 s read 100; promtool 3.10). The first over a
     # window up_for_seconds longer: an old target's first sample in it is the window's start, a scrape interval either
@@ -87,7 +91,8 @@
     # step's own recovery) waits until 2 minutes after it; one after t0, of a target there at t0, is a flap - one lucky
     # poll does not pass a target that flaps without restarting (scrape timeouts, an intermittent 503 through the mesh)
     # - and fails at once, never waited out (a window sliding with each retry let a flap age out); a target first seen
-    # after t0 (a pod the settle replaced) waits 2 minutes from its first sample, its first scrapes' downs no flap
+    # after t0 (a pod the settle replaced) waits 2 minutes from its first sample, its first scrapes' downs no flap - up
+    # to up_wait_seconds after t0: then given up on, said
     - name: Every scrape target up for 2 minutes, none down since they all were
       ansible.builtin.shell: |
         set -euo pipefail
@@ -122,6 +127,9 @@
         young = ["%s (%d s up of %d)" % (n, now - at, up_for) for n, at in sorted(since.items()) if now - at < up_for]
         for n in young:
             print("NOT YET", n)
+        if young and now - t0 > int(os.environ["UP_WAIT"]):
+            print("GIVE UP: %d s after every target was up, these not up %d s yet" % (now - t0, up_for))
+            sys.exit(1)
         if young:
             sys.exit(2)
         print("stayed up: every target up for %d s, none down since %d" % (up_for, t0))
@@ -131,14 +139,15 @@
       environment:
         UP_OUT: "{{ _targets_up.stdout }}"
         UP_FOR: "{{ up_for_seconds }}"
+        UP_WAIT: "{{ up_wait_seconds }}"
         DOWN_Q: "{{ down_query }}"
         FIRST_Q: "{{ first_query }}"
       register: _targets
       changed_when: false
-      # a recovery's whole wait, and two polls more
-      retries: "{{ (up_for_seconds | int) // 15 + 2 }}"
+      # the whole wait after t0, and two polls more
+      retries: "{{ (up_wait_seconds | int) // 15 + 2 }}"
       delay: 15
-      until: _targets.rc == 0 or 'FLAPPED' in _targets.stdout
+      until: _targets.rc == 0 or 'FLAPPED' in _targets.stdout or 'GIVE UP' in _targets.stdout
       failed_when: _targets.rc != 0
 
     - name: The recorded scrape pools (taken on a green copy - -e record_scrape_pools=true)

@@ -124,6 +124,15 @@ check("a target first seen 30 s ago, never down: not yet - its 2 minutes from it
       (r.returncode, "NOT YET" in r.stdout), (2, True))
 r, _, _, _ = stayed_run(150, first_ago=130)
 check("a target first seen 130 s ago, never down: passes", (r.returncode, "stayed up" in r.stdout), (0, True))
+# a target first seen late (a pod the settle replaced, a Job's): its 2 minutes waited for while within the wait after
+# t0 - never cut by a count of tries from the first poll; past it, given up (a target that never stays up) - said
+wait_for = int(play_vars["up_wait_seconds"])
+r, _, _, _ = stayed_run(wait_for - 60, first_ago=10)
+check("a target first seen %d s after t0, up since: not yet - waited for, within the wait" % (wait_for - 70),
+      (r.returncode, "NOT YET" in r.stdout, "GIVE UP" in r.stdout), (2, True, False))
+r, _, _, _ = stayed_run(wait_for + 10, first_ago=10)
+check("past the wait after t0, a target still not up 2 minutes: given up, said", (r.returncode, "GIVE UP" in r.stdout),
+      (1, True))
 r, q, _, _ = stayed_run(30)
 frng = re.search(r"min_over_time.*?\[(\d+)s:\d+s\]", q)
 check("its first sample read over a window 2 minutes longer (an old target's first sample in it is the window's start, "
@@ -137,12 +146,16 @@ check("promtool evaluates the playbook's own expressions",
       ({play_vars["down_query"], play_vars["first_query"]} <= exprs), True)
 reg2 = stayed["register"]
 until = stayed.get("until", "")
-check("not yet: retried; a flap: no retry - it fails at once; passed: done",
+check("not yet: retried; a flap: no retry - it fails at once; given up: no retry; passed: done",
       [condition(until, **{reg2: {"rc": rc, "stdout": out}}) for rc, out in
-       ((2, "NOT YET j i (40 s up of 120)"), (1, "FLAPPED j i"), (0, "stayed up"))], [False, True, True])
+       ((2, "NOT YET j i (40 s up of 120)"), (1, "FLAPPED j i"), (1, "NOT YET j i\nGIVE UP"), (0, "stayed up"))],
+      [False, True, True, True])
 check("a flap fails the task", condition(stayed.get("failed_when", f"{reg2}.rc != 0"),
                                          **{reg2: {"rc": 1, "stdout": "FLAPPED j i"}}), True)
-check("the retries cover a recovery's 2 minutes", int(render(str(stayed.get("retries", 0)), **v)) * stayed.get("delay", 5) >= 150, True)
+check("the retries cover the wait after t0 (the polls start at t0, or after)",
+      int(render(str(stayed.get("retries", 0)), **v)) * stayed.get("delay", 5) >= wait_for, True)
+check("the wait covers a recovery's 2 minutes, and a target first seen as late again after t0",
+      wait_for >= 2 * int(play_vars["up_for_seconds"]), True)
 print("metrics-window: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK
