@@ -319,6 +319,7 @@ PROOF_KW = []  # the keyword arguments each phase read the proof with
 
 
 RUN_ARGS = []  # every command a phase ran (phase_calls), whole
+FLUSH_KW = {}  # the Tempo flush's run arguments (its bound, its output)
 ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its arguments
 
 
@@ -337,6 +338,8 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
         calls.append(("run", "tempo-flush.py" if flush else os.path.basename(cmd[0])))
         RUN_ARGS.append(list(cmd) + (["<tempo-flush.py>"] if flush else []))
+        if flush:
+            FLUSH_KW.update(k)
         if revs and "rev-parse" in cmd:
             ref = cmd[-1].removesuffix("^{commit}")
             return type("R", (), {"returncode": 0, "stdout": revs.get(ref, "abc1234")})()
@@ -529,6 +532,10 @@ check("merge 54 infra: asked, Tempo flushed (the flush waited for), then merged"
       [("asked",), ("run", "tempo-flush.py"), ("run", "upgrade-merge-step.sh")])
 check("merge 54 infra: the flush runs on ten (its kubectl and credentials), the script on its python's stdin",
       [a for a in RUN_ARGS if a[-1] == "<tempo-flush.py>"], [[*m.SSH, m.TEN, "python3 -", "<tempo-flush.py>"]])
+# its progress shown as it goes (minutes of waiting, said), bounded past its own waits (held 30 x 2 s, stored 60 x 10 s,
+# each query 30 s at most): the default 900 s ssh bound cut it
+check("merge 54 infra: the flush's output shown as it runs, its bound past its own waits (> 900 s)",
+      (FLUSH_KW.get("capture_output"), (FLUSH_KW.get("timeout") or 0) > 900), (False, True))
 RUN_ARGS.clear()
 got = phase_calls(m.merge, S54, "platform", events=ev(f"{S54} apps app"))
 check("merge 54 platform: no flush", [c for c in got if c in (("ten", "flush"), ("run", "tempo-flush.py"))], [])
