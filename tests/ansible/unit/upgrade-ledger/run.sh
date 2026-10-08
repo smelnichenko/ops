@@ -487,6 +487,15 @@ m.proven_digest = lambda step, name, tag: D1 if name.endswith("scylladb/scylla-m
 check("prepull: 21's manager by the digest the copy ran (a pin in two keys)",
       [i for i in m.prepull_images("21-scylla-operator-1.22") if "scylla-manager:" in i],
       [f"docker.io/scylladb/scylla-manager:3.12.1@{D1}"])
+# the Vagrant step's pre-pull, before its proof (proven=False, the prepull-images CLI): the branches' pins alone - the
+# copy's digest is not there yet to read
+read_proof = []
+saved_pd = m.proven_digest
+m.proven_digest = lambda step, name, tag: read_proof.append(name) or saved_pd(step, name, tag)
+check("prepull before the proof: the branches' pins alone, no proof read",
+      ([i for i in m.prepull_images("21-scylla-operator-1.22", proven=False) if "scylla-manager:" in i], read_proof),
+      (["docker.io/scylladb/scylla-manager:3.12.1"], []))
+m.proven_digest = saved_pd
 m.image_pins = lambda step, name, tag: {D2} if name.endswith("scylladb/scylla-manager") else set()
 try:
     m.prepull_images("21-scylla-operator-1.22")
