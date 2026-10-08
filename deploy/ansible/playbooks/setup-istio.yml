@@ -2,8 +2,7 @@
 # Setup Istio sidecar mesh on kubeadm cluster
 #
 # Installs:
-#   - Istio sidecar (base, istiod, cni)
-#   - Enables sidecar injection for schnappy namespace
+#   - Istio sidecar (base, istiod, cni) - a pod injected by its own label (sidecar.istio.io/inject), no namespace's
 #
 # Gateway uses ClusterIP + externalIPs (192.168.11.2) — no LB controller needed.
 #
@@ -22,7 +21,10 @@
 
   vars:
     istio_version: "1.25.2"
-    ns: schnappy
+    # the gateway that serves pmon.dev: the infra environment's - the mesh chart's Gateway <release>-gateway in its
+    # namespace (the ApplicationSet's path segment), Istio's Service for it <gateway>-istio (production, 2026-10-08)
+    ns: schnappy-infra
+    gateway_service: "{{ ns }}-gateway-istio"
     # Argo CD's own values for istiod and istio-cni (infra checkout next to ops): a run here installs what Argo would -
     # its own copy of them drifted (no hub, CNI or pilot settings of production's)
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
@@ -121,28 +123,11 @@
       ansible.builtin.debug:
         msg: "istiod and CNI running"
 
-    # ================================================================
-    # Phase 2: Enable sidecar injection for schnappy namespace
-    # ================================================================
-
-    - name: Label schnappy namespace for sidecar injection
-      kubernetes.core.k8s:
-        kubeconfig: /etc/kubernetes/admin.conf
-        state: patched
-        api_version: v1
-        kind: Namespace
-        name: "{{ ns }}"
-        definition:
-          metadata:
-            labels:
-              istio-injection: enabled
-
-    - name: "PHASE 2: schnappy namespace sidecar injection enabled"
-      ansible.builtin.debug:
-        msg: "New/restarted pods in {{ ns }} will get Envoy sidecar"
+    # no namespace labelled for injection: a pod is injected by its own label (sidecar.istio.io/inject: "true", the
+    # webhook's object selector); production's namespaces carry none (read 2026-10-08)
 
     # ================================================================
-    # Phase 3: Verify
+    # Phase 2: Verify
     # ================================================================
 
     - name: Wait for Istio gateway service
@@ -150,7 +135,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         api_version: v1
         kind: Service
-        name: schnappy-gateway-istio
+        name: "{{ gateway_service }}"
         namespace: "{{ ns }}"
       register: gateway_svc
       retries: 30
@@ -166,12 +151,14 @@
 
     - name: Test Istio gateway  # noqa: command-instead-of-module
       # curl --resolve pins pmon.dev to the gateway VIP; uri module has no equivalent. Verified: the gateway serves the
-      # public *.pmon.dev certificate
+      # public *.pmon.dev certificate. Judged: no answer at all (000 - the gateway unreachable, its TLS failing) fails;
+      # an application's own status (a first install's apps still starting) is said below, not failed
       ansible.builtin.shell: |
-        curl -s -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:{{ gateway_vip_addr }} https://pmon.dev/api/health
+        curl -s --max-time 30 -o /dev/null -w '%{http_code}' --resolve pmon.dev:443:{{ gateway_vip_addr }} \
+          https://pmon.dev/api/health
       register: gateway_test
       changed_when: false
-      failed_when: false
+      failed_when: gateway_test.stdout == '000'
 
     - name: "RESULT"
       ansible.builtin.debug:
