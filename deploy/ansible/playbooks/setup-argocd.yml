@@ -231,11 +231,23 @@
       ansible.builtin.debug:
         msg: "Installing Argo CD via Helm"
 
-    - name: Set OIDC client secret
-      # argocd_keycloak_client_secret comes from inventory.
-      ansible.builtin.set_fact:
-        vault_argocd_secret:
-          stdout: "{{ argocd_keycloak_client_secret }}"
+    # Keycloak's client secret for Argo CD (the inventory's) in a Secret of its own, named by the OIDC config below
+    # ($argocd-oidc-keycloak:clientSecret; Argo CD resolves references only in Secrets labelled part-of argocd): the
+    # Helm install then carries no secret, and its preview and its failures are seen
+    - name: Argo CD's Keycloak client secret
+      kubernetes.core.k8s:
+        kubeconfig: /etc/kubernetes/admin.conf
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: argocd-oidc-keycloak
+            namespace: "{{ argocd_namespace }}"
+            labels:
+              app.kubernetes.io/part-of: argocd
+          type: Opaque
+          stringData:
+            clientSecret: "{{ argocd_keycloak_client_secret }}"
       no_log: true
 
     - name: Add Argo Helm repository
@@ -346,7 +358,7 @@
                 name: Keycloak
                 issuer: https://{{ keycloak_host }}/realms/schnappy
                 clientID: argocd
-                clientSecret: $argocd-secret:oidc.keycloak.clientSecret
+                clientSecret: $argocd-oidc-keycloak:clientSecret
                 enablePKCEAuthentication: true
                 requestedScopes:
                   - openid
@@ -359,10 +371,6 @@
                 g, Users, role:readonly
               policy.default: "role:readonly"
               scopes: "[groups, roles]"
-            secret:
-              extra:
-                oidc.keycloak.clientSecret: "{{ vault_argocd_secret.stdout }}"
-
           server:
             resources:
               requests:
@@ -411,9 +419,6 @@
 
           # no applicationSet key: the chart has no switch for its controller (an `enabled: false` here rendered the
           # same, 9.5.4 and 9.5.11), and production's ApplicationSets (schnappy-apps-envs, schnappy-data-envs) need it
-      # its values carry the OIDC client secret (logged on the host, printed at -v); a failure's message is hidden too:
-      # `helm status argocd -n argocd` and the pods on ten say why
-      no_log: true
 
     - name: Wait for argocd-server to be ready
       kubernetes.core.k8s_info:
