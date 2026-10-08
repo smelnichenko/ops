@@ -24,21 +24,24 @@ def check(name, got, want):
 def norm(x):
     """Continuations joined, comment lines out (their words are no command)."""
     return "\n".join(l for l in re.sub(r"\\\n\s*", " ", x).splitlines() if not l.lstrip().startswith("#"))
+def reads(x):
+    """The lines of a script that read a Secret as the lint reads one (CLI, below): every spelling, not one."""
+    return [line for line in norm(x).splitlines() if CLI.search(line)]
 PUBLIC = {
     ("tests/ansible/upgrade/production-state.yml",
      "The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day"):
         ("the certificate (tls.crt) alone",
-         lambda x, t: bool(re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))
-         and all(r == r"{.data.tls\.crt}" for r in re.findall(r"get secret[^\n]*jsonpath='([^']*)'", norm(x)))),
+         lambda x, t: bool(reads(x)) and all(re.findall(r"jsonpath='([^']*)'", line) == [r"{.data.tls\.crt}"]
+                                             for line in reads(x))),
     ("tests/ansible/test-keycloak.yml", "DIAG events + describe + eso + secret"):
         ("the Secret's key names alone",
          lambda x, t: all(re.search(r"-o json\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"data\"", line)
-                       for line in norm(x).splitlines() if re.search(r"get secret", line))),
+                          for line in reads(x))),
     ("tests/ansible/test-cicd.yml", "DIAG pod pull failure"):
         ("the registry hosts of its credentials alone - its token on no command line, in no script, in no "
          "environment (Ansible puts that on the module's command line, and prints it at -vvv, no_log or not)",
          lambda x, t: all(re.search(r"base64 -d\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"auths\"", line)
-                          for line in norm(x).splitlines() if re.search(r"get secret", line))
+                          for line in reads(x))
          and "registry_token" not in str(t) and not re.search(r"curl [^\n]*(-u |--user|-sv|-v )", norm(x))),
 }
 # kubectl get of a Secret printing more than its name: the resource where it stands among get's flags (-n x secret),
@@ -113,6 +116,17 @@ for f in files():
                                      j.strip()):
                             printed.append(f"{f}: {t.get('name')}: {r}")
 check("no message prints what a Secret's read registered", sorted(set(printed)), [])
+# each named-public read held to its reason on every line that reads a Secret as the lint reads one - a read spelt
+# otherwise (flags before the resource) added beside it passed the predicates' own filter
+public_texts = {}
+for f in files():
+    for t in tasks(load(f)):
+        for mod, val in actions(t):
+            if (f, t.get("name")) in PUBLIC:
+                public_texts[(f, t.get("name"))] = (str(val.get("cmd", val) if isinstance(val, dict) else val), t)
+EXTRA = "\nkubectl get -n x -o yaml secret y"
+check("each public read with a whole Secret read added beside it (flags before the resource): no longer public",
+      sorted(k[1] for k, (x, t) in public_texts.items() if PUBLIC[k][1](x + EXTRA, t)), [])
 bad = [x for x in found if x[3] is not True]
 check("every task reading, writing or printing a Secret's data is no_log", len(bad), 0)
 for f, n, w, _ in bad:
