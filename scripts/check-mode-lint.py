@@ -148,6 +148,22 @@ def read_of(reg, text, field=None):
     return out
 
 
+def item_reads(reg, text):
+    """[(field, read with | default)] of the items of looped register `reg`'s results in `text`, read otherwise than as
+    a loop's item: one by its index (reg.results[0].f), each by a filter naming the field (map(attribute=...),
+    selectattr, rejectattr, sum/sort/groupby/unique/min/max(attribute=...)), each by a Jinja for over them."""
+    text, out = str(text), []
+    res = rf"(?<![\w.]){re.escape(reg)}\.results"
+    for m in re.finditer(res + r"\[\s*-?\d+\s*\](?:\.([A-Za-z_]+)|\[\s*['\"]([A-Za-z_]+)['\"]\s*\])", text):
+        out.append((m.group(1) or m.group(2), bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+    for m in re.finditer(res + r"\s*\|\s*(?:(?:selectattr|rejectattr)\(\s*|(?:map|sum|sort|groupby|unique|min|max)"
+                         r"\([^)]*?attribute\s*=\s*)['\"]([A-Za-z_]+)", text):
+        out.append((m.group(1), False))
+    for m in re.finditer(r"\{%-?\s*for\s+(\w+)\s+in\s+" + res + r"\b", text):
+        out.extend(read_of(m.group(1), text[m.end():]))
+    return out
+
+
 def lint(path, select=None, text=None):
     """The reads of a result check mode never made, in the playbook at `path` (its text `text`, if given) run with
     --tags `select` (None: every task)."""
@@ -186,13 +202,19 @@ def lint(path, select=None, text=None):
                 # results: that read is the one named)
                 loop = str(t.get("loop", "")) + str(t.get("with_items", ""))
                 over = [empty for reg, empty, looped in reads if looped and read_of(reg, loop, "results")]
+                var = (t.get("loop_control") or {}).get("loop_var", "item")
                 if over:
-                    reads.append(("item", over[0], False))
+                    reads.append((var, over[0], False))
                 for reg, empty, looped in reads:
-                    fine = FINE | ({"item", "false_condition", "ansible_loop_var"} if reg == "item" else set()) \
+                    fine = FINE | ({"item", "false_condition", "ansible_loop_var"} if over and reg == var else set()) \
                         | ({"results"} if looped else set())
                     hit = next((f for x in texts for f, defaulted in read_of(reg, x)
                                 if f not in fine and (empty or not defaulted)), None)
+                    # its items, each skipped alike: read by an index, a filter or a Jinja for - not as a loop's item
+                    hit = hit or next((f"results[].{f}" for x in texts for f, defaulted in
+                                       (item_reads(reg, x) if looped else [])
+                                       if f not in FINE | {"item", "false_condition", "ansible_loop_var"}
+                                       and (empty or not defaulted)), None)
                     if hit:
                         out.append(f"{path}: '{t.get('name')}' reads {reg}.{hit} - skipped in check mode")
             if "register" in t:

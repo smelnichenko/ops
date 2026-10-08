@@ -75,6 +75,22 @@ OVER = """    - name: over
 check("a loop over a skipped looped register's results: its items' reads named", play(LOOPED + OVER), ["item.stdout"])
 check("over a skipped register not looped: its .results named, no item reads besides", play(PROBE + OVER),
       ["_p.results"])
+# a looped register's items read otherwise than as a loop's item: by its loop_var, a Jinja for, map/selectattr, an index
+VAR = OVER.replace("item.stdout", "r.stdout").replace('      loop: "{{ _p.results }}"\n',
+                                                      '      loop: "{{ _p.results }}"\n      loop_control:\n        loop_var: r\n')
+check("... over its results by another loop_var: its items' reads named", play(LOOPED + VAR), ["r.stdout"])
+FOR = READ.replace("{{ _p.stdout }}", "{% for r in _p.results %}{{ r.stdout }}{% endfor %}")
+check("... a Jinja for over its results: named", play(LOOPED + FOR), ["_p.results[].stdout"])
+check("... map(attribute=) over its results: named",
+      play(LOOPED + READ.replace("_p.stdout", "_p.results | map(attribute='stdout') | list")), ["_p.results[].stdout"])
+check("... selectattr over its results: named",
+      play(LOOPED + READ.replace("_p.stdout", "_p.results | selectattr('rc', 'eq', 0) | list")), ["_p.results[].rc"])
+check("... one of its results by index: named", play(LOOPED + READ.replace("_p.stdout", "_p.results[0].json.ok")),
+      ["_p.results[].json"])
+check("... its results' count, each item's own item, a Jinja for reading item alone: not named",
+      play(LOOPED + READ.replace("_p.stdout", "_p.results | length"))
+      + play(LOOPED + READ.replace("_p.stdout", "_p.results | map(attribute='item') | list"))
+      + play(LOOPED + READ.replace("{{ _p.stdout }}", "{% for r in _p.results %}{{ r.item }}{% endfor %}")), [])
 # a register's name inside another one's (x._p, hostvars-free): no read of it
 check("another object's field named like the register (x._p.stdout): not named",
       play(PROBE + READ.replace("_p.stdout", "x._p.stdout")), [])
