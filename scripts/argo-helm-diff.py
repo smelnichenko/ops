@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 
 import yaml
@@ -70,6 +71,26 @@ def helm_binary(version):
     return path
 
 
+# a chart fetch an upstream answers with a transient failure - a 5xx (blob.istio.io's 502 ended a full run in its first
+# minute, 2026-10-08), a 429, a connection reset or timed out: tried again, FETCH_TRIES times at most, FETCH_WAIT
+# seconds more each time; any other failure fails at once
+TRANSIENT = re.compile(r"failed to fetch .*: (5\d\d|429)\b|connection reset|i/o timeout|TLS handshake timeout"
+                       r"|unexpected EOF", re.I)
+FETCH_TRIES, FETCH_WAIT = 3, 10
+
+
+def template(args, cwd):
+    """helm template, its fetch's transient failures tried again."""
+    for attempt in range(1, FETCH_TRIES + 1):
+        r = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+        if r.returncode == 0 or attempt == FETCH_TRIES or not TRANSIENT.search(r.stderr):
+            return r
+        print(f"helm template: a transient fetch failure, try {attempt} of {FETCH_TRIES}: {r.stderr.strip()[:200]}",
+              file=sys.stderr)
+        time.sleep(FETCH_WAIT * attempt)
+    return r
+
+
 def upstream(helm, infra_ref, work):
     """{application name: rendered manifests} for every application that takes a chart from an upstream repository."""
     out = {}
@@ -106,7 +127,7 @@ def upstream(helm, infra_ref, work):
                         args += ["-f", path]
                 for p in h.get("parameters", []):
                     args += ["--set-string" if p.get("forceString") else "--set", f"{p['name']}={p['value']}"]
-                r = subprocess.run(args, capture_output=True, text=True, cwd=work)
+                r = template(args, work)
                 if r.returncode:
                     sys.exit(f"{name}: {os.path.basename(os.path.dirname(helm))}'s helm template failed:\n{r.stderr}")
                 out[name] = r.stdout

@@ -96,6 +96,36 @@ fails += not check_("upstream: its CRDs and the cluster's version and API versio
 contents = sorted(files.values())
 fails += not check_("upstream: the infra value file, the inline values and valuesObject, each a file",
                     contents == sorted(["fromfile: 1\n", "inline: 2", "object: 3\n"]), contents)
+# a chart fetch an upstream answers with a transient failure (blob.istio.io's 502 ended a full run in its first minute,
+# 2026-10-08): tried again, up to three times; any other failure, or the third, fails at once, said
+flaky = os.path.join(up, "flaky-helm")
+open(flaky, "w").write("#!/usr/bin/env python3\nimport os, sys\n"
+                       f"c = {os.path.join(up, 'flaky-count')!r}\n"
+                       "n = int(open(c).read()) + 1 if os.path.exists(c) else 1\nopen(c, 'w').write(str(n))\n"
+                       "if n <= int(os.environ['FAIL_FOR']):\n"
+                       "    sys.exit('Error: ' + os.environ['FAIL_WITH'])\n"
+                       "print('kind: ConfigMap\\nmetadata: {name: x}')\n")
+os.chmod(flaky, 0o755)
+hd.FETCH_WAIT = 0
+def flaky_run(fail_for, fail_with):
+    c = os.path.join(up, "flaky-count")
+    if os.path.exists(c):
+        os.remove(c)
+    os.environ.update(FAIL_FOR=str(fail_for), FAIL_WITH=fail_with)
+    try:
+        got = sorted(hd.upstream(flaky, "main", work_up))
+    except SystemExit as e:
+        got = "failed: " + str(e)[:80]
+    return got, int(open(c).read()) if os.path.exists(c) else 0
+BAD = "failed to fetch https://blob.istio.io/istio-release/charts/cni-1.31.1.tgz : 502 Bad Gateway"
+got = flaky_run(1, BAD)
+fails += not check_("an upstream's 502 once: tried again, rendered", got == (["oci", "up"], 3), got)
+got = flaky_run(99, BAD)
+fails += not check_("a 502 every time: fails after three tries of the first chart, said",
+                    got[0].startswith("failed: ") and got[1] == 3, got)
+got = flaky_run(99, 'chart "thing" version "1.2.3" not found in https://charts.example.com repository')
+fails += not check_("a failure that is no fetch's blip (a version not found): fails at once", got[0].startswith("failed: ")
+                    and got[1] == 1, got)
 # Argo CD's precedence, as helm reads -f (each later one over the ones before): the value files in their order, then
 # the inline values, then valuesObject - and the parameters over all of them (after every -f)
 order = [files[args[i + 1]] for i, a in enumerate(args) if a == "-f"]
