@@ -1156,6 +1156,47 @@ every argocd Helm revision holds it in clear); Keycloak's admin and database pas
 failure alerted or not (last-success has no reader); Caddy's peer fallback for auth.pmon.dev, keepalived's priority
 arithmetic (150-50 ties 100, nopreempt); Sonar's hotspots and S3776; and the seventh's list.
 
+## Ninth full review 2026-10-08 (ops f9f36c7..69883a9) and full run 9
+
+Eight passes (architecture, correctness of the scripts and of the playbooks, security, concurrency, platform
+reliability, test quality - 17 of my reverts re-run, same; Sonar). Full run 9 (16:07) failed in its build at once.
+
+Critical:
+- Mine (3ce88c5): `git add -A deploy/ansible` committed the fix clone's venv symlink (`deploy/ansible/venv/` ignored a
+  directory alone); ops' fast-forward replaced ops' venv with it, run 9's build failed, and the venv rebuilt unpinned got
+  ansible-core 2.21.5. Untracked, ignored in any form (69883a9), Ansible pinned to what every run proved - ansible
+  13.4.0, ansible-core 2.20.3 (eb7e380); ops' venv restored to it.
+- The Argo CD single sign-on probe (63bd89b) ran on the kubeadm node, which in the copy resolves auth.pmon.dev to
+  production's: behind the copy's isolation it timed out (the build's setup-argocd), in the flows without it it asked
+  production's Keycloak. Now asked from the first Pi, its name checked there to be the inventory's VIP, before anything
+  is written, judged against a wrong secret's answer measured in the same run (db80b71).
+
+Warnings fixed: Keycloak's restart one task file both playbooks import - one Pi at a time, the VIP's only with both Pis
+in the run, setup-patroni's own handler gone; the credentials' check on every run (92079ee); the database password the
+secrets file gives proven to be the one Keycloak runs with before the unit names it (81cf5f6); the copy's systemd reads
+production's unit (e72e21a); the host-key assert refuses untemplated values (2f31459); deploy:pgbouncer's -e password
+(e1df8d8); urllib's Authorization off redirects, the copy's mirror push scoped (1ba29b3); vault-eso's put-back on stdin
+(bdb3a3c); check-mode-lint reads loops rendered before when (e7ebc9c); the git mirror's sync bounded, its push checking
+the mount, its old settings read locally (9358cde), its volume owned by its user through Gluster (3e86965); the
+stamper's two races (a6212f4); a stop's TERM resent by a process's start, orphans of a lost process with it - the
+library's own test failed 1 in 5 on it (ae53e2f); a job the KILL did not end not waited for (94614d7); environments
+against production's git-directory ApplicationSets, destroy only for an environment create made - env_name=infra passed
+(fca9295); the lints' gaps (42e8302); tests for survivors (dd0526c, 8907294, 489ced0, d0f96c6, d1c8bf5).
+
+Left, with why:
+- 55 test-playbook tasks outside the full run, and test-ephemeral-env's `http://admin:<pw>@` URLs: a secret on a
+  command line; each needs its own run.
+- 7 in-pod ClickHouse and Grafana clients (named in secrets-off-argv).
+- The mirror play's home (setup-velero): a move.
+- Stall bounds at production's size: never measured.
+- The copy never models argocd-secret's oidc.keycloak.clientSecret: production-state runs before Argo CD is installed.
+- ssh config files not read by the host-key detectors: CI has no ssh for `ssh -G`.
+- The step checks' bound estimated per try: a task timeout fails the try, never retries it (TaskExecutor).
+- ten's Helm not in prod-inventory.txt: the inventory compares the copy's live components.
+- The restart stamp's hash of Keycloak's secrets file: long random secrets, no practical oracle.
+
+The operator's: Sonar's S3776 (25) and hotspots; the eighth's list.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
