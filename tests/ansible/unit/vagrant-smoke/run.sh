@@ -71,8 +71,9 @@ out=$(remote ENDED=Failed | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out#
 check "a failed Job: failed, said so, its Job and ConfigMap deleted" \
   "$rc $(grep -c '^SMOKE FAILED (Failed)$' <<< "$out") $(deleted)" "1 1 2"
 # its connection gone (the caller stopped): the next heartbeat's write fails - it ends, deleting its Job and ConfigMap
-# (PIPE in its trap is an equivalent mutant on bash 5.2: a fatal SIGPIPE runs the EXIT trap too - measured
-# 2026-10-07, the shell's exit 141 and its deletes; the trap keeps the exit explicit)
+# (its whole `trap 'exit 1' HUP INT TERM PIPE` line is an equivalent mutant on bash 5.2.37: a fatal HUP, TERM or PIPE
+# runs the EXIT trap too - measured, without the line: exits 129, 143, 141, each with its 2 deletes; the line keeps the
+# exit explicit)
 t0=$SECONDS
 remote | head -c 0
 check "its connection gone: it ends at its next heartbeat, its Job and ConfigMap deleted" \
@@ -90,5 +91,42 @@ check "none left: nothing said" "$(grep -c 'leftovers' <<< "$out")" 0
 check "every kubectl call bounded (--request-timeout)" "$(grep -vc -- '--request-timeout=' "$W/calls")" 0
 # the heartbeat is the poll's own write: no process of its own (one left behind signalled a PID that may be another's)
 check "no background process in the remote shell" "$(grep -cE '&( |$)' "$W/remote.sh")" 0
+# the whole script, its smoke failing on the VM: it exits non-zero - its remote shell's output goes through `tr`, and
+# without pipefail the pipeline's exit was tr's (0): a failed smoke passed
+E=$W/e2e; mkdir -p "$E/ops/scripts" "$E/ops/.upgrade" "$E/bin"
+cp "$S" "$E/ops/scripts/"
+for r in platform infra; do git init -q -b main "$E/$r"; done
+mkdir -p "$E/platform/helm/schnappy" "$E/infra/clusters/production/schnappy-production-apps"
+echo "name: schnappy" > "$E/platform/helm/schnappy/Chart.yaml"
+echo "x: 1" > "$E/infra/clusters/production/schnappy-production-apps/values.yaml"
+for r in platform infra; do
+  git -C "$E/$r" add -A; git -C "$E/$r" -c user.name=t -c user.email=t@t commit -q -m c
+done
+cat > "$E/bin/helm" <<'STUB'
+#!/bin/bash
+cat <<'Y'
+kind: ConfigMap
+metadata: {name: schnappy-k6-smoke}
+data: {script.js: "x"}
+---
+kind: Job
+metadata: {name: schnappy-production-k6-smoke}
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      volumes: [{name: script, configMap: {name: schnappy-k6-smoke}}]
+Y
+STUB
+# the VM: the yaml copied; the remote shell's smoke failing
+cat > "$E/bin/ssh" <<'STUB'
+#!/bin/bash
+cat > /dev/null
+case "${@: -1}" in *"bash -s"*) printf 'SMOKE FAILED (Failed)\r\n'; exit 1 ;; esac
+exit 0
+STUB
+chmod +x "$E/bin/helm" "$E/bin/ssh"
+out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null bash scripts/vagrant-smoke.sh 2>&1); rc=$?
+check "the smoke failing on the VM: the script fails, said" "$((rc != 0)) $(grep -c '^SMOKE FAILED' <<< "$out")" "1 1"
 echo "vagrant-smoke: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
