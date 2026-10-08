@@ -2,7 +2,9 @@
 # scripts/vagrant-smoke.sh's two inline programs as the file holds them - the render's pick (pick.py) and the remote
 # shell (the 'SH' heredoc), kubectl a stub: each run's Job and ConfigMap carry a name of its own, and the remote shell
 # deletes them when it ends, also when its connection is gone (its caller stopped by a step's check: a run left behind
-# held the fixed name the next run deleted and applied - its own end then deleted the next run's Job).
+# held the fixed name the next run deleted and applied - its own end then deleted the next run's Job). The run's bound
+# and poll reach the remote shell as its arguments (ssh forwards no environment, sudo resets it: the caller's were
+# read on the VM as unset), numbers only; its deadline on the VM's /proc/uptime (bash's SECONDS follows the wall clock).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 S=scripts/vagrant-smoke.sh
@@ -15,7 +17,8 @@ check() {  # check <name> <got> <want>
 }
 sed -n "/^cat > \"\$work\/pick.py\" <<'EOF'$/,/^EOF$/p" "$S" | sed '1d;$d' > "$W/pick.py"
 sed -n "/<<'SH'/,/^SH$/p" "$S" | sed '1d;$d' > "$W/remote.sh"
-check "the remote shell given the run's name" "$(grep -c "\"sudo bash -s \$name\" <<'SH'" "$S")" 1
+check "the remote shell given the run's name, its bound and its poll" \
+  "$(grep -c "\"sudo bash -s \$name \$SMOKE_SECONDS \$SMOKE_POLL\" <<'SH'" "$S")" 1
 [ -s "$W/pick.py" ] && [ -s "$W/remote.sh" ] || { echo "FAIL the inline programs not found"; exit 1; }
 # the names: one per run, as the script makes them
 names=$(for _ in 1 2; do bash -c "$(grep -m1 '^name=' "$S"); echo \"\$name\""; done | sort -u | wc -l)
@@ -45,7 +48,9 @@ cat > "$W/kubectl" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$W/calls"
 case "$*" in
-  *jsonpath*conditions*) [ -z "${SLOW_GET:-}" ] || sleep 1; echo "${ENDED:-}" ;;
+  *jsonpath*conditions*) [ -z "${SLOW_GET:-}" ] || sleep 1; echo "${ENDED:-}"
+    # FAKE_CLOCK: the VM's uptime 1000 s on at each poll
+    [ -z "${FAKE_CLOCK:-}" ] || { read -r u _ < "$W/uptime"; echo "$(( ${u%.*} + 1000 )).00 0.00" > "$W/uptime"; } ;;
   *jsonpath*succeeded*) [ "${ENDED:-}" = Complete ] && echo 1 ;;
   *" logs "*) echo "✓ status is 200" ;;
   # the smoke objects by label: LEFTOVER - an earlier run's, an hour old; CONCURRENT - another run's, a minute old;
@@ -59,10 +64,12 @@ exit 0
 STUB
 chmod +x "$W/kubectl"
 mkdir -p "$W/bin"; ln -s "$W/kubectl" "$W/bin/kubectl"
-remote() {  # remote <env...>: the remote shell as root runs it - its stdin the program, the run's name its argument
+remote() {  # remote <env...>: the remote shell as root runs it - its stdin the program, the run's name, bound and poll
+  # its arguments (SECS, POLL: 900 and 5 by default, as the script passes them)
   : > "$W/calls"
   # bounded: a shell that never ends fails here rather than hanging the suite
-  timeout -k 5 40 env "$@" W="$W" PATH="$W/bin:$PATH" bash -s vagrant-k6-smoke-ab12 < "$W/remote.sh"
+  timeout -k 5 40 env "$@" W="$W" PATH="$W/bin:$PATH" bash -s vagrant-k6-smoke-ab12 "${SECS:-900}" "${POLL:-5}" \
+    < "${PROGRAM:-$W/remote.sh}"
 }
 deleted() { grep -cE 'delete (job|configmap) vagrant-k6-smoke-ab12' "$W/calls"; }
 out=$(remote ENDED=Complete | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
@@ -98,10 +105,21 @@ check "a concurrent run's objects kept, an earlier run's removed" \
   "$(grep -c 'delete job/vagrant-k6-smoke-fr3sh' "$W/calls") $(grep -c 'delete job/vagrant-k6-smoke-0ld' "$W/calls")" "0 1"
 # the run's bound is the clock's: a slow poll does not stretch it (180 polls of up to 35 s each were not 15 minutes)
 t0=$SECONDS
-out=$(remote SLOW_GET=1 SMOKE_SECONDS=3 SMOKE_POLL=0.1 | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
+out=$(SECS=3 POLL=0.1 remote SLOW_GET=1 | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
 check "never ending: failed at its deadline, by the clock" "$rc $((SECONDS - t0 < 10)) $(grep -c '^SMOKE FAILED' <<< "$out")" \
   "1 1 1"
 check "every kubectl call bounded (--request-timeout)" "$(grep -vc -- '--request-timeout=' "$W/calls")" 0
+# the deadline on the VM's uptime: a clock 1000 s on at each poll ends a 1500 s bound at the second poll - bash's
+# SECONDS, following the wall clock, waited the 1500 s (here: cut at 40)
+sed "s|/proc/uptime|$W/uptime|g" "$W/remote.sh" > "$W/remote-clock.sh"
+check "the remote shell's clock read from /proc/uptime (the copy reads a file of the test's)" \
+  "$(grep -c "$W/uptime" "$W/remote-clock.sh")" 2
+echo "1000.00 0.00" > "$W/uptime"
+t0=$SECONDS
+out=$(SECS=1500 POLL=0.1 PROGRAM="$W/remote-clock.sh" remote FAKE_CLOCK=1 | tr -d '\r'; echo "exit ${PIPESTATUS[0]}")
+rc=${out##*exit }
+check "its deadline on the VM's uptime: past it after two polls of a clock 1000 s on each - failed at once" \
+  "$rc $((SECONDS - t0 < 10)) $(grep -c 'jsonpath.*conditions' "$W/calls")" "1 1 2"
 # the heartbeat is the poll's own write: no process of its own (one left behind signalled a PID that may be another's)
 check "no background process in the remote shell (a lone &, not && or a redirection)" \
   "$(grep -cE '(^|[^&<>])&([[:space:]]|$)' "$W/remote.sh")" 0
@@ -142,5 +160,17 @@ STUB
 chmod +x "$E/bin/helm" "$E/bin/ssh"
 out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null bash scripts/vagrant-smoke.sh 2>&1); rc=$?
 check "the smoke failing on the VM: the script fails, said" "$((rc != 0)) $(grep -c '^SMOKE FAILED' <<< "$out")" "1 1"
+# the caller's bound and poll reach the remote shell, on its command line - numbers only (that line is a shell's)
+printf '#!/bin/bash\necho "${@: -1}" >> "%s/ssh-cmds"\ncat > /dev/null\ncase "${@: -1}" in *"bash -s"*) echo "SMOKE PASSED" ;; esac\n' \
+  "$E" > "$E/bin/ssh"
+: > "$E/ssh-cmds"
+out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null SMOKE_SECONDS=7 SMOKE_POLL=2 \
+  bash scripts/vagrant-smoke.sh 2>&1); rc=$?
+check "the caller's SMOKE_SECONDS and SMOKE_POLL given to the remote shell" \
+  "$rc $(grep -cE '^sudo bash -s vagrant-k6-smoke-[0-9a-f]+ 7 2$' "$E/ssh-cmds")" "0 1"
+: > "$E/ssh-cmds"
+out=$(cd "$E/ops" && PATH="$E/bin:$PATH" VAGRANT_SSH_CONFIG=/dev/null SMOKE_SECONDS='9; reboot' \
+  bash scripts/vagrant-smoke.sh 2>&1); rc=$?
+check "a bound that is no number: refused, nothing sent to the VM" "$((rc != 0)) $(wc -l < "$E/ssh-cmds")" "1 0"
 echo "vagrant-smoke: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

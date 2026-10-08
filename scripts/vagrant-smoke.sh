@@ -23,6 +23,11 @@ mkdir -p "$ops/.upgrade"
 work=$(mktemp -d "$ops/.upgrade/smoke.XXXX")
 trap 'rm -rf "$work"' EXIT
 name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+# the run's bound (15 minutes) and its poll, given to the remote shell as its arguments - ssh forwards no environment and
+# sudo resets it (the caller's were read on the VM as unset); numbers only: they go on that shell's command line
+SMOKE_SECONDS=${SMOKE_SECONDS:-900} SMOKE_POLL=${SMOKE_POLL:-5}
+[[ $SMOKE_SECONDS =~ ^[1-9][0-9]*$ && $SMOKE_POLL =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+  || { echo "SMOKE_SECONDS=$SMOKE_SECONDS SMOKE_POLL=$SMOKE_POLL: not numbers of seconds"; exit 1; }
 
 git -C "$ops/../platform" archive "$platform_ref" helm/schnappy | tar -x -C "$work"
 git -C "$ops/../infra" show "$infra_ref:clusters/production/schnappy-production-apps/values.yaml" > "$work/values.yaml"
@@ -66,9 +71,9 @@ vssh kubeadm "cat > /tmp/$name.yaml" < "$work/smoke.yaml"
 # One remote shell does the whole run, polling the Job's end itself: no waiter to stop, none to outlive it. Each poll
 # writes a heartbeat (a carriage return, dropped here): once the connection is gone the write fails and the shell ends
 # - its EXIT trap deletes the run's Job and ConfigMap, silently (a write would end it at once).
-vssh kubeadm "sudo bash -s $name" <<'SH' | tr -d '\r'
+vssh kubeadm "sudo bash -s $name $SMOKE_SECONDS $SMOKE_POLL" <<'SH' | tr -d '\r'
 set -u
-NAME=$1
+NAME=$1 SMOKE_SECONDS=$2 SMOKE_POLL=$3
 # every call bounded: a hung API server held the poll for good
 K="kubectl --kubeconfig /etc/kubernetes/admin.conf --request-timeout=30s -n schnappy-production"
 cleanup() {
@@ -80,7 +85,6 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM PIPE
 # what an earlier run left (its connection and its cleanup both cut - its own end deletes it otherwise), said so:
 # only what outlived any run's bound (another run's, still within it, is that run's own)
-SMOKE_SECONDS=${SMOKE_SECONDS:-900}
 cutoff=$(( $(date +%s) - SMOKE_SECONDS - 300 ))
 if left=$($K get job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke \
     -o jsonpath='{range .items[*]}{.kind}/{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}' 2>&1); then
@@ -96,13 +100,15 @@ fi
 $K apply -f "/tmp/$NAME.yaml" || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
 rm -f "/tmp/$NAME.yaml"
 ended=""
-# 15 minutes by the clock (180 polls of up to 35 s each were up to 105)
-end=$((SECONDS + SMOKE_SECONDS))
-while [ "$SECONDS" -lt "$end" ]; do
+# 15 minutes by the clock (180 polls of up to 35 s each were up to 105) - the VM's uptime: bash's SECONDS follows the
+# wall clock, which a step moves (chrony's at the VM's boot)
+read -r up _ < /proc/uptime
+end=$(( ${up%.*} + SMOKE_SECONDS ))
+while read -r up _ < /proc/uptime && [ "${up%.*}" -lt "$end" ]; do
   printf '\r' 2> /dev/null
   ended=$($K get job "$NAME" -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2> /dev/null)
   case "$ended" in *Complete* | *Failed*) break ;; esac
-  sleep "${SMOKE_POLL:-5}"
+  sleep "$SMOKE_POLL"
 done
 echo "--- k6 checks"
 $K logs "job/$NAME" -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(error|warning)' | head -40
