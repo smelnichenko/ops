@@ -210,6 +210,65 @@ pid=$(cat "$T/long.pid" 2> /dev/null)
 if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playbook ]; then kill -KILL "$pid"; fi
 rm -f "$T/pipe"
 
+# the output's reader gone with no signal to the script (a tee killed alone): a check's end is written - SIGPIPE ends
+# the script, bash runs its cleanup all the same, which must go on to its end: the deaf check KILLed, the work directory
+# removed (its message to the dead reader ended the cleanup, the directory left)
+rm -f "$T/long.pid" "$T/long.pid.finished"; rm -rf "$T/.upgrade"/step-checks.*
+mkfifo "$T/pipe2"
+cat "$T/pipe2" > /dev/null & reader=$!
+LONG="$T/long.pid" IGNORE_TERM=1 STOP_GRACE=1 PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 \
+  schnappy < /dev/null > "$T/pipe2" 2>&1 &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
+[ "$(proc_info "$reader" | awk '{print $1, $4}')" = "$$ cat" ] && kill "$reader"
+wait "$reader" 2> /dev/null
+wait "$sp"; rc=$?
+check "the reader gone, no signal to the script: its cleanup run to its end - the deaf check gone, the work directory removed" \
+  "$rc $(gone "$T/long.pid") $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "141 gone 0"
+pid=$(cat "$T/long.pid" 2> /dev/null)
+if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playbook ]; then kill -KILL "$pid"; fi
+rm -f "$T/pipe2"
+# its watchdog ended and reaped before the script's last stop of it, its PID then another process's (forced in a PID
+# namespace of its own: the next PID set to the watchdog's, a session-leading sleep of this test's given it) - never
+# signalled by that PID. Where user namespaces are not allowed, said loudly and not run
+if unshare -Urpf --mount-proc true 2> /dev/null; then
+  cat > "$T/reuse.sh" <<'REUSE'
+set -u
+T=$1
+mkfifo "$T/go"
+python3 - "$T/scripts/upgrade-step-checks.sh" "$T/scripts/reuse-copy.sh" "$T" <<'PYINS'
+import sys
+s = open(sys.argv[1]).read()
+old = "own_jobs left_\n"
+assert s.count(old) == 1
+ins = ('kill -TERM -- "-$watchdog"; wait "$watchdog" 2> /dev/null; echo "$watchdog" > "%s/wd.pid"; read -r _ < "%s/go"\n'
+       % (sys.argv[3], sys.argv[3]))
+open(sys.argv[2], "w").write(s.replace(old, ins + old))
+PYINS
+rm -f "$T/wd.pid"
+ALL_PASS=1 PATH="$T/bin:$PATH" bash "$T/scripts/reuse-copy.sh" i p 24.8 u < /dev/null > "$T/reuse.out" 2>&1 &
+sp=$!
+for _ in $(seq 200); do [ -s "$T/wd.pid" ] && break; sleep 0.05; done
+wd=$(cat "$T/wd.pid" 2> /dev/null)
+[ -n "$wd" ] || { echo "no watchdog PID"; exit 2; }
+echo $((wd - 1)) > /proc/sys/kernel/ns_last_pid
+setsid sleep 1000 < /dev/null > /dev/null 2>&1 &
+mine=$!
+[ "$mine" = "$wd" ] || { echo "PID not reused ($mine, not $wd)"; kill "$mine"; echo go > "$T/go"; wait; exit 2; }
+for _ in $(seq 50); do read -r st < "/proc/$mine/stat"; set -- ${st##*) }; [ "$3 $4" = "$mine $mine" ] && break; sleep 0.02; done
+echo go > "$T/go"
+wait "$sp"
+for _ in $(seq 20); do [ -e "/proc/$mine" ] || break; sleep 0.05; done
+if [ -e "/proc/$mine" ]; then echo LIVES; kill "$mine"; else echo SIGNALLED; fi
+wait "$mine" 2> /dev/null
+REUSE
+  got=$(unshare -Urpf --mount-proc bash "$T/reuse.sh" "$T" 2>&1 | tail -1)
+  check "the watchdog's PID another process's by its last stop (a PID namespace of its own): that process not signalled" \
+    "$got" LIVES
+else
+  echo "SKIP the watchdog's reused PID - user namespaces not allowed here (unshare -Urpf): not tested on this host"
+fi
+
 # a check bash collected outside wait -n (a `jobs` reported it ended - out of the job table, wait -n returns 127, `wait
 # <pid>` still has its status): judged by that status - a failure failed, all passing passed (measured on bash 5.2)
 sed 's|^start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"$|&\nsleep 1; jobs > /dev/null|' \
