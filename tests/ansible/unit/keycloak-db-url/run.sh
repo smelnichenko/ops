@@ -50,6 +50,17 @@ check("the copy's production state: production's URL (no server type), step 00 m
       (state, any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
                   for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt"))),
       (["jdbc:postgresql://127.0.0.1:6432/keycloak"], True))
+# step 00's tagged run (--tags keycloak-db-url) reaches the unit, its restart and every fact its URL is made of - one
+# left out is undefined there (the run fails), or read from nothing
+doc = load("deploy/ansible/playbooks/setup-pi-services.yml")
+facts = {"_patroni_state", "_pgbouncer_state", "_patroni_installed", "_db_port", "keycloak_db_host_effective"}
+def makes(t):
+    sf = t.get("ansible.builtin.set_fact") or {}
+    return ({t.get("register")} | set(sf if isinstance(sf, dict) else {})) & facts
+needed = [t for t in tasks(doc) if makes(t) or t.get("name") in ("Install Keycloak systemd service", "Restart Keycloak")]
+check("the tag on the unit, its restart and every task making a fact of its URL (none untagged)",
+      (sorted(set().union(*(makes(t) for t in needed))) == sorted(facts), len(needed) >= 2 + len(facts) - 1,
+       [t.get("name") for t in needed if "keycloak-db-url" not in (t.get("tags") or [])]), (True, True, []))
 # one URL's query on every writer: two that differ restart Keycloak on each other's every run
 check("the same query from every writer", len({u.split("?", 1)[-1] for found in urls.values() for u in found}), 1)
 print("keycloak-db-url: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
