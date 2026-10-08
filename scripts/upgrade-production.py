@@ -926,7 +926,7 @@ def merge(step, repo):
             # pushed by an earlier run cut short before its tag (its change checked above): tagged, recorded - nothing
             # asked or pushed again
             print(f"{repo}: {step} was pushed already (no {MERGED_TAG}{step} yet) - tagging it, recording it")
-            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up"])
+            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up", tip])
                    .returncode == 0 else [f"the {repo} take-up failed (above)"])
         else:
             # checked and shown against production's main: a local main behind origin's (CD pushed meanwhile) showed

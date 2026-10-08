@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# upgrade-merge-step.sh <step> <infra|platform> [take-up | <tip>] - the GitOps half of one production upgrade step: the
-# step's branch (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so
+# upgrade-merge-step.sh <step> <infra|platform> [take-up [<tip>] | <tip>] - the GitOps half of one production upgrade
+# step: the step's branch (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so
 # the push is the production change (platform's CI lints the same commit alongside; it gates nothing). Called by
 # scripts/upgrade-production.py merge (`task deploy:upgrade:merge`) after its ledger, proof and merge-order checks.
 #
@@ -10,13 +10,15 @@
 # The merged step is tagged upgrade-merged/<step> (annotated: "base <main it went onto>"); a run cut short after its
 # push and before its tag is taken up by the next one. `take-up`: only that - any other state is refused, nothing
 # pushed (upgrade-production.py merge asks for it once its proof check found the push already live). <tip>: the
-# branch's commit the caller checked - a branch moved since is refused, nothing pushed.
+# branch's commit the caller checked - a branch moved since is refused before anything (a take-up too), nothing pushed
+# or tagged. A step whose tag is there already (merged before) is refused: a forced tag moved it, its base another main.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-step=${1:?step}; repo=${2:?infra or platform}; only=${3:-} tip=
+step=${1:?step}; repo=${2:?infra or platform}; only=${3:-} tip=${4:-}
 case "$only" in
-  "" | take-up) ;;
-  *) [[ $only =~ ^[0-9a-f]{40}$ ]] || { echo "REFUSED: $only (take-up, a commit, or nothing)" >&2; exit 1; }
+  "") ;;
+  take-up) [ -z "$tip" ] || [[ $tip =~ ^[0-9a-f]{40}$ ]] || { echo "REFUSED: $tip (a commit)" >&2; exit 1; } ;;
+  *) [[ $only =~ ^[0-9a-f]{40}$ ]] && [ -z "$tip" ] || { echo "REFUSED: $only (take-up, a commit, or nothing)" >&2; exit 1; }
      tip=$only only= ;;
 esac
 case "$repo" in infra|platform) ;; *) echo "REFUSED: repo $repo (infra or platform)" >&2; exit 1;; esac
@@ -33,6 +35,8 @@ tag="upgrade-merged/$step"
 # the branch's commit, read once: the one checked (the caller's tip), logged, pushed and tagged - a branch moving under
 # the run (a restack in another shell) is refused below, and never pushed by its name
 head=$(git -C "$dir" rev-parse "$branch")
+[ -z "$tip" ] || [ "$head" = "$tip" ] \
+  || { echo "REFUSED: $repo $branch moved since it was checked (${tip:0:10}) - nothing pushed or tagged" >&2; exit 1; }
 # pushed by an earlier run cut short before its tag (a push the server took, the connection gone): the branch's commit
 # is in origin's main (CD may have pushed on top since) and no tag says so - tagged now with the main it went onto
 # (local main if not moved yet, else where it was before the fast-forward), so the re-run is a resume, not a refusal
@@ -55,6 +59,8 @@ if git -C "$dir" merge-base --is-ancestor "$head" origin/main \
   exit 0
 fi
 [ -z "$only" ] || { echo "REFUSED: take-up only, and $repo $branch is not in origin's main without $tag" >&2; exit 1; }
+! git -C "$dir" rev-parse -q --verify "refs/tags/$tag" > /dev/null \
+  || { echo "REFUSED: $tag exists already - step $step was merged before (task deploy:upgrade:status)" >&2; exit 1; }
 [ "$(git -C "$dir" rev-parse main)" = "$(git -C "$dir" rev-parse origin/main)" ] \
   || { echo "REFUSED: $repo main is not origin/main" >&2; exit 1; }
 # stacked branches all contain main: what matters is that the repo's previous step branch is merged already, so this
@@ -70,8 +76,6 @@ if [ -n "$prev" ]; then
   git -C "$dir" merge-base --is-ancestor "$prev" main \
     || { echo "REFUSED: $repo $prev (the step before) is not merged into main yet" >&2; exit 1; }
 fi
-[ -z "$tip" ] || [ "$head" = "$tip" ] \
-  || { echo "REFUSED: $repo $branch moved since it was checked (${tip:0:10}) - nothing pushed" >&2; exit 1; }
 git -C "$dir" merge-base --is-ancestor main "$head" \
   || { echo "REFUSED: $repo $branch does not contain main - rebase it" >&2; exit 1; }
 echo "$repo: main $(git -C "$dir" rev-parse --short main) -> $branch $(git -C "$dir" rev-parse --short "$head"):"
@@ -85,5 +89,5 @@ git -C "$dir" merge --ff-only -q "$head"
 # the step marked merged, with the main it went onto: the refs check, the restack and the merge order skip merged steps
 # (their branches are in main now), and a re-run after an interrupted ledger record finds the step's own change
 # (base..tag) to compare with its proof
-git -C "$dir" tag -a -f -m "base $base" "$tag" "$head"
+git -C "$dir" tag -a -m "base $base" "$tag" "$head"
 echo "$repo: main is $(git -C "$dir" rev-parse --short main), pushed; tagged $tag"

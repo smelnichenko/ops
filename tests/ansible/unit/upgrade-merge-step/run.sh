@@ -151,6 +151,28 @@ check "pushed untagged, CD on top: its change, against the main it went onto, is
 check "then taken up: tagged" 0 "pushed already" "$M" 12-l infra take-up
 check "its base the main before the push" 0 "base $main12" base_of 12-l
 
+# the tip the caller checked, compared first: a branch that moved on to a commit pushed meanwhile (in origin's main,
+# untagged - the take-up's state) was tagged unchecked; take-up takes the tip too
+g pull -q --ff-only origin main
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/15-o.txt"
+g checkout -q -b upgrade/15-o; echo o >> "$W/infra/f"; g commit -q -am o; checked15=$(g rev-parse HEAD)
+echo o2 >> "$W/infra/f"; g commit -q -am o2; g push -q origin upgrade/15-o:main; g checkout -q main
+check "the branch moved on to a commit pushed since the tip was checked: refused, not taken up" 1 "moved since" \
+  "$M" 15-o infra "$checked15"
+check "take-up with the tip checked, the branch moved: refused" 1 "moved since" "$M" 15-o infra take-up "$checked15"
+check "nothing tagged" 1 "" g rev-parse -q --verify refs/tags/upgrade-merged/15-o
+rm -f "$W/ops/tests/ansible/upgrade/steps/15-o.txt"
+# a step's tag there already (merged before): refused before any push - a forced tag moved it, its base another main
+g fetch -q origin main; g merge -q --ff-only origin/main
+printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/13-m.txt"
+g checkout -q -b upgrade/13-m; echo m >> "$W/infra/f"; g commit -q -am m; g checkout -q main
+g tag -a -m "base earlier" upgrade-merged/13-m "$(g rev-parse main)"
+origin13=$(git -C "$W/origin.git" rev-parse main)
+check "its tag there already: refused" 1 "exists already" "$M" 13-m infra
+check "nothing pushed" 0 "$origin13" git -C "$W/origin.git" rev-parse main
+check "its tag unmoved" 0 "base earlier" base_of 13-m
+rm -f "$W/ops/tests/ansible/upgrade/steps/13-m.txt"
+
 # the digests a step's branch pins an image tag to, read from the branch (production's prepull pulls the reference
 # production runs); a repo the step declares with neither its branch nor its merged tag refuses
 printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/08-h.txt"

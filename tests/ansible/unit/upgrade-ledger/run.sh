@@ -405,7 +405,11 @@ check("merge 57: the proof checked against the tip the merge then pushes (read o
 check("merge 57: shown against origin's main, the checked tip handed to the merge",
       ([a[-1] for a in RUN_ARGS if "diff" in a][:1], [a[-1] for a in RUN_ARGS if a[0].endswith("upgrade-merge-step.sh")]),
       (["origin/main..c4ecked"], ["c4ecked"]))
-got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), pushed="b4se")
+RUN_ARGS.clear()
+got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"), pushed="b4se",
+                  revs={"upgrade/57-sonarqube-26.9": "c4ecked"})
+check("merge 57's take-up handed the tip it checked (a branch moved since refused, nothing tagged)",
+      [a[-2:] for a in RUN_ARGS if a[0].endswith("upgrade-merge-step.sh")], [["take-up", "c4ecked"]])
 check("merge 57 pushed by a run cut short before its tag: taken up (tagged) and recorded - not asked, nothing pulled",
       [c for c in got if c[0] in ("run", "ansible", "record", "asked")],
       [("run", "git"), ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"), ("record", "settled")])
