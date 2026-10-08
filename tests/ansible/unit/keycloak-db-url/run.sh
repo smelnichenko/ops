@@ -151,8 +151,9 @@ check("its restart pending by its unit and secrets file, recorded after - both t
 restarts = [t for t in every if str(t.get("name", "")).startswith("Keycloak restarted where pending")]
 check("two restarts: the Pi without the VIP, then the one with it - both tagged, each one Pi at a time (no VIP on "
       "either, or on both: the same task on both at once)",
-      ([every.index(t) for t in restarts] == sorted(every.index(t) for t in restarts), len(restarts),
-       [tagged(t) for t in restarts], [t.get("throttle") for t in restarts]), (True, 2, [True, True], [1, 1]))
+      ([str(t.get("name", "")).split(" - ")[1][:18] for t in restarts], len(restarts),
+       [tagged(t) for t in restarts], [t.get("throttle") for t in restarts]),
+      (["the Pi without the", "the Pi with the VI"], 2, [True, True], [1, 1]))
 # the VIP's restart only with both Pis still in the play: one dropped by an earlier failure leaves the VIP's first
 # and alone (the peer guard passes on the old Keycloak still serving there)
 both = next((t for t in every if "ansible_play_hosts_all" in str(t.get("ansible.builtin.assert", ""))), None)

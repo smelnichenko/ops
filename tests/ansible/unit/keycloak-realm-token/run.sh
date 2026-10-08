@@ -24,6 +24,9 @@ ok = {"status": 200, "json": {"access_token": "x"}}
 check("the token waited for: a 502 (Keycloak starting) and a refused connection (-1) tried again, a token taken",
       [condition(t["until"], **{reg: r}) if "until" in t else None
        for r in ({"status": 502, "failed": True}, {"status": -1, "failed": True}, ok)], [False, False, True])
+# a refused password (401) is no Keycloak starting: not waited on (five minutes of retries, then the same failure)
+check("a 401 (the admin's password refused) ends the wait at once - failing",
+      (condition(t["until"], **{reg: {"status": 401, "failed": True}}) if "until" in t else None), True)
 check("for as long as a Keycloak start takes (240 s at least)",
       int(t.get("retries", 0)) * int(t.get("delay", 5)) >= 240, True)
 check("its failure still a failure once the wait is over (its status not widened)",
