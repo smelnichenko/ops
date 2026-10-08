@@ -18,12 +18,23 @@ check() {  # check <name> <got> <want>
 }
 for h in tolerates rebuilds clean; do
   mkdir -p "$W/suite-$h/$h"; cp "$W/$h/run.sh" "$W/suite-$h/$h/run.sh"
-  out=$(bash tests/ansible/unit/run.sh "$W/suite-$h" 2>&1); rc=$?
+  # without the caller's FENCE: the runner's own export is what the rebuilding harness must find
+  out=$(env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-$h" 2>&1); rc=$?
   case $h in
     clean) check "a harness reaching no host: the suite passes" "$rc" 0 ;;
     *) check "a harness that $h (its failure tolerated): the suite fails, naming the call" \
          "$rc $(grep -c "FENCED: $h reached" <<< "$out")" "1 1" ;;
   esac
 done
+# each harness started with its signals at their defaults: a runner started with INT ignored (a background job, a
+# nohup) passed it on, and bash cannot trap a signal ignored on entry - a harness's stop cases passed on nothing
+mkdir -p "$W/suite-int/traps"
+printf '#!/bin/bash
+trap "exit 0" INT
+kill -INT $$
+exit 1
+' > "$W/suite-int/traps/run.sh"
+out=$( (trap '' INT; env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-int") 2>&1); rc=$?
+check "a runner started with INT ignored: each harness gets it at its default (its trap runs)" "$rc" 0
 echo "unit-fence: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
