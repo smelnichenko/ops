@@ -93,8 +93,12 @@ if lived:
           "is today's midnight); 10 s before: not proven (one clock - no slack); in its second and after: proven",
           [min(made_after(-3600), 1), made("", now), min(made_after(-10), 1), made_after(0), made_after(1)],
           [1, 1, 1, 0, 0])
-    check("a push time not the API server's (an epoch an older seed wrote, none): fails",
-          [made("1970-01-01T00:18:20Z", "1000"), made("1970-01-01T00:18:20Z", "")], [1, 1])
+    # date(1) reads "1000" as today 10:00: a Tempo made a minute after that read as replaced - never read as a time
+    ten = subprocess.run(["date", "-u", "-d", "@" + str(int(subprocess.run(["date", "-d", "1000", "+%s"],
+                          capture_output=True, text=True).stdout) + 60), "+%Y-%m-%dT%H:%M:%SZ"],
+                         capture_output=True, text=True).stdout.strip()
+    check("a push time not the API server's (an epoch an older seed wrote, none, one date(1) reads as a time): fails",
+          [made("1970-01-01T00:18:20Z", "1000"), made("1970-01-01T00:18:20Z", ""), made(ten, "1000")], [1, 1, 1])
 print("tempo-flush-traces: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYTFT
