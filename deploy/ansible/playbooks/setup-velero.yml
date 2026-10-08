@@ -437,6 +437,8 @@
     git_mirror_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
     git_mirror_password: "{{ forgejo_admin_password }}"
     git_mirror_local_path: "/var/lib/git-mirror/monitor.git"
+    git_mirror_host_alias: pi-vip
+    git_mirror_known_hosts: "/var/lib/git-mirror/known_hosts"
 
   tasks:
     - name: Install git
@@ -463,15 +465,46 @@
           # Add Pi as push target
           git -C "{{ git_mirror_local_path }}" remote add pi \
             "{{ offsite_backup_user | default('sm') }}@{{ offsite_backup_host | default(keepalived_vip) }}:/mnt/backups/git-mirror/monitor.git"
-          # Configure SSH key for Pi remote
-          git -C "{{ git_mirror_local_path }}" config \
-            core.sshCommand "ssh -o StrictHostKeyChecking=no -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"
         fi
       become: true
       become_user: "{{ offsite_backup_user | default('sm') }}"
       register: git_mirror_init
       changed_when: "'Cloning' in git_mirror_init.stdout"
       no_log: true
+      when: git_mirror_enabled | default(true) | bool
+
+    # the push goes to the VIP - pi1's or pi2's address, as keepalived has it: both Pis' own host keys (read from them
+    # over Ansible's checked connections) known under one alias, and checked - never "no" (a host answering at the VIP
+    # got the code)
+    - name: Each Pi's own host key
+      ansible.builtin.slurp:
+        src: /etc/ssh/ssh_host_ed25519_key.pub
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      register: _pi_host_keys
+      when: git_mirror_enabled | default(true) | bool
+
+    - name: The VIP's known hosts - both Pis' keys
+      ansible.builtin.copy:
+        dest: "{{ git_mirror_known_hosts }}"
+        content: |
+          {% for k in _pi_host_keys.results %}
+          {{ git_mirror_host_alias }} {{ (k.content | b64decode).split()[:2] | join(' ') }}
+          {% endfor %}
+        owner: "{{ offsite_backup_user | default('sm') }}"
+        group: "{{ offsite_backup_user | default('sm') }}"
+        mode: '0644'
+      when: git_mirror_enabled | default(true) | bool
+
+    # set on every run, not only the first clone: a mirror made before kept its old command
+    - name: The push's ssh - its key, the VIP's host keys checked
+      ansible.builtin.command:
+        argv: [git, -C, "{{ git_mirror_local_path }}", config, core.sshCommand,
+               "ssh -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
+               -o StrictHostKeyChecking=yes -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }}"]
+      become: true
+      become_user: "{{ offsite_backup_user | default('sm') }}"
+      changed_when: true
       when: git_mirror_enabled | default(true) | bool
 
     - name: Write offsite backup rsync script

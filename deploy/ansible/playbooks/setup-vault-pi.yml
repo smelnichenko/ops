@@ -751,8 +751,9 @@
       register: _unseal_keys
       no_log: true
 
-    # sent only when pi2's differ (pi1's compared by hash on the controller): a host answering as pi2 gets no shares
-    # it does not hold already
+    # sent only when pi2's differ (pi1's compared by hash on the controller) - a re-run sends nothing. Not a guard
+    # against a host answering in pi2's place: one without the file gets every share - its host key is that guard
+    # (asserted below)
     - name: Hash of the unseal keys pi2 holds
       ansible.builtin.command: sha256sum /etc/vault-unseal/unseal-keys
       register: _pi2_keys_sum
@@ -762,11 +763,31 @@
 
     # stdin is in memory only while modules are piped to the remote python: without pipelining Ansible writes the
     # module, its stdin included, to a temp file on the controller first. As this run has it (ansible.cfg, ANSIBLE_*,
-    # a host var)
+    # a host var) - and Ansible pipelines only with no remote files kept and a become plugin that can (sudo; su
+    # cannot): ConnectionBase.is_pipelining_enabled
     - name: Pipelining on - the shares never in a file on the controller
       ansible.builtin.assert:
-        that: lookup('ansible.builtin.config', 'pipelining', plugin_type='connection', plugin_name='ssh') | bool
-        fail_msg: "REFUSED: pipelining is off - pi2's key shares would be written to a temp file here first"
+        that:
+          - lookup('ansible.builtin.config', 'pipelining', plugin_type='connection', plugin_name='ssh') | bool
+          - not lookup('ansible.builtin.config', 'DEFAULT_KEEP_REMOTE_FILES') | bool
+          - (ansible_become_method | default(lookup('ansible.builtin.config', 'DEFAULT_BECOME_METHOD'))) == 'sudo'
+        fail_msg: >-
+          REFUSED: pipelining is off (pipelining, keep_remote_files or a become method other than sudo) - pi2's key
+          shares would be written to a temp file here first
+        quiet: true
+
+    # the shares go to the host pi2 is: its host key checked - by Ansible (host_key_checking, as this run has it) and
+    # by ssh (no argument of this run's turning it off)
+    - name: Host keys checked - the shares only to pi2 itself
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.config', 'host_key_checking', plugin_type='connection', plugin_name='ssh') | bool
+          - >-
+            (lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
+            ~ lookup('ansible.builtin.config', 'ssh_common_args', plugin_type='connection', plugin_name='ssh') ~ ' '
+            ~ lookup('ansible.builtin.config', 'ssh_extra_args', plugin_type='connection', plugin_name='ssh'))
+            is not search('StrictHostKeyChecking[= ]*(no|off|accept-new)|UserKnownHostsFile[= ]*/dev/null', ignorecase=True)
+        fail_msg: "REFUSED: host keys not checked - a host answering as pi2 would get every key share"
         quiet: true
 
     # on stdin (pipelined: in memory, through ssh), never a file on the controller (a copy with content: writes one);

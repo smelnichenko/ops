@@ -133,6 +133,28 @@ if dist:
                piped(ansible_ssh_pipelining=False)]
         check("pipelining: on as ansible.cfg has it; off by ANSIBLE_PIPELINING, ansible_pipelining or "
               f"ansible_ssh_pipelining (got {got})", got == ["True", "False", "False", "False"])
+        # Ansible pipelines only with neither kept remote files nor a become plugin that cannot (su) - each turns it off
+        # (ConnectionBase.is_pipelining_enabled)
+        got = [piped({"ANSIBLE_KEEP_REMOTE_FILES": "True"}), piped(ansible_become_method="su"),
+               piped({"ANSIBLE_BECOME_METHOD": "su"}), piped(ansible_become_method="sudo")]
+        check(f"kept remote files or become by su: refused; sudo passes (got {got})",
+              got == ["False", "False", "False", "True"])
+        check("no play or task of it sets its own become_method (the assert reads the run's, not a keyword's)",
+              not any("become_method" in x for x in [play, *play["tasks"]]))
+    # the shares go to the host pi2 is - its host key checked: one answering in its place (its file absent) would get
+    # them all; asserted as the run has it, ssh's own arguments included
+    keys = next((t for t in play["tasks"][:play["tasks"].index(dist)] if "ansible.builtin.assert" in t
+                 and "host_key_checking" in str(t["ansible.builtin.assert"].get("that"))), None)
+    check("host key checking asserted in pi2's play before the shares go", keys is not None)
+    if keys and gate:
+        gate = keys
+        got = [piped(), piped({"ANSIBLE_HOST_KEY_CHECKING": "False"}), piped(ansible_host_key_checking=False),
+               piped(ansible_ssh_host_key_checking=False),
+               piped(ansible_ssh_common_args="-o StrictHostKeyChecking=no"),
+               piped({"ANSIBLE_SSH_ARGS": "-C -o ControlMaster=auto -o UserKnownHostsFile=/dev/null"}),
+               piped(ansible_ssh_extra_args="-o StrictHostKeyChecking=accept-new")]
+        check(f"host keys: checked as ansible.cfg has it; off by the environment, a host var or ssh's arguments "
+              f"(got {got})", got == ["True"] + ["False"] * 6)
     ino = os.stat(k).st_ino
     r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
                         os.path.join(W, "vu"))], input="k1\nk2\nk3\n", env=env, capture_output=True, text=True)
