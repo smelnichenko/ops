@@ -1183,6 +1183,15 @@ library's own test failed 1 in 5 on it (ae53e2f); a job the KILL did not end not
 against production's git-directory ApplicationSets, destroy only for an environment create made - env_name=infra passed
 (fca9295); the lints' gaps (42e8302); tests for survivors (dd0526c, 8907294, 489ced0, d0f96c6, d1c8bf5).
 
+Three of the fixes passed with their fix removed - each test strengthened to catch it (4fb7131): the probe's
+calibration (both secrets answered alike, neither "Invalid client"), the TERM resent by a start (the lost child's
+parent staying in the job), destroy's git-directory check (its harness built list ApplicationSets for that shape).
+
+The gate before the push caught two more of mine (ansible-lint): the host-key patterns' `[{][{%]` holds Jinja's block
+start - a task var's text is a template, the assert failed on reading it - now `[{]([{]|%)`, the harness reading the
+task's vars as Ansible loads them; an apostrophe in destroy-environment's free-form shell (5239852, 5d7caf2). Pushed
+at 5d7caf2; full run 10 started 18:08.
+
 Left, with why:
 - 55 test-playbook tasks outside the full run, and test-ephemeral-env's `http://admin:<pw>@` URLs: a secret on a
   command line; each needs its own run.
