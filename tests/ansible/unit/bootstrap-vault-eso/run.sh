@@ -29,8 +29,10 @@ case "\$*" in
     { cat; echo ---; } >> "$W/applied" ;;
   "get externalsecret -A -o jsonpath="*) [ -n "\${ES_NONE:-}" ] || printf 'cert-manager/porkbun-secret-es\nargocd/x\n' ;;
   "-n cert-manager get externalsecret porkbun-secret-es -o jsonpath="*)
-    if [ -e "$W/annotated" ] && [ "\${ES_READY:-True}" = True ]; then echo "2026-10-08T02:00:00Z True"
-    elif [ -e "$W/annotated" ]; then echo "2026-10-08T01:00:00Z False"; else echo "2026-10-08T01:00:00Z True"; fi ;;
+    if [ ! -e "$W/annotated" ] || [ "\${ES_READY:-True}" = Stale ]; then echo "2026-10-08T01:00:00Z True"
+    elif [ "\${ES_READY:-True}" = True ]; then echo "2026-10-08T02:00:00Z True"
+    elif [ "\${ES_READY:-True}" = Moved ]; then echo "2026-10-08T02:00:00Z False"
+    else echo "2026-10-08T01:00:00Z False"; fi ;;
   "-n cert-manager annotate externalsecret porkbun-secret-es force-sync="*" --overwrite") touch "$W/annotated" ;;
   "-n external-secrets get secret vault-token-reviewer --ignore-not-found -o name")
     [ -n "\${NO_TOKEN_SECRET:-}" ] || echo "secret/vault-token-reviewer" ;;
@@ -102,6 +104,11 @@ check "after Vault's write: one ExternalSecret refreshed now (force-sync), then 
 run ES_READY=False
 check "External Secrets not logging in on the new config: the step fails, said so, the old token kept" \
   "$rc $(grep -c 'delete secret' "$W/kubectl-calls") $(grep -c 'NOT proven' <<< "$out")" "1 0 1"
+run ES_READY=Stale
+check "not refreshed (Ready from before, its refresh time unchanged): the step fails, the old token kept" \
+  "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
+run ES_READY=Moved
+check "refreshed but not Ready: the step fails, the old token kept" "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
 run ES_NONE=1 NO_TOKEN_SECRET=1
 check "no ExternalSecret yet (a fresh cluster), no old token: passes, said" \
   "$rc $(grep -c 'delete secret' "$W/kubectl-calls") $(grep -c 'no ExternalSecret' <<< "$out")" "0 0 1"
