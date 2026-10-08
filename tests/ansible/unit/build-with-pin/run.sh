@@ -54,6 +54,18 @@ check() {  # check <name> <got> <want>
   echo "FAIL $1: got '$2', want '$3'"; sed 's/^/    /' <<< "$out"; fails=$((fails + 1))
 }
 pin_end() { [ -e "$T/.upgrade/pin.finished" ] && echo finished || echo stopped; }
+# a log as the script left it: its time-stamper (a process substitution, no job - it outlives the script by a moment)
+# writes the last lines after the script's own end; read once no process of this test's holds it open, 5 s at most
+settled() {  # settled <file>
+  local f=$1 fd held
+  for _ in $(seq 50); do
+    held=""
+    for fd in /proc/[0-9]*/fd/*; do [ "$fd" -ef "$f" ] && { held=1; break; }; done 2> /dev/null
+    [ -n "$held" ] || break
+    sleep 0.1
+  done
+  cat "$f"
+}
 gone() {  # gone <pid file>: the process it names no more there - a moment allowed for its teardown
   local pid; pid=$(cat "$1" 2> /dev/null) || { echo "no-pid"; return; }
   for _ in $(seq 20); do [ -e "/proc/$pid" ] || { echo gone; return; }; sleep 0.1; done
@@ -81,7 +93,7 @@ sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
 [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
 wait "$sp"
-out=$(cat "$T/term.out")
+out=$(settled "$T/term.out")
 check "a TERM to the script, mid-build: it ends at once, the build and the pin stopped, the pin's process gone" \
   "$(pin_end) $([ -e "$T/.upgrade/build.finished" ] && echo finished || echo stopped) $((SECONDS - t0 < 10)) \
 $(gone "$T/.upgrade/pin.pid")" "stopped stopped 1 gone"
@@ -104,7 +116,7 @@ sessions="$(own_session "$T/.upgrade/build.pid") $(own_session "$T/.upgrade/pin.
 # the whole group of timeout (it leads one), as the terminal's Ctrl-C reaches it - this test's own child, checked so
 [ "$(proc_info "$sp" | awk '{print $1, $2}')" = "$$ $sp" ] && kill -INT -- "-$sp"
 wait "$sp"
-out=$(cat "$T/int.out")
+out=$(settled "$T/int.out")
 check "the build and the pin each lead a session of their own (no terminal to stop on)" "$sessions" "own own"
 check "a Ctrl-C to the group: it ends at once, both stopped and gone, the stop said in the log" \
   "$(pin_end) $([ -e "$T/.upgrade/build.finished" ] && echo finished || echo stopped) $((SECONDS - t0 < 10)) \
@@ -120,7 +132,7 @@ for sig in TERM HUP; do
   timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
   [ "$(proc_info "$sp" | awk '{print $1, $2}')" = "$$ $sp" ] && kill "-$sig" -- "-$sp"
   wait "$sp"
-  out=$(cat "$T/grp.out")
+  out=$(settled "$T/grp.out")
   check "a $sig to the group: both stopped and gone, the stop said in the log" \
     "$(gone "$T/.upgrade/pin.pid") $(gone "$T/.upgrade/build.pid") $(grep -c '^[0-9:]\{8\} STOPPED BY A SIGNAL' <<< "$out")" \
     "gone gone 1"
@@ -134,7 +146,7 @@ sp=$!
 timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
 [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
 wait "$sp"
-out=$(cat "$T/ign.out")
+out=$(settled "$T/ign.out")
 check "a job ignoring TERM: killed after the grace, said so; both gone, the stop said, well before the bound" \
   "$(gone "$T/.upgrade/build.pid") $(gone "$T/.upgrade/pin.pid") $(grep -c 'outlived the stop' <<< "$out") \
 $(grep -c 'STOPPED BY A SIGNAL' <<< "$out") $((SECONDS - t0 < 10))" "gone gone 1 1 1"
@@ -151,7 +163,7 @@ if [ "$(proc_info "$sp" | awk '{print $1, $2}')" = "$$ $sp" ]; then
   kill -INT -- "-$sp"; sleep 0.3; kill -INT -- "-$sp" 2> /dev/null
 fi
 wait "$sp"
-out=$(cat "$T/twice.out")
+out=$(settled "$T/twice.out")
 check "a Ctrl-C pressed twice, the second during the stop: the stop goes on - the slow job's own stop done, both gone, the stop said" \
   "$([ -e "$T/.upgrade/build.slow" ] && echo slow-done || echo cut) $(gone "$T/.upgrade/build.pid") \
 $(gone "$T/.upgrade/pin.pid") $(grep -c 'STOPPED BY A SIGNAL' <<< "$out")" "slow-done gone gone 1"
@@ -166,7 +178,7 @@ sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
 [ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
 wait "$sp"
-out=$(cat "$T/unkept.out")
+out=$(settled "$T/unkept.out")
 check "a job whose PID was not kept yet: stopped with the rest, its process gone" \
   "$(pin_end) $(gone "$T/.upgrade/pin.pid")" "stopped gone"
 # the traps set before the jobs start: a signal between a job's start and its trap left that job running

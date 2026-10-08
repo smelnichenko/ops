@@ -19,22 +19,22 @@ exec > >(trap '' INT TERM HUP; exec python3 -u -c 'import sys, time
 for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
 build_job="" pin="" signalled=""
-# group_alive, stop_groups
+# own_jobs, stop_groups
 source scripts/lib/process-groups.sh
 stop() {
   local j own
-  # every job of this script's, each a session of its own (setsid) - never a PID it did not start: one whose PID was
-  # not kept yet (a signal between its start and `pin=$!`) is stopped with the rest. The time-stamping process is no
+  # every job of this script's still its child, each a session of its own (setsid) - never a PID it did not start, nor
+  # one bash reaped already: one whose PID was not kept yet (a signal between its start and `pin=$!`) is stopped with
+  # the rest. The time-stamping process is no
   # job (a process substitution - `jobs -p` never lists it, measured on bash 5.2): waiting for it would wait for this
   # script's own end
   # nor here, on a stop of its own (a failed build) a signal arrives
   trap '' INT TERM HUP
-  own=$(jobs -p)
+  own_jobs own
   # each job's processes given STOP_GRACE seconds to end (the pin's trap removes its containers), then killed, said:
   # one that ignored the TERM held the stop for good
-  # shellcheck disable=SC2086 # the job PIDs, one word each
-  stop_groups "${STOP_GRACE:-60}" $own
-  for j in $own; do wait "$j" 2> /dev/null; done
+  [ "${#own[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${own[@]}"
+  for j in "${own[@]}"; do wait "$j" 2> /dev/null; done
   [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
 }
 # the traps before the jobs: a signal between a job's start and its trap left the job running

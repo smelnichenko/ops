@@ -18,8 +18,13 @@ set -uo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 infra_ref=$1 platform_ref=$2 clickhouse_compat=$3 clickhouse_users=$4
 cd "$ops" || exit 1
-# group_alive, stop_groups
+# own_jobs, group_alive, stop_groups, uptime_s
 source scripts/lib/process-groups.sh
+# the checks' own bound (below): above every check's own - data-check's retries alone wait up to ~3085 s (each until's
+# retries and delays, summed) - so it stops only what none of them bounds; a value that is no number would make its
+# sleep fail at once and leave no bound
+bound=${STEP_CHECKS_SECONDS:-3600}
+[[ $bound =~ ^[1-9][0-9]*$ ]] || { echo "STEP_CHECKS_SECONDS=$bound: not a whole number of seconds"; exit 1; }
 mkdir -p .upgrade
 logs=$(mktemp -d "$ops/.upgrade/step-checks.XXXX")
 names=() pids=() done_=() failed=() watchdog=""
@@ -35,17 +40,14 @@ not_judged() {  # the checks not judged named, each with its log, and the failur
   exit 1
 }
 cleanup() {
-  local i own groups=()
+  local groups
   # no signal cuts it short (a Ctrl-C pressed twice: the second ran the trap again inside it, its checks unwaited)
   trap '' INT TERM HUP
-  # a group signalled only while it is one of this script's jobs: never a PID it did not start (1 is `kill -- -1`,
-  # every process of the user; 2026-10-07 a test's PID 1 ended the operator's session), nor one the system gave to
-  # another process after the job ended. Each whole - the playbook under a check's subshell too - bounded
-  own=" $(jobs -p | tr '\n' ' ') "
-  for i in "${!pids[@]}"; do
-    [ -z "${done_[$i]:-}" ] && [[ $own == *" ${pids[$i]} "* ]] && groups+=("${pids[$i]}")
-  done
-  [[ -n $watchdog && $own == *" $watchdog "* ]] && groups+=("$watchdog")
+  # every job of this script's still its child - a check or the watchdog whose PID was not kept yet (a signal between
+  # its start and its record) among them: never a PID it did not start (1 is `kill -- -1`, every process of the user;
+  # 2026-10-07 a test's PID 1 ended the operator's session), nor one the system gave to another process after the job
+  # ended. Each whole - the playbook under a check's subshell too - bounded
+  own_jobs groups
   [ "${#groups[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${groups[@]}"
   wait 2> /dev/null
   rm -rf "$logs"
@@ -53,7 +55,13 @@ cleanup() {
 on_signal() {  # on_signal <exit>: a signal's first act - no other cuts the stop short; the checks' bound said
   trap '' INT TERM HUP
   if [ -e "$logs/timed-out" ]; then
-    echo "STEP CHECKS: not ended within ${STEP_CHECKS_SECONDS:-1800} s - stopped"
+    # the bound reached as the last check ended: every one judged, nothing to stop - the verdict goes on
+    if [ "${#done_[@]}" -eq "${#pids[@]}" ]; then
+      trap 'on_signal 130' INT TERM
+      trap 'on_signal 129' HUP
+      return
+    fi
+    echo "STEP CHECKS: not ended within $bound s - stopped"
     not_judged
   fi
   exit "$1"
@@ -86,9 +94,12 @@ start storage play ../../tests/ansible/upgrade/storage-check.yml
 start metrics play ../../tests/ansible/upgrade/metrics-check.yml
 start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"
 
-# the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it for ever, measured on bash
-# 5.2), or a hang none of them bounds - ends them after STEP_CHECKS_SECONDS, said, those left not judged
-( sleep "${STEP_CHECKS_SECONDS:-1800}" && : > "$logs/timed-out" && kill -TERM $$ ) < /dev/null > /dev/null 2>&1 &
+# the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it while any other job runs, this
+# one always: measured on bash 5.2), or a hang none of them bounds - ends them after STEP_CHECKS_SECONDS, said, those
+# left not judged. It signals this script only while it is still its parent: one killed outright (no cleanup ran)
+# left it behind, its PID free for another process by the time the bound came
+( sleep "$bound" && read -r st < "/proc/$BASHPID/stat" && set -- ${st##*) } && [ "$2" = "$$" ] \
+  && : > "$logs/timed-out" && kill -TERM $$ ) < /dev/null > /dev/null 2>&1 &
 watchdog=$!
 left=${#pids[@]}
 while [ "$left" -gt 0 ]; do
@@ -101,7 +112,8 @@ while [ "$left" -gt 0 ]; do
   # The checks left named, each with what its log holds
   if [ -z "${ended:-}" ]; then
     echo "STEP CHECKS: wait returned $rc with no check ended - each left read by its status where bash kept it"
-    # a check stopped by a signal: wait -n returns 127 for it (bash 5.2, measured) and `wait <pid>` its stop (147) - not
+    # a check stopped by a signal: wait -n waits on it while another job runs (the watchdog: it is what ends a stopped
+    # check), and returns 127 for it only once none does (bash 5.2, measured); `wait <pid>` gives its stop (147) - not
     # its end: not judged, said; the cleanup ends it (judged, it was waited for by the cleanup for ever)
     stopped=" $(jobs -sp | tr '\n' ' ') "
     for i in "${!pids[@]}"; do
@@ -134,6 +146,8 @@ while [ "$left" -gt 0 ]; do
   done
   left=$((left - 1))
 done
+# every check judged: the bound has nothing left to stop
+stop_groups 5 "$watchdog"
 if [ "${#failed[@]}" -gt 0 ]; then
   echo "STEP CHECKS FAILED: ${failed[*]}"
   exit 1
