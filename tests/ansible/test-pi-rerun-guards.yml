@@ -1071,7 +1071,10 @@
   tasks:
     - name: The playbook
       ansible.builtin.command:
-        cmd: "{{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml"
+        # with the variables production's deploy:vault-pi and the copy's build give it (the Vault names, the Pis' ranges)
+        cmd: >-
+          {{ ansible_playbook_python | dirname }}/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-pi.yml
+          -e @vars/vault.yml -e @vars/vault-vagrant.yml
         chdir: "{{ playbook_dir }}/../../deploy/ansible"
       changed_when: false
 
