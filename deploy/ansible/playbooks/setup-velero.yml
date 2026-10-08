@@ -677,7 +677,9 @@
                     -o StrictHostKeyChecking=yes -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }})
           export GIT_SSH_COMMAND="ssh ${ssh_opts[*]}"
           # git's other helpers reset; this one answers "get" alone - storing or erasing (after a 401) changes nothing
-          helper=(-c credential.helper= -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username={{ git_mirror_user }}; echo \"password=\$(cat $tokenf)\"; }; f")
+          mirror_user={{ git_mirror_user }}
+          helper=(-c credential.helper=
+                  -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username=$mirror_user; echo \"password=\$(cat $tokenf)\"; }; f")
           token=$(cat "$tokenf" 2> /dev/null) || token=""
           [ -n "$token" ] || { say "FAILED: no token in $tokenf"; exit 1; }
           repos="" page=1
