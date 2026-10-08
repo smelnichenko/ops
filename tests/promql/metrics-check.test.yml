@@ -1,0 +1,40 @@
+# tests/ansible/upgrade/metrics-check.yml's two queries (its down_query and first_query, RANGE named here) as Prometheus
+# evaluates them - promtool test rules, the version production runs (CI's promql step):
+#   docker run --rm --network none -v "$PWD/tests/promql:/t:ro" --entrypoint promtool \
+#     quay.io/prometheus/prometheus:v3.10.0 test rules /t/metrics-check.test.yml
+# Targets scraped every 15 s, judged at 600 s: one up throughout; one down once at 330 (recovered); one first seen at
+# 510, down in its first two scrapes, up from 540 (a pod the settle replaced); one gone at 300 (stale - no target now).
+# Each value is a sample's own time - never a subquery step's.
+rule_files: []
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'up{job="a",instance="old"}'
+        values: '1x40'
+      - series: 'up{job="b",instance="recovered"}'
+        values: '1x21 0 1x17'
+      - series: 'up{job="c",instance="new"}'
+        values: '_x34 0 0 1x4'
+      - series: 'up{job="d",instance="gone"}'
+        values: '1x20 stale'
+    promql_expr_test:
+      # the last sample down of each target active now: the recovered one's at 330, the new one's at 525
+      - expr: max_over_time((timestamp(up) and up == 0)[300s:5s]) and on(job, instance) up
+        eval_time: 600s
+        exp_samples:
+          - labels: '{job="b",instance="recovered"}'
+            value: 330
+          - labels: '{job="c",instance="new"}'
+            value: 525
+      # the first sample of each over a window 120 s longer: the old ones' at the window's start (180), the new one's
+      # at 510 - the gone one not active
+      - expr: min_over_time(timestamp(up)[420s:5s]) and on(job, instance) up
+        eval_time: 600s
+        exp_samples:
+          - labels: '{job="a",instance="old"}'
+            value: 180
+          - labels: '{job="b",instance="recovered"}'
+            value: 180
+          - labels: '{job="c",instance="new"}'
+            value: 510
