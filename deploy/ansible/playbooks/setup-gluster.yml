@@ -19,6 +19,8 @@
   hosts: pi1,pi2,target
   become: true
   gather_facts: true
+  # the network's facts alone (node_ip): the hardware's stat every mount - a hung client's in a thread no signal ends
+  gather_subset: [network]
 
   vars:
     gluster_brick: /var/lib/gluster/forgejo-brick
@@ -333,9 +335,40 @@
   hosts: pi1,pi2
   become: true
   gather_facts: true
+  # the network's facts alone (node_ip): the hardware's stat every mount - a hung client's in a thread no signal ends
+  gather_subset: [network]
 
   vars:
     gluster_mount: /var/lib/forgejo/repos
+    # how long a mounted volume has to answer a stat before its client is said hung
+    mount_answer_seconds: 10
+    # a mount point's answer to a stat, bounded without waiting on it: a stat a hung client holds waits in the kernel,
+    # deaf to every signal, and `timeout` waits for its child all the same. Prints why it did not answer, nothing when
+    # it did (the plays mounting the backup volumes use it too)
+    answers_fn: &answers_fn |
+      answers() {  # answers <mount point> <file for its error>
+        stat -f "$1" < /dev/null > /dev/null 2> "$2" &
+        local sp=$! i
+        for ((i = 0; i < {{ mount_answer_seconds }} * 10; i++)); do kill -0 "$sp" 2> /dev/null || break; sleep 0.1; done
+        if kill -0 "$sp" 2> /dev/null; then
+          echo "mounted, no answer in {{ mount_answer_seconds }} s - its client hung"
+        elif ! wait "$sp"; then
+          echo "mounted, not answering: $(< "$2")"
+        fi
+      }
+    # every volume mounted at its mount point answering - none touched before (made, unmounted, mounted, its owner set:
+    # each a stat a hung client holds for good); one that does not refused at its deadline, named
+    answer_check: &answer_check |
+      set -uo pipefail
+      {{ answers_fn }}
+      bad=""
+      d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+      while read -r name mnt; do
+        findmnt -rn -M "$mnt" > /dev/null || continue
+        why=$(answers "$mnt" "$d/$name")
+        [ -z "$why" ] || bad+=" $name ($mnt: $why)"
+      done <<< "$VOLUMES"
+      [ -z "$bad" ] || { echo "HUNG:$bad - unmount it (umount -l), then run again"; exit 1; }
     node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
@@ -346,6 +379,16 @@
     - name: No service to start yet (the services stopped for a mount start in the last plays)
       ansible.builtin.set_fact:
         gluster_services_to_start: []
+
+    - name: The repos' volume answers where it is mounted (nothing touches it before)
+      check_mode: false  # a read: a preview judges it too
+      timeout: 60
+      ansible.builtin.shell:
+        cmd: "{{ answer_check }}"
+        executable: /bin/bash
+      environment:
+        VOLUMES: "forgejo-repos {{ gluster_mount }}"
+      changed_when: false
 
     # the entry alone where the repos are mounted already: the mount module remounts a mounted volume when its entry
     # changes
@@ -376,12 +419,14 @@
             state: stopped
 
         - name: Unmount what is mounted there now
+          timeout: 120
           ansible.posix.mount:
             path: "{{ gluster_mount }}"
             state: unmounted
           when: _repos_mount.stdout | trim | length > 0
 
         - name: Mount GlusterFS volume
+          timeout: 300
           ansible.posix.mount:
             path: "{{ gluster_mount }}"
             src: "{{ node_ip }}:/forgejo-repos"
@@ -390,6 +435,7 @@
             state: mounted
 
         - name: Fix ownership
+          timeout: 60
           ansible.builtin.file:
             path: "{{ gluster_mount }}"
             owner: forgejo
@@ -758,10 +804,14 @@
   hosts: pi1,pi2
   become: true
   gather_facts: true
+  # the network's facts alone (node_ip): the hardware's stat every mount - a hung client's in a thread no signal ends
+  gather_subset: [network]
 
   vars:
     # how long a mounted volume has to answer a stat before its client is said hung
     mount_answer_seconds: 10
+    answers_fn: *answers_fn
+    answer_check: *answer_check
     node_ip: "{{ node_ip_override | default(ansible_default_ipv4.address) }}"
     pi1_ip: "{{ hostvars['pi1']['ansible_host'] | default('192.168.11.4') }}"
     pi2_ip: "{{ hostvars['pi2']['ansible_host'] | default('192.168.11.6') }}"
@@ -800,6 +850,16 @@
       changed_when: false
       failed_when: _current_mounts.rc not in [0, 1]
 
+    - name: The backup volumes answer where they are mounted (nothing touches them before)
+      check_mode: false  # a read: a preview judges it too
+      timeout: 120
+      ansible.builtin.shell:
+        cmd: "{{ answer_check }}"
+        executable: /bin/bash
+      environment:
+        VOLUMES: "{{ backup_volumes | map(attribute='name') | zip(backup_volumes | map(attribute='mount')) | map('join', ' ') | join('\n') }}"
+      changed_when: false
+
     - name: None to (re)mount yet
       ansible.builtin.set_fact:
         backup_remount: []
@@ -837,6 +897,7 @@
       when: item.stop_service | length > 0 and (item.stop_service ~ '.service') in ansible_facts.services
 
     - name: Create mount points
+      timeout: 60
       ansible.builtin.file:
         path: "{{ item.mount }}"
         state: directory
@@ -844,6 +905,7 @@
       loop: "{{ backup_volumes }}"
 
     - name: Unmount what another source has mounted there
+      timeout: 120
       ansible.posix.mount:
         path: "{{ item.item.mount }}"
         state: unmounted
@@ -855,6 +917,7 @@
     # mounted where not mounted from the volume yet; elsewhere the entry alone - the mount module remounts a mounted
     # volume when its entry changes
     - name: Mount backup volumes
+      timeout: 300
       ansible.posix.mount:
         path: "{{ item.mount }}"
         src: "{{ node_ip }}:/{{ item.name }}"
@@ -872,6 +935,7 @@
       when: _fstab_repos is changed or _fstab_backup is changed
 
     - name: Fix MinIO data ownership
+      timeout: 60
       ansible.builtin.file:
         path: /var/lib/minio/data
         owner: minio
@@ -890,6 +954,7 @@
     # not Forgejo's: a `chown -R` of all of it on every run wrote every file's
     # metadata on three bricks, the packages included, and said "ok".
     - name: Fix Forgejo data ownership (heal/ownership can lag on a new volume)
+      timeout: 1800
       ansible.builtin.shell: |
         set -euo pipefail
         find /var/lib/forgejo/data \( ! -user forgejo -o ! -group forgejo \) -print \
@@ -919,6 +984,7 @@
       ansible.builtin.shell: |
         set -uo pipefail
         bad=""
+        {{ answers_fn }}
         d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
         while read -r name mnt; do
           src=$(findmnt -rn -t fuse.glusterfs -o SOURCE -M "$mnt" || true)
@@ -927,14 +993,8 @@
             bad+=" $name ($mnt: ${src:-not mounted})"
             continue
           fi
-          stat -f "$mnt" < /dev/null > /dev/null 2> "$d/$name" &
-          sp=$!
-          for _ in $(seq $(( {{ mount_answer_seconds }} * 10 ))); do kill -0 "$sp" 2> /dev/null || break; sleep 0.1; done
-          if kill -0 "$sp" 2> /dev/null; then
-            bad+=" $name ($mnt: mounted, no answer in {{ mount_answer_seconds }} s - its client hung)"
-          elif ! wait "$sp"; then
-            bad+=" $name ($mnt: mounted, not answering: $(< "$d/$name"))"
-          fi
+          why=$(answers "$mnt" "$d/$name")
+          [ -z "$why" ] || bad+=" $name ($mnt: $why)"
         done <<< "$VOLUMES"
         [ -z "$bad" ] || { echo "NOT MOUNTED:$bad"; exit 1; }
       args:
