@@ -46,12 +46,21 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   [ "${args[$i]}" = clone ] && { dest=${args[$((${#args[@]} - 1))]}; mkdir -p "$dest"; touch "$dest/HEAD"; exit 0; }
 done
 case "$*" in *" fetch "*) [ -n "${FETCH_FAILS:-}" ] && [[ $* == *"/$FETCH_FAILS.git"* ]] && exit 128 ;; esac
-# PUSH_FAILS=<repo>: the Pi refuses its push (a full disk, a permission)
-case "$*" in *" push "*) [ -n "${PUSH_FAILS:-}" ] && [[ $* == *"/$PUSH_FAILS.git"* ]] && exit 1 ;; esac
-# OLD_CONFIG=<repo>: the old mirror's settings in it - an ssh command (no host-key check) and a remote named pi
+# PUSH_FAILS=<repo>: the Pi refuses its push (a full disk, a permission). A push runs its --receive-pack command as
+# the Pi would (pibin: mountpoint answering MOUNTED, git-receive-pack recording) - none given, it lands unchecked
+case "$*" in *" push "*) [ -n "${PUSH_FAILS:-}" ] && [[ $* == *"/$PUSH_FAILS.git"* ]] && exit 1
+  rp=""; for a; do case $a in --receive-pack=*) rp=${a#--receive-pack=} ;; esac; done
+  dest=${@: -1}; path=${dest#*:}; path=${path//\/mnt\/backups\/git-mirror/$W/pi}
+  if [ -n "$rp" ]; then PATH="$W/pibin:$PATH" bash -c "${rp//\/mnt\/backups\/git-mirror/$W/pi} '$path'" || exit 1
+  else echo "received-unchecked $path" >> "$W/pi-calls"; fi
+  exit 0 ;; esac
+# OLD_CONFIG=<repo>: the old mirror's settings in it - an ssh command (no host-key check) and a remote named pi;
+# GLOBAL_SSH: one in the user's or the system's git config (every scope but the repository's own)
 old=""; [ -n "${OLD_CONFIG:-}" ] && [[ $* == *"/$OLD_CONFIG.git "* ]] && old=1
 case "$*" in
-  *" config --get core.sshCommand"*) [ -n "$old" ] && { echo "ssh -o StrictHostKeyChecking=no"; exit 0; }; exit 1 ;;
+  *" config --local --get core.sshCommand"*) [ -n "$old" ] && { echo "ssh -o StrictHostKeyChecking=no"; exit 0; }; exit 1 ;;
+  *" config --get core.sshCommand"*) [ -n "$old" ] || [ -n "${GLOBAL_SSH:-}" ] && { echo "ssh -o x"; exit 0; }; exit 1 ;;
+  *" config --local --get-regexp ^remote\.pi\."*) [ -n "$old" ] && { echo "remote.pi.url pi:/x"; exit 0; }; exit 1 ;;
   *" remote") echo origin; [ -z "$old" ] || echo pi; exit 0 ;;
 esac
 exit 0
@@ -60,11 +69,18 @@ STUB
 cat > "$W/bin/ssh" <<'STUB'
 #!/bin/bash
 echo "ssh $*" >> "$W/ssh-calls"
-[ -n "${INIT_FAILS:-}" ] && [[ $* == *"/$INIT_FAILS.git/HEAD || git init"* ]] && { echo "fatal: cannot mkdir" >&2; exit 128; }
+[ -n "${INIT_FAILS:-}" ] && [[ $* == *"/$INIT_FAILS.git/HEAD"* ]] && { echo "fatal: cannot mkdir" >&2; exit 128; }
 # LAST_FAILS: the last-success write refused on the Pi
 [ -n "${LAST_FAILS:-}" ] && [[ $* == *"last-success"* ]] && { echo "Permission denied" >&2; exit 1; }
-exit 0
+# the remote command run as the Pi would: the volume at $W/pi, mounted unless MOUNTED=no
+cmd=${@: -1}
+PATH="$W/pibin:$PATH" bash -c "${cmd//\/mnt\/backups\/git-mirror/$W/pi}"
 STUB
+mkdir -p "$W/pibin"
+printf '#!/bin/bash\n[ "${MOUNTED:-yes}" = yes ]\n' > "$W/pibin/mountpoint"
+printf '#!/bin/bash\necho "pi-git $*" >> "$W/pi-calls"\n' > "$W/pibin/git"
+printf '#!/bin/bash\necho "received $*" >> "$W/pi-calls"\n' > "$W/pibin/git-receive-pack"
+chmod +x "$W/pibin"/*
 printf '#!/bin/bash\ncat > /dev/null\n' > "$W/bin/logger"
 chmod +x "$W/bin"/*
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYGM2'
@@ -240,6 +256,8 @@ def run(pages, existing=(), **env):
     for f in ("git-calls", "ssh-calls", "curl-calls"):
         os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
     shutil.rmtree(os.path.join(W, "mirror")); os.makedirs(os.path.join(W, "mirror"))
+    shutil.rmtree(os.path.join(W, "pi"), ignore_errors=True); os.makedirs(os.path.join(W, "pi"))
+    os.path.exists(os.path.join(W, "pi-calls")) and os.remove(os.path.join(W, "pi-calls"))
     shutil.rmtree(os.path.join(W, "pages"), ignore_errors=True); os.makedirs(os.path.join(W, "pages"))
     for i, names_ in enumerate(pages, 1):
         open(os.path.join(W, "pages", str(i)), "w").write(" ".join(names_))
@@ -315,7 +333,7 @@ check("one repository's fetch failing: the others pushed, it named, the unit fai
       (rc, sum(" push " in l for l in g), "infra(fetch)" in out, sum("last-success" in l for l in sh)), (1, 3, True, 0))
 rc, out, g, sh, cu = run([["ops", "infra", "site"]], INIT_FAILS="infra")
 check("one repository's repository on the Pi not made: it named, not pushed; the others pushed; the unit failed, no "
-      "last-success", (rc, "infra(its repository on the Pi)" in out, re.findall(r" push -q --mirror \S+/([\w.-]+\.git) ",
+      "last-success", (rc, "infra(its repository on the Pi)" in out, re.findall(r" push .*/([\w.-]+\.git) PROMPT=",
                                                                              "\n".join(g)),
                        sum("last-success" in l for l in sh)), (1, True, ["ops.git", "site.git"], 0))
 rc, out, g, sh, cu = run([["ops", "infra", "site"]], PUSH_FAILS="infra")
@@ -328,6 +346,27 @@ check("its last-success not written on the Pi: the unit failed, said", (rc, "las
 remote = [l for l in sh if "git init" in l or "last-success" in l]
 check("every write on the Pi (a repository made, last-success) under the mount's check",
       (bool(remote), all("mountpoint -q " in l for l in remote)), (True, True))
+# run as the Pi runs them: mounted - each repository made and received, last-success written; not mounted (a bare
+# mount point, the Pi's own disk) - nothing made, nothing received, no last-success, the unit failed, each named
+pi_calls = lambda: open(os.path.join(W, "pi-calls")).read().splitlines() if os.path.exists(os.path.join(W, "pi-calls")) else []  # noqa: E731
+rc, out, g, sh, cu = run([["ops", "infra"]])
+got_m = (rc, sorted(l.split()[0] for l in pi_calls()), os.path.exists(os.path.join(W, "pi", "last-success")))
+rc, out, g, sh, cu = run([["ops", "infra"]], MOUNTED="no")
+got_u = (rc, pi_calls(), os.path.exists(os.path.join(W, "pi", "last-success")))
+check("on the Pi, mounted: each repository made and received, last-success written; not mounted: nothing made or "
+      "received, no last-success, the unit failed", (got_m, got_u),
+      ((0, ["pi-git", "pi-git", "received", "received"], True), (1, [], False)))
+# bounded: its ssh (a dead connection ends), each remote command's mount check, its fetch's speed; the listing's pages
+check("its ssh and remote commands bounded, its fetch's low speed bounded",
+      ("ConnectTimeout=" in body and "ServerAliveInterval=" in body, all("timeout " in l for l in sh if "mountpoint" in l),
+       "http.lowSpeedLimit" in body), (True, True, True))
+rc, out, g, sh, cu = run([[f"r{i}"] for i in range(25)])
+check("more pages than it reads: fails, said - never a mirror of part of the organisation",
+      (rc, "not all listed" in out), (1, True))
+# the old mirror's settings read in the repository's own config alone: one in the user's or the system's left (its
+# unset of the repository's failed every run, every repository named)
+rc, out, g, sh, cu = run([["ops", "infra"]], existing=["ops", "infra"], GLOBAL_SSH="1")
+check("an ssh setting in git's user or system config: left, the run 0", (rc, any("--unset-all" in l for l in g)), (0, False))
 rc, out, g, sh, cu = run([["ops", "bad$(name)"]])
 check("a name that is no plain name: named, never used; the unit failed",
       (rc, "(its name)" in out, any("bad$(name)" in l for l in g + sh)), (1, True, False))
