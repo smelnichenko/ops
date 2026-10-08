@@ -81,6 +81,27 @@ if persist:
 # controller
 dist = next((t for t in alltasks if t.get("name", "").startswith("The unseal keys on pi2")), None)
 check("pi2's shares given on stdin", dist is not None and "_unseal_keys" in str((dist.get("args") or {}).get("stdin", "")))
+# pi2's play reads them itself, from pi1 (a slurp delegated there): a run limited to pi2 skipped pi1's plays, and a
+# read of hostvars['pi1'] failed it
+pi2_play = next((p for p in book if dist in (p.get("tasks") or [])), {})
+own = next((t for t in pi2_play.get("tasks") or [] if "ansible.builtin.slurp" in t
+            and t["ansible.builtin.slurp"].get("src") == "/etc/vault-unseal/unseal-keys"), None)
+check("pi2's play reads the shares from pi1 itself, out of the log; no read of pi1's results",
+      own is not None and own.get("delegate_to") == "pi1" and own.get("no_log") is True
+      and own.get("register") in str((dist.get("args") or {}).get("stdin", ""))
+      and pi2_play["tasks"].index(own) < pi2_play["tasks"].index(dist)
+      and "hostvars['pi1']" not in yaml.safe_dump(pi2_play, width=10000))
+# root's alone, read-only - also where its content matched already (the shares not sent)
+mode = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.file") or {}).get("path")
+             == "/etc/vault-unseal/unseal-keys"), None)
+check("pi2's unseal-keys root's alone, read-only, sent or not",
+      mode is not None and (mode["ansible.builtin.file"].get("owner"), mode["ansible.builtin.file"].get("group"),
+                            str(mode["ansible.builtin.file"].get("mode"))) == ("root", "root", "0400"))
+if mode:
+    probe_reg = next((t.get("register") for t in pi2_play["tasks"] if t.get("name", "").startswith("Hash of")), "_x")
+    check("enforced on a run whatever was found, on a preview where the file was found (a first install's has none)",
+          [condition(mode.get("when", True), ansible_check_mode=cm, **{probe_reg: {"rc": rc}})
+           for cm, rc in ((False, 0), (False, 1), (True, 0), (True, 1))] == [True, True, True, False])
 if dist:
     sh = dist["ansible.builtin.shell"]
     r = subprocess.run(["bash", "-c", (sh if isinstance(sh, str) else sh["cmd"]).replace("/etc/vault-unseal",
@@ -125,12 +146,12 @@ if dist:
         psh = probe["ansible.builtin.shell"] if "ansible.builtin.shell" in probe else probe["ansible.builtin.command"]
         psh = (psh if isinstance(psh, str) else psh["cmd"]).replace("/etc/vault-unseal", os.path.join(W, "vu"))
         reg = probe["register"]
-        pi1 = {"pi1": {"_unseal_keys": {"content": base64.b64encode(b"k1\nk2\nk3\n").decode()}}}
+        shares = {"content": base64.b64encode(b"k1\nk2\nk3\n").decode()}
         def sent():
             r = subprocess.run(["bash", "-c", psh], env=env, capture_output=True, text=True)
             res = {"rc": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
             return (condition(probe.get("failed_when", f"{reg}.rc != 0"), **{reg: res}),
-                    condition(dist.get("when", True), **{reg: res, "hostvars": pi1}))
+                    condition(dist.get("when", True), **{reg: res, own["register"] if own else "_unseal_keys": shares}))
         check("pi2 holding the same shares: nothing sent", sent() == (False, False))
         os.remove(k)
         open(k, "w").write("k1\nk2\nOLD\n")

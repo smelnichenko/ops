@@ -200,6 +200,10 @@ if other:
     r = subprocess.run(["bash", "-c", sh2], capture_output=True, text=True)
     got = (r.returncode != 0, "REFUSED" in r.stdout + r.stderr, os.path.exists(os.path.join(tls, "ca-key.pem")))
     check("one there: refused, left as it is", got == (True, True, True), got)
+# both Pis' certificates signed on pi1 against one serial file: one at a time (at once, two read the same serial)
+sign = next((t for t in tasks if "-CAserial" in str(t.get("ansible.builtin.shell", ""))), {})
+check("the signing one Pi at a time (one serial file)", sign.get("throttle") == 1 and sign.get("delegate_to") == "pi1",
+      sign.get("throttle"))
 print("vault-csr: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

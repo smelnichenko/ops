@@ -332,6 +332,7 @@
         SANS: "{{ _sans | join(',') }}"
       register: _vault_signed
       delegate_to: pi1
+      throttle: 1  # one serial file (-CAserial): two at once read the same serial
       changed_when: true
       when: not _vault_cert.stat.exists
 
@@ -660,13 +661,6 @@
           ============================================================
       when: _init_pending.stat.exists
 
-    # read into memory for pi2, never written on the controller (a fetch left every share in its /tmp)
-    - name: The unseal keys, for pi2
-      ansible.builtin.slurp:
-        src: /etc/vault-unseal/unseal-keys
-      register: _unseal_keys
-      no_log: true
-
     - name: Unseal pi1 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh
       register: _pi1_unseal
@@ -748,6 +742,15 @@
     VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
+    # read on pi1 by this play itself, into memory, never written on the controller (a fetch left every share in its
+    # /tmp): a run limited to pi2 skips pi1's plays, and their results with them
+    - name: The unseal keys, read on pi1
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/unseal-keys
+      delegate_to: pi1
+      register: _unseal_keys
+      no_log: true
+
     # sent only when pi2's differ (pi1's compared by hash on the controller): a host answering as pi2 gets no shares
     # it does not hold already
     - name: Hash of the unseal keys pi2 holds
@@ -782,14 +785,24 @@
           mv "$part" /etc/vault-unseal/unseal-keys
           echo written
       args:
-        stdin: "{{ hostvars['pi1']._unseal_keys.content | b64decode }}"
+        stdin: "{{ _unseal_keys.content | b64decode }}"
         stdin_add_newline: false
       register: _pi2_keys
       changed_when: "'written' in _pi2_keys.stdout"
       when: >-
         (_pi2_keys_sum.stdout.split() | first | default(''))
-        != (hostvars['pi1']._unseal_keys.content | b64decode | hash('sha256'))
+        != (_unseal_keys.content | b64decode | hash('sha256'))
       no_log: true
+
+    # root's alone, read-only - also where its content matched already and nothing was sent (where it was found, or
+    # once sent: a first install's preview has none)
+    - name: Pi2's unseal keys root's alone, read-only
+      ansible.builtin.file:
+        path: /etc/vault-unseal/unseal-keys
+        owner: root
+        group: root
+        mode: '0400'
+      when: _pi2_keys_sum.rc == 0 or not ansible_check_mode
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh
