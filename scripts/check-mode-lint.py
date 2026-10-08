@@ -22,8 +22,10 @@ order, imports and static includes followed, as the preview runs it:
   - a block's and an include's own keywords (when, loop, vars) are read where they stand; a register lives on in its
     host's later plays and other hosts read it through hostvars (hostvars['h']['r'].stdout) - read across the
     playbook; a loop over a skipped looped register's results gets its items, each skipped - an item's field other
-    than what a skipped item holds (item, skipped, skip_reason...) is a read; strings are read as parsed (a subscript in
-    double quotes, r["stdout"], as one in single).
+    than what a skipped item holds (item, skipped, skip_reason...) is a read, a with_together's part over them
+    (item.0.f) too, and so is one read by index, as the first or last, by a filter or a json_query - the results
+    written r.results or r['results'], the register by its name or through hostvars; strings are read as parsed (a
+    subscript in double quotes, r["stdout"], as one in single).
 
 Usage: scripts/check-mode-lint.py                    (every step's playbook lines, and the playbooks a deploy task
                                                      hands {{.CLI_ARGS}} - a --check preview; exit 1 naming each read)
@@ -136,26 +138,52 @@ def strings(node):
             yield from strings(v)
 
 
+def name_of(reg):
+    """Register `reg` as a template names it: reg, or hostvars[...]['reg']."""
+    return rf"(?:(?<![\w.]){re.escape(reg)}|\[\s*['\"]{re.escape(reg)}['\"]\s*\])"
+
+
+# a field as a template reads it: .f or ['f'] / ["f"]
+FIELD = r"(?:\.([A-Za-z_]+)|\[\s*['\"]([A-Za-z_]+)['\"]\s*\])"
+# a json_query over it (Ansible's, community.general's): the fields its query names
+JSON_QUERY = r"\s*\|\s*(?:community\.general\.)?json_query\(\s*['\"]([^'\"]*)['\"]"
+
+
+def query_fields(query):
+    """The fields a JMESPath query reads - its names, a literal's aside."""
+    return re.findall(r"[A-Za-z_]\w*", re.sub(r"`[^`]*`|'[^']*'", "", query))
+
+
 def read_of(reg, text, field=None):
-    """[(field, read with | default)] of register `reg` in `text`: reg.f, reg['f'], hostvars[...]['reg'].f - with
-    `field`, only reads of that field."""
-    out = []
-    for m in re.finditer(rf"(?:(?<![\w.]){re.escape(reg)}|\[\s*['\"]{re.escape(reg)}['\"]\s*\])"
-                         rf"(?:\.([A-Za-z_]+)|\[\s*['\"]([A-Za-z_]+)['\"]\s*\])", str(text)):
+    """[(field, read with | default)] of register `reg` in `text`: reg.f, reg['f'], hostvars[...]['reg'].f, a
+    json_query of it - with `field`, only reads of that field."""
+    out, text = [], str(text)
+    for m in re.finditer(name_of(reg) + FIELD, text):
         f = m.group(1) or m.group(2)
         if field is None or f == field:
             out.append((f, bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+    for m in re.finditer(name_of(reg) + JSON_QUERY, text):
+        for f in query_fields(m.group(1))[:1]:
+            if field is None or f == field:
+                out.append((f, False))
     return out
 
 
 def item_reads(reg, text):
     """[(field, read with | default)] of the items of looped register `reg`'s results in `text`, read otherwise than as
-    a loop's item: one by its index (reg.results[0].f), each by a filter naming the field (map(attribute=...),
-    selectattr, rejectattr, sum/sort/groupby/unique/min/max(attribute=...)), each by a Jinja for over them."""
+    a loop's item: one by its index (reg.results[0].f, reg['results'][0]['f']) or as its first or last, each by a filter
+    naming the field (map(attribute=...), selectattr, rejectattr, sum/sort/groupby/unique/min/max(attribute=...)), by a
+    json_query, by a Jinja for over them - the register by its name or through hostvars."""
     text, out = str(text), []
-    res = rf"(?<![\w.]){re.escape(reg)}\.results"
-    for m in re.finditer(res + r"\[\s*-?\d+\s*\](?:\.([A-Za-z_]+)|\[\s*['\"]([A-Za-z_]+)['\"]\s*\])", text):
+    # its results as written: .results or ['results'], the register by its name or through hostvars
+    res = name_of(reg) + r"(?:\.results|\[\s*['\"]results['\"]\s*\])"
+    # one by its index, or its first or last
+    for m in re.finditer(res + r"\[\s*-?\d+\s*\]" + FIELD, text):
         out.append((m.group(1) or m.group(2), bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+    for m in re.finditer(r"\(\s*" + res + r"\s*\|\s*(?:first|last)\s*\)" + FIELD, text):
+        out.append((m.group(1) or m.group(2), bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+    for m in re.finditer(res + JSON_QUERY, text):
+        out.extend((f, False) for f in query_fields(m.group(1)))
     for m in re.finditer(res + r"\s*\|\s*(?:(?:selectattr|rejectattr)\(\s*|(?:map|sum|sort|groupby|unique|min|max)"
                          r"\([^)]*?attribute\s*=\s*)['\"]([A-Za-z_]+)", text):
         out.append((m.group(1), False))
@@ -203,10 +231,19 @@ def lint(path, select=None, text=None):
                 loop = str(t.get("loop", "")) + str(t.get("with_items", ""))
                 over = [empty for reg, empty, looped in reads if looped and read_of(reg, loop, "results")]
                 var = (t.get("loop_control") or {}).get("loop_var", "item")
+                items = set()  # the names a skipped item goes by in this task
                 if over:
                     reads.append((var, over[0], False))
+                    items.add(var)
+                # with_together: its k-th list a skipped looped register's results - each item's k-th part (item.k)
+                together = t.get("with_together")
+                for k, part in enumerate(together if isinstance(together, list) else []):
+                    hit = [empty for reg, empty, looped in reads if looped and read_of(reg, str(part), "results")]
+                    if hit:
+                        reads.append((f"{var}.{k}", hit[0], False))
+                        items.add(f"{var}.{k}")
                 for reg, empty, looped in reads:
-                    fine = FINE | ({"item", "false_condition", "ansible_loop_var"} if over and reg == var else set()) \
+                    fine = FINE | ({"item", "false_condition", "ansible_loop_var"} if reg in items else set()) \
                         | ({"results"} if looped else set())
                     hit = next((f for x in texts for f, defaulted in read_of(reg, x)
                                 if f not in fine and (empty or not defaulted)), None)

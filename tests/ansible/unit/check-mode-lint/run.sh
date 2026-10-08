@@ -91,6 +91,30 @@ check("... its results' count, each item's own item, a Jinja for reading item al
       play(LOOPED + READ.replace("_p.stdout", "_p.results | length"))
       + play(LOOPED + READ.replace("_p.stdout", "_p.results | map(attribute='item') | list"))
       + play(LOOPED + READ.replace("{{ _p.stdout }}", "{% for r in _p.results %}{{ r.item }}{% endfor %}")), [])
+# the reads review 7 found unseen: its first or last item, results by subscript, a json_query, a with_together's item
+check("... its first result's field ((results | first).f): named",
+      play(LOOPED + READ.replace("_p.stdout", "(_p.results | first).stdout")), ["_p.results[].stdout"])
+check("... its results by subscript (r['results'][0].f, r[\"results\"][0]['f']): named",
+      play(LOOPED + READ.replace("_p.stdout", "_p['results'][0].stdout"))
+      + play(LOOPED + "    - name: read\n      ansible.builtin.debug:\n        msg: '{{ _p[\"results\"][0][\"rc\"] }}'\n"),
+      ["_p.results[].stdout", "_p.results[].rc"])
+check("... a json_query over its results: named; over a register not looped: named",
+      play(LOOPED + READ.replace("_p.stdout", "_p.results | json_query('[].stdout')"))
+      + play(PROBE + READ.replace("_p.stdout", "_p | community.general.json_query('stdout_lines')")),
+      ["_p.results[].stdout", "_p.stdout_lines"])
+check("... a json_query of each item's own item: not named",
+      play(LOOPED + READ.replace("_p.stdout", "_p.results | json_query('[].item')")), [])
+TOGETHER = """    - name: together
+      ansible.builtin.debug:
+        msg: "{{ item.0.stdout }} {{ item.1 }}"
+      with_together:
+        - "{{ _p.results }}"
+        - [a, b]
+"""
+check("... a with_together over its results: the item's skipped part read (item.0.stdout) named, the other not",
+      play(LOOPED + TOGETHER), ["item.0.stdout"])
+check("... the same reading item.0.item alone: not named", play(LOOPED + TOGETHER.replace("item.0.stdout", "item.0.item")),
+      [])
 # a register's name inside another one's (x._p, hostvars-free): no read of it
 check("another object's field named like the register (x._p.stdout): not named",
       play(PROBE + READ.replace("_p.stdout", "x._p.stdout")), [])
@@ -194,6 +218,12 @@ check("a loop over a skipped register's results reading item.stdout: named",
       play_full("- hosts: a\n  tasks:\n" + LOOPED + "- hosts: b\n  tasks:\n    - name: use\n"
                 "      ansible.builtin.copy:\n        content: '{{ item.stdout }}'\n        dest: /x\n"
                 "      loop: \"{{ hostvars['a']['_p'].results | default([]) }}\"\n"), ["item.stdout"])
+check("its results read through hostvars by index or a filter: named",
+      play_full("- hosts: a\n  tasks:\n" + LOOPED + "- hosts: b\n  tasks:\n"
+                + READ.replace("_p.stdout", "hostvars['a']['_p'].results[0].stdout"))
+      + play_full("- hosts: a\n  tasks:\n" + LOOPED + "- hosts: b\n  tasks:\n"
+                  + READ.replace("_p.stdout", "hostvars['a']['_p'].results | map(attribute='rc') | list")),
+      ["_p.results[].stdout", "_p.results[].rc"])
 check("the same loop reading item.item alone: not named",
       play_full("- hosts: a\n  tasks:\n" + LOOPED + "- hosts: b\n  tasks:\n    - name: use\n"
                 "      ansible.builtin.debug:\n        msg: '{{ item.item }}'\n"
