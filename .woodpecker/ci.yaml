@@ -40,9 +40,9 @@ steps:
           limits: { cpu: 1000m, memory: 512Mi }
 
   # the tests' PromQL as Prometheus evaluates it (the unit harnesses' stubs answer whatever is asked) - on the version
-  # production runs
+  # production runs, pinned by its digest (the tag's manifest list, read 2026-10-08): a tag moves
   - name: promql
-    image: quay.io/prometheus/prometheus:v3.10.0
+    image: quay.io/prometheus/prometheus:v3.10.0@sha256:7571a304e67fbd794be02422b13627dc7de822152f74e99e2bef95d29eceecde
     commands:
       - promtool test rules tests/promql/*.test.yml
     backend_options:
