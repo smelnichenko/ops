@@ -303,10 +303,14 @@ done
 # a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
 # between that read and the TERM (here as -n's named kill runs: the job forks it then) that lost the TERM - deaf at it,
 # at its default half a second later - is sent it again, ends at once; read so, it was KILLed at the grace, said
+# (the job catches the TERM and waits for its child: the child's parent stays in the job - only its start says it was
+# there when the TERM went)
 cat > "$W/gap-job" <<'JOB'
-trap 'bash -c "trap \"\" TERM; echo \$\$ > \"\$0\"; sleep 0.5; trap - TERM; sleep 30; :" "$1.child" &' USR1
+trap 'bash -c "trap \"\" TERM; echo \$\$ > \"\$0\"; sleep 0.5; trap - TERM; sleep 30; :" "$1.child" & child=$!' USR1
+trap 'term=1' TERM
 echo $$ > "$1"
-for _ in $(seq 600); do sleep 0.1; done
+for _ in $(seq 600); do [ -n "${child:-}" ] && [ -n "${term:-}" ] && break; sleep 0.1; done
+wait "${child:-}"
 JOB
 setsid bash "$W/gap-job" "$W/gap.pid" < /dev/null > /dev/null 2>&1 & s=$!
 sessions+=("$s")

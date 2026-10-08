@@ -28,8 +28,8 @@ GIT = {"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata
                 "template": {}}}
 LIST = {"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata": {"name": "x", "namespace": "argocd"},
         "spec": {"generators": [{"list": {"elements": [{"env": "old"}]}}], "template": {}}}
-def tree(shape):
-    d = os.path.join(W, shape)
+def tree(shape, name=None):
+    d = os.path.join(W, name or shape)
     os.makedirs(os.path.join(d, "argocd", "apps"), exist_ok=True)
     for chart in ("data", "apps", "mesh"):
         doc = copy.deepcopy(GIT if shape == "git" else LIST)
@@ -59,7 +59,7 @@ t = next(t for t in book["tasks"] if t.get("name") == "Remove env from Applicati
 sh = t["ansible.builtin.shell"]
 res = {}
 for shape in ("git", "list", "other"):
-    d = tree(shape + "-d")
+    d = tree(shape, shape + "-d")
     if shape != "git":
         for f in os.listdir(os.path.join(d, "argocd", "apps")):
             doc = copy.deepcopy(LIST if shape == "list" else LIST)

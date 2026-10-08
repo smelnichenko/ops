@@ -176,8 +176,12 @@ if taken and len(probes) == 2:
            judged((401, "invalid_client", "Invalid client credentials"), (401, "invalid_grant", "Invalid user credentials")),
            judged(WRONG, WRONG), judged(WRONG, (401, "invalid_client", "Invalid client credentials")),
            judged((400, "x", "y"), (401, "unauthorized_client", "Invalid client or Invalid client credentials")),
-           judged(WRONG, (401, None, None)), judged(WRONG, (400, "invalid_request", "Missing parameter"))],
-          [True, True, False, False, False, False, False])
+           judged(WRONG, (401, None, None)), judged(WRONG, (400, "invalid_request", "Missing parameter")),
+           # the same answer to both, neither "Invalid client" (a Keycloak judging the grant before the secret): proves
+           # nothing of the secret - refused
+           judged((400, "unauthorized_client", "Client not allowed for direct access grants"),
+                  (400, "unauthorized_client", "Client not allowed for direct access grants"))],
+          [True, True, False, False, False, False, False, False])
     check("the answers said (status, error), the secret not", ("_sso_answers" in str(taken["ansible.builtin.assert"]
                                                                .get("fail_msg")), summary is not None and
                                                                summary.get("no_log") is not True), (True, True))
