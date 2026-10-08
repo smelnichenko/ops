@@ -197,7 +197,7 @@ check("a run-time token on another program's argv: named; on a builtin's, a desc
        bool(argv_reads('x --token="${TOKEN}" y')),
        bool(argv_reads('ssh -p "$port" host')),
        bool(argv_reads('docker login --password-stdin -u u < "$f"')),
-       # review 7's: another header's scheme, curl's user:password, vault login's token, a URL's credentials
+       # once missed: another header's scheme, curl's user:password, vault login's token, a URL's credentials
        bool(argv_reads('curl -sf -H "Authorization: token $t" "$api"')),
        bool(argv_reads('curl -sf -u "$user:$pass" "$api"')),
        bool(argv_reads('curl -sf --user admin:"$pw" "$api"')),

@@ -91,7 +91,7 @@ check("... its results' count, each item's own item, a Jinja for reading item al
       play(LOOPED + READ.replace("_p.stdout", "_p.results | length"))
       + play(LOOPED + READ.replace("_p.stdout", "_p.results | map(attribute='item') | list"))
       + play(LOOPED + READ.replace("{{ _p.stdout }}", "{% for r in _p.results %}{{ r.item }}{% endfor %}")), [])
-# the reads review 7 found unseen: its first or last item, results by subscript, a json_query, a with_together's item
+# reads it once missed: its first or last item, results by subscript, a json_query, a with_together's item
 check("... its first result's field ((results | first).f): named",
       play(LOOPED + READ.replace("_p.stdout", "(_p.results | first).stdout")), ["_p.results[].stdout"])
 check("... its results by subscript (r['results'][0].f, r[\"results\"][0]['f']): named",

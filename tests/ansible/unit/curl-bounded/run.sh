@@ -2,7 +2,7 @@
 # Every curl a production playbook runs is bounded: its whole time (--max-time / -m), or a stall (--speed-time, with
 # --speed-limit, for a transfer whose size sets its time - a 4 GiB backup part), or the task's own (Ansible's timeout:,
 # a timeout(1) before it). curl's default is none: a connection that stalls - an answer never sent, a gateway holding
-# it - held its task, an until's retries never reached, the play with it (review 7: 20 of 31 had no bound; setup-istio's
+# it - held its task, an until's retries never reached, the play with it (20 of 31 had no bound; setup-istio's
 # --max-time removed, nothing failed).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1

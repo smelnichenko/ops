@@ -189,7 +189,7 @@ wait "$o" 2> /dev/null
 if mine "$s"; then stop_groups 1 "$s" > /dev/null; fi
 wait "$s" 2> /dev/null
 # a TERM the job never got (a job just forked loses one: its signals still the parent's handlers - the step's checks'
-# stop then waited out their bound; review 7, 3 of 24 under load): sent again while it runs with TERM neither caught
+# stop then waited out their bound, 3 of 24 under load): sent again while it runs with TERM neither caught
 # nor ignored - alive so, the TERM never reached it. Here a job deaf at the first TERM, at its default after: it ends of
 # that TERM at once - not KILLed after the grace
 set -m

@@ -40,7 +40,7 @@ OFF_ARGS = re.compile(OFF.pattern + r"|(^|[^a-z0-9-])(?-i:-F)", re.I)
 forms = ["-o StrictHostKeyChecking=no", "-o StrictHostKeyChecking=false", "-o 'StrictHostKeyChecking no'",
          "-o StrictHostKeyChecking=accept-new", "-o UserKnownHostsFile=/dev/null", "-o GlobalKnownHostsFile=/dev/null",
          "-o KnownHostsCommand=/bin/echo", "-o \"StrictHostKeyChecking off\"",
-         # a tab between, quotes around the value, no space after -o (ssh reads each as =no - review 7)
+         # a tab between, quotes around the value, no space after -o (ssh reads each as =no)
          "-o StrictHostKeyChecking\tno", "-o StrictHostKeyChecking='no'", "-oStrictHostKeyChecking=no",
          "-o UserKnownHostsFile='/dev/null'"]
 check("every spelling of an unchecked key read as one", [f for f in forms if not OFF.search(f)], [])

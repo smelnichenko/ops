@@ -66,7 +66,7 @@ if sso:
            for k, c in ((True, False), (False, False), (True, True))], [True, False, False])
 # before the Secret is written and the install runs: the client secret this run writes is set, and is the one Argo CD
 # signs in with now while argocd-secret holds it (production's earlier shape) - empty or another, single sign-on broke,
-# found only after the Helm upgrade had switched to it (review 7)
+# found only after the Helm upgrade had switched to it
 pre = [t for t in tasks if "ansible.builtin.assert" in t and "argocd_keycloak_client_secret" in str(t["ansible.builtin.assert"])]
 now = next((t for t in tasks if (t.get("kubernetes.core.k8s_info") or {}).get("name") == "argocd-secret"), None)
 check("the client secret checked before its Secret is written and before the install, argocd-secret read before",

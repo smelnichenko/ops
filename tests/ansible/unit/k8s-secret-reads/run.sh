@@ -2,7 +2,7 @@
 # A Kubernetes Secret's data never in Ansible's output: every task that reads one (k8s_info of kind Secret, registered),
 # writes one (k8s of kind Secret - its arguments hold the data) or prints one (kubectl get secret with an output other
 # than its name) is no_log. Ansible prints a task's result at -v and on a failure: the Velero credentials' wait printed
-# their S3 keys, a Keycloak diagnosis the Secret's whole data, a CI diagnosis the registry's credentials (review 7). A
+# their S3 keys, a Keycloak diagnosis the Secret's whole data, a CI diagnosis the registry's credentials. A
 # read that prints only what is public - a certificate, a listing of keys - is named below with its reason, and each
 # one named must still be such a task (none left behind).
 set -u
