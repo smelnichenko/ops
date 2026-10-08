@@ -23,5 +23,10 @@ seen() {  # seen <kind>: what git status lists in a repository of this .gitignor
   git -C "$W/r" status --porcelain --untracked-files=all | grep -c 'deploy/ansible/venv'
 }
 check "the venv ignored as a directory and as a symlink" "$(seen directory) $(seen symlink)" "0 0"
+# what the venv is built from pinned, each package to one version: an unpinned rebuild (deploy:install after the venv
+# was lost) got ansible-core 2.21.5 in place of the 2.20.3 every full run had proved
+unpinned=$(grep -vE '^\s*(#|$)' deploy/ansible/requirements.txt | grep -vcE '^[A-Za-z0-9._-]+==[0-9][0-9A-Za-z.]*\s*$')
+check "every requirement of the venv pinned (==), ansible-core among them" \
+  "$unpinned $(grep -cE '^ansible-core==' deploy/ansible/requirements.txt)" "0 1"
 echo "venv-ignored: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
