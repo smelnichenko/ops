@@ -626,11 +626,12 @@
       register: _forgejo_cfg
       notify: [Database port changed, Restart Forgejo]
 
+    # any server: setup-pi-services.yml's unit says why (PgBouncer's first connection's parameters, kept)
     - name: Update Keycloak KC_DB_URL
       ansible.builtin.lineinfile:
         path: /etc/systemd/system/keycloak.service
         regexp: 'Environment=KC_DB_URL='
-        line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:{{ _db_port }}/keycloak"
+        line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:{{ _db_port }}/keycloak?targetServerType=any"
       register: _keycloak_cfg
       notify: [Database port changed, Restart Keycloak]
 

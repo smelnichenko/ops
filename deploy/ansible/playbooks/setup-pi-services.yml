@@ -661,6 +661,10 @@
       notify: Restart Keycloak
       no_log: true
 
+    # targetServerType=any: PgBouncer hands every client the startup parameters of its first server connection, never
+    # read again - one made to the replica (HAProxy's servers start up, before their first check) says in_hot_standby=on
+    # for good, and Keycloak's default (primary) then refused every connection until PgBouncer restarted. HAProxy's
+    # /primary check picks the primary. setup-patroni.yml writes the same URL when the port changes
     - name: Install Keycloak systemd service
       ansible.builtin.copy:
         dest: /etc/systemd/system/keycloak.service
@@ -680,7 +684,7 @@
           User=keycloak
           Group=keycloak
           Environment=KC_DB=postgres
-          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host_effective }}/keycloak
+          Environment=KC_DB_URL=jdbc:postgresql://{{ keycloak_db_host_effective }}/keycloak?targetServerType=any
           Environment=KC_DB_USERNAME=postgres
           EnvironmentFile=/etc/keycloak/secrets.env
           Environment=KC_HOSTNAME=auth.pmon.dev
