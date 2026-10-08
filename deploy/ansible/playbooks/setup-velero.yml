@@ -454,9 +454,10 @@
     git_mirror_known_hosts: "/var/lib/git-mirror/known_hosts"
     # Forgejo read with a token of read:repository and read:organization alone, never the admin's password - that sat
     # in the old mirror's origin URL, on git-remote-https's argv at each fetch (any local user reads those in /proc).
-    # The token in a file of the mirror's user's alone: git's credential helper reads it (the credential protocol),
-    # the sync's API call takes it on curl's config
-    git_mirror_credentials_file: "/var/lib/git-mirror/credentials"
+    # The token in a file of the mirror's user's alone: a credential helper of the sync's own hands it to git (the
+    # credential protocol: no command line) - one that answers "get" alone: git's store helper erases what it holds
+    # on any 401 (a blip), and every sync after failed; the sync's API call takes it on curl's config
+    git_mirror_token_file: "/var/lib/git-mirror/token"
     # each repository pushed to a bare one of its own on the Pi at the VIP; the run's last-success beside them
     git_mirror_pi_dir: /mnt/backups/git-mirror
     _git_mirror_owner: "{{ offsite_backup_user | default('sm') }}"
@@ -467,9 +468,7 @@
     # the play fails, no token made
     _git_mirror_probe: |
       set -uo pipefail
-      [ -s "$CREDS" ] || { echo "NO TOKEN"; exit 0; }
-      token=$(python3 -c 'import sys, urllib.parse
-      print(urllib.parse.urlsplit(open(sys.argv[1]).read().strip()).password or "")' "$CREDS") || token=""
+      token=$(cat "$TOKEN_FILE" 2> /dev/null) || token=""
       [ -n "$token" ] || { echo "NO TOKEN"; exit 0; }
       code=$(curl -s --max-time 30 -o /dev/null -w '%{http_code}' \
         -K <(printf 'header = "Authorization: token %s"\n' "$token") "$API?limit=1")
@@ -497,7 +496,7 @@
         cmd: "{{ _git_mirror_probe }}"
         executable: /bin/bash
       environment:
-        CREDS: "{{ git_mirror_credentials_file }}"
+        TOKEN_FILE: "{{ git_mirror_token_file }}"
         API: "{{ _git_mirror_api }}"
       become: true
       become_user: "{{ _git_mirror_owner }}"
@@ -558,11 +557,12 @@
         - not ansible_check_mode
       block:
         # written on ten from the task's stdin (copy's content passes a temp file on the controller first)
-        - name: The token where git's credential helper reads it
+        - name: The token where the sync's credential helper reads it
           ansible.builtin.command:
             argv: [install, -m, "0600", -o, "{{ _git_mirror_owner }}", -g, "{{ _git_mirror_owner }}", /dev/stdin,
-                   "{{ git_mirror_credentials_file }}"]
-            stdin: "https://{{ git_mirror_user }}:{{ _git_mirror_token.json.sha1 }}@{{ git_mirror_host }}"
+                   "{{ git_mirror_token_file }}"]
+            stdin: "{{ _git_mirror_token.json.sha1 }}"
+            stdin_add_newline: false
           changed_when: true
           no_log: true
 
@@ -571,7 +571,7 @@
             cmd: "{{ _git_mirror_probe }}"
             executable: /bin/bash
           environment:
-            CREDS: "{{ git_mirror_credentials_file }}"
+            TOKEN_FILE: "{{ git_mirror_token_file }}"
             API: "{{ _git_mirror_api }}"
           become: true
           become_user: "{{ _git_mirror_owner }}"
@@ -652,7 +652,7 @@
           # writes last-success (its time) on the Pi, last.
           set -uo pipefail
           dir={{ git_mirror_dir }}
-          creds={{ git_mirror_credentials_file }}
+          tokenf={{ git_mirror_token_file }}
           api={{ _git_mirror_api }}
           pi={{ _git_mirror_pi }}
           pidir={{ git_mirror_pi_dir }}
@@ -661,10 +661,10 @@
           ssh_opts=(-o BatchMode=yes -o HostKeyAlias={{ git_mirror_host_alias }} -o UserKnownHostsFile={{ git_mirror_known_hosts }}
                     -o StrictHostKeyChecking=yes -i {{ offsite_backup_ssh_key | default('/home/sm/.ssh/id_ed25519') }})
           export GIT_SSH_COMMAND="ssh ${ssh_opts[*]}"
-          helper=(-c credential.helper= -c "credential.helper=store --file=$creds")
-          token=$(python3 -c 'import sys, urllib.parse
-          print(urllib.parse.urlsplit(open(sys.argv[1]).read().strip()).password or "")' "$creds") || token=""
-          [ -n "$token" ] || { say "FAILED: no token in $creds"; exit 1; }
+          # git's other helpers reset; this one answers "get" alone - storing or erasing (after a 401) changes nothing
+          helper=(-c credential.helper= -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username={{ git_mirror_user }}; echo \"password=\$(cat $tokenf)\"; }; f")
+          token=$(cat "$tokenf" 2> /dev/null) || token=""
+          [ -n "$token" ] || { say "FAILED: no token in $tokenf"; exit 1; }
           repos="" page=1
           while :; do
             out=$(curl -sf --max-time 60 -K <(printf 'header = "Authorization: token %s"\n' "$token") \

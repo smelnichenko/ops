@@ -3,7 +3,8 @@
 # production's GitOps repository lives in (setup-argocd's argocd_root_repo) - it mirrored forgejo_admin/monitor, a
 # repository production does not have, and its daily job had failed since July unnoticed. Forgejo read with a token of
 # read:repository and read:organization alone (never the admin's password, which sat in the old origin URL), written
-# on ten from stdin into a 0600 file git's credential helper reads; the token kept while it reads the organisation's
+# on ten from stdin into a 0600 file a credential helper of its own reads - one that answers git's "get" alone: git's
+# store helper erases what it holds on any 401 (a blip), and every sync after failed; the token kept while it reads the organisation's
 # repositories - a 401/403 (or none) makes a new one, a network failure proves nothing and fails the play, minting
 # none; a new one that does not read deleted again; the older ones deleted once it reads. The sync runs as the mirror's
 # user and is proven at deploy. The daily sync, run here with curl, git, ssh and logger stubs: the organisation's
@@ -97,12 +98,12 @@ check("the probe: 200 kept, 401/403/none replaced; no answer or a 5xx fails the 
 # the probe's script itself: the token from the file, on curl's config
 script = R(play["vars"]["_git_mirror_probe"])
 creds = os.path.join(W, "creds")
-open(creds, "w").write("https://admin:0123456789abcdef0123456789abcdef01234567@git.pmon.dev\n")
+open(creds, "w").write("0123456789abcdef0123456789abcdef01234567")
 def probe_run(code, have=True):
     os.path.exists(os.path.join(W, "curl-calls")) and os.remove(os.path.join(W, "curl-calls"))
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=dict(
         os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, PROBE_CODE=code,
-        CREDS=creds if have else os.path.join(W, "none"), API="https://git.pmon.dev/api/v1/orgs/x/repos"))
+        TOKEN_FILE=creds if have else os.path.join(W, "none"), API="https://git.pmon.dev/api/v1/orgs/x/repos"))
     calls = [json.loads(x) for x in open(os.path.join(W, "curl-calls"))] if os.path.exists(os.path.join(W, "curl-calls")) else []
     return r.stdout.strip(), [("0123456789abcdef" in " ".join(c["argv"]), "token 0123456789abcdef" in c["config"]) for c in calls]
 check("the probe's script: HTTP 200 / 401 said, the token on curl's config only; no file, NO TOKEN",
@@ -113,7 +114,7 @@ resc = block.get("rescue") or []
 check("a new token that does not read: deleted again (its id), the play failed",
       [(t.get("ansible.builtin.uri") or {}).get("method") for t in resc] + [("ansible.builtin.fail" in t) for t in resc],
       ["DELETE", None, False, True])
-write = next(t for t in block["block"] if "credential helper reads it" in t.get("name", ""))
+write = next(t for t in block["block"] if "helper reads it" in t.get("name", ""))
 check("the token written on ten from stdin (no copy content: a temp file on the controller), 0600, no_log",
       ("ansible.builtin.copy" in write, "/dev/stdin" in str(write), '"0600"' in json.dumps(write) or "0600" in str(write),
        write.get("no_log")), (False, True, True, True))
@@ -130,7 +131,7 @@ check("the sync as the mirror's user; run once at deploy, a failure failing the 
       (True, "started", [True, False]))
 # the daily sync, as the playbook writes it
 sync = next(t for t in tasks if (t.get("ansible.builtin.copy") or {}).get("dest") == "/usr/local/bin/offsite-backup-sync.sh")
-body = R(sync["ansible.builtin.copy"]["content"]).replace(R("{{ git_mirror_credentials_file }}"), creds) \
+body = R(sync["ansible.builtin.copy"]["content"]).replace(R("{{ git_mirror_token_file }}"), creds) \
     .replace(R("{{ git_mirror_dir }}"), os.path.join(W, "mirror"))
 open(os.path.join(W, "sync.sh"), "w").write(body)
 def run(pages, existing=(), **env):
@@ -160,8 +161,22 @@ check("two repositories (one new): the new cloned, both origins set bare, fetche
        ["infra.git", "ops.git"], 1))
 check("its git: no prompt (none to answer), the Pi's host keys checked, the credential helper reset before its own",
       (all("PROMPT=0" in l for l in g), all("StrictHostKeyChecking=yes" in l and "UserKnownHostsFile=" in l for l in push),
-       all(" -c credential.helper= -c credential.helper=store --file=" in l for l in g if " fetch " in l or " clone " in l)),
+       all(" -c credential.helper= -c credential.helper=!" in l for l in g if " fetch " in l or " clone " in l)),
       (True, True, True))
+# the helper as git runs it (its action an argument): "get" answers the token; "erase" and "store" (git's after a 401,
+# a success) leave the file as it is - no store helper anywhere
+fetch_line = next((l for l in g if " fetch " in l), "")
+helper = re.search(r"credential\.helper=(!f\(\) \{.*?\}; f)(?= )", fetch_line)  # as git is given it
+def helper_run(action):
+    r = subprocess.run(["sh", "-c", helper.group(1)[1:] + " " + action], input="protocol=https\nhost=git.pmon.dev\n\n",
+                       capture_output=True, text=True)
+    return r.stdout, open(creds).read()
+check("its credential helper: get answers the token; erase and store leave it be; git's store helper used nowhere",
+      (helper is not None and helper_run("get"), helper is not None and helper_run("erase")[1],
+       helper is not None and helper_run("store")[1], "store --file" in body or "store --file" in text),
+      ((f"username=admin\npassword=0123456789abcdef0123456789abcdef01234567\n",
+        "0123456789abcdef0123456789abcdef01234567"), "0123456789abcdef0123456789abcdef01234567",
+       "0123456789abcdef0123456789abcdef01234567", False))
 check("the token on no command line (curl's config, git's credential helper)",
       any("0123456789abcdef" in l for l in g + sh) or any("0123456789abcdef" in json.loads(c)["argv"].__str__() for c in cu),
       False)
