@@ -1,11 +1,18 @@
 #!/bin/bash
 # The three playbooks that pause Patroni around their work (setup-consul, setup-patroni, upgrade-patroni) - their
-# pause, resume and not-paused-already tasks as the files hold them, consul (its KV with ModifyIndex and check-and-set)
-# and patronictl stubs: each pause puts a marker naming the playbook and the time, check-and-set - one only: a marker
-# there already (another run holding the cluster paused, or one cut short) refuses the run before any pause, and
-# is left as it is; a pause that fails deletes its own marker; the resume deletes the marker only if it is still its
-# own (one put since is left). A pause the next run finds names the run that left it - a Ctrl-C skips Ansible's
-# always: - asking whether it still runs; a marker of another shape is not echoed.
+# not-paused check, pause and resume as the files hold them, against consul and patronictl stubs that answer as the real
+# ones do: Consul's KV (ModifyIndex, check-and-set - a CAS delete of a missing key succeeds, measured on Consul 1.20.6)
+# holding Patroni's DCS (the config's pause, each member's own), and patronictl 4.1's answers, its exit 0 on a failed
+# pause or resume among them (ctl.py toggle_pause, read on pi1).
+#
+# Each pause puts a marker naming the playbook, the time and a nonce, check-and-set - one only: a marker there already
+# refuses the run before any pause. A pause is proven by the DCS - the config and every member paused - not by
+# patronictl's exit or its "Success": one not proven undoes what it may have done, then deletes its marker; one someone
+# else made meanwhile ("already paused") is left as it is. The resume deletes the run's own marker first - a marker not
+# its own, or none, means the pause is not its own: refused, nothing resumed - then resumes, proven the same way; one
+# that does not take puts a marker naming the run again. The not-paused check refuses a paused config or member and a
+# DCS it cannot read, naming the run a marker names (a Ctrl-C skips Ansible's always:); a marker of another shape is not
+# echoed.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -13,51 +20,116 @@ PY=python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/kv"
-# consul kv: a key's value in kv/<key>, its ModifyIndex in kv/<key>.idx (a counter in kv/.n)
+printf 'scope: pg\nname: pi1\n' > "$W/patroni.yml"
+# consul kv: a key's value in kv/<key>, its ModifyIndex in kv/<key>.idx, its name in kv/<key>.key (a counter in kv/.n)
 cat > "$W/bin/consul" <<'STUB'
-#!/bin/bash
-echo "consul $*" >> "$W/calls"
-[ "$1" = kv ] || exit 2
-op=$2; shift 2
-cas= idx=
-while [[ ${1:-} == -* ]]; do
-  case "$1" in -cas) cas=1 ;; -modify-index=*) idx=${1#*=} ;; -detailed) det=1 ;; esac; shift
-done
-k=$W/kv/${1//\//_}
-case "$op" in
-  put)
-    if [ -n "$cas" ] && [ "$idx" = 0 ] && [ -e "$k" ]; then echo "Error! Did not write to $1: CAS failed" >&2; exit 1; fi
-    n=$(( $(cat "$W/kv/.n" 2> /dev/null || echo 10) + 1 )); echo $n > "$W/kv/.n"
-    printf '%s' "$2" > "$k"; echo $n > "$k.idx" ;;
-  get)
-    [ -e "$k" ] || { echo "Error! No key exists at: $1" >&2; exit 1; }
-    if [ -n "${det:-}" ]; then echo "Key                 $1"; echo "ModifyIndex         $(cat "$k.idx")"
-      echo "Value               $(cat "$k")"; else cat "$k"; echo; fi ;;
-  delete)
-    if [ -n "$cas" ] && { [ ! -e "$k" ] || [ "$(cat "$k.idx")" != "$idx" ]; }; then
-      echo "Error! Did not delete key $1: CAS failed" >&2; exit 1
-    fi
-    rm -f "$k" "$k.idx" ;;
-esac
+#!/usr/bin/env python3
+import os, sys
+W = os.environ["W"]
+open(os.path.join(W, "calls"), "a").write("consul " + " ".join(sys.argv[1:]) + "\n")
+if os.environ.get("CONSUL_DOWN"):
+    sys.exit("Error querying Consul agent: Get \"http://127.0.0.1:8500/v1/kv/x\": dial tcp 127.0.0.1:8500: connect: "
+             "connection refused")
+a = sys.argv[1:]
+assert a[0] == "kv", a
+op, a = a[1], a[2:]
+flags = {}
+while a and a[0].startswith("-"):
+    k, _, v = a.pop(0).lstrip("-").partition("=")
+    flags[k] = v
+KV = os.path.join(W, "kv")
+f = lambda key: os.path.join(KV, key.replace("/", "_"))  # noqa: E731
+def put(key, value):
+    n = int(open(os.path.join(KV, ".n")).read()) + 1 if os.path.exists(os.path.join(KV, ".n")) else 11
+    open(os.path.join(KV, ".n"), "w").write(str(n))
+    open(f(key), "w").write(value); open(f(key) + ".idx", "w").write(str(n)); open(f(key) + ".key", "w").write(key)
+if op == "put":
+    key, value = a
+    if "cas" in flags and flags["modify-index"] == "0" and os.path.exists(f(key)):
+        sys.exit(f"Error! Did not write to {key}: CAS performed with index=0 and key already exists.")
+    put(key, value)
+    print(f"Success! Data written to: {key}")
+elif op == "get" and "recurse" in flags:
+    for name in sorted(os.listdir(KV)):
+        if name.endswith(".key") and open(os.path.join(KV, name)).read().startswith(a[0]):
+            key = open(os.path.join(KV, name)).read()
+            print(f"{key}:{open(f(key)).read()}")
+elif op == "get":
+    key = a[0]
+    if not os.path.exists(f(key)):
+        sys.exit(f"Error! No key exists at: {key}")
+    if "detailed" in flags:
+        print(f"CreateIndex      {open(f(key) + '.idx').read()}\nFlags            0\nKey              {key}\n"
+              f"LockIndex        0\nModifyIndex      {open(f(key) + '.idx').read()}\nSession          -\n"
+              f"Value            {open(f(key)).read()}")
+    else:
+        print(open(f(key)).read())
+elif op == "delete":
+    key = a[0]
+    if "cas" in flags and os.path.exists(f(key)) and open(f(key) + ".idx").read() != flags["modify-index"]:
+        sys.exit(f"Error! Did not delete key {key}: CAS failed")
+    for x in ("", ".idx", ".key"):
+        if os.path.exists(f(key) + x):
+            os.remove(f(key) + x)
+    print(f"Success! Deleted key: {key}")
 STUB
+# patronictl: its DCS in the consul stub's store (service/pg/config, service/pg/members/<name>); PAUSE_MODE and
+# RESUME_MODE pick what Patroni 4.1 answers - ok, failed (a member's 503: nothing changed), lags (the config changed, the
+# last member not: "didn't recognized"), lie (the config changed, the last member not, "Success" all the same)
 cat > "$W/bin/patronictl" <<'STUB'
-#!/bin/bash
-echo "patronictl $*" >> "$W/calls"
-case "$*" in
-  *"pause --wait"*) [ -z "${PAUSE_FAILS:-}" ] || { echo "Cluster is already paused" >&2; exit 1; }; touch "$W/paused" ;;
-  *"resume --wait"*) rm -f "$W/paused" ;;
-  *list*) echo "+ Cluster: pg"; [ -e "$W/paused" ] && echo " Maintenance mode: on" ;;
-esac
-exit 0
+#!/usr/bin/env python3
+import json, os, sys
+W = os.environ["W"]
+args = [x for x in sys.argv[1:] if not x.startswith("-c") and not x.endswith(".yml")]
+open(os.path.join(W, "calls"), "a").write("patronictl " + " ".join(args) + "\n")
+if os.environ.get("CONSUL_DOWN"):
+    sys.exit("Error: ConsulException: connection refused")
+KV = os.path.join(W, "kv")
+def path(key):
+    return os.path.join(KV, key.replace("/", "_"))
+def get(key):
+    return json.loads(open(path(key)).read())
+def put(key, d):
+    open(path(key), "w").write(json.dumps(d))
+members = sorted(n[len("service_pg_members_"):-4] for n in os.listdir(KV) if n.startswith("service_pg_members_")
+                 and n.endswith(".key"))
+config = get("service/pg/config")
+if args[:1] == ["list"]:
+    print("+ Cluster: pg")
+    if config.get("pause"):
+        print(" Maintenance mode: on")
+    sys.exit(0)
+want = args[:1] == ["pause"]
+mode = os.environ.get("PAUSE_MODE" if want else "RESUME_MODE", "ok")
+if bool(config.get("pause")) == want:
+    sys.exit(f"Error: Cluster is {'already' if want else 'not'} paused")
+word = "pause" if want else "resume"
+if mode == "failed":
+    print(f"Failed: {word} cluster management status code=503, (no leader)")
+    sys.exit(0)
+config["pause"] = True if want else None
+put("service/pg/config", {k: v for k, v in config.items() if v is not None})
+for i, name in enumerate(members):
+    m = get(f"service/pg/members/{name}")
+    if mode in ("lags", "lie") and i == len(members) - 1:
+        continue
+    m["pause"] = True if want else None
+    put(f"service/pg/members/{name}", {k: v for k, v in m.items() if v is not None})
+print(f"'{word}' request sent, waiting until it is recognized by all nodes")
+if mode == "lags":
+    print(f"{members[-1]} members didn't recognized pause state after 10 seconds")
+else:
+    print(f"Success: cluster management is {'paused' if want else 'resumed'}")
 STUB
 chmod +x "$W/bin"/*
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYCHECK'
-import os, subprocess, sys
+import json, os, shlex, subprocess, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render  # noqa: E402
 W = os.environ["W"]
-KEY = os.path.join(W, "kv", "ansible_patroni-paused-by")
+KV = os.path.join(W, "kv")
+KEY = os.path.join(KV, "ansible_patroni-paused-by")
 fails = 0
 def check(name, ok, detail=""):
     global fails
@@ -69,72 +141,137 @@ def tasks(items):
         for k in ("block", "rescue", "always"):
             yield from tasks(t.get(k))
 def text(t):
-    for m in ("ansible.builtin.command", "ansible.builtin.shell"):
+    for m in ("ansible.builtin.command", "ansible.builtin.shell", "ansible.builtin.script"):
         a = t.get(m)
         if a is not None:
             return a if isinstance(a, str) else a.get("cmd", "")
     return ""
-def state(paused=False, marker=None, idx=None):
-    for f in os.listdir(os.path.join(W, "kv")):
-        os.remove(os.path.join(W, "kv", f))
+def kv_put(key, value, idx):
+    p = os.path.join(KV, key.replace("/", "_"))
+    open(p, "w").write(value)
+    open(p + ".idx", "w").write(str(idx))
+    open(p + ".key", "w").write(key)
+def state(paused=False, members_paused=None, marker=None, idx=7):
+    """The DCS: the config's pause, each member's (pi1, pi2: as `paused` unless given); the marker at index `idx`."""
+    for f in os.listdir(KV):
+        os.remove(os.path.join(KV, f))
     open(os.path.join(W, "calls"), "w").close()
-    if paused:
-        open(os.path.join(W, "paused"), "w").close()
-    elif os.path.exists(os.path.join(W, "paused")):
-        os.remove(os.path.join(W, "paused"))
+    kv_put("service/pg/config", json.dumps({"ttl": 30, "loop_wait": 10, **({"pause": True} if paused else {})}), 3)
+    for name, p in zip(("pi1", "pi2"), members_paused or (paused, paused)):
+        kv_put(f"service/pg/members/{name}", json.dumps({"role": "primary" if name == "pi1" else "replica",
+                                                         **({"pause": True} if p else {})}), 4)
     if marker is not None:
-        open(KEY, "w").write(marker)
-        open(KEY + ".idx", "w").write(f"{idx or 7}\n")
-def sh(cmd, env=None, **st):
+        kv_put("ansible/patroni-paused-by", marker, idx)
+def dcs():
+    """(config paused, [each member paused])."""
+    get = lambda k: json.loads(open(os.path.join(KV, k.replace("/", "_"))).read())  # noqa: E731
+    return bool(get("service/pg/config").get("pause")), [bool(get(f"service/pg/members/{n}").get("pause"))
+                                                          for n in ("pi1", "pi2")]
+def run(task, env=None, **st):
+    """The task as Ansible runs it: a shell's text, rendered; a script's command line, rendered, on python3."""
     state(**st)
-    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], **(env or {})))
+    cmd = render(text(task), patronictl=f"patronictl -c {W}/patroni.yml", playbook_dir="deploy/ansible/playbooks")
+    argv = ["bash", "-c", cmd] if "ansible.builtin.script" not in task else ["python3", *shlex.split(cmd)]
+    r = subprocess.run(argv, capture_output=True, text=True, env=dict(
+        os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], PATRONI_CONFIG=f"{W}/patroni.yml",
+        PATRONI_PAUSE_WAIT="0.3", PATRONI_PAUSE_POLL="0.05", **(env or {})))
     calls = open(os.path.join(W, "calls")).read().splitlines()
     return r, calls, open(KEY).read() if os.path.exists(KEY) else None
-v = dict(patronictl="patronictl")
+def acts(calls):
+    """patronictl's pause/resume and consul's KV writes, in their order."""
+    return [" ".join(c.split()[:2]) if c.startswith("patronictl") else " ".join(c.split()[:3]) for c in calls
+            if c.split()[:2] in (["patronictl", "pause"], ["patronictl", "resume"])
+            or c.split()[:3] in (["consul", "kv", "put"], ["consul", "kv", "delete"])]
 for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
     every = [t for play in yaml.safe_load(open(f"deploy/ansible/playbooks/{book}.yml")) for t in tasks(play.get("tasks"))]
-    pause = [t for t in every if "pause --wait" in text(t) and "resume --wait" not in text(t)]
-    resume = [t for t in every if "resume --wait" in text(t)]
-    checks = [t for t in every if "Maintenance mode" in text(t) and "REFUSED" in text(t)]
+    pause = [t for t in every if ("pause --wait" in text(t) and "resume --wait" not in text(t))
+             or "patroni-pause.py pause" in text(t)]
+    resume = [t for t in every if "resume --wait" in text(t) or "patroni-pause.py resume" in text(t)]
+    checks = [t for t in every if ("Maintenance mode" in text(t) and "REFUSED" in text(t))
+              or "patroni-pause.py check" in text(t)]
     check(f"{book}: one pause, one resume, one not-paused check", (len(pause), len(resume), len(checks)) == (1, 1, 1),
           (len(pause), len(resume), len(checks)))
     if not (pause and resume and checks):
         continue
-    p, rs, ck = (render(text(x[0]), **v) for x in (pause, resume, checks))
-    reg = pause[0].get("register")
-    r, calls, kv = sh(p)
-    first = [c.split()[0] + " " + c.split()[1] for c in calls]
-    check(f"{book}: the pause puts its marker (check-and-set), then pauses; its index kept",
-          r.returncode == 0 and kv is not None and kv.startswith(book + " ") and "MARKER 11" in r.stdout
-          and any("put -cas -modify-index=0" in c for c in calls) and first.index("patronictl pause") > 0,
-          (r.returncode, r.stdout, r.stderr, calls, kv))
-    r, calls, kv = sh(p, marker="setup-consul 2026-10-08T01:00:00Z")
+    p, rs, ck = pause[0], resume[0], checks[0]
+    reg = p.get("register")
+    def renv(out):
+        return {n: str(render(str(x), **{reg: {"stdout": out}})) for n, x in (rs.get("environment") or {}).items()}
+    # --- the pause
+    r, calls, kv = run(p)
+    check(f"{book}: the pause puts its marker (check-and-set: the playbook, the time, a nonce), then pauses - every "
+          "member paused; its index said", r.returncode == 0 and kv is not None and kv.startswith(book + " ")
+          and len(kv.split()) == 3 and f"MARKER 11" in r.stdout and acts(calls)[:2] == ["consul kv put", "patronictl pause"]
+          and dcs() == (True, [True, True]), (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, marker="setup-consul 2026-10-08T01:00:00Z ab12cd34")
     check(f"{book}: a marker there already: refused before any pause, the marker left as it was",
-          r.returncode != 0 and "REFUSED" in r.stdout + r.stderr and not any("pause" in c for c in calls if c.startswith("patronictl"))
-          and kv == "setup-consul 2026-10-08T01:00:00Z", (r.returncode, r.stdout, r.stderr, calls, kv))
-    r, calls, kv = sh(p, env={"PAUSE_FAILS": "1"})
-    check(f"{book}: its pause failing: its own marker deleted again", r.returncode != 0 and kv is None,
-          (r.returncode, r.stdout, r.stderr, kv))
-    pout = "MARKER 7"
-    renv = {n: str(render(str(x), **{reg: {"stdout": pout}})) for n, x in (resume[0].get("environment") or {}).items()}
-    r, calls, kv = sh(rs, env=renv, paused=True, marker=f"{book} 2026-10-08T01:00:00Z", idx=7)
-    check(f"{book}: the resume resumes, then deletes its own marker",
-          r.returncode == 0 and kv is None and not os.path.exists(os.path.join(W, "paused"))
-          and [c.split()[1] for c in calls][:2] == ["resume", "kv"], (r.returncode, r.stdout, r.stderr, calls, kv))
-    r, calls, kv = sh(rs, env=renv, paused=True, marker="setup-patroni 2026-10-08T02:00:00Z", idx=9)
-    check(f"{book}: a marker put since (not its own): left as it is, said so", r.returncode == 0
-          and kv == "setup-patroni 2026-10-08T02:00:00Z" and "left" in r.stdout, (r.returncode, r.stdout, r.stderr, kv))
-    r, calls, kv = sh(ck, paused=True, marker="upgrade-patroni 2026-10-07T23:00:00Z")
-    check(f"{book}: paused, a marker: refused, naming the run, asking whether it still runs", r.returncode == 1
-          and "upgrade-patroni 2026-10-07T23:00:00Z" in r.stdout and "no longer running" in r.stdout, (r.returncode, r.stdout))
-    r, calls, kv = sh(ck, paused=True, marker="$(reboot) run patronictl remove")
+          r.returncode != 0 and "REFUSED" in r.stdout + r.stderr and "patronictl pause" not in acts(calls)
+          and kv == "setup-consul 2026-10-08T01:00:00Z ab12cd34", (r.returncode, r.stdout, r.stderr, calls, kv))
+    # someone paused it between the check and this pause: patronictl refuses (exit 1) - theirs, not undone
+    r, calls, kv = run(p, paused=True)
+    check(f"{book}: paused meanwhile by someone else: fails, its own marker deleted, their pause left",
+          r.returncode != 0 and kv is None and "patronictl resume" not in acts(calls) and dcs() == (True, [True, True]),
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, env={"PAUSE_MODE": "failed"})
+    check(f"{book}: patronictl exits 0 on 'Failed: ... status code=503': the pause fails, its marker deleted",
+          r.returncode != 0 and kv is None and dcs() == (False, [False, False]),
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    for mode, says in (("lags", "a member not recognizing it (exit 0)"), ("lie", "'Success' with a member unpaused")):
+        r, calls, kv = run(p, env={"PAUSE_MODE": mode})
+        check(f"{book}: {says}: the pause fails - undone (resumed, every member), then its marker deleted",
+              r.returncode != 0 and kv is None and dcs() == (False, [False, False])
+              and acts(calls)[-2:] == ["patronictl resume", "consul kv delete"],
+              (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, env={"PAUSE_MODE": "lags", "RESUME_MODE": "failed"})
+    check(f"{book}: a failed pause whose undoing fails too: its marker kept (it names the run), said so",
+          r.returncode != 0 and kv is not None and kv.startswith(book + " ") and "STILL PAUSED" in r.stdout,
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    # --- the resume, given the pause's output
+    mine = f"{book} 2026-10-08T01:00:00Z ab12cd34"
+    r, calls, kv = run(rs, env=renv("PAUSED: ...\nMARKER 7"), paused=True, marker=mine, idx=7)
+    check(f"{book}: the resume deletes its own marker first, then resumes - every member",
+          r.returncode == 0 and kv is None and dcs() == (False, [False, False])
+          and acts(calls) == ["consul kv delete", "patronictl resume"], (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env=renv("MARKER 7"), paused=True, marker="setup-patroni 2026-10-08T02:00:00Z ef56ab78", idx=9)
+    check(f"{book}: a marker put since (not its own): refused - nothing resumed, the marker left",
+          r.returncode != 0 and kv == "setup-patroni 2026-10-08T02:00:00Z ef56ab78" and "patronictl resume" not in acts(calls)
+          and dcs()[0], (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env=renv("MARKER 7"), paused=True)
+    check(f"{book}: its marker gone (deleted by hand): refused - nothing resumed (Consul's CAS delete of a missing key "
+          "succeeds)", r.returncode != 0 and "patronictl resume" not in acts(calls) and dcs()[0],
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env=renv("PAUSE FAILED: ..."), paused=True, marker=mine, idx=7)
+    check(f"{book}: no MARKER in the pause's output: refused - nothing resumed, nothing deleted",
+          r.returncode != 0 and kv == mine and "patronictl resume" not in acts(calls) and dcs()[0],
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env={**renv("MARKER 7"), "RESUME_MODE": "lags"}, paused=True, marker=mine, idx=7)
+    check(f"{book}: a resume a member does not take (exit 0): fails, a marker naming the run put again",
+          r.returncode != 0 and kv is not None and kv.startswith(book + " ") and "STILL PAUSED" in r.stdout,
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    # --- the not-paused check
+    r, calls, kv = run(ck, paused=True, marker="upgrade-patroni 2026-10-07T23:00:00Z")
+    check(f"{book}: paused, an older run's marker: refused, naming the run, asking whether it still runs",
+          r.returncode == 1 and "upgrade-patroni 2026-10-07T23:00:00Z" in r.stdout and "no longer running" in r.stdout,
+          (r.returncode, r.stdout))
+    r, calls, kv = run(ck, paused=True, marker="setup-consul 2026-10-08T01:00:00Z ab12cd34")
+    check(f"{book}: paused, a marker with its nonce: refused, naming the run", r.returncode == 1
+          and "setup-consul 2026-10-08T01:00:00Z ab12cd34" in r.stdout and "no longer running" in r.stdout,
+          (r.returncode, r.stdout))
+    r, calls, kv = run(ck, paused=True, marker="$(reboot) run patronictl remove")
     check(f"{book}: paused, a marker of another shape: refused, not echoed", r.returncode == 1
           and "reboot" not in r.stdout and "another shape" in r.stdout, (r.returncode, r.stdout))
-    r, calls, kv = sh(ck, paused=True)
+    r, calls, kv = run(ck, paused=True, marker="upgrade-patroni 2026-10-07T23:00:00Z $(reboot)")
+    check(f"{book}: paused, a run's shape with more after it: refused, not echoed", r.returncode == 1
+          and "reboot" not in r.stdout and "another shape" in r.stdout, (r.returncode, r.stdout))
+    r, calls, kv = run(ck, paused=True)
     check(f"{book}: paused, no marker (someone's maintenance): refused, no run named", r.returncode == 1
           and "REFUSED" in r.stdout and "no longer running" not in r.stdout, (r.returncode, r.stdout))
-    r, calls, kv = sh(ck)
+    r, calls, kv = run(ck, members_paused=(False, True))
+    check(f"{book}: a member still paused (the config not - a resume half taken): refused", r.returncode == 1
+          and "REFUSED" in r.stdout, (r.returncode, r.stdout))
+    r, calls, kv = run(ck, env={"CONSUL_DOWN": "1"})
+    check(f"{book}: the DCS not readable: refused", r.returncode == 1 and "REFUSED" in r.stdout, (r.returncode, r.stdout))
+    r, calls, kv = run(ck)
     check(f"{book}: not paused: passes", r.returncode == 0, (r.returncode, r.stdout))
 print("patroni-pause-marker: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)

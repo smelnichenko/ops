@@ -702,7 +702,7 @@
         chdir: "{{ playbook_dir }}/../../deploy/ansible"
       register: _refused_run
       changed_when: false
-      failed_when: _refused_run.rc == 0 or 'Patroni is paused' not in _refused_run.stdout
+      failed_when: _refused_run.rc == 0 or 'REFUSED: the cluster is paused' not in _refused_run.stdout
 
 - name: Still paused - the run left someone else's pause alone
   hosts: pi1
