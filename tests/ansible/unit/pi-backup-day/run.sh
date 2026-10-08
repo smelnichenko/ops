@@ -64,6 +64,11 @@ echo "timedatectl $*" >> "$CALLS"
 [ "$(grep -c '^timedatectl' "$CALLS")" -ge "${SYNCED_FROM:-1}" ] && echo yes || echo no
 STUB
 printf '#!/bin/bash\necho "sleep $*" >> "$CALLS"\n' > "$W/bin/sleep"
+# chrony's view: synchronized once since its start (SYNCED_ONCE=chrony) - its leap status Normal - or never
+cat > "$W/bin/chronyc" <<'STUB'
+#!/bin/bash
+[ "${SYNCED_ONCE:-}" = chrony ] && echo "Leap status     : Normal" || echo "Leap status     : Not synchronised"
+STUB
 chmod +x "$W/bin"/*
 W=$W "$PY" - <<'PY'
 import datetime, os, subprocess, sys
@@ -75,13 +80,20 @@ task = next(t for t in yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-ba
             if t.get("name") == "The backup script")
 script = os.path.join(W, "backup.sh")
 content = render(task["ansible.builtin.copy"]["content"])
-open(script, "w").write(content.replace("/var/backups/pi-tier0", os.path.join(W, "pi-tier0")))  # its work directory
+# its work directory, and timesyncd's mark of a sync since this boot (in /run)
+TIMESYNC = os.path.join(W, "timesync-synchronized")
+open(script, "w").write(content.replace("/var/backups/pi-tier0", os.path.join(W, "pi-tier0"))
+                        .replace("/run/systemd/timesync/synchronized", TIMESYNC))
 os.chmod(script, 0o700)
 today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 yesterday = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)).strftime("%Y%m%dT%H%M%SZ")
 def run(last, **extra):
     calls = os.path.join(W, "calls")
     open(calls, "w").close()
+    if extra.get("SYNCED_ONCE") == "timesyncd":
+        open(TIMESYNC, "w").close()
+    elif os.path.exists(TIMESYNC):
+        os.remove(TIMESYNC)
     env = dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], CALLS=calls, LAST=last,
                PI_BACKUP_BUCKET="b", PI_BACKUP_RETENTION_DAYS="30", PI_BACKUP_KEEP="7", **extra)
     r = subprocess.run(["bash", script], capture_output=True, text=True, env=env)
@@ -115,6 +127,13 @@ looks = lambda calls: sum(c.startswith("timedatectl") for c in calls)
 rc, out, calls = run(yesterday, SYNCED_FROM="3")
 check("the clock synchronized at the third look: then on to the backup", rc == 2 and looks(calls) == 3
       and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls))
+# synchronized once since this boot, not now (an internet outage: the kernel's error bound past 16 s after ~9 h) - the
+# clock close enough: on to the backup at once, said so; a day's backup stopped on every such outage
+for daemon in ("timesyncd", "chrony"):
+    rc, out, calls = run(yesterday, SYNCED_FROM="9999", SYNCED_ONCE=daemon)
+    check(f"not synchronized now, but once since this boot ({daemon}): on to the backup at once, said so",
+          rc == 2 and looks(calls) == 1 and "since this boot" in out
+          and any(c.startswith("consul snapshot save") for c in calls), (rc, out, calls[:4], looks(calls)))
 rc, out, calls = run(yesterday, SYNCED_FROM="9999")
 check("the clock never synchronized: failed after its bounded wait, said so, nothing read or backed up",
       rc == 1 and "not synchronized" in out and looks(calls) == 60
