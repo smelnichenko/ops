@@ -77,12 +77,14 @@ if lived:
           [made_after(100), min(made_after(400), 1)], [0, 1])
     # a pod made before the push is the Tempo that held it, never replaced; none running is nothing read (date -d ""
     # is today's midnight: a negative lifetime read as proven) - neither proves anything. 10 s before: the clocks' slack
-    def made(text):  # the push now, as in a run (date -d "" is today's midnight: before it)
+    def made(text, pushed=None):  # the push now, as in a run (date -d "" is today's midnight: before it)
         return min(subprocess.run(["bash", "-c", sh], capture_output=True, text=True, env=dict(
             os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], MADE=text,
-            **{**env, "PUSHED": str(int(__import__("time").time()))})).returncode, 1)
-    check("a Tempo made an hour before the push (never replaced): not proven, fails; none running: fails; 10 s before "
-          "(the clocks' slack): proven", [min(made_after(-3600), 1), made(""), made_after(-10)], [1, 1, 0])
+            **{**env, "PUSHED": str(pushed or int(__import__("time").time()))})).returncode, 1)
+    midnight = int(subprocess.run(["date", "-d", "", "+%s"], capture_output=True, text=True).stdout)
+    check("a Tempo made an hour before the push (never replaced): not proven, fails; none running: fails - pushed 5 s "
+          "after midnight too (that midnight within the clocks' slack); 10 s before (the slack): proven",
+          [min(made_after(-3600), 1), made(""), made("", midnight + 5), made_after(-10)], [1, 1, 1, 0])
 print("tempo-flush-traces: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYTFT
