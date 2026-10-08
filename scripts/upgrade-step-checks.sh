@@ -18,23 +18,49 @@ set -uo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 infra_ref=$1 platform_ref=$2 clickhouse_compat=$3 clickhouse_users=$4
 cd "$ops" || exit 1
+# group_alive, stop_groups
+source scripts/lib/process-groups.sh
 mkdir -p .upgrade
 logs=$(mktemp -d "$ops/.upgrade/step-checks.XXXX")
-names=() pids=() done_=()
+names=() pids=() done_=() failed=() watchdog=""
+not_judged() {  # the checks not judged named, each with its log, and the failures judged before; the run fails
+  local i unjudged=()
+  for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || unjudged+=("${names[$i]}"); done
+  echo "STEP CHECKS NOT JUDGED: ${unjudged[*]}"
+  for n in "${unjudged[@]}"; do
+    echo "===== check $n (not judged)"
+    cat "$logs/$n" 2> /dev/null || echo "(no log)"
+  done
+  [ "${#failed[@]}" -eq 0 ] || echo "STEP CHECKS FAILED: ${failed[*]}"
+  exit 1
+}
 cleanup() {
-  local i own
+  local i own groups=()
+  # no signal cuts it short (a Ctrl-C pressed twice: the second ran the trap again inside it, its checks unwaited)
+  trap '' INT TERM HUP
   # a group signalled only while it is one of this script's jobs: never a PID it did not start (1 is `kill -- -1`,
   # every process of the user; 2026-10-07 a test's PID 1 ended the operator's session), nor one the system gave to
-  # another process after the job ended
+  # another process after the job ended. Each whole - the playbook under a check's subshell too - bounded
   own=" $(jobs -p | tr '\n' ' ') "
   for i in "${!pids[@]}"; do
-    [ -z "${done_[$i]:-}" ] && [[ $own == *" ${pids[$i]} "* ]] && kill -TERM -- "-${pids[$i]}" 2> /dev/null
+    [ -z "${done_[$i]:-}" ] && [[ $own == *" ${pids[$i]} "* ]] && groups+=("${pids[$i]}")
   done
+  [[ -n $watchdog && $own == *" $watchdog "* ]] && groups+=("$watchdog")
+  [ "${#groups[@]}" -eq 0 ] || stop_groups "${STOP_GRACE:-60}" "${groups[@]}"
   wait 2> /dev/null
   rm -rf "$logs"
 }
+on_signal() {  # on_signal <exit>: a signal's first act - no other cuts the stop short; the checks' bound said
+  trap '' INT TERM HUP
+  if [ -e "$logs/timed-out" ]; then
+    echo "STEP CHECKS: not ended within ${STEP_CHECKS_SECONDS:-1800} s - stopped"
+    not_judged
+  fi
+  exit "$1"
+}
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'on_signal 130' INT TERM
+trap 'on_signal 129' HUP
 # own process groups for the jobs (job control), so a group kill reaches each check's whole tree
 set -m
 
@@ -60,7 +86,10 @@ start storage play ../../tests/ansible/upgrade/storage-check.yml
 start metrics play ../../tests/ansible/upgrade/metrics-check.yml
 start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"
 
-failed=()
+# the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it for ever, measured on bash
+# 5.2), or a hang none of them bounds - ends them after STEP_CHECKS_SECONDS, said, those left not judged
+( sleep "${STEP_CHECKS_SECONDS:-1800}" && : > "$logs/timed-out" && kill -TERM $$ ) < /dev/null > /dev/null 2>&1 &
+watchdog=$!
 left=${#pids[@]}
 while [ "$left" -gt 0 ]; do
   running=()
@@ -71,30 +100,29 @@ while [ "$left" -gt 0 ]; do
   # no check - never the last one again; bash unsets `ended` then (set -u would end the script before this said why).
   # The checks left named, each with what its log holds
   if [ -z "${ended:-}" ]; then
-    echo "STEP CHECKS: wait returned $rc with no check ended - the rest not judged"
-    unjudged=()
+    echo "STEP CHECKS: wait returned $rc with no check ended - each left read by its status where bash kept it"
+    # a check stopped by a signal: wait -n returns 127 for it (bash 5.2, measured) and `wait <pid>` its stop (147) - not
+    # its end: not judged, said; the cleanup ends it (judged, it was waited for by the cleanup for ever)
+    stopped=" $(jobs -sp | tr '\n' ' ') "
     for i in "${!pids[@]}"; do
       [ -z "${done_[$i]:-}" ] || continue
-      # none of them runs (wait -n would wait): a check bash collected outside wait -n has its status still known to
-      # `wait` - judged; one it never knew (127) is not
+      if [[ $stopped == *" ${pids[$i]} "* ]]; then
+        echo "STEP CHECKS: check ${names[$i]} stopped by a signal"
+        continue
+      fi
+      # none of them runs (wait -n would wait): a check bash collected outside wait -n (a `jobs` reported its end)
+      # has its status still known to `wait` - judged; one it never knew (127) is not
       wait "${pids[$i]}" 2> /dev/null; r=$?
       if [ "$r" != 127 ]; then
         done_[i]=1
         echo "===== check ${names[$i]} (exit $r, its status read after)"
         cat "$logs/${names[$i]}"
         [ "$r" = 0 ] || failed+=("${names[$i]}")
-      else
-        unjudged+=("${names[$i]}")
       fi
     done
-    echo "STEP CHECKS NOT JUDGED: ${unjudged[*]}"
-    for n in "${unjudged[@]}"; do
-      echo "===== check $n (not judged)"
-      cat "$logs/$n" 2> /dev/null || echo "(no log)"
-    done
-    # and what was judged before: the failures said too
-    [ "${#failed[@]}" -eq 0 ] || echo "STEP CHECKS FAILED: ${failed[*]}"
-    exit 1
+    # every one judged: the verdict as ever; otherwise those not judged said
+    for i in "${!pids[@]}"; do [ -n "${done_[$i]:-}" ] || not_judged; done
+    break
   fi
   for i in "${!pids[@]}"; do
     if [ "${pids[$i]}" = "$ended" ]; then

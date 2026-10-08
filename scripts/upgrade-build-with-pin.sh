@@ -19,19 +19,10 @@ exec > >(trap '' INT TERM HUP; exec python3 -u -c 'import sys, time
 for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
 build_job="" pin="" signalled=""
-# a process group with a member still running - read from /proc (CI's image has no ps); a zombie, a job's own exited
-# leader not reaped yet, is none
-group_alive() {  # group_alive <pgid>
-  local g=$1 f st
-  for f in /proc/[0-9]*/stat; do
-    st=$(cat "$f" 2> /dev/null) || continue
-    set -- ${st##*) }  # its state, parent, group (after the command name, which may hold spaces)
-    [ "$3" = "$g" ] && [ "$1" != Z ] && return 0
-  done
-  return 1
-}
+# group_alive, stop_groups
+source scripts/lib/process-groups.sh
 stop() {
-  local j own end
+  local j own
   # every job of this script's, each a session of its own (setsid) - never a PID it did not start: one whose PID was
   # not kept yet (a signal between its start and `pin=$!`) is stopped with the rest. The time-stamping process is no
   # job (a process substitution - `jobs -p` never lists it, measured on bash 5.2): waiting for it would wait for this
@@ -39,17 +30,10 @@ stop() {
   # nor here, on a stop of its own (a failed build) a signal arrives
   trap '' INT TERM HUP
   own=$(jobs -p)
-  for j in $own; do kill -TERM -- "-$j" 2> /dev/null; done
   # each job's processes given STOP_GRACE seconds to end (the pin's trap removes its containers), then killed, said:
   # one that ignored the TERM held the stop for good
-  end=$((SECONDS + ${STOP_GRACE:-60}))
-  for j in $own; do
-    while group_alive "$j" && ((SECONDS < end)); do sleep 0.5; done
-    if group_alive "$j"; then
-      echo "job $j's processes outlived the stop by ${STOP_GRACE:-60} s - killed"
-      kill -KILL -- "-$j" 2> /dev/null
-    fi
-  done
+  # shellcheck disable=SC2086 # the job PIDs, one word each
+  stop_groups "${STOP_GRACE:-60}" $own
   for j in $own; do wait "$j" 2> /dev/null; done
   [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
 }
