@@ -228,13 +228,16 @@
 
     - name: Create velero bucket in MinIO
       vars:
-        mc_image: "quay.io/minio/mc:latest"
+        # AWS's own CLI, as platform's s3gw bucket Job: MinIO withdrew its mc images on 2026-09-24 (quay.io 401,
+        # docker.io gone)
+        s3_image: "amazon/aws-cli:2.37.1@sha256:b0dd5a4d216a1786863541a201baa7b7b4c5032bec9c6e72c38d01cafd7e8db8"
         minio_url: "http://minio-backup.{{ velero_namespace }}.svc:9000"
-        # the server's own credentials, from its Secret into the pod's environment - templated in, they were on
-        # kubectl's command line on ten (any local user reads it in /proc)
-        mc_cmd: >-
-          mc alias set backup {{ minio_url }} "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-          && mc mb --ignore-existing backup/velero
+        # the server's own keys, from its Secret into the pod's environment - never on a command line (templated in,
+        # they were on kubectl's on ten; as mc's arguments, on the node's /proc)
+        s3_cmd: >-
+          set -e; s3() { aws --endpoint-url {{ minio_url }} s3api "$@"; };
+          if s3 head-bucket --bucket velero > /dev/null 2>&1; then echo "BUCKET EXISTS";
+          else s3 create-bucket --bucket velero > /dev/null; echo "BUCKET CREATED"; fi
         pod_overrides:
           spec:
             securityContext:
@@ -244,24 +247,33 @@
                 type: RuntimeDefault
             containers:
               - name: minio-setup
-                image: "{{ mc_image }}"
-                command: ["sh", "-c", "{{ mc_cmd }}"]
-                envFrom:
-                  - secretRef:
-                      name: minio-backup-secret
+                image: "{{ s3_image }}"
+                command: ["sh", "-c", "{{ s3_cmd }}"]
+                env:
+                  - name: AWS_ACCESS_KEY_ID
+                    valueFrom: {secretKeyRef: {name: minio-backup-secret, key: MINIO_ROOT_USER}}
+                  - name: AWS_SECRET_ACCESS_KEY
+                    valueFrom: {secretKeyRef: {name: minio-backup-secret, key: MINIO_ROOT_PASSWORD}}
+                  - name: AWS_DEFAULT_REGION
+                    value: us-east-1
+                  - name: HOME  # the CLI's cache, writable as uid 1000
+                    value: /tmp
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:
                     drop: ["ALL"]
+      # its result judged: a failure (the image, the store, the keys) fails the step - `|| true` hid every one
       ansible.builtin.shell: |
-        # Run mc client as ephemeral pod to create the bucket
+        set -o pipefail
         kubectl run minio-setup --rm -i \
           --restart=Never \
           -n {{ velero_namespace }} \
-          --image={{ mc_image }} \
-          --overrides='{{ pod_overrides | to_json }}' \
-          2>&1 || true
-      changed_when: false
+          --image={{ s3_image }} \
+          --overrides='{{ pod_overrides | to_json }}' 2>&1
+      args:
+        executable: /bin/bash
+      register: _bucket
+      changed_when: "'BUCKET CREATED' in _bucket.stdout"
 
     # ================================================================
     # Phase 3: Deploy Velero
