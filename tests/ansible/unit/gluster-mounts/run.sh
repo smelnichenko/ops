@@ -55,6 +55,13 @@ if t:
           (True, True))
     check("skipped in a preview (it checks what the play did)",
           [condition(t.get("when", True), ansible_check_mode=cm) for cm in (False, True)], [True, False])
+# the volumes Forgejo and Nexus write have their root's owner kept by Gluster (storage.owner-uid/gid): a heal or a
+# remount set it back to the arbiter brick's root:root otherwise - forgejo-repos had none (a re-run after a full run
+# found its root changed, 2026-10-08)
+own = next((t for p in plays for t in p.get("tasks") or [] if "storage.owner-uid" in str(t)), None)
+items = {(x["name"], x["id"]) for x in (own or {}).get("loop") or []}
+check("the owner kept by Gluster on forgejo-repos and forgejo-data (900), nexus-data (901)",
+      {("forgejo-repos", 900), ("forgejo-data", 900), ("nexus-data", 901)} <= items, True)
 print("gluster-mounts: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYGM

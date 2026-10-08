@@ -716,6 +716,8 @@
       loop:
         - { name: nexus-data, id: 901 }
         - { name: forgejo-data, id: 900 }
+        # the repositories: their root reverted to root:root without it (a re-run after a full run found it changed)
+        - { name: forgejo-repos, id: 900 }
       register: _owner
       changed_when: _owner.stdout | length > 0
 
