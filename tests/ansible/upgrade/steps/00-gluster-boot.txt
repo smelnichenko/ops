@@ -4,7 +4,10 @@
 # to root behind Gluster's back. Proven in Vagrant (all three VMs halted and started together: every mount up, Forgejo
 # and versitygw answering; a re-run changed nothing); production's Pis have run the older playbook since before it.
 # outage: none expected - fstab entries of mounted volumes are rewritten without a remount, the boot unit is added for
-# the next boot; the preview runs the playbook's reads (peers, volumes), not its gluster commands
+# the next boot. forgejo-repos gets its root's owner kept by Gluster (storage.owner-uid and -gid, unset on production -
+# read 2026-10-08): two `gluster volume set`, each a client graph switch on the live mounts - a moment's stall of
+# Forgejo's repository writes, no remount. The preview runs the playbook's reads (peers, volumes), not its gluster
+# commands
 # abort: not by the older playbook - its re-run stops and unmounts every service and volume (defect 21). By hand on
 # each Pi: `systemctl disable gluster-volumes-ready`, `,x-systemd.after=gluster-volumes-ready.service` taken out of the
 # glusterfs lines' options in /etc/fstab, `systemctl daemon-reload` - not rehearsed
