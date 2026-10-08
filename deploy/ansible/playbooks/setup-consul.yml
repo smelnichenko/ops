@@ -298,6 +298,8 @@
   vars:
     patronictl: patronictl -c /etc/patroni/patroni.yml
     _other_pi: "{{ 'pi2' if inventory_hostname == 'pi1' else 'pi1' }}"
+    # how long a handover (Vault's step-down, Consul's leadership) may take before the restart is refused
+    consul_handover_seconds: 30
   tasks:
     - name: A restart here, and Patroni running to pause around it
       when:
@@ -323,6 +325,26 @@
           retries: 6
           delay: 5
           until: _consul_spare.rc == 0
+          changed_when: false
+
+        # the Pis' tier-0 backup (02:40 UTC, setup-pi-backups.yml) runs under a Consul lock: a restart of a server ends
+        # its session, the lock, and the backup with it
+        - name: No tier-0 backup holding its Consul lock
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -uo pipefail
+              if ! out=$(consul kv get -detailed pi-tier0-backup/.lock 2>&1); then
+                grep -q 'No key exists' <<< "$out" || { echo "REFUSED: the backup's lock not read: $out"; exit 1; }
+                out=""
+              fi
+              held=$(awk '$1 == "Session" && $2 != "-" {print $2}' <<< "$out")
+              if [ -n "$held" ]; then
+                echo "REFUSED: the Pis' tier-0 backup holds its Consul lock (02:40 UTC, up to 30 minutes) - a restart" \
+                  "ends it: run after it"
+                exit 1
+              fi
+              echo "NO BACKUP RUNNING"
           changed_when: false
 
         # by whether Patroni is installed on the other Pi, not whether it runs there: with that one stopped, the
@@ -358,6 +380,61 @@
               changed_when: true
               delegate_to: "{{ _other_pi }}"
               when: _patroni_active | bool
+
+            # Vault's storage is this Pi's Consul agent: its active node, here, would lose its lock with the restart and
+            # Vault be without one until the other Pi's took over - handed over first, to a standby there, unsealed
+            - name: Vault stepped down here first - the other Pi's active
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  export VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+                  here=https://127.0.0.1:8200 other=https://{{ hostvars[_other_pi]['ansible_host'] }}:8200
+                  st() { VAULT_ADDR=$1 vault status -format=json 2> /dev/null || true; }  # exit 2: sealed
+                  get() { python3 -c 'import json, sys
+                  d = json.loads(sys.stdin.read() or "{}")
+                  print(d.get(sys.argv[1]))' "$1"; }
+                  if [ "$(st $here | get is_self)" != True ]; then echo "VAULT NOT ACTIVE HERE"; exit 0; fi
+                  o=$(st $other)
+                  if [ "$(get sealed <<< "$o")" != False ] || [ "$(get ha_enabled <<< "$o")" != True ]; then
+                    echo "REFUSED: Vault is active here and {{ _other_pi }}'s is not standing by (sealed or unreachable)"
+                    exit 1
+                  fi
+                  VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+                  export VAULT_TOKEN
+                  VAULT_ADDR=$here vault operator step-down > /dev/null
+                  for _ in $(seq {{ consul_handover_seconds }}); do
+                    if [ "$(st $here | get is_self)" != True ] && [ "$(st $other | get is_self)" = True ]; then
+                      echo "STEPPED DOWN: {{ _other_pi }}'s Vault active"
+                      exit 0
+                    fi
+                    sleep 1
+                  done
+                  echo "REFUSED: Vault's step-down not taken in {{ consul_handover_seconds }} s"
+                  exit 1
+              register: _vault_handover
+              changed_when: "'STEPPED DOWN' in _vault_handover.stdout"
+              when: inventory_hostname in groups['pis']
+
+            # the raft leader restarted is an election with a server already down: leadership to another first
+            - name: Consul's leadership moved off this server first
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -euo pipefail
+                  leader() { consul operator raft list-peers | awk '$4 == "leader" {print $1}'; }
+                  l=$(leader)
+                  if [ "$l" != "{{ inventory_hostname }}" ]; then echo "NOT THE LEADER ($l is)"; exit 0; fi
+                  consul operator raft transfer-leader > /dev/null
+                  for _ in $(seq {{ consul_handover_seconds }}); do
+                    l=$(leader)
+                    if [ -n "$l" ] && [ "$l" != "{{ inventory_hostname }}" ]; then echo "LEADERSHIP MOVED to $l"; exit 0; fi
+                    sleep 1
+                  done
+                  echo "REFUSED: Consul's leadership not moved off {{ inventory_hostname }} in {{ consul_handover_seconds }} s"
+                  exit 1
+              register: _consul_handover
+              changed_when: "'LEADERSHIP MOVED' in _consul_handover.stdout"
 
             - name: Restarted
               ansible.builtin.systemd_service:
