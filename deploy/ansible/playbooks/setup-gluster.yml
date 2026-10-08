@@ -904,6 +904,25 @@
     # their services start after the new volumes are replicated (the play after 'New volumes - pi2's brick ...'):
     # started here, the store's gateway met pi2's copy still unhealed and crash-looped until the heal landed
 
+    # each volume mounted at its own mount point, from itself (one line matching any of them passed: two of three
+    # unmounted passed). What the play did: skipped in a preview, which mounts nothing
+    - name: Each backup volume mounted here from itself
+      when: not ansible_check_mode
+      ansible.builtin.shell: |
+        set -uo pipefail
+        bad=""
+        while read -r name mnt; do
+          src=$(findmnt -rn -t fuse.glusterfs -o SOURCE -M "$mnt" || true)
+          echo "$mnt ${src:-not mounted}"
+          [[ $src == *":/$name" ]] || bad+=" $name ($mnt: ${src:-not mounted})"
+        done <<< "$VOLUMES"
+        [ -z "$bad" ] || { echo "NOT MOUNTED:$bad"; exit 1; }
+      args:
+        executable: /bin/bash
+      environment:
+        VOLUMES: "{{ backup_volumes | map(attribute='name') | zip(backup_volumes | map(attribute='mount')) | map('join', ' ') | join('\n') }}"
+      changed_when: false
+
 # ─── New volumes: replicated in full before anything uses them ─────────────
 # A fresh install copies the existing data straight into pi1's brick before creating the volume; pi2's brick starts
 # empty. Gluster knows nothing of files written behind its back: neither index heal nor `heal full` copied them
@@ -1056,18 +1075,6 @@
         executable: /bin/bash
       register: backup_status
       changed_when: false
-
-    - name: Verify mounts on both nodes
-      check_mode: false
-      ansible.builtin.shell: |
-        set -o pipefail
-        findmnt -rn -t fuse.glusterfs -o TARGET,SOURCE | grep -E "backup-|nexus-data"
-      args:
-        executable: /bin/bash
-      register: mount_check
-      changed_when: false
-      delegate_to: "{{ item }}"
-      loop: [pi1, pi2]
 
     - name: Print results
       ansible.builtin.debug:
