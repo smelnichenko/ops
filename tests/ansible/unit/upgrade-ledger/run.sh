@@ -671,6 +671,20 @@ mid13 = done_upto("12-kubelet-shutdown-grace") + [f"{S13} apps app", f"{S13} beg
 check("status after 13's playbooks: its defaults next", status_of(mid13), [f"next: {S13} defaults"])
 check("status after 13's defaults (the event carries the commit): done next",
       [l.split(" - ")[0] for l in status_of(mid13 + [f"{S13} defaults deadbeef"])], [f"next: {S13} done"])
+# the soak's time left as status shows it, by ten's clock (the first green check's): this machine's, a day later here,
+# showed it over
+soaking = mid13 + [f"{S13} defaults deadbeef", f"{S13} checked"]
+at = (T0 + datetime.timedelta(minutes=len(soaking) - 1 + 5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+saved = m.read_ledger, m.ten_now
+m.read_ledger, m.ten_now = (lambda: (None, ev(*soaking))), (lambda: at)
+buf = io.StringIO()
+try:
+    with contextlib.redirect_stdout(buf):
+        m.status()
+finally:
+    m.read_ledger, m.ten_now = saved
+check("status of a step soaking: its time left by ten's clock (5 minutes into 13's 60)",
+      [l.strip().split(", ")[-1] for l in buf.getvalue().splitlines() if "soaking since" in l], ["55 of 60 minutes left"])
 
 # begin records the app set before begun: cut short between them, it runs again rather than stranding the step
 got = phase_calls(m.begin, S47, events=ev(*done_upto("46-postgres-18-test")))
