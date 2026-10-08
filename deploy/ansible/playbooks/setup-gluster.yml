@@ -879,6 +879,12 @@
     - name: The services on this Pi
       ansible.builtin.service_facts:
 
+    # the volumes' own services (keepalived's - autostart false - aside): the last play starts any of them left stopped
+    - name: The services of the volumes mounted here
+      ansible.builtin.set_fact:
+        gluster_autostart_services: >-
+          {{ (['forgejo'] + (backup_volumes | selectattr('autostart') | map(attribute='stop_service') | select | list)) | unique }}
+
     - name: Stop their services before mounting (those installed - Nexus comes later, with setup-nexus.yml)
       ansible.builtin.systemd:
         name: "{{ item.stop_service }}"
@@ -1086,12 +1092,24 @@
     - name: The services on this Pi
       ansible.builtin.service_facts:
 
+    # a remount a run before did not finish (its task's timeout) left its service stopped: the re-run sees the source
+    # right, stops nothing and started nothing - the volumes' own services enabled here and not running, started too
+    - name: The volumes' services left stopped here (enabled, not running)
+      ansible.builtin.set_fact:
+        _left_stopped: >-
+          {%- set out = [] -%}
+          {%- for s in gluster_autostart_services | default([]) -%}
+          {%- set f = ansible_facts.services.get(s ~ '.service', {}) -%}
+          {%- if f.get('status') == 'enabled' and f.get('state') != 'running' -%}{%- set _ = out.append(s) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
     # autostart: false ones are started by keepalived's notify on the VIP's Pi only (see the mount play's vars)
     - name: Start them (those installed, and not keepalived's)
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: started
-      loop: "{{ gluster_services_to_start | default([]) | unique }}"
+      loop: "{{ (gluster_services_to_start | default([]) + _left_stopped) | unique }}"
       when: (item ~ '.service') in ansible_facts.services
 
 - name: Verify backup volumes

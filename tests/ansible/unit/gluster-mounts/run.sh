@@ -164,6 +164,32 @@ before = plays[:plays.index(mounting)]
 inside = [t.get("name") for p in before for t in flat(p.get("tasks")) for m in mounts
           if m + "/" in str(t.get("ansible.builtin.shell", "")) + str(t.get("ansible.builtin.command", ""))]
 check("no task before the answer check reaches inside a backup volume's mount", inside, [])
+# a remount a run before did not finish (its task's timeout) left its service stopped; the re-run sees the source right,
+# stops nothing, starts nothing - the volumes' own services enabled here and not running are started all the same
+# (keepalived's - autostart false - never)
+starting = next(p for p in plays if p.get("name") == "Start the services of the remounted volumes")
+own = next((t for t in mounting["tasks"] if "gluster_autostart_services" in str(t.get("ansible.builtin.set_fact", ""))), None)
+left = next((t for t in starting["tasks"] if "_left_stopped" in str(t.get("ansible.builtin.set_fact", ""))), None)
+start = next((t for t in starting["tasks"] if t.get("ansible.builtin.systemd")), None)
+check("the volumes' own services recorded, those left stopped read, started with the rest",
+      (own is not None, left is not None, "_left_stopped" in str((start or {}).get("loop"))), (True, True, True))
+if own and left and start:
+    autostart = render(own["ansible.builtin.set_fact"]["gluster_autostart_services"], backup_volumes=vols)
+    svc = lambda st, en: {"state": st, "status": en}  # noqa: E731
+    facts = {"forgejo.service": svc("stopped", "enabled"), "versitygw.service": svc("running", "enabled"),
+             "nexus.service": svc("stopped", "enabled")}
+    stopped = render(left["ansible.builtin.set_fact"]["_left_stopped"], gluster_autostart_services=autostart,
+                     ansible_facts={"services": facts})
+    check("the volumes' own services: Forgejo and the store's gateway - never Nexus (keepalived starts it)",
+          sorted(autostart), ["forgejo", "versitygw"])
+    check("left stopped: enabled and not running alone (Forgejo here) - not one running, not keepalived's",
+          list(stopped), ["forgejo"])
+    disabled = render(left["ansible.builtin.set_fact"]["_left_stopped"], gluster_autostart_services=autostart,
+                      ansible_facts={"services": {"forgejo.service": svc("stopped", "disabled")}})
+    check("a disabled one (stopped by intent) never started", list(disabled), [])
+    check("started: those the run stopped and those left stopped, once each",
+          list(render(start["loop"], gluster_services_to_start=["versitygw"], _left_stopped=["forgejo", "versitygw"])),
+          ["versitygw", "forgejo"])
 # the volumes Forgejo and Nexus write have their root's owner kept by Gluster (storage.owner-uid/gid): a heal or a
 # remount set it back to the arbiter brick's root:root otherwise - forgejo-repos had none (a re-run after a full run
 # found its root changed, 2026-10-08)
