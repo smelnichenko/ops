@@ -77,7 +77,9 @@ STUB
 printf '#!/bin/bash\necho "sha-${@: -1}"\n' > "$W/bin/git"
 printf '#!/bin/bash\necho "upgrade/$2 main"\n' > "$W/run/scripts/upgrade-expected-inventory.py"
 printf '#!/bin/bash\necho "proof $2" >> "$LOG"\n' > "$W/run/scripts/upgrade-production.py"
-printf '#!/bin/bash\necho digests\n' > "$W/run/scripts/vagrant-image-digests.sh"
+# the digests read after a step: DIGESTS_HANG - it hangs (a stalled VM), its PID recorded
+printf '#!/bin/bash\n[ -z "${DIGESTS_HANG:-}" ] || { echo $$ > "$W/digests.pid"; sleep 30; }\necho digests\n' \
+  > "$W/run/scripts/vagrant-image-digests.sh"
 chmod +x "$W/bin/"* "$W/run/scripts/"*.py "$W/run/scripts/"*.sh
 fails=0
 check() {
@@ -93,7 +95,7 @@ run() {  # run <signal or none> <env...>: the script (SCRIPT: another copy) in a
   # test's): what to wait for before the signal - re:<a line of its output> (default: the step's line 3) or file:<name>
   local sig=$1 wait_for=${WAIT_FOR:-'re:^[0-9:]\{8\} line 3$'}; shift
   rm -f "$W/rc" "$W/step.pid" "$W/final.pid" "$W/task.pid" "$W/next.ran" "$W/stamper.starting" "$W/check.pid" \
-    "$W/leftover.pid"
+    "$W/leftover.pid" "$W/digests.pid"
   : > "$W/log"; : > "$W/out"
   (cd "$W/run" && exec env STOP_GRACE=1 "$@" W="$W" LOG="$W/log" PATH="$W/bin:$PATH" python3 -c 'import os, signal
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE): signal.signal(s, signal.SIG_DFL)
@@ -107,7 +109,18 @@ os.execvp("bash", ["bash", os.environ["W"] + "/wrapper"])') &
     esac
     sleep 0.05
   done
-  if [ "$sig" != none ]; then
+  if [ "${sig#script:}" != "$sig" ]; then
+    # the script alone (not its group): its process in this test's session, read from /proc
+    local sp="" f c st
+    for f in /proc/[0-9]*/cmdline; do
+      c=$(tr '\0' ' ' 2> /dev/null < "$f") || continue
+      [[ $c == "bash scripts/upgrade-full-steps.sh "* ]] || continue
+      read -r st 2> /dev/null < "${f%/cmdline}/stat" || continue
+      set -- ${st##*) }
+      [ "$4" = "$pg" ] && { sp=${f#/proc/}; sp=${sp%/cmdline}; }
+    done
+    [ -n "$sp" ] && kill "-${sig#script:}" "$sp"
+  elif [ "$sig" != none ]; then
     proc_ok "$pg" "$BASHPID" && kill "-$sig" -- "-$pg"
   fi
   for _ in $(seq 200); do [ -s "$W/rc" ] && break; sleep 0.05; done
@@ -224,5 +237,12 @@ check "a TERM after the task's end: what it left running stopped with it, the ru
   "$(cat "$W/rc" 2> /dev/null || echo none) $([ -n "$leftover" ] && [ -e "/proc/$leftover" ] && echo alive || echo gone)" \
   "143 gone"
 if [ -n "$leftover" ] && [ "$(tr '\0' ' ' 2> /dev/null < "/proc/$leftover/cmdline")" = "sleep 60 " ]; then kill "$leftover"; fi
+# a TERM to the script alone while the digests are read after a step (a stalled VM): the stop at once, the read
+# stopped with it - in the foreground the trap waited for the read to end
+WAIT_FOR=file:digests.pid run script:TERM ENDS=3 DIGESTS_HANG=1
+dp=$(cat "$W/digests.pid" 2> /dev/null)
+check "a TERM while the digests are read: the run stopped at once (143), the read ended with it" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $([ -n "$dp" ] && [ -e "/proc/$dp" ] && echo alive || echo gone)" "143 gone"
+if [ -n "$dp" ] && [ "$(tr '\0' ' ' 2> /dev/null < "/proc/$dp/cmdline")" = "sleep 30 " ]; then kill "$dp"; fi
 echo "step-stamper: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

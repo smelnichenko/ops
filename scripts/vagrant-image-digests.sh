@@ -3,14 +3,19 @@
 # "<name> <tag> <digest>" per line. A chart that pins in two keys (tag: <tag>@sha256:...) composes the full reference
 # only there. The full run keeps each step's (.upgrade/step-digests/<step>.txt, right after the step - its proof is
 # recorded a step later), the step's proof records its own images' digests, and production's pre-pull pulls by them.
-# With VAGRANT_SSH_CONFIG set, plain ssh with that config; else vagrant ssh.
+# With VAGRANT_SSH_CONFIG set, plain ssh with that config; else vagrant ssh. Bounded both ways: keep-alives on the
+# connection (Vagrant's own config sets none - a stalled VM held the full run, which reads this after every step) and
+# the API server's request timeout.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ops"
+alive=(-o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=30)
 on() {
-  if [ -n "${VAGRANT_SSH_CONFIG:-}" ]; then ssh -F "$VAGRANT_SSH_CONFIG" "$1" "$2"; else vagrant ssh "$1" -c "$2"; fi
+  if [ -n "${VAGRANT_SSH_CONFIG:-}" ]; then ssh -F "$VAGRANT_SSH_CONFIG" "${alive[@]}" "$1" "$2"
+  else vagrant ssh "$1" -c "$2" -- "${alive[@]}"; fi
 }
-on kubeadm 'sudo kubectl --kubeconfig /etc/kubernetes/admin.conf get pods,cronjobs -A -o json' | tr -d '\r' \
+on kubeadm 'sudo kubectl --kubeconfig /etc/kubernetes/admin.conf --request-timeout=60s get pods,cronjobs -A -o json' \
+  | tr -d '\r' \
   | python3 -c '
 import json, sys
 seen = set()

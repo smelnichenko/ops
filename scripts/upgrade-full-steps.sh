@@ -100,9 +100,11 @@ for step in $steps; do
   # the step before it in this run, green: what it need not check again
   run_task test:upgrade:step STEP="$step" PREV_STEP="${prev%% *}"
   [ "$task_rc" = 0 ] || { echo "=== STEP $step FAILED (exit $task_rc) $(date +%T)"; exit "$task_rc"; }
-  # the digests the copy runs now, right after the step: its proof (recorded a step later) keeps its images'
+  # the digests the copy runs now, right after the step: its proof (recorded a step later) keeps its images'. A job in
+  # a session of its own, waited for: a signal stops it as it stops a step (in the foreground the trap waited for it)
   mkdir -p .upgrade/step-digests
-  scripts/vagrant-image-digests.sh > ".upgrade/step-digests/$step.txt" || exit 1
+  setsid scripts/vagrant-image-digests.sh > ".upgrade/step-digests/$step.txt" < /dev/null &
+  wait $! || exit 1
   if [ -n "$prev" ]; then
     # shellcheck disable=SC2086 # step, infra and platform sha: three words
     scripts/upgrade-production.py record-proof $prev || exit 1
