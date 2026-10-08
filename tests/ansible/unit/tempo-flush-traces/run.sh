@@ -47,6 +47,12 @@ clock = next((t for t in flush if "--dry-run=server" in str(t.get("ansible.built
               and "creationTimestamp" in str(t.get("ansible.builtin.command", ""))), None)
 check("the second push's time read from the API server's clock after it, by a dry run (nothing written)",
       clock is not None and flush.index(clock) > pushes[1][0] and clock.get("register") in str(keep), True)
+# the seed fails on a push time not in the API server's form (an epoch, empty, a date(1) reads otherwise) - the ID file
+# never holds one; the verify's own check is the second line, not the first
+creg = (clock or {}).get("register", "_after_clock")
+check("the seed refuses a push time not in the API server's form; takes one in it",
+      [condition((clock or {}).get("failed_when", False), **{creg: {"rc": 0, "stdout": v}})
+       for v in ("1000", "", "2026-10-08 12:00:00", "2026-10-08T12:00:00Z")], [True, True, True, False])
 ids = {"_trace": "a" * 32, "_after": "b" * 32, (clock or {}).get("register", "_after_clock"): {"stdout": "1970-01-01T00:16:40Z"}}
 path = os.path.join(W, "ids")
 open(path, "w").write(render(keep["ansible.builtin.copy"]["content"], **ids))

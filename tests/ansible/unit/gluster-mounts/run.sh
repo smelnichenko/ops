@@ -162,6 +162,12 @@ for pname, touching in TOUCH.items():
 # a mounted volume's root left as its own plays keep it: the mount points made only for the volumes about to be mounted
 # here (the mount module makes a missing one itself), after what another source mounted there is unmounted - every run
 # set the git mirror's root (setup-vault-pi's, 0750) to 0755, and setup-vault-pi set it back (full runs 2140 to 1217)
+# each answer check bounded by Ansible as well as by its own deadline: a stat in the kernel holds its shell, and the
+# task's timeout is the outer bound
+shell_cmd = lambda t: (lambda sh: sh.get("cmd", "") if isinstance(sh, dict) else str(sh or ""))(  # noqa: E731
+    t.get("ansible.builtin.shell"))
+answers = [t for p in plays for t in flat(p.get("tasks")) if shell_cmd(t) == "{{ answer_check }}"]
+check("every answer check has a task timeout (two of them)", [(bool(t.get("timeout"))) for t in answers], [True, True])
 mp = next((t for t in mounting["tasks"] if t.get("name") == "Create mount points"), None)
 names = [t.get("name") for t in mounting["tasks"]]
 check("the mount points made for the volumes about to be mounted alone, after the unmount, before the mount",

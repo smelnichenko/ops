@@ -1202,6 +1202,13 @@ def torn_write():
 
 check("record-proof writes through write_json: a write dying half way leaves the proof before it, nothing beside it",
       torn_write() if hasattr(m, "write_json") else "no write_json", ('{"old": "proof"}', ["proof.json"]))
+# its file as a plain write leaves it (0644, under the usual umask) - mkstemp's 0600 kept it from the operator's
+# other readers of the proofs
+_mw = _tf.mkdtemp()
+m.write_json(os.path.join(_mw, "p.json"), {"step": "x"})
+check("write_json leaves the proof 0644, as a plain write would", oct(os.stat(os.path.join(_mw, "p.json")).st_mode & 0o777),
+      "0o644")
+__import__("shutil").rmtree(_mw)
 src = open("scripts/upgrade-production.py").read()
 check("the proof and run.json both written by write_json, no other write of either in place",
       (src.count('write_json(proof_path(step), proof'), src.count('write_json(os.path.join(PROVEN, "run.json")'),
