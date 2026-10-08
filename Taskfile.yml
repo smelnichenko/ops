@@ -715,9 +715,12 @@ tasks:
             refs=$(scripts/upgrade-expected-inventory.py --refs "$step")
             infra_sha=$(git -C ../infra rev-parse "${refs% *}")
             platform_sha=$(git -C ../platform rev-parse "${refs#* }")
-            # every line of the step stamped with its time: where a step's minutes go stays measurable
+            # every line of the step stamped with its time: where a step's minutes go stays measurable. A Ctrl-C, TERM or
+            # HUP to the group passes the stamper by (it ends with its input): it died first, and go-task - stopping the
+            # step's commands - of the closed pipe, its children left running unwaited
             task test:upgrade:step STEP="$step" 2>&1 \
-              | python3 -u -c 'import sys, time
+              | python3 -u -c 'import signal, sys, time
+          for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(s, signal.SIG_IGN)
           for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()'
             # the digests the copy runs now, right after the step: its proof (recorded a step later) keeps its images'
             mkdir -p .upgrade/step-digests
