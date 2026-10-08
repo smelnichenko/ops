@@ -184,6 +184,13 @@ if dist:
         check("pi2 holding others: sent", sent() == (False, True))
         os.remove(k)
         check("pi2 holding none: sent", sent() == (False, True))
+        # its file unreadable another way (a directory in its place - EISDIR; EACCES alike): the probe fails, nothing
+        # sent - only a missing file is a host holding none
+        os.mkdir(k)
+        got = sent()
+        os.rmdir(k)
+        check(f"pi2's file not readable for another reason (a directory there): the probe fails (got {got})",
+              got[0] is True)
     else:
         os.remove(k)
 # an ssh retry overlapping a first invocation still running: each writes its own file aside - the other's output (the
