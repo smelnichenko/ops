@@ -102,6 +102,8 @@
   always:
     # not after a failed restore: one transaction, the database is still empty - Keycloak started on it would build its
     # schema there, and every re-run would refuse the database in use (the realm only in the dump). A re-run restores.
+    # Not waited for: a first install's Keycloak uses its own Pi's Postgres, and the replica's cannot serve until the
+    # reconfigure play points it at the primary and its restart (tasks/keycloak-restart.yml) loads that
     - name: Keycloak started again (unless the restore failed)
       ansible.builtin.systemd:
         name: keycloak

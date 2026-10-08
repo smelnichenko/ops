@@ -149,16 +149,16 @@ check("its restart pending by its unit and secrets file, recorded after - both t
        [condition(x.get("when", True), ansible_check_mode=True) for x in (pend or {}, rec or {})]),
       (True, True, [False, False]))
 restarts = [t for t in every if str(t.get("name", "")).startswith("Keycloak restarted where pending")]
-check("two restarts: the Pi without the VIP, then the one with it - both tagged, each one Pi at a time (no VIP on "
-      "either, or on both: the same task on both at once)",
+check("three restarts: where Keycloak does not serve (nothing to lose there), then the Pi without the VIP, then the "
+      "one with it - each tagged, one Pi at a time (no VIP on either, or on both: the same task on both at once)",
       ([str(t.get("name", "")).split(" - ")[1][:18] for t in restarts], len(restarts),
        [tagged(t) for t in restarts], [t.get("throttle") for t in restarts]),
-      (["the Pi without the", "the Pi with the VI"], 2, [True, True], [1, 1]))
+      (["a Pi where it does", "the Pi without the", "the Pi with the VI"], 3, [True] * 3, [1] * 3))
 # a Keycloak this run started (down before) serving before any restart: the other Pi's restart guard reads one still
 # starting as down, and refuses - the waits after the restarts come too late for it
 start = next(t for t in every if t.get("name") == "Enable and start Keycloak")
 waits = [t for t in every if (t.get("ansible.builtin.uri") or {}).get("url") == "http://127.0.0.1:8080/realms/master"
-         and restarts and every.index(start) < every.index(t) < every.index(restarts[0])]
+         and t.get("until") and restarts and every.index(start) < every.index(t) < every.index(restarts[0])]
 w = waits[0] if waits else {}
 check("a Keycloak this run started waited for before any restart: tagged, only where it started now, in no preview, "
       "its 200 alone ends it (not a refused connection, a 503 while it starts, no answer), for 240 s",
@@ -173,7 +173,7 @@ check("a Keycloak this run started waited for before any restart: tagged, only w
 # and alone (the peer guard passes on the old Keycloak still serving there)
 both = next((t for t in every if "ansible_play_hosts_all" in str(t.get("ansible.builtin.assert", ""))), None)
 check("both Pis still in the play before the VIP's restart: checked between the two, tagged; one dropped - refused",
-      (both is not None and len(restarts) == 2 and every.index(restarts[0]) < every.index(both) < every.index(restarts[1]),
+      (both is not None and len(restarts) == 3 and every.index(restarts[1]) < every.index(both) < every.index(restarts[2]),
        both is not None and tagged(both),
        [condition((both or {}).get("ansible.builtin.assert", {}).get("that", "false"), ansible_play_hosts=h,
                   ansible_play_hosts_all=["pi1", "pi2"]) for h in (["pi1", "pi2"], ["pi1"])]),
@@ -189,15 +189,30 @@ check("setup-patroni: no Keycloak handler or notify; the shared restart in a pla
       ([t.get("name") for t in pat_every if "Keycloak" in str(t.get("notify", "")) or t.get("name") == "Restart Keycloak"],
        len(imp) == 1 and recon is not None and imp[0] > recon and not pat[imp[0]].get("serial")
        and str(pat[imp[0]].get("hosts")) in ("pi1,pi2", "pis")), ([], True))
-if len(restarts) == 2:
-    vip_reg = next(t.get("register") for t in every if "keepalived_vip" in str(t.get("ansible.builtin.command", "")))
-    def runs(t, pending, vip, check_mode=False):
+if len(restarts) == 3:
+    vip_task = next(t for t in every if "keepalived_vip" in str(t.get("ansible.builtin.command", "")))
+    vip_reg = vip_task.get("register")
+    # whether Keycloak serves here, read on both Pis before any restart: a Pi where it does not restarts first - its
+    # restart takes nothing down, and the other Pi's guard then finds it serving (the VIP on neither, pi1 went first and
+    # refused, its peer's Keycloak on the replica's own Postgres until restarted: a full run's build, 2026-10-08)
+    sv = next((t for t in every[every.index(vip_task):every.index(restarts[0])]
+               if (t.get("ansible.builtin.uri") or {}).get("url") == "http://127.0.0.1:8080/realms/master"), None)
+    serves_reg = (sv or {}).get("register", "_none")
+    check("whether Keycloak serves here read before the restarts: tagged, in a preview too, failing nothing",
+          (sv is not None and tagged(sv), (sv or {}).get("check_mode"),
+           sv is not None and condition(sv.get("failed_when", "true"), **{serves_reg: {"status": -1}})),
+          (True, False, False))
+    V = "2: eth0 inet 10.0.0.5/32"
+    def runs(t, pending, vip, serves=True, check_mode=False):
         return condition(t.get("when", True), ansible_check_mode=check_mode,
-                         _restart_pending={"stdout_lines": [pending, "h"]}, **{vip_reg: {"stdout": vip}})
-    check("the first only where pending without the VIP, the second only where pending with it; none in a preview",
-          [[runs(t, "pending", ""), runs(t, "pending", "2: eth0 inet 10.0.0.5/32"), runs(t, "current", ""),
-            runs(t, "pending", "", True)] for t in restarts],
-          [[True, False, False, False], [False, True, False, False]])
+                         _restart_pending={"stdout_lines": [pending, "h"]}, **{vip_reg: {"stdout": vip}},
+                         **{serves_reg: {"status": 200 if serves else -1}})
+    check("where it does not serve first (the VIP's or not), then serving without the VIP, then serving with it; only "
+          "where pending; none in a preview",
+          [[runs(t, "pending", "", False), runs(t, "pending", V, False), runs(t, "pending", ""), runs(t, "pending", V),
+            runs(t, "current", "", False), runs(t, "pending", "", False, True)] for t in restarts],
+          [[True, True, False, False, False, False], [False, False, True, False, False, False],
+           [False, False, False, True, False, False]])
     # the restart's own script: a file the unit names missing - refused, nothing restarted; the peer not serving while
     # this one does - refused; else restarted and serving
     import os, subprocess, tempfile  # noqa: E401,E402
@@ -206,7 +221,8 @@ if len(restarts) == 2:
     os.makedirs(os.path.join(W, "bin"))
     open(os.path.join(W, "bin", "systemctl"), "w").write('#!/bin/bash\necho "systemctl $*" >> "$W/calls"\n')
     open(os.path.join(W, "bin", "curl"), "w").write(
-        '#!/bin/bash\ncase "$*" in *127.0.0.1*) [ -z "${HERE_DOWN:-}" ] ;; *) [ -z "${PEER_DOWN:-}" ] ;; esac\n')
+        '#!/bin/bash\ncase "$*" in *127.0.0.1*) [ -z "${HERE_DOWN:-}" ] || grep -q "restart keycloak" "$W/calls" ;;\n'
+        '*) [ -z "${PEER_DOWN:-}" ] ;; esac\n')  # here: serving once restarted
     for b in ("systemctl", "curl"):
         os.chmod(os.path.join(W, "bin", b), 0o755)
     def restart(t, have_file=True, **env):
@@ -228,6 +244,42 @@ if len(restarts) == 2:
           "the peer down while this serves - refused; else restarted",
           [restart(restarts[0], have_file=False), restart(restarts[0], PEER_DOWN="1"), restart(restarts[0])],
           [(1, True, False), (1, True, False), (0, False, True)])
+    # the order as a run makes it: each restart task Pi by Pi (throttle: pi1, then pi2), its own script on what serves
+    # at that moment - a Pi refused leaves the play
+    def simulate(serving, vip, pending):
+        serving, play, log = dict(serving), ["pi1", "pi2"], []
+        facts = {h: {"_restart_pending": {"stdout_lines": ["pending" if h in pending else "current", "h"]},
+                     vip_reg: {"stdout": V if h in vip else ""}, serves_reg: {"status": 200 if serving[h] else -1}}
+                 for h in play}
+        for t in every[every.index(restarts[0]):every.index(restarts[-1]) + 1]:
+            if t in restarts:
+                for h in list(play):
+                    if not condition(t.get("when", True), ansible_check_mode=False, **facts[h]):
+                        continue
+                    peer = "pi2" if h == "pi1" else "pi1"
+                    env = dict({"HERE_DOWN": "1"} if not serving[h] else {}, **({"PEER_DOWN": "1"} if not serving[peer] else {}))
+                    rc, _, restarted = restart(t, **env)
+                    if rc == 0 and restarted:
+                        serving[h] = True
+                        log.append(f"{h} restarted")
+                    else:
+                        play.remove(h)
+                        log.append(f"{h} refused")
+            elif t is both and play and not condition(t["ansible.builtin.assert"]["that"], ansible_play_hosts=play,
+                                                      ansible_play_hosts_all=["pi1", "pi2"]):
+                log.append("both refused")
+                play = []
+        return log
+    check("the order as a run makes it: pi2 not serving, the VIP on neither (the build) - pi2 first, then pi1; both "
+          "serving - the one without the VIP first; the VIP's not serving - it first; the VIP on neither, both serving - "
+          "one at a time; this one serving, the other down and nothing pending there - refused",
+          [simulate({"pi1": True, "pi2": False}, set(), {"pi1", "pi2"}),
+           simulate({"pi1": True, "pi2": True}, {"pi1"}, {"pi1", "pi2"}),
+           simulate({"pi1": False, "pi2": True}, {"pi1"}, {"pi1", "pi2"}),
+           simulate({"pi1": True, "pi2": True}, set(), {"pi1", "pi2"}),
+           simulate({"pi1": True, "pi2": False}, {"pi1"}, {"pi1"})],
+          [["pi2 restarted", "pi1 restarted"], ["pi2 restarted", "pi1 restarted"], ["pi1 restarted", "pi2 restarted"],
+           ["pi1 restarted", "pi2 restarted"], ["pi1 refused"]])
 # before the unit names the secrets file: the database password it gives (as systemd reads an EnvironmentFile - quotes,
 # backslashes) is the one Keycloak runs with now (production's inline Environment=, read from the running process), by
 # hash, neither said nor on a command line; a Keycloak not running has nothing to compare. A different one: refused,

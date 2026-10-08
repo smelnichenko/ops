@@ -1,7 +1,7 @@
 ---
 # Keycloak restarted where its unit or secrets file differ from what it last loaded (a stamp, by content: a restart that
 # failed or was refused stays pending and the next run makes it - a handler fired once, and a re-run left the old
-# process running), the Pi without the VIP first, one Pi at a time. setup-pi-services (its unit and secrets written)
+# process running), one Pi at a time: a Pi where it does not serve first, then the Pi without the VIP, the VIP's last. setup-pi-services (its unit and secrets written)
 # and setup-patroni (its database port moved) import these - in a play of both Pis: the order by the VIP needs both in
 # it (a play one Pi at a time restarted the VIP's first). Not in a preview: it wrote neither file. Needs keepalived_vip;
 # _keycloak_start (the start task's result) where the play has one.
@@ -28,10 +28,23 @@
   changed_when: false
   check_mode: false  # a read
 
-- name: Keycloak restarted where pending - the Pi without the VIP
+# a Pi where Keycloak does not serve restarts first, the VIP's or not: its restart takes nothing down, and the other
+# Pi's guard then finds it serving. Restarted after one that serves, it was read as down and that one refused - the VIP
+# on neither, pi2's Keycloak on its own Postgres, a replica, until its restart loaded the primary's port (a full run's
+# build, 2026-10-08)
+- name: Whether Keycloak serves here
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/realms/master
+    status_code: 200
+    timeout: 10
+    follow_redirects: none
+  register: _keycloak_serves
+  failed_when: false  # a read: not serving is an answer
+  check_mode: false  # a read
+
+- name: Keycloak restarted where pending - a Pi where it does not serve (nothing served there to lose)
   vars:
     peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
-  # one Pi at a time: the VIP on neither (keepalived down) or on both (split) ran this task on both at once
   throttle: 1
   ansible.builtin.shell:
     executable: /bin/bash
@@ -54,6 +67,21 @@
   when:
     - not ansible_check_mode
     - _restart_pending.stdout_lines[0] == 'pending'
+    - _keycloak_serves.status | default(0) != 200
+
+- name: Keycloak restarted where pending - the Pi without the VIP
+  vars:
+    peer_ip: "{{ hostvars[groups['pis'] | difference([inventory_hostname]) | first]['ansible_host'] }}"
+  # one Pi at a time: the VIP on neither (keepalived down) or on both (split) ran this task on both at once
+  throttle: 1
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: *keycloak_restart
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - _restart_pending.stdout_lines[0] == 'pending'
+    - _keycloak_serves.status | default(0) == 200
     - _keycloak_vip.stdout | length == 0
 
 # the VIP's only with both Pis still in this play: one dropped by an earlier failure (a guard refusing, a write
@@ -80,6 +108,7 @@
   when:
     - not ansible_check_mode
     - _restart_pending.stdout_lines[0] == 'pending'
+    - _keycloak_serves.status | default(0) == 200
     - _keycloak_vip.stdout | length > 0
 
 # what the next run compares with: restarted (a failure ends this Pi's run before here), or current
