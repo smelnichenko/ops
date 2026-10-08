@@ -942,7 +942,7 @@ reverted (ops a7d8c4b..d76ae14, then ..HEAD after the 03:22 run started; platfor
   sent only when they differ, read by its own play, their mode kept, pipelining asserted, the CA key never left in
   Vault's directory, certificates signed one at a time; the backups go on after a sync since boot (an internet outage
   stopped them); forgejo-repos' root owner kept by Gluster; each backup volume checked mounted from itself.
-- Security: no reviewer token for Vault's Kubernetes auth (ESO's short-lived token reviews itself); host keys checked;
+- Security: no reviewer token for Vault's Kubernetes auth in the copy (ESO's short-lived token reviews itself - production still has one: fifth review, below); host keys checked;
   Forgejo's admin password on stdin (root's shell ran `$( )` in it); PgBouncer's password sent as a SCRAM verifier;
   bootstrap.sh refuses a cluster CA that is not base64 (a heredoc line ran as root on the Pi) and fails a failed apply;
   the Velero bucket pod's keys from its Secret; secrets lints follow variables, stdin and every logging module.
@@ -964,6 +964,48 @@ certificates that do not verify against a new CA); no alert on the Pi tier-0 bac
 unauthenticated and port 8008 open on the LAN; ten's Consul ports and Consul ACLs; secret rotation (old values in
 pi1's logs); UFW 8200 open to the LAN; Sonar's S3776 findings; pi2's stray ca-cert.srl; the Velero mirror's URL
 credential; and, with the 3 h target, whether to cut production's own steps (the settles, Wave 0's stores).
+
+## Fifth full review 2026-10-08 - what it fixed, what is the operator's
+
+Seven passes over ops 0841273..ce0fa58 and platform aebdec0 (correctness twice, architecture, security, platform
+reliability, concurrency, test quality - the last re-ran all 52 earlier reverts, every one red). No Critical. Full run
+03:22 (on ce0fa58) failed at step 22, 05:54: the metrics check called the ClickHouse init Job's pod, first seen after
+the moment every target was up and down in its one scrape, a flap - the false FLAPPED this review fixed (below). Steps
+00-21 were green.
+
+Fixed (ops 79145b2.., each test-first, each mechanism reverted and seen red):
+- Production's Vault login: production's External Secrets still logs in with a non-expiring token of its own account
+  (it reads every Secret); the copy proves every step without it. `task deploy:vault-eso` (bootstrap's vault-eso)
+  refuses a kube context on another cluster than Vault's, proves the login by refreshing one ExternalSecret, then
+  deletes the token; `deploy:upgrade:begin` refuses every step while production still has it. DR step 5 names it.
+- Patroni's pause: one script for setup-consul, setup-patroni and upgrade-patroni, proven by every member's state in
+  the DCS - patronictl 4.1 exits 0 on a failed pause or resume and says Success with a member unpaused (read on pi1);
+  the resume deletes only its own marker first (Consul's CAS delete of a missing key succeeds - measured).
+- Consul's rolling restart hands over first: the active Vault (pi1 today) steps down to the other Pi's standby, the
+  raft leader (pi1 today) hands leadership on; no restart while the tier-0 backup holds its lock. The rerun-guards
+  case now starts from production's Consul shape (HTTP on every address, Serf WAN, every port open to Anywhere in
+  both families).
+- The metrics check reads samples' own times (timestamp() of an expression gives the subquery's steps - promtool
+  3.10), a target first seen after t0 waits its 2 minutes; CI's promql step evaluates the queries.
+- upgrade-production keeps a phase's reason when its end cannot be read or written; Vault's key shares: pipelining
+  asserted as Ansible decides it, host key checking asserted; nothing production runs turns ssh's key check off
+  (setup-velero's mirror push did); Caddy's cluster token off curl's command line; setup-velero's legacy bucket task
+  (MinIO withdrew mc on 2026-09-24; `|| true` hid it) on aws-cli, its keys in the pod's environment; setup-argocd's
+  Keycloak secret in a Secret of its own - the Helm install no longer no_log; the secret lints catch eight more
+  shapes; build-with-pin's and step-checks' stops bounded and whole, step-checks bounded overall (a stopped check
+  waited on for ever); every YAML file parsed in CI (my pause commit had broken a test playbook's).
+- Run time: the VMs' readiness and the isolation's re-apply only after a step that changed a host - the isolation's
+  proof every step (about 18 minutes of 62 steps).
+- Platform: step 45's Tempo comments no longer name the plan's step (46-61 restacked, two lines each).
+Refuted by measurement: a blocked SIGCHLD stopping bash's traps (my own claim of the fourth review).
+Equivalent, measured: the pause's Success-text check (the DCS check catches it later); the stop's zombie test; each of
+the two ignore layers alone in build-with-pin's and step-checks' stops (both together: red).
+
+The operator's, before the upgrade starts: `task deploy:vault-eso` on production (writes Vault's Kubernetes auth,
+refreshes one ExternalSecret, deletes external-secrets/vault-token-reviewer); rotate the caddy-cert-reader token (it
+was on curl's command line daily on both Pis); remove pi1's stray pi2-key.pem and *.bak in /etc/vault.d/tls and pi2's
+ca-cert.srl; retire ten's offsite-backup.timer (a March script, failing daily) or decide to keep the playbook's;
+setup-velero's legacy first play (the in-cluster MinIO, retired) - keep or delete. With the earlier open items.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
