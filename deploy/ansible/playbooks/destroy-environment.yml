@@ -58,17 +58,26 @@
         GIT_COMMITTER_NAME: "env-automation"
         GIT_COMMITTER_EMAIL: "automation@pmon.dev"
 
-    - name: Check environment exists
-      ansible.builtin.stat:
-        path: "{{ cluster_dir }}/{{ env_ns }}-data/values.yaml"
-      register: env_exists
+    # an environment create-environment made: its directories exactly -apps, -data, -mesh - production's infra has
+    # -data and -mesh (their removal deleted its Argo application, its finalizer its resources), production's own a
+    # -realtime besides
+    - name: The environment's directories
+      ansible.builtin.find:
+        paths: "{{ cluster_dir }}"
+        patterns: ["{{ env_ns }}", "{{ env_ns }}-*"]
+        file_type: directory
+      register: env_dirs
       delegate_to: localhost
       become: false
 
-    - name: Fail if environment doesn't exist
+    - name: The environment's directories exactly the three create-environment makes
       ansible.builtin.fail:
-        msg: "Environment {{ env_ns }} not found"
-      when: not env_exists.stat.exists
+        msg: >-
+          REFUSED: {{ env_ns }} is no environment create-environment made - its directories
+          {{ env_dirs.files | map(attribute='path') | map('basename') | sort | list }}, not exactly -apps, -data, -mesh
+      when: >-
+        (env_dirs.files | map(attribute='path') | map('basename') | sort | list)
+        != [env_ns ~ '-apps', env_ns ~ '-data', env_ns ~ '-mesh']
 
   tasks:
     # ================================================================
@@ -151,13 +160,18 @@
             'apps': '{{ cluster_dir }}/argocd/apps/schnappy-apps-envs.yaml',
             'mesh': '{{ cluster_dir }}/argocd/apps/schnappy-mesh-envs.yaml',
         }
+        import fnmatch, sys
         for chart, path in appsets.items():
             with open(path) as f:
                 doc = yaml.safe_load(f)
-            doc['spec']['generators'][0]['list']['elements'] = [
-                e for e in doc['spec']['generators'][0]['list']['elements']
-                if e.get('env') != '{{ env_name }}'
-            ]
+            first = (doc['spec'].get('generators') or [{}])[0]
+            dirs = [d.get('path', '') for d in (first.get('git') or {}).get('directories') or []]
+            # listed by its own directories (production's since 2026-04-10): their removal unlists it
+            if any(fnmatch.fnmatch('clusters/production/{{ env_ns }}-' + chart, d) for d in dirs):
+                continue
+            if 'list' not in first:
+                sys.exit(f"REFUSED: {path}: its generator neither lists elements nor generates the environment's directory")
+            first['list']['elements'] = [e for e in first['list']['elements'] if e.get('env') != '{{ env_name }}']
             with open(path, 'w') as f:
                 yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
         PYEOF

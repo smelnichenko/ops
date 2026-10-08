@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Add an environment to ApplicationSets (data, apps, mesh)."""
+"""Add an environment to ApplicationSets (data, apps, mesh). One generating from git directories
+(clusters/production/schnappy-*-<chart> - production's since 2026-04-10) lists the environment by its own directories:
+nothing to edit there. A list generator gets the environment's element; another shape is refused (editing it as a list
+failed: KeyError 'list')."""
+import fnmatch
 import sys
 import os
 import yaml
@@ -20,7 +24,14 @@ for chart, path in appsets.items():
     if os.path.exists(path):
         with open(path) as f:
             doc = yaml.safe_load(f)
-        elements = doc["spec"]["generators"][0]["list"]["elements"]
+        first = (doc["spec"].get("generators") or [{}])[0]
+        dirs = [d.get("path", "") for d in (first.get("git") or {}).get("directories") or []]
+        if any(fnmatch.fnmatch(f"clusters/production/{env_ns}-{chart}", d) for d in dirs):
+            print(f"{path}: lists {env_ns}-{chart} by its directory - nothing to edit")
+            continue
+        if "list" not in first:
+            sys.exit(f"REFUSED: {path}: its generator neither lists elements nor generates {env_ns}-{chart}'s directory")
+        elements = first["list"]["elements"]
     else:
         doc = {
             "apiVersion": "argoproj.io/v1alpha1",
