@@ -158,6 +158,9 @@ $(grep -c 'Ready' <<< "$out")" "1 0 0 1"
 run ES_LIST_FAILS=1
 check "the ExternalSecrets not listed (an error, not 'none'): the step fails before any write, the token kept" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0 0"
+run ES_LIST_FAILS=1 NO_TOKEN_SECRET=1
+check "... and no old token either: still an error, never a fresh cluster - nothing written" \
+  "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'fresh cluster' <<< "$out")" "1 0 0"
 run ES_READ_FAILS_AT=1
 check "its refresh time before not read: the step fails, never 'refreshed' - the old token kept" \
   "$rc $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0"
