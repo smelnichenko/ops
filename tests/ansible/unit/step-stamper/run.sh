@@ -294,6 +294,26 @@ cs t1
 check "a TERM before the step's task started: the stop at once (not the stamper's 5 s), nothing said held; ended 143" \
   "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'output still held' "$W/out") $(( t1 - t0 < 350 )) \
 $(grep -c 'test:upgrade:step' "$W/log")" "143 0 1 0"
+# ... the stamper slow to reach its own open (here half a second): given a writer however late it opens - not held its
+# grace, nothing said held. Forced in a copy: a sleep before the stamper's exec, the TERM before the task
+sed -e 's|^  ( trap .. INT TERM HUP; exec python3|  ( sleep 0.5; trap '"''"' INT TERM HUP; exec python3|' \
+    -e 's|^  setsid task "\$@" .* &$|  kill -TERM $$\n&|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/latestamper.sh"
+check "the copy with a late stamper and a TERM before the task" \
+  "$(grep -c '^  ( sleep 0.5; trap' "$W/run/scripts/latestamper.sh") $(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/latestamper.sh")" "1 1"
+cs t0
+WAIT_FOR=file:rc run none SCRIPT=scripts/latestamper.sh STAMPER_GRACE=5
+cs t1
+check "a TERM before the task, the stamper late to open: the stop at once, nothing said held; ended 143" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'output still held' "$W/out") $(( t1 - t0 < 350 ))" "143 0 1"
+# a TERM between the stamper's fork and its record: the stamper is no step job (its stop waited out STOP_GRACE for a
+# process deaf to the TERM, said "outlived"), it is ended as a stamper is. Forced in a copy: the TERM before its record
+sed 's|^  stamper=\$!$|  kill -TERM $$\n&|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/unrecorded.sh"
+check "the copy with a TERM before the stamper's record" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/unrecorded.sh")" 1
+cs t0
+WAIT_FOR=file:rc run none SCRIPT=scripts/unrecorded.sh STOP_GRACE=5 STAMPER_GRACE=5
+cs t1
+check "a TERM before the stamper's PID was kept: ended as a stamper - nothing said outlived or held, at once; 143" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'outlived\|output still held' "$W/out") $(( t1 - t0 < 350 ))" "143 0 1"
 # the run's output reader gone, no signal to the run (a tee killed alone): the stamper reads on, its lines lost - the
 # step runs to its own end (dead, the stamper's FIFO ended the step's next write: SIGPIPE in the middle of a step); the
 # run then ends at its next word (141), no step after it

@@ -27,14 +27,16 @@ step_job="" stamper="" signalled=""
 # the stamper ends when what it reads does - all of it read; something outside the step still holding that (a daemon
 # it started) holds it STAMPER_GRACE seconds at most (on the clock: counted in sleeps, a loaded host stretched it), then
 # it is ended, said - 1 then (the step's log is not whole). One still waiting for its first writer (a signal between
-# its start and the task's: none came) given one and its end at once - the FIFO opened and closed here, which waits for
-# nothing, and ends nothing a writer still holds (the task's output is closed by now: it ended, or the stop ended it)
+# its start and the task's: none came) given one and its end - the FIFO opened and closed here at every look (the
+# stamper may reach its own open after the first: it waited the grace out, said held), which waits for nothing and ends
+# nothing a writer still holds (the task's output is closed by now: it ended, or the stop ended it)
 end_stamper() {
   local held=0 now end w
-  exec {w}<> "$work/out" && exec {w}>&-
   uptime_cs now
   end=$((now + stamper_grace * 100))
-  while child_alive "$stamper" && uptime_cs now && ((now < end)); do sleep 0.1; done
+  while exec {w}<> "$work/out" && exec {w}>&- && child_alive "$stamper" && uptime_cs now && ((now < end)); do
+    sleep 0.1
+  done
   if child_alive "$stamper"; then
     kill -KILL "$stamper"
     held=1
@@ -53,6 +55,9 @@ stop() {
   # (a signal before its leftovers were stopped): every process of each, bounded. go-task KILLed at once: it ran the
   # step's next command once the running one ended, the grace still running
   own_jobs own
+  # a signal between the stamper's fork and its record: the one job there is it (no task starts before that record) -
+  # ended as a stamper, not stopped as a step (deaf to the TERM, it was waited out to STOP_GRACE, said outlived)
+  if [ "$stamper" = starting ]; then stamper=${own[0]:-}; fi
   for j in "${own[@]}"; do [ "$j" = "$stamper" ] || steps_+=("$j"); done
   [ -z "$step_job" ] || [[ " ${steps_[*]} " == *" $step_job "* ]] || steps_+=("$step_job")
   [ "${#steps_[@]}" -eq 0 ] || stop_groups -n task "$stop_grace" "${steps_[@]}"
@@ -73,6 +78,7 @@ trap 'trap "" INT TERM HUP; signalled=129; exit 129' HUP
 # write (SIGPIPE in the middle of a step). Its exit in task_rc; a process of its session outliving its end stopped,
 # said, and the task failed (1), as when something outside it held its output
 run_task() {  # run_task <task arguments...>
+  stamper=starting
   ( trap '' INT TERM HUP; exec python3 -u -c 'import os, signal, sys, time
 for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(s, signal.SIG_IGN)
 for line in sys.stdin.buffer:
