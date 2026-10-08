@@ -305,9 +305,18 @@ for step, asked, want in (("20", "no", (True, False)), ("20", "yes", (True, True
     check(f"the playbook's command line, step {step or 'none'}, restarts expected {asked}: history, expected",
           ("--restart-history" in argv, "--restarts-expected" in argv), want)
 
-# the settle's values reach the script as given (the full run's step settles: 120 s, 2 polls 5 s apart) and are
-# production's by default (300 s, 4 polls 10 s apart) - a wiring that dropped one ran every settle at the script's
-for given, want in (({}, ["300", "4", "10"]), ({"restart_quiet": 120, "stable_polls": 2, "poll_seconds": 5}, ["120", "2", "5"])):
+# the settle's values reach the script as given (the full run's step settles: the Taskfile's STEP_SETTLE) and are
+# production's by default (upgrade-production.py's SETTLE_*) - a wiring that dropped one ran every settle at the
+# script's; both read from where they are set, never restated here
+import importlib.machinery, importlib.util, re as _re
+_l = importlib.machinery.SourceFileLoader("up", "scripts/upgrade-production.py")
+up = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", _l))
+_l.exec_module(up)
+production = [str(up.SETTLE_QUIET), str(up.SETTLE_STABLE), str(up.SETTLE_POLL)]
+step_settle = dict(_re.findall(r"-e (\w+)=(\d+)", yaml.safe_load(open("Taskfile.yml"))["vars"]["STEP_SETTLE"]))
+check("the full run's step settle sets all three", sorted(step_settle), ["poll_seconds", "restart_quiet", "stable_polls"])
+for given, want in (({}, production),
+                    (step_settle, [step_settle["restart_quiet"], step_settle["stable_polls"], step_settle["poll_seconds"]])):
     argv = render(script, **{**base, "restart_step": "", "restarts_expected": "no", **given}).split()
     got = [argv[argv.index(f) + 1] if f in argv else None for f in ("--restart-quiet", "--stable-polls", "--poll")]
     check(f"the playbook's command line, {'the full run step settle' if given else 'the defaults'}: quiet, polls, poll",
