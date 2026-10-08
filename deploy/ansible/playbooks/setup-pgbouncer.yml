@@ -126,7 +126,7 @@
             SELECT usename, passwd FROM pg_shadow WHERE usename = i_username INTO uname, phash;
             RETURN;
           END;
-          $$ LANGUAGE plpgsql SECURITY DEFINER;
+          $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp;
 
           REVOKE ALL ON FUNCTION public.user_lookup(text) FROM public;
           GRANT EXECUTE ON FUNCTION public.user_lookup(text) TO pgbouncer;

@@ -41,6 +41,12 @@ check("the task's script runs", r.returncode, 0)
 read = lambda f: open(os.path.join(W, f)).read() if os.path.exists(os.path.join(W, f)) else ""
 argv, env, sql = read("psql-argv"), read("psql-env"), read("psql-sql")
 check("the password neither in psql's arguments, its environment nor its SQL", PW in argv + env + sql, False)
+# the lookup runs as its owner (SECURITY DEFINER, reading pg_shadow): its search_path fixed - a caller's own schema
+# first in it would otherwise resolve names the function uses to the caller's objects
+fn = re.search(r"CREATE OR REPLACE FUNCTION public\.user_lookup.*?\$\$ LANGUAGE plpgsql([^;]*);", sql, re.S)
+check("the lookup SECURITY DEFINER with its search_path fixed (pg_catalog, pg_temp)",
+      bool(fn) and "SECURITY DEFINER" in fn.group(1) and re.search(r"SET search_path\s*=\s*pg_catalog,\s*pg_temp",
+                                                                   fn.group(1)) is not None, True)
 check("nor the verifier on its command line", "SCRAM-SHA-256$" in argv, False)
 var = re.search(r"^\\getenv pw (\w+)$", sql, re.M)
 check("the SQL reads the verifier from psql's environment, the ALTER takes it quoted by the server",
@@ -54,6 +60,12 @@ if v:
     client = hmac.new(salted, b"Client Key", hashlib.sha256).digest()
     server = hmac.new(salted, b"Server Key", hashlib.sha256).digest()
     check("4096 iterations, a 16-byte salt", (it, len(salt)), (4096, 16))
+    # a new salt each run (a fixed one makes every Postgres's verifier of this password the same)
+    subprocess.run([sh.get("executable", "/bin/sh"), "-c", script], input="THE-ADMIN-PASSWORD\n", capture_output=True,
+                   text=True, env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W))
+    again = next((l.split("=", 1)[1] for l in read("psql-env").splitlines() if l.startswith(var.group(1) + "=")), "")
+    check("each run its own salt", again.split("$")[1].split(":")[1] != v.group(2) if again.count("$") >= 2 else "no verifier",
+          True)
     check("its StoredKey and ServerKey are the password's (RFC 5802)",
           (base64.b64decode(v.group(3)) == hashlib.sha256(client).digest(), base64.b64decode(v.group(4)) == server),
           (True, True))
