@@ -806,8 +806,10 @@
 
     # the shares go to the host pi2 is: its host key checked - by Ansible (host_key_checking, as this run has it) and
     # by ssh (no argument of this run's turning it off, in any of ssh's spellings: no/off/false/accept-new after any
-    # separator - =, spaces, a tab, quotes - a known-hosts file of /dev/null, a KnownHostsCommand, another config by -F
-    # with or without a space; never -f, ssh's background flag). The Vagrant copy's VMs, rebuilt
+    # separator - =, spaces, a tab, quotes - a known-hosts file of /dev/null or none, a KnownHostsCommand, another
+    # config by -F with or without a space, alone or after flags that take no argument (-CF); never -f, ssh's background
+    # flag) - read as ssh reads them, the shell's quotes and backslashes gone (Strict''HostKeyChecking=n\o is =no to
+    # ssh: Ansible splits its arguments as a shell does). The Vagrant copy's VMs, rebuilt
     # each run with new keys, check none: said by its inventory (host_keys_unchecked_rebuilt_vms) and taken only for a
     # pi2 on the Vagrant network - a production inventory saying it would send the shares unchecked. No backslash in
     # the patterns: a conditional's string literals are read as Jinja reads escapes
@@ -816,9 +818,11 @@
         # ssh's ways to take a host's key unchecked, any one of them
         _unchecked_ssh:
           - 'StrictHostKeyChecking[^a-z0-9/]+(no|off|false|accept-new)'
-          - '(User|Global)KnownHostsFile[^a-z0-9/~]+/dev/null'
+          - '(User|Global)KnownHostsFile[^a-z0-9/~]+(/dev/null|none([^a-z0-9]|$))'
           - KnownHostsCommand
-          - '(^|[^a-z0-9-])(?-i:-F)'
+          - '(^|[^a-z0-9-])(?-i:-[46AaCfGgKkMNnqsTtVvXxYy]*F)'
+        # the shell's quoting ssh never sees: quotes and backslashes (a variable - no backslash in a conditional)
+        _ssh_quoting: '[''"\\]'
       ansible.builtin.assert:
         that:
           - >-
@@ -828,10 +832,10 @@
           - >-
             (host_keys_unchecked_rebuilt_vms | default(false) | bool
             and hostvars['pi2']['ansible_host'] is match('^192[.]168[.]56[.]'))
-            or (lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
+            or ((lookup('ansible.builtin.config', 'ssh_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_common_args', plugin_type='connection', plugin_name='ssh') ~ ' '
             ~ lookup('ansible.builtin.config', 'ssh_extra_args', plugin_type='connection', plugin_name='ssh'))
-            is not search(_unchecked_ssh | join('|'), ignorecase=True)
+            | regex_replace(_ssh_quoting, '')) is not search(_unchecked_ssh | join('|'), ignorecase=True)
         fail_msg: "REFUSED: host keys not checked - a host answering as pi2 would get every key share"
         quiet: true
 
