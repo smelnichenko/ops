@@ -48,9 +48,12 @@ done
 case "$*" in *" fetch "*) [ -n "${FETCH_FAILS:-}" ] && [[ $* == *"/$FETCH_FAILS.git"* ]] && exit 128 ;; esac
 exit 0
 STUB
+# ssh: its argv recorded; INIT_FAILS=<repo>: the Pi's repository for it not made (a full disk, a permission)
 cat > "$W/bin/ssh" <<'STUB'
 #!/bin/bash
 echo "ssh $*" >> "$W/ssh-calls"
+[ -n "${INIT_FAILS:-}" ] && [[ $* == *"/$INIT_FAILS.git/HEAD || git init"* ]] && { echo "fatal: cannot mkdir" >&2; exit 128; }
+exit 0
 STUB
 printf '#!/bin/bash\ncat > /dev/null\n' > "$W/bin/logger"
 chmod +x "$W/bin"/*
@@ -211,6 +214,11 @@ check("none listed: fails (an empty organisation is no clean run)", (rc, sum("la
 rc, out, g, sh, cu = run([["ops", "infra", "site"]], FETCH_FAILS="infra")
 check("one repository's fetch failing: the others pushed, it named, the unit failed, no last-success",
       (rc, sum(" push " in l for l in g), "infra(fetch)" in out, sum("last-success" in l for l in sh)), (1, 3, True, 0))
+rc, out, g, sh, cu = run([["ops", "infra", "site"]], INIT_FAILS="infra")
+check("one repository's repository on the Pi not made: it named, not pushed; the others pushed; the unit failed, no "
+      "last-success", (rc, "infra(its repository on the Pi)" in out, re.findall(r" push -q --mirror \S+/([\w.-]+\.git) ",
+                                                                             "\n".join(g)),
+                       sum("last-success" in l for l in sh)), (1, True, ["ops.git", "site.git"], 0))
 rc, out, g, sh, cu = run([["ops", "bad$(name)"]])
 check("a name that is no plain name: named, never used; the unit failed",
       (rc, "(its name)" in out, any("bad$(name)" in l for l in g + sh)), (1, True, False))
