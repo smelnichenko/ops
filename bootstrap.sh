@@ -310,7 +310,7 @@ eso_switch_proven() {
     [[ -z $gone ]] || log "the old reviewer token (external-secrets/vault-token-reviewer) deleted"
     return 0
   fi
-  err "External Secrets' login on the new config NOT proven - the old reviewer token kept; kubectl -n ${es%/*}" \
+  err "External Secrets' login on the new config NOT proven - nothing deleted; kubectl -n ${es%/*}" \
     "describe externalsecret ${es#*/}"
   if [[ $was != ready ]]; then
     err "nothing put back: no ExternalSecret logged in on the config before either"
@@ -326,27 +326,29 @@ eso_switch_proven() {
 }
 
 # One refresh of the ExternalSecret asked for and waited for (ESO_PROOF_SECONDS): its syncedResourceVersion (the
-# generation and a hash of its labels and annotations) changed from before the force-sync annotation - the reconcile
-# that saw it began after the annotation, so after Vault's write; a sync already running when Vault was written
-# refreshes with the version from before - and Ready. The version before not read fails it - never "refreshed"
+# generation and a hash of its labels and annotations) changed from before the force-sync annotation and Ready - the
+# reconcile that saw it began after the annotation, so after Vault's write; a sync already running when Vault was
+# written refreshes with the version from before. ESO writes the version on a successful sync alone: one never synced
+# (a rebuilt cluster, DR step 5) has none before - any version since is its first sync. Read with a separator (empty
+# fields shifted a whitespace split); a read that fails is never "refreshed"
 eso_refreshed() {
   local es=$1 line before now ready end
-  local path='{.status.syncedResourceVersion} {.status.conditions[?(@.type=="Ready")].status}'
-  if ! line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath="{.status.refreshTime} $path") \
-      || ! read -r _ before _ <<< "$line" || [[ -z $before ]]; then
+  local path='{.status.syncedResourceVersion}|{.status.conditions[?(@.type=="Ready")].status}'
+  if ! line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath="$path"); then
     err "ExternalSecret $es's synced version not read - nothing proven"
     return 1
   fi
+  IFS='|' read -r before _ <<< "$line"
   kubectl -n "${es%/*}" annotate externalsecret "${es#*/}" force-sync="$(date +%s)" --overwrite > /dev/null \
     || { err "Cannot ask ExternalSecret $es to refresh"; return 1; }
   end=$((SECONDS + ${ESO_PROOF_SECONDS:-90}))
   while :; do
-    if line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath="{.status.refreshTime} $path"); then
-      read -r _ now ready <<< "$line"
-      [[ $now != "$before" && $ready == True ]] && return 0
+    if line=$(kubectl -n "${es%/*}" get externalsecret "${es#*/}" -o jsonpath="$path"); then
+      IFS='|' read -r now ready <<< "$line"
+      [[ -n $now && $now != "$before" && $ready == True ]] && return 0
     fi
     if ((SECONDS >= end)); then
-      err "ExternalSecret $es not refreshed since asked (Ready ${ready:-unread}, synced version ${now:-unread})"
+      err "ExternalSecret $es not refreshed since asked (Ready ${ready:-unread}, synced version ${now:-none})"
       return 1
     fi
     sleep 2

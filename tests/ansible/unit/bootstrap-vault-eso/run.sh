@@ -37,15 +37,18 @@ case "\$*" in
     n=\$(( \$(cat "$W/es-reads" 2> /dev/null || echo 0) + 1 )); echo \$n > "$W/es-reads"
     [ "\${ES_READ_FAILS_AT:-0}" != "\$n" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
     # after the rollback (Vault's config written back), the login works again unless ROLLBACK_LOGIN=no
-    # "<refresh time> <syncedResourceVersion> <Ready>": the version changes once a reconcile saw the force-sync annotation
-    # (Inflight: one already running refreshes - a new time - with the version from before the annotation)
+    # "<syncedResourceVersion>|<Ready>": the version changes once a reconcile saw the force-sync annotation (Inflight:
+    # one already running refreshes with the version from before the annotation). NEVER_SYNCED: a rebuilt cluster's -
+    # ESO sets the version on a successful sync alone, none before the switch: "|False"
     if [ -e "$W/rolled-back" ] && [ -e "$W/annotated-again" ]; then
-      [ "\${ROLLBACK_LOGIN:-yes}" = yes ] && echo "2026-10-08T03:00:00Z 1-ccc True" || echo "2026-10-08T01:00:00Z 1-aaa False"
-    elif [ ! -e "$W/annotated" ] || [ "\${ES_READY:-True}" = Stale ]; then echo "2026-10-08T01:00:00Z 1-aaa True"
-    elif [ "\${ES_READY:-True}" = True ]; then echo "2026-10-08T02:00:00Z 1-bbb True"
-    elif [ "\${ES_READY:-True}" = Inflight ]; then echo "2026-10-08T02:00:00Z 1-aaa True"
-    elif [ "\${ES_READY:-True}" = Moved ]; then echo "2026-10-08T02:00:00Z 1-bbb False"
-    else echo "2026-10-08T01:00:00Z 1-aaa False"; fi ;;
+      [ "\${ROLLBACK_LOGIN:-yes}" = yes ] && echo "1-ccc|True" || echo "1-aaa|False"
+    elif [ ! -e "$W/annotated" ] && [ -n "\${NEVER_SYNCED:-}" ]; then echo "|False"
+    elif [ ! -e "$W/annotated" ] || [ "\${ES_READY:-True}" = Stale ]; then echo "1-aaa|True"
+    elif [ "\${ES_READY:-True}" = True ]; then echo "1-bbb|True"
+    elif [ "\${ES_READY:-True}" = Inflight ]; then echo "1-aaa|True"
+    elif [ "\${ES_READY:-True}" = Moved ]; then echo "1-bbb|False"
+    elif [ -n "\${NEVER_SYNCED:-}" ]; then echo "|False"
+    else echo "1-aaa|False"; fi ;;
   "-n "*" annotate externalsecret "*" force-sync="*" --overwrite")
     [ ! -e "$W/annotated" ] || touch "$W/annotated-again"; touch "$W/annotated"; echo "\$2/\$5" >> "$W/annotated-es" ;;
   "-n external-secrets get secret vault-token-reviewer --ignore-not-found -o name")
@@ -173,14 +176,16 @@ check "the config before not read (an error, not 'none'): the step fails before 
 run ES_FIRST=False
 check "the first ExternalSecret not Ready before the switch: the next Ready one proves it" \
   "$rc $(cat "$W/annotated-es" 2> /dev/null)" "0 argocd/x"
-# none Ready before the switch - a rebuilt cluster (DR step 5): switched all the same, proven by an ExternalSecret
-run ES_FIRST=False ES_SECOND=False NO_TOKEN_SECRET=1
-check "none Ready before the switch (a rebuilt cluster): switched, proven by one of them refreshed and Ready; passes" \
+# none Ready before the switch - a rebuilt cluster (DR step 5): none ever synced (no version at all - ESO writes it on
+# a successful sync alone): switched all the same, proven by one of them synced since and Ready
+run ES_FIRST=False ES_SECOND=False NO_TOKEN_SECRET=1 NEVER_SYNCED=1
+check "none Ready, none ever synced (a rebuilt cluster): switched, proven by one of them synced since and Ready; passes" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c '^vault write auth/kubernetes/config' "$W/vault-argv") \
 $(cat "$W/annotated-es" 2> /dev/null | head -1)" "0 1 1 cert-manager/porkbun-secret-es"
-run ES_FIRST=False ES_SECOND=False ES_READY=False
-check "none Ready before, not proven after: the step fails, said - nothing put back (the old config did not work either)" \
-  "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(grep -c 'NOT proven' <<< "$out")" "1 none 1"
+run ES_FIRST=False ES_SECOND=False NO_TOKEN_SECRET=1 NEVER_SYNCED=1 ES_READY=False
+check "none Ready, none synced, not proven after: the step fails, said - nothing put back, no old token said kept" \
+  "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(grep -c 'NOT proven' <<< "$out") \
+$(grep -c 'reviewer token kept' <<< "$out")" "1 none 1 0"
 run ES_LIST_FAILS=1
 check "the ExternalSecrets not listed (an error, not 'none'): the step fails before any write, the token kept" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0 0"
