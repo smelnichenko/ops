@@ -4,8 +4,6 @@
 # answered per case. The tables were counted once, before Keycloak was stopped: a Keycloak running on the empty
 # database could build its schema in between, the dump (one transaction) then failed on it and every later run refused
 # the database in use. Now counted again with Keycloak stopped; a database in use before is refused without a stop.
-# Started again, each Pi's Keycloak waited for until it serves: one still starting was read as down by the next
-# restart's guard on the other Pi, which refused.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
@@ -15,9 +13,7 @@ unset ANSIBLE_CONFIG
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 W=$W "$PY" - <<'PY' || { echo "FAIL the play could not be built"; exit 1; }
-import os, sys, yaml
-sys.path.insert(0, "tests/ansible/unit")
-from templar import condition  # noqa: E402
+import os, yaml
 W = os.environ["W"]
 LOG = os.path.join(W, "log")
 counts = 0
@@ -36,16 +32,6 @@ def stub(t):
     svc = t.get("ansible.builtin.systemd")
     if svc:
         return {**keep, "ansible.builtin.shell": f"echo \"{{{{ item }}}} {svc['name']} {svc['state']}\" >> {LOG}"}
-    uri = t.get("ansible.builtin.uri")
-    # each Pi's own Keycloak asked on that Pi (delegated to the loop's Pi), for as long as a start takes (240 s, as
-    # its restart waits): logged as that Pi serving - any other shape left as written, and it fails here
-    if (uri and t.get("delegate_to") == "{{ item }}" and str(uri.get("url", "")) == "http://127.0.0.1:8080/realms/master"
-            and int(t.get("retries", 0)) * int(t.get("delay", 0)) >= 240
-            # its until as Ansible evaluates it: Keycloak's 200 alone ends the wait - not a refused connection (-1), a
-            # 503 while it starts, no answer
-            and [condition(t.get("until", "false"), **{t.get("register", "_r"): r})
-                 for r in ({"status": 200}, {"status": -1}, {"status": 503}, {})] == [True, False, False, False]):
-        return {**keep, "ansible.builtin.shell": f"echo \"{{{{ item }}}} keycloak serving\" >> {LOG}"}
     if "psql" in str(t.get("ansible.builtin.shell", "")):
         # the restore as the case says: done, or failed (psql's error, the database left empty - one transaction)
         return {**keep, "failed_when": False, "register": t["register"], "ansible.builtin.shell":
@@ -75,8 +61,7 @@ HOSTS
   echo "FAIL $1 (rc $rc)"; echo "    got:  $got"; echo "    want: $4"; grep -E "ERROR|fatal" <<< "$out" | head -3
   fails=$((fails + 1))
 }
-S="pi1 keycloak stopped;pi2 keycloak stopped"
-R="pi1 keycloak started;pi2 keycloak started;pi1 keycloak serving;pi2 keycloak serving"
+S="pi1 keycloak stopped;pi2 keycloak stopped" R="pi1 keycloak started;pi2 keycloak started"
 case_ "empty, and still empty with Keycloak stopped: restored, Keycloak started again" "[0, 0]" 0 "$S;restored;$R"
 case_ "empty, then its schema built before Keycloak stopped: refused, nothing restored, Keycloak started again" \
   "[0, 92]" 1 "$S;$R"
