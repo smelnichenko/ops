@@ -7,7 +7,7 @@ automated sync with selfHeal shows nothing OutOfSync, it just applies it. So bef
 infra's clusters/production/argocd/apps at the step's commits rendered with both Helms, object by object.
 
 A step opts in with its line `helm-diff <old helm> <new helm>`; the renders use the official binaries of those versions
-(downloaded into .upgrade/helm, checked against their published sha256). Platform's charts as upgrade-merge-order.py
+(downloaded into .upgrade/helm, checked against their published sha256, pinned here). Platform's charts as upgrade-merge-order.py
 renders them (the per-environment ApplicationSets included); the upstream charts from their repositories (HTTP and
 OCI), with their value files from infra, inline values and parameters - CRDs included, as Argo CD renders them.
 
@@ -25,6 +25,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 import yaml
@@ -39,21 +40,45 @@ mo = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_me
 _loader.exec_module(mo)
 
 
+# the published sha256 of each Helm a step's helm-diff line names (get.helm.sh/helm-v<version>-linux-amd64.tar.gz
+# .sha256sum, read 2026-10-08 - the archives kept in .upgrade/helm since matching): pinned here, not fetched at each
+# use - a sum from the server the archive comes from proves only that the two agree, and its fetch failing ended a boot
+HELM_SHA256 = {
+    "3.19.4": "759c656fbd9c11e6a47784ecbeac6ad1eb16a9e76d202e51163ab78504848862",
+    "4.2.1": "479dca836e5b45e8bd222400c5591b0e3a647378f03ff96597180db97c17fdae",
+}
+
+
+def fetch(url):
+    """A download, a transient failure (a 5xx, a 429, the connection lost) tried again as a chart fetch is."""
+    for attempt in range(1, FETCH_TRIES + 1):
+        try:
+            return urllib.request.urlopen(url, timeout=120).read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+            code = getattr(e, "code", None)
+            if attempt == FETCH_TRIES or (code is not None and code < 500 and code != 429):
+                raise
+            print(f"{url}: a transient failure, try {attempt} of {FETCH_TRIES}: {e}", file=sys.stderr)
+            time.sleep(FETCH_WAIT * attempt)
+
+
 def helm_binary(version):
-    """The official linux-amd64 binary of that Helm version, from its archive verified against the published sha256 at
-    each use: the archive kept here, fetched again when it is not the published one; the binary taken from it afresh.
+    """The official linux-amd64 binary of that Helm version, from its archive verified against its pinned sha256 at
+    each use: the archive kept here, fetched again when it is not the pinned one; the binary taken from it afresh.
     Nothing cached is run on its word - a binary left in its place (by hand, a wrong build, a plant) said the version
     asked for and was trusted."""
     path = os.path.join(BIN, version, "helm")
     name = f"helm-v{version}-linux-amd64.tar.gz"
     url = f"https://get.helm.sh/{name}"
-    want = urllib.request.urlopen(url + ".sha256sum", timeout=60).read().decode().split()[0]
+    want = HELM_SHA256.get(version)
+    if not want:
+        sys.exit(f"helm {version}: no sha256 pinned (HELM_SHA256 in {__file__}) - add the published one: {url}.sha256sum")
     kept = os.path.join(BIN, version, name)
     archive = open(kept, "rb").read() if os.path.exists(kept) else b""
     if hashlib.sha256(archive).hexdigest() != want:
-        archive = urllib.request.urlopen(url, timeout=120).read()
+        archive = fetch(url)
         if hashlib.sha256(archive).hexdigest() != want:
-            sys.exit(f"helm {version}: the archive's sha256 is not the published one")
+            sys.exit(f"helm {version}: the archive's sha256 is not the pinned one")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # each written beside its place and moved there whole: one cut short left a partial helm that every later run used
     for dest, data in ((kept, lambda: archive), (path, lambda: tarfile.open(fileobj=io.BytesIO(archive))

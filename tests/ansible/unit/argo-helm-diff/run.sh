@@ -152,7 +152,7 @@ fails += not check_("which Helm renders it: only the old one, only the new one",
                     labels)
 # the binary: written whole or not at all - a download cut short (here: the archive's read failing midway) left a
 # partial helm at its path, and every later run used it
-import hashlib, tarfile, urllib.request
+import hashlib, re, tarfile, urllib.error, urllib.request
 def archive(body):
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as t:
@@ -169,9 +169,20 @@ class Resp:
 bins = tempfile.mkdtemp()
 saved = (fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile)
 fresh.BIN = bins
-fetched = []
-urllib.request.urlopen = lambda url, timeout=None: fetched.append(url) or Resp(
-    hashlib.sha256(blob).hexdigest().encode() + b"  x\n" if url.endswith(".sha256sum") else blob)
+saved_pins = dict(getattr(fresh, "HELM_SHA256", {}))
+# the sum pinned in the script, nothing fetched for it; the archive from the server (a sum asked for: none to give)
+fresh.HELM_SHA256 = {"9.9.9": hashlib.sha256(blob).hexdigest()}
+fresh.FETCH_WAIT = 0
+fetched, serve = [], {"fails": 0, "blob": blob}
+def urlopen(url, timeout=None):
+    fetched.append(url)
+    if url.endswith(".sha256sum"):
+        raise urllib.error.HTTPError(url, 404, "no sum served here", None, None)
+    if serve["fails"]:
+        serve["fails"] -= 1
+        raise urllib.error.HTTPError(url, 502, "Bad Gateway", None, None)
+    return Resp(serve["blob"])
+urllib.request.urlopen = urlopen
 class Cut:
     def read(self):
         raise KeyboardInterrupt
@@ -192,25 +203,54 @@ try:
     # fetched), the binary taken from it afresh - one left in its place (by hand, a wrong build, a plant) never run
     fetched.clear()
     fresh.helm_binary("9.9.9")
-    fails += not check_("the cached archive, its published sha256 matching: only the sum fetched",
-                        [u.endswith(".sha256sum") for u in fetched] == [True], fetched)
+    fails += not check_("the cached archive, its pinned sha256 matching: nothing fetched", fetched == [], fetched)
     ran = os.path.join(bins, "ran")
     open(path, "wb").write(f'#!/bin/sh\ntouch {ran}\necho v9.9.9\n'.encode())
     os.chmod(path, 0o755)
     fetched.clear()
     got_path = fresh.helm_binary("9.9.9")
-    got = (open(got_path, "rb").read(), os.path.exists(ran), [u.endswith(".sha256sum") for u in fetched])
+    got = (open(got_path, "rb").read(), os.path.exists(ran), fetched)
     fails += not check_("a binary left in its place (saying the version asked for): never run, replaced from the archive",
-                        got == (HELM, False, [True]), got)
+                        got == (HELM, False, []), got)
     arc = [f for f in os.listdir(os.path.join(bins, "9.9.9")) if f.endswith(".tar.gz")]
     open(os.path.join(bins, "9.9.9", arc[0]), "wb").write(archive(b"#!/bin/sh\necho planted\n"))
     fetched.clear()
     got_path = fresh.helm_binary("9.9.9")
     got = (open(got_path, "rb").read(), sorted(u.rsplit("/", 1)[1] for u in fetched))
-    fails += not check_("a cached archive not the published one: fetched again, verified, the binary from it",
-                        got == (HELM, ["helm-v9.9.9-linux-amd64.tar.gz", "helm-v9.9.9-linux-amd64.tar.gz.sha256sum"]), got)
+    fails += not check_("a cached archive not the pinned one: fetched again, verified, the binary from it",
+                        got == (HELM, ["helm-v9.9.9-linux-amd64.tar.gz"]), got)
+    # the server's archive not the pinned one: refused, nothing written in its place
+    os.remove(os.path.join(bins, "9.9.9", arc[0]))
+    serve["blob"] = archive(b"#!/bin/sh\necho other\n")
+    try:
+        fresh.helm_binary("9.9.9")
+        got = "ran"
+    except SystemExit as e:
+        got = "pinned" in str(e)
+    fails += not check_("the server's archive not the pinned one: refused", got is True, got)
+    serve["blob"] = blob
+    # a transient failure of the archive's fetch (a 502): tried again
+    serve["fails"], fetched[:] = 1, []
+    got_path = fresh.helm_binary("9.9.9")
+    fails += not check_("the archive's fetch failing once (502): tried again, the binary from it",
+                        (open(got_path, "rb").read(), len(fetched)) == (HELM, 2), (len(fetched), fetched))
+    # a version with no sum pinned: refused before any fetch
+    fetched.clear()
+    try:
+        fresh.helm_binary("9.9.8")
+        got = "ran"
+    except SystemExit as e:
+        got = ("no sha256 pinned" in str(e), fetched)
+    fails += not check_("a version with no sha256 pinned: refused, nothing fetched", got == (True, []), got)
 finally:
     fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile = saved
+# every Helm a step's helm-diff line names: its sha256 pinned
+import glob  # noqa: E402
+named = sorted({v for f in glob.glob("tests/ansible/upgrade/steps/*.txt") for line in open(f)
+                if line.startswith("helm-diff ") for v in line.split()[1:3]})
+fails += not check_("every Helm a step's helm-diff line names has its sha256 pinned",
+                    bool(named) and all(re.fullmatch(r"[0-9a-f]{64}", saved_pins.get(v, "")) for v in named),
+                    (named, sorted(saved_pins)))
 print("argo-helm-diff: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
