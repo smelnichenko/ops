@@ -923,7 +923,7 @@ setup-pi-backups names) to push; Sonar's 23 complexity findings (S3776) after th
 
 ## Fourth full review 2026-10-08 - what it fixed
 
-Seven passes over ops a19d595..d76ae14's predecessor (the third review's fixes) and platform's step 45; then two Pi
+Seven passes over the third review's fixes (ops from a19d595) and platform's step 45; then two Pi
 hand tests on the copy as the old code left it. Each fix has a test that fails first and again when its mechanism is
 reverted (ops a7d8c4b..d76ae14, then ..HEAD after the 03:22 run started; platform aebdec0 on step 45, 46-61 restacked):
 - Production's procedure: `confirm()` read every answer on a real terminal as a no (a text "r+" on /dev/tty raises -
