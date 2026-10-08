@@ -315,8 +315,8 @@
     _other_pi: "{{ 'pi2' if inventory_hostname == 'pi1' else 'pi1' }}"
     # how long a handover (Vault's step-down, Consul's leadership) may take before the restart is refused
     consul_handover_seconds: 30
-    # the Pi with Vault's root token: setup-vault-pi's init play writes it there only
-    _vault_token_pi: pi1
+    # the Pi Vault was initialised on: its root token is there only (setup-vault-pi's init play)
+    _vault_init_pi: pi1
   tasks:
     - name: A restart here, and Patroni running to pause around it
       when:
@@ -407,7 +407,7 @@
                     exit 1
                   fi
                   if ! VAULT_TOKEN=$(cat /etc/vault-unseal/root-token 2> /dev/null) || [ -z "$VAULT_TOKEN" ]; then
-                    echo "REFUSED: no root token on {{ _vault_token_pi }} (/etc/vault-unseal/root-token) to step Vault" \
+                    echo "REFUSED: no root token on {{ _vault_init_pi }} (/etc/vault-unseal/root-token) to step Vault" \
                       "down with - step it down by hand (VAULT_ADDR=$here vault operator step-down), then run again"
                     exit 1
                   fi
@@ -428,7 +428,7 @@
                   exit 1
               register: _vault_handover
               changed_when: "'STEPPED DOWN' in _vault_handover.stdout"
-              delegate_to: "{{ _vault_token_pi }}"
+              delegate_to: "{{ _vault_init_pi }}"
               when:
                 - inventory_hostname in groups['pis']
                 - _vault_unit.status.ActiveState | default('') == 'active'

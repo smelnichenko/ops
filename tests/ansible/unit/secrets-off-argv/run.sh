@@ -148,6 +148,7 @@ check("a module that puts an argument on a command line (git's repo): named; a p
 # `x --token "$(cat /etc/x/token)"` puts it in /proc as surely as a templated one. A builtin's arguments (printf, echo,
 # read) never reach an exec: curl takes the header from a descriptor (-K <(printf ...)), a file (-H @f) or stdin.
 BUILTINS = {"printf", "echo", "read", "local", "export", "declare", "readonly", "set", "test", "[", "[[", "return"}
+KEYWORDS = {"if", "elif", "while", "until", "!", "then", "do", "else", "time"}
 ARGV_SECRET = re.compile(r"Bearer \$|\$\(\s*(cat|<)\s*[^)]*(token|password|passwd|secret|private|\.key)\b[^)]*\)", re.I)
 
 
@@ -165,6 +166,8 @@ def argv_reads(script):
             # command's argument, a <( )'s inner command its own
             seg = re.split(r"&&|\|\||;|\||<\(|\bthen\b|\bdo\b|\{", cmd[:m.start()])[-1]
             words = [w for w in seg.split() if not re.match(r"^\w+=", w)]
+            while words and words[0] in KEYWORDS:  # the shell's own words: the command is the next
+                words.pop(0)
             if words and words[0] not in BUILTINS and not words[0].endswith("()"):
                 out.append(cmd)
                 break
@@ -178,8 +181,10 @@ check("a run-time token on another program's argv: named; on a builtin's, a desc
        bool(argv_reads('x=1; curl -K <(printf \'header = "Authorization: Bearer %s"\\n\' "$token") "$api"')),
        bool(argv_reads('read -r token < /etc/caddy/cluster-token')),
        bool(argv_reads('cat /etc/caddy/cluster-token > /dev/null')),
-       bool(argv_reads('VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)'))],
-      [True, True, True, False, False, False, False])
+       bool(argv_reads('VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)')),
+       bool(argv_reads('if ! VAULT_TOKEN=$(cat /etc/vault-unseal/root-token 2> /dev/null); then exit 1; fi')),
+       bool(argv_reads('if ! vault login "$(cat /etc/vault-unseal/root-token)"; then exit 1; fi'))],
+      [True, True, True, False, False, False, False, False, True])
 
 
 def scripts(doc):
