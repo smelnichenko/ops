@@ -45,11 +45,15 @@ cat > "$W/kubectl" <<'STUB'
 #!/bin/bash
 echo "$*" >> "$W/calls"
 case "$*" in
-  *jsonpath*conditions*) echo "${ENDED:-}" ;;
+  *jsonpath*conditions*) [ -z "${SLOW_GET:-}" ] || sleep 1; echo "${ENDED:-}" ;;
   *jsonpath*succeeded*) [ "${ENDED:-}" = Complete ] && echo 1 ;;
   *" logs "*) echo "✓ status is 200" ;;
-  *"delete job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke"*)  # as kubectl 1.34 answers (read on ten)
-    if [ -n "${LEFTOVER:-}" ]; then echo 'job.batch "vagrant-k6-smoke-0ld" deleted'; else echo "No resources found"; fi ;;
+  # the smoke objects by label: LEFTOVER - an earlier run's, an hour old; CONCURRENT - another run's, a minute old;
+  # SLOW_GET - each poll's read takes a second (the deadline is the clock's, not a count of polls)
+  *"get job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke"*)
+    [ -z "${LEFTOVER:-}" ] || echo "Job/vagrant-k6-smoke-0ld $(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+    [ -z "${CONCURRENT:-}" ] || echo "Job/vagrant-k6-smoke-fr3sh $(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)" ;;
+  *"delete job/"*|*"delete configmap/"*) echo "${*##* }" | sed 's|.*/||; s|^|deleted |' ;;
 esac
 exit 0
 STUB
@@ -81,16 +85,26 @@ check "its connection gone: it ends at its next heartbeat, its Job and ConfigMap
 # an earlier run's leftovers (one whose connection and cleanup were both cut) removed before this run's apply, said so;
 # none, nothing said; every call bounded (a hung API server held the poll for good)
 out=$(remote ENDED=Complete LEFTOVER=1 | tr -d '\r')
-first_delete=$(grep -n 'delete job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke' "$W/calls" | head -1 | cut -d: -f1)
+first_delete=$(grep -n 'delete job/vagrant-k6-smoke-0ld' "$W/calls" | head -1 | cut -d: -f1)
 apply=$(grep -n ' apply ' "$W/calls" | head -1 | cut -d: -f1)
 check "an earlier run's leftovers removed by label before the apply, said so" \
   "$([ -n "$first_delete" ] && [ -n "$apply" ] && [ "$first_delete" -lt "$apply" ] && echo before) $(grep -c 'earlier run.s leftovers removed' <<< "$out")" \
   "before 1"
 out=$(remote ENDED=Complete | tr -d '\r')
 check "none left: nothing said" "$(grep -c 'leftovers' <<< "$out")" 0
+# another run's, still within its own bound (a concurrent smoke): left alone - only what outlived any run is removed
+out=$(remote ENDED=Complete LEFTOVER=1 CONCURRENT=1 | tr -d '\r')
+check "a concurrent run's objects kept, an earlier run's removed" \
+  "$(grep -c 'delete job/vagrant-k6-smoke-fr3sh' "$W/calls") $(grep -c 'delete job/vagrant-k6-smoke-0ld' "$W/calls")" "0 1"
+# the run's bound is the clock's: a slow poll does not stretch it (180 polls of up to 35 s each were not 15 minutes)
+t0=$SECONDS
+out=$(remote SLOW_GET=1 SMOKE_SECONDS=3 SMOKE_POLL=0.1 | tr -d '\r'; echo "exit ${PIPESTATUS[0]}"); rc=${out##*exit }
+check "never ending: failed at its deadline, by the clock" "$rc $((SECONDS - t0 < 10)) $(grep -c '^SMOKE FAILED' <<< "$out")" \
+  "1 1 1"
 check "every kubectl call bounded (--request-timeout)" "$(grep -vc -- '--request-timeout=' "$W/calls")" 0
 # the heartbeat is the poll's own write: no process of its own (one left behind signalled a PID that may be another's)
-check "no background process in the remote shell" "$(grep -cE '&( |$)' "$W/remote.sh")" 0
+check "no background process in the remote shell (a lone &, not && or a redirection)" \
+  "$(grep -cE '(^|[^&<>])&([[:space:]]|$)' "$W/remote.sh")" 0
 # the whole script, its smoke failing on the VM: it exits non-zero - its remote shell's output goes through `tr`, and
 # without pipefail the pipeline's exit was tr's (0): a failed smoke passed
 E=$W/e2e; mkdir -p "$E/ops/scripts" "$E/ops/.upgrade" "$E/bin"

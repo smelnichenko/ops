@@ -78,20 +78,31 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM PIPE
-# what an earlier run left (its connection and its cleanup both cut - its own end deletes it otherwise), said so
-# (kubectl says "No resources found" when there are none)
-left=$($K delete job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke --ignore-not-found --wait=false 2>&1) \
-  || echo "an earlier run's leftovers not removed: $(tr '\n' ' ' <<< "$left")"
-gone=$(grep ' deleted$' <<< "$left" | tr '\n' ' ') || true
-[ -z "$gone" ] || echo "an earlier run's leftovers removed: $gone"
+# what an earlier run left (its connection and its cleanup both cut - its own end deletes it otherwise), said so:
+# only what outlived any run's bound (another run's, still within it, is that run's own)
+SMOKE_SECONDS=${SMOKE_SECONDS:-900}
+cutoff=$(( $(date +%s) - SMOKE_SECONDS - 300 ))
+if left=$($K get job,configmap -l app.kubernetes.io/name=vagrant-k6-smoke \
+    -o jsonpath='{range .items[*]}{.kind}/{.metadata.name} {.metadata.creationTimestamp}{"\n"}{end}' 2>&1); then
+  gone=""
+  while read -r obj made; do
+    [ -n "$obj" ] && [ "$(date -d "$made" +%s)" -lt "$cutoff" ] || continue
+    $K delete "${obj,,}" --ignore-not-found --wait=false > /dev/null 2>&1 && gone+=" ${obj#*/}"
+  done <<< "$left"
+  [ -z "$gone" ] || echo "an earlier run's leftovers removed:$gone"
+else
+  echo "an earlier run's leftovers not read: $(tr '\n' ' ' <<< "$left")"
+fi
 $K apply -f "/tmp/$NAME.yaml" || { echo "SMOKE FAILED: the Job not applied"; exit 1; }
 rm -f "/tmp/$NAME.yaml"
 ended=""
-for _ in $(seq 180); do  # 15 minutes
+# 15 minutes by the clock (180 polls of up to 35 s each were up to 105)
+end=$((SECONDS + SMOKE_SECONDS))
+while [ "$SECONDS" -lt "$end" ]; do
   printf '\r' 2> /dev/null
   ended=$($K get job "$NAME" -o jsonpath='{.status.conditions[?(@.status=="True")].type}' 2> /dev/null)
   case "$ended" in *Complete* | *Failed*) break ;; esac
-  sleep 5
+  sleep "${SMOKE_POLL:-5}"
 done
 echo "--- k6 checks"
 $K logs "job/$NAME" -c k6 --tail=80 | grep -E '[✓✗]|http_req_failed|level=(error|warning)' | head -40
