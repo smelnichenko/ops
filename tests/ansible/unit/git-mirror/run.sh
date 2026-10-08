@@ -122,6 +122,27 @@ names = [t.get("name") for t in tasks]
 dele = [t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "DELETE" and "older" in t.get("name", "")]
 check("the older tokens deleted after the new one is proven to read",
       bool(dele) and names.index("The new token reads the organisation's repositories") < names.index(dele[0]["name"]), True)
+# which tokens go: the mirror's own alone - the admin's others (Argo CD's, Woodpecker's) never
+admin_tokens = [{"id": 1, "name": "git-mirror-20261001T000000"}, {"id": 2, "name": "argocd-root"},
+                {"id": 3, "name": "woodpecker-infra"}, {"id": 4, "name": "git-mirror-20261002T000000"},
+                {"id": 5, "name": "my-git-mirror-x"}]
+check("the older tokens: the mirror's own (git-mirror-*) alone - Argo CD's, Woodpecker's, a name merely holding it kept",
+      [x["id"] for x in render(dele[0]["loop"], _git_mirror_tokens={"json": admin_tokens})] if dele else None, [1, 4])
+check("the older tokens: none read (the kept token reads) - none deleted",
+      list(render(dele[0]["loop"], _git_mirror_tokens={"skipped": True})) if dele else None, [])
+# whether the kept token reads: an HTTP 200 alone - a refusal, no token, a skipped read (the mirror off) is none
+works = next((t for t in tasks if t.get("name") == "Whether the kept token reads"), None)
+fact = (works or {}).get("ansible.builtin.set_fact", {}).get("_git_mirror_token_works")
+check("the kept token reads on HTTP 200 alone (401, 403, NO TOKEN, a skipped read: a new one)",
+      [str(render(fact, _git_mirror_read=r)) for r in ({"stdout": "HTTP 200"}, {"stdout": "HTTP 401"},
+                                                        {"stdout": "HTTP 403"}, {"stdout": "NO TOKEN"}, {"skipped": True})]
+      if fact else None, ["True", "False", "False", "False", "False"])
+# the new token's proof: anything but HTTP 200 fails it - the rescue deletes it, the older ones stay
+proof = next((t for t in block["block"] if t.get("name") == "The new token reads the organisation's repositories"), None)
+check("the new token proven by HTTP 200 alone (401, 403, 000, 502 fail the block)",
+      [condition(proof["failed_when"], _git_mirror_new_read={"stdout": x})
+       for x in ("HTTP 200", "HTTP 401", "HTTP 403", "HTTP 000", "HTTP 502")] if proof else None,
+      [False, True, True, True, True])
 svc = next(t for t in tasks if (t.get("ansible.builtin.copy") or {}).get("dest") == "/etc/systemd/system/offsite-backup.service")
 now = next((t for t in tasks if (t.get("ansible.builtin.systemd") or {}).get("name") == "offsite-backup.service"), None)
 check("the sync as the mirror's user; run once at deploy, a failure failing the play (not in a preview)",

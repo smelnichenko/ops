@@ -95,6 +95,33 @@ WRAP
   out=$(INFRA=$W/infra PATH="$W/wrap:$PATH" push "env: create f"); rc=$?
   check "another fetch between the script's fetch and its rebase: rebased onto the remote's main, never that branch" \
     "$rc $(git -C "$W/remote.git" log --format=%s main | grep -c '^other branch$')" "0 0"
+  # the remote's main moved by another clone right before the script's push (the apps' CD pushing tags): rejected,
+  # rebased onto it, pushed again - three tries; moved before each, refused, nothing of this run's pushed
+  mkdir -p "$W/move" && cat > "$W/move/git" <<'WRAP'
+#!/bin/bash
+if [ "$1" = -C ] && [ "$2" = "$INFRA" ] && [ "$3" = push ]; then
+  n=$(( $(cat "$MOVED" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$MOVED"
+  if [ "$n" -le "$MOVES" ]; then
+    echo "$n" > "$ELSEWHERE/tag-${MOVED##*/}-$n" && /usr/bin/git -C "$ELSEWHERE" add . \
+      && GIT_AUTHOR_NAME=someone GIT_COMMITTER_NAME=someone /usr/bin/git -C "$ELSEWHERE" commit -qm "cd: tag $n" \
+      && /usr/bin/git -C "$ELSEWHERE" pull -q --rebase origin main && /usr/bin/git -C "$ELSEWHERE" push -q origin main
+  fi
+fi
+exec /usr/bin/git "$@"
+WRAP
+  chmod +x "$W/move/git"
+  git -C "$W/elsewhere" pull -q --rebase origin main
+  echo m > "$W/infra/env/x"
+  out=$(INFRA=$W/infra ELSEWHERE=$W/elsewhere MOVES=1 MOVED=$W/moved1 PATH="$W/move:$PATH" push "env: create m"); rc=$?
+  check "the remote moved just before the push: rejected, rebased, pushed on the second try - both there, ours on top" \
+    "$rc $(cat "$W/moved1") $(git -C "$W/remote.git" log -1 --format=%s main) \
+$(git -C "$W/remote.git" log --format=%s main | grep -c '^cd: tag 1$')" "0 2 env: create m 1"
+  echo n > "$W/infra/env/x"
+  out=$(INFRA=$W/infra ELSEWHERE=$W/elsewhere MOVES=3 MOVED=$W/moved3 PATH="$W/move:$PATH" push "env: create n"); rc=$?
+  check "the remote moved before each of three pushes: refused, said - nothing of this run's pushed" \
+    "$rc $(cat "$W/moved3") $(grep -c 'not pushed to .* in three tries' <<< "$out") \
+$(git -C "$W/remote.git" log --format=%s main | grep -c '^env: create n$')" "1 3 1 0"
+  git -C "$W/infra" fetch -q origin main && git -C "$W/infra" reset -q --hard "$(git -C "$W/remote.git" rev-parse main)"
   # the same line changed on both sides: refused, nothing pushed, the checkout not left mid-rebase
   git -C "$W/elsewhere" pull -q --rebase origin main && echo theirs > "$W/elsewhere/env/x" \
     && someone -C "$W/elsewhere" commit -qam "theirs" && git -C "$W/elsewhere" push -q origin main

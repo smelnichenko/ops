@@ -67,7 +67,7 @@ W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYCHECK'
 import json, os, re, subprocess, sys, time
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
-from templar import render  # noqa: E402
+from templar import condition, render  # noqa: E402
 W = os.environ["W"]
 fails = 0
 def check(name, got, want):
@@ -93,8 +93,15 @@ if None in (lock, vault, leader, pause):
 at = every.index
 check("in order: Vault's handover, Patroni paused, Consul's handover, the backup's lock read, the restart at once",
       [at(vault) < at(pause) < at(leader) < at(lock), at(lock) + 1 == at(restart)], [True, True])
+# its condition as Ansible evaluates it: a Pi whose Vault is active - not the third server, not a Pi whose Vault is
+# stopped, failed or not installed (a restart on the active Pi without a step-down: its Vault lost its storage agent)
+pis = {"pis": ["pi1", "pi2"]}
 check("Vault's only on the Pis (none on the third server), and only where it runs",
-      ("groups['pis']" in str(vault.get("when")), "_vault_unit" in str(vault.get("when"))), (True, True))
+      [condition(vault.get("when"), inventory_hostname=h, groups=pis, _vault_unit=u) for h, u in (
+          ("pi1", {"status": {"ActiveState": "active"}}), ("pi2", {"status": {"ActiveState": "active"}}),
+          ("ten", {"status": {"ActiveState": "active"}}), ("pi1", {"status": {"ActiveState": "inactive"}}),
+          ("pi1", {"status": {"ActiveState": "failed"}}), ("pi1", {"status": {}}), ("pi1", {"skipped": True}))],
+      [True, True, False, False, False, False, False])
 unit = next((t for t in every[:at(vault)] if (t.get("ansible.builtin.systemd") or {}).get("name") == "vault"
              and t.get("register") == "_vault_unit"), None)
 check("the Vault unit read before it", unit is not None, True)

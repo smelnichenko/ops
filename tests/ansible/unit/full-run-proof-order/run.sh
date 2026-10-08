@@ -23,28 +23,35 @@ cat > "$W/bin/task" <<'STUB'
 #!/bin/bash
 echo "task $*" >> "$LOG"
 case "$*" in "test:upgrade:step STEP=$FAIL_AT "*) exit 1 ;; esac
+case "$*" in "test:upgrade:final-settle "*) [ -z "${SETTLE_FAILS:-}" ] || exit 1 ;; esac
 STUB
 cat > "$W/bin/git" <<'STUB'
 #!/bin/bash
+[ "${@: -1}" != "${GIT_FAILS_AT:-none}" ] || exit 128
 echo "sha-${@: -1}"
 STUB
 cat > "$W/run/scripts/upgrade-expected-inventory.py" <<'STUB'
 #!/bin/bash
+[ "$2" != "${REFS_FAIL_AT:-none}" ] || exit 1
 echo "upgrade/$2 main"
 STUB
 cat > "$W/run/scripts/upgrade-production.py" <<'STUB'
 #!/bin/bash
 echo "proof $2" >> "$LOG"
+[ "$2" != "${PROOF_FAILS_AT:-none}" ] || exit 1
 STUB
 cat > "$W/run/scripts/vagrant-image-digests.sh" <<'STUB'
 #!/bin/bash
 echo digests >> "$LOG"
+n=$(grep -c '^digests$' "$LOG")
+[ "$n" != "${DIGESTS_FAIL_AT:-none}" ] || exit 1
 STUB
 chmod +x "$W/bin/"* "$W/run/scripts/"*
 fails=0
-case_() {  # case_ <name> <step that fails, or none> <want rc 0|1> <want log, ; between>
+case_() {  # case_ <name> <step that fails, or none> <want rc 0|1> <want log, ; between> [<env>...]
   : > "$W/log"
-  (cd "$W/run" && PATH="$W/bin:$PATH" LOG="$W/log" FAIL_AT=$2 bash scripts/upgrade-full-steps.sh > "$W/out" 2>&1); rc=$?
+  (cd "$W/run" && env "${@:5}" PATH="$W/bin:$PATH" LOG="$W/log" FAIL_AT=$2 bash scripts/upgrade-full-steps.sh \
+    > "$W/out" 2>&1); rc=$?
   [ $rc = 0 ] || rc=1
   got=$(sed 's/^task test:upgrade:step STEP=/step /; s/^task test:upgrade:final-settle STEP=/final-settle /' "$W/log" \
     | paste -sd';')
@@ -61,10 +68,30 @@ case_ "the last step fails: the one before unproven, no final settle" 03-c 1 \
 check() {
   if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got $2, want $3"; fails=$((fails + 1)); fi
 }
+# each of the run's own acts failing ends the run there, failed (no -e: each guarded on its own - one guard dropped, a
+# failed final settle still recorded the last step's proof, a failed proof or digests went on to the next step)
+case_ "the final settle fails: the last step unproven, the run failed" none 1 \
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c" \
+  SETTLE_FAILS=1
+case_ "a proof refused: the run ends there, failed - no step after it" none 1 \
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a" PROOF_FAILS_AT=01-a
+case_ "the last proof refused: the run failed" none 1 \
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c" \
+  PROOF_FAILS_AT=03-c
+case_ "the digests after a step not read: the run ends there, failed - no proof, no step after it" none 1 \
+  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests" DIGESTS_FAIL_AT=2
+case_ "a step's refs not read: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests" REFS_FAIL_AT=02-b
+case_ "a step's branch not in a repository: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests" \
+  GIT_FAILS_AT=upgrade/02-b
 case_ "(again, for the digests' files)" none 0 \
   "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c"
 check "each step's digests in a file of its own" "$(ls "$W/run/.upgrade/step-digests" | paste -sd' ')" \
   "01-a.txt 02-b.txt 03-c.txt"
+# no step at all: a failure, not a green run
+mv "$W/run/tests/ansible/upgrade/steps" "$W/steps.kept" && mkdir "$W/run/tests/ansible/upgrade/steps"
+case_ "no step in the directory: the run failed, nothing run" none 1 ""
+check "  said so" "$(grep -c '^no upgrade steps in tests/ansible/upgrade/steps$' "$W/out")" 1
+rmdir "$W/run/tests/ansible/upgrade/steps" && mv "$W/steps.kept" "$W/run/tests/ansible/upgrade/steps"
 # the final settle as the Taskfile holds it: production's own values - what scripts/upgrade-production.py settle-values
 # prints, the values its settle sends argo-settled.py on ten - and a restart-history label of its own; the step settles
 # one set of values (STEP_SETTLE), shorter

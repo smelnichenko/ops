@@ -86,6 +86,9 @@ if [ "\$*" = "read -format=json auth/kubernetes/config" ]; then
   exit 0
 fi
 [ -z "\${VAULT_FAIL:-}" ] || { echo "Error writing data: 403" >&2; exit 2; }
+# ROLE_FAIL: the role's write alone refused
+case "\$*" in "write auth/kubernetes/role/"*)
+  [ -z "\${ROLE_FAIL:-}" ] || { echo "Error writing data to auth/kubernetes/role/eso-role: 403" >&2; exit 2; } ;; esac
 STUB
 chmod +x "$W/bin"/*
 fails=0
@@ -211,6 +214,12 @@ check "a server that is not a plain https URL: the step fails, nothing sent to t
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(ls "$W"/pwned-* 2> /dev/null | wc -l)" "1 0 0"
 run VAULT_FAIL=1
 check "a failure on the Pi: the step fails, said so" "$rc $(grep -c "Kubernetes auth on the Pi failed" <<< "$out")" "1 1"
+# the role written before the config: its write refused, the config never written - left as it was (the step ends
+# before its proof and its put-back)
+run ROLE_FAIL=1
+check "the role's write refused: the step fails, said so - the config never written" \
+  "$rc $(grep -c "Kubernetes auth on the Pi failed" <<< "$out") $(grep -c '^vault write auth/kubernetes/role/' "$W/vault-argv") \
+$(grep -c '^vault write auth/kubernetes/config' "$W/vault-argv")" "1 1 1 0"
 # the Vagrant Vault configured as ten's: the same keys in the same write, the same account bound, no token Secret
 keys() { grep -oE '(kubernetes_host|kubernetes_ca_cert|token_reviewer_jwt|disable_local_ca_jwt|issuer|pem_keys)=' | sort -u | tr -d '\n'; }
 iso=tests/ansible/upgrade/isolate-cluster.yml
