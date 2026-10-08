@@ -146,11 +146,17 @@ check("a module that puts an argument on a command line (git's repo): named; a p
 # read) never reach an exec: curl takes the header from a descriptor (-K <(printf ...)), a file (-H @f) or stdin.
 BUILTINS = {"printf", "echo", "read", "local", "export", "declare", "readonly", "set", "test", "[", "[[", "return"}
 KEYWORDS = {"if", "elif", "while", "until", "!", "then", "do", "else", "time"}
-# a secret on the command line: a bearer header, a file's secret read in place by $( ), or an option for one given a
-# variable (--password "$x", --token=${T}, -p"$db_pass" - a variable named for one: -p is a port's too)
-ARGV_SECRET = re.compile(r"Bearer \$|\$\(\s*(cat|<)\s*[^)]*(token|password|passwd|secret|private|\.key)\b[^)]*\)"
+# a secret on the command line: an authorization header of a variable (Bearer, token, Basic), a file's secret read in
+# place by $( ), an option for one given a variable (--password "$x", --token=${T}, -p"$db_pass" - a variable named for
+# one: -p is a port's too), curl's user:password with a variable password (-u, --user - curl's lower case alone: psql's
+# -U is a user), vault login's token, a URL's credentials (https://u:${token}@host)
+ARGV_SECRET = re.compile(r"(Bearer|Authorization:\s*(token|Basic))\s+\$"
+                         r"|\$\(\s*(cat|<)\s*[^)]*(token|password|passwd|secret|private|\.key)\b[^)]*\)"
                          r"|--(password|passwd|token|secret)[= ]+\"?\$"
-                         r"|(^|\s)-p\s*\"?\$\{?\w*(pass|pw|secret|token)", re.I)
+                         r"|(^|\s)-p\s*\"?\$\{?\w*(pass|pw|secret|token)"
+                         r"|(^|\s)(?-i:-u|--user)[= ]*[\"']?[^\s\"':]*:[\"']?\$"
+                         r"|(?<=\blogin\s)[\"']?(token=)?\$"
+                         r"|://[^/\s:@]+:\$\{?\w+\}?@", re.I)
 
 
 def argv_reads(script):
@@ -190,8 +196,18 @@ check("a run-time token on another program's argv: named; on a builtin's, a desc
        bool(argv_reads('mysql -u root -p"$db_pass" -e "select 1"')),
        bool(argv_reads('x --token="${TOKEN}" y')),
        bool(argv_reads('ssh -p "$port" host')),
-       bool(argv_reads('docker login --password-stdin -u u < "$f"'))],
-      [True, True, True, False, False, False, False, False, True, True, True, True, False, False])
+       bool(argv_reads('docker login --password-stdin -u u < "$f"')),
+       # review 7's: another header's scheme, curl's user:password, vault login's token, a URL's credentials
+       bool(argv_reads('curl -sf -H "Authorization: token $t" "$api"')),
+       bool(argv_reads('curl -sf -u "$user:$pass" "$api"')),
+       bool(argv_reads('curl -sf --user admin:"$pw" "$api"')),
+       bool(argv_reads('vault login "$T"')),
+       bool(argv_reads('git clone "https://u:${token}@git.example.org/r.git"')),
+       bool(argv_reads('psql -U postgres -c "select 1"')),
+       bool(argv_reads('vault login -method=userpass username=admin')),
+       bool(argv_reads('git clone "https://git.example.org/r.git"'))],
+      [True, True, True, False, False, False, False, False, True, True, True, True, False, False,
+       True, True, True, True, True, False, False, False])
 
 
 def scripts(doc):
