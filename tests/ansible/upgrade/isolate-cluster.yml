@@ -44,12 +44,14 @@
 
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
+      tags: [proof]
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
     # read once, from a public resolver (the LAN's resolves pmon.dev to production's LAN address): every A record,
     # each a public address - else refused (public-addresses.py): an empty lookup dropped nothing, a
     # DNS-intercepting router's LAN answer made the proof probe an address dropped already
     - name: Production's public addresses
+      tags: [proof]
       ansible.builtin.set_fact:
         production_public: "{{ lookup('ansible.builtin.pipe', 'python3 ' ~ playbook_dir ~ '/../public-addresses.py pmon.dev') | split }}"
 
@@ -104,6 +106,7 @@
     # the rewrite is proven by what the cluster's DNS answers, not by the ConfigMap: a Pi-served name -> the Vagrant
     # Pi VIP, any other pmon.dev name and the apex -> this node, never a production address
     - name: The cluster's DNS answers pmon.dev with Vagrant addresses
+      tags: [proof]
       ansible.builtin.shell: |
         set -euo pipefail
         dns=$({{ kubectl }} -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
@@ -178,6 +181,7 @@
     # failing closed the day a box or a libvirt network gives the VM some; an `ip` that fails is no answer (it read as
     # "no IPv6"), a kernel with no IPv6 is
     - name: No IPv6 beyond link-local
+      tags: [proof]
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
@@ -199,6 +203,7 @@
     # VIP, were it reachable, accepts the connect in milliseconds, so 1 s for the connect proves the drop
 
     - name: Prove it - the node cannot reach production's VIP nor its public addresses, and can reach the Vagrant VIP
+      tags: [proof]
       ansible.builtin.shell: |
         set -uo pipefail
         # blocked = no connect made and timed out (a dropped SYN); a connect that stalled, a refusal, an answer - no proof
@@ -223,6 +228,7 @@
         or 'vagrant-reachable' not in _node_probe.stdout_lines
 
     - name: Prove it - a pod cannot reach production's VIP nor its public addresses, and can reach the Vagrant VIP
+      tags: [proof]
       ansible.builtin.shell: |
         set -uo pipefail
         # one probe pod kept between steps (a new one each step cost about 7 s to start) in its own namespace, which

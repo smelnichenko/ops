@@ -526,8 +526,20 @@ tasks:
       # below waits for the same sync on its own
       HAS_PLAYBOOKS:
         sh: p=$(scripts/upgrade-expected-inventory.py --playbooks {{.STEP}}) || exit 1; if [ -n "$p" ]; then echo yes; else echo no; fi
+      # the VMs' readiness checked again unless the step before it, green in this same run (PREV_STEP, the full run's),
+      # changed nothing on a host (no playbook lines): its checks proved them as they are. A step run alone checks all
+      HOST_RECHECK:
+        sh: |
+          if [ -z "{{.PREV_STEP}}" ]; then echo yes; exit 0; fi
+          p=$(scripts/upgrade-expected-inventory.py --playbooks '{{.PREV_STEP}}') || exit 1
+          if [ -n "$p" ]; then echo yes; else echo no; fi
     cmds:
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
+      - cmd: |
+          if [ "{{.HOST_RECHECK}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
+          else
+            echo "VMS READY: as {{.PREV_STEP}} left them (green, no host changed since)"
+          fi
       # Wave 0 first, as production takes it before a one-way step changes anything: each of the step's wave0 stores
       # backed up into the Pi store and its restore rehearsed - at the versions the step starts from, not only at the
       # baseline
@@ -576,8 +588,14 @@ tasks:
           if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then scripts/upgrade-step-playbooks.sh --check {{.STEP}}; fi
       # host-side changes (this step's playbook lines), after the cluster side
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
-      # still isolated from production: a Kubernetes upgrade rewrites CoreDNS (re-applied and proven by the probe)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
+      # still isolated from production, proven every step: a Kubernetes upgrade rewrites CoreDNS - after a step's
+      # playbook lines the isolation is applied again; without, only its proof runs (nothing on a host changed)
+      - cmd: |
+          if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
+          else
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml --tags proof
+          fi
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw
       # its quiet window 120 s, held green for 2 polls of 5 s (production's own settle keeps 300 s and 4 polls of 10 s):
@@ -725,7 +743,8 @@ tasks:
             # every line of the step stamped with its time: where a step's minutes go stays measurable. A Ctrl-C, TERM or
             # HUP to the group passes the stamper by (it ends with its input): it died first, and go-task - stopping the
             # step's commands - of the closed pipe, its children left running unwaited
-            task test:upgrade:step STEP="$step" 2>&1 \
+            # the step before it in this run, green: what the step need not check again (PREV_STEP)
+            task test:upgrade:step STEP="$step" PREV_STEP="${prev%% *}" 2>&1 \
               | python3 -u -c 'import signal, sys, time
           for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP): signal.signal(s, signal.SIG_IGN)
           for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()'
