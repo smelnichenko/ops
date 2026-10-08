@@ -129,10 +129,24 @@ check("the older tokens deleted after the new one is proven to read",
 admin_tokens = [{"id": 1, "name": "git-mirror-20261001T000000"}, {"id": 2, "name": "argocd-root"},
                 {"id": 3, "name": "woodpecker-infra"}, {"id": 4, "name": "git-mirror-20261002T000000"},
                 {"id": 5, "name": "my-git-mirror-x"}]
-check("the older tokens: the mirror's own (git-mirror-*) alone - Argo CD's, Woodpecker's, a name merely holding it kept",
-      [x["id"] for x in render(dele[0]["loop"], _git_mirror_tokens={"json": admin_tokens})] if dele else None, [1, 4])
+# read page by page (Forgejo pages its answers: 30 a page by default, 50 at most) - an older mirror token on a later
+# page was never deleted
+pages = {"results": [{"json": admin_tokens[:3]}, {"json": admin_tokens[3:]}, {"json": []}]}
+check("the older tokens: the mirror's own (git-mirror-*) alone, from every page - Argo CD's, Woodpecker's, a name "
+      "merely holding it kept", [x["id"] for x in render(dele[0]["loop"], _git_mirror_tokens=pages)] if dele else None,
+      [1, 4])
 check("the older tokens: none read (the kept token reads) - none deleted",
-      list(render(dele[0]["loop"], _git_mirror_tokens={"skipped": True})) if dele else None, [])
+      list(render(dele[0]["loop"], _git_mirror_tokens={"results": [{"skipped": True}] * 3})) if dele else None, [])
+listing = next((t for t in tasks if (t.get("ansible.builtin.uri") or {}).get("method") == "GET"
+                and "/tokens" in str(t["ansible.builtin.uri"].get("url"))), None)
+check("the admin's tokens read a page at a time (limit and page in the URL, a loop over the pages)",
+      listing is not None and "limit=50" in str(listing["ansible.builtin.uri"]["url"])
+      and "page={{ item }}" in str(listing["ansible.builtin.uri"]["url"]) and "loop" in listing, True)
+full = next((t for t in tasks if "ansible.builtin.assert" in t and "_git_mirror_tokens" in str(t)), None)
+check("the last page read not full - more tokens than read refused, never some left unread",
+      [condition(full["ansible.builtin.assert"]["that"], _git_mirror_tokens=r) for r in (
+          pages, {"results": [{"json": [{"id": i, "name": "x"} for i in range(50)]}] * 10})] if full else None,
+      [True, False])
 # whether the kept token reads: an HTTP 200 alone - a refusal, no token, a skipped read (the mirror off) is none
 works = next((t for t in tasks if t.get("name") == "Whether the kept token reads"), None)
 fact = (works or {}).get("ansible.builtin.set_fact", {}).get("_git_mirror_token_works")

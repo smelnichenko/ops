@@ -512,10 +512,13 @@
         _git_mirror_token_works: "{{ _git_mirror_read.stdout | default('') == 'HTTP 200' }}"
       when: git_mirror_enabled | default(true) | bool
 
-    - name: Forgejo's tokens of the admin
+    # page by page (Forgejo pages its answers: 30 a page by default, 50 at most) - an older mirror token on a later page
+    # was never deleted; ten pages of 50, the last one not full (the check below)
+    - name: Forgejo's tokens of the admin, page by page
       check_mode: false
+      loop: "{{ range(1, 11) | list }}"
       ansible.builtin.uri:
-        url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens"
+        url: "https://{{ git_mirror_host }}/api/v1/users/{{ git_mirror_user }}/tokens?limit=50&page={{ item }}"
         method: GET
         user: "{{ git_mirror_user }}"
         password: "{{ forgejo_admin_password }}"
@@ -524,6 +527,15 @@
       register: _git_mirror_tokens
       changed_when: false
       no_log: true
+      when:
+        - git_mirror_enabled | default(true) | bool
+        - not _git_mirror_token_works | bool
+
+    - name: Every one of the admin's tokens read (the last page not full)
+      ansible.builtin.assert:
+        that: (_git_mirror_tokens.results | last).json | length < 50
+        fail_msg: "REFUSED: forgejo_admin has more than 500 tokens - not all read; delete the stale ones by hand"
+        quiet: true
       when:
         - git_mirror_enabled | default(true) | bool
         - not _git_mirror_token_works | bool
@@ -604,7 +616,9 @@
         password: "{{ forgejo_admin_password }}"
         force_basic_auth: true
         status_code: 204
-      loop: "{{ _git_mirror_tokens.json | default([]) | selectattr('name', 'match', '^git-mirror-') | list }}"
+      loop: >-
+        {{ _git_mirror_tokens.results | default([]) | map(attribute='json', default=[]) | flatten
+           | selectattr('name', 'match', '^git-mirror-') | list }}
       loop_control:
         label: "{{ item.name }}"
       no_log: true
