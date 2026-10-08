@@ -67,13 +67,32 @@ check("step 00 runs the tagged playbook", any("playbook setup-pi-services.yml --
 doc = load("deploy/ansible/playbooks/setup-pi-services.yml")
 every = list(tasks(doc))
 tagged = lambda t: "keycloak-db-url" in (t.get("tags") or [])  # noqa: E731
-facts = {"_patroni_state", "_pgbouncer_state", "_patroni_installed", "_db_port", "keycloak_db_host_effective"}
-def makes(t):
+# the facts derived, not listed: the names the unit's and its secrets file's templates read, back through every task
+# that sets one (its register, its set_fact) to the names that task reads - a guard reading them (an assert, a fail:
+# the PgBouncer check) belongs to the tagged run too
+NAME = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
+sets = {}
+for t in every:
     sf = t.get("ansible.builtin.set_fact") or {}
-    return ({t.get("register")} | set(sf if isinstance(sf, dict) else {})) & facts
-fact_tasks = [t for t in every if makes(t)]
-check("every task making a fact of its URL tagged", (sorted(set().union(*(makes(t) for t in fact_tasks))),
-      [t.get("name") for t in fact_tasks if not tagged(t)]), (sorted(facts), []))
+    for n in ({t.get("register")} | set(sf if isinstance(sf, dict) else {})) - {None}:
+        sets.setdefault(n, []).append(t)
+def reads(x):
+    return {n for st in strings(x) for e in re.findall(r"\{\{(.*?)\}\}|\{%(.*?)%\}", st, re.S)
+            for part in e for n in NAME.findall(part)}
+templates = [t for t in every for m, v in actions(t) if isinstance(v, dict)
+             and v.get("dest") in ("/etc/systemd/system/keycloak.service", "/etc/keycloak/secrets.env")]
+need, todo = set(), set().union(*(reads(t) for t in templates)) & set(sets)
+while todo:
+    n = todo.pop()
+    need.add(n)
+    for t in sets[n]:
+        todo |= (reads({k: v for k, v in t.items() if k != "register"}) & set(sets)) - need
+setters = [t for t in every if any(t in sets[n] for n in need)]
+guards = [t for t in every if (t.get("ansible.builtin.assert") or t.get("ansible.builtin.fail"))
+          and reads(t) & need]
+check("the facts the unit needs derived (its URL's among them), every task setting one and every guard reading one tagged",
+      ({"keycloak_db_host_effective", "_db_port", "_pgbouncer_state"} <= need, bool(guards),
+       [t.get("name") for t in setters + guards if not tagged(t)]), (True, True, []))
 unit_task = next(t for t in every if (t.get("ansible.builtin.copy") or {}).get("dest") == "/etc/systemd/system/keycloak.service")
 named = re.findall(r"(?m)^EnvironmentFile=(?!-)(\S+)$", unit_task["ansible.builtin.copy"]["content"])
 writers = {f: [t for t in every for m, v in actions(t) if isinstance(v, dict) and v.get("dest") == f] for f in named}
