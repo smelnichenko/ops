@@ -314,8 +314,15 @@ eso_switch_proven() {
   err "External Secrets' login on the new config NOT proven - nothing deleted; kubectl -n ${es%/*}" \
     "describe externalsecret ${es#*/}"
   if [[ $was != ready ]] && ! eso_same_cluster "$before" "$ca"; then
-    err "nothing put back: no ExternalSecret logged in on the config before either, and it named another cluster's CA" \
-      "(a rebuilt cluster's)"
+    if python3 -c 'import json, sys; sys.exit(1 if json.load(open(sys.argv[1])).get("data") else 0)' "$before" 2> /dev/null
+    then
+      err "nothing put back: no ExternalSecret logged in before, and no config there before (a fresh Vault)"
+    else
+      # its cluster gone (a rebuilt one's CA now) - said with how to put it back by hand, if it was this one's after all
+      err "nothing put back: no ExternalSecret logged in on the config before either, and it named another cluster's" \
+        "CA (a rebuilt cluster's)"
+      eso_say_before "$before" "$pi"
+    fi
     return 1
   fi
   eso_put_back "$before" "$pi" || { eso_say_before "$before" "$pi"; return 1; }
@@ -400,16 +407,13 @@ print(base64.b64encode(json.dumps(d).encode()).decode())' "$before" <<< "$jwt");
   fi
   if ! ssh "sm@${pi}" "sudo bash -s" <<REMOTE; then
 set -euo pipefail
-umask 077
-d=\$(mktemp -d)
-trap 'rm -rf "\$d"' EXIT
-base64 -d > "\$d/config.json" <<'B64'
-${payload}
-B64
 export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
 VAULT_TOKEN=\$(cat /etc/vault-unseal/root-token)
 export VAULT_TOKEN
-vault write auth/kubernetes/config @"\$d/config.json" > /dev/null
+# the config - the old reviewer token in it - on vault's stdin: never a file on the Pi
+base64 -d <<'B64' | vault write auth/kubernetes/config - > /dev/null
+${payload}
+B64
 REMOTE
     err "Vault's config NOT put back: the write on the Pi failed (above)"
     return 1

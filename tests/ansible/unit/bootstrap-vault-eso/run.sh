@@ -33,7 +33,9 @@ case "\$*" in
     { cat; echo ---; } >> "$W/applied" ;;
   "get externalsecret -A -o jsonpath="*) [ -z "\${ES_LIST_FAILS:-}" ] || { echo "error: etcdserver: request timed out" >&2; exit 1; }
     [ -n "\${ES_NONE:-}" ] || printf 'cert-manager/porkbun-secret-es %s\nargocd/x %s\n' "\${ES_FIRST:-True}" "\${ES_SECOND:-True}" ;;
-  "-n "*" get externalsecret "*" -o jsonpath="*)
+  # the proof's read: answered for the exact path the proof needs alone (any other read is a defect - one that read the
+  # refresh time, or a space for the separator, passed on an answer meant for another)
+  "-n "*" get externalsecret "*' -o jsonpath={.status.syncedResourceVersion}|{.status.conditions[?(@.type=="Ready")].status}')
     n=\$(( \$(cat "$W/es-reads" 2> /dev/null || echo 0) + 1 )); echo \$n > "$W/es-reads"
     [ "\${ES_READ_FAILS_AT:-0}" != "\$n" ] || { echo "error: the server is currently unable to handle the request" >&2; exit 1; }
     # after the rollback (Vault's config written back), the login works again unless ROLLBACK_LOGIN=no
@@ -49,6 +51,7 @@ case "\$*" in
     elif [ "\${ES_READY:-True}" = Moved ]; then echo "1-bbb|False"
     elif [ -n "\${NEVER_SYNCED:-}" ]; then echo "|False"
     else echo "1-aaa|False"; fi ;;
+  "-n "*" get externalsecret "*" -o jsonpath="*) echo "unexpected read: \$*" >&2; exit 1 ;;
   "-n "*" annotate externalsecret "*" force-sync="*" --overwrite")
     [ ! -e "$W/annotated" ] || touch "$W/annotated-again"; touch "$W/annotated"; echo "\$2/\$5" >> "$W/annotated-es" ;;
   "-n external-secrets get secret vault-token-reviewer --ignore-not-found -o name")
@@ -80,7 +83,8 @@ cat > "$W/bin/vault" <<STUB
 echo "vault \$*" >> "$W/vault-argv"
 env | grep '^VAULT_' >> "$W/vault-env"
 for a; do case "\$a" in *=@*) echo "\${a%%=@*} \$(cat "\${a#*=@}")" >> "$W/vault-files" ;;
-  @*) cat "\${a#@}" >> "$W/vault-json"; echo >> "$W/vault-json"; touch "$W/rolled-back" ;; esac; done
+  @*) cat "\${a#@}" >> "$W/vault-json"; echo >> "$W/vault-json"; touch "$W/rolled-back" ;;
+  -) cat >> "$W/vault-json"; echo >> "$W/vault-json"; touch "$W/rolled-back"; echo "stdin" >> "$W/vault-stdin" ;; esac; done
 if [ "\$*" = "read -format=json auth/kubernetes/config" ]; then
   case "\${OLD_CONFIG:-there}" in
     # OLD_CA: the CA the config before names (default another cluster's: a rebuilt one's, DR)
@@ -193,6 +197,19 @@ $(grep -c 'reviewer token kept' <<< "$out")" "1 none 1 0"
 run ES_FIRST=False ES_SECOND=False ES_READY=False OLD_CA="THE CLUSTER CA"
 check "none Ready on this cluster (its CA the config's before - an outage), not proven: the config before put back" \
   "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(grep -c 'put back as it was' <<< "$out")" "1 put-back 1"
+# the put-back's config - the old reviewer token in it - on vault's stdin, never a file on the Pi
+run ES_READY=False
+check "the config put back on vault's stdin (write ... -), no file of it on the Pi" \
+  "$(grep -c '^vault write auth/kubernetes/config -$' "$W/vault-argv") $(grep -c 'auth/kubernetes/config @' "$W/vault-argv")" "1 0"
+# none Ready and no config there before (a fresh Vault): said so - not "another cluster's CA"
+run ES_FIRST=False ES_SECOND=False ES_READY=False OLD_CONFIG=none
+check "none Ready, no config before, not proven: said there was none - not another cluster's CA; nothing put back" \
+  "$rc $(grep -c 'no config there before' <<< "$out") $(grep -c "another cluster's CA" <<< "$out") \
+$(test -e "$W/vault-json" && echo put-back || echo none)" "1 1 0 none"
+# none Ready, another cluster's CA (DR), not proven: the config before said with how to put it back by hand
+run ES_FIRST=False ES_SECOND=False ES_READY=False
+check "none Ready on a rebuilt cluster, not proven: nothing put back, the config before said" \
+  "$rc $(test -e "$W/vault-json" && echo put-back || echo none) $(said_before)" "1 none 1 1 10"
 run ES_LIST_FAILS=1
 check "the ExternalSecrets not listed (an error, not 'none'): the step fails before any write, the token kept" \
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(grep -c 'delete secret' "$W/kubectl-calls")" "1 0 0"
