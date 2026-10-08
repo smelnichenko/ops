@@ -623,6 +623,7 @@
         path: /var/lib/forgejo/custom/conf/app.ini
         regexp: '^HOST = '
         line: "HOST = 127.0.0.1:{{ _db_port }}"
+      diff: false  # app.ini's database password is three lines from HOST: a --diff run printed it
       register: _forgejo_cfg
       notify: [Database port changed, Restart Forgejo]
 
@@ -632,6 +633,7 @@
         path: /etc/systemd/system/keycloak.service
         regexp: 'Environment=KC_DB_URL='
         line: "Environment=KC_DB_URL=jdbc:postgresql://127.0.0.1:{{ _db_port }}/keycloak?targetServerType=any"
+      diff: false  # a unit still holding its passwords inline (production's) has KC_DB_PASSWORD two lines below
       register: _keycloak_cfg
       notify: [Database port changed, Restart Keycloak]
 
