@@ -73,6 +73,8 @@ import yaml
 
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEN = "sm@192.168.11.2"
+# the ledger's times, ten's clock's and this machine's alike: UTC to the second
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 PIS = ("sm@192.168.11.4", "sm@192.168.11.6")
 LEDGER_NAMESPACE, LEDGER_NAME = "kube-system", "upgrade-ledger"
 REPOS = ("infra", "platform")
@@ -288,7 +290,7 @@ def read_ledger():
 
 def ten_now():
     """ten's clock, UTC, as the ledger writes times: the pods' restart times are its."""
-    at = ten("date -u +%Y-%m-%dT%H:%M:%SZ").stdout.strip()
+    at = ten(f"date -u +{TIME_FORMAT}").stdout.strip()
     if not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", at):
         sys.exit(f"ten's clock answered {at!r}")
     return at
@@ -296,7 +298,7 @@ def ten_now():
 
 def ten_clock():
     """ten_now() as a time."""
-    return datetime.datetime.strptime(ten_now(), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    return datetime.datetime.strptime(ten_now(), TIME_FORMAT).replace(tzinfo=datetime.timezone.utc)
 
 
 def claim_problems(step, obj):
@@ -325,7 +327,7 @@ def record(step, event, *args, obj=None, at=None):
     lost = claim_problems(step, obj)
     if lost:
         sys.exit(f"REFUSED: {lost[0]} - {event} not recorded")
-    at = at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    at = at or datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
     line = " ".join((at, step, event, *args))
     obj.setdefault("data", {})["events"] = (obj["data"].get("events", "").rstrip("\n") + "\n" + line).lstrip("\n")
     out = ten("kubectl replace -f -", stdin=json.dumps(obj), check=False)
@@ -417,7 +419,7 @@ def settled(minutes, allow_out_of_sync, apps=None, restart_step=None, restarts_e
     if apps:
         cmd += f" --expect-apps {shlex.quote(','.join(apps))}"
     if restarted_since is not None:
-        cmd += f" --restarted-since {restarted_since:%Y-%m-%dT%H:%M:%SZ}"
+        cmd += f" --restarted-since {restarted_since.strftime(TIME_FORMAT)}"
     if restart_step:
         cmd += f" --restart-history {RESTART_HISTORY} --step {shlex.quote(restart_step)}"
         if restarts_expected:
@@ -479,7 +481,7 @@ def proof_start():
         sys.exit("REFUSED: the ops tree is not committed - a full run proves a commit:\n" + dirty)
     head = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
     os.makedirs(PROVEN, exist_ok=True)
-    started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
     with open(os.path.join(PROVEN, "run.json"), "w") as f:
         json.dump({"ops": head, "run": started, "branches": branch_shas()}, f)
     print(f"PROOF: run {started} of ops {head[:10]}")
@@ -492,7 +494,7 @@ def branch_shas():
         refs = run(["git", "-C", os.path.join(OPS, "..", repo), "for-each-ref",
                     "--format=%(refname:short) %(objectname)", "refs/heads/upgrade/"], capture_output=True,
                    check=True).stdout
-        out[repo] = dict(line.split() for line in refs.splitlines())
+        out[repo] = {ref: sha for ref, sha in (line.split() for line in refs.splitlines())}
     return out
 
 
@@ -573,7 +575,7 @@ def floating_digests():
     path = os.path.join(WORK, "floating-digests.txt")
     if not os.path.exists(path):
         sys.exit("REFUSED: no .upgrade/floating-digests.txt - the run's build copies ten's floating-tag images")
-    return dict(l.split() for l in open(path) if l.strip())
+    return {k: v for k, v in (l.split() for l in open(path) if l.strip())}
 
 
 def step_images(step):
@@ -783,7 +785,7 @@ def package_status(name, version):
     """Forgejo's answer for a container package version of schnappy (200: there), read with git's credentials."""
     cred = run(["git", "credential", "fill"], input="protocol=https\nhost=git.pmon.dev\n\n", capture_output=True,
                check=True).stdout
-    fields = dict(l.split("=", 1) for l in cred.splitlines() if "=" in l)
+    fields = {k: v for k, v in (l.split("=", 1) for l in cred.splitlines() if "=" in l)}
     request = urllib.request.Request(f"https://git.pmon.dev/api/v1/packages/schnappy/container/{name}/{version}")
     request.add_header("Authorization", "Basic " + base64.b64encode(
         f"{fields['username']}:{fields['password']}".encode()).decode())
@@ -830,10 +832,15 @@ def confirm(question):
     before the question is discarded: input typed ahead is no answer to it."""
     try:
         with open("/dev/tty", "rb+", buffering=0) as tty:
+            # asked only from the terminal's foreground: from its background the flush stopped this process (SIGTTOU)
+            # at the question, its claim on the step held - a no, said
+            if os.tcgetpgrp(tty.fileno()) != os.getpgrp():
+                print(f"{question} - not asked: this runs in its terminal's background (a no)", file=sys.stderr)
+                return False
             termios.tcflush(tty.fileno(), termios.TCIFLUSH)
             tty.write(f"{question} [y/N] ".encode())
             return tty.readline().decode(errors="replace").strip().lower() in ("y", "yes")
-    except OSError:
+    except (OSError, termios.error):  # termios.error is no OSError
         return False
 
 
