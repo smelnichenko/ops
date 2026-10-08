@@ -21,10 +21,16 @@ mine() {  # mine <pid>: the process is this shell's child
   set -- ${st##*) }
   [ "$2" = "$$" ]
 }
+# bounded waits on what a process of this test writes once its traps are set - never a sleep before a signal (a slow
+# start took the signal before the trap: the case passed or failed on the machine's load)
+ready() {  # ready <file>...: each there, 5 s at most
+  local f
+  for f; do for _ in $(seq 100); do [ -s "$f" ] && break; sleep 0.05; done; done
+}
 set +m
 # a job in this shell's group (no job control): what a setsid job is until setsid has run - its group none yet
-bash -c 'trap "kill \$!; exit 143" TERM; sleep 30 & wait' & j=$!
-sleep 0.2
+bash -c 'trap "kill \$!; exit 143" TERM; echo ready > "$0"; sleep 30 & wait' "$W/r1" & j=$!
+ready "$W/r1"
 t0=$SECONDS
 if mine "$j"; then stop_groups 5 "$j" > "$W/stop.out"; fi
 wait "$j"; rc=$?
@@ -32,8 +38,8 @@ check "a job leading no group yet: TERMed by its PID, ended at once - nothing ki
   "$rc $((SECONDS - t0 < 3)) $(grep -c killed "$W/stop.out")" "143 1 0"
 # one leading no group yet that ignores the TERM: still counted alive by its PID - KILLed after the grace, said (read
 # as gone at once, it ran on)
-bash -c 'trap "" TERM; sleep 30' & j=$!
-sleep 0.2
+bash -c 'trap "" TERM; echo ready > "$0"; sleep 30' "$W/r2" & j=$!
+ready "$W/r2"
 if mine "$j"; then stop_groups 1 "$j" > "$W/stop.out"; fi
 wait "$j"; rc=$?
 check "a job leading no group yet, ignoring the TERM: counted alive, KILLed after the grace, said" \
@@ -63,9 +69,9 @@ wait "$k" 2> /dev/null
 # the grace on uptime_cs's clock: one that jumps 100 s at each read ends a 30 s grace at its second read - a TERM-
 # ignoring job then killed at once, said; on bash's SECONDS it waited the 30 s out
 set -m
-bash -c 'trap "" TERM; sleep 30' & h=$!
+bash -c 'trap "" TERM; echo ready > "$0"; sleep 30' "$W/r3" & h=$!
 set +m
-sleep 0.2
+ready "$W/r3"
 t0=$SECONDS
 if mine "$h"; then
   ( fake=0; uptime_cs() { fake=$((fake + 10000)); printf -v "$1" '%s' "$fake"; }; stop_groups 30 "$h" ) > "$W/clock.out"
@@ -82,18 +88,13 @@ check "uptime_cs: 0.3 s read as about 30 hundredths (whole seconds read 0 or 100
 # a 1 s grace is a second: a job that ends 0.6 s after its TERM is not killed (whole seconds cut it at anything from
 # none to a second)
 set -m
-bash -c 'trap "sleep 0.6; exit 143" TERM; sleep 30 & wait' & h=$!
+bash -c 'trap "sleep 0.6; exit 143" TERM; echo ready > "$0"; sleep 30 & wait' "$W/r4" & h=$!
 set +m
-sleep 0.2
+ready "$W/r4"
 if mine "$h"; then stop_groups 1 "$h" > "$W/grace.out"; fi
 wait "$h" 2> /dev/null; rc=$?
 check "a 1 s grace: a job ending 0.6 s after its TERM ends of its own (143), not killed" \
   "$rc $(grep -c killed "$W/grace.out")" "143 0"
-# bounded waits on what a process of this test writes when it is ready
-ready() {  # ready <file>...: each there, 5 s at most
-  local f
-  for f; do for _ in $(seq 100); do [ -s "$f" ] && break; sleep 0.05; done; done
-}
 gone_or_zombie() {  # gone_or_zombie <pid>: "gone" once it runs no more (a zombie its parent has not reaped is gone)
   local st
   for _ in $(seq 50); do

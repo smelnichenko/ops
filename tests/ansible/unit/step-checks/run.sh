@@ -19,10 +19,10 @@ cat > "$T/deploy/ansible/venv/bin/ansible-playbook" <<'STUB'
 #!/bin/bash
 # LONG=<file>: the storage check runs on (its PID in the file) until the script's cleanup stops it - one that ran
 # its course leaves <file>.finished (the cleanup's wait waited it out)
-# SLOW_TERM: it takes a second to end on a TERM (.slow then). STOPPER=<file>: the data check stops itself (SIGSTOP), its
+# SLOW_TERM: it takes a second to end on a TERM (.stopping as it starts, .slow then). STOPPER=<file>: the data check stops itself (SIGSTOP), its
 # PID in the file. ALL_PASS: the metrics check passes too
 case "$*" in *storage-check*) [ -z "${LONG:-}" ] || { echo $$ > "$LONG"
-  [ -z "${SLOW_TERM:-}" ] || trap 'sleep 1; echo > "$LONG.slow"; exit 143' TERM
+  [ -z "${SLOW_TERM:-}" ] || trap 'echo > "$LONG.stopping"; sleep 1; echo > "$LONG.slow"; exit 143' TERM
   [ -z "${IGNORE_TERM:-}" ] || trap '' TERM
   sleep 30 & wait $!; echo > "$LONG.finished"; } ;; esac
 case "$*" in *data-check*) [ -z "${STOPPER:-}" ] || { echo $$ > "$STOPPER"; kill -STOP $$; } ;; esac
@@ -144,19 +144,24 @@ check "the bound reached after every check was judged: the verdict stands (passe
   "$rc $(grep -c '^STEP CHECKS PASSED' <<< "$out") $(grep -c 'NOT JUDGED\|not ended within' <<< "$out")" "0 1 0"
 # the script killed outright (no cleanup runs): its watchdog, left behind, signals nothing when its bound comes - its
 # parent gone, the PID may be another process's. Forced in a copy that waits after starting its checks
-sed 's|^watchdog=\$!$|&\nsleep 6|' "$T/scripts/upgrade-step-checks.sh" > "$T/scripts/killed.sh"
-check "the copy that waits made" "$(grep -c '^sleep 6$' "$T/scripts/killed.sh")" 1
+sed 's|^watchdog=\$!$|&\necho "$watchdog" > "$logs/watchdog.pid"; sleep 6|' "$T/scripts/upgrade-step-checks.sh" \
+  > "$T/scripts/killed.sh"
+check "the copy that waits made (its watchdog kept, then its PID written)" \
+  "$(grep -c '^watchdog=\$!$' "$T/scripts/killed.sh") $(grep -c '^echo "\$watchdog" > "\$logs/watchdog.pid"; sleep 6$' "$T/scripts/killed.sh")" "1 1"
 rm -rf "$T/.upgrade"/step-checks.*
 ALL_PASS=1 STEP_CHECKS_SECONDS=2 PATH="$T/bin:$PATH" bash "$T/scripts/killed.sh" i p 24.8 schnappy < /dev/null \
   > /dev/null 2>&1 &
 sp=$!
-timeout 10 bash -c 'until ls "$0"/step-checks.*/ssh-config > /dev/null 2>&1; do sleep 0.1; done' "$T/.upgrade"
-sleep 0.5
+# the watchdog started (its PID written), then the script killed
+timeout 10 bash -c 'until ls "$0"/step-checks.*/watchdog.pid > /dev/null 2>&1; do sleep 0.1; done' "$T/.upgrade"
+wd=$(cat "$T/.upgrade"/step-checks.*/watchdog.pid 2> /dev/null)
 if [ "$(proc_info "$sp" | awk '{print $1, $4}')" = "$$ bash" ]; then
   kill -KILL "$sp"
 fi
 wait "$sp" 2> /dev/null
-sleep 3
+# its bound come and gone: the watchdog ended (10 s at most) - not a fixed wait
+timeout 10 bash -c 'while [ -n "$0" ] && [ -e "/proc/$0" ]; do sleep 0.1; done' "${wd:-}"
+check "killed outright: the watchdog's PID read, its bound come and gone" "$([ -n "$wd" ] && [ ! -e "/proc/$wd" ] && echo gone || echo "${wd:-no pid}")" gone
 check "killed outright: its watchdog's bound, come, signals nothing (no timed-out mark)" \
   "$(ls "$T/.upgrade"/step-checks.*/timed-out 2> /dev/null | wc -l)" 0
 rm -rf "$T/.upgrade"/step-checks.*
@@ -228,13 +233,16 @@ $(gone "$T/stopper.pid")" "1 1 1 gone"
 # a second signal during the cleanup's wait for a check that takes a second to end (a Ctrl-C pressed twice; a kill
 # sent twice): the cleanup goes on to its end - the check's own stop done, the run's work directory removed. TERM: a
 # background job here ignores INT (no job control), and the trap takes both alike
-rm -f "$T/long.pid" "$T/long.pid.slow" "$T/long.pid.finished"; rm -rf "$T/.upgrade"/step-checks.*
+rm -f "$T/long.pid" "$T/long.pid.slow" "$T/long.pid.stopping" "$T/long.pid.finished"; rm -rf "$T/.upgrade"/step-checks.*
 LONG="$T/long.pid" SLOW_TERM=1 PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy \
   < /dev/null > "$T/twice.out" 2>&1 &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
 if [ "$(proc_info "$sp" | awk '{print $1, $4}')" = "$$ bash" ]; then
-  kill -TERM "$sp"; sleep 0.3; kill -TERM "$sp" 2> /dev/null
+  # the second once the check's own stop has begun - inside the cleanup's wait
+  kill -TERM "$sp"
+  timeout 10 bash -c 'until [ -e "$0" ]; do sleep 0.05; done' "$T/long.pid.stopping"
+  kill -TERM "$sp" 2> /dev/null
 fi
 wait "$sp"; rc=$?
 check "a TERM twice, the second in the cleanup: it goes on - the check's own stop done, the work directory gone" \
