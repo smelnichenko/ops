@@ -259,6 +259,8 @@ vault write auth/kubernetes/config kubernetes_host='${K8S_HOST}' kubernetes_ca_c
   disable_local_ca_jwt=true > /dev/null
 REMOTE
     err "Configuring Vault's Kubernetes auth on the Pi failed (above)"
+    # read before it failed: whether the write was made is not known here (the connection may have dropped after it)
+    eso_say_before "$work/config-before.json" "$VAULT_PI"
     return 1
   fi
   if [[ -n $es ]]; then
@@ -314,7 +316,7 @@ eso_switch_proven() {
     err "nothing put back: no ExternalSecret logged in on the config before either"
     return 1
   fi
-  eso_put_back "$before" "$pi" || return 1
+  eso_put_back "$before" "$pi" || { eso_say_before "$before" "$pi"; return 1; }
   if eso_refreshed "$es"; then
     log "External Secrets logs in on the config put back ($es refreshed)"
   else
@@ -349,6 +351,19 @@ eso_refreshed() {
     fi
     sleep 2
   done
+}
+
+# Vault's config as read before the write, said with how to put it back by hand - when this step could not, or does
+# not know whether it wrote: its file is this run's, removed as the step ends. None of it secret: Vault reads back no
+# reviewer token (token_reviewer_jwt_set alone)
+eso_say_before() {
+  local before=$1 pi=$2
+  [[ -s $before ]] || return 0
+  err "Vault's config before this run (auth/kubernetes/config on $pi) - to put back by hand: its data below," \
+    "token_reviewer_jwt the token of external-secrets/vault-token-reviewer in place of token_reviewer_jwt_set, then" \
+    "as root on $pi: vault write auth/kubernetes/config @<that JSON>"
+  python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])).get("data") or {}, indent=1))' \
+    "$before" >&2 || cat "$before" >&2
 }
 
 # Vault's config put back as it was read before the write, the old reviewer token (the kept Secret's) with it - both

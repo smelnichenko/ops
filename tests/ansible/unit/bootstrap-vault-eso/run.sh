@@ -96,6 +96,8 @@ check() {  # check <name> <got> <want>
   if [ "$2" = "$3" ]; then echo "PASS $1"; return; fi
   echo "FAIL $1: got '$2', want '$3'"; fails=$((fails + 1))
 }
+# the config before said (its marker, its host, the hand command)
+said_before() { echo "$(grep -c "Vault's config before this run" <<< "$out") $(grep -c '"kubernetes_host": "https://192.168.11.2:6443"' <<< "$out") $(grep -c 'vault write auth/kubernetes/config @' <<< "$out")"; }
 run() {  # run <env...>: bootstrap.sh vault-eso, its exit in $rc; its temp files under $W/tmp
   rm -rf "$W"/{kubectl-calls,applied,applies,annotated,annotated-again,annotated-es,es-reads,rolled-back,ssh-argv} \
     "$W"/{vault-argv,vault-env,vault-files,vault-json,tmp} "$W"/pwned-*
@@ -109,6 +111,7 @@ check "nothing of it kept in /tmp (the CA a cache any local user plants)" \
 [ "$fails" = 0 ] || { echo "bootstrap-vault-eso: $fails FAILED (not run: it would write /tmp)"; exit 1; }
 run
 check "the step passes" "$rc" 0
+check "... proven: no config before said (nothing to put back)" "$(said_before)" "0 0 0"
 check "the cluster trusts the CA read from the Pi now" \
   "$(grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")" "$W/applied")" 1
 check "no non-expiring token of External Secrets' account made, none read" \
@@ -149,6 +152,9 @@ check "... the login failing on the config put back too: the step fails, said so
 run ES_READY=False NO_TOKEN_SECRET=1 ES_NONE=
 check "... no reviewer token to put back: nothing written back, said, the step fails" \
   "$rc $(test -e "$W/vault-json" && echo written || echo none) $(grep -c 'NOT put back' <<< "$out")" "1 none 1"
+# what this step could not put back, said with how to by hand: the config before (none of it secret - Vault reads back
+# no reviewer token) - its file was this run's, removed as the step ended
+check "... and the config before said, with how to put it back by hand" "$(said_before)" "1 1 1"
 run ES_READY=False OLD_CONFIG=none
 check "... no config there before (a fresh Vault): nothing to put back, said, the step fails" \
   "$rc $(test -e "$W/vault-json" && echo written || echo none) $(grep -c 'NOT put back' <<< "$out")" "1 none 1"
@@ -214,6 +220,7 @@ check "a server that is not a plain https URL: the step fails, nothing sent to t
   "$rc $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s') $(ls "$W"/pwned-* 2> /dev/null | wc -l)" "1 0 0"
 run VAULT_FAIL=1
 check "a failure on the Pi: the step fails, said so" "$rc $(grep -c "Kubernetes auth on the Pi failed" <<< "$out")" "1 1"
+check "... the config before said, with how to put it back by hand (the write's fate unknown here)" "$(said_before)" "1 1 1"
 # the role written before the config: its write refused, the config never written - left as it was (the step ends
 # before its proof and its put-back)
 run ROLE_FAIL=1
