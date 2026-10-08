@@ -2,7 +2,8 @@
 # setup-vault-pi.yml's firewall for Vault's cluster port (8201: request forwarding and HA between the two Vaults): open
 # to the two Pis only - the narrow rules first, then the rule that opened it to the whole LAN (production's, both
 # families: pi1 read 2026-10-08) removed, as setup-consul closes Consul's; no Pi loses its peer in between. 8200 (the
-# API) is not touched here: the operator's.
+# API) opened to both Pis too: setup-consul's step-down reads both Vaults from the Pi holding the root token (today
+# through an older LAN-wide rule, the operator's to close).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -27,6 +28,12 @@ check("one delete: 8201/tcp's rule from anywhere - nothing else", [(str(u.get("p
       [("8201", "tcp", False, "allow")])
 check("the narrow rule before the delete (no Pi loses its peer between)",
       bool(narrow and closed) and narrow[0] < closed[0][0], True)
+api = [t for t in tasks if "community.general.ufw" in t
+       and str(t["community.general.ufw"].get("port")) == "8200" and not t["community.general.ufw"].get("delete")
+       and "ansible_host" in str(t)]
+check("8200 opened to both Pis (their addresses, one rule each)",
+      [sorted(str(x) for x in t.get("loop") or []) for t in api],
+      [["{{ hostvars['pi1']['ansible_host'] }}", "{{ hostvars['pi2']['ansible_host'] }}"]])
 print("vault-ufw: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYVU

@@ -182,6 +182,17 @@
         proto: tcp
       when: (vault_cluster_ipv6 | default(production_ten_ipv6)) | length > 0
 
+    # the API between the Pis: setup-consul's step-down reads both Vaults from the Pi holding the root token
+    - name: UFW allow Vault's API from the Pis
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ item }}"
+        port: "8200"
+        proto: tcp
+      loop:
+        - "{{ hostvars['pi1']['ansible_host'] }}"
+        - "{{ hostvars['pi2']['ansible_host'] }}"
+
     - name: UFW allow Vault peer-to-peer (Pi↔Pi cluster port)
       community.general.ufw:
         rule: allow

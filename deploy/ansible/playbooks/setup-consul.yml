@@ -315,6 +315,8 @@
     _other_pi: "{{ 'pi2' if inventory_hostname == 'pi1' else 'pi1' }}"
     # how long a handover (Vault's step-down, Consul's leadership) may take before the restart is refused
     consul_handover_seconds: 30
+    # the Pi with Vault's root token: setup-vault-pi's init play writes it there only
+    _vault_token_pi: pi1
   tasks:
     - name: A restart here, and Patroni running to pause around it
       when:
@@ -342,26 +344,6 @@
           until: _consul_spare.rc == 0
           changed_when: false
 
-        # the Pis' tier-0 backup (02:40 UTC, setup-pi-backups.yml) runs under a Consul lock: a restart of a server ends
-        # its session, the lock, and the backup with it
-        - name: No tier-0 backup holding its Consul lock
-          ansible.builtin.shell:
-            executable: /bin/bash
-            cmd: |
-              set -uo pipefail
-              if ! out=$(consul kv get -detailed pi-tier0-backup/.lock 2>&1); then
-                grep -q 'No key exists' <<< "$out" || { echo "REFUSED: the backup's lock not read: $out"; exit 1; }
-                out=""
-              fi
-              held=$(awk '$1 == "Session" && $2 != "-" {print $2}' <<< "$out")
-              if [ -n "$held" ]; then
-                echo "REFUSED: the Pis' tier-0 backup holds its Consul lock (02:40 UTC, up to 30 minutes) - a restart" \
-                  "ends it: run after it"
-                exit 1
-              fi
-              echo "NO BACKUP RUNNING"
-          changed_when: false
-
         # by whether Patroni is installed on the other Pi, not whether it runs there: with that one stopped, the
         # leader on this Pi still demotes when its own agent is gone (patronictl reaches the cluster through Consul)
         - name: Patroni on the other Pi (a first install has none yet)
@@ -385,40 +367,58 @@
 
         - name: Restarted, Patroni paused meanwhile
           block:
-            - name: Patroni paused - no demotion while this server's agent is away
-              # a marker first, naming this run: a Ctrl-C skips the always: below and leaves the cluster paused - the
-              # next run's not-paused check names it (scripts/patroni-pause.py: the pause proven by every member's state)
-              ansible.builtin.script:
-                cmd: "{{ playbook_dir }}/scripts/patroni-pause.py pause setup-consul"
-                executable: python3
-              register: _patroni_paused
-              changed_when: true
-              delegate_to: "{{ _other_pi }}"
-              when: _patroni_active | bool
+            # Vault on the Pi being restarted: running, it may be the active node (a first install has none yet)
+            - name: Vault on this Pi
+              ansible.builtin.systemd:
+                name: vault
+              register: _vault_unit
+              when: inventory_hostname in groups['pis']
 
             # Vault's storage is this Pi's Consul agent: its active node, here, would lose its lock with the restart and
-            # Vault be without one until the other Pi's took over - handed over first, to a standby there, unsealed
+            # Vault be without one until the other Pi's took over - handed over first, to a standby there, unsealed. Run
+            # where the root token is (setup-vault-pi's init play writes it on that Pi only), against both Pis'
+            # addresses. A Vault running here whose status is not read is refused, never taken for a standby; each read
+            # bounded - the CLI's own are a 60 s timeout, retried twice - and the wait by the clock
             - name: Vault stepped down here first - the other Pi's active
               ansible.builtin.shell:
                 executable: /bin/bash
                 cmd: |
-                  set -euo pipefail
-                  export VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
-                  here=https://127.0.0.1:8200 other=https://{{ hostvars[_other_pi]['ansible_host'] }}:8200
-                  st() { VAULT_ADDR=$1 vault status -format=json 2> /dev/null || true; }  # exit 2: sealed
+                  set -uo pipefail
+                  export VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem VAULT_CLIENT_TIMEOUT=5 VAULT_MAX_RETRIES=0
+                  here=https://{{ hostvars[inventory_hostname]['ansible_host'] }}:8200
+                  other=https://{{ hostvars[_other_pi]['ansible_host'] }}:8200
+                  # a status: exit 0 unsealed, 2 sealed - anything else (unreachable, timed out) is none
+                  st() { local out rc; out=$(VAULT_ADDR=$1 vault status -format=json 2> /dev/null); rc=$?
+                    if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then printf '%s' "$out"; fi; }
                   get() { python3 -c 'import json, sys
-                  d = json.loads(sys.stdin.read() or "{}")
-                  print(d.get(sys.argv[1]))' "$1"; }
-                  if [ "$(st $here | get is_self)" != True ]; then echo "VAULT NOT ACTIVE HERE"; exit 0; fi
-                  o=$(st $other)
-                  if [ "$(get sealed <<< "$o")" != False ] || [ "$(get ha_enabled <<< "$o")" != True ]; then
-                    echo "REFUSED: Vault is active here and {{ _other_pi }}'s is not standing by (sealed or unreachable)"
+                  try:
+                      print(json.loads(sys.stdin.read()).get(sys.argv[1]))
+                  except ValueError:
+                      print("UNREAD")' "$1"; }
+                  self=$(st $here | get is_self)
+                  if [ "$self" = UNREAD ]; then
+                    echo "REFUSED: Vault runs on {{ inventory_hostname }} and its status was not read ($here)"
                     exit 1
                   fi
-                  VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)
+                  if [ "$self" != True ]; then echo "VAULT NOT ACTIVE HERE"; exit 0; fi
+                  o=$(st $other)
+                  if [ "$(get sealed <<< "$o")" != False ] || [ "$(get ha_enabled <<< "$o")" != True ]; then
+                    echo "REFUSED: Vault is active on {{ inventory_hostname }} and {{ _other_pi }}'s is not standing by" \
+                      "(sealed or unreachable)"
+                    exit 1
+                  fi
+                  if ! VAULT_TOKEN=$(cat /etc/vault-unseal/root-token 2> /dev/null) || [ -z "$VAULT_TOKEN" ]; then
+                    echo "REFUSED: no root token on {{ _vault_token_pi }} (/etc/vault-unseal/root-token) to step Vault" \
+                      "down with - step it down by hand (VAULT_ADDR=$here vault operator step-down), then run again"
+                    exit 1
+                  fi
                   export VAULT_TOKEN
-                  VAULT_ADDR=$here vault operator step-down > /dev/null
-                  for _ in $(seq {{ consul_handover_seconds }}); do
+                  if ! VAULT_ADDR=$here vault operator step-down > /dev/null; then
+                    echo "REFUSED: Vault's step-down on {{ inventory_hostname }} failed"
+                    exit 1
+                  fi
+                  end=$((SECONDS + {{ consul_handover_seconds }}))
+                  while [ $SECONDS -lt $end ]; do
                     if [ "$(st $here | get is_self)" != True ] && [ "$(st $other | get is_self)" = True ]; then
                       echo "STEPPED DOWN: {{ _other_pi }}'s Vault active"
                       exit 0
@@ -429,7 +429,23 @@
                   exit 1
               register: _vault_handover
               changed_when: "'STEPPED DOWN' in _vault_handover.stdout"
-              when: inventory_hostname in groups['pis']
+              delegate_to: "{{ _vault_token_pi }}"
+              when:
+                - inventory_hostname in groups['pis']
+                - _vault_unit.status.ActiveState | default('') == 'active'
+
+            - name: Patroni paused - no demotion while this server's agent is away
+              # a marker first, naming this run: a Ctrl-C skips the always: below and leaves the cluster paused - the
+              # next run's not-paused check names it (scripts/patroni-pause.py: the pause proven by every member's state).
+              # After Vault's handover (it takes nothing of Consul's), before Consul's (an election): paused no longer
+              # than it must be
+              ansible.builtin.script:
+                cmd: "{{ playbook_dir }}/scripts/patroni-pause.py pause setup-consul"
+                executable: python3
+              register: _patroni_paused
+              changed_when: true
+              delegate_to: "{{ _other_pi }}"
+              when: _patroni_active | bool
 
             # the raft leader restarted is an election with a server already down: leadership to another first
             - name: Consul's leadership moved off this server first
@@ -441,7 +457,8 @@
                   l=$(leader)
                   if [ "$l" != "{{ inventory_hostname }}" ]; then echo "NOT THE LEADER ($l is)"; exit 0; fi
                   consul operator raft transfer-leader > /dev/null
-                  for _ in $(seq {{ consul_handover_seconds }}); do
+                  end=$((SECONDS + {{ consul_handover_seconds }}))
+                  while [ $SECONDS -lt $end ]; do
                     l=$(leader)
                     if [ -n "$l" ] && [ "$l" != "{{ inventory_hostname }}" ]; then echo "LEADERSHIP MOVED to $l"; exit 0; fi
                     sleep 1
@@ -450,6 +467,27 @@
                   exit 1
               register: _consul_handover
               changed_when: "'LEADERSHIP MOVED' in _consul_handover.stdout"
+
+            # the Pis' tier-0 backup (02:40 UTC, setup-pi-backups.yml) runs under a Consul lock: a restart of a server
+            # ends its session, the lock, and the backup with it - read right before the restart (its timer may start the
+            # backup while the handovers run)
+            - name: No tier-0 backup holding its Consul lock
+              ansible.builtin.shell:
+                executable: /bin/bash
+                cmd: |
+                  set -uo pipefail
+                  if ! out=$(consul kv get -detailed pi-tier0-backup/.lock 2>&1); then
+                    grep -q 'No key exists' <<< "$out" || { echo "REFUSED: the backup's lock not read: $out"; exit 1; }
+                    out=""
+                  fi
+                  held=$(awk '$1 == "Session" && $2 != "-" {print $2}' <<< "$out")
+                  if [ -n "$held" ]; then
+                    echo "REFUSED: the Pis' tier-0 backup holds its Consul lock (its timer 02:40 UTC) - a restart" \
+                      "ends it: run after it"
+                    exit 1
+                  fi
+                  echo "NO BACKUP RUNNING"
+              changed_when: false
 
             - name: Restarted
               ansible.builtin.systemd_service:
