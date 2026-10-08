@@ -246,6 +246,23 @@ check "the reader gone, no signal to the script: its cleanup run to its end - th
 pid=$(cat "$T/long.pid" 2> /dev/null)
 if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playbook ]; then kill -KILL "$pid"; fi
 rm -f "$T/pipe2" "$T/go2"
+# ... and where no PID can be made reused (CI: no user namespaces): its watchdog ended and reaped just before the last
+# stop, the stops it asks for recorded - none names the watchdog's PID (one the system may give another process)
+python3 - "$T/scripts/upgrade-step-checks.sh" "$T/scripts/reaped-wd.sh" "$T" <<'PYSEAM'
+import sys
+s = open(sys.argv[1]).read()
+src = "source scripts/lib/process-groups.sh\n"
+old = "own_jobs left_\n"
+assert s.count(src) == 1 and s.count(old) == 1
+s = s.replace(src, src + 'stop_groups() { echo "stop_groups $*" >> "%s/stops"; }\n' % sys.argv[3])
+s = s.replace(old, 'kill -TERM -- "-$watchdog"; wait "$watchdog" 2> /dev/null; echo "$watchdog" > "%s/wd2.pid"\n' % sys.argv[3] + old)
+open(sys.argv[2], "w").write(s)
+PYSEAM
+rm -f "$T/stops" "$T/wd2.pid"
+ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/reaped-wd.sh" i p 24.8 u < /dev/null > /dev/null 2>&1
+wd2=$(cat "$T/wd2.pid" 2> /dev/null)
+check "its watchdog reaped before the last stop: no stop names its PID (the copy made, the PID read)" \
+  "$([ -n "$wd2" ] && echo read || echo none) $(grep -sw -- "$wd2" "$T/stops" | wc -l)" "read 0"
 # its watchdog ended and reaped before the script's last stop of it, its PID then another process's (forced in a PID
 # namespace of its own: the next PID set to the watchdog's, a session-leading sleep of this test's given it) - never
 # signalled by that PID. Where user namespaces are not allowed, said loudly and not run
