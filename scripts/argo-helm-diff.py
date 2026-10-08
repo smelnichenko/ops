@@ -39,10 +39,18 @@ _loader.exec_module(mo)
 
 
 def helm_binary(version):
-    """The official linux-amd64 binary of that Helm version, verified against its published sha256."""
+    """The official linux-amd64 binary of that Helm version, verified against its published sha256. One cached here is
+    used only as what it says it is - the version asked for; anything else (left by hand, another build) fetched again."""
     path = os.path.join(BIN, version, "helm")
     if os.path.exists(path):
-        return path
+        try:
+            said = subprocess.run([path, "version", "--template", "{{.Version}}"], capture_output=True, text=True,
+                                  timeout=30).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            said = ""
+        if said == f"v{version}":
+            return path
+        os.remove(path)
     url = f"https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz"
     archive = urllib.request.urlopen(url, timeout=120).read()
     want = urllib.request.urlopen(url + ".sha256sum", timeout=60).read().decode().split()[0]

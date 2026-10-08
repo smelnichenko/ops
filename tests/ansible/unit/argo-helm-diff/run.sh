@@ -129,7 +129,8 @@ def archive(body):
         info = tarfile.TarInfo("linux-amd64/helm"); info.size = len(body)
         t.addfile(info, io.BytesIO(body))
     return buf.getvalue()
-blob = archive(b"#!/bin/sh\necho helm\n")
+HELM = b'#!/bin/sh\n[ "$1" = version ] && echo v9.9.9 || echo helm\n'
+blob = archive(HELM)
 class Resp:
     def __init__(self, data):
         self.data = data
@@ -138,8 +139,9 @@ class Resp:
 bins = tempfile.mkdtemp()
 saved = (fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile)
 fresh.BIN = bins
-urllib.request.urlopen = lambda url, timeout=None: Resp(hashlib.sha256(blob).hexdigest().encode() + b"  x\n"
-                                                         if url.endswith(".sha256sum") else blob)
+fetched = []
+urllib.request.urlopen = lambda url, timeout=None: fetched.append(url) or Resp(
+    hashlib.sha256(blob).hexdigest().encode() + b"  x\n" if url.endswith(".sha256sum") else blob)
 class Cut:
     def read(self):
         raise KeyboardInterrupt
@@ -154,7 +156,17 @@ try:
     tarfile.TarFile.extractfile = saved[2]
     path = fresh.helm_binary("9.9.9")
     fails += not check_("the next run downloads it whole, executable", (open(path, "rb").read(), os.access(path, os.X_OK))
-                        == (b"#!/bin/sh\necho helm\n", True), path)
+                        == (HELM, True), path)
+    # a cached binary is used only as what it says it is: the version asked for - another (a file left by hand, a
+    # wrong build) fetched again
+    fetched.clear()
+    fresh.helm_binary("9.9.9")
+    fails += not check_("the cached binary, the version asked for: used, nothing fetched", fetched == [], fetched)
+    open(path, "wb").write(b'#!/bin/sh\necho v1.0.0\n')
+    os.chmod(path, 0o755)
+    fresh.helm_binary("9.9.9")
+    got = (len(fetched) > 0, open(path, "rb").read())
+    fails += not check_("a cached binary of another version: fetched again", got == (True, HELM), got)
 finally:
     fresh.BIN, urllib.request.urlopen, tarfile.TarFile.extractfile = saved
 print("argo-helm-diff: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
