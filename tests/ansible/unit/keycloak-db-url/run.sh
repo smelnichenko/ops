@@ -154,6 +154,21 @@ check("two restarts: the Pi without the VIP, then the one with it - both tagged,
       ([str(t.get("name", "")).split(" - ")[1][:18] for t in restarts], len(restarts),
        [tagged(t) for t in restarts], [t.get("throttle") for t in restarts]),
       (["the Pi without the", "the Pi with the VI"], 2, [True, True], [1, 1]))
+# a Keycloak this run started (down before) serving before any restart: the other Pi's restart guard reads one still
+# starting as down, and refuses - the waits after the restarts come too late for it
+start = next(t for t in every if t.get("name") == "Enable and start Keycloak")
+waits = [t for t in every if (t.get("ansible.builtin.uri") or {}).get("url") == "http://127.0.0.1:8080/realms/master"
+         and restarts and every.index(start) < every.index(t) < every.index(restarts[0])]
+w = waits[0] if waits else {}
+check("a Keycloak this run started waited for before any restart: tagged, only where it started now, in no preview, "
+      "its 200 alone ends it (not a refused connection, a 503 while it starts, no answer), for 240 s",
+      (len(waits), bool(w) and tagged(w),
+       [condition(w.get("when", True), ansible_check_mode=cm, **{start.get("register", "_s"): {"changed": ch}})
+        for cm, ch in ((False, True), (False, False), (True, True))],
+       [condition(w.get("until", "false"), **{w.get("register", "_r"): r})
+        for r in ({"status": 200}, {"status": -1}, {"status": 503}, {})],
+       int(w.get("retries", 0)) * int(w.get("delay", 0)) >= 240),
+      (1, True, [True, False, False], [True, False, False, False], True))
 # the VIP's restart only with both Pis still in the play: one dropped by an earlier failure leaves the VIP's first
 # and alone (the peer guard passes on the old Keycloak still serving there)
 both = next((t for t in every if "ansible_play_hosts_all" in str(t.get("ansible.builtin.assert", ""))), None)

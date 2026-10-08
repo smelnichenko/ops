@@ -681,6 +681,23 @@
         daemon_reload: true
       register: _keycloak_start
 
+    # one this run started (down before) serving before any restart: the other Pi's restart guard reads one still
+    # starting as down, and refuses
+    - name: Keycloak serving where this run started it
+      tags: [keycloak-db-url]
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/realms/master
+        status_code: 200
+        timeout: 10
+        follow_redirects: none
+      register: _keycloak_started_serving
+      until: _keycloak_started_serving.status | default(0) == 200
+      retries: 120
+      delay: 2
+      when:
+        - not ansible_check_mode
+        - _keycloak_start is changed
+
     # Keycloak restarted where its unit or secrets file differ from what it last loaded - the Pi without the VIP first,
     # one Pi at a time (tasks/keycloak-restart.yml, setup-patroni's too)
     - name: Keycloak restarted where pending
