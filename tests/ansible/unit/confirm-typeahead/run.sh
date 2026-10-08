@@ -14,7 +14,8 @@ def check(name, got, want):
 def ask(typed_ahead, answer, setup=None):
     """confirm()'s result with `typed_ahead` typed before the question and `answer` after it ("" none); `setup`: what
     the child does first - "flush-fails" (the terminal's flush raising termios.error), "background" (in a process
-    group of its own: not the terminal's foreground)."""
+    group of its own: not the terminal's foreground), "moved" (in the foreground when checked, moved to a group of its
+    own - Ctrl-Z, bg - before its read)."""
     pid, fd = pty.fork()
     if pid == 0:
         l = importlib.machinery.SourceFileLoader("up", "scripts/upgrade-production.py")
@@ -23,6 +24,16 @@ def ask(typed_ahead, answer, setup=None):
         if setup == "flush-fails":
             def tcflush(*_):
                 raise m.termios.error(5, "Input/output error")
+            m.termios.tcflush = tcflush
+        elif setup == "moved":
+            gpid = os.fork()
+            if gpid:
+                os.waitpid(gpid, 0)
+                os._exit(0)
+            flush = m.termios.tcflush
+            def tcflush(fd, queue):
+                flush(fd, queue)
+                os.setpgid(0, 0)  # the terminal's background from here: its read stopped it (SIGTTIN)
             m.termios.tcflush = tcflush
         elif setup == "background":
             # pty.fork's child leads its session (no group of its own for it): its child asks, from a group of its own
@@ -71,6 +82,9 @@ check("the terminal's flush failing (termios.error, no OSError): no - never a cr
 # claim - it answers no at once, said
 check("not the terminal's foreground: no, at once (not stopped at the question), said",
       (ask("", "y\n", "background"), "not asked: this runs in its terminal's background" in ASKED[-1]), ("False", True))
+# moved to the terminal's background between the check and the read (Ctrl-Z, bg): the read stopped it there (SIGTTIN),
+# its claim held - it answers no, never stopped
+check("moved to the background after the check: no, not stopped at the read", ask("", "y\n", "moved"), "False")
 print("confirm-typeahead: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCT

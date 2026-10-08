@@ -60,6 +60,7 @@ import os
 import re
 import secrets
 import shlex
+import signal
 import subprocess
 import socket
 import sys
@@ -835,7 +836,10 @@ def pushed_base(repo_dir, step, tip=None):
 def confirm(question):
     """The operator's yes on the terminal, as the Taskfile's prompts ask it; no terminal is a no. Unbuffered binary: a
     text "r+" needs a seekable file and a terminal is none - it raised, and every question read as a no. What was typed
-    before the question is discarded: input typed ahead is no answer to it."""
+    before the question is discarded: input typed ahead is no answer to it. SIGTTIN and SIGTTOU ignored meanwhile: moved
+    to the background after the check (Ctrl-Z, bg), the read stopped it there, its claim held - ignored, the read fails
+    (EIO): a no"""
+    kept = {s: signal.signal(s, signal.SIG_IGN) for s in (signal.SIGTTIN, signal.SIGTTOU)}
     try:
         with open("/dev/tty", "rb+", buffering=0) as tty:
             # asked only from the terminal's foreground: from its background the flush stopped this process (SIGTTOU)
@@ -848,6 +852,9 @@ def confirm(question):
             return tty.readline().decode(errors="replace").strip().lower() in ("y", "yes")
     except (OSError, termios.error):  # termios.error is no OSError
         return False
+    finally:
+        for sig, handler in kept.items():
+            signal.signal(sig, handler)
 
 
 def refuse(lines):
@@ -1229,7 +1236,8 @@ def main():
                     if reason:
                         print(reason, file=sys.stderr)
                     raise SystemExit(str(e)) from None
-                except SystemExit:  # the read's or the write's failure becomes the exit: the phase's own reason first
+                except BaseException:  # the read's or the write's failure (an exit, or an exception - a ledger's
+                    # answer not JSON) becomes the run's end: the phase's own reason first
                     if reason:
                         print(reason, file=sys.stderr)
                     raise

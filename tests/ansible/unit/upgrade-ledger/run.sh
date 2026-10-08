@@ -856,6 +856,8 @@ def main_ends(code, released=False, write_fails=False, read_fails=False):
     lines = [f"{S47} start begin host:1:aa"] + ([f"{S47} end begin released host:1:aa"] if released else [])
     text = "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(lines))
     def fake_read():
+        if read_fails == "crash":  # the ledger's answer not JSON (a proxy's error page)
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
         if read_fails:  # ten unreachable when the end is read
             sys.exit("reading the ledger: Unable to connect to the server: dial tcp: i/o timeout")
         return {"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text)
@@ -900,6 +902,9 @@ check("a phase refused, its end not written: both said - the phase's reason, the
 main_ends("REFUSED: the phase's own reason", read_fails=True)
 check("a phase refused, ten unreachable when its end is read: both said - the phase's reason, then the read's",
       ("REFUSED: the phase's own reason" in MAIN_OUT["err"], "reading the ledger" in str(MAIN_OUT["exit"])), (True, True))
+main_ends("REFUSED: the phase's own reason", read_fails="crash")
+check("a phase refused, its end's read failing otherwise (an exception): both said - the phase's reason, then that",
+      ("REFUSED: the phase's own reason" in MAIN_OUT["err"], "ValueError" in str(MAIN_OUT["exit"])), (True, True))
 main_ends(RuntimeError("the phase's own defect"), write_fails=True)
 check("a phase dying of an exception, its end not written: its traceback said, then the write's failure",
       ("RuntimeError: the phase's own defect" in MAIN_OUT["err"], "Traceback" in MAIN_OUT["err"],
