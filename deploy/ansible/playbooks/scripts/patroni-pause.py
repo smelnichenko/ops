@@ -160,8 +160,18 @@ def pause(pre, who):
         print(f"REFUSED: a Patroni pause marker is there already, or none could be put ({put.stderr.strip()}) - another"
               f" run pausing, or one cut short: {CLEAN_UP}")
         return 1
-    # read back: its index, and that it is this run's (the nonce) - nothing can have changed it unseen in between
-    got, idx = read_marker()
+    # read back: its index, and that it is this run's (the nonce) - nothing can have changed it unseen in between. A read
+    # failing (Consul's leader moving) is read again; one never read leaves the marker, named, nothing paused
+    for attempt in range(3):
+        try:
+            got, idx = read_marker()
+            break
+        except Unread as e:
+            if attempt == 2:
+                print(f"REFUSED: the pause marker this run put ({value!r}) not read back ({e}) - nothing paused; once"
+                      f" Consul answers, delete it if it still names this run: consul kv delete {KEY}")
+                return 1
+            time.sleep(POLL)
     if got != value or not (idx or "").isdigit():
         print(f"REFUSED: the pause marker read back is not the one this run put ({got!r}, index {idx!r}) - nothing"
               f" paused: {CLEAN_UP}")

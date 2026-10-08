@@ -31,9 +31,13 @@ W = os.environ["W"]
 open(os.path.join(W, "calls"), "a").write("consul " + " ".join(sys.argv[1:]) + "\n")
 # CONSUL_BLIP_AFTER: the first call after that one (e.g. "patronictl resume") fails - once
 blip = os.environ.get("CONSUL_BLIP_AFTER")
-if blip and not os.path.exists(os.path.join(W, "blipped")) and any(
-        c.startswith(blip) for c in open(os.path.join(W, "calls")).read().splitlines()):
+if blip and not os.path.exists(os.path.join(W, "blipped")) and any(  # a call before this one (its own line is last)
+        c.startswith(blip) for c in open(os.path.join(W, "calls")).read().splitlines()[:-1]):
     open(os.path.join(W, "blipped"), "w").close()
+    sys.exit("Error querying Consul agent: Unexpected response code: 500 (No cluster leader)")
+# CONSUL_DOWN_AFTER: every call after that one fails
+down = os.environ.get("CONSUL_DOWN_AFTER")
+if down and any(c.startswith(down) for c in open(os.path.join(W, "calls")).read().splitlines()[:-1]):
     sys.exit("Error querying Consul agent: Unexpected response code: 500 (No cluster leader)")
 if os.environ.get("CONSUL_DOWN"):
     sys.exit("Error querying Consul agent: Get \"http://127.0.0.1:8500/v1/kv/x\": dial tcp 127.0.0.1:8500: connect: "
@@ -220,6 +224,14 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
           "member paused; its index said", r.returncode == 0 and kv is not None and kv.startswith(book + " ")
           and len(kv.split()) == 3 and f"MARKER 11" in r.stdout and acts(calls)[:2] == ["consul kv put", "patronictl pause"]
           and dcs() == (True, [True, True]), (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, env={"CONSUL_BLIP_AFTER": "consul kv put"})
+    check(f"{book}: its marker's read-back failing once (Consul's leader moving): read again - paused, its index said",
+          r.returncode == 0 and "MARKER 11" in r.stdout and dcs() == (True, [True, True]),
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(p, env={"CONSUL_DOWN_AFTER": "consul kv put"})
+    check(f"{book}: its marker never read back: refused, nothing paused, the marker named (to delete once Consul answers)",
+          r.returncode != 0 and "not read back" in r.stdout and kv is not None and kv in r.stdout
+          and "patronictl pause" not in acts(calls), (r.returncode, r.stdout, r.stderr, calls, kv))
     r, calls, kv = run(p, env={"CONSUL_SWAPPED": "1"})
     check(f"{book}: the marker read back is not the one it put: refused - nothing paused",
           r.returncode != 0 and "not the one this run put" in r.stdout and "patronictl pause" not in acts(calls),
