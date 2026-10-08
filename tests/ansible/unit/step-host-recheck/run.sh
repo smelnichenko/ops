@@ -1,14 +1,15 @@
 #!/bin/bash
 # test:upgrade:step's two cuts that keep the proof (the full run's minutes): the VMs' readiness checked again unless
 # the step before it, green in this same run, changed no host (no playbook lines) - a step run alone, or the first,
-# checks all; the isolation from production applied again after a step's own playbook lines, and its proof (--tags
-# proof: the DNS answers, IPv6, the node's and a pod's probes) run every step. The Taskfile's own shell, run here.
+# checks all; the isolation from production - the cluster's and the Pis' - applied again after a step's own playbook
+# lines, and the cluster's proof (--tags proof: the DNS answers, IPv6, the node's and a pod's probes) run every step.
+# The Taskfile's own shell, run here: its commands against an ansible-playbook stub that records what it is given.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" - <<'PYCHECK'
-import re, subprocess, sys
+import os, re, subprocess, sys, tempfile
 import yaml
 fails = 0
 def check(name, got, want):
@@ -26,12 +27,37 @@ check("after a step with playbook lines (containerd): checked", host_recheck("14
 check("after a step without (Velero's): not", host_recheck("10-velero"), "no")
 check("a step before it that is no step: fails (never read as none)", host_recheck("99-none").startswith("rc "), True)
 cmds = [c["cmd"] if isinstance(c, dict) else c for c in step["cmds"]]
+# each command run as go-task renders it, ansible-playbook a stub recording its playbook and arguments
+work = tempfile.mkdtemp()
+os.makedirs(os.path.join(work, "deploy/ansible/venv/bin"))
+stub = os.path.join(work, "deploy/ansible/venv/bin/ansible-playbook")
+open(stub, "w").write('#!/bin/bash\nprintf "%s\\n" "${*: -$(( $# - 2 ))}" >> "$RAN"\n'
+                      '[[ -z ${FAILS:-} || $* != *$FAILS* ]]\n')
+os.chmod(stub, 0o755)
+def ran(cmd, fails="", **values):
+    for k, val in values.items():
+        cmd = cmd.replace("{{.%s}}" % k, val)
+    log = os.path.join(work, "ran")
+    open(log, "w").close()
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, cwd=work,
+                       env=dict(os.environ, RAN=log, FAILS=fails))
+    return r.returncode, [os.path.basename(x.split()[0]) + "".join(" " + w for w in x.split()[1:])
+                          for x in open(log).read().splitlines()]
 vms = [c for c in cmds if "vms-ready.yml" in c]
-check("vms-ready by HOST_RECHECK", len(vms) == 1 and '{{.HOST_RECHECK}}' in vms[0], True)
+check("one command for the VMs' readiness", len(vms), 1)
+if vms:
+    check("HOST_RECHECK yes: the VMs' readiness checked (vms-ready)", ran(vms[0], HOST_RECHECK="yes", PREV_STEP="x"),
+          (0, ["vms-ready.yml"]))
+    check("HOST_RECHECK no: not checked again", ran(vms[0], HOST_RECHECK="no", PREV_STEP="x"), (0, []))
 iso = [c for c in cmds if "isolate-cluster.yml" in c]
-check("the isolation applied again after the step's playbook lines, its proof alone otherwise",
-      len(iso) == 1 and bool(re.search(r'"\{\{\.HAS_PLAYBOOKS\}\}" = yes \]; then\s+\S.*isolate-cluster\.yml\s*\n\s*else\s*\n\s*.*isolate-cluster\.yml --tags proof', iso[0])),
-      True)
+check("one command for the isolation after the step's playbook lines", len(iso), 1)
+if iso:
+    check("after the step's playbook lines: the Pis' isolation and the cluster's applied again",
+          ran(iso[0], HAS_PLAYBOOKS="yes"), (0, ["isolate-pis.yml", "isolate-cluster.yml"]))
+    check("no playbook lines: the cluster's proof alone", ran(iso[0], HAS_PLAYBOOKS="no"),
+          (0, ["isolate-cluster.yml --tags proof"]))
+    check("the Pis' isolation failing: the command fails there (go-task's shell goes on past a failed line)",
+          ran(iso[0], fails="isolate-pis", HAS_PLAYBOOKS="yes"), (1, ["isolate-pis.yml"]))
 full = tf["test:upgrade:full"]["cmds"]
 check("the full run passes each step the one before it",
       sum('PREV_STEP="${prev%% *}"' in str(c.get("cmd", "") if isinstance(c, dict) else c) for c in full), 1)
