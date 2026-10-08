@@ -104,6 +104,20 @@ check("... a json_query over its results: named; over a register not looped: nam
       ["_p.results[].stdout", "_p.stdout_lines"])
 check("... a json_query of each item's own item: not named",
       play(LOOPED + READ.replace("_p.stdout", "_p.results | json_query('[].item')")), [])
+check("... a json_query of the register itself over its results (results[*].f): named; results[*].item: not",
+      play(LOOPED + READ.replace("_p.stdout", "_p | json_query('results[*].stdout')"))
+      + play(LOOPED + READ.replace("_p.stdout", "_p | json_query('results[*].item')")), ["_p.results[].stdout"])
+ZIP = """    - name: zipped
+      ansible.builtin.debug:
+        msg: "{{ item[0].stdout }} {{ item[1] }}"
+      loop: "{{ _p.results | zip(['a', 'b']) | list }}"
+"""
+check("... a loop zipping its results with another list: the item's part from them read (item[0].stdout, item.0.rc) "
+      "named, the other's not; zipped second: item[1]",
+      play(LOOPED + ZIP) + play(LOOPED + ZIP.replace("item[0].stdout", "item.0.rc"))
+      + play(LOOPED + ZIP.replace("_p.results | zip(['a', 'b'])", "['a', 'b'] | zip(_p.results)")
+             .replace("{{ item[0].stdout }} {{ item[1] }}", "{{ item[0] }} {{ item[1].stdout }}")),
+      ["item[0].stdout", "item.0.rc", "item[1].stdout"])
 TOGETHER = """    - name: together
       ansible.builtin.debug:
         msg: "{{ item.0.stdout }} {{ item.1 }}"

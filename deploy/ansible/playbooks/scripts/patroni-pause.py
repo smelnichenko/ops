@@ -218,8 +218,11 @@ def resume(pre, idx):
         if not paused and not any(members.values()):
             print(f"NOTHING TO RESUME: its marker gone, {said(paused, members)}")
             return 0
-    problem = ("this run's pause marker is gone already (deleted by hand?)" if value is None
-               else None if now == idx else f"the pause marker is not this run's any more ({value!r})")
+    problem = None
+    if value is None:
+        problem = "this run's pause marker is gone already (deleted by hand?)"
+    elif now != idx:
+        problem = f"the pause marker is not this run's any more ({value!r})"
     if problem:
         print(f"REFUSED: {problem} - the pause is not this run's: left as it is ({CLEAN_UP})")
         return 1

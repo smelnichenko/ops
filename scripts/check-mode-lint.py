@@ -44,6 +44,8 @@ SKIPPED = {"shell", "command", "script", "raw", "uri"}
 EMPTY = {"shell", "command"}  # skipped in check mode, their register still holds rc 0, stdout '' (raw, script: none)
 FINE = {"skipped", "changed", "failed", "skip_reason"}  # what a skipped task's register does hold
 MODULE = re.compile(r"^(?:ansible\.builtin\.|ansible\.legacy\.)?([a-z_]+)$")
+# a read given a default right after it: `| default(...)`
+DEFAULTED = re.compile(r"\s*\|\s*default\b")
 # Ansible's task keywords - every other key of a task is its module (or action)
 KEYWORDS = {"name", "when", "register", "tags", "vars", "args", "loop", "loop_control", "become", "become_user",
             "become_method", "become_flags", "become_exe", "block", "rescue", "always", "notify", "listen",
@@ -161,7 +163,7 @@ def read_of(reg, text, field=None):
     for m in re.finditer(name_of(reg) + FIELD, text):
         f = m.group(1) or m.group(2)
         if field is None or f == field:
-            out.append((f, bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+            out.append((f, bool(DEFAULTED.match(text, m.end()))))
     for m in re.finditer(name_of(reg) + JSON_QUERY, text):
         for f in query_fields(m.group(1))[:1]:
             if field is None or f == field:
@@ -179,17 +181,38 @@ def item_reads(reg, text):
     res = name_of(reg) + r"(?:\.results|\[\s*['\"]results['\"]\s*\])"
     # one by its index, or its first or last
     for m in re.finditer(res + r"\[\s*-?\d+\s*\]" + FIELD, text):
-        out.append((m.group(1) or m.group(2), bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+        out.append((m.group(1) or m.group(2), bool(DEFAULTED.match(text, m.end()))))
     for m in re.finditer(r"\(\s*" + res + r"\s*\|\s*(?:first|last)\s*\)" + FIELD, text):
-        out.append((m.group(1) or m.group(2), bool(re.match(r"\s*\|\s*default\b", text[m.end():]))))
+        out.append((m.group(1) or m.group(2), bool(DEFAULTED.match(text, m.end()))))
     for m in re.finditer(res + JSON_QUERY, text):
         out.extend((f, False) for f in query_fields(m.group(1)))
+    # a json_query of the register itself over its results: results[*].f - the names after results its items'
+    for m in re.finditer(name_of(reg) + JSON_QUERY, text):
+        names = query_fields(m.group(1))
+        if names[:1] == ["results"]:
+            out.extend((f, False) for f in names[1:])
     for m in re.finditer(res + r"\s*\|\s*(?:(?:selectattr|rejectattr)\(\s*|(?:map|sum|sort|groupby|unique|min|max)"
                          r"\([^)]*?attribute\s*=\s*)['\"]([A-Za-z_]+)", text):
         out.append((m.group(1), False))
     for m in re.finditer(r"\{%-?\s*for\s+(\w+)\s+in\s+" + res + r"\b", text):
         out.extend(read_of(m.group(1), text[m.end():]))
     return out
+
+
+def zip_parts(loop):
+    """A loop's lists zipped together - `a | zip(b, c)`: [a, b, c] (the item's k-th part from the k-th); none: []."""
+    m = re.search(r"\{\{(.*?)\|\s*zip\((.*)\)", loop, re.S)
+    if not m:
+        return []
+    parts, depth, cur = [m.group(1)], 0, ""
+    for ch in m.group(2):
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+            continue
+        depth += (ch in "([{") - (ch in ")]}")
+        cur += ch
+    return parts + [cur]
 
 
 def lint(path, select=None, text=None):
@@ -236,6 +259,13 @@ def lint(path, select=None, text=None):
                 if over:
                     reads.append((var, over[0], False))
                     items.add(var)
+                # zipped with other lists: the item's part from its results (item[k], item.k)
+                for k, part in enumerate(zip_parts(loop)):
+                    hit = [empty for reg, empty, looped in reads if looped and read_of(reg, part, "results")]
+                    if hit:
+                        for name in (f"{var}[{k}]", f"{var}.{k}"):
+                            reads.append((name, hit[0], False))
+                            items.add(name)
                 # with_together: its k-th list a skipped looped register's results - each item's k-th part (item.k)
                 together = t.get("with_together")
                 for k, part in enumerate(together if isinstance(together, list) else []):
