@@ -473,36 +473,48 @@
       # Forgejo's CLI takes a password only as an argument (any local user reads those in /proc): the admin made with a
       # random one Forgejo makes itself (forgejo's own shell given the user and the e-mail on stdin), then its password
       # set through Forgejo's API - the random one on curl's config descriptor, the real one in the request's body on
-      # stdin. A retry after the create (the user there, its random one unknown) sets a throwaway first, on an argument
-      # for the second until the API replaces it - never the real one. All three on the task's stdin: templated into the
-      # script, root's shell ran $( ) and ` in them. Proven against Forgejo 15.0.9 (2026-10-08)
+      # stdin. A retry after the create (the user there, its random one unknown): a write:admin token from Forgejo's
+      # CLI (on its stdout - no password on any argument, a throwaway's either) sets it, then every such token deleted
+      # with the real password. All three on the task's stdin: templated into the script, root's shell ran $( ) and `
+      # in them. Proven against Forgejo 15.0.9 (2026-10-08), the retry's token made, used and deleted
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
           set -euo pipefail
           IFS= read -r user && IFS= read -r email && IFS= read -r pw
           conf=/var/lib/forgejo/custom/conf/app.ini
+          esc() { sed 's/[\\"]/\\&/g' <<< "$1"; }
+          api=http://localhost:3000/api/v1
           if out=$(printf '%s\n%s\n' "$user" "$email" | su - forgejo -c 'IFS= read -r user && IFS= read -r email &&
               exec forgejo admin user create --admin --username "$user" --email "$email" --random-password \
               --must-change-password=false --config '"$conf" 2>&1); then
             random=$(sed -n "s/^generated random password is '\(.*\)'$/\1/p" <<< "$out")
             [ -n "$random" ] || { echo "no random password in Forgejo's answer"; exit 1; }
+            auth=$(printf 'user = "%s:%s"' "$(esc "$user")" "$(esc "$random")")
           elif grep -q 'already exists' <<< "$out"; then
-            random=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
-            printf '%s\n%s\n' "$user" "$random" | su - forgejo -c 'IFS= read -r user && IFS= read -r rnd &&
-              exec forgejo admin user change-password --username "$user" --password "$rnd" \
-              --must-change-password=false --config '"$conf"
+            name="password-reset-$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+            token=$(printf '%s\n%s\n' "$user" "$name" | su - forgejo -c 'IFS= read -r user && IFS= read -r name &&
+              exec forgejo admin user generate-access-token --username "$user" --token-name "$name" \
+              --scopes write:admin --raw --config '"$conf")
+            [[ $token =~ ^[0-9a-f]{40}$ ]] || { echo "no token in Forgejo's answer"; exit 1; }
+            auth=$(printf 'header = "Authorization: token %s"' "$token")
           else
             sed "s/is '.*'/is '***'/" <<< "$out"
             exit 1
           fi
-          esc() { sed 's/[\\"]/\\&/g' <<< "$1"; }
           printf '%s' "$pw" | python3 -c 'import json, sys
           print(json.dumps({"login_name": sys.argv[1], "source_id": 0, "password": sys.stdin.read(),
                             "must_change_password": False}))' "$user" \
             | curl -sf --max-time 30 -o /dev/null -X PATCH -H 'Content-Type: application/json' \
-                -K <(printf 'user = "%s:%s"\n' "$(esc "$user")" "$(esc "$random")") --data @- \
-                "http://localhost:3000/api/v1/admin/users/$user"
+                -K <(printf '%s\n' "$auth") --data @- "$api/admin/users/$user"
+          # the reset tokens (this retry's, any an earlier one left) deleted with the password now set
+          real=$(printf 'user = "%s:%s"' "$(esc "$user")" "$(esc "$pw")")
+          ids=$(curl -sf --max-time 30 -K <(printf '%s\n' "$real") "$api/users/$user/tokens" | python3 -c '
+          import json, sys
+          print(" ".join(str(t["id"]) for t in json.load(sys.stdin) if t["name"].startswith("password-reset-")))')
+          for id in $ids; do
+            curl -sf --max-time 30 -o /dev/null -X DELETE -K <(printf '%s\n' "$real") "$api/users/$user/tokens/$id"
+          done
         stdin: "{{ forgejo_admin_user }}\n{{ forgejo_admin_email }}\n{{ forgejo_admin_password }}"
       register: _forgejo_admin_create
       retries: 5

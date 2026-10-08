@@ -4,8 +4,11 @@
 # CLI takes a password only as an argument (any local user reads those in /proc): the admin is made with a random one
 # (Forgejo says it), then its password set through Forgejo's API - the random one on curl's config descriptor, the real
 # one in the request's body on stdin, exactly, with $( ), backticks, quotes and a backslash, nothing of it run; neither
-# ever on a command line. All on the task's stdin, no_log. Proven against Forgejo 15.0.9 itself (2026-10-08: the admin
-# logged in with the password so set, a wrong one refused).
+# ever on a command line. A retry after the create (the user there, its random password unknown): a write:admin token
+# from Forgejo's CLI (on its stdout) sets it, then every such token deleted with the real one - no password on any
+# argument, a throwaway's either. A create failing otherwise fails, nothing more done. All on the task's stdin, no_log.
+# Proven against Forgejo 15.0.9 itself (2026-10-08: the admin logged in with the password so set, a wrong one refused;
+# the retry's token made, used and deleted).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -17,23 +20,34 @@ cat > "$W/bin/forgejo" <<'STUB'
 #!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
-name = "change-argv.json" if "change-password" in a else "argv.json"
+name = ("change-argv.json" if "change-password" in a else "token-argv.json" if "generate-access-token" in a
+        else "argv.json")
 json.dump(a, open(os.path.join(os.environ["W"], name), "w"))
 if "create" in a:
+    if os.environ.get("CREATE_FAILS"):  # another failure: the database locked
+        sys.exit("Command error: CreateUser: database is locked")
     if os.environ.get("EXISTS"):  # a retry after the create: the user there
         sys.exit("Command error: CreateUser: user already exists [name: admin]")
     print("generated random password is 'Rnd0mPw4tEst'")
     print("New user 'admin' has been successfully created!")
+if "generate-access-token" in a:
+    print("0123456789abcdef0123456789abcdef01234567")
 STUB
-# curl: its argv, the config it reads from -K, and its body from stdin (--data @-)
+# curl: each call's argv, the config it reads from -K, and its body from stdin (--data @-), one JSON line each (the
+# last also in curl.json); a GET of the user's tokens answers two - one an earlier retry left, one of the user's own
 cat > "$W/bin/curl" <<'STUB'
 #!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]
 conf = open(a[a.index("-K") + 1]).read() if "-K" in a else ""
 body = sys.stdin.read() if "@-" in a else ""
-json.dump({"argv": a, "config": conf, "body": body}, open(os.path.join(os.environ["W"], "curl.json"), "w"))
-print(200)
+call = {"argv": a, "config": conf, "body": body}
+json.dump(call, open(os.path.join(os.environ["W"], "curl.json"), "w"))
+open(os.path.join(os.environ["W"], "curl-calls"), "a").write(json.dumps(call) + "\n")
+if a[-1].endswith("/tokens") and "-X" not in a:
+    if os.environ.get("TOKENS_FAIL"):
+        sys.exit(22)
+    print(json.dumps([{"id": 7, "name": "password-reset-0badc0de"}, {"id": 3, "name": "ci"}]))
 STUB
 chmod +x "$W/bin/forgejo" "$W/bin/curl"
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYFAC'
@@ -66,20 +80,22 @@ for book in ("setup-pi-services", "setup-patroni"):
         script = render(cmd, **v).replace("su - forgejo -c ", "bash -c ")
         add_nl = (sh.get("stdin_add_newline", True) if isinstance(sh, dict) else True)
         data = render(str(stdin), **v) + ("\n" if add_nl else "") if stdin else ""
-        for f in ("argv.json", "curl.json", "ran", "ran2"):
+        for f in ("argv.json", "curl.json", "curl-calls", "ran", "ran2"):
             os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
         r = subprocess.run(["bash", "-c", script], input=data, capture_output=True, text=True,
                            env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W))
         argv = json.load(open(os.path.join(W, "argv.json"))) if os.path.exists(os.path.join(W, "argv.json")) else []
         arg = lambda k: argv[argv.index(k) + 1] if k in argv else None
-        c = json.load(open(os.path.join(W, "curl.json"))) if os.path.exists(os.path.join(W, "curl.json")) else {}
+        cl = os.path.join(W, "curl-calls")
+        every = [json.loads(x) for x in open(cl).read().splitlines()] if os.path.exists(cl) else []
+        c = next((x for x in every if "PATCH" in x["argv"]), {})  # the password set
         body = json.loads(c["body"]) if c.get("body") else {}
         check(f"{book}: password {n + 1}: the admin made with a random one (no --password), the user and the e-mail "
               "exactly; then its password set through the API - the real one in the body exactly, the random one on "
               "curl's config, neither on a command line; nothing of them run",
               (r.returncode, "--password" in argv, "--random-password" in argv, arg("--username"), arg("--email"),
                body.get("password") == PW, body.get("must_change_password"), "admin:Rnd0mPw4tEst" in c.get("config", ""),
-               any(PW in x or "Rnd0mPw4tEst" in x for x in c.get("argv", [])),
+               any(PW in x or "Rnd0mPw4tEst" in x for e in every for x in e["argv"]),
                c.get("argv", [""])[-1].endswith("/api/v1/admin/users/admin"),
                os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))),
               (0, False, True, "admin", "a'b@example.org", True, False, True, False, True, False))
@@ -88,16 +104,45 @@ for book in ("setup-pi-services", "setup-patroni"):
     v = dict(forgejo_admin_user="admin", forgejo_admin_email="a@b", forgejo_admin_password=PWS[0])
     script = render(cmd, **v).replace("su - forgejo -c ", "bash -c ")
     data = render(str(stdin), **v) + ("\n" if add_nl else "")
-    for f in ("argv.json", "change-argv.json", "curl.json"):
-        os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
+    def fresh():
+        for f in ("argv.json", "change-argv.json", "token-argv.json", "curl.json", "curl-calls"):
+            os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
+    def calls():
+        p = os.path.join(W, "curl-calls")
+        return [json.loads(x) for x in open(p).read().splitlines()] if os.path.exists(p) else []
+    fresh()
     r = subprocess.run(["bash", "-c", script], input=data, capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, EXISTS="1"))
-    ch = json.load(open(os.path.join(W, "change-argv.json"))) if os.path.exists(os.path.join(W, "change-argv.json")) else []
-    c = json.load(open(os.path.join(W, "curl.json"))) if os.path.exists(os.path.join(W, "curl.json")) else {}
-    thrown = ch[ch.index("--password") + 1] if "--password" in ch else None
-    check(f"{book}: a retry, the user there: a throwaway set, then the real password through the API - never on a "
-          "command line", (r.returncode, thrown is not None and thrown != PWS[0], f"admin:{thrown}" in c.get("config", ""),
-                           json.loads(c.get("body") or "{}").get("password") == PWS[0]), (0, True, True, True))
+    tok = json.load(open(os.path.join(W, "token-argv.json"))) if os.path.exists(os.path.join(W, "token-argv.json")) else []
+    arg = lambda k: tok[tok.index(k) + 1] if k in tok else None
+    cs = calls()
+    patch = [c for c in cs if "PATCH" in c["argv"]]
+    deleted = [c["argv"][-1].rsplit("/", 1)[1] for c in cs if "DELETE" in c["argv"]]
+    esc = PWS[0].replace("\\", "\\\\").replace('"', '\\"')
+    check(f"{book}: a retry, the user there: a write:admin token from Forgejo's CLI (no throwaway password set) sets the "
+          "real one through the API - the token on curl's config; then the reset tokens deleted (only those) with the real "
+          "password on curl's config; no password, no token on any command line",
+          (r.returncode, os.path.exists(os.path.join(W, "change-argv.json")), arg("--scopes"), "--raw" in tok,
+           (arg("--token-name") or "").startswith("password-reset-"),
+           [("Authorization: token 0123456789abcdef0123456789abcdef01234567" in c["config"],
+             json.loads(c["body"] or "{}").get("password") == PWS[0]) for c in patch],
+           deleted, all(f'user = "admin:{esc}"' in c["config"] for c in cs if "PATCH" not in c["argv"]),
+           any(PWS[0] in x or "0123456789abcdef0123456789abcdef01234567" in x for c in cs for x in c["argv"])),
+          (0, False, "write:admin", True, True, [(True, True)], ["7"], True, False))
+    # the reset tokens not read (the API failing): the task fails - a write:admin token never left unsaid
+    fresh()
+    r = subprocess.run(["bash", "-c", script], input=data, capture_output=True, text=True,
+                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, EXISTS="1",
+                                TOKENS_FAIL="1"))
+    check(f"{book}: a retry whose reset tokens are not read: fails", r.returncode != 0, True)
+    # a create failing otherwise (not "already exists"): the task fails, said - no token made, nothing sent
+    fresh()
+    r = subprocess.run(["bash", "-c", script], input=data, capture_output=True, text=True,
+                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W,
+                                CREATE_FAILS="1"))
+    check(f"{book}: a create failing otherwise: fails, said - no token, nothing sent to the API",
+          (r.returncode != 0, "database is locked" in r.stdout + r.stderr,
+           os.path.exists(os.path.join(W, "token-argv.json")), calls()), (True, True, False, []))
 print("forgejo-admin-create: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYFAC
