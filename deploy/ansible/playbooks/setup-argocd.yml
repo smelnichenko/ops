@@ -643,6 +643,45 @@
         namespace: "{{ argocd_namespace }}"
       register: argocd_pods
 
+    # single sign-on as the server reads it: argocd-cm's OIDC config names the Secret and key this run wrote, and that
+    # Secret holds a value, labelled for Argo CD to resolve - production's earlier shape named a key in argocd-secret,
+    # which this install drops (Helm's three-way merge): verified after every install, step 31's on production too
+    - name: Argo CD's OIDC config, as the server reads it
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: ConfigMap
+        name: argocd-cm
+        namespace: "{{ argocd_namespace }}"
+      register: _argocd_cm
+      when: keycloak_enabled | bool
+
+    - name: The Secret its client secret is in
+      kubernetes.core.k8s_info:
+        kubeconfig: /etc/kubernetes/admin.conf
+        kind: Secret
+        name: argocd-oidc-keycloak
+        namespace: "{{ argocd_namespace }}"
+      register: _argocd_oidc
+      no_log: true
+      when: keycloak_enabled | bool
+
+    - name: Single sign-on configured - the OIDC config's client secret where it points
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_argocd_cm.resources[0].data['oidc.config'] | default('') | from_yaml).clientSecret | default('')
+            == '$argocd-oidc-keycloak:clientSecret'
+          - _argocd_oidc.resources | length == 1
+          - _argocd_oidc.resources[0].data.clientSecret | default('') | length > 0
+          - _argocd_oidc.resources[0].metadata.labels['app.kubernetes.io/part-of'] | default('') == 'argocd'
+        fail_msg: >-
+          REFUSED: Argo CD's single sign-on is not as this run wrote it (argocd-cm's oidc.config clientSecret,
+          the argocd-oidc-keycloak Secret) - kubectl -n {{ argocd_namespace }} get cm argocd-cm -o yaml
+        quiet: true
+      when:  # a preview wrote no Secret
+        - keycloak_enabled | bool
+        - not ansible_check_mode
+
     - name: Display Argo CD status
       ansible.builtin.debug:
         msg: |

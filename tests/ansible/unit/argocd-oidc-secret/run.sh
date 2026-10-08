@@ -2,14 +2,18 @@
 # setup-argocd.yml: Argo CD's Helm install carries no secret, so it is not no_log - its preview (--check --diff, steps
 # 31/33/34) and a failure's message are seen. The Keycloak client secret Argo CD's OIDC config names ($<secret>:<key>)
 # is in a Secret of its own, written before the install by one no_log task, labelled app.kubernetes.io/part-of=argocd
-# (Argo CD resolves references only in Secrets so labelled), its key the one referenced.
+# (Argo CD resolves references only in Secrets so labelled), its key the one referenced. After the install single
+# sign-on is verified as the server reads it - argocd-cm's OIDC config naming that Secret and key, the Secret holding a
+# value: production's earlier shape named a key in argocd-secret, which the install drops (step 31 moves it there).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYCHECK'
-import re, sys
+import base64, re, sys
 import yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition  # noqa: E402
 fails = 0
 def check(name, got, want):
     global fails
@@ -37,6 +41,29 @@ if ref:
                key in (d.get("stringData") or d.get("data") or {})),
               ("argocd", "{{ argocd_namespace }}", True))
         check("that task no_log (its definition holds the secret)", writes[0].get("no_log"), True)
+# single sign-on verified after the install, as the server reads it
+sso = [t for t in tasks if "ansible.builtin.assert" in t and "argocd-oidc-keycloak" in str(t["ansible.builtin.assert"])]
+check("single sign-on verified after the install", len(sso) == 1 and bool(sso) and tasks.index(sso[0]) > tasks.index(helm),
+      True)
+if sso:
+    a = sso[0]["ansible.builtin.assert"]
+    regs = [t.get("register") for t in tasks if "kubernetes.core.k8s_info" in t
+            and t["kubernetes.core.k8s_info"].get("name") in ("argocd-cm", "argocd-oidc-keycloak")]
+    cm_reg, sec_reg = regs if len(regs) == 2 else ("_cm", "_sec")
+    def sso_ok(ref, value=b"s3cret", label="argocd", there=True):
+        cm = {"resources": [{"data": {"oidc.config": f"name: Keycloak\nissuer: https://auth\nclientID: argocd\n"
+                                                    f"clientSecret: {ref}\n"}}]}
+        sec = {"resources": [{"data": {"clientSecret": base64.b64encode(value).decode()},
+                              "metadata": {"labels": {"app.kubernetes.io/part-of": label}}}] if there else []}
+        return condition(a["that"], **{cm_reg: cm, sec_reg: sec})
+    check("as this run writes it: configured; production's old reference (argocd-secret), the Secret gone or empty, "
+          "unlabelled: not",
+          [sso_ok("$argocd-oidc-keycloak:clientSecret"), sso_ok("$argocd-secret:oidc.keycloak.clientSecret"),
+           sso_ok("$argocd-oidc-keycloak:clientSecret", there=False), sso_ok("$argocd-oidc-keycloak:clientSecret", b""),
+           sso_ok("$argocd-oidc-keycloak:clientSecret", label="")], [True, False, False, False, False])
+    check("checked only with Keycloak on, not in a preview (which wrote no Secret)",
+          [condition(sso[0].get("when", True), keycloak_enabled=k, ansible_check_mode=c)
+           for k, c in ((True, False), (False, False), (True, True))], [True, False, False])
 print("argocd-oidc-secret: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYCHECK
