@@ -765,12 +765,17 @@ check("the write failing otherwise: said so - it may have been made", ("may have
 # main records the claimed phase's end, passed or failed - an end it could not write fails the run (the phase's own
 # result aside); a claim released meanwhile has its end written already: nothing written, said so
 MAIN_OUT = {}  # main_ends' last run: its stderr and its exit
-def main_ends(code, released=False, write_fails=False):
+def main_ends(code, released=False, write_fails=False, conflicts=0):
     ends, saved = [], {k: getattr(m, k) for k in ("record", "begin", "read_ledger")}
+    tries = []
     def fake_record(st, e, *a, **k):
+        tries.append(e)
         if write_fails:
             sys.exit("the ledger write failed - it may have been made all the same")
+        if len(tries) <= conflicts:
+            sys.exit("REFUSED: the ledger changed since it was read (another phase at work?): Conflict")
         ends.append((st, e, *a))
+    MAIN_OUT["tries"] = tries
     m.record = fake_record
     lines = [f"{S47} start begin host:1:aa"] + ([f"{S47} end begin released host:1:aa"] if released else [])
     text = "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(lines))
@@ -802,6 +807,15 @@ check("a phase that passes: its end recorded passed, with its claim's token", ma
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
       ([(S47, "end", "begin", "failed", "host:1:aa")], False))
 check("a phase that passes, its end not written: the run fails", main_ends(0, write_fails=True), ([], False))
+# the end's write refused on a Conflict (the ledger changed since its read - the run's own late write that committed,
+# another phase's record): read again, its claim checked, written again - a few times; a write that may have been made
+# (its connection gone) is not written twice
+check("the end's write in conflict once: read and written again, recorded", (main_ends(0, conflicts=1),
+      MAIN_OUT["tries"]), (([(S47, "end", "begin", "passed", "host:1:aa")], True), ["end", "end"]))
+check("in conflict every time: the run fails after three", (main_ends(0, conflicts=99)[1], len(MAIN_OUT["tries"])),
+      (False, 3))
+check("a write that may have been made: not written again", (main_ends(0, write_fails=True)[1], len(MAIN_OUT["tries"])),
+      (False, 1))
 main_ends("REFUSED: the phase's own reason", write_fails=True)
 check("a phase refused, its end not written: both said - the phase's reason, then the write's",
       ("REFUSED: the phase's own reason" in MAIN_OUT["err"], "ledger write failed" in str(MAIN_OUT["exit"])), (True, True))

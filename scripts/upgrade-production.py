@@ -1172,17 +1172,24 @@ def main():
         # an end that cannot be written fails the run, whatever the phase's result (the next start then refuses on the
         # open claim); a claim released meanwhile has its end written already
         for step, phase, token in CLAIMED:
-            obj = read_ledger()[0]
-            lost = claim_problems(step, obj)
-            if lost:
-                print(f"{lost[0]} - its end not recorded")
-                continue
-            try:
-                record(step, "end", phase, result, token, obj=obj)
-            except SystemExit:
-                if reason:  # the write's failure becomes the exit: the phase's own reason said first
-                    print(reason, file=sys.stderr)
-                raise
+            # a write refused on a Conflict (the ledger changed since its read - this run's own late write that
+            # committed, another phase's record) made nothing: read again, the claim checked, written again - three
+            # times at most. One that may have been made (its connection gone) is not written twice
+            for attempt in range(3):
+                obj = read_ledger()[0]
+                lost = claim_problems(step, obj)
+                if lost:
+                    print(f"{lost[0]} - its end not recorded")
+                    break
+                try:
+                    record(step, "end", phase, result, token, obj=obj)
+                    break
+                except SystemExit as e:
+                    if attempt < 2 and "the ledger changed since it was read" in str(e.code):
+                        continue
+                    if reason:  # the write's failure becomes the exit: the phase's own reason said first
+                        print(reason, file=sys.stderr)
+                    raise
 
 
 if __name__ == "__main__":
