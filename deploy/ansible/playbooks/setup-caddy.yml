@@ -235,7 +235,8 @@
     # GET only this one Secret backs a daily per-Pi systemd timer. Applied with
     # kubectl on the cluster host (like the cert reads above).
     # The SA token is legacy/non-expiring: an off-cluster Pi can't refresh a
-    # bound token, and the SA can GET only the one public cert Secret.
+    # bound token, and the SA can GET only the one Secret - the wildcard's
+    # certificate AND its private key: the token is as secret as the key.
     - name: Render the cert-sync RBAC manifest (cluster host)
       ansible.builtin.copy:
         dest: /tmp/caddy-cert-reader-rbac.yml
@@ -384,8 +385,11 @@
           ca=/etc/caddy/cluster-ca.crt
           dest=/etc/caddy/certs
           tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+          # the token on curl's descriptor, never its command line (any local user reads those in /proc - and the
+          # token reads the wildcard's private key)
+          read -r token < /etc/caddy/cluster-token
           curl -sf --cacert "$ca" \
-            -H "Authorization: Bearer $(cat /etc/caddy/cluster-token)" \
+            -K <(printf 'header = "Authorization: Bearer %s"\n' "$token") \
             "$api/api/v1/namespaces/schnappy-infra/secrets/pmon-dev-wildcard-tls" \
             -o "$tmp/secret.json"
           python3 - "$tmp" <<'PY'

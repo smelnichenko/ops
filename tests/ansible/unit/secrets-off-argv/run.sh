@@ -128,6 +128,63 @@ check("a variable holding no secret, one named alike in plain text: not named",
 check("a module that puts an argument on a command line (git's repo): named; a passphrase too",
       [bool(named({"ansible.builtin.git": {"repo": "https://u:{{ forgejo_token }}@x/r.git", "dest": "/d"}})),
        bool(named({"ansible.builtin.shell": "x {{ key_passphrase }}"}))], [True, True])
+# and none read at run time onto another program's command line: a script's `curl -H "Authorization: Bearer $t"` or
+# `x --token "$(cat /etc/x/token)"` puts it in /proc as surely as a templated one. A builtin's arguments (printf, echo,
+# read) never reach an exec: curl takes the header from a descriptor (-K <(printf ...)), a file (-H @f) or stdin.
+BUILTINS = {"printf", "echo", "read", "local", "export", "declare", "readonly", "set", "test", "[", "[[", "return"}
+ARGV_SECRET = re.compile(r"Bearer \$|\$\(\s*(cat|<)\s*[^)]*(token|password|passwd|secret|private|\.key)\b[^)]*\)", re.I)
+
+
+def argv_reads(script):
+    """The lines of a shell script that hand a secret read at run time to another program's argv."""
+    out, logical = [], ""
+    for line in str(script or "").splitlines():
+        logical += line.rstrip("\\") + " "
+        if line.rstrip().endswith("\\"):
+            continue
+        cmd = logical.strip()
+        logical = ""
+        for m in ARGV_SECRET.finditer(cmd):
+            # the command whose argv it lands on: the one its segment starts with - a $( )'s result is its outer
+            # command's argument, a <( )'s inner command its own
+            seg = re.split(r"&&|\|\||;|\||<\(|\bthen\b|\bdo\b|\{", cmd[:m.start()])[-1]
+            words = [w for w in seg.split() if not re.match(r"^\w+=", w)]
+            if words and words[0] not in BUILTINS and not words[0].endswith("()"):
+                out.append(cmd)
+                break
+    return out
+
+
+check("a run-time token on another program's argv: named; on a builtin's, a descriptor's or a path's: not",
+      [bool(argv_reads('curl -sf -H "Authorization: Bearer $(cat /etc/caddy/cluster-token)" x')),
+       bool(argv_reads('curl -sf --cacert "$ca" \\\n  -H "Authorization: Bearer $token" \\\n  "$api"')),
+       bool(argv_reads('vault login "$(cat /etc/vault-unseal/root-token)"')),
+       bool(argv_reads('x=1; curl -K <(printf \'header = "Authorization: Bearer %s"\\n\' "$token") "$api"')),
+       bool(argv_reads('read -r token < /etc/caddy/cluster-token')),
+       bool(argv_reads('cat /etc/caddy/cluster-token > /dev/null')),
+       bool(argv_reads('VAULT_TOKEN=$(cat /etc/vault-unseal/root-token)'))],
+      [True, True, True, False, False, False, False])
+
+
+def scripts(doc):
+    """Every shell script a playbook runs or writes: its shell/command tasks' scripts and the files it writes that
+    start #! (copy or template content)."""
+    for t, _ in judged(doc):
+        for k, v in actions(t):
+            if k in FREEFORM_ACTIONS:
+                yield t.get("name"), v if isinstance(v, str) else str((v or {}).get("cmd") or "") if isinstance(v, dict) else ""
+            elif k in ("ansible.builtin.copy", "ansible.builtin.template") and isinstance(v, dict) \
+                    and str(v.get("content") or "").startswith("#!"):
+                yield t.get("name"), v["content"]
+
+
+import glob  # noqa: E402
+reads = [f"{f}: {n}: {line[:120]}" for f in files("deploy/ansible") for n, sc in scripts(load(f))
+         for line in argv_reads(sc)]
+reads += [f"{f}: {line[:120]}" for f in sorted(glob.glob("deploy/ansible/playbooks/scripts/*") + glob.glob("scripts/*.sh")
+                                               + ["bootstrap.sh"]) for line in argv_reads(open(f, errors="replace").read())]
+check("no secret read onto another program's command line in a playbook's scripts, the ops scripts, bootstrap.sh",
+      reads, [])
 bad, used = [], set()
 for f in files("deploy/ansible"):
     for t, scope in judged(load(f)):
