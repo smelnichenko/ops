@@ -50,11 +50,20 @@
                         "must_change_password": False}))' "$user" \
         | curl -sf --max-time 30 -o /dev/null -X PATCH -H 'Content-Type: application/json' \
             -K <(printf '%s\n' "$auth") --data @- "$api/admin/users/$user"
-      # the reset tokens (this retry's, any an earlier one left) deleted with the password now set
+      # the reset tokens (this retry's, any an earlier one left) deleted with the password now set - read page by page
+      # (Forgejo pages its answer: 30 a page by default, 50 at most; one on a later page was left), till a page not full
       real=$(printf 'user = "%s:%s"' "$(esc "$user")" "$(esc "$pw")")
-      ids=$(curl -sf --max-time 30 -K <(printf '%s\n' "$real") "$api/users/$user/tokens" | python3 -c '
+      ids=""
+      for page in $(seq 1 20); do
+        got=$(curl -sf --max-time 30 -K <(printf '%s\n' "$real") "$api/users/$user/tokens?limit=50&page=$page" \
+          | python3 -c '
       import json, sys
-      print(" ".join(str(t["id"]) for t in json.load(sys.stdin) if t["name"].startswith("password-reset-")))')
+      tokens = json.load(sys.stdin)
+      print(len(tokens), " ".join(str(t["id"]) for t in tokens if t["name"].startswith("password-reset-")))')
+        ids+=" ${got#* }"
+        [ "${got%% *}" -eq 50 ] || break
+        [ "$page" -lt 20 ] || { echo "over 1000 tokens of $user - not all read"; exit 1; }
+      done
       for id in $ids; do
         curl -sf --max-time 30 -o /dev/null -X DELETE -K <(printf '%s\n' "$real") "$api/users/$user/tokens/$id"
       done

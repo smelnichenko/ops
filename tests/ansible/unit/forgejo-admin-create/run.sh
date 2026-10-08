@@ -36,20 +36,26 @@ if "generate-access-token" in a:
         "TOKEN_GARBAGE") else "0123456789abcdef0123456789abcdef01234567")
 STUB
 # curl: each call's argv, the config it reads from -K, and its body from stdin (--data @-), one JSON line each (the
-# last also in curl.json); a GET of the user's tokens answers two - one an earlier retry left, one of the user's own
+# last also in curl.json); a GET of the user's tokens answers a page as Forgejo does (limit, 30 by default; page, 1 by
+# default) of 61: 59 of the user's own, then one an earlier retry left - past the first page - and one more
 cat > "$W/bin/curl" <<'STUB'
 #!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, urllib.parse
 a = sys.argv[1:]
 conf = open(a[a.index("-K") + 1]).read() if "-K" in a else ""
 body = sys.stdin.read() if "@-" in a else ""
 call = {"argv": a, "config": conf, "body": body}
 json.dump(call, open(os.path.join(os.environ["W"], "curl.json"), "w"))
 open(os.path.join(os.environ["W"], "curl-calls"), "a").write(json.dumps(call) + "\n")
-if a[-1].endswith("/tokens") and "-X" not in a:
+path, _, query = a[-1].partition("?")
+if path.endswith("/tokens") and "-X" not in a:
     if os.environ.get("TOKENS_FAIL"):
         sys.exit(22)
-    print(json.dumps([{"id": 7, "name": "password-reset-0badc0de"}, {"id": 3, "name": "ci"}]))
+    q = urllib.parse.parse_qs(query)
+    limit, page = int(q.get("limit", ["30"])[0]), int(q.get("page", ["1"])[0])
+    every = [{"id": 100 + i, "name": f"ci-{i}"} for i in range(59)] + [{"id": 7, "name": "password-reset-0badc0de"},
+                                                                       {"id": 3, "name": "ci"}]
+    print(json.dumps(every[(page - 1) * min(limit, 50):page * min(limit, 50)]))
 STUB
 chmod +x "$W/bin/forgejo" "$W/bin/curl"
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYFAC'

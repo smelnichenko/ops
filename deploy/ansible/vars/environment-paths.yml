@@ -1,0 +1,15 @@
+---
+# what create-environment.yml and destroy-environment.yml write in the infra checkout, relative to it: only these are
+# committed (the checkout is the operator's own - other work there is refused, never pushed with the environment's).
+# One list for both: two copies drift (a path one writes, the other's commit leaves out). env_ns is each play's own
+_infra_env_paths:
+  - "clusters/production/{{ env_ns }}-data"
+  - "clusters/production/{{ env_ns }}-apps"
+  - "clusters/production/{{ env_ns }}-mesh"
+  - "clusters/production/cluster-config/{{ env_ns }}-namespace.yaml"
+  - "clusters/production/cluster-config/{{ env_ns }}-default-deny.yaml"
+  - clusters/production/cluster-config/forgejo-registry-secret.yaml
+  - clusters/production/schnappy-mesh/values.yaml
+  - clusters/production/argocd/apps/schnappy-data-envs.yaml
+  - clusters/production/argocd/apps/schnappy-apps-envs.yaml
+  - clusters/production/argocd/apps/schnappy-mesh-envs.yaml

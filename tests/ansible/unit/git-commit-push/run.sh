@@ -203,7 +203,8 @@ for book in ("create-environment", "destroy-environment"):
     ident = all("GIT_COMMITTER_NAME" in (t.get("environment") or {}) for t in (infra[0], infra[-1]))
     # the paths it commits: every one a task of it writes, relative to the checkout
     play = yaml.safe_load(open(book + ".yml"))[0]
-    paths = [str(x) for x in play["vars"].get("_infra_env_paths") or []]
+    vf = {k: v for f in play.get("vars_files") or [] for k, v in (yaml.safe_load(open(f)) or {}).items()}
+    paths = [str(x) for x in {**vf, **(play.get("vars") or {})}.get("_infra_env_paths") or []]
     written = {str((t.get(m) or {}).get(k)).replace("{{ item }}", str(i)) for t in tasks
                for m in ("ansible.builtin.copy", "ansible.builtin.file", "ansible.builtin.lineinfile",
                          "ansible.builtin.template") for k in ("dest", "path")
@@ -216,6 +217,22 @@ for book in ("create-environment", "destroy-environment"):
 ')
 check "both playbooks: ready first; committed last with the environment's paths (every one a task writes); identity" \
   "$order" "create-environment True True True True destroy-environment True True True True "
+# one list of the environment's paths, both playbooks' (two copies drifted: a path one wrote and the other's commit
+# left out); env_name held to one pattern by both before anything - destroy's took any (a path out of the checkout,
+# a quote into its inline Python)
+same=$(cd "$ROOT/deploy/ansible/playbooks" && python3 -c '
+import yaml
+out = []
+for book in ("create-environment", "destroy-environment"):
+    play = yaml.safe_load(open(book + ".yml"))[0]
+    first = (play.get("pre_tasks") or [{}])[0]
+    that = (first.get("ansible.builtin.assert") or {}).get("that") or []
+    out.append((book, "_infra_env_paths" in (play.get("vars") or {}), play.get("vars_files"),
+                any("^[a-z0-9-]+$" in str(x) and "match" in str(x) for x in that)))
+print(out)
+')
+check "both playbooks: one list of the environment paths (a vars file, no copy of their own); env_name matched first" \
+  "$same" "[('create-environment', False, ['../vars/environment-paths.yml'], True), ('destroy-environment', False, ['../vars/environment-paths.yml'], True)]"
 # the commit reported changed when it pushed alone (it said "changed" on every run, nothing pushed among them)
 PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=$ROOT/deploy/ansible/venv/bin/python3

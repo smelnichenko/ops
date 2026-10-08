@@ -73,6 +73,10 @@
           password: "{{ (_vault.stdout | from_json).keycloak.admin_password }}"
           grant_type: password
       register: _token
+      # a Keycloak still starting (Caddy's 502, a refused connection) waited for as long as its start takes
+      retries: 30
+      delay: 10
+      until: _token.status == 200 and (_token.json.access_token | default('')) | length > 0
       no_log: true
 
     - name: Does the realm exist?

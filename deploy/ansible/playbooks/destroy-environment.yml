@@ -14,23 +14,13 @@
   become: true
   gather_facts: false
 
+  vars_files:
+    - ../vars/environment-paths.yml
+
   vars:
     env_ns: "schnappy-{{ env_name }}"
     infra_dir: "{{ infra_dir_override | default(playbook_dir + '/../../../../infra') }}"
     cluster_dir: "{{ infra_dir }}/clusters/production"
-    # what this playbook writes in the infra checkout, relative to it: only these are committed (the checkout is the
-    # operator's own - other work there is refused, never pushed with the environment's)
-    _infra_env_paths:
-      - "clusters/production/{{ env_ns }}-data"
-      - "clusters/production/{{ env_ns }}-apps"
-      - "clusters/production/{{ env_ns }}-mesh"
-      - "clusters/production/cluster-config/{{ env_ns }}-namespace.yaml"
-      - "clusters/production/cluster-config/{{ env_ns }}-default-deny.yaml"
-      - clusters/production/cluster-config/forgejo-registry-secret.yaml
-      - clusters/production/schnappy-mesh/values.yaml
-      - clusters/production/argocd/apps/schnappy-data-envs.yaml
-      - clusters/production/argocd/apps/schnappy-apps-envs.yaml
-      - clusters/production/argocd/apps/schnappy-mesh-envs.yaml
     vault_addr: "https://127.0.0.1:8200"
     keycloak_url: "http://localhost:8080"
     infra_git_url: "{{ infra_git_url_override | default('') }}"
@@ -49,7 +39,9 @@
           - env_name is defined
           - env_name | length > 0
           - env_name != "production"
-        fail_msg: "Cannot destroy production (got: '{{ env_name | default('undefined') }}')"
+          - env_name is match("^[a-z0-9-]+$")
+        fail_msg: >-
+          env_name must be lowercase alphanumeric, never production (got: '{{ env_name | default('undefined') }}')
 
     # before the infra checkout is read or written: on main, nothing uncommitted or untracked (pushed with this
     # environment's change otherwise), up to date - the check below reads it, the tasks after write it
