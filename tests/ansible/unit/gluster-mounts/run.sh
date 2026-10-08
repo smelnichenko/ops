@@ -222,9 +222,31 @@ if own and left and start:
 # remount set it back to the arbiter brick's root:root otherwise - forgejo-repos had none (a re-run after a full run
 # found its root changed, 2026-10-08)
 own = next((t for p in plays for t in p.get("tasks") or [] if "storage.owner-uid" in str(t)), None)
-items = {(x["name"], x["id"]) for x in (own or {}).get("loop") or []}
+items = {(x["name"], str(x.get("uid")), str(x.get("gid"))) for x in (own or {}).get("loop") or []}
 check("the owner kept by Gluster on forgejo-repos and forgejo-data (900), nexus-data (901)",
-      {("forgejo-repos", 900), ("forgejo-data", 900), ("nexus-data", 901)} <= items, True)
+      {("forgejo-repos", "900", "900"), ("forgejo-data", "900", "900"), ("nexus-data", "901", "901")} <= items, True)
+# and the git mirror's volume by its user (the daily sync writes there as it - root:root 0755 on production, read
+# 2026-10-08, every repository refused), its ids read on each Pi and required the same on both (another user's uid on
+# one Pi would own the mirror there)
+ptasks = [t for p in plays for t in p.get("tasks") or []]
+mirror = next((x for x in (own or {}).get("loop") or [] if x.get("name") == "backup-git-mirror"), {})
+ids = next((t for t in ptasks if "offsite_backup_user" in str(t.get("ansible.builtin.command", ""))
+            or "offsite_backup_user" in str(t.get("ansible.builtin.shell", ""))), None)
+same = next((t for t in ptasks if "ansible.builtin.assert" in t and (ids or {}).get("register", "?") in str(t)), None)
+check("the git mirror's volume owned by its user's ids, read on each Pi, the same on both - before the owner is set",
+      (bool(mirror) and "{{" in str(mirror.get("uid")) and "{{" in str(mirror.get("gid")),
+       ids is not None and "groups['pis']" in str(ids.get("loop")) and ids.get("delegate_to") == "{{ item }}",
+       same is not None and own is not None and ptasks.index(ids) < ptasks.index(same) < ptasks.index(own)),
+      (True, True, True))
+from ansible.parsing.dataloader import DataLoader  # noqa: E402
+from ansible.inventory.manager import InventoryManager  # noqa: E402
+from ansible.vars.manager import VariableManager  # noqa: E402
+dl = DataLoader()
+inv = InventoryManager(loader=dl, sources=["deploy/ansible/inventory/vagrant.yml"])
+vmv = VariableManager(loader=dl, inventory=inv)
+check("the copy names its own mirror user (its Pis have no sm)",
+      [vmv.get_vars(host=h, include_hostvars=False).get("offsite_backup_user") for h in inv.get_hosts("pis")],
+      ["vagrant", "vagrant"])
 print("gluster-mounts: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PYGM

@@ -742,23 +742,48 @@
     # as 900/900 (set by 'Align Forgejo UID/GID' in the first play of this
     # file). Both volumes exist here - created above on a new install (this
     # said "the next play creates it", and swallowed every error).
+    # the git mirror's volume is its user's (the daily sync from ten writes there as it - root:root 0755 on production,
+    # read 2026-10-08: every repository refused): that user's ids on each Pi, the same on both (another user's uid on
+    # one Pi would own the mirror there)
+    - name: The git mirror user's ids on each Pi
+      ansible.builtin.shell:
+        cmd: "id -u {{ offsite_backup_user | default('sm') }} && id -g {{ offsite_backup_user | default('sm') }}"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      register: _mirror_user_ids
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: The git mirror user's ids the same on both Pis
+      ansible.builtin.assert:
+        that:
+          - _mirror_user_ids.results | map(attribute='stdout_lines') | unique | length == 1
+        fail_msg: >-
+          REFUSED: {{ offsite_backup_user | default('sm') }} has other ids on the Pis
+          ({{ _mirror_user_ids.results | map(attribute='stdout_lines') | list }}) - the mirror's volume not given it
+        quiet: true
+
     - name: Volume ownership enforced by Gluster (durable across heals)
       ansible.builtin.shell: |
         set -euo pipefail
-        for opt in storage.owner-uid storage.owner-gid; do
+        for pair in "storage.owner-uid {{ item.uid }}" "storage.owner-gid {{ item.gid }}"; do
+          opt=${pair% *} id=${pair#* }
           now=$(gluster volume get {{ item.name }} "$opt" | awk -v o="$opt" '$1 == o {print $2}')
-          if [ "$now" != "{{ item.id }}" ]; then
-            gluster volume set {{ item.name }} "$opt" {{ item.id }} > /dev/null
-            echo "$opt {{ item.id }} (was $now)"
+          if [ "$now" != "$id" ]; then
+            gluster volume set {{ item.name }} "$opt" "$id" > /dev/null
+            echo "$opt $id (was $now)"
           fi
         done
       args:
         executable: /bin/bash
       loop:
-        - { name: nexus-data, id: 901 }
-        - { name: forgejo-data, id: 900 }
+        - { name: nexus-data, uid: 901, gid: 901 }
+        - { name: forgejo-data, uid: 900, gid: 900 }
         # the repositories: their root reverted to root:root without it (a re-run after a full run found it changed)
-        - { name: forgejo-repos, id: 900 }
+        - { name: forgejo-repos, uid: 900, gid: 900 }
+        - name: backup-git-mirror
+          uid: "{{ (_mirror_user_ids.results | first).stdout_lines[0] }}"
+          gid: "{{ (_mirror_user_ids.results | first).stdout_lines[1] }}"
       register: _owner
       changed_when: _owner.stdout | length > 0
 
