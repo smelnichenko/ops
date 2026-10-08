@@ -18,6 +18,7 @@ import yaml
 sys.path.insert(0, "../../tests/ansible/unit")
 from templar import as_loaded, condition, render  # noqa: E402
 from ansible.config.manager import ConfigManager
+from ansible.errors import AnsibleError
 from ansible.inventory.manager import InventoryManager
 from ansible.parsing.dataloader import DataLoader
 from ansible.vars.manager import VariableManager
@@ -154,8 +155,12 @@ clause = second.replace(args_expr.group(0), "(_args)") if args_expr else "false"
 # the task's vars as Ansible loads them (their text a template, rendered when read); ssh's arguments as a lookup
 # returns them (not)
 tv = as_loaded(vp[0].get("vars") or {}) if vp else {}
-judge = lambda a: condition(clause, _args=a, host_keys_unchecked_rebuilt_vms=False,  # noqa: E731
-                            hostvars={"pi2": {"ansible_host": "192.168.11.6"}}, **tv)
+def judge(a):
+    try:
+        return condition(clause, _args=a, host_keys_unchecked_rebuilt_vms=False,
+                         hostvars={"pi2": {"ansible_host": "192.168.11.6"}}, **tv)
+    except AnsibleError as e:  # Ansible's own failure reading the task (its vars' text a template): said, as a run says it
+        return f"failed: {e.message.splitlines()[0]}"
 check("the assert as Ansible evaluates it: a value its lookup returns untemplated ({{ x }}, {% %}) refused - what it "
       "names is not read",
       [judge(v) for v in ("{{ common_ssh }}", "-o ControlMaster=auto {% if x %}-o A=b{% endif %}", "-o ServerAliveInterval=15")],
