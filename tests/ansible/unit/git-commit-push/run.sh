@@ -123,6 +123,44 @@ $(git -C "$W/remote.git" log --format=%s main | grep -c '^cd: tag 1$')" "0 2 env
     "$rc $(cat "$W/moved3") $(grep -c 'not pushed to .* in three tries' <<< "$out") \
 $(git -C "$W/remote.git" log --format=%s main | grep -c '^env: create n$')" "1 3 1 0"
   git -C "$W/infra" fetch -q origin main && git -C "$W/infra" reset -q --hard "$(git -C "$W/remote.git" rev-parse main)"
+  # a rename staged from outside the environment's paths into them (git mv a env/y): its source is another's change -
+  # refused, named; its status line names the destination alone (R  a -> env/y), and the commit took the whole index
+  echo a > "$W/infra/outside" && git -C "$W/infra" add outside && { git -C "$W/infra" rm -q --ignore-unmatch env/y; } \
+    && git -C "$W/infra" commit -qm "env: outside file, no y" && git -C "$W/infra" push -q origin main
+  git -C "$W/infra" mv outside env/y
+  check "the rename staged as one (R  outside -> env/y)" "$(git -C "$W/infra" status --porcelain | grep -c '^R  outside -> env/y$')" 1
+  out=$(push "env: create renamed"); rc=$?
+  check "a rename staged from outside into the environment's paths: refused, its source named - nothing pushed" \
+    "$rc $(grep -c 'REFUSED.*outside' <<< "$out") $(git -C "$W/remote.git" ls-tree --name-only main | grep -c '^outside$')" \
+    "1 1 1"
+  git -C "$W/infra" reset -q --hard "$(git -C "$W/remote.git" rev-parse main)"
+  # another session in the same checkout while the script runs: a file of its own staged after the script's check,
+  # a commit of its own made after the script's - neither pushed (the commit takes the environment's paths alone, the
+  # push the head the script checked)
+  mkdir -p "$W/race" && cat > "$W/race/git" <<'WRAP'
+#!/bin/bash
+if [ "$1" = -C ] && [ "$2" = "$INFRA" ]; then
+  case "$3 $4" in
+    "add -A") echo theirs > "$INFRA/staged-by-another" && /usr/bin/git -C "$INFRA" add staged-by-another ;;
+    "push -q") [ -z "${COMMIT_BEFORE_PUSH:-}" ] || { echo w > "$INFRA/wip" && /usr/bin/git -C "$INFRA" add wip \
+      && GIT_AUTHOR_NAME=someone GIT_COMMITTER_NAME=someone /usr/bin/git -C "$INFRA" commit -qm "WIP: another's" -- wip; } ;;
+  esac
+fi
+exec /usr/bin/git "$@"
+WRAP
+  chmod +x "$W/race/git"
+  echo s > "$W/infra/env/x"
+  out=$(INFRA=$W/infra PATH="$W/race:$PATH" push "env: create s"); rc=$?
+  check "another's file staged after the script's check: the environment's commit without it, pushed" \
+    "$rc $(git -C "$W/remote.git" show --name-only --format= main | tr '\n' ' ')" "0 env/x "
+  git -C "$W/infra" reset -q staged-by-another && rm -f "$W/infra/staged-by-another"
+  echo t > "$W/infra/env/x"
+  out=$(INFRA=$W/infra COMMIT_BEFORE_PUSH=1 PATH="$W/race:$PATH" push "env: create t"); rc=$?
+  check "another's commit made just before the push: the head the script checked pushed, never that commit" \
+    "$rc $(git -C "$W/remote.git" log -1 --format=%s main) $(git -C "$W/remote.git" log --format=%s main | grep -c "^WIP: another's$")" \
+    "0 env: create t 0"
+  git -C "$W/infra" reset -q staged-by-another 2> /dev/null; rm -f "$W/infra/staged-by-another"
+  git -C "$W/infra" reset -q --hard "$(git -C "$W/remote.git" rev-parse main)"
   # the same line changed on both sides: refused, nothing pushed, the checkout not left mid-rebase
   git -C "$W/elsewhere" pull -q --rebase origin main && echo theirs > "$W/elsewhere/env/x" \
     && someone -C "$W/elsewhere" commit -qam "theirs" && git -C "$W/elsewhere" push -q origin main
