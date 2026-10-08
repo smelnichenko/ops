@@ -191,6 +191,12 @@ other = next((t for t in tasks if "ca-key.pem" in str(t.get("ansible.builtin.she
              None)
 check("a CA key in another Pi's Vault directory: a task refuses it", other is not None, "")
 if other:
+    # run on every Pi but pi1 (whose Vault directory may hold it on the way to its root-only place) - its condition as
+    # Ansible evaluates it
+    sys.path.insert(0, "tests/ansible/unit")
+    from templar import condition  # noqa: E402
+    runs = [condition(other.get("when", True), inventory_hostname=h) for h in ("pi1", "pi2", "target")]
+    check("the refusal runs on pi2 and the third server, not on pi1", runs == [False, True, True], runs)
     tls = os.path.join(W, "pi2-tls"); os.makedirs(tls)
     sh2 = other["ansible.builtin.shell"]
     sh2 = (sh2 if isinstance(sh2, str) else sh2["cmd"]).replace("/etc/vault.d/tls", tls)
