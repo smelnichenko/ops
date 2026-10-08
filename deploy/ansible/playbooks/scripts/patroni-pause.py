@@ -212,6 +212,12 @@ def resume(pre, idx):
     # read, not deleted, first: a resume not proven (a DCS unread among them - main's) keeps the marker as it is, its
     # index the one the pause said, and the task's retry resumes; only this run deletes a marker by its index
     value, now = read_marker()
+    if value is None:
+        # gone and nothing paused: done - an earlier try of this task resumed and cleared it, or a person did
+        paused, members = state(pre)
+        if not paused and not any(members.values()):
+            print(f"NOTHING TO RESUME: its marker gone, {said(paused, members)}")
+            return 0
     problem = ("this run's pause marker is gone already (deleted by hand?)" if value is None
                else None if now == idx else f"the pause marker is not this run's any more ({value!r})")
     if problem:

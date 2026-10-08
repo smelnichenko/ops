@@ -391,6 +391,12 @@
                 cmd: "{{ playbook_dir }}/scripts/patroni-pause.py resume setup-patroni"
                 executable: python3
               changed_when: true
+              # a failed read (a Consul blip - likely, when the block failed of Consul's trouble) is no paused cluster
+              # for good: the marker is kept until the resume is proven - a try again is safe
+              register: _patroni_resumed
+              retries: 6
+              delay: 10
+              until: _patroni_resumed.rc == 0
               environment:
                 PAUSED_OUT: "{{ _restart_paused.stdout | default('') }}"
               run_once: true

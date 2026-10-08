@@ -289,6 +289,15 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
     check(f"{book}: its marker gone (deleted by hand): refused - nothing resumed (Consul's CAS delete of a missing key "
           "succeeds)", r.returncode != 0 and "gone" in r.stdout and "patronictl resume" not in acts(calls) and dcs()[0],
           (r.returncode, r.stdout, r.stderr, calls, kv))
+    r, calls, kv = run(rs, env=renv("MARKER 7"))
+    check(f"{book}: its marker gone, the cluster not paused (resumed and cleared already): nothing to do - passes, said",
+          r.returncode == 0 and "NOTHING TO RESUME" in r.stdout and "patronictl resume" not in acts(calls),
+          (r.returncode, r.stdout, r.stderr, calls, kv))
+    # the task retried: one failed read (a Consul blip, likely while the block's own failure is Consul's) is no paused
+    # cluster for good - the marker kept until the resume is proven makes a retry safe
+    got = (bool(rs.get("register")), int(rs.get("retries", 0)) >= 3,
+           str(rs.get("until", "")).replace(" ", "") == f"{rs.get('register')}.rc==0")
+    check(f"{book}: the resume task retried (register, retries, until its exit 0)", got == (True, True, True), got)
     r, calls, kv = run(rs, env=renv("PAUSE FAILED: ..."), paused=True, marker=mine, idx=7)
     check(f"{book}: no MARKER in the pause's output: refused - nothing resumed, nothing deleted",
           r.returncode != 0 and "no MARKER" in r.stdout and kv == mine and "patronictl resume" not in acts(calls)
