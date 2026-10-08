@@ -110,7 +110,11 @@ def read_marker():
         if "No key exists" in got.stderr:
             return None, None
         raise Unread(f"the pause marker not read: {got.stderr.strip()}")
-    fields = dict(line.split(None, 1) for line in got.stdout.splitlines() if len(line.split(None, 1)) == 2)
+    fields = {}
+    for line in got.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            fields[parts[0]] = parts[1]
     return fields.get("Value"), fields.get("ModifyIndex")
 
 

@@ -822,7 +822,7 @@ def claim(replace_rc, err="Error from server (Conflict): the object has been mod
     try:
         m.ledger_for(S47, "backup", "postgres")
         got = "claimed"
-    except SystemExit as e:
+    except (SystemExit, m.LedgerConflict) as e:  # a conflict is its own exception, main() ends the run with it
         got = str(e)
     finally:
         for k, v in saved.items():
@@ -939,6 +939,27 @@ def main_conflicts(n):
 check("kubectl's Conflict on the end's write, twice: written the third time", main_conflicts(2),
       (True, 3, ["end", "begin", "passed", "host:1:aa"]))
 check("kubectl's Conflict every time: the run fails after three writes", main_conflicts(99)[:2], (False, 3))
+# a phase's own write refused on a Conflict: the run ends with its message - a refusal's exit, not a traceback
+def phase_conflict():
+    saved = {k: getattr(m, k) for k in ("begin",)}
+    def begin(step):
+        raise m.LedgerConflict("REFUSED: the ledger changed since it was read (another phase at work?): Conflict")
+    m.begin = begin
+    m.CLAIMED.clear()
+    argv, sys.argv = sys.argv, ["x", "begin", S47]
+    try:
+        m.main()
+        return "no exit"
+    except SystemExit as e:
+        return e.code
+    except BaseException as e:
+        return f"not an exit: {type(e).__name__}"
+    finally:
+        sys.argv = argv
+        for k, v in saved.items():
+            setattr(m, k, v)
+check("a phase's write refused on a Conflict: the run ends with its message", str(phase_conflict()).startswith(
+    "REFUSED: the ledger changed"), True)
 check("a phase whose claim was released meanwhile: no end written (its release is), the phase's result",
       main_ends(0, released=True), ([], True))
 # a run whose claim was closed meanwhile (released by hand, its run still alive) records nothing more: its events would

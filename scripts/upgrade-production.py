@@ -314,8 +314,9 @@ def claim_problems(step, obj):
     return [f"this run's claim on {step} was closed meanwhile (deploy:upgrade:release?)"]
 
 
-class LedgerConflict(SystemExit):
-    """A ledger write kubectl refused on a Conflict: the ledger changed since its read, nothing written."""
+class LedgerConflict(Exception):
+    """A ledger write kubectl refused on a Conflict: the ledger changed since its read, nothing written. main() ends
+    the run with its message."""
 
 
 def record(step, event, *args, obj=None, at=None):
@@ -494,7 +495,7 @@ def branch_shas():
         refs = run(["git", "-C", os.path.join(OPS, "..", repo), "for-each-ref",
                     "--format=%(refname:short) %(objectname)", "refs/heads/upgrade/"], capture_output=True,
                    check=True).stdout
-        out[repo] = {ref: sha for ref, sha in (line.split() for line in refs.splitlines())}
+        out[repo] = dict(map(str.split, refs.splitlines()))
     return out
 
 
@@ -575,7 +576,8 @@ def floating_digests():
     path = os.path.join(WORK, "floating-digests.txt")
     if not os.path.exists(path):
         sys.exit("REFUSED: no .upgrade/floating-digests.txt - the run's build copies ten's floating-tag images")
-    return {k: v for k, v in (l.split() for l in open(path) if l.strip())}
+    with open(path) as f:
+        return dict(map(str.split, filter(str.strip, f)))
 
 
 def step_images(step):
@@ -785,7 +787,11 @@ def package_status(name, version):
     """Forgejo's answer for a container package version of schnappy (200: there), read with git's credentials."""
     cred = run(["git", "credential", "fill"], input="protocol=https\nhost=git.pmon.dev\n\n", capture_output=True,
                check=True).stdout
-    fields = {k: v for k, v in (l.split("=", 1) for l in cred.splitlines() if "=" in l)}
+    fields = {}
+    for line in cred.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            fields[key] = value
     request = urllib.request.Request(f"https://git.pmon.dev/api/v1/packages/schnappy/container/{name}/{version}")
     request.add_header("Authorization", "Basic " + base64.b64encode(
         f"{fields['username']}:{fields['password']}".encode()).decode())
@@ -1191,6 +1197,9 @@ def main():
     try:
         fn(*a[1:])
         result = "passed"
+    except LedgerConflict as e:  # a write refused: the run ends with its message, as a refusal does
+        reason = str(e)
+        raise SystemExit(reason) from None
     except SystemExit as e:
         result = "passed" if e.code in (None, 0) else "failed"
         reason = e.code if isinstance(e.code, str) else None
@@ -1214,12 +1223,12 @@ def main():
                         break
                     record(step, "end", phase, result, token, obj=obj)
                     break
-                except LedgerConflict:
+                except LedgerConflict as e:
                     if attempt < 2:
                         continue
                     if reason:
                         print(reason, file=sys.stderr)
-                    raise
+                    raise SystemExit(str(e)) from None
                 except SystemExit:  # the read's or the write's failure becomes the exit: the phase's own reason first
                     if reason:
                         print(reason, file=sys.stderr)
