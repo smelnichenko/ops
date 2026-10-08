@@ -15,6 +15,14 @@ export PATH="$FENCE:$PATH"
 rc=0
 for r in "$H"/*/run.sh; do
   echo "== $(basename "$(dirname "$r")")"
-  bash "$r" || rc=1
+  # no signal blocked, as CI's container and a terminal start it: a caller's blocked SIGCHLD (a tool's shell) is
+  # inherited, and a bash trap no longer runs during `wait` - build-with-pin's signal cases failed here, passing in CI.
+  # SIGPIPE and SIGXFSZ back to their defaults: Python ignores them, and an ignored signal survives the exec (a write
+  # to a closed pipe then no longer ends a shell - vagrant-smoke's heartbeat case)
+  python3 -c 'import os, signal, sys
+signal.pthread_sigmask(signal.SIG_SETMASK, [])
+for s in (signal.SIGPIPE, signal.SIGXFSZ):
+    signal.signal(s, signal.SIG_DFL)
+os.execvp("bash", ["bash", sys.argv[1]])' "$r" || rc=1
 done
 exit $rc
