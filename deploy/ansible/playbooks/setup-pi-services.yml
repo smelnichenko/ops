@@ -608,6 +608,28 @@
           KC_BOOTSTRAP_ADMIN_PASSWORD={{ keycloak_admin_password }}
       no_log: true
 
+    # before the unit names it: the database password the file gives - as systemd reads an EnvironmentFile (quotes,
+    # backslashes: not as an inline Environment=) - is the one Keycloak runs with now (production's inline, read from
+    # the running process), by hash, never said, on no command line. Another: refused, the unit not written (pi2's
+    # Keycloak crash-looped on it, both units on disk naming it). Keycloak not running: nothing to compare
+    - name: The secrets file gives Keycloak the database password it runs with now
+      tags: [keycloak-db-url]
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pid=$(systemctl show -p MainPID --value keycloak)
+          if [ "$pid" = 0 ]; then echo "not running"; exit 0; fi
+          now=$(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^KC_DB_PASSWORD=//p' | sha256sum)
+          new=$(systemd-run --quiet --pipe --wait --collect -p EnvironmentFile=/etc/keycloak/secrets.env \
+            /usr/bin/printenv KC_DB_PASSWORD | sha256sum)
+          if [ "$now" = "$new" ]; then echo same; else echo different; fi
+      register: _keycloak_db_password_same
+      changed_when: false
+      failed_when: >-
+        _keycloak_db_password_same.rc != 0 or _keycloak_db_password_same.stdout | trim not in ['same', 'not running']
+      when: not ansible_check_mode
+
     # targetServerType=any: PgBouncer hands every client the startup parameters of its first server connection, never
     # read again - one made to the replica (HAProxy's servers start up, before their first check) says in_hot_standby=on
     # for good, and Keycloak's default (primary) then refused every connection until PgBouncer restarted. HAProxy's

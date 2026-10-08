@@ -202,6 +202,51 @@ if len(restarts) == 2:
           "the peer down while this serves - refused; else restarted",
           [restart(restarts[0], have_file=False), restart(restarts[0], PEER_DOWN="1"), restart(restarts[0])],
           [(1, True, False), (1, True, False), (0, False, True)])
+# before the unit names the secrets file: the database password it gives (as systemd reads an EnvironmentFile - quotes,
+# backslashes) is the one Keycloak runs with now (production's inline Environment=, read from the running process), by
+# hash, neither said nor on a command line; a Keycloak not running has nothing to compare. A different one: refused,
+# the unit not written (pi2's Keycloak crash-looped on it, both units on disk naming it)
+same = next((t for t in every if "systemd-run" in str(t.get("ansible.builtin.shell", ""))), None)
+check("the password compared before the unit is written, tagged, never in a preview",
+      (same is not None and every.index(same) < every.index(unit_task) and every.index(same) >
+       min(i for i, t in enumerate(every) for m, v in actions(t) if isinstance(v, dict)
+           and v.get("dest") == "/etc/keycloak/secrets.env"),
+       same is not None and tagged(same), condition((same or {}).get("when", True), ansible_check_mode=True)),
+      (True, True, False))
+if same:
+    import os, subprocess, tempfile  # noqa: E401,E402
+    from templar import render  # noqa: E402
+    S = tempfile.mkdtemp()
+    os.makedirs(os.path.join(S, "bin"))
+    # systemctl: the running Keycloak's PID (a process this test started with that environment), 0 when none;
+    # systemd-run: the variable as an EnvironmentFile gives it (KEY=VALUE, the value's quotes stripped)
+    open(os.path.join(S, "bin", "systemctl"), "w").write('#!/bin/bash\necho "${KC_PID:-0}"\n')
+    open(os.path.join(S, "bin", "systemd-run"), "w").write(
+        '#!/bin/bash\nf=""; for a; do case $a in EnvironmentFile=*) f=${a#EnvironmentFile=};; esac; done\n'
+        'v=$(sed -n "s/^KC_DB_PASSWORD=//p" "$f"); v=${v#\\"}; v=${v%\\"}; printf "%s\\n" "$v"\n')
+    for b in ("systemctl", "systemd-run"):
+        os.chmod(os.path.join(S, "bin", b), 0o755)
+    sh = same["ansible.builtin.shell"]
+    script = render(sh if isinstance(sh, str) else sh["cmd"], inventory_hostname="pi1")
+    def compare(running, file_value):
+        f = os.path.join(S, "secrets.env")
+        open(f, "w").write(f"KC_DB_PASSWORD={file_value}\n")
+        proc = subprocess.Popen(["sleep", "30"], env={"KC_DB_PASSWORD": running}) if running is not None else None
+        try:
+            r = subprocess.run(["bash", "-c", script.replace("/etc/keycloak/secrets.env", f)], capture_output=True,
+                               text=True, timeout=30, env=dict(os.environ, PATH=os.path.join(S, "bin") + ":" +
+                                                               os.environ["PATH"], KC_PID=str(proc.pid) if proc else "0"))
+        finally:
+            if proc:
+                proc.kill()
+                proc.wait()
+        reg = same.get("register", "_r")
+        res = {"rc": r.returncode, "stdout": r.stdout.strip(), "stdout_lines": r.stdout.split()}
+        failed = condition(same.get("failed_when", "false"), **{reg: res}) if "failed_when" in same else r.returncode != 0
+        return failed, "pw" in (r.stdout + r.stderr)
+    check("the same password: on; another (systemd read the file's quotes away): refused; Keycloak not running: on; "
+          "the password itself never said",
+          [compare("pw", "pw"), compare("pw", '"pw2"'), compare(None, "pw")], [(False, False), (True, False), (False, False)])
 # step 00 says what it costs and how it is undone
 text = open("tests/ansible/upgrade/steps/00-gluster-boot.txt").read()
 check("step 00's outage names logins down while the VIP's Keycloak restarts; its abort puts the old URL back, "
