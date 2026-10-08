@@ -194,6 +194,59 @@
         regexp: '^encrypt = '
         line: 'encrypt = "{{ _drift_key.stdout }}"'
 
+    # production's Consul as the old playbook left it (pi1, read 2026-10-08): its HTTP API on every address, no ports
+    # block (Serf WAN on 8302), and UFW opening RPC, Serf LAN and WAN and HTTP to Anywhere, IPv4 and IPv6, each with
+    # its comment - the narrow rules today's playbook writes absent. Whether its deletes remove those commented rules,
+    # both families, is what this proves
+    - name: Production's listeners - HTTP on every address
+      ansible.builtin.lineinfile:
+        path: /etc/consul.d/consul.hcl
+        regexp: '^client_addr = '
+        line: 'client_addr = "0.0.0.0"'
+
+    - name: Production's listeners - no ports block (Serf WAN on)
+      ansible.builtin.replace:
+        path: /etc/consul.d/consul.hcl
+        regexp: '\nports \{[^}]*\}\n'
+        replace: "\n"
+
+    - name: Production's firewall - the narrow rules absent
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ item.0 }}"
+        to_port: "{{ item.1.port }}"
+        proto: "{{ item.1.proto }}"
+        delete: true
+      loop: "{{ [pi1_ip, pi2_ip, ten_ip] | product(_ports) | list }}"
+      vars:
+        _ports:
+          - { port: "8300", proto: "tcp" }
+          - { port: "8301", proto: "tcp" }
+          - { port: "8301", proto: "udp" }
+      when: inventory_hostname in groups['pis']
+
+    - name: Production's firewall - Consul's ports open to Anywhere, IPv4 and IPv6, with its comments
+      ansible.builtin.command:
+        argv: [ufw, allow, "{{ item.rule }}", comment, "{{ item.comment }}"]
+      loop:
+        - { rule: 8300/tcp, comment: Consul RPC }
+        - { rule: 8301/tcp, comment: Consul Serf LAN }
+        - { rule: 8301/udp, comment: Consul Serf LAN UDP }
+        - { rule: 8500/tcp, comment: Consul HTTP }
+        - { rule: 8302/tcp, comment: Consul Serf WAN }
+        - { rule: 8302/udp, comment: Consul Serf WAN UDP }
+      changed_when: true
+      when: inventory_hostname in groups['pis']
+
+    - name: Production's firewall, read back - all six open to Anywhere in both families
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "set -o pipefail; ufw status | grep -cE '^(8300|8301|8302|8500)/(tcp|udp)( \\(v6\\))? +ALLOW +Anywhere'"
+      register: _prod_ufw
+      changed_when: false
+      failed_when: _prod_ufw.stdout | int != 12
+      when: inventory_hostname in groups['pis']
+
     # with the record a build by today's playbook leaves, the key written back is the config Consul loaded: nothing to
     # restart - production has no record yet
     - name: No record of the config Consul loaded (as production, from the old playbook)
@@ -285,6 +338,30 @@
         cmd: "{{ live_key }}"
       register: _live_after
       changed_when: false
+
+    # production's transition: the open rules gone in both families, the narrow ones there, HTTP and DNS on the node
+    # itself, nothing on Serf WAN
+    - name: The firewall and the listeners after
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          echo "open $(ufw status | grep -cE '^(8300|8301|8302|8500)/(tcp|udp)( \(v6\))? +ALLOW +Anywhere')"
+          echo "narrow $(ufw status | grep -cE '^(8300/tcp|8301/tcp|8301/udp) +ALLOW +[0-9.]+ ')"
+          echo "listen $(ss -Hltnu | awk '{print $5}' | grep -E ':(8500|8600|8302)$' | sort -u | tr '\n' ' ')"
+      register: _consul_shape
+      changed_when: false
+      when: inventory_hostname in groups['pis']
+
+    - name: Production's transition made - no Consul port open to the LAN, the narrow rules, HTTP and DNS local, no WAN
+      ansible.builtin.assert:
+        that:
+          - _consul_shape.stdout_lines[0] == 'open 0'
+          - _consul_shape.stdout_lines[1] == 'narrow 9'
+          - (_consul_shape.stdout_lines[2].split()[1:] | sort) == ['127.0.0.1:8500', '127.0.0.1:8600']
+        fail_msg: "{{ inventory_hostname }}: {{ _consul_shape.stdout_lines }}"
+        quiet: true
+      when: inventory_hostname in groups['pis']
 
     - name: Restarted in this run; the config holds the live key again; the live key unchanged
       ansible.builtin.assert:
@@ -702,7 +779,7 @@
         chdir: "{{ playbook_dir }}/../../deploy/ansible"
       register: _refused_run
       changed_when: false
-      failed_when: _refused_run.rc == 0 or 'REFUSED: the cluster is paused' not in _refused_run.stdout
+      failed_when: "_refused_run.rc == 0 or 'REFUSED: the cluster is paused' not in _refused_run.stdout"
 
 - name: Still paused - the run left someone else's pause alone
   hosts: pi1
