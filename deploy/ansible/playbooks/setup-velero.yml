@@ -704,15 +704,17 @@
             # its origin the organisation's, bare (a mirror made before pointed elsewhere, a password in its URL)
             git -C "$d" remote set-url origin "$url" || { failed+=" $r(origin)"; continue; }
             git "${helper[@]}" -C "$d" fetch -q --prune origin 2>&1 | logger -t git-mirror || failed+=" $r(fetch)"
-            ssh "${ssh_opts[@]}" "$pi" "test -f $pidir/$r.git/HEAD || git init -q --bare $pidir/$r.git" 2>&1 \
-              | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
+            # only where the volume is mounted: a bare mount point is the Pi's own disk (what is pushed there is lost
+            # with the next mount)
+            ssh "${ssh_opts[@]}" "$pi" "mountpoint -q $pidir && { test -f $pidir/$r.git/HEAD || git init -q --bare $pidir/$r.git; }" \
+              2>&1 | logger -t git-mirror || { failed+=" $r(its repository on the Pi)"; continue; }
             git -C "$d" push -q --mirror "$pi:$pidir/$r.git" 2>&1 | logger -t git-mirror || failed+=" $r(push)"
           done
           if [ -n "$failed" ]; then
             say "FAILED:$failed"
             exit 1
           fi
-          ssh "${ssh_opts[@]}" "$pi" "date -u +%Y%m%dT%H%M%SZ > $pidir/last-success" \
+          ssh "${ssh_opts[@]}" "$pi" "mountpoint -q $pidir && date -u +%Y%m%dT%H%M%SZ > $pidir/last-success" \
             || { say "FAILED: its last-success not written on the Pi"; exit 1; }
           say "mirrored:" $repos
       when: git_mirror_enabled | default(true) | bool
@@ -758,6 +760,29 @@
         state: started
         daemon_reload: true
       when: offsite_backup_enabled | default(true) | bool
+
+    # the Pi-side root the sync writes as the mirror's user: the backup-git-mirror volume's root - root:root 0755 as
+    # Gluster made it on production (read 2026-10-08: every repository's init and last-success refused there) - the
+    # mirror user's on each Pi where it is mounted; a bare mount point refused (the Pi's own disk). Bounded: a hung
+    # client holds no play
+    - name: The mirror's root on the Pis - mounted, the mirror user's
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['pis'] }}"
+      become: true
+      timeout: 60
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mountpoint -q {{ git_mirror_pi_dir }} || { echo "REFUSED: {{ git_mirror_pi_dir }} is not mounted here"; exit 1; }
+          now=$(stat -c '%U:%G %a' {{ git_mirror_pi_dir }})
+          [ "$now" != "{{ _git_mirror_owner }}:{{ _git_mirror_owner }} 750" ] || exit 0
+          chown {{ _git_mirror_owner }}:{{ _git_mirror_owner }} {{ git_mirror_pi_dir }}
+          chmod 0750 {{ git_mirror_pi_dir }}
+          echo "changed from $now"
+      register: _git_mirror_pi_root
+      changed_when: "'changed from' in _git_mirror_pi_root.stdout"
+      when: git_mirror_enabled | default(true) | bool
 
     # proven now, not at 4 AM: the sync run once (a oneshot: the start waits for its end, a failure fails the play)
     - name: The mirror synced now

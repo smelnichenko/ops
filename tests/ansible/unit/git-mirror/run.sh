@@ -46,6 +46,8 @@ for ((i = 0; i < ${#args[@]}; i++)); do
   [ "${args[$i]}" = clone ] && { dest=${args[$((${#args[@]} - 1))]}; mkdir -p "$dest"; touch "$dest/HEAD"; exit 0; }
 done
 case "$*" in *" fetch "*) [ -n "${FETCH_FAILS:-}" ] && [[ $* == *"/$FETCH_FAILS.git"* ]] && exit 128 ;; esac
+# PUSH_FAILS=<repo>: the Pi refuses its push (a full disk, a permission)
+case "$*" in *" push "*) [ -n "${PUSH_FAILS:-}" ] && [[ $* == *"/$PUSH_FAILS.git"* ]] && exit 1 ;; esac
 exit 0
 STUB
 # ssh: its argv recorded; INIT_FAILS=<repo>: the Pi's repository for it not made (a full disk, a permission)
@@ -53,6 +55,8 @@ cat > "$W/bin/ssh" <<'STUB'
 #!/bin/bash
 echo "ssh $*" >> "$W/ssh-calls"
 [ -n "${INIT_FAILS:-}" ] && [[ $* == *"/$INIT_FAILS.git/HEAD || git init"* ]] && { echo "fatal: cannot mkdir" >&2; exit 128; }
+# LAST_FAILS: the last-success write refused on the Pi
+[ -n "${LAST_FAILS:-}" ] && [[ $* == *"last-success"* ]] && { echo "Permission denied" >&2; exit 1; }
 exit 0
 STUB
 printf '#!/bin/bash\ncat > /dev/null\n' > "$W/bin/logger"
@@ -167,6 +171,35 @@ check("the sync as the mirror's user; run once at deploy, a failure failing the 
        now is not None and [condition(now.get("when"), git_mirror_enabled=True, offsite_backup_enabled=True,
                                       ansible_check_mode=c) for c in (False, True)]),
       (True, "started", [True, False]))
+# the Pi-side root the sync writes as the mirror's user: the backup-git-mirror volume's root (root:root 0755 on
+# production, read 2026-10-08: every repository's init and last-success refused) made the mirror user's, on each Pi
+# where it is mounted - a bare mount point refused (the Pi's own disk); before the deploy-time sync
+root = next((t for t in tasks if "mountpoint -q" in str(t.get("ansible.builtin.shell", ""))
+             and "chown" in str(t.get("ansible.builtin.shell", ""))), None)
+check("the Pi-side root made the mirror user's, on each Pi, before the sync runs",
+      (root is not None and root.get("delegate_to") == "{{ item }}" and "groups['pis']" in str(root.get("loop")),
+       root is not None and names.index(root["name"]) < names.index("The mirror synced now")), (True, True))
+if root:
+    sh_ = root["ansible.builtin.shell"]
+    rscript = R(sh_ if isinstance(sh_, str) else sh_["cmd"])
+    def root_run(mounted, stat):
+        open(os.path.join(W, "root-calls"), "w").close()
+        for b, body in (("mountpoint", f'#!/bin/bash\n[ "{mounted}" = yes ]\n'), ("stat", f'#!/bin/bash\necho "{stat}"\n'),
+                        ("chown", '#!/bin/bash\necho "chown $*" >> "$W/root-calls"\n'),
+                        ("chmod", '#!/bin/bash\necho "chmod $*" >> "$W/root-calls"\n')):
+            open(os.path.join(W, "rbin", b), "w").write(body)
+            os.chmod(os.path.join(W, "rbin", b), 0o755)
+        r = subprocess.run(["bash", "-c", rscript], capture_output=True, text=True, env=dict(
+            os.environ, PATH=os.path.join(W, "rbin") + ":" + os.environ["PATH"], W=W))
+        return r.returncode, r.stdout.strip().split("\n")[-1][:40], open(os.path.join(W, "root-calls")).read().split("\n")[:2]
+    os.makedirs(os.path.join(W, "rbin"), exist_ok=True)
+    got = [root_run("no", "root:root 755"), root_run("yes", "root:root 755"), root_run("yes", "sm:sm 750")]
+    check("the root: not mounted - refused, nothing changed; root's - made the mirror user's 0750, said; already - nothing",
+          [(g[0], g[0] != 0 or "changed" in g[1], [c.split()[0] for c in g[2] if c]) for g in got],
+          [(1, True, []), (0, True, ["chown", "chmod"]), (0, False, [])])
+    check("its changed: only where it changed",
+          [condition(root.get("changed_when", True), **{root.get("register", "_r"): {"stdout": o}})
+           for o in ("changed from root:root 755", "")], [True, False])
 # the daily sync, as the playbook writes it
 sync = next(t for t in tasks if (t.get("ansible.builtin.copy") or {}).get("dest") == "/usr/local/bin/offsite-backup-sync.sh")
 body = R(sync["ansible.builtin.copy"]["content"]).replace(R("{{ git_mirror_token_file }}"), creds) \
@@ -233,6 +266,16 @@ check("one repository's repository on the Pi not made: it named, not pushed; the
       "last-success", (rc, "infra(its repository on the Pi)" in out, re.findall(r" push -q --mirror \S+/([\w.-]+\.git) ",
                                                                              "\n".join(g)),
                        sum("last-success" in l for l in sh)), (1, True, ["ops.git", "site.git"], 0))
+rc, out, g, sh, cu = run([["ops", "infra", "site"]], PUSH_FAILS="infra")
+check("one repository's push refused by the Pi: named, the others pushed, the unit failed, no last-success",
+      (rc, "infra(push)" in out, sum("last-success" in l for l in sh)), (1, True, 0))
+rc, out, g, sh, cu = run([["ops", "infra"]], LAST_FAILS="1")
+check("its last-success not written on the Pi: the unit failed, said", (rc, "last-success not written" in out), (1, True))
+# what it writes on the Pi only where the volume is mounted: an unmounted mount point is the Pi's own disk (pushes there
+# lost with the next mount)
+remote = [l for l in sh if "git init" in l or "last-success" in l]
+check("every write on the Pi (a repository made, last-success) under the mount's check",
+      (bool(remote), all("mountpoint -q " in l for l in remote)), (True, True))
 rc, out, g, sh, cu = run([["ops", "bad$(name)"]])
 check("a name that is no plain name: named, never used; the unit failed",
       (rc, "(its name)" in out, any("bad$(name)" in l for l in g + sh)), (1, True, False))
