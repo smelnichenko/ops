@@ -118,6 +118,29 @@ check("... a loop zipping its results with another list: the item's part from th
       + play(LOOPED + ZIP.replace("_p.results | zip(['a', 'b'])", "['a', 'b'] | zip(_p.results)")
              .replace("{{ item[0].stdout }} {{ item[1] }}", "{{ item[0] }} {{ item[1].stdout }}")),
       ["item[0].stdout", "item.0.rc", "item[1].stdout"])
+# a loop is rendered before the task's when is judged (ansible-core's TaskExecutor: its items first) - one whose when,
+# or a block's, says it never runs in a preview still renders its loop there: a from_json of a skipped result's empty
+# stdout failed the preview. Named - an include's, and a task's in such a block
+INC_LOOP = """    - name: an include over a result
+      when: not ansible_check_mode
+      ansible.builtin.include_tasks: x.yml
+      loop: "{{ _p.stdout | from_json }}"
+"""
+BLOCK_LOOP = """    - name: a block never in a preview
+      when: not ansible_check_mode
+      block:
+        - name: over a result
+          ansible.builtin.debug:
+            msg: "{{ item }}"
+          loop: "{{ _p.stdout | from_json }}"
+"""
+check("a loop rendered before its when: an include's, a task's in a never-in-a-preview block - named; their when's "
+      "reads (never evaluated in a preview) not",
+      (play(PROBE + INC_LOOP, extra={"x.yml": "- ansible.builtin.debug:\n    msg: hi\n"}), play(PROBE + BLOCK_LOOP),
+       play(PROBE + BLOCK_LOOP.replace("      when: not ansible_check_mode\n",
+                                        "      when: not ansible_check_mode and _p.stdout == 'x'\n")
+            .replace('loop: "{{ _p.stdout | from_json }}"', "loop: [1]"))),
+      (["_p.stdout"], ["_p.stdout"], []))
 TOGETHER = """    - name: together
       ansible.builtin.debug:
         msg: "{{ item.0.stdout }} {{ item.1 }}"

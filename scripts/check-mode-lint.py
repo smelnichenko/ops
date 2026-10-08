@@ -54,6 +54,9 @@ KEYWORDS = {"name", "when", "register", "tags", "vars", "args", "loop", "loop_co
             "timeout", "async", "poll", "any_errors_fatal", "remote_user", "port", "connection", "module_defaults",
             "collections", "debugger", "local_action"}
 SECTIONS = ("pre_tasks", "tasks", "post_tasks", "handlers")
+# what a task loops over, rendered before its when
+LOOPS = ("loop", "with_items", "with_dict", "with_list", "with_together", "with_sequence", "with_subelements",
+         "with_nested", "with_fileglob", "with_indexed_items")
 # the order a play runs them in: handlers flushed after each of the others
 RUN_ORDER = ("pre_tasks", "handlers", "tasks", "handlers", "post_tasks", "handlers")
 
@@ -237,15 +240,18 @@ def lint(path, select=None, text=None):
             if module(t) == "meta" and "end_host" in str(t) and check_only(conds):
                 break
             runs = not never_in_check(conds)  # a block's or an include's own when is read: its conditions are its parents'
-            if runs:
-                own = {k: v for k, v in t.items() if k not in ("register", "__head__")}
-                if t.get("__head__"):
+            # a loop is rendered before the task's when is judged (TaskExecutor: its items first) - a task its parents
+            # keep out of a preview renders its loop there all the same
+            loops = {k: t[k] for k in LOOPS if k in t}
+            if runs or loops:
+                own = {k: v for k, v in t.items() if k not in ("register", "__head__")} if runs else loops
+                if runs and t.get("__head__"):
                     # a block's or an include's own when, as Ansible evaluates a list: in order, stopping at the first
-                    # false - what follows `not ansible_check_mode` is never read in a preview, nor its vars or loop
-                    # (rendered only once its when holds)
+                    # false - what follows `not ansible_check_mode` is never read in a preview, nor its vars (rendered
+                    # once its when holds); its loop is, before it
                     w = whens(t)
                     cut = next((i for i, c in enumerate(w) if never_in_check([c])), len(w))
-                    own = {"when": w[:cut]} if cut < len(w) else dict(own, when=w)
+                    own = {"when": w[:cut], **loops} if cut < len(w) else dict(own, when=w)
                 texts = list(strings(own))
                 # its own register aside: a task check mode skips evaluates no until/failed_when on it
                 reads = [(reg, empty, looped) for reg, (empty, looped) in sorted(skipped.items())
