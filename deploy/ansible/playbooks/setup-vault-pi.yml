@@ -821,6 +821,8 @@
           - '(User|Global)KnownHostsFile[^a-z0-9/~]+(/dev/null|none([^a-z0-9]|$))'
           - KnownHostsCommand
           - '(^|[^a-z0-9-])(?-i:-[46AaCfGgKkMNnqsTtVvXxYy]*F)'
+          # a value the config lookup returns untemplated (a variable's name, as {{ x }}): what it names is not read
+          - '[{][{%]'
         # the shell's quoting ssh never sees: quotes and backslashes (a variable - no backslash in a conditional)
         _ssh_quoting: '[''"\\]'
       ansible.builtin.assert:

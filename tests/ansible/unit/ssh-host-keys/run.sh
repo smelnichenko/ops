@@ -59,15 +59,18 @@ F_FORMS = ["-F /etc/x", "-F/etc/x", "-C -F/x", '-"F" /x', "-CF /x", "-qF/x", "-4
 check("another config by -F, a space after it or none, quoted, in a cluster",
       [f for f in F_FORMS if not OFF_ARGS.search(norm(f))], [])
 def offs(inventory):
+    from ansible.template import Templar
     loader = DataLoader()
     inv = InventoryManager(loader=loader, sources=[inventory])
     vm = VariableManager(loader=loader, inventory=inv)
     out = set()
     for h in inv.get_hosts():
         v = vm.get_vars(host=h, include_hostvars=False)
+        templar = Templar(loader=loader, variables=v)
         for k in ("ansible_ssh_common_args", "ansible_ssh_extra_args", "ansible_ssh_args", "ansible_scp_extra_args",
                   "ansible_sftp_extra_args"):
-            if OFF_ARGS.search(str(v.get(k, ""))):
+            # as Ansible gives it to ssh: templated (a variable holding =no passed as its name)
+            if OFF_ARGS.search(norm(str(templar.template(v.get(k, ""))))):
                 out.add(h.name)
         # the Vagrant copy's own word that its VMs' keys go unchecked (setup-vault-pi's key-share assert takes it)
         if str(v.get("host_keys_unchecked_rebuilt_vms", "")).lower() in ("true", "yes", "1", "on"):
@@ -82,7 +85,8 @@ off, hosts = offs("inventory/vagrant.yml")
 check("the Vagrant inventory: off for its own (rebuilt) VMs", off == hosts and len(hosts) >= 3, True)
 # each way an inventory says it, alone - the Vagrant copy's own word, another config file, a check turned off
 import tempfile  # noqa: E402
-for name, var in (("its own word", "host_keys_unchecked_rebuilt_vms: true"),
+for name, var in (("a variable holding ssh's =no", 'ansible_ssh_common_args: "{{ common_ssh }}"\n      common_ssh: -o StrictHostKeyChecking=no'),
+                  ("its own word", "host_keys_unchecked_rebuilt_vms: true"),
                   ("another ssh config", "ansible_ssh_common_args: -F /tmp/x"),
                   ("ssh's =false", "ansible_ssh_extra_args: -o StrictHostKeyChecking=false"),
                   ("Ansible's check off", "ansible_host_key_checking: false")):
@@ -139,6 +143,10 @@ clause = second.replace(args_expr.group(0), "(_args)") if args_expr else "false"
 tv = vp[0].get("vars") or {} if vp else {}
 judge = lambda a: condition(clause, _args=a, host_keys_unchecked_rebuilt_vms=False,  # noqa: E731
                             hostvars={"pi2": {"ansible_host": "192.168.11.6"}}, **tv)
+check("the assert as Ansible evaluates it: a value its lookup returns untemplated ({{ x }}, {% %}) refused - what it "
+      "names is not read",
+      [judge(v) for v in ("{{ common_ssh }}", "-o ControlMaster=auto {% if x %}-o A=b{% endif %}", "-o ServerAliveInterval=15")],
+      [False, False, True])
 check("the assert as Ansible evaluates it: every unchecked spelling refused, checked ones passed",
       ([f for f in forms + F_FORMS if judge(f)], [f for f in CHECKED if not judge(f)]), ([], []))
 # Ansible's own check off, as the copy's run has it (its config lookup put as that value)
