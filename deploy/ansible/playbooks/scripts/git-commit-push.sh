@@ -35,8 +35,10 @@ only_ours() {
   [ -z "$foreign" ] || { echo "REFUSED: $1's main has commits ahead of the remote that are not this automation's:" \
     "${foreign//$'\n'/; } - push or drop them first"; exit 1; }
 }
-# main rebased onto REF; a conflict undone and refused
+# main rebased onto REF; a conflict undone and refused. Main checked again first: another session's switch since the
+# start would have had its branch rebased
 onto_remote() {
+  on_main "$1"
   if ! git -C "$1" rebase -q "$REF" > /dev/null 2>&1; then
     local gd
     gd=$(git -C "$1" rev-parse --absolute-git-dir)
@@ -101,10 +103,16 @@ for e in "${paths[@]}"; do
   if [ -e "$dir/$e" ] || git -C "$dir" ls-files --error-unmatch -- "$e" > /dev/null 2>&1; then present+=("$e"); fi
 done
 [ "${#present[@]}" -eq 0 ] || git -C "$dir" add -A -- "${present[@]}"
-if [ "${#present[@]}" -eq 0 ] || git -C "$dir" diff --cached --quiet -- "${present[@]}"; then
+staged=() names=""
+# (a substitution, not a process's: its failure fails the script - read as nothing staged, it said nothing to commit)
+[ "${#present[@]}" -eq 0 ] || names=$(git -C "$dir" diff --cached --name-only -- "${present[@]}")
+[ -z "$names" ] || mapfile -t staged <<< "$names"
+if [ "${#staged[@]}" -eq 0 ]; then
   echo "NOTHING TO COMMIT"
 else
-  git -C "$dir" commit -q -m "$msg" -- "${present[@]}"
+  # the paths git staged alone: one it knows nothing in (an empty directory) refused the commit ("pathspec did not
+  # match"), the change left staged
+  git -C "$dir" commit -q -m "$msg" -- "${staged[@]}"
 fi
 # a push the remote's main moved past in between is rejected: rebased onto it again, at most three times. What is pushed
 # is the head checked here - a commit another session makes meanwhile is not (main as it is at the push was)

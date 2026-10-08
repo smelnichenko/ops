@@ -57,6 +57,26 @@ $(git -C "$W/remote.git" log -1 --format=%s main)" "1 1 0 env: create x"
   out=$(push "env: create w"); rc=$?
   check "... its change gone: the environment's committed, pushed" "$rc $(git -C "$W/remote.git" log -1 --format=%s main)" \
     "0 env: create w"
+  # a path there that git knows nothing in (an empty directory): the change of the others committed, pushed (the
+  # commit named it and git refused: "pathspec did not match", the change left staged)
+  mkdir -p "$W/infra/env/emptydir" && echo v > "$W/infra/env/x"
+  out=$(bash "$S" "$W/infra" "env: create v" "" -- env/x env/emptydir 2>&1); rc=$?
+  check "a path git knows nothing in (an empty directory) among them: the others' change committed, pushed" \
+    "$rc $(git -C "$W/remote.git" log -1 --format=%s main)" "0 env: create v"
+  rmdir "$W/infra/env/emptydir"
+  # main checked again before each rebase: another session's switch between the commit and the rebase (its branch
+  # rebased onto the remote's main) - refused, its branch as it was. Forced in a copy: the switch right before it
+  sed 's|^    onto_remote "\$dir" "\$url"$|    git -C "$dir" checkout -q -b elsewhere\n&|' "$S" > "$W/switching.sh"
+  someone clone -q "$W/remote.git" "$W/clone2" && echo m > "$W/clone2/moved" && someone -C "$W/clone2" add moved \
+    && someone -C "$W/clone2" commit -qm moved && someone -C "$W/clone2" push -q origin main
+  echo w2 > "$W/infra/env/x"
+  out=$(bash "$W/switching.sh" "$W/infra" "env: create u" "" -- env/x env/y 2>&1); rc=$?
+  check "a branch switched before the rebase (forced): refused, not main - that branch not rebased, nothing pushed" \
+    "$(grep -c '^    git -C "\$dir" checkout -q -b elsewhere$' "$W/switching.sh") $rc $(grep -c 'not main' <<< "$out") \
+$(git -C "$W/infra" log -1 --format=%s elsewhere) $(git -C "$W/remote.git" log -1 --format=%s main)" \
+    "1 1 1 env: create u moved"
+  git -C "$W/infra" checkout -q main && git -C "$W/infra" branch -q -D elsewhere
+  git -C "$W/infra" fetch -q origin && git -C "$W/infra" reset -q --hard origin/main
   # the remote's main moved meanwhile (another clone's push)
   git clone -q "$W/remote.git" "$W/elsewhere" && echo t > "$W/elsewhere/tag" && git -C "$W/elsewhere" add tag \
     && someone -C "$W/elsewhere" commit -qm "cd: image tag" && git -C "$W/elsewhere" push -q origin main
