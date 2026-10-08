@@ -201,6 +201,8 @@ EOF
   K8S_HOST=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
   [[ $K8S_HOST =~ ^https://[A-Za-z0-9.:-]+$ ]] \
     || { err "The cluster's server is not a plain https URL: $K8S_HOST"; return 1; }
+  # base64 alone: it goes into the script run as root on the Pi (a line of its own would end that heredoc)
+  [[ $K8S_CA =~ ^[A-Za-z0-9+/]+=*$ ]] || { err "The cluster's CA (certificate-authority-data) is not base64"; return 1; }
 
   # Vault's Kubernetes auth on the Pi: the script on ssh's stdin, the root token read there (on no command line - any
   # local user reads those in /proc), Vault verified against its CA (its certificate names 127.0.0.1); no

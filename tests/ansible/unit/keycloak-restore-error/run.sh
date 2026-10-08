@@ -34,6 +34,15 @@ for name, ok in (("an ERROR quoting a value: said", "invalid input syntax for ty
                  ("the value it quotes not", "A-CLIENT-SECRET" not in msg)):
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f": {msg}"))
+# a value with a quote inside: masked to the end of the line (a mask to the next quote let its tail through)
+stderr = ["psql:/var/backups/patroni-first-install/keycloak.sql:812: ERROR:  invalid input syntax for type json: "
+          "\"{\"secret\":\"A-SECRET-TAIL\"}\""]
+msg = render(task["ansible.builtin.assert"]["fail_msg"],
+             _restored={"rc": 3, "stderr": "\n".join(stderr), "stderr_lines": stderr})
+for name, ok in (("a value quoting a quote: said", "invalid input syntax for type json" in msg),
+                 ("no part of it", "A-SECRET-TAIL" not in msg and "secret" not in msg)):
+    fails += not ok
+    print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f": {msg}"))
 print("keycloak-restore-error: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

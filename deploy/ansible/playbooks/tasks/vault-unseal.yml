@@ -15,7 +15,8 @@
     cmd: |
       set -euo pipefail
       openssl verify -x509_strict -CAfile /etc/vault.d/tls/ca-cert.pem /etc/vault.d/tls/vault-cert.pem > /dev/null
-      openssl x509 -in /etc/vault.d/tls/vault-cert.pem -noout -ext subjectAltName | grep -q 'IP Address:127.0.0.1'
+      # the whole address: 127.0.0.10 is not it
+      openssl x509 -in /etc/vault.d/tls/vault-cert.pem -noout -ext subjectAltName | grep -qE 'IP Address:127\.0\.0\.1(,|$)'
   changed_when: false
 
 - name: The unseal script
