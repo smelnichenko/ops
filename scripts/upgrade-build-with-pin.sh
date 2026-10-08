@@ -12,29 +12,33 @@
 # Usage: scripts/upgrade-build-with-pin.sh   (test:upgrade:full)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
-# every line stamped with its time, as the steps' are: where the build's minutes go stays measurable. A Ctrl-C reaches
-# the stamper too (the terminal's foreground group): it ignores it and ends when its input does - what this script says
-# while it stops reaches the log, and no write of it dies of a closed pipe
-exec > >(trap '' INT; exec python3 -u -c 'import sys, time
+# every line stamped with its time, as the steps' are: where the build's minutes go stays measurable. A Ctrl-C, a TERM
+# or a HUP to the group reaches the stamper too: it ignores them (ignored, they stay so through its exec) and ends when
+# its input does - what this script says while it stops reaches the log, and no write of it dies of a closed pipe
+exec > >(trap '' INT TERM HUP; exec python3 -u -c 'import sys, time
 for line in sys.stdin.buffer: sys.stdout.buffer.write(time.strftime("%H:%M:%S ").encode() + line); sys.stdout.flush()') 2>&1
 rm -f .upgrade/clickhouse-pin.json
 build_job="" pin="" signalled=""
 stop() {
   local j own
-  # a session signalled only while it is still this script's job: never one it did not start
-  own=" $(jobs -p | tr '\n' ' ') "
-  for j in "$build_job" "$pin"; do
-    [ -n "$j" ] && [[ $own == *" $j "* ]] && kill -TERM -- "-$j" 2> /dev/null
-  done
-  # these two only: a bare wait waits for the time-stamping process too, which waits for this script's end
-  for j in "$build_job" "$pin"; do
-    [ -z "$j" ] || wait "$j" 2> /dev/null
-  done
+  # every job of this script's, each a session of its own (setsid) - never a PID it did not start: one whose PID was
+  # not kept yet (a signal between its start and `pin=$!`) is stopped with the rest. The time-stamping process is no
+  # job (a process substitution - `jobs -p` never lists it, measured on bash 5.2): waiting for it would wait for this
+  # script's own end
+  # nor here, on a stop of its own (a failed build) a signal arrives
+  trap '' INT TERM HUP
+  own=$(jobs -p)
+  for j in $own; do kill -TERM -- "-$j" 2> /dev/null; done
+  for j in $own; do wait "$j" 2> /dev/null; done
   [ -z "$signalled" ] || echo "STOPPED BY A SIGNAL - the build and the ClickHouse pin stopped"
 }
 # the traps before the jobs: a signal between a job's start and its trap left the job running
 trap stop EXIT
-trap 'signalled=1; exit 130' INT TERM
+# a signal's first act: no other cuts the stop short (a Ctrl-C pressed twice; a timeout forwarding one to its group -
+# measured: the second's exit ended the stop half done, the jobs left running, the stop unsaid). HUP (its terminal
+# closed) the same stop, said
+trap 'trap "" INT TERM HUP; signalled=1; exit 130' INT TERM
+trap 'trap "" INT TERM HUP; signalled=1; exit 129' HUP
 # the build and the pin each in a session of its own (setsid: no job control here, so neither leads a process group
 # and setsid runs it in place - its PID is $!, its session's and group's): stopped whole when this ends early - a
 # failed build, an interrupt, a TERM - the pin's docker calls with it (its own trap removes its containers). With no

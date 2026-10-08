@@ -100,6 +100,35 @@ check "a Ctrl-C to the group: it ends at once, both stopped and gone, the stop s
   "$(pin_end) $([ -e "$T/.upgrade/build.finished" ] && echo finished || echo stopped) $((SECONDS - t0 < 10)) \
 $(gone "$T/.upgrade/pin.pid") $(gone "$T/.upgrade/build.pid") $(grep -c '^[0-9:]\{8\} STOPPED BY A SIGNAL' <<< "$out")" \
   "stopped stopped 1 gone gone 1"
+# a TERM or a HUP to the whole group (a closed terminal, a kill of the group): the stamper ignores them too - the stop is
+# said in the log (it died of the TERM, and the stop's line of a closed pipe)
+for sig in TERM HUP; do
+  rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+  (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
+    bash scripts/upgrade-build-with-pin.sh < /dev/null > "$T/grp.out" 2>&1) &
+  sp=$!
+  timeout 10 bash -c 'until [ -s "$0" ] && [ -s "$1" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid"
+  [ "$(proc_info "$sp" | awk '{print $1, $2}')" = "$$ $sp" ] && kill "-$sig" -- "-$sp"
+  wait "$sp"
+  out=$(cat "$T/grp.out")
+  check "a $sig to the group: both stopped and gone, the stop said in the log" \
+    "$(gone "$T/.upgrade/pin.pid") $(gone "$T/.upgrade/build.pid") $(grep -c '^[0-9:]\{8\} STOPPED BY A SIGNAL' <<< "$out")" \
+    "gone gone 1"
+done
+# a signal between a job's start and the line that keeps its PID: the job stopped all the same - every job of the
+# script's, not the PIDs it kept (a copy without `pin=$!` stands for one that landed there)
+sed '/^pin=\$!$/d' "$T/scripts/upgrade-build-with-pin.sh" > "$T/scripts/unkept.sh"
+check "the copy has no pin=\$! (the stand-in holds)" "$(grep -c "^pin=" "$T/scripts/unkept.sh")" 0
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished"
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/unkept.sh < /dev/null > "$T/unkept.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
+[ "$(proc_info "$sp" | awk '{print $1}')" = "$$" ] && kill -TERM "$sp"
+wait "$sp"
+out=$(cat "$T/unkept.out")
+check "a job whose PID was not kept yet: stopped with the rest, its process gone" \
+  "$(pin_end) $(gone "$T/.upgrade/pin.pid")" "stopped gone"
 # the traps set before the jobs start: a signal between a job's start and its trap left that job running
 check "the traps set before the first job starts" \
   "$(awk '/^trap stop EXIT/ {t = NR} /&$/ && !j {j = NR} END {print (t && j && t < j)}' \
