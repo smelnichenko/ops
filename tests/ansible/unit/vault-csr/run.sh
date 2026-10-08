@@ -172,10 +172,34 @@ if move:
     r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True)
     check("production's key and serial moved beside each other, out of Vault's directory", r.returncode == 0
           and sorted(os.listdir(new)) == ["ca-cert.srl", "ca-key.pem"] and os.listdir(old) == [], r.stderr)
+    # a key in both places: the same - the copy Vault can read removed; another - refused, both kept (which one signed
+    # the CA is the operator's to say)
+    open(os.path.join(old, "ca-key.pem"), "w").write("KEY")
+    r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True)
+    got = (r.returncode, os.path.exists(os.path.join(old, "ca-key.pem")), open(os.path.join(new, "ca-key.pem")).read())
+    check("the same key in Vault's directory too: that copy removed, the root-only one kept", got == (0, False, "KEY"),
+          (got, r.stdout, r.stderr))
     open(os.path.join(old, "ca-key.pem"), "w").write("OTHER")
     r = subprocess.run(["bash", "-c", sh], capture_output=True, text=True)
-    check("a key there already never overwritten", r.returncode == 0 and open(os.path.join(new, "ca-key.pem")).read()
-          == "KEY", r.stderr)
+    got = (r.returncode != 0, "REFUSED" in r.stdout + r.stderr, open(os.path.join(old, "ca-key.pem")).read(),
+           open(os.path.join(new, "ca-key.pem")).read())
+    check("another key in Vault's directory: refused, both kept, the root-only one never overwritten",
+          got == (True, True, "OTHER", "KEY"), (got, r.stdout, r.stderr))
+    os.remove(os.path.join(old, "ca-key.pem"))
+# a CA key on another Pi, where Vault can read it: refused
+other = next((t for t in tasks if "ca-key.pem" in str(t.get("ansible.builtin.shell", "")) and "pi1" in str(t.get("when", ""))),
+             None)
+check("a CA key in another Pi's Vault directory: a task refuses it", other is not None, "")
+if other:
+    tls = os.path.join(W, "pi2-tls"); os.makedirs(tls)
+    sh2 = other["ansible.builtin.shell"]
+    sh2 = (sh2 if isinstance(sh2, str) else sh2["cmd"]).replace("/etc/vault.d/tls", tls)
+    r = subprocess.run(["bash", "-c", sh2], capture_output=True, text=True)
+    check("none there: passes", r.returncode == 0, r.stderr)
+    open(os.path.join(tls, "ca-key.pem"), "w").write("KEY")
+    r = subprocess.run(["bash", "-c", sh2], capture_output=True, text=True)
+    got = (r.returncode != 0, "REFUSED" in r.stdout + r.stderr, os.path.exists(os.path.join(tls, "ca-key.pem")))
+    check("one there: refused, left as it is", got == (True, True, True), got)
 print("vault-csr: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

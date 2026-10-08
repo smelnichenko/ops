@@ -84,7 +84,9 @@
       delegate_to: pi1
       run_once: true
 
-    # production's key and serial (the serial keeps the CA's numbering), each only where none is yet
+    # production's key and serial (the serial keeps the CA's numbering), each only where none is yet. A key in both
+    # places: the same - the copy Vault can read removed; another - refused (which one signed the CA is the operator's
+    # to say: `openssl x509 -noout -pubkey -in /etc/vault.d/tls/ca-cert.pem` against each key's `openssl pkey -pubout`)
     - name: The CA's key and serial moved out of Vault's TLS directory (production's, from before)
       ansible.builtin.shell:
         executable: /bin/bash
@@ -94,12 +96,36 @@
             if [ -e "/etc/vault.d/tls/$f" ] && [ ! -e "/etc/vault-ca/$f" ]; then
               mv -n "/etc/vault.d/tls/$f" "/etc/vault-ca/$f"
               echo "moved $f"
+            elif [ "$f" = ca-key.pem ] && [ -e "/etc/vault.d/tls/$f" ]; then
+              if cmp -s "/etc/vault.d/tls/$f" "/etc/vault-ca/$f"; then
+                rm -f "/etc/vault.d/tls/$f"
+                echo "removed $f from Vault's directory (the same as the root-only one)"
+              else
+                echo "REFUSED: two CA keys - /etc/vault.d/tls/ca-key.pem (Vault can read it) differs from" \
+                  "/etc/vault-ca/ca-key.pem: keep the one that signed ca-cert.pem, remove the other by hand"
+                exit 1
+              fi
             fi
           done
       register: _ca_moved
-      changed_when: "'moved' in _ca_moved.stdout"
+      changed_when: "'moved' in _ca_moved.stdout or 'removed' in _ca_moved.stdout"
       delegate_to: pi1
       run_once: true
+
+    # the CA's key lives on pi1 alone: one in another Pi's Vault directory is refused, left as it is
+    - name: No CA key in Vault's directory on the other Pis
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          if [ -e /etc/vault.d/tls/ca-key.pem ]; then
+            echo "REFUSED: a CA key in /etc/vault.d/tls on {{ inventory_hostname }} (Vault can read it; the CA is pi1's) -" \
+              "remove it by hand once you know where it came from"
+            exit 1
+          fi
+      changed_when: false
+      check_mode: false  # a read
+      when: inventory_hostname != 'pi1'
 
     - name: Create vault-unseal directory
       ansible.builtin.file:
