@@ -90,7 +90,8 @@
 
     # the second trace proves flush_all_on_shutdown only if Tempo 2 stopped while it still held it: within its
     # max_block_duration (5 min) of the push - later, Tempo 2 wrote it to the store itself and finding it proves nothing.
-    # Tempo is replaced by Recreate: its new pod made after the old one stopped (20 s of slack for the clocks)
+    # Tempo is replaced by Recreate: its new pod made after the old one stopped (20 s of slack for the clocks) - one
+    # made before the push is the Tempo that held it, never replaced; none running is nothing read: neither proves it
     - name: Tempo 2 stopped within 5 minutes of the trace pushed after the flush (else its check proves nothing)
       when: mode == 'verify'
       ansible.builtin.shell:
@@ -100,8 +101,10 @@
           made=$(kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra get pod -l app.kubernetes.io/component=tempo \
             --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.creationTimestamp}' | tr ' ' '\n' \
             | sort | tail -1)
+          [ -n "$made" ] || { echo "NOT PROVEN: no Tempo pod running"; exit 1; }
           lived=$(( $(date -d "$made" +%s) - PUSHED ))
           echo "Tempo 2 replaced $lived s after the trace pushed after the flush"
+          [ "$lived" -ge -20 ] || { echo "NOT PROVEN: Tempo made $(( -lived )) s before it - never replaced"; exit 1; }
           [ "$lived" -le 280 ] || { echo "NOT PROVEN: Tempo 2 lived $lived s after it - over its 5-minute blocks"; exit 1; }
       environment:
         PUSHED: "{{ (lookup('ansible.builtin.file', id_file).splitlines() | select('search', ' upgrade-postflush ') | first).split()[2] }}"
