@@ -1042,7 +1042,8 @@ was green through steps 00-13 when it was stopped for the fixed commit. Three Cr
   "7\r" and refused: Patroni left paused. Read through CR LF; the marker deleted only once resumed (a retry
   resumes); a DCS read failing after the pause request undone; the marker's read-back retried.
 - Caddy's wildcard sync: `read` of the cluster token (no newline at its end) returned 1 and set -e ended every daily
-  sync - the Pis would serve the certificate until it expired (2026-11-09).
+  sync - the Pis would serve the certificate until it expired (2026-11-09). (Review 7: the playbook's form only -
+  production's Pis run the older `$(cat)` one; the defect would have reached them with the next deploy, not before.)
 
 Fixed besides (ops 59d1b17..cfd7751, each test-first, each mechanism reverted and seen red): deploy:vault-eso picks a
 Ready ExternalSecret before any write, checks every read, reads Vault's config first and puts it back (with the old
@@ -1053,9 +1054,11 @@ sha256 pinned per version; jobs stopped whole (one not recorded yet, one leading
 tempo-flush and metrics-check without their false results; the Pis' isolation applied again after a step's playbook
 lines; ten's git mirror reads Forgejo with a read:repository token, not the admin's password on git's argv, its sync
 failing the unit; Forgejo's admin retry by a token, not a throwaway password on argv (proven on Forgejo 15.0.9);
-setup-istio waits for the gateway production has; host-key checks catch every spelling; vagrant-smoke's bound
+setup-istio waits for the gateway production has; host-key checks catch the =/space spellings (review 7 found a tab,
+quotes and -F/path read as checked - fixed); vagrant-smoke's bound
 reaches the VM; setup-argocd verifies single sign-on after its install (step 31 moves production off argocd-secret's
-key); setup-gluster's mount check cannot be held by a hung client; the full run's steps in a script of their own -
+key); setup-gluster's last mount check cannot be held by a hung client (its plays' facts and the tasks before it
+could - review 7, fixed); the full run's steps in a script of their own -
 go-task swallowed a Ctrl-C and ran a step's remaining commands; a stop's grace measured in hundredths of a second.
 Not changed: platform's 123-character comment (platform has no line limit; 17 branches to restack).
 
@@ -1063,6 +1066,50 @@ The operator's: rotate the Forgejo admin password (a reviewer's read printed it)
 run setup-consul on production (Consul is open to the LAN - 8300/8301/8500 Anywhere) once rerun-guards has proven the
 transition; `task deploy:vault-eso` before step 1; the mirror's push key restricted; PgBouncer's superusers; Sonar's
 hotspots and S3776.
+
+## Seventh full review 2026-10-08 (ops 2a473bf..a88c887) and full run 0951
+
+Seven passes (architecture, correctness of the playbooks and of the scripts, security, concurrency, platform
+reliability, test quality - 15 of the sixth's reverts re-run, all red). The full run started at 09:51 failed in its build
+at 10:26.
+
+Critical:
+- Found by the run: PgBouncer keeps its pool's first server connection's startup parameters. After the Pis' reboot that
+  connection went through HAProxy (its servers up before their first check) to the replica, `in_hot_standby=on` was
+  kept, and Keycloak 26.5.7's default `targetServerType=primary` refused every connection until PgBouncer restarted -
+  production, on any Pi reboot or Patroni failover. Reproduced on the copy (18-23 refusals; with `targetServerType=any`
+  Keycloak started in 4.7 s). HAProxy 3.0 has no `init-state` (3.1+). Both writers of KC_DB_URL take any server; the
+  primary is HAProxy's /primary check's (78b4e9f).
+- ten's offsite git mirror mirrored forgejo_admin/monitor, a repository production does not have; its unit had failed
+  daily since July (an old script, set -e at a gone rsync). Now every repository of the organisation, a token of two
+  reads, git's helper of its own (git's store helper erased the token on a 401) (79824e4, c4b8a78).
+- bootstrap's vault-eso refused the DR state (none Ready: DR step 5) - my regression of review 6; switched and proven
+  by any ExternalSecret then, nothing put back (3022505).
+
+Warnings fixed: environments' infra push staged another's work and pushed foreign commits (bd421ed); Patroni's resume
+not retried (88c09b3); setup-consul's handover waits on the wall clock, a peers read failing silently (cbd259f); the
+full run's stops - a step's session stopped whole, go-task killed at once, the KILL before any write, the graces
+validated, a TERM a just-forked job lost sent again (review 7's flaky step-checks), the stamper deaf from its fork, the
+final settle run as a step, a step's leftovers and held output failing it (13685df); proofs written whole (2b18ef1);
+fifteen Kubernetes Secret reads and writes not no_log - the Velero credentials' wait printed their S3 keys at -v, CI's
+and Keycloak's diagnoses the registry's credentials and the Secret's whole data (d81e83d); setup-gluster held by a
+hung client before its check (5f11cbb); step 31's client secret judged before the switch, and the copy checks single
+sign-on as production does (fefe93c - production's in-use secret and ops/.env's equal by hash); the host-key detectors'
+missed spellings (7f2f3b0); check-mode-lint's five missed reads (7fcaa82); vault-eso's put-back said by hand when it
+could not run (c927adf); 20 of 31 curls in the production playbooks unbounded (3a91e1c); tempo-flush's 20 s of clock
+slack - one clock now, the API server's (cb68271); the step checks' bound 4500 s (b009f87); setup-istio's comments as
+production is (fb033d2); SMOKE_POLL=0 refused (b37af28); Forgejo's admin one task file (bbc277d); harness sleeps
+before signals replaced by ready files (88996cd); the test-quality pass's survivors given tests that bite (4c6cf94,
+f2221bd, 331bcfb, 49e9c92, 8e0fc95).
+
+Measured equivalent, kept: the KILL before the stop's message (every caller ignores SIGPIPE now); step-checks'
+cleanup's own SIGPIPE ignore (its signal handler set it first); the watchdog stopped only while a job of the script's.
+
+The operator's: rotate the Forgejo admin password, then the mirror play on ten (a dedicated read-only user for it);
+whether the mirror's failure is alerted (pi-backup-check reading its last-success, or the mirror a CronJob); setup-consul
+on production (Consul open to the LAN); `task deploy:vault-eso` before step 1; a step-down-only Vault token for the
+Consul handover; a patroni_is_paused alert; pi2's /etc/vault-unseal at 0755 and its missing 8200-from-ten rule (a
+setup-vault-pi run); PgBouncer's superusers; Sonar's hotspots and S3776.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
