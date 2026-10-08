@@ -23,7 +23,7 @@ plays = [p for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-keepaliv
 assert [p["name"] for p in plays] == ["Keepalived's drop-in loaded where pending - a daemon-reload, no restart"], \
     [p.get("name") for p in plays]
 LOG = os.path.join(W, "log")
-KEEP = ("name", "when", "run_once", "loop", "loop_control", "vars", "changed_when", "failed_when")
+KEEP = ("name", "when", "run_once", "loop", "loop_control", "vars", "changed_when", "failed_when", "check_mode")
 
 
 def log(text):
@@ -54,12 +54,20 @@ def stub(t):
         raise SystemExit("the drop-in's lines grepped at run time: a constant this playbook writes - pinned by this "
                          "harness instead (a refusal there could never clear)")
     if argv and argv[:2] == ["systemctl", "show"]:
-        # what systemd holds for the unit: the drop-in once a reload loaded it here (current: loaded before), unless
-        # the reload was lost or the unit changed since (stale_unit)
-        return {**keep, "register": t["register"], "ansible.builtin.shell":
-                f"if [ '{{{{ stale_unit | default(false) }}}}' != True ] && {{ [ '{{{{ answer }}}}' = current ] || "
+        # what systemd holds for the unit: the drop-in once a reload loaded it here (current: loaded before - unless an
+        # upgraded package left its unit needing a reload, needs_reload), unless the reload was lost or the unit stays
+        # stale whatever is reloaded (stale_unit); asked NeedDaemonReload alone (--value): yes until then
+        good = (f"[ '{{{{ stale_unit | default(false) }}}}' != True ] && {{ {{ [ '{{{{ answer }}}}' = current ] && "
+                f"[ '{{{{ needs_reload | default(false) }}}}' != True ]; }} || "
                 f"{{ grep -qx '{{{{ inventory_hostname }}}} daemon-reload' {LOG} && "
-                f"[ '{{{{ reload_lost | default(false) }}}}' != True ]; }}; }}; then "
+                f"[ '{{{{ reload_lost | default(false) }}}}' != True ]; }}; }}")
+        # dropin_missing: systemd needs no reload, and runs no ExecStopPost (the drop-in gone by hand)
+        if "--value" in argv:
+            return {**keep, "register": t["register"], "ansible.builtin.shell":
+                    f"if [ '{{{{ dropin_missing | default(false) }}}}' = True ] || {good}; then echo no; else echo yes; fi"}
+        return {**keep, "register": t["register"], "ansible.builtin.shell":
+                f"if [ '{{{{ dropin_missing | default(false) }}}}' = True ]; then echo ExecStopPost=; echo NeedDaemonReload=no; "
+                f"elif {good}; then "
                 "echo 'ExecStopPost={ path=/etc/keepalived/active_services_backup.sh ; "
                 "argv[]=/etc/keepalived/active_services_backup.sh --force ; }'; echo NeedDaemonReload=no; "
                 "else echo ExecStopPost=; echo NeedDaemonReload=yes; fi"}
@@ -84,12 +92,13 @@ yaml.safe_dump(out, open(os.path.join(W, "play.yml"), "w"), sort_keys=False)
 PYBUILD
 fails=0
 case_() {  # case_ <name> <pi1 answer> <pi2 answer> <pi1's other vars, a: b> <want rc 0|1> <want log, ; between>
+  # [CHECK=--check: a preview]
   : > "$W/log"
   printf 'all:\n  hosts:\n' > "$W/hosts.yml"
   printf '    pi1: {answer: %s, %s}\n    pi2: {answer: %s}\n' "$2" "$4" "$3" >> "$W/hosts.yml"
   printf '  vars: {ansible_connection: local, ansible_python_interpreter: "{{ ansible_playbook_python }}",
     keepalived_vip: 192.168.11.5}\n  children: {pis: {hosts: {pi1: {}, pi2: {}}}}\n' >> "$W/hosts.yml"
-  out=$(ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" 2>&1); rc=$?
+  out=$(ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" ${CHECK:-} 2>&1); rc=$?
   [ $rc = 0 ] || rc=1
   got=$(sort "$W/log" | paste -sd';')
   if [ $rc = "$5" ] && [ "$got" = "$6" ]; then echo "PASS $1"; return; fi
@@ -102,7 +111,15 @@ case_ "both current: nothing reloaded or restarted, both recorded" current curre
   "pi1 recorded keepalived c0ffee;pi2 recorded keepalived c0ffee"
 case_ "pending, the reload lost (systemd holds the old unit): fails there, nothing recorded on that Pi" \
   pending pending "reload_lost: true" 1 "pi1 daemon-reload;pi2 daemon-reload;pi2 recorded keepalived c0ffee"
-case_ "current by its record, systemd needing a reload all the same: fails there, nothing recorded on that Pi" \
-  current current "stale_unit: true" 1 "pi2 recorded keepalived c0ffee"
+case_ "current by its record, systemd needing a reload (an upgraded package's unit): read again, recorded" \
+  current current "needs_reload: true" 0 "pi1 daemon-reload;pi1 recorded keepalived c0ffee;pi2 recorded keepalived c0ffee"
+case_ "current by its record, its unit stale whatever is reloaded: fails there, nothing recorded on that Pi" \
+  current current "stale_unit: true" 1 "pi1 daemon-reload;pi2 recorded keepalived c0ffee"
+# a preview reads systemd's view as the run does (a read, not skipped): the drop-in not in effect, no reload pending,
+# fails it too; one needing a reload passes it (the run reloads first)
+CHECK=--check case_ "a preview: systemd's view read - the drop-in not in effect fails it" current current \
+  "dropin_missing: true" 1 ""
+CHECK=--check case_ "a preview, the unit needing a reload: passes (the run reloads, then reads)" current current \
+  "needs_reload: true" 0 ""
 echo "keepalived-pending: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

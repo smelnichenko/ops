@@ -533,10 +533,19 @@
 
     # the drop-in (written above) sets ExecStopPost alone - anything else would need keepalived restarted, one Pi at a
     # time: tests/ansible/unit/keepalived-pending holds it to that
+    # systemd's own word too: an upgraded package (apt) leaves the unit needing a reload while the drop-in's record
+    # says current - read again then, as for a pending drop-in (it failed every run until a hand reloaded it)
+    - name: Whether systemd needs keepalived's unit read again
+      ansible.builtin.command:
+        argv: [systemctl, show, keepalived, -p, NeedDaemonReload, --value]
+      register: _keepalived_need_reload
+      changed_when: false
+      check_mode: false  # a read
+
     - name: The unit read again
       ansible.builtin.systemd:
         daemon_reload: true
-      when: _restart_pending.stdout_lines[0] == 'pending'
+      when: _restart_pending.stdout_lines[0] == 'pending' or _keepalived_need_reload.stdout == 'yes'
 
     # pending or not: a record that says current proves nothing of the unit systemd holds now
     - name: Systemd runs the drop-in's ExecStopPost at keepalived's next stop, its unit needing no reload
@@ -548,7 +557,10 @@
         _stop_post.rc != 0 or 'active_services_backup.sh --force' not in _stop_post.stdout
         or 'NeedDaemonReload=no' not in _stop_post.stdout_lines
       check_mode: false  # a read
-      when: not (ansible_check_mode and _restart_pending.stdout_lines[0] == 'pending')  # a preview reloaded nothing
+      # a preview reloaded nothing
+      when: >-
+        not (ansible_check_mode and (_restart_pending.stdout_lines[0] == 'pending'
+        or _keepalived_need_reload.stdout == 'yes'))
 
     # what the next run compares with: loaded (a failed reload or check ends this Pi's run before here), or current
     - name: Keepalived's drop-in as systemd runs it, recorded
