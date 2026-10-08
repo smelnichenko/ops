@@ -33,6 +33,15 @@ PUBLIC = {
         ("the certificate (tls.crt) alone",
          lambda x, t: bool(reads(x)) and all(re.findall(r"jsonpath='([^']*)'", line) == [r"{.data.tls\.crt}"]
                                              for line in reads(x))),
+    # setup-caddy's two (argv lists - read once joined): the wildcard's certificate and the cert reader's CA, public
+    ("deploy/ansible/playbooks/setup-caddy.yml", "Read the *.pmon.dev wildcard cert from the cluster (cluster host)"):
+        ("the certificate (tls.crt) alone",
+         lambda x, t: bool(reads(x)) and all(re.findall(r"jsonpath=['\"]?([^'\"\s]*)", line) == [r"{.data.tls\.crt}"]
+                                             for line in reads(x))),
+    ("deploy/ansible/playbooks/setup-caddy.yml", "Read the cert-reader CA (cluster host)"):
+        ("the CA certificate (ca.crt) alone",
+         lambda x, t: bool(reads(x)) and all(re.findall(r"jsonpath=['\"]?([^'\"\s]*)", line) == [r"{.data.ca\.crt}"]
+                                             for line in reads(x))),
     ("tests/ansible/test-keycloak.yml", "DIAG events + describe + eso + secret"):
         ("the Secret's key names alone",
          lambda x, t: all(re.search(r"-o json\s*\|\s*python3 -c '[^']*sorted\(json\.load\(sys\.stdin\)\.get\(\"data\"", line)
@@ -53,13 +62,16 @@ RES = r"['\"]?(?:[\w.-]+,)*secrets?(?:\.v1)?(?:,[\w.-]+)*['\"]?(?:/\S+)?(?=[\s'\
 OUT = r"(?:(?:-o|--output)[ =]*['\"]?(?!name\b)\w|--template\b)"
 CLI = re.compile(rf"\bget\b(?:\s+-{{1,2}}[\w-]+(?:[ =][^\s-]\S*)?)*\s+{RES}[^\n|;&]*?{OUT}"
                  rf"|\bget\b[^\n|;&]*?{OUT}[^\n|;&]*?\s{RES}"
-                 r"|\bget\s+--raw[ =]+['\"]?/api/v1/\S*/secrets\b|\bcurl\b[^\n]*?/api/v1/\S*/secrets\b")
+                 r"|\bget\s+--raw[ =]+['\"]?/api/v1/\S*/secrets\b|\bcurl\b[^\n]*?/api/v1/\S*/secrets\b"
+                 # a release's values (its secrets set there among them), a pod's environment (a Secret's keys in it)
+                 r"|\bhelm\b[^\n|;&]*\bget\s+(values|manifest|all)\b|\bexec\b[^\n|;&]*\s--\s+(env|printenv)\b")
 # the forms it reads, each alone: a Secret's data printed - named; its name alone, another kind - not
 FORMS = ["kubectl get secret x -o json", "kubectl get -n ns secret x -o yaml", "kubectl -n ns get secret x -ojsonpath='{.data}'",
          "kubectl get -o yaml secret x", "kubectl get 'secret' x -o json", "kubectl get secret/x -o json",
          "kubectl get configmap,secret -n x -o yaml", "kubectl get secret.v1 x --template '{{.data}}'",
          "kubectl get --raw /api/v1/namespaces/x/secrets/y", "curl -sf https://k:6443/api/v1/namespaces/x/secrets/y",
          "kubectl get secrets -n x -o=json"]
+FORMS += ["helm -n argocd get values argocd", "helm get manifest x", "kubectl -n x exec deploy/y -- env"]
 QUIET = ["kubectl get secret x -o name", "kubectl get secrets -n x", "kubectl get configmap x -o yaml",
          "kubectl get pods -o yaml | grep secret", "kubectl get -n x secret x -o name", "kubectl get secretstores -o yaml"]
 check("a uri task reading the API's Secrets path: read as one; its ConfigMaps' not",
@@ -88,8 +100,9 @@ for f in files():
                 what = "reads a Secret"
             elif m == "k8s" and kind.lower() == "secret":
                 what = "writes a Secret"
-            elif m in ("shell", "command") and CLI.search(re.sub(r"\\\n\s*", " ", str(
-                    val.get("cmd", val.get("argv", val)) if isinstance(val, dict) else val))):
+            elif m in ("shell", "command") and CLI.search(re.sub(r"\\\n\s*", " ", (
+                    " ".join(map(str, val["argv"])) if isinstance(val, dict) and isinstance(val.get("argv"), list)
+                    else str(val.get("cmd", val) if isinstance(val, dict) else val)))):
                 what = "prints a Secret"
             elif m == "uri" and isinstance(val, dict) and API.search(str(val.get("url", ""))) and t.get("register"):
                 what = "reads a Secret through the API"
@@ -98,7 +111,8 @@ for f in files():
             key = (f, t.get("name"))
             if key in PUBLIC:
                 public_seen.add(key)
-                if not PUBLIC[key][1](str(val.get("cmd", val) if isinstance(val, dict) else val), t):
+                if not PUBLIC[key][1](" ".join(map(str, val["argv"])) if isinstance(val, dict) and isinstance(
+                        val.get("argv"), list) else str(val.get("cmd", val) if isinstance(val, dict) else val), t):
                     found.append((f, t.get("name"), "named public, prints more: " + PUBLIC[key][0], None))
                 continue
             found.append((f, t.get("name"), what, t.get("no_log")))
@@ -123,7 +137,8 @@ for f in files():
     for t in tasks(load(f)):
         for mod, val in actions(t):
             if (f, t.get("name")) in PUBLIC:
-                public_texts[(f, t.get("name"))] = (str(val.get("cmd", val) if isinstance(val, dict) else val), t)
+                public_texts[(f, t.get("name"))] = (" ".join(map(str, val["argv"])) if isinstance(val, dict) and isinstance(
+                    val.get("argv"), list) else str(val.get("cmd", val) if isinstance(val, dict) else val), t)
 EXTRA = "\nkubectl get -n x -o yaml secret y"
 check("each public read with a whole Secret read added beside it (flags before the resource): no longer public",
       sorted(k[1] for k, (x, t) in public_texts.items() if PUBLIC[k][1](x + EXTRA, t)), [])

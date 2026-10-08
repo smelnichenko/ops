@@ -35,6 +35,10 @@ check("ansible.cfg: host keys checked, said in the file",
 # any separator between the key and its value (=, spaces, a tab, quotes - ssh reads each so); -F with or without a space
 # after it, and never -f (ssh's background flag)
 OFF = re.compile(r"StrictHostKeyChecking[^a-z0-9/]+(no|off|false|accept-new)\b"
+                 # a value from a variable or a template (=${STRICT:-no}, ={{ x }}): what it is, unknown here
+                 r"|StrictHostKeyChecking[= ]+[\"']?(\$|\{\{)"
+                 # a host's key taken as it answers (trust on first use) into a known-hosts file
+                 r"|ssh-keyscan\b[^\n|;&]*>>?\s*\S*known_hosts"
                  r"|(User|Global)KnownHostsFile[^a-z0-9/~]+(/dev/null|none\b)|KnownHostsCommand", re.I)
 # -F alone or after flags that take no argument (ssh's 46AaCfGgKkMNnqsTtVvXxYy): -CF is -C -F; -oF... is -o's
 OFF_ARGS = re.compile(OFF.pattern + r"|(^|[^a-z0-9-])(?-i:-[46AaCfGgKkMNnqsTtVvXxYy]*F)", re.I)
@@ -47,6 +51,13 @@ forms = ["-o StrictHostKeyChecking=no", "-o StrictHostKeyChecking=false", "-o 'S
          # quoting the shell's split removes (Ansible splits ssh's arguments so: shlex), and a known-hosts file of none
          "-o Strict''HostKeyChecking=no", "-o StrictHostKeyChecking=n''o", "-o StrictHostKeyChecking=n\\o",
          "-o UserKnownHostsFile=none", "-o GlobalKnownHostsFile=none"]
+# a script's value from a variable or a template (its shell or Ansible fills it): what it is, unknown here - Ansible's
+# own ssh arguments are never expanded so (ssh refuses such a value)
+check("a script's StrictHostKeyChecking from a variable or a template: read as unchecked",
+      [bool(OFF.search(x)) for x in ("-o StrictHostKeyChecking=${STRICT:-no}", "-o StrictHostKeyChecking={{ x }}")],
+      [True, True])
+check("a host's key taken as it answers into a known-hosts file: read as unchecked",
+      [bool(OFF.search(x)) for x in ("ssh-keyscan -H pi1 >> ~/.ssh/known_hosts", "ssh-keyscan pi1 > /tmp/k")], [True, False])
 # what ssh reads after the shell's split: its quotes and backslashes gone
 norm = lambda s: re.sub(r"['\"\\\\]", "", s)  # noqa: E731
 check("every spelling of an unchecked key read as one", [f for f in forms if not OFF.search(norm(f))], [])

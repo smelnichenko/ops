@@ -160,7 +160,16 @@ ARGV_SECRET = re.compile(r"(Bearer|Authorization:\s*(token|Basic))\s+\$"
                          # Vault's token header, curl's bearer option, a -token= flag; a secret store's answer
                          # (vault kv get, vault read) handed over as an argument
                          r"|X-Vault-Token:\s*\$|--oauth2-bearer[= ]+\"?\$|(^|\s)-token[= ]+\"?\$"
-                         r"|\$\(\s*vault\s+(kv\s+get|read)\b", re.I)
+                         r"|\$\(\s*vault\s+(kv\s+get|read)\b"
+                         # an option named for one (--client-secret, --db-password=), kubectl's --from-literal of one,
+                         # vault login's token after its flags, an unseal key, a form field of one (curl -d,
+                         # --data-urlencode), helm's --set of one, a token header of another name, mc's keys, redis-cli -a
+                         r"|--(?![\w-]*-(name|id|ids|file|path|ttl|scopes?|type)\b)[\w-]*(password|passwd|token|secret)[\w-]*[= ]+[\"']?\$"
+                         r"|--from-literal=[\w.-]*(password|secret|token|key)[\w.-]*=[\"']?\$"
+                         r"|\bvault\s+login\b[^\n|;&]*\s[\"']?(token=)?\$|\bvault\s+operator\s+unseal\b[^\n|;&]*\s[\"']?\$"
+                         r"|(-d|--data(-urlencode|-raw|-binary)?)[= ]+[\"']?[^\"'\s]*(secret|password|token)[^\"'\s=]*=\$"
+                         r"|--set(-string)?[= ]+[\"']?[\w.\[\]-]*(password|secret|token)[\w.\[\]-]*=\$"
+                         r"|(X-Auth-Token|PRIVATE-TOKEN)\s*:\s*\$|\bmc\s+alias\s+set\b[^\n|;&]*\$|\bredis-cli\b[^\n|;&]*\s-a\s+[\"']?\$", re.I)
 
 
 def argv_reads(script):
@@ -179,6 +188,9 @@ def argv_reads(script):
             words = [w for w in seg.split() if not re.match(r"^\w+=", w)]
             while words and words[0] in KEYWORDS:  # the shell's own words: the command is the next
                 words.pop(0)
+            # a match that begins at the command itself (vault login ..., redis-cli -a ...): that command
+            if not words and re.match(r"\w", m.group(0)):
+                words = m.group(0).split()[:1]
             if words and words[0] not in BUILTINS and not words[0].endswith("()"):
                 out.append(cmd)
                 break
@@ -216,9 +228,22 @@ check("a run-time token on another program's argv: named; on a builtin's, a desc
        bool(argv_reads('curl -sf --oauth2-bearer "$t" "$api"')),
        bool(argv_reads('consul acl token read -token="$CONSUL_HTTP_TOKEN"')),
        bool(argv_reads('python3 -c "x" "$(vault kv get -format=json secret/a)"')),
-       bool(argv_reads('s=$(vault kv get -format=json secret/a)'))],
+       bool(argv_reads('s=$(vault kv get -format=json secret/a)')),
+       # once missed (review): each named
+       bool(argv_reads('x --client-secret "$s"')), bool(argv_reads('x --db-password="$p"')),
+       bool(argv_reads('kubectl create secret generic a --from-literal=password="$p"')),
+       bool(argv_reads('vault login -no-print "$T"')), bool(argv_reads('vault operator unseal "$k"')),
+       bool(argv_reads('curl -sf -d "client_secret=$s" "$u"')), bool(argv_reads('curl --data-urlencode "password=$p" u')),
+       bool(argv_reads('helm upgrade x y --set db.password=$p')), bool(argv_reads('curl -H "X-Auth-Token: $t" u')),
+       bool(argv_reads('curl -H "PRIVATE-TOKEN: $t" u')), bool(argv_reads('mc alias set s3 http://x "$AK" "$SK"')),
+       bool(argv_reads('redis-cli -a "$p" ping')),
+       # and their plain forms not
+       bool(argv_reads('x --client-id "$id"')), bool(argv_reads('curl -d "name=$n" u')),
+       bool(argv_reads('helm upgrade x y --set image.tag=$t')),
+       bool(argv_reads('forgejo admin user generate-access-token --token-name "$name"'))],
       [True, True, True, False, False, False, False, False, True, True, True, True, False, False,
-       True, True, True, True, True, False, False, False, True, True, True, True, False])
+       True, True, True, True, True, False, False, False, True, True, True, True, False,
+       True, True, True, True, True, True, True, True, True, True, True, True, False, False, False, False])
 
 
 def scripts(doc):
