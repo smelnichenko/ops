@@ -1202,6 +1202,13 @@ strict (c8dce26). Tested by the order a run makes, each restart through its own 
 waits for a Keycloak it started (one that was down) before the restarts, else the other Pi's guard reads it starting
 as down (8554aa5).
 
+Full run 12 (19:31, ops 0b49768): the build green with the restart order (pi2, not serving, first; then pi1), steps
+00-05 green; step 06 (Istio 1.29) failed at 21:00 on production's k6 smoke - every check passed, no request failed,
+p95 2.88 s over 12 requests against its 2 s, the first requests after every sidecar restarted. 2 of 449 smoke runs
+(the other full run 7's step 09, also after an Istio step): about one full run in four. That failure alone now runs
+the smoke once more, and that run decides, both said; any other failure stands (26f785d). Production's own Job
+retries every failure three times.
+
 Left, with why:
 - 55 test-playbook tasks outside the full run, and test-ephemeral-env's `http://admin:<pw>@` URLs: a secret on a
   command line; each needs its own run.
