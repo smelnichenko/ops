@@ -896,14 +896,6 @@
         label: "{{ item.name }}"
       when: item.stop_service | length > 0 and (item.stop_service ~ '.service') in ansible_facts.services
 
-    - name: Create mount points
-      timeout: 60
-      ansible.builtin.file:
-        path: "{{ item.mount }}"
-        state: directory
-        mode: '0755'
-      loop: "{{ backup_volumes }}"
-
     - name: Unmount what another source has mounted there
       timeout: 120
       ansible.posix.mount:
@@ -913,6 +905,19 @@
       loop_control:
         label: "{{ item.item.mount }}"
       when: item.stdout | trim | length > 0 and item.stdout | trim != node_ip ~ ':/' ~ item.item.name
+
+    # only for the volumes about to be mounted here, after what another source mounted there is gone: a mounted volume's
+    # root is its own plays' (every run set the git mirror's, setup-vault-pi's 0750, to 0755 - and setup-vault-pi set it
+    # back); the mount module makes a missing mount point itself
+    - name: Create mount points
+      timeout: 60
+      ansible.builtin.file:
+        path: "{{ item.mount }}"
+        state: directory
+        mode: '0755'
+      loop: "{{ backup_remount }}"
+      loop_control:
+        label: "{{ item.mount }}"
 
     # mounted where not mounted from the volume yet; elsewhere the entry alone - the mount module remounts a mounted
     # volume when its entry changes

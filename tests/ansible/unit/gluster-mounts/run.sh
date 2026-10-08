@@ -148,6 +148,15 @@ for pname, touching in TOUCH.items():
     rc, out, prompt = pre_run(mounted, hung=points[0] if points else "")
     check(f"{pname}: a mounted volume whose client hung: refused at its deadline, named - never held",
           (rc != 0, bool(points) and points[0] in out and "HUNG" in out, prompt), (True, True, True))
+# a mounted volume's root left as its own plays keep it: the mount points made only for the volumes about to be mounted
+# here (the mount module makes a missing one itself), after what another source mounted there is unmounted - every run
+# set the git mirror's root (setup-vault-pi's, 0750) to 0755, and setup-vault-pi set it back (full runs 2140 to 1217)
+mp = next((t for t in mounting["tasks"] if t.get("name") == "Create mount points"), None)
+names = [t.get("name") for t in mounting["tasks"]]
+check("the mount points made for the volumes about to be mounted alone, after the unmount, before the mount",
+      (mp is not None and str(mp.get("loop", "")).replace(" ", "") == "{{backup_remount}}",
+       mp is not None and names.index("Unmount what another source has mounted there") < names.index("Create mount points")
+       < names.index("Mount backup volumes")), (True, True))
 # the volumes Forgejo and Nexus write have their root's owner kept by Gluster (storage.owner-uid/gid): a heal or a
 # remount set it back to the arbiter brick's root:root otherwise - forgejo-repos had none (a re-run after a full run
 # found its root changed, 2026-10-08)
