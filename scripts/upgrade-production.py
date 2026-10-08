@@ -484,8 +484,7 @@ def proof_start():
     head = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
-    with open(os.path.join(PROVEN, "run.json"), "w") as f:
-        json.dump({"ops": head, "run": started, "branches": branch_shas()}, f)
+    write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "branches": branch_shas()})
     print(f"PROOF: run {started} of ops {head[:10]}")
 
 
@@ -533,6 +532,20 @@ def pin_problems(step, platform_sha, ops_sha, path=None):
     return []
 
 
+def write_json(path, obj, **kw):
+    """The file whole or not at all: written beside it, then moved over it - a stop or a full disk mid-write left a
+    truncated proof in place (production's merge then read no JSON)."""
+    fd, part = tempfile.mkstemp(dir=os.path.dirname(path), prefix="." + os.path.basename(path) + ".")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(obj, f, **kw)
+        os.chmod(part, 0o644)
+        os.replace(part, path)
+    except BaseException:
+        os.unlink(part)
+        raise
+
+
 def record_proof(step, infra_sha, platform_sha):
     run_info = json.load(open(os.path.join(PROVEN, "run.json")))
     changed = ops_unchanged_since(run_info["ops"], PROVEN_PATHS)
@@ -567,8 +580,7 @@ def record_proof(step, infra_sha, platform_sha):
     pin = pin_problems(step, shas["platform"], run_info["ops"])
     if pin:
         sys.exit("REFUSED: " + "; ".join(pin))
-    with open(proof_path(step), "w") as f:
-        json.dump(proof, f, indent=1)
+    write_json(proof_path(step), proof, indent=1)
     print(f"PROOF: {step} " + " ".join(f"{r}={p['sha'][:10]}" for r, p in proof["repos"].items()))
 
 

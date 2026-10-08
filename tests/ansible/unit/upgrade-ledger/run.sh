@@ -1177,6 +1177,35 @@ check("record-proof 59 with a pin another ops commit's test proved: refused, not
       record_59({"59": {"platform": "p59", "images": img[S59], "ops": "an earlier ops"}}),
       "refused, nothing recorded: True")
 
+
+# a proof written whole or not at all: a write that dies half way (a stop, a full disk) leaves the proof there before
+# it as it was and nothing beside it - in place, it left a truncated proof (production's merge then read no JSON)
+def torn_write():
+    work = tempfile.mkdtemp()
+    target = os.path.join(work, "proof.json")
+    with open(target, "w") as f:
+        f.write('{"old": "proof"}')
+    real = m.json.dump
+
+    def dump(obj, f, **kw):
+        f.write('{"step": "half')
+        raise OSError("no space left on device")
+    m.json.dump = dump
+    try:
+        m.write_json(target, {"step": "x"}, indent=1)
+    except OSError:
+        pass
+    finally:
+        m.json.dump = real
+    return open(target).read(), sorted(os.listdir(work))
+
+
+check("record-proof writes through write_json: a write dying half way leaves the proof before it, nothing beside it",
+      torn_write() if hasattr(m, "write_json") else "no write_json", ('{"old": "proof"}', ["proof.json"]))
+src = open("scripts/upgrade-production.py").read()
+check("the proof and run.json both written by write_json, no other write of either in place",
+      (src.count('write_json(proof_path(step), proof'), src.count('write_json(os.path.join(PROVEN, "run.json")'),
+       src.count('open(proof_path(step), "w")'), src.count('open(os.path.join(PROVEN, "run.json"), "w")')), (1, 1, 0, 0))
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 EOF
