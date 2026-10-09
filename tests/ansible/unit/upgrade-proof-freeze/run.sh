@@ -185,7 +185,7 @@ check("production runs another app tag: refused, naming it", m.app_tag_problems(
       ["app: production runs p1, the full run ran c1 - promote it first, or drop the overlay's tag and prove again"])
 os.makedirs(m.PROVEN, exist_ok=True)
 with open(os.path.join(m.PROVEN, "01-a.json"), "w") as f:
-    f.write('{"run": "r", "ops": "%s", "floating": ["x"]}' % proven)
+    f.write('{"run": "r", "complete": true, "ops": "%s", "floating": ["x"]}' % proven)
 m.floating_problems, m.unproven_changes = (lambda *a: []), (lambda *a: [])
 check("every phase's proof check refuses it", any(p.startswith("app: production runs p1")
                                                   for p in proof_problems("01-a", ["01-a"])), True)
@@ -207,7 +207,8 @@ for want_own, name, expect in ((own, "the proven change", []),
                                ("another", "another change", ["infra upgrade-merged/01-a brought a change other than "
                                                               "the one the full run proved"])):
     with open(os.path.join(m.PROVEN, "01-a.json"), "w") as f:
-        f.write('{"run": "r", "ops": "%s", "floating": ["x"], "repos": {"infra": {"own": "%s"}}}' % (proven, want_own))
+        f.write('{"run": "r", "complete": true, "ops": "%s", "floating": ["x"], "repos": {"infra": {"own": "%s"}}}'
+                % (proven, want_own))
     check(f"merged already, {name}", proof_problems("01-a", ["01-a"], repo="infra"), expect)
 I("tag", "-d", "upgrade-merged/01-a")
 I("commit", "-q", "--allow-empty", "-m", "never pushed")

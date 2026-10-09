@@ -159,6 +159,10 @@ for want in ("scripts/upgrade-production.py proof-start {{.START}}", "scripts/up
              "UPGRADE_FROM={{.START}} scripts/upgrade-full-steps.sh"):
     if want not in [text(c) for c in full["cmds"]]:
         bad.append(f"test:upgrade:full lacks: {want}")
+# the run marked complete last: after the restore checks at its end - its proofs count only then
+seq = [text(c) or c.get("task", "") for c in full["cmds"]]
+if seq[-2:] != ["test:upgrade:restore-check", "scripts/upgrade-production.py proof-complete"]:
+    bad.append(f"test:upgrade:full does not end restore-check, proof-complete: {seq[-2:]}")
 if any("--all" in text(c) for c in full["cmds"]):
     bad.append("test:upgrade:full checks every step, not the run's")
 build = tf["test:upgrade:build"]

@@ -121,6 +121,22 @@ check("02-b: 01-a done in production - its own older proof does not matter", pp(
 prove("03-c", "R", "01-a")
 check("03-c: a run from 01-a - 01-a must be proven by it, done or not", len(pp("03-c", ["01-a"])), 1)
 
+# a proof counts only once its run completed - every step, then the backups restored at its end (proof-complete marks
+# the run's proofs then; a run that failed at its end, or stopped at a step, leaves its proofs unmarked)
+complete = getattr(m, "proof_complete", None)
+incomplete = lambda step: [p for p in m.proof_problems(step, names, done=["01-a"]) if "did not complete" in p]
+prove("02-b", "R", "02-b")
+prove("03-c", "R", "02-b")
+check("a proof of a run not marked complete: refused", len(incomplete("03-c")), 1)
+json.dump({"ops": "x", "run": "R", "from": "02-b", "branches": {}}, open(os.path.join(m.PROVEN, "run.json"), "w"))
+prove("01-a", "OTHER", "01-a")
+check("proof-complete: taken", exits(complete) if complete else "no proof_complete", None)
+check("  the run's proofs marked, another run's not",
+      [json.load(open(m.proof_path(s_))).get("complete") for s_ in ("01-a", "02-b", "03-c")], [None, True, True])
+check("a proof of a run marked complete: no problem", incomplete("03-c"), [])
+os.remove(os.path.join(m.PROVEN, "run.json"))
+check("proof-complete with no run started: refused", exits(complete) is not None if complete else None, True)
+
 # the copy's build at a step: every base line up to it
 inv = lambda *a: subprocess.run([os.path.join(o, "scripts", "upgrade-expected-inventory.py"), *a],
                                 capture_output=True, text=True)

@@ -46,6 +46,7 @@ Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py resume-from [<step>]    (the step a full run starts from: production's first not
                                                              done, read-only - or the one given)
        scripts/upgrade-production.py proof-start [<step>]   (the run's record; its start, the first step by default)
+       scripts/upgrade-production.py proof-complete         (the run's proofs marked complete: its last act)
        scripts/upgrade-production.py record-proof <step> <infra sha> <platform sha>
        scripts/upgrade-production.py prepull-images <step>   (the images the merge pre-pulls, by the branches' pins:
                                                              the Vagrant step runs the pre-pull with them)
@@ -524,6 +525,24 @@ def proof_start(from_step=None):
     print(f"PROOF: run {started} of ops {head[:10]} from {from_step}")
 
 
+def proof_complete():
+    """The run's proofs marked complete - test:upgrade:full's last act, after every step and the backups restored at
+    its end: a run that failed there, or stopped at a step, leaves its proofs unmarked, and production refuses them."""
+    path = os.path.join(PROVEN, "run.json")
+    if not os.path.exists(path):
+        sys.exit("REFUSED: no run started (proof-start) - nothing to mark complete")
+    run_id = json.load(open(path))["run"]
+    marked = []
+    for name in sorted(os.listdir(PROVEN)):
+        if not name.endswith(".json") or name == "run.json":
+            continue
+        proof = json.load(open(os.path.join(PROVEN, name)))
+        if proof.get("run") == run_id:
+            write_json(os.path.join(PROVEN, name), dict(proof, complete=True), indent=1)
+            marked.append(proof["step"])
+    print(f"PROOF: run {run_id} complete - {len(marked)} steps: {', '.join(marked) or 'none'}")
+
+
 def branch_shas():
     """Every step branch (upgrade/*) of infra and platform, its commit - proof-start records them for the run."""
     out = {}
@@ -731,6 +750,9 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
     proof = json.load(open(path))
     out = []
+    if not proof.get("complete"):
+        out.append(f"the full run that proved {step} ({proof.get('run')}) did not complete - every step, then the "
+                   "backups restored at its end (proof-complete)")
     start = proof.get("from", names[0])
     for earlier in names[:names.index(step)]:
         if start in names and names.index(earlier) < names.index(start):
@@ -1251,7 +1273,7 @@ def status():
 def main():
     a = sys.argv[1:]
     actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start,
-               ("proof-start", 1): proof_start, ("release", 1): release,
+               ("proof-start", 1): proof_start, ("proof-complete", 0): proof_complete, ("release", 1): release,
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof,

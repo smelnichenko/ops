@@ -766,6 +766,8 @@ tasks:
       - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-full-steps.sh
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
       - task: test:upgrade:restore-check
+      # the run's proofs count only now: a run that failed at its end, or stopped at a step, leaves them unmarked
+      - cmd: scripts/upgrade-production.py proof-complete
 
   # the full run's last step judged as production will judge it: its quiet window 300 s, held 4 polls 10 s apart, and
   # its restarts against the step's own (a restart-history entry of its own) - no step after it does

@@ -77,7 +77,7 @@ m.OPS, m.PROVEN = os.path.join(W, "ops"), os.path.join(W, "proven")
 os.makedirs(m.PROVEN, exist_ok=True)
 base, tip = os.environ["OWN_OF"].split("..")
 own = m.own_change(os.path.join(W, "infra"), base, tip)
-json.dump({"run": "r", "ops": "x", "repos": {"infra": {"own": own}}, "floating": {"a": "b"}},
+json.dump({"run": "r", "complete": True, "ops": "x", "repos": {"infra": {"own": own}}, "floating": {"a": "b"}},
           open(m.proof_path(step), "w"))
 m.floating_problems = m.app_tag_problems = m.unproven_changes = lambda *a: []
 print("PROBLEMS:", m.proof_problems(step, [step], "infra") or "none")
