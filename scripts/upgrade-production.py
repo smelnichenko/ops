@@ -1321,7 +1321,9 @@ def merge(step, repo):
     info = step_info(step)
     refuse(merged_live_problems(step, [repo]))
     ok, revs, _ = settled(info["settle"], [], apps)
-    refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
+    refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here. An app's ComparisonError "
+                          "above is a render error (the chart or its values, or a cached one hard-refreshed already): "
+                          "fix the step's branch and merge again, not its abort line; otherwise its abort line"])
     record(step, "settled", repo, revs[URLS[repo]])
     # a barman-after-merge step (PostgreSQL 18): its base backup as soon as the merge that makes the new major live
     # settled (47's infra merge; its platform merge renders nothing new) - until one exists the new major has no point

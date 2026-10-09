@@ -210,12 +210,28 @@ gate("a pod terminated otherwise (not the node's shutdown), its owner running ag
 gate("a restart at the very --restarted-since: not green", A, [pod("p1", "u1", 1, "2026-10-06T10:30:00Z")], 1,
      "after 2026-10-06T10:30:00", "--restart-quiet", "300", "--restarted-since", "2026-10-06T10:30:00Z")
 
+# a render error: an app not green says its error conditions (the repo-server's cached failure reads as a stuck app
+# otherwise); an error condition beside a green app changes nothing
+broken = app("c")
+broken["status"]["sync"]["status"] = "Unknown"
+broken["status"]["conditions"] = [{"type": "ComparisonError", "message": "Manifest generation error (cached): chart x"},
+                                  {"type": "OrphanedResourceWarning", "message": "1 orphaned"}]
+rc, out = run(A + [broken], P)
+check("an app not green: its ComparisonError said", (rc, "ComparisonError: Manifest generation error (cached)" in out,
+                                                     "OrphanedResourceWarning" in out), (1, True, False), out)
+stale = app("c")
+stale["status"]["conditions"] = [{"type": "ComparisonError", "message": "old"}]
+rc, out = run(A + [stale], P)
+check("an error condition beside a green app: still green", rc, 0, out)
+
+
 # the poll loop, against a kubectl stub: one failed poll is a red poll, not the end; restarts between polls never settle
-def loop(mode, *args):
+def loop(mode, *args, apps=None):
     d = tempfile.mkdtemp()
-    json.dump({"items": A}, open(os.path.join(d, "apps.json"), "w"))
+    json.dump({"items": apps or A}, open(os.path.join(d, "apps.json"), "w"))
     with open(os.path.join(d, "kubectl"), "w") as f:
         f.write(f"""#!/bin/bash
+case "$*" in *" annotate "*) echo "$*" >> {d}/annotated; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
@@ -228,7 +244,17 @@ printf '"containerStatuses":[{{"ready":true,"restartCount":%d}}]}}}}]}}' $r
     r = subprocess.run([sys.executable, S, "--kubeconfig", "x", "--poll", "0", "--stable-polls", "2", *args],
                        capture_output=True, text=True, env={**os.environ, "PATH": d + ":" + os.environ["PATH"],
                                                              "MIRROR_REVISIONS": ""})
-    return r.returncode, r.stdout + r.stderr
+    annotated = open(os.path.join(d, "annotated")).read().splitlines() if os.path.exists(os.path.join(d, "annotated")) else []
+    return r.returncode, r.stdout + r.stderr + "".join(f"\nANNOTATED {x}" for x in annotated)
+# a ComparisonError two polls running: that app hard-refreshed, once (a paused generation serves a cached error for 60
+# minutes - longer than a settle)
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [broken])
+hard = [x for x in out.splitlines() if x.startswith("ANNOTATED ")]
+check("a ComparisonError two polls running: hard-refreshed once, said",
+      (rc, len(hard), "applications.argoproj.io c argocd.argoproj.io/refresh=hard --overwrite" in (hard or [""])[0],
+       out.count("HARD REFRESH c:")), (1, 1, True, 1), out)
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0")
+check("  no error: nothing refreshed", [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
 rc, out = loop("fail-first", "--minutes", "0.05", "--restart-quiet", "0")
 check("a failed poll first: red, then settled", (rc, "poll failed" in out, "ARGO SETTLED" in out), (0, True, True), out)
 rc, out = loop("churn", "--minutes", "0.02", "--restart-quiet", "0")

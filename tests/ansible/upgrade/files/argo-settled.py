@@ -31,6 +31,10 @@ plane (a kubeadm upgrade - every controller holding a leader lease restarts with
 recorded, not judged - two such steps in a row are no crash loop - and the next step judges its own restarts against
 them: a pod restarting there too is a crash loop, caught a step after.
 
+An app not green says its error conditions (a ComparisonError: the render failed - a chart or values error, or the
+repo-server's paused generation: after 3 failures it serves the cached error for 60 minutes, longer than a settle). An
+app with a ComparisonError two polls running is hard-refreshed, once - the generation is tried again past the cache.
+
 Exit 0 settled, 1 not settled in --minutes (the state of everything not green is printed), 2 bad arguments.
 --once evaluates one poll and exits; --apps-json/--pods-json evaluate saved `kubectl get -o json` output instead of
 the cluster (both for checking this script).
@@ -103,7 +107,24 @@ def app_problems(app, allowed, mirror):
         revisions = sync.get("revisions") or [sync.get("revision")]
         if any(s.get("repoURL") in mirror and r != mirror[s["repoURL"]] for s, r in zip(sources(spec), revisions)):
             problems.append("not on the pushed commit")
+    if problems:  # why, when Argo says: its error conditions (a render error reads as a stuck app otherwise)
+        problems += [f"{c['type']}: {(c.get('message') or '')[:300]}" for c in status.get("conditions") or []
+                     if str(c.get("type", "")).endswith("Error")]
     return problems
+
+
+def comparison_errors(apps):
+    """The apps whose manifests Argo could not generate: their names."""
+    return {x["metadata"]["name"] for x in apps["items"]
+            if any(c.get("type") == "ComparisonError" for c in (x.get("status") or {}).get("conditions") or [])}
+
+
+def hard_refresh(kubeconfig, name):
+    """Argo regenerates the app's manifests past its repo-server's cache (a paused generation serves a cached error)."""
+    out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "annotate", "applications.argoproj.io",
+                          name, "argocd.argoproj.io/refresh=hard", "--overwrite"], capture_output=True, text=True,
+                         timeout=60)
+    return out.returncode == 0
 
 
 def node_shutdown_leftover(status):
@@ -327,7 +348,9 @@ def main():
 
     deadline = time.monotonic() + a.minutes * 60
     first, last, streak = None, None, 0
+    erring, refreshed = {}, set()  # polls running with a ComparisonError per app; the apps hard-refreshed
     while True:
+        apps = None  # this poll's (a failed poll has none: no app counted erring from it)
         try:
             apps = kubectl(a.kubeconfig, "-n", "argocd", "get", "applications.argoproj.io", "-o", "json")
             pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json"), a.ignore_namespaces)
@@ -336,6 +359,13 @@ def main():
             line = summary(apps, problems, not_ready, allowed)
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             green, problems, not_ready, restarts, line = False, {}, [], last or {}, f"poll failed: {e}"
+        if apps is not None:
+            errs = comparison_errors(apps)
+            erring = {n: erring.get(n, 0) + 1 for n in errs}
+            for n in sorted(n for n, k in erring.items() if k >= 2 and n not in refreshed):
+                refreshed.add(n)
+                print(f"HARD REFRESH {n}: a ComparisonError two polls running -"
+                      f" {'requested' if hard_refresh(a.kubeconfig, n) else 'refused by kubectl'}", flush=True)
         first = first if first is not None else restarts
         churn = restarted(last, restarts) if last is not None else []
         last = restarts
