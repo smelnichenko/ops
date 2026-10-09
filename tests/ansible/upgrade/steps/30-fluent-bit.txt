@@ -1,6 +1,11 @@
-# Fluent Bit 4.2.3.1 -> 4.2.8 (patch releases; 5.x is a later step). infra upgrade/30-fluent-bit.
-# outage: log shipping pauses while it rolls (it resumes from its position)
+# Fluent Bit 4.2.3.1 -> 4.2.8 (patch releases; 5.x is a later step). infra upgrade/30-fluent-bit also moves its
+# positions and buffer from an emptyDir to the node's disk (/var/lib/fluent-bit) and keeps a chunk however long
+# ClickHouse is down (no retry limit, the buffer bounded at 512M) - options of platform's chart from its
+# upgrade/30-fluent-bit, merged first: their defaults render as before
+# outage: log shipping pauses while it rolls, and the lines written meanwhile are lost this once: the positions start
+# empty on the node's disk, read from the files' ends. From then on a roll resumes from its position
 # abort: revert the step's merge on main (Argo syncs back)
 image cr.fluentbit.io/fluent/fluent-bit 4.2.3.1 => image cr.fluentbit.io/fluent/fluent-bit 4.2.8
-# its change: the branch upgrade/30-fluent-bit in infra
+# its change: the branch upgrade/30-fluent-bit in platform (the chart's options, rendering as before), then infra
+branch platform
 branch infra
