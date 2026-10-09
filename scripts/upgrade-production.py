@@ -523,13 +523,14 @@ def own_change(repo_dir, base, tip):
 
 
 def own_hash(diff):
-    """own_change's hash of a `git diff -U0 --binary`: every line but the hunks' positions (@@) and the files' blob
-    names (index ...), which a moved main changes for the same change - the file headers, modes, renames, the changed
-    lines and a binary file's patch all count."""
+    """own_change's hash of a `git diff -U0 --binary`: every line but the hunks' positions (@@'s numbers) and the
+    files' blob names (index ...), which a moved main changes for the same change - the file headers, modes, renames,
+    each hunk's section heading (git's function context: the same lines under another YAML key are another change),
+    the changed lines and a binary file's patch all count."""
     h = hashlib.sha256()
     for line in diff.splitlines():
         if line.startswith("@@"):
-            line = "@@"
+            line = "@@" + line.split("@@", 2)[2] if line.count("@@") >= 2 else "@@"
         elif line.startswith("index "):
             continue
         h.update(line.encode() + b"\n")

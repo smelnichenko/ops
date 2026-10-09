@@ -178,8 +178,8 @@ check("ledger lines parse", m.parse_events("2026-10-06T08:00:00Z 47-postgres-18 
       [(T0, "47-postgres-18", "merged", ["infra", "abc"])])
 
 # the own-change hash: the same change rebased (other line numbers) is the same; another change, file or line is not
-D = lambda path, at, lines: (f"diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n"
-                             f"@@ -{at} +{at} @@\n" + "".join(l + "\n" for l in lines))
+D = lambda path, at, lines, section="": (f"diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n"
+                                         f"@@ -{at} +{at} @@{section}\n" + "".join(l + "\n" for l in lines))
 base = m.own_hash(D("values.yaml", 10, ["-  image: a:1", "+  image: a:2"]))
 check("own: the same change at another line",
       m.own_hash(D("values.yaml", 42, ["-  image: a:1", "+  image: a:2"])), base)
@@ -189,6 +189,11 @@ check("own: a line more differs",
       m.own_hash(D("values.yaml", 10, ["-  image: a:1", "+  image: a:2", "+  pull: Always"])) != base, True)
 check("own: other blob names (a moved main) - the same", m.own_hash(D("values.yaml", 10, ["-  image: a:1",
       "+  image: a:2"]).replace("index 1..2", "index 7..9")), base)
+# the same lines under another section (git's function context: the hunk's heading, a YAML top-level key) are another
+# change - a value moved from one component to another hashed the same; the heading kept, its numbers not
+sec = lambda name, at: m.own_hash(D("values.yaml", at, ["-  image: a:1", "+  image: a:2"], f" {name}:"))
+check("own: the same lines under another section differ", sec("grafana", 10) != sec("mimir", 10), True)
+check("own: the same section at another line - the same", sec("grafana", 10), sec("grafana", 77))
 mode = lambda new: f"diff --git a/s.sh b/s.sh\nold mode 100644\nnew mode {new}\n"
 check("own: a mode change counts", m.own_hash(mode("100755")) != m.own_hash(mode("100644")), True)
 binary = lambda data: (f"diff --git a/i.png b/i.png\nindex 1..2 100644\nGIT binary patch\nliteral 4\n{data}\n\n"

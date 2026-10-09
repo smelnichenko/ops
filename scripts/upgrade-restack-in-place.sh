@@ -24,7 +24,13 @@ fi
   && { echo "$repo: a rebase is in progress - finish it first"; exit 1; }
 declare -A old
 while read -r b s; do old[$b]=$s; done < "$state"
-own() { git diff -U0 "$1" "$2" | grep -E '^[-+]' | grep -vE '^(---|\+\+\+) ' | sha256sum | cut -c1-16; }
+# a step's own change: its changed lines with each hunk's section heading (git's function context - the same lines
+# under another YAML key are another change), not the hunks' line numbers (a restack moves them)
+own() {
+  git diff -U0 "$1" "$2" \
+    | awk '/^@@/ {sub(/^@@ [^@]* @@/, "@@"); print; next} /^[-+]/ && !/^(---|\+\+\+) / {print}' \
+    | sha256sum | cut -c1-16
+}
 prev=main; moved=0
 for b in "${heads[@]}"; do
   # a step production merged already (tagged by scripts/upgrade-merge-step.sh) is in main: nothing to put back, and
