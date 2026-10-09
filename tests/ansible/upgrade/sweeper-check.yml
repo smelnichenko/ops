@@ -1,0 +1,221 @@
+---
+# The stale PR environment sweeper (infra: argocd/extras/stale-pr-envs-cronjob.yaml) against the copy's real Vault,
+# after the step that moves it (its sweeper-check line) - production's case first:
+#   1. its stored token dead (production's died unrenewed): a run fails, saying so - never a quiet "nothing to purge";
+#   2. setup-vault-cleanup-policy.yml (the step's playbook line, run again here) replaces the dead token; once External
+#      Secrets brings it over, a run renews it and purges every key of a preview prefix with no live app (a nested one
+#      too), and nothing else;
+#   3. a CA that did not sign Vault's certificate in argocd/vault-pi-ca: a run fails (TLS), saying so - Vault is read
+#      verified, never with curl -k. The CA is put back.
+# Each run is a Job made from the CronJob, waited for (bounded) and deleted. The stub-driven cases of the script itself
+# (prune rules, times, failures) are infra's tests/stale-pr-envs-sweeper.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/sweeper-check.yml
+#        [-e sweeper_cronjob=<another CronJob made from the same manifest>]
+- name: The copy's Vault - preview keys to purge, a key to keep, the stored token killed
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    # schnappy-pr-990: no Application has that PR number on the copy
+    - name: Seed preview keys (one nested) and kill the stored cleanup token, as production's is
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+          VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
+          vault kv put secret/schnappy-pr-990/app seeded=1 > /dev/null
+          vault kv put secret/schnappy-pr-990/db/owner seeded=1 > /dev/null
+          vault kv put secret/schnappy/sweeper-check-keep seeded=1 > /dev/null
+          t=$(vault kv get -field=token secret/argocd/vault-cleanup-token)
+          printf '%s' "$t" | sha256sum | cut -c1-64 > /root/.sweeper-check-dead
+          # the token on stdin (`vault write ... token=-`; `vault token revoke -` takes "-" for the token itself)
+          printf '%s' "$t" | vault write auth/token/revoke token=- > /dev/null
+          # dead by Vault's own word
+          ! printf '%s' "$t" | vault write auth/token/lookup token=- > /dev/null 2>&1
+      no_log: true
+      changed_when: true
+
+    - name: Vault's CA (put back after the wrong-CA run)
+      ansible.builtin.slurp:
+        src: /etc/vault.d/tls/ca-cert.pem
+      register: _vault_ca
+
+- name: A dead token - the run fails, said
+  hosts: target
+  become: true
+  gather_facts: false
+  vars: &sweeper_vars
+    kubectl: "kubectl --kubeconfig /etc/kubernetes/admin.conf -n argocd"
+    sweeper_cronjob: stale-pr-envs-sweeper
+    # one run: a Job from the CronJob, waited for up to 6 minutes (backoffLimit 1: a failing run runs twice), its result
+    # ("RESULT Complete|Failed|none") and its log; the Job deleted
+    run_sweeper: |
+      set -euo pipefail
+      job=sweeper-check-$(date +%s)
+      {{ kubectl }} create job "$job" --from=cronjob/{{ sweeper_cronjob }} > /dev/null
+      trap '{{ kubectl }} delete job "$job" --wait=false > /dev/null 2>&1 || true' EXIT
+      end=$(( $(cut -d. -f1 /proc/uptime) + 360 ))
+      st=""
+      while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+        st=$({{ kubectl }} get job "$job" -o jsonpath='{range .status.conditions[?(@.status=="True")]}{.type} {end}')
+        case " $st " in *" Complete "*|*" Failed "*) break ;; esac
+        sleep 5
+      done
+      case " $st " in *" Complete "*) echo "RESULT Complete" ;; *" Failed "*) echo "RESULT Failed" ;; *) echo "RESULT none" ;; esac
+      {{ kubectl }} logs "job/$job" --all-containers 2>&1 | tail -60
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Run the sweeper with the dead token
+      ansible.builtin.shell:
+        cmd: "{{ run_sweeper }}"
+        executable: /bin/bash
+      register: _dead
+      changed_when: true
+
+    - name: It failed, saying Vault refused its token, and purged nothing
+      ansible.builtin.assert:
+        that:
+          - "'RESULT Failed' in _dead.stdout_lines"
+          - "_dead.stdout is search('auth/token/renew-self: 403')"
+          - "_dead.stdout is not search('purge secret/')"
+        fail_msg: "{{ _dead.stdout_lines }}"
+
+- name: The cleanup token replaced (the step's playbook line again)
+  ansible.builtin.import_playbook: ../../../deploy/ansible/playbooks/setup-vault-cleanup-policy.yml
+
+- name: The new token is another, and it lives
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Its hash, checked against the dead one's (neither printed)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+          VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
+          t=$(vault kv get -field=token secret/argocd/vault-cleanup-token)
+          printf '%s' "$t" | vault write auth/token/lookup token=- > /dev/null
+          h=$(printf '%s' "$t" | sha256sum | cut -c1-64)
+          [ "$h" != "$(cat /root/.sweeper-check-dead)" ]
+          echo "$h"
+      register: _new_token_hash
+      changed_when: false
+
+- name: The new token - a run renews it, purges the preview keys, keeps the rest; a wrong CA fails
+  hosts: target
+  become: true
+  gather_facts: false
+  vars: *sweeper_vars
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: External Secrets brings the new token over (force-synced; its hash only compared)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} annotate externalsecret vault-cleanup-token force-sync="$(date +%s)" --overwrite > /dev/null
+          {{ kubectl }} get secret vault-cleanup-token -o jsonpath='{.data.token}' | base64 -d | sha256sum | cut -c1-64
+      register: _synced
+      changed_when: true
+      retries: 24
+      delay: 5
+      until: _synced.rc == 0 and _synced.stdout == hostvars['pi1']['_new_token_hash'].stdout
+
+    - name: Run the sweeper with the live token
+      ansible.builtin.shell:
+        cmd: "{{ run_sweeper }}"
+        executable: /bin/bash
+      register: _live
+      changed_when: true
+
+    - name: It completed, renewed the token first, purged both preview keys
+      ansible.builtin.assert:
+        that:
+          - "'RESULT Complete' in _live.stdout_lines"
+          - "_live.stdout is search('token renewed for [0-9]+ s')"
+          - "'[vault-gc] purge secret/schnappy-pr-990/app' in _live.stdout_lines"
+          - "'[vault-gc] purge secret/schnappy-pr-990/db/owner' in _live.stdout_lines"
+        fail_msg: "{{ _live.stdout_lines }}"
+
+    - name: A CA that did not sign Vault's certificate (the cluster's own) - the run fails on TLS; Vault's put back
+      block:
+        - name: The cluster's CA in argocd/vault-pi-ca
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              {{ kubectl }} create secret generic vault-pi-ca --from-file=ca.crt=/etc/kubernetes/pki/ca.crt \
+                --dry-run=client -o yaml | {{ kubectl }} replace -f - > /dev/null
+          changed_when: true
+
+        - name: Run the sweeper against the wrong CA
+          ansible.builtin.shell:
+            cmd: "{{ run_sweeper }}"
+            executable: /bin/bash
+          register: _wrong_ca
+          changed_when: true
+
+        - name: It failed on Vault's certificate, saying so
+          ansible.builtin.assert:
+            that:
+              - "'RESULT Failed' in _wrong_ca.stdout_lines"
+              - "_wrong_ca.stdout is search('SSL certificate problem')"
+            fail_msg: "{{ _wrong_ca.stdout_lines }}"
+      always:
+        - name: Vault's CA back in argocd/vault-pi-ca
+          kubernetes.core.k8s:
+            kubeconfig: /etc/kubernetes/admin.conf
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: vault-pi-ca
+                namespace: argocd
+              data:
+                ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
+
+- name: Vault after the runs - the preview keys gone, the rest kept, the token renewed
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Read the keys and the token's last renewal
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
+          VAULT_TOKEN=$(cat /etc/vault-unseal/root-token); export VAULT_TOKEN
+          for k in schnappy-pr-990/app schnappy-pr-990/db/owner schnappy/sweeper-check-keep; do
+            if vault kv metadata get "secret/$k" > /dev/null 2>&1; then echo "kept $k"; else echo "gone $k"; fi
+          done
+          vault kv get -field=token secret/argocd/vault-cleanup-token \
+            | vault write -format=json auth/token/lookup token=- | python3 -c 'import json, sys; print("renewed", json.load(sys.stdin)["data"].get("last_renewal_time") is not None)'
+          vault kv metadata delete secret/schnappy/sweeper-check-keep > /dev/null
+          rm -f /root/.sweeper-check-dead
+      register: _after
+      changed_when: true
+
+    - name: The preview keys gone, the other kept, the token renewed by the run
+      ansible.builtin.assert:
+        that:
+          - _after.stdout_lines == ['gone schnappy-pr-990/app', 'gone schnappy-pr-990/db/owner',
+            'kept schnappy/sweeper-check-keep', 'renewed True']
+        fail_msg: "{{ _after.stdout_lines }}"
