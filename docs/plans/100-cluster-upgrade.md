@@ -53,7 +53,7 @@ Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.is
 | versitygw (cluster, Pi) | 1.6.0 | 1.8.0 | cluster first, Pi outside 02:00–04:00 |
 | local-path-provisioner | 0.0.35 | 0.0.37 | direct (Rancher's manifest, applied by setup-kubeadm.yml - no chart) |
 | kube-prometheus-stack | 82.16.0 (Prometheus 3.10, operator 0.89) | 91.8.2 (3.15, 0.94.1) | direct, CRDs by Argo |
-| Alertmanager / blackbox / ksm | 0.31.1 / 0.27.0 / 2.18.0 | 0.34.1 / 0.28.0 / 2.20.0 | direct |
+| Alertmanager / blackbox / ksm | 0.31.1 / 0.27.0 / 2.18.0 | 0.34.1 / 0.29.0 / 2.20.0 | direct |
 | Grafana | 12.4.2 | 13.2.3 | 12.4.12 → 13.2.3 |
 | Mimir | 2.17.8 | 3.2.1 | 2.17.11 → 3.0 → 3.1 → 3.2 |
 | Tempo | 2.7.2 | 3.1.0 | one-way; config rewrite |
@@ -347,7 +347,7 @@ The steps (generated from tests/ansible/upgrade/steps - the step files are the s
 | 42 | kubernetes-1.35 | Kubernetes 1.34.12 -> 1.35.9 (the next minor; after containerd 2) | infra + playbook | etcd |
 | 43 | kubernetes-1.36 | Kubernetes 1.35.9 -> 1.36.5, the last platform step (Istio 1.31 and Cilium 1.20 support 1.36; nothing here sup... | infra + playbook | etcd |
 | 44 | eso-2.11 | External Secrets 2.2.0 -> 2.11.0, CRDs with it through Argo (step 41) | infra | - |
-| 45 | alertmanager-blackbox-ksm | Alertmanager 0.31.1 -> 0.34.1, blackbox exporter 0.27.0 -> 0.28.0 (its config reloader to the operator's v0.94... | platform | - |
+| 45 | alertmanager-blackbox-ksm | Alertmanager 0.31.1 -> 0.34.1, blackbox exporter 0.27.0 -> 0.29.0 (its config reloader to the operator's v0.94... | platform | - |
 | 46 | postgres-18-test | PostgreSQL 17 -> 18.6 in the test environment, before production's (operator 2026-10-05) | infra + platform + playbook | postgres |
 | 47 | postgres-18 | PostgreSQL 17 -> 18.6, CNPG's offline in-place major upgrade (operator 2026-10-01, option A) | infra + platform + playbook | postgres |
 | 48 | valkey-9.1-test | Valkey 8.1 -> 9.1.2, pinned, in the test environment (infra) and the chart default PR environments use (platfo... | infra + platform | - |
