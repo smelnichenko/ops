@@ -42,6 +42,8 @@
     upgrade_backup_endpoint: "{{ upgrade_backup_endpoint_override | default('http://' ~ keepalived_vip ~ ':9000') }}"
     upgrade_backup_bucket: upgrade-backups
     local_dir: /var/backups/upgrade
+    # a Pi of the backup store: its free space read before each copy (tasks/upgrade-backup-space.yml)
+    upgrade_backup_store_host: "{{ groups['pis'] | first }}"
     # the store's credentials for curl, only root reads it: never on a command line or in the environment
     store_curl: "{{ local_dir }}/.store-credentials.curl"
     stores: [postgres, clickhouse, grafana, kafka, gateway, scylla, etcd]

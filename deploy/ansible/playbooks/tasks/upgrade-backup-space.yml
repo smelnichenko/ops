@@ -7,7 +7,11 @@
 # also leave it under the kubelet's image GC threshold less 5 (read from its configz, as tasks/image-store-room.yml
 # does): the merge's pre-pull refuses past that - a copy ending between 80% and 85% passed here and blocked the merge.
 #
-# Expects: space_dirs (one or more directories on this host), local_dir, upload_part_bytes, kubeconfig.
+# The Pi backup store, which the copy is uploaded to, keeps 10% of its volume free after it (the gateway's own backend
+# directory, from its unit on upgrade_backup_store_host): a full store stops CNPG's WAL archiving into it too.
+#
+# Expects: space_dirs (one or more directories on this host), local_dir, upload_part_bytes, kubeconfig,
+# upgrade_backup_store_host (a Pi of the store).
 - name: "Space - room in the local directory for a copy of: {{ space_dirs | join(', ') }}"
   ansible.builtin.shell:
     executable: /bin/bash
@@ -45,3 +49,22 @@
   register: _space
   changed_when: false
   failed_when: _space.rc != 0 or space_dirs | length == 0
+
+- name: "Space - room in the Pi backup store for that copy, 10% of its volume kept free"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      # the gateway's own backend directory: its unit's last argument
+      dir=$(systemctl show -p ExecStart --value versitygw | sed -n 's/.*argv\[\]=\([^;]*\);.*/\1/p' | awk '{print $NF}')
+      [ -n "$dir" ] || { echo "the gateway's backend directory unread (its unit)"; exit 1; }
+      read -r avail size < <(df --output=avail,size -B1 "$dir" | tail -n 1)
+      src={{ _space.stdout | regex_findall('sources ([0-9]+) bytes') | first }}
+      keep=$(( size / 10 ))
+      echo "the Pi store ($dir): $avail of $size bytes free, the copy at most $src, 10% kept: $keep"
+      [ $(( avail - src )) -ge "$keep" ] \
+        || { echo "the Pi store would keep $(( avail - src )) bytes free, under 10% of its volume ($keep)"; exit 1; }
+  delegate_to: "{{ upgrade_backup_store_host }}"
+  register: _store_space
+  changed_when: false
+  check_mode: false  # a read: a preview runs it
