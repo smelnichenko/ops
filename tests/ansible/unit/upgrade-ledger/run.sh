@@ -210,8 +210,10 @@ check("between 47's merges: postgresql:17 not judged, 18 not yet, the rest as be
 # a no - or no terminal - runs nothing and records nothing
 def done_calls(step, answer, events=()):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record",
-                                                   "proof_problems", "ten_now")}
+                                                   "proof_problems", "ten_now", "merged_live_problems")}
     m.ten_now = lambda: "2026-10-07T10:00:00Z"
+    # the merge live on origin/main: read in the step's repos beside ops (CI's checkout has none) - not this test's
+    m.merged_live_problems = lambda *a: []
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: (None, 0)

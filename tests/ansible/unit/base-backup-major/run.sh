@@ -45,6 +45,8 @@ m.soak_state = lambda *a: (None, 0)
 m.check = lambda *a, **k: True
 m.record = lambda *a, **k: None
 m.ten_now = lambda: "2026-10-07T10:00:00Z"
+# the merge live on origin/main: read in the step's repos beside ops (CI's checkout has none) - not this test's
+m.merged_live_problems = lambda *a: []
 try:
     m.done("47-postgres-18")
 except SystemExit:
