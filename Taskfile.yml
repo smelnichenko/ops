@@ -192,7 +192,9 @@ tasks:
     cmds:
       - python3 -m venv venv
       - venv/bin/pip install -q -r requirements.txt
-      - venv/bin/ansible-galaxy collection install -r requirements.yml -p collections
+      # --force: galaxy skips a collection the ansible package bundles ("already installed"), and the project's path -
+      # what ansible.cfg loads first, what the check reads - then lacks it
+      - venv/bin/ansible-galaxy collection install -r requirements.yml -p collections --force
 
   # bootstrap's vault-eso alone: Vault's Kubernetes auth written for the kube context's cluster (refused unless it is
   # the one the Pi Vault serves), External Secrets' login on it proven, then the old reviewer token deleted

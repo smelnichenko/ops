@@ -79,6 +79,13 @@ check("--check: a collection at another version - failed, named", (r.returncode,
 os.remove(os.path.join(root, "collections/ansible_collections/community/general/MANIFEST.json"))
 r = av("--check")
 check("--check: a collection missing - failed, named", (r.returncode, "community.general" in r.stderr), (1, True))
+# deploy:install puts every pinned collection into the project's path: galaxy skips one the ansible package bundles
+# ("already installed") and the check reads the project's path alone - kubernetes.core and community.hashi_vault were
+# never installed there, and proof-start refused the run (2026-10-10)
+inst = yaml.safe_load(open("Taskfile.yml"))["tasks"]["deploy:install"]["cmds"]
+galaxy = [c for c in inst if "ansible-galaxy collection install" in str(c)]
+check("deploy:install forces the pinned collections into the project's path",
+      [("-p collections" in str(c), "--force" in str(c)) for c in galaxy], [(True, True)])
 print("ansible-pins: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
