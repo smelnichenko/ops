@@ -1386,10 +1386,20 @@ m.write_json(os.path.join(_mw, "p.json"), {"step": "x"})
 check("write_json leaves the proof 0644, as a plain write would", oct(os.stat(os.path.join(_mw, "p.json")).st_mode & 0o777),
       "0o644")
 __import__("shutil").rmtree(_mw)
-src = open("scripts/upgrade-production.py").read()
-check("the proof and run.json both written by write_json, no other write of either in place",
-      (src.count('write_json(proof_path(step), proof'), src.count('write_json(os.path.join(PROVEN, "run.json")'),
-       src.count('open(proof_path(step), "w")'), src.count('open(os.path.join(PROVEN, "run.json"), "w")')), (1, 1, 0, 0))
+import ast as _ast
+_src = open("scripts/upgrade-production.py").read()
+_proven = lambda node: any(w in _ast.get_source_segment(_src, node) for w in ("PROVEN", "proof_path"))
+_writes, _opens = [], []
+for _n in _ast.walk(_ast.parse(_src)):
+    if isinstance(_n, _ast.Call) and isinstance(_n.func, _ast.Name) and _n.args:
+        if _n.func.id == "write_json" and _proven(_n.args[0]):
+            _writes.append(_ast.get_source_segment(_src, _n.args[0]))
+        mode = _n.args[1] if len(_n.args) > 1 else next((k.value for k in _n.keywords if k.arg == "mode"), None)
+        if _n.func.id == "open" and isinstance(mode, _ast.Constant) and set(str(mode.value)) & set("wax") \
+           and _proven(_n.args[0]):
+            _opens.append(_ast.get_source_segment(_src, _n.args[0]))
+check("every write of a proof or run.json through write_json (run.json, each step's, the complete mark), none in place",
+      (len(_writes), _opens), (3, []))
 print("upgrade-ledger: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 EOF
