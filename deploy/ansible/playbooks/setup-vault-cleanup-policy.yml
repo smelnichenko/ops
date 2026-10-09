@@ -127,7 +127,8 @@
     - name: The stored token lives, or Vault calls it dead
       ansible.builtin.assert:
         that: _token_lookup is skipped or _token_lookup.status == 200 or 'bad token' in (_token_lookup.json.errors | default([]))
-        fail_msg: "Vault's token lookup answered {{ _token_lookup.status }} {{ _token_lookup.json.errors | default('') }}"
+        # rendered even when the assert passes (ansible-core 2.20): a skipped lookup has neither
+        fail_msg: "Vault's token lookup answered {{ _token_lookup.status | default('-') }} {{ (_token_lookup.json | default({})).errors | default('') }}"
         quiet: true
 
     - name: Issue new periodic token bound to {{ policy_name }}

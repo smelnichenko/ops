@@ -46,5 +46,22 @@ store = t["Store cleanup token at secret/argocd/vault-cleanup-token"]
 print(look["ansible.builtin.uri"]["url"].endswith("/v1/auth/token/lookup"), look.get("check_mode") is False,
       look["ansible.builtin.uri"]["status_code"] == [200, 403], "_token_lookup.status | default(200) == 403" in issue["when"],
       "not ansible_check_mode" in store["when"], look.get("no_log") is True)')" "True True True True True True"
+# the stored token's check as Ansible finalizes it - fail_msg rendered even when the assert passes (ansible-core 2.20):
+# a first install has no stored token (the lookup skipped), a dead one answers 403, a live one 200
+check "the token check: no token yet (lookup skipped), live, dead - passes, rendered; another answer refused" "$("$PY" -c '
+import sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition, render
+t = {x["name"]: x for x in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-cleanup-policy.yml"))[0]["tasks"]}
+a = t["The stored token lives, or Vault calls it dead"]["ansible.builtin.assert"]
+out = []
+for look in ({"skipped": True, "changed": False}, {"status": 200, "json": {}}, {"status": 403, "json": {"errors": ["bad token"]}},
+             {"status": 403, "json": {"errors": ["permission denied"]}}):
+    try:
+        render(a["fail_msg"], _token_lookup=look)
+        out.append(condition(a["that"], _token_lookup=look))
+    except Exception as e:
+        out.append("error: " + type(e).__name__)
+print(out)')" "[True, True, True, False]"
 echo "sweeper-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
