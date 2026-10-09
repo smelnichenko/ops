@@ -332,6 +332,29 @@ def claim_problems(step, obj):
     return [f"this run's claim on {step} was closed meanwhile (deploy:upgrade:release?)"]
 
 
+class Interrupted(BaseException):
+    """A signal while the phase's work ran on ten or the Pis (host_work): that work may still run there - Ansible's
+    tasks go over pipelined ssh, which signals no remote command, and a detached copy runs on by design. main() leaves
+    the phase's start open: the next phase refuses until nothing runs there and the start is released."""
+
+
+def host_work(cmd, **kw):
+    """A phase's work on ten or the Pis (ansible-playbook, the step's playbook lines, the merge script), run to its own
+    end: a Ctrl-C or a TERM does not kill it mid-way - subprocess KILLed ansible-playbook a quarter second after one,
+    its remote tasks running on. A Ctrl-C reaches it with this process (the terminal's process group: ansible-playbook
+    ends its own run); the signal is kept, and once it ended the phase ends Interrupted."""
+    got = []
+    kept = {s: signal.signal(s, lambda n, _f: got.append(n)) for s in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        out = subprocess.run(cmd, text=True, **kw)
+    finally:
+        for s, h in kept.items():
+            signal.signal(s, h)
+    if got:
+        raise Interrupted(signal.Signals(got[0]).name)
+    return out
+
+
 class LedgerConflict(Exception):
     """A ledger write kubectl refused on a Conflict: the ledger changed since its read, nothing written. main() ends
     the run with its message."""
@@ -951,10 +974,29 @@ def ledger_for(step, phase, arg=None):
     obj, events = read_ledger()
     info = step_info(step) if step in names else None
     refuse(problems(names, step, phase, events, info, arg))
-    token = f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
+    token = claim_token()
     record(step, "start", phase, *([arg] if arg else []), token, obj=obj)
     CLAIMED.append((step, phase, token))
     return names, events, info
+
+
+def claim_token():
+    """A claim's token: host:pid:nonce:process group - its end closes only its own start, and release refuses while a
+    process of its group (an ansible-playbook or merge script of a run killed outright) is alive on its host."""
+    return f"{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}:{os.getpgrp()}"
+
+
+def group_alive(pgid):
+    """Whether a process of process group `pgid` is alive here."""
+    for d in os.listdir("/proc"):
+        if d.isdigit():
+            try:
+                stat = open(f"/proc/{d}/stat").read()
+            except OSError:
+                continue
+            if stat[stat.rindex(")") + 2:].split()[2] == str(pgid):
+                return True
+    return False
 
 
 def release(step):
@@ -964,18 +1006,23 @@ def release(step):
     if not started:
         sys.exit(f"{step} has no open start")
     token = started[1][-1]
-    host, pid = (token.split(":") + ["", ""])[:2]
+    host, pid, _, pgid = (token.split(":") + ["", "", "", ""])[:4]
     if host == socket.gethostname() and pid.isdigit() and os.path.exists(f"/proc/{pid}/cmdline") \
             and "upgrade-production" in open(f"/proc/{pid}/cmdline").read():
         sys.exit(f"REFUSED: the run that started {step}'s {started[1][0]} (pid {pid}) is alive here - stop it first")
+    # the run killed outright: its ansible-playbook or merge script, in its process group, may live on
+    if host == socket.gethostname() and pgid.isdigit() and group_alive(pgid):
+        sys.exit(f"REFUSED: a process of the run that started {step}'s {started[1][0]} (process group {pgid}) is alive "
+                 "here - its ansible-playbook or merge script; let it end first")
     refuse([] if confirm(f"Nothing runs {step}'s {' '.join(started[1])} (started {started[0]:%Y-%m-%d %H:%M} UTC) "
-                         "any more - close it?") else ["not confirmed"])
+                         "any more - here, and on ten and the Pis (pgrep -af 'ansible|AnsiballZ|kubeadm|upgrade' there "
+                         "finds none of it) - close it?") else ["not confirmed"])
     record(step, "end", started[1][0], "released", token, obj=obj)
 
 
 def ansible(*args):
-    return run(["venv/bin/ansible-playbook", "-i", "inventory/production.yml", *args],
-               cwd=os.path.join(OPS, "deploy", "ansible"), stdin=subprocess.DEVNULL).returncode == 0
+    return host_work(["venv/bin/ansible-playbook", "-i", "inventory/production.yml", *args],
+                     cwd=os.path.join(OPS, "deploy", "ansible"), stdin=subprocess.DEVNULL).returncode == 0
 
 
 def last_done_out_of_sync(events):
@@ -1024,7 +1071,7 @@ def preview(step):
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
                           done=applied_steps(events)))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
-    refuse([] if run([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
+    refuse([] if host_work([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
 
 
@@ -1049,7 +1096,7 @@ def merge(step, repo):
             # pushed by an earlier run cut short before its tag (its change checked above): tagged, recorded - nothing
             # asked or pushed again
             print(f"{repo}: {step} was pushed already (no {MERGED_TAG}{step} yet) - tagging it, recording it")
-            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up", tip])
+            refuse([] if host_work([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up", tip])
                    .returncode == 0 else [f"the {repo} take-up failed (above)"])
         else:
             # checked and shown against production's main: a local main behind origin's (CD pushed meanwhile) showed
@@ -1088,8 +1135,8 @@ def merge(step, repo):
             # the claim read again right before the push: released by hand during the yes, the pre-pull or the flush
             # (the run looked dead), the change would go live under no claim - the next record refuses only after it
             refuse([f"{p} - nothing merged" for p in claim_problems(step, read_ledger()[0])])
-            refuse([] if run([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]).returncode == 0
-                   else [f"the {repo} merge failed (above)"])
+            merge_step = [os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]
+            refuse([] if host_work(merge_step).returncode == 0 else [f"the {repo} merge failed (above)"])
         sha = run(["git", "-C", d, "rev-parse", MERGED_TAG + step + "^{commit}"], capture_output=True,
                   check=True).stdout.strip()
         record(step, "merged", repo, sha)
@@ -1136,7 +1183,7 @@ def playbooks(step):
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
                           done=applied_steps(events)))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
-    refuse([] if run([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
+    refuse([] if host_work([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")
 
 
@@ -1297,10 +1344,16 @@ def main():
         sys.exit(__doc__)
     if a[0] == "merge" and a[2] not in REPOS:
         sys.exit("merge <step> <infra|platform>")
-    result, reason = "failed", None
+    result, reason, left_open = "failed", None, False
     try:
         fn(*a[1:])
         result = "passed"
+    except Interrupted as e:  # its work may run on there: the start stays open, said so
+        left_open = True
+        steps = ", ".join(sorted({s for s, _, _ in CLAIMED})) or "the step"
+        print(f"INTERRUPTED ({e}) while the phase's work ran on ten or the Pis: that work may still run there - its "
+              f"start left open; once nothing of it runs there: task deploy:upgrade:release STEP={steps}")
+        raise SystemExit(130) from None
     except LedgerConflict as e:  # a write refused: the run ends with its message, as a refusal does
         reason = str(e)
         raise SystemExit(reason) from None
@@ -1314,7 +1367,7 @@ def main():
     finally:
         # an end that cannot be written fails the run, whatever the phase's result (the next start then refuses on the
         # open claim); a claim released meanwhile has its end written already
-        for step, phase, token in CLAIMED:
+        for step, phase, token in ([] if left_open else CLAIMED):
             # a write refused on a Conflict (the ledger changed since its read - this run's own late write that
             # committed, another phase's record) made nothing: read again, the claim checked, written again - three
             # times at most. One that may have been made (its connection gone) is not written twice

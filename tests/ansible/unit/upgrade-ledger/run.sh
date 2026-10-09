@@ -325,7 +325,8 @@ ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its argument
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
                 pushed=None, revs=None, ten_out="abc1234", vault=()):
-    calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "ansible", "record", "settled",
+    calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "host_work", "ansible", "record",
+                       "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
                        "ten", "image_pins", "read_ledger", "vault_login_problems")
     saved = {k: getattr(m, k) for k in keep}
@@ -345,7 +346,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
             ref = cmd[-1].removesuffix("^{commit}")
             return type("R", (), {"returncode": 0, "stdout": revs.get(ref, "abc1234")})()
         return _Done()
-    m.run = fake_run
+    m.run = m.host_work = fake_run  # the merge script and the step playbooks are host work: recorded as runs
     m.ansible = lambda *a: calls.append(("ansible", a[0])) or ANSIBLE_ARGS.append(list(a)) or ansible_ok
     m.record = lambda st, ev, *a: calls.append(("record", ev))
     m.settled = lambda minutes, *a, **k: calls.append(("settled", minutes)) or (True, dict.fromkeys(m.URLS.values(), "r"),
@@ -873,21 +874,32 @@ def main_ends(code, released=False, write_fails=False, read_fails=False):
     argv = sys.argv
     sys.argv = ["x", "begin", S47]
     exit_code = None
-    err = io.StringIO()
+    err, out = io.StringIO(), io.StringIO()
     try:
-        with contextlib.redirect_stderr(err):
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
             m.main()
     except SystemExit as e:
         exit_code = e.code
-    except Exception as e:  # a phase's exception, its end written: main raises it on
+    except BaseException as e:  # noqa: B036 - a phase's exception (a Ctrl-C too), its end written: main raises it on
         exit_code = repr(e)
     finally:
-        MAIN_OUT.update(err=err.getvalue(), exit=exit_code)
+        MAIN_OUT.update(err=err.getvalue(), out=out.getvalue(), exit=exit_code)
         sys.argv = argv
         m.CLAIMED.clear()
         for k, v in saved.items():
             setattr(m, k, v)
     return ends, exit_code in (None, 0)
+# a signal while the phase's work ran on ten or the Pis (host_work: Ansible's tasks over pipelined ssh get no signal,
+# a detached copy runs on by design): its start left open - the next phase refuses until nothing runs there and it is
+# released; said so, the run failed. Outside such work a Ctrl-C ends it failed, as any failure
+Interrupted = getattr(m, "Interrupted", None)
+got = main_ends(Interrupted("SIGINT")) if Interrupted else None
+said = MAIN_OUT.get("err", "") + MAIN_OUT.get("out", "")
+check("interrupted while its work ran on the hosts: no end written, the run failed", got, ([], False))
+check("  said: its work may still run there, release once nothing does",
+      ("may still run" in said and "deploy:upgrade:release" in said) if Interrupted else None, True)
+check("a Ctrl-C outside host work: its end recorded failed", main_ends(KeyboardInterrupt())[0],
+      [(S47, "end", "begin", "failed", "host:1:aa")])
 check("a phase that passes: its end recorded passed, with its claim's token", main_ends(0),
       ([(S47, "end", "begin", "passed", "host:1:aa")], True))
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
@@ -995,7 +1007,8 @@ check("released, and another phase claimed it: refused", recorded(
 # flush (its run looked dead) pushes nothing - the next write would refuse only after the change went live
 def merged_by(released_at_confirm):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "proof_problems", "registry_problems", "step_apps",
-                                                  "merged_base", "pushed_base", "run", "confirm", "prepull_images",
+                                                  "merged_base", "pushed_base", "run", "host_work", "confirm",
+                                                  "prepull_images",
                                                   "step_info", "settled", "record", "read_ledger")}
     claimed = f"{S47} start merge infra host:1:aa"
     text = [claimed]
@@ -1012,7 +1025,7 @@ def merged_by(released_at_confirm):
     def ledger_for(step, phase, arg=None):
         m.CLAIMED.append((step, phase, "host:1:aa"))
         return names, ev(claimed), None
-    m.ledger_for, m.run, m.confirm = ledger_for, run, confirm
+    m.ledger_for, m.run, m.host_work, m.confirm = ledger_for, run, run, confirm
     m.proof_problems = m.registry_problems = lambda *a, **k: []
     m.step_apps, m.prepull_images = lambda *a: ["app"], lambda *a: []
     m.merged_base = m.pushed_base = lambda *a: None
@@ -1066,6 +1079,54 @@ child.wait()
 got, token = released(child.pid)
 check("release: that run gone - its start closed, with its token", got, [("end", "merge", "released", token)])
 
+# the phase's work on the hosts runs to its own end through a signal (subprocess KILLed ansible-playbook 0.25 s after a
+# Ctrl-C, its remote tasks running on), then the phase ends interrupted
+import signal, threading, time  # noqa: E401
+hw = getattr(m, "host_work", None)
+mark = os.path.join(tempfile.mkdtemp(), "ended")
+t0 = time.monotonic()
+threading.Timer(0.3, lambda: os.kill(os.getpid(), signal.SIGINT)).start()
+try:
+    hw([sys.executable, "-c", "import signal, sys, time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(1.5); "
+        "open(sys.argv[1], 'w').write('x')", mark]) if hw else None
+    raised = None
+except BaseException as e:  # noqa: B036 - the class asked about
+    raised = type(e).__name__
+check("host work signalled: run to its end, then the phase interrupted",
+      (raised, os.path.exists(mark), time.monotonic() - t0 >= 1.4), ("Interrupted", True, True))
+check("  a signal taken as before once it ended", signal.getsignal(signal.SIGINT), signal.default_int_handler)
+import ast  # noqa: E402
+tree = ast.parse(open("scripts/upgrade-production.py").read())
+acting = []
+for node in ast.walk(tree):
+    # a command run (run(), subprocess.run()) whose command line names one of them: through host_work, not run
+    if isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) == "run" and \
+            node.args and any(w in ast.unparse(node.args[0])
+                              for w in ("ansible-playbook", "upgrade-merge-step.sh", "'--production'")):
+        acting.append(ast.unparse(node)[:70])
+check("every run of ansible-playbook, the step playbooks and the merge script is host work", acting, [])
+# release: refused while a process of the run that claimed is alive here (its process group - the run killed outright,
+# its ansible-playbook or merge script left running)
+def release_with(token):
+    saved = {k: getattr(m, k) for k in ("read_ledger", "confirm", "record")}
+    m.read_ledger = lambda: ({}, ev(f"{S47} start playbooks {token}"))
+    m.confirm = lambda q: True
+    m.record = lambda *a, **k: None
+    try:
+        m.release(S47)
+        return "released"
+    except SystemExit as e:
+        return "refused" if "alive" in str(e) else str(e)
+    finally:
+        for k, v in saved.items():
+            setattr(m, k, v)
+child = subprocess.Popen(["sleep", "30"], start_new_session=True)
+check("release: a process of the claiming run's group alive here - refused",
+      release_with(f"{socket.gethostname()}:4194300:cc:{child.pid}"), "refused")
+child.kill()
+child.wait()
+check("release: that group gone - released", release_with(f"{socket.gethostname()}:4194300:cc:{child.pid}"), "released")
+check("a claim's token names its process group", m.claim_token().count(":") if hasattr(m, "claim_token") else None, 3)
 # a proof is refused when any step branch moved, was made or deleted since the run started (proof-start's record) -
 # the run then mixed states; a run.json from before that record refuses too
 import tempfile
