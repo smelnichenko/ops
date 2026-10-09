@@ -77,7 +77,9 @@
           set -euo pipefail
           K="{{ kubectl }} -n schnappy-infra"
           p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
-          $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ \
+          # its password from the pod's environment (CLICKHOUSE_PASSWORD - clickhouse-client 24.8, 25.8, 26.8 read it),
+          # never on an argv
+          $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy -q "$1"' _ \
             "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120"
       register: _logs
       changed_when: false
@@ -91,8 +93,14 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          g() { {{ kubectl }} -n schnappy-infra exec deploy/schnappy-grafana -c grafana -- sh -c \
-            'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" "http://localhost:3000$1"' _ "$1"; }
+          # a script on stdin to the pod's sh: the admin credentials to curl on its stdin (-K-), never on an argv
+          g() {
+            {{ kubectl }} -n schnappy-infra exec -i deploy/schnappy-grafana -c grafana -- sh -s "$1" <<'POD'
+          p=$(printf %s "$GF_SECURITY_ADMIN_PASSWORD" | sed 's/[\\"]/\\&/g')
+          printf 'user = "%s:%s"\n' "$GF_SECURITY_ADMIN_USER" "$p" \
+            | curl -sf -K- --connect-timeout 10 --max-time 30 "http://localhost:3000$1"
+          POD
+          }
           for uid in $(g /api/datasources | python3 -c 'import json, sys; print(" ".join(d["uid"] for d in json.load(sys.stdin)))'); do
             echo "$uid $(g "/api/datasources/uid/$uid/health" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status"))')"
           done

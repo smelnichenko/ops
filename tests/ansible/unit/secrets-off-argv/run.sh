@@ -263,19 +263,11 @@ reads = [f"{f}: {n}: {line[:120]}" for f in files("deploy/ansible") for n, sc in
          for line in argv_reads(sc)]
 reads += [f"{f}: {line[:120]}" for f in sorted(glob.glob("deploy/ansible/playbooks/scripts/*") + glob.glob("scripts/*.sh")
                                                + ["bootstrap.sh"]) for line in argv_reads(open(f, errors="replace").read())]
-# the full run's own playbooks (tests/ansible/upgrade: every step runs them, on a copy holding production's
-# secrets) too - each read named below in a pod's own shell (kubectl exec ... sh -c), the pod's env var on its client's
-# argv in that pod: whether its ClickHouse client reads the password from its environment is not known here (24.8 to
-# 25.x, not measured), Grafana's curl the same - left, each named, none more
-POD_READS = {
-    ("tests/ansible/upgrade/metrics-check.yml", "Container logs reach ClickHouse (Fluent Bit -> logs.podlogs, rows of the last two minutes)"),
-    ("tests/ansible/upgrade/survival-check.yml", "ClickHouse - the canary table, its rows written and merged into one part (seed)"),
-    ("tests/ansible/upgrade/survival-check.yml", "ClickHouse - exactly the seeded rows, the compatibility setting as the step files say, the version"),
-    ("tests/ansible/upgrade/survival-check.yml", "Grafana - the canary dashboard (seed)"),
-    ("tests/ansible/upgrade/survival-check.yml", "Grafana - every dashboard UID, and the canary's content"),
-    ("tests/ansible/upgrade/survival-check.yml", "Grafana - every datasource healthy"),
-    ("tests/ansible/upgrade/wave0-rehearsal.yml", "ClickHouse - the canary's frozen parts restored into a new table of its schema"),
-}
+# the full run's own playbooks (tests/ansible/upgrade: every step runs them, on a copy holding production's secrets)
+# too, the same rule: a pod's own shell (kubectl exec ... sh) passes its env var to its client's argv no more - the
+# ClickHouse client reads CLICKHOUSE_PASSWORD from its environment (24.8, 25.8, 26.8 measured 2026-10-09), Grafana's
+# curl its credentials on its stdin (-K-). None excepted.
+POD_READS = set()
 pod_seen = set()
 for f in files("tests/ansible/upgrade"):
     for n, sc in scripts(load(f)):

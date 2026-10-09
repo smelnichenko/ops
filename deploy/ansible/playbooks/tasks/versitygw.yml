@@ -66,7 +66,7 @@
         amd64: 75fbd1d2f6b640e5d7cb7ac596286de02972ece0ca7dae2c74f66ade914fcc9f
         arm64: 06fcdf9ef14c0f7f8b000e17bd5409903f79eb602f6105ec4eb7d725c1ac3b4b
 
-- name: A checksum for versitygw {{ vgw_version }} on {{ forgejo_arch }}
+- name: A checksum for the versitygw version and arch - {{ [vgw_version, forgejo_arch] | join(' ') }}
   ansible.builtin.assert:
     that: forgejo_arch in vgw_checksums[vgw_version] | default({})
     fail_msg: "REFUSED: no sha256 for versitygw {{ vgw_version }} ({{ forgejo_arch }}) in vgw_checksums - add it first"
@@ -81,7 +81,7 @@
   check_mode: false
   when: _installed_version != vgw_version
 
-- name: Download versitygw {{ vgw_version }}, its sha256 checked
+- name: Download versitygw, its sha256 checked - {{ vgw_version }}
   ansible.builtin.get_url:
     url: "https://github.com/versity/versitygw/releases/download/v{{ vgw_version }}/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
     dest: "/var/cache/versitygw/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"

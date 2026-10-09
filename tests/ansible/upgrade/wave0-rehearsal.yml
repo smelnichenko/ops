@@ -155,7 +155,7 @@
         cmd: |
           set -euo pipefail
           K="{{ kubectl }} -n schnappy-infra"
-          q() { $K exec schnappy-clickhouse-0 -c clickhouse -- sh -c 'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ "$1"; }
+          q() { $K exec schnappy-clickhouse-0 -c clickhouse -- sh -c 'clickhouse-client --user schnappy -q "$1"' _ "$1"; }
           mkdir {{ work_dir }}/x && tar -C {{ work_dir }}/x -xzf {{ work_dir }}/backup
           # the database's metadata link resolved inside the backup; the table made from the backup's own schema
           link=$(readlink {{ work_dir }}/x/metadata/upgrade_check)

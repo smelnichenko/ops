@@ -77,7 +77,7 @@
         cmd: |
           set -euo pipefail
           {{ kubectl }} exec -i schnappy-clickhouse-0 -c clickhouse -- sh -c 'clickhouse-client --user schnappy \
-            --password "$CLICKHOUSE_PASSWORD" --multiquery' <<'SQL'
+            --multiquery' <<'SQL'
           CREATE DATABASE IF NOT EXISTS upgrade_check;
           CREATE TABLE IF NOT EXISTS upgrade_check.canary (k UInt32, v String) ENGINE = MergeTree ORDER BY k;
           INSERT INTO upgrade_check.canary SELECT number + 1, concat('v-', toString(number + 1)) FROM numbers({{ rows }})
@@ -101,7 +101,7 @@
           set -euo pipefail
           q() {
             {{ kubectl }} exec schnappy-clickhouse-0 -c clickhouse -- sh -c 'clickhouse-client --user schnappy \
-              --password "$CLICKHOUSE_PASSWORD" --format TSV -q "$1"' _ "$1"
+              --format TSV -q "$1"' _ "$1"
           }
           q "SELECT count(), lower(hex(MD5(arrayStringConcat(arrayMap(x -> x.2, arraySort(groupArray((k, v)))), ','))))
              FROM upgrade_check.canary"
@@ -139,13 +139,16 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          {{ kubectl }} exec -i deploy/schnappy-grafana -c grafana -- sh -c 'curl -sf -u \
-            "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" -H "Content-Type: application/json" \
-            -X POST --data-binary @- http://localhost:3000/api/dashboards/db' <<'JSON'
-          {"overwrite": true, "dashboard": {"uid": "{{ dashboard_uid }}", "title": "Upgrade check",
+          # the body an argument (no secret), the admin credentials to curl on its stdin (-K-), never on an argv
+          body='{"overwrite": true, "dashboard": {"uid": "{{ dashboard_uid }}", "title": "Upgrade check",
            "panels": [{"id": 1, "type": "text", "title": "canary", "gridPos": {"h": 4, "w": 8, "x": 0, "y": 0},
-                       "options": {"mode": "markdown", "content": "{{ dashboard_text }}"}}]}}
-          JSON
+                       "options": {"mode": "markdown", "content": "{{ dashboard_text }}"}}]}}'
+          {{ kubectl }} exec -i deploy/schnappy-grafana -c grafana -- sh -s "$body" <<'POD'
+          p=$(printf %s "$GF_SECURITY_ADMIN_PASSWORD" | sed 's/[\\"]/\\&/g')
+          printf 'user = "%s:%s"\n' "$GF_SECURITY_ADMIN_USER" "$p" \
+            | curl -sf -K- --connect-timeout 10 --max-time 30 -H "Content-Type: application/json" -X POST \
+              --data-binary "$1" http://localhost:3000/api/dashboards/db
+          POD
       changed_when: true
       when: mode == 'seed'
 
@@ -154,12 +157,17 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          G="{{ kubectl }} exec deploy/schnappy-grafana -c grafana -- sh -c"
-          $G 'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" \
-            "http://localhost:3000/api/search?type=dash-db&limit=5000"' | python3 -c '
+          # a script on stdin to the pod's sh: the admin credentials to curl on its stdin (-K-), never on an argv
+          g() {
+            {{ kubectl }} exec -i deploy/schnappy-grafana -c grafana -- sh -s "$1" <<'POD'
+          p=$(printf %s "$GF_SECURITY_ADMIN_PASSWORD" | sed 's/[\\"]/\\&/g')
+          printf 'user = "%s:%s"\n' "$GF_SECURITY_ADMIN_USER" "$p" \
+            | curl -sf -K- --connect-timeout 10 --max-time 30 "http://localhost:3000$1"
+          POD
+          }
+          g "/api/search?type=dash-db&limit=5000" | python3 -c '
           import json, sys; print(json.dumps(sorted(d["uid"] for d in json.load(sys.stdin))))'
-          $G 'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" \
-            http://localhost:3000/api/dashboards/uid/{{ dashboard_uid }}' | python3 -c '
+          g "/api/dashboards/uid/{{ dashboard_uid }}" | python3 -c '
           import json, sys; d = json.load(sys.stdin)["dashboard"]; print(d["panels"][0]["options"]["content"])'
       register: _grafana
       changed_when: false
@@ -177,8 +185,13 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          g() { {{ kubectl }} exec deploy/schnappy-grafana -c grafana -- sh -c \
-            'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" "http://localhost:3000$1"' _ "$1"; }
+          g() {
+            {{ kubectl }} exec -i deploy/schnappy-grafana -c grafana -- sh -s "$1" <<'POD'
+          p=$(printf %s "$GF_SECURITY_ADMIN_PASSWORD" | sed 's/[\\"]/\\&/g')
+          printf 'user = "%s:%s"\n' "$GF_SECURITY_ADMIN_USER" "$p" \
+            | curl -sf -K- --connect-timeout 10 --max-time 30 "http://localhost:3000$1"
+          POD
+          }
           for uid in $(g /api/datasources | python3 -c 'import json, sys; print(" ".join(d["uid"] for d in json.load(sys.stdin)))'); do
             echo "$uid $(g "/api/datasources/uid/$uid/health" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status"))')"
           done
