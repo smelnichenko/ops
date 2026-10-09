@@ -1,19 +1,13 @@
 # Plan 100 — upgrade the cluster to current releases
 
-Status: **IN PROGRESS** (2026-10-05): step 02 (old 19: Istio charts from blob.istio.io) is in production since
-2026-10-03; the steps are reordered (operator's decisions 2026-10-05). The gate before any other production change
-(operator 2026-10-05: "full run and full review at the end before live"):
-1. the open fixes done - R14 (test environment before production for the data versions), R18 (abort and outage
-   notes per step), R27 (the defaults at the targets, a fresh build at them, a green task dr:drill) - ALL DONE
-   2026-10-05;
-2. full run 7 green: task test:upgrade:full - a fresh Vagrant copy, all steps in order with every check, the
-   restore checks at the end, unattended;
-3. a full review of the whole upgrade work after that run (not only what changed since the last one); its findings
-   fixed and proven, and the full run repeated if a fix touches the steps or the harness - the review of 2026-10-06
-   (below) is done and its fixes in, as are the second's and the third's (2026-10-07); the full run that proves the
-   third's is next, then another full review;
-4. then production, step by step, each with the operator's approval - Wave 0 backup first for every one-way step,
-   every stateful step shown before it runs.
+Status: **IN PROGRESS** (2026-10-09): step 02 in production since 2026-10-03, nothing since. Reviews 1-10 done
+(10: the whole plan, 62 steps); full run 13 green (2026-10-08, 5 h 09 min); review 10's findings fixed, each with a
+failing test and a revert check. Next: gate (CI image), ops main pushed, a rehearsal from a late step, full run 14,
+review 11 - then production step by step with the operator's go: `task deploy:vault-eso` first, a Wave 0 backup before
+every one-way step, every stateful step shown before it runs.
+Run time: full run ~4.3 h projected after review 10's cuts (target 3 h; ~3.8 h is the floor without a snapshot of the
+built copy or cutting production's own procedure - both the operator's call). Rollout: 62 steps, 28 h of soaks (15
+min a step, 60 after a Wave 0 step's; 17 such) on top of each step's own phases.
 
 ## Decisions (operator, 2026-10-01)
 
@@ -219,9 +213,10 @@ Fidelity and isolation of the Vagrant copy (2026-10-02/03):
   major has no recovery point until then), as production's merge takes it. Step files mark them (`backup-check`,
   `barman-check`); the restore check closes the run.
 - **ClickHouse's compatibility pin applies at the next start**: the users file is a subPath mount, which never sees a
-  ConfigMap change, so steps 58 and 60 change nothing in the running server; the image bumps right after them (59,
-  61) restart it with the pin in place before the new version writes a part - the order that matters. Checked with
-  `getSetting('compatibility')` after each step.
+  ConfigMap change. Step 58 restarts ClickHouse anyway (its startupProbe), so 24.8's pin is live from there; 60's
+  waits for 61's restart. The image bumps (59, 61) start the new version with the pin in place before it writes a
+  part - the order that matters. Checked after each step with `getSetting('compatibility')` and the pinned formats in
+  `system.merge_tree_settings`.
 - **A step that goes to production early leaves the stack**: it is cherry-picked onto main, the repo's step branches
   are rebased on that main (`git rebase --update-refs main <last step branch>`; git drops the now-duplicate commit),
   and its own branch is deleted. Step 19, 2026-10-03: every later branch's tree unchanged, 02-16 gained only it.
@@ -296,9 +291,10 @@ fixes green - all 61 steps, 4 h 58 min (the build 50 min; the steps 4 h 4 min: s
 the step playbooks 36, Wave 0 12, the Velero backup checks 22, the isolation and readiness 23). The fourth full review
 ran on those fixes; full run 2026-10-08 03:22 on its fixes (ops d76ae14).
 
-**Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): full run 7 green - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
+**Gate before the production rollout** (operator, 2026-10-03; 2026-10-05): the latest full run green on the commit rolled out - `task test:upgrade:full`: the Vagrant copy built from nothing, then every step below in order, unattended, every check after each - then a full review of the whole work, then production step by step ("Production, step by step" at the end).
 
-The steps (generated from tests/ansible/upgrade/steps - the step files are the source; Wave 0 = the stores backed up before the step, in production and in the full run):
+The steps (from tests/ansible/upgrade/steps - the step files are the source, this table follows them: the
+plan-steps harness fails on a step missing or extra; Wave 0 = the stores backed up before the step, in production and in the full run):
 
 | # | Step | Changes | Where | Wave 0 |
 |---|---|---|---|---|
@@ -346,7 +342,7 @@ The steps (generated from tests/ansible/upgrade/steps - the step files are the s
 | 41 | eso-crds | External Secrets' CRDs under Argo, same 2.2.0 | infra | - |
 | 42 | kubernetes-1.35 | Kubernetes 1.34.12 -> 1.35.9 (the next minor; after containerd 2) | infra + playbook | etcd |
 | 43 | kubernetes-1.36 | Kubernetes 1.35.9 -> 1.36.5, the last platform step (Istio 1.31 and Cilium 1.20 support 1.36; nothing here sup... | infra + playbook | etcd |
-| 44 | eso-2.11 | External Secrets 2.2.0 -> 2.11.0, CRDs with it through Argo (step 41) | infra | - |
+| 44 | eso-2.12 | External Secrets 2.2.0 -> 2.12.0, CRDs with it through Argo (step 41) | infra | - |
 | 45 | alertmanager-blackbox-ksm | Alertmanager 0.31.1 -> 0.34.1, blackbox exporter 0.27.0 -> 0.29.0 (its config reloader to the operator's v0.94... | platform | - |
 | 46 | postgres-18-test | PostgreSQL 17 -> 18.6 in the test environment, before production's (operator 2026-10-05) | infra + platform + playbook | postgres |
 | 47 | postgres-18 | PostgreSQL 17 -> 18.6, CNPG's offline in-place major upgrade (operator 2026-10-01, option A) | infra + platform + playbook | postgres |
@@ -1223,6 +1219,25 @@ Left, with why:
 
 The operator's: Sonar's S3776 (25) and hotspots; the eighth's list.
 
+## Tenth full review 2026-10-09 (the whole plan) - what it fixed, what is left
+
+Fixed (ops scratchpad review10/FIXED10.md lists each with its commits and revert checks): the stale PR env sweeper
+(it pruned every preview app at its first sweep; its Vault GC never ran), the runner's refusals now all tested, merged
+tags pushed, abort moving them aside on origin, a stale Wave 0 backup or preview refused, the test environment's steps
+checked in production, the ClickHouse pin run on ten's own build, apt keys pinned, the runtime floor failing closed,
+playbook defaults checked against the inventory at every step, chart versions required per environment, blackbox
+exporter 0.29.0, run time cuts.
+
+After the rollout (not before - tests follow production): the apps' CI and ops' tests to PostgreSQL 18, Valkey 9.1,
+ClickHouse 26.8, Mimir 3 (monitor/admin/chat/chess Testcontainers; test-logs, test-grafana, test-dr); ClickHouse's
+compatibility pin removed once 26.8 has settled (its own change and review).
+
+The operator's: arch W7 - `bootstrap.sh vault-eso` stays bash (40-check harness; a playbook rewrite before the first
+production action is a risk of its own); monitor's fix/warm-up-review promoted before full run 14 or after the rollout
+(promoted between, every phase refuses on the app tag); Argo CD's Keycloak client secret rotated; the Keycloak admin and
+DB passwords split; an alert on the git mirror's failure; a Forgejo read-only user for the registry pull secret and
+Argo's repo-creds; CI's floating ansible-lint:latest; Sonar S3776.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
@@ -1264,7 +1279,7 @@ E: 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, then 41. Every moved 
 Unavoidable windows (current numbers): Istio 1.26-1.27 on 1.34 (steps 03-04, one minor at a time); containerd 2.3
 under Kubernetes 1.34 and 1.35 (steps 14-42: 2.3 is listed for 1.36 only; the 1.7 -> 2.3 LTS hop is containerd's
 supported path); External Secrets 2.2 on 1.36 between steps 43 and 44 (operator 2026-10-05: accepted); kube-state-metrics
-2.18 on 1.35 (steps 42-45).
+2.18 on 1.35 and 1.36 (steps 42-45: it moves at 45).
 Mine to fix: the kubectl images to 1.35.x before 26; step 25's comment (Istio 1.31: 1.32-1.36, not 1.37) - DONE;
 step 40 pins Scylla Manager and its agents to the target 3.12.1 (the chart's default is 3.12.0) - with the restructure.
 Operator's decisions (2026-10-05): ScyllaDB 2026.1 LTS - step 41 (2026.3) dropped, its branch kept as
@@ -1304,8 +1319,8 @@ Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Post
 
 ## Production, step by step (after the gate and the operator's approval)
 
-Gate: full run 7 green (`task test:upgrade:full`: built from nothing, every step in one unattended run, each green
-step's proof recorded), then the full review of the whole upgrade work with its fixes proven (the full run repeated
+Gate: the latest full run green on the commit rolled out (`task test:upgrade:full`: built from nothing, every step in
+one unattended run, each green step's proof recorded), then the full review of the whole upgrade work with its fixes proven (the full run repeated
 when a fix touches the steps or the harness), then the operator's approval.
 
 One step at a time, in the step files' order, only through the deploy:upgrade:* tasks: scripts/upgrade-production.py
