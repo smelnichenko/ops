@@ -16,6 +16,9 @@
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
     schedule: velero-schnappy-daily
+    # one workload's pods, not the schedule's 79 volumes (8-13 min, one at a time): the same path - node-agent, kopia,
+    # the Pi store - for Valkey's data volume and its sidecar's
+    backup_selector: { app.kubernetes.io/component: valkey }
     # every resource fully qualified: `backup` alone is CNPG's Backup (postgresql.cnpg.io) - the first run of this
     # check polled CNPG for Velero's backup for 10 minutes (2026-10-03)
     kubectl: "kubectl --kubeconfig {{ kubeconfig }} -n velero"
@@ -49,7 +52,8 @@
         cmd: |
           set -euo pipefail
           for ns in {{ (_schedule.stdout | from_json).spec.template.includedNamespaces | join(' ') }}; do
-            kubectl --kubeconfig {{ kubeconfig }} -n "$ns" get pods --field-selector=status.phase=Running -o json
+            kubectl --kubeconfig {{ kubeconfig }} -n "$ns" get pods --field-selector=status.phase=Running -o json \
+              -l '{{ backup_selector.items() | map('join', '=') | join(',') }}'
           done | python3 -c '
           import json, sys
           dec = json.JSONDecoder(); text = sys.stdin.read().strip(); i = 0; out = []
@@ -76,7 +80,7 @@
             name: "{{ backup }}"
             namespace: velero
             labels: { upgrade-test: backup-check }
-          spec: "{{ (_schedule.stdout | from_json).spec.template | combine({'ttl': '1h'}) }}"
+          spec: "{{ (_schedule.stdout | from_json).spec.template | combine({'ttl': '1h', 'labelSelector': {'matchLabels': backup_selector}}) }}"
       vars:
         backup: "upgrade-check-{{ lookup('pipe', 'date +%s') }}"
       register: _created
