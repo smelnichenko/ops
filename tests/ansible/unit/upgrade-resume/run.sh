@@ -193,6 +193,10 @@ check("a merged step's commit since: no problem", main_of(), [])
 git_("infra", "tag", "-d", "upgrade-merged/03-c")
 check("the same commit with no merged tag: refused", len(main_of()), 1)
 check("a proof with no main recorded: refused", len(mp({}) if mp else [None]) >= 1, True)
+kept_mp, m.main_problems = m.main_problems, (lambda proof: ["MAIN-X"])
+prove("03-c", "R", "02-b")
+check("every proof check judges production's main", "MAIN-X" in m.proof_problems("03-c", names, done=["01-a"]), True)
+m.main_problems = kept_mp
 
 # the copy's build at a step: every base line up to it
 inv = lambda *a: subprocess.run([os.path.join(o, "scripts", "upgrade-expected-inventory.py"), *a],
