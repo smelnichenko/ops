@@ -18,7 +18,7 @@ fails=0
 check() {  # check <name> <got> <want>
   if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1"; echo "    got:  $2"; echo "    want: $3"; fails=$((fails + 1)); fi
 }
-PROD=a8548f9c-d7ca-4860-ae70-62c9a01f9a31 TEST=b1111111-d7ca-4860-ae70-62c9a01f9a31
+PROD=a8548f9c-d7ca-4860-ae70-62c9a01f9a31 TEST=b1111111-d7ca-4860-ae70-62c9a01f9a31 OTHER=c2222222-d7ca-4860-ae70-62c9a01f9a31
 mkdir "$W/bin"
 cat > "$W/bin/date" <<'STUB'
 #!/bin/bash
@@ -33,7 +33,11 @@ case "$a" in
   *" sctool cluster list "*)
     echo "| ID | Name | Labels | Port | Credentials |"
     echo "| $PROD | schnappy-production/schnappy-production-scylla | x | default | |"
-    [ -n "${NO_TEST:-}" ] || echo "| $TEST | schnappy-test/schnappy-test-scylla | x | default | |" ;;
+    [ -n "${NO_TEST:-}" ] || echo "| $TEST | schnappy-test/schnappy-test-scylla | x | default | |"
+    [ -z "${OTHER_CLUSTER:-}" ] || echo "| $OTHER | schnappy-other/schnappy-other-scylla | x | default | |" ;;
+  *" sctool tasks -c $OTHER "*)
+    echo "| Task | Labels | Schedule | Window | Timezone | Success | Error | Last Success | Last Error | Status | Next |"
+    row healthcheck/cql "* * * * *" DONE ;;
   *" sctool tasks -c $PROD "*)
     echo "| Task | Labels | Schedule | Window | Timezone | Success | Error | Last Success | Last Error | Status | Next |"
     [ -n "${NO_BACKUP:-}" ] || row backup/schnappy-production-daily-backup "0 3 * * *" "${BACKUP_STATUS:-DONE}"
@@ -66,7 +70,7 @@ PY
 run() {  # run <env...>: rc and the clusters backups were started on
   : > "$W/calls"
   [ -f "$W/play.yml" ] || { echo "no playbook"; return; }
-  env "$@" PATH="$W/bin:$PATH" W="$W" PROD=$PROD TEST=$TEST ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" \
+  env "$@" PATH="$W/bin:$PATH" W="$W" PROD=$PROD TEST=$TEST OTHER=$OTHER ANSIBLE_NOCOLOR=1 "$AP" -i "$W/hosts.yml" "$W/play.yml" \
     -e kubeconfig=/x ${CHECK:+--check} > "$W/out" 2>&1
   echo "rc=$? started=$(grep -o -- 'sctool start -c [a-z0-9-]*' "$W/calls" | cut -c17-24 | paste -sd,)"
 }
@@ -77,6 +81,7 @@ check "a preview: tasks read, no backup started" "$(CHECK=1 run)" "rc=0 started=
 check "a repair task whose last run failed: refused, nothing started" "$(run REPAIR_STATUS=ERROR)" "rc=2 started="
 check "the backup task's last run aborted: refused" "$(run BACKUP_STATUS=ABORTED)" "rc=2 started="
 check "a production cluster with no backup task: refused" "$(run NO_BACKUP=1)" "rc=2 started="
+check "  beside one that has one: refused all the same, nothing started" "$(run OTHER_CLUSTER=1)" "rc=2 started="
 check "the backup ends in ERROR: failed" "$(run PROGRESS=ERROR | cut -c1-4)" "rc=2"
 check "DONE with the last run's snapshot (older than the start): failed" \
   "$(run TAG=sm_20261008030049UTC | cut -c1-4)" "rc=2"
