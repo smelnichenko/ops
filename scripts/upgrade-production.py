@@ -719,7 +719,41 @@ def step_digests(step):
     path = os.path.join(WORK, "step-digests", step + ".txt")
     if not os.path.exists(path):
         sys.exit(f"REFUSED: no {path} - the run records the digests its copy ran after each step")
-    return {f"{full_name(n)}:{t}": d for n, t, d in (l.split() for l in open(path) if l.strip())}
+    out = {}
+    for n, t, d in (l.split() for l in open(path) if l.strip()):
+        key = f"{full_name(n)}:{t}"
+        if out.get(key, d) != d:  # two builds of one tag running: which one production would run is unclear
+            sys.exit(f"REFUSED: the copy ran {key} as two builds after {step} ({out[key][:19]}..., {d[:19]}...)")
+        out[key] = d
+    return out
+
+
+def running_digest_problems(step, pods=None):
+    """The step's images as production runs them - each container's imageID - against the builds the full run's copy
+    ran them with (its proof's digests): another build under the same tag (rebuilt upstream, pulled by tag at a
+    rollout) is named. `pods`: kubectl's get pods -A -o json (read on ten without)."""
+    try:
+        proven = json.load(open(proof_path(step))).get("digests") or {}
+    except (OSError, ValueError):
+        return [f"{step}'s proof not read - its images' builds not judged"]
+    if not proven:
+        return []
+    if pods is None:
+        pods = json.loads(ten("kubectl get pods -A -o json --request-timeout=60s").stdout)
+    out = set()
+    for o in pods.get("items", []):
+        status = o.get("status") or {}
+        running = {s.get("name"): s.get("imageID") or "" for s in status.get("containerStatuses", [])
+                   + status.get("initContainerStatuses", [])}
+        for c in o["spec"].get("containers", []) + o["spec"].get("initContainers", []):
+            ref = c["image"].split("@")[0]
+            name, tag = ref.rsplit(":", 1) if ":" in ref.split("/")[-1] else (ref, "latest")
+            want = proven.get(f"{full_name(name)}:{tag}")
+            got = running.get(c.get("name"), "").partition("@")[2]
+            if want and got and got != want:
+                out.add(f"{name}:{tag} runs {got[:19]}..., the full run ran {want[:19]}... "
+                        f"({o['metadata']['namespace']}/{o['metadata']['name']})")
+    return sorted(out)
 
 
 def proven_digest(step, name, tag):
@@ -1370,7 +1404,11 @@ def check(step, since=None, deciding=False):
     info = step_info(step)
     ok_settled, _, _ = settled(CHECK_MINUTES, info["out_of_sync"], apps, step if deciding else None,
                                info["restarts_expected"], since)
-    return ok and ok_settled
+    # the builds production runs for the step's images: the ones the full run ran
+    builds = running_digest_problems(step)
+    for p in builds:
+        print(f"IMAGE: {p}")
+    return ok and ok_settled and not builds
 
 
 def done(step):

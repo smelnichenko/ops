@@ -49,7 +49,9 @@ echo "kubectl $*" >> "$W/kubectl-calls"
 echo "{\"kubeletconfig\": {\"imageGCHighThresholdPercent\": ${GC_HIGH:-85}, \"imageGCLowThresholdPercent\": 80}}"
 STUB
 printf '#!/bin/bash\n' > "$W/bin/sleep"
-chmod +x "$W/bin/crictl" "$W/bin/df" "$W/bin/kubectl" "$W/bin/sleep"
+# ctr: its calls logged with the pulls (the tag pointed at the digest pulled)
+printf '#!/bin/bash\necho "ctr $*" >> "$CALLS"\n' > "$W/bin/ctr"
+chmod +x "$W/bin/crictl" "$W/bin/df" "$W/bin/kubectl" "$W/bin/sleep" "$W/bin/ctr"
 W=$W "$PY" - <<'PY'
 import os, yaml
 W = os.environ["W"]
@@ -77,8 +79,16 @@ case_() {  # case_ <name> <want rc 0|1> <want calls, ; between> <ansible-playboo
 E="--runtime-endpoint unix:///run/containerd/containerd.sock --image-endpoint unix:///run/containerd/containerd.sock"
 case_ "no images: refused, nothing pulled" 1 "" -e images=
 D=sha256:$(printf 'f%.0s' {1..64})
-case_ "each image pulled through containerd's socket" 0 "$E pull docker.io/a/b:1;$E pull ghcr.io/c/d:2@$D" \
+# one by its digest: pulled by it, then its tag pointed at it - a pod naming the tag starts that build, not whatever the
+# registry's tag names by then (containerd keeps no tag for a reference with a digest)
+case_ "each image pulled through containerd's socket; one by digest, its tag pointed at it" 0 \
+  "$E pull docker.io/a/b:1;$E pull ghcr.io/c/d:2@$D;ctr -n k8s.io images tag --force ghcr.io/c/d@$D ghcr.io/c/d:2" \
   -e images=docker.io/a/b:1,ghcr.io/c/d:2@$D
+case_ "a registry's port: the tag split from the last path part" 0 \
+  "$E pull registry.local:5000/c/d:2@$D;ctr -n k8s.io images tag --force registry.local:5000/c/d@$D registry.local:5000/c/d:2" \
+  -e images=registry.local:5000/c/d:2@$D
+PRESENT="ghcr.io/c/d:2@$D" case_ "on the node already by its digest: not pulled, its tag pointed at it all the same" 0 \
+  "ctr -n k8s.io images tag --force ghcr.io/c/d@$D ghcr.io/c/d:2" -e images=ghcr.io/c/d:2@$D
 FAILS=1 case_ "a pull failing once: retried, pulled" 0 "$E pull docker.io/a/b:1;$E pull docker.io/a/b:1" \
   -e images=docker.io/a/b:1
 FAILS=9 case_ "a pull failing every time: the run fails" 1 "$E pull x:1;$E pull x:1;$E pull x:1;$E pull x:1" \

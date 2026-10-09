@@ -633,9 +633,11 @@ SETTLED = inspect.signature(m.settled)
 
 def settle_args(step, since=None, deciding=True):
     """settled()'s arguments, by name, as check() calls it."""
-    seen, saved = [], {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled")}
+    seen, saved = [], {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled",
+                                                  "running_digest_problems")}
     m.read_ledger = lambda: (None, [])
     m.inventory_check = lambda *a: True
+    m.running_digest_problems = lambda *a: []
     m.settled = lambda *a, **k: seen.append(SETTLED.bind(*a, **k).arguments) or (True, {}, [])
     try:
         m.check(step, since, deciding=deciding)
@@ -654,6 +656,41 @@ check("the first check: no restart history, no since", (first.get("restart_step"
 at = T0 + datetime.timedelta(minutes=20)
 check("the deciding check: restarts judged since the first green check's time, not a window before it",
       settle_args(S47, at)["restarted_since"], at)
+
+
+# the step's images as production runs them against the builds the full run's copy ran (its proof's digests): another
+# build under the same tag (a tag rebuilt upstream, a pull by tag at a rollout) is refused, named; the check is red
+import contextlib, io, tempfile  # noqa: E401,E402
+S59 = "59-clickhouse-25.8"
+rdp = getattr(m, "running_digest_problems", None)
+kept_proven = m.PROVEN
+m.PROVEN = tempfile.mkdtemp()
+P1, P2 = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+json.dump({"step": S59, "digests": {"docker.io/clickhouse/clickhouse-server:25.8.33.6-alpine": P1}},
+          open(m.proof_path(S59), "w"))
+pod = lambda image, image_id: {"items": [{"metadata": {"namespace": "n", "name": "p"},
+                                          "spec": {"containers": [{"name": "c", "image": image}]},
+                                          "status": {"containerStatuses": [{"name": "c", "imageID": image_id}]}}]}
+CH = "clickhouse/clickhouse-server:25.8.33.6-alpine"
+check("running the build the full run ran: no problem",
+      rdp(S59, pod(CH, "docker.io/clickhouse/clickhouse-server@" + P1)) if rdp else None, [])
+got = rdp(S59, pod(CH, "docker.io/clickhouse/clickhouse-server@" + P2)) if rdp else []
+check("another build under the same tag: a problem naming the image and the pod",
+      (len(got), CH.split(":")[0] in str(got), "n/p" in str(got)), (1, True, True))
+check("an image the step does not move: not judged", rdp(S59, pod("x/y:1", "x/y@" + P2)) if rdp else None, [])
+json.dump({"step": S59}, open(m.proof_path(S59), "w"))
+check("a proof without digests: nothing judged", rdp(S59, pod(CH, "x@" + P2)) if rdp else None, [])
+m.PROVEN = kept_proven
+saved = {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled", "running_digest_problems")}
+m.read_ledger, m.inventory_check = (lambda: (None, [])), (lambda *a: True)
+m.settled = lambda *a, **k: (True, {}, [])
+m.running_digest_problems = lambda *a: ["DIGEST-X"]
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    red = m.check(S59)
+check("check: red on a step image of another build, said", (red, "DIGEST-X" in out.getvalue()), (False, True))
+for k, v in saved.items():
+    setattr(m, k, v)
 
 
 REVS = {m.URLS["infra"]: "infra-sha", m.URLS["platform"]: "platform-sha"}
@@ -1265,6 +1302,11 @@ record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, start=Non
 check("record-proof 59 of a run that recorded no start: from the first step", RECORDED[-1].get("from"), names[0])
 check("record-proof 59 without the digests the copy ran after it: refused, nothing recorded",
       record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, digests=None),
+      "refused, nothing recorded: True")
+check("record-proof 59 with two builds of one tag running: refused, nothing recorded",
+      record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}},
+                digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256:" + "3" * 64 + "\n"
+                        "docker.io/clickhouse/clickhouse-server 25.8.33.6-alpine sha256:" + "5" * 64 + "\n"),
       "refused, nothing recorded: True")
 check("record-proof 59 without a pin result: refused, nothing recorded", record_59(None),
       "refused, nothing recorded: True")

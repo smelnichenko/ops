@@ -63,6 +63,17 @@
       until: _pulled.rc == 0
       changed_when: true
 
+    # an image by its digest (the step's pin, or the build the full run's copy ran): containerd keeps no tag for that
+    # reference, and a pod naming the tag (IfNotPresent) pulled whatever build the registry's tag named by then - the
+    # tag pointed at the digest pulled, whether pulled now or there already
+    - name: Each image by digest - its tag pointed at the digest pulled
+      ansible.builtin.command:
+        argv: [ctr, -n, k8s.io, images, tag, --force,
+               "{{ item.split('@')[0] | regex_replace(':[^:/]+$', '') }}@{{ item.split('@')[1] }}",
+               "{{ item.split('@')[0] }}"]
+      loop: "{{ images.split(',') | select('search', '@sha256:') | list }}"
+      changed_when: true
+
     - name: Room left after them
       ansible.builtin.include_tasks: tasks/image-store-room.yml
       vars:
