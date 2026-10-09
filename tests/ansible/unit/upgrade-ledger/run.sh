@@ -32,6 +32,9 @@ def unstubbed_ansible(*a):
 
 
 m.ansible = unstubbed_ansible
+# a merge live on origin/main is read in the step's repos beside ops - CI's checkout has none (upgrade-abort tests the
+# read): no change here unless a test sets one
+m.merged_live_problems = lambda *a: []
 
 fails = 0
 T0 = datetime.datetime(2026, 10, 6, 8, 0, tzinfo=datetime.timezone.utc)
