@@ -207,6 +207,24 @@ check("S6 a preview 7 h old: the playbooks refused, named",
       len(fresh(m.problems(m.step_names(), st, "playbooks", ev(1, 7, True), info43))), 1)
 check("S6 a backup 7 h old: the playbooks refused too (the kubeadm upgrade is the one-way change)",
       len(fresh(m.problems(m.step_names(), st, "playbooks", ev(7, 1, True), info43))), 1)
+# S8: a test environment step's done sees its change running there (its test-image line)
+want_test = {"16-scylladb-2025.1-test": ["docker.io/scylladb/scylla 2025.1.16"],
+             "19-scylladb-2026.1-test": ["docker.io/scylladb/scylla 2026.1.14"],
+             "39-kafka-4.3-test": ["quay.io/strimzi/kafka 1.2.0-kafka-4.3.1"],
+             "48-valkey-9.1-test": ["valkey/valkey 9.1.2-alpine"]}
+check("S8 each test environment step names the image it moves there",
+      {st: m.step_info(st).get("test_images") for st in want_test}, want_test)
+def inv_with(apart, images):
+    s = patched(ten=lambda c, stdin=None, check=True: R(0, apart if "INVENTORY_ONLY_NAMESPACES" in c else ""),
+                remote=lambda *a, **k: R(0, ""), run=lambda cmd, **k: R(0), WORK=tempfile.mkdtemp())
+    try:
+        return m.inventory_check([], images)
+    finally:
+        restore(s)
+check("S8 control: the test environment runs it - green", inv_with("image docker.io/scylladb/scylla 2025.1.16\n",
+                                                                   ["docker.io/scylladb/scylla 2025.1.16"]), True)
+check("S8 it still runs the old one - red", inv_with("image docker.io/scylladb/scylla 6.2.3\n",
+                                                      ["docker.io/scylladb/scylla 2025.1.16"]), False)
 print("runner-refusals: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_RUNNER_REFUSALS

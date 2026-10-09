@@ -8,3 +8,5 @@
 # abort: none for its data - the test environment's ScyllaDB has no backup (no Manager task, its agent no store
 # credentials; Wave 0 skips it by name): its keyspaces rebuilt by the test environment's schema Job, test data lost
 branch infra
+# production's done: the test environment runs it
+test-image docker.io/scylladb/scylla 2025.1.16

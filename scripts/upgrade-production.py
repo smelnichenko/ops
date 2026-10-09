@@ -150,8 +150,9 @@ def step_names():
 
 def step_info(name):
     playbooks, wave0, soak, settle, out_of_sync, flags, tempo_flush = [], [], [], [], [], set(), []
+    test_images = []
     inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak, settle=settle,
-              out_of_sync=out_of_sync, flags=flags, tempo_flush=tempo_flush)
+              out_of_sync=out_of_sync, flags=flags, tempo_flush=tempo_flush, test_images=test_images)
     default_soak = SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
             "soak": soak[-1] if soak else default_soak,
@@ -160,7 +161,7 @@ def step_info(name):
             "base_backup": "barman-check" in flags, "base_backup_after_merge": "barman-after-merge" in flags,
             "scylla_backup": "scylla-backup-check" in flags,
             "restarts_expected": "restarts-control-plane" in flags,
-            "tempo_flush": tempo_flush}
+            "tempo_flush": tempo_flush, "test_images": test_images}
 
 
 # ---- the ledger: rules (pure) ---------------------------------------------------------------------------------------
@@ -442,9 +443,10 @@ def excluded_namespaces():
     return " ".join([TEST_NAMESPACES, *(n for n in names if re.search(PREVIEW_NAMESPACES, n))])
 
 
-def inventory_check(applied):
+def inventory_check(applied, test_images=()):
     """ten's and the Pis' inventory (the test environment and open preview environments left out, the test
-    environment listed apart) against production's with the given steps applied."""
+    environment listed apart) against production's with the given steps applied; `test_images` ("<name> <tag>", a
+    test environment step's): the test environment runs each."""
     os.makedirs(WORK, exist_ok=True)
     # this run's own files (a check beside a phase must not diff the other one's), removed after it
     files = [tempfile.mkstemp(prefix=p, suffix=".txt", dir=WORK) for p in ("prod-expected.", "prod-inventory-now.")]
@@ -467,7 +469,10 @@ def inventory_check(applied):
         apart = ten(f"INVENTORY_ONLY_NAMESPACES={shlex.quote(TEST_NAMESPACES)} bash -s", stdin=script).stdout
         print(f"the test environment ({TEST_NAMESPACES}) - listed, not compared:")
         print("\n".join("  " + l for l in apart.splitlines() if l.startswith(("image ", "helm ", "kafka-metadata "))))
-        return run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
+        missing = [t for t in test_images if f"image {t}" not in apart.splitlines()]
+        for t in missing:
+            print(f"TEST ENVIRONMENT: not running {t} (the step's test-image line)")
+        return not missing and run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
                     os.path.join(inv.UPGRADE, "prod-transient.txt")]).returncode == 0
     finally:
         for path in (expected, now):
@@ -1454,9 +1459,9 @@ def check(step, since=None, deciding=False):
     if step not in step_names():
         sys.exit(f"REFUSED: no step {step}")
     events = current(read_ledger()[1])
-    ok = inventory_check(sorted(set(applied_steps(events)) | {step}))
-    apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
     info = step_info(step)
+    ok = inventory_check(sorted(set(applied_steps(events)) | {step}), info["test_images"])
+    apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
     ok_settled, _, _ = settled(CHECK_MINUTES, info["out_of_sync"], apps, step if deciding else None,
                                info["restarts_expected"], since)
     # the builds production runs for the step's images: the ones the full run ran

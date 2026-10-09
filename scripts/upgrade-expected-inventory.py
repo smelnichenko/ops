@@ -50,6 +50,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
     settle <minutes>                          (production waits this long for Argo to settle after each of the step's
                                                merges - scripts/upgrade-production.py; default 30)
     default <file>: <line> => <line>          (a playbook default the step moves - scripts/upgrade-defaults.py)
+    test-image <name> <tag>                   (a test environment step: production's done wants the test environment
+                                               (not in the copy) running that image)
     scrape-pool-gone <pool>                   (a Prometheus scrape pool the step removes on purpose: the metrics check
                                                excuses it from then on)
     base <arguments>                          (setup-kubeadm's arguments for a copy built after this step: what the
@@ -115,7 +117,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
-          wave0=None, soak=None, settle=None, tempo_flush=None, base=None, pools_gone=None):
+          wave0=None, soak=None, settle=None, tempo_flush=None, base=None, pools_gone=None, test_images=None):
     changes, seen, undos = [], set(), []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -161,6 +163,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
                 settle.append(int(line.split()[1]))
         elif line.startswith("default "):
             pass  # scripts/upgrade-defaults.py
+        elif re.fullmatch(r"test-image [A-Za-z0-9/_.:-]+ [A-Za-z0-9_.-]+", line):
+            if test_images is not None:
+                test_images.append(line[len("test-image "):])
         elif re.fullmatch(r"scrape-pool-gone [A-Za-z0-9/_.:-]+", line):
             if pools_gone is not None:
                 pools_gone.append(line.split()[1])

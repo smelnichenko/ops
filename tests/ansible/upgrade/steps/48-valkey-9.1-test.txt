@@ -7,3 +7,5 @@
 # abort: its values back
 branch infra
 branch platform
+# production's done: the test environment runs it
+test-image valkey/valkey 9.1.2-alpine

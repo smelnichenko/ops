@@ -8,3 +8,5 @@
 # help: Strimzi moves the metadata version seconds after the broker rolled (no metadataVersion is rendered)
 branch infra
 branch platform
+# production's done: the test environment runs it
+test-image quay.io/strimzi/kafka 1.2.0-kafka-4.3.1
