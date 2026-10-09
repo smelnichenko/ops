@@ -7,7 +7,8 @@
 # runtime lost a container (CONTAINERS LOST) the kubelet stays stopped - the outage lasts until the operator decides
 # (one node: nothing is evicted, the node lifecycle controller is in full disruption)
 # abort: effectively one-way - containerd 2.3 moves its metadata database (v3 -> v4), and 1.7 on a moved one is untested;
-# by hand, as upgrade-containerd.yml's header says: Debian's containerd and the kept config back (not rehearsed)
+# by hand, as upgrade-containerd.yml's header says: Debian's containerd (its .deb kept in /var/backups/upgrade) and the
+# kept config back (not rehearsed)
 # Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 - pkg containerd 1.7.24~ds1-6+deb13u1
 - pkg runc 1.1.15+ds1-2+b4

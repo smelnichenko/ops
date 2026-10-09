@@ -40,6 +40,7 @@
   become: true
   gather_facts: true
   vars:
+    upgrade_backup_dir: /var/backups/upgrade
     kubeconfig: /etc/kubernetes/admin.conf
     target: "{{ containerd_upgrade_to | default('') }}"
     crictl: crictl --runtime-endpoint unix:///run/containerd/containerd.sock
@@ -234,6 +235,23 @@
 
     # apt-get's own download-only (the apt module has none): the package and what it replaces resolved now, every .deb
     # in apt's cache for the install once the kubelet is stopped
+    # the abort reinstalls it (dpkg -i): apt's cache may be cleaned by then, the mirror moved on
+    - name: The running containerd's package kept for an abort ({{ upgrade_backup_dir }})
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pkg=$(dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}\n' containerd containerd.io 2> /dev/null \
+            | awk '$3 == "installed" {print $1 "=" $2; exit}')
+          [ -n "$pkg" ] || { echo "no containerd package installed"; exit 1; }
+          mkdir -p {{ upgrade_backup_dir }}
+          cd {{ upgrade_backup_dir }}
+          if ls "${pkg%%=*}_${pkg#*=}_"*.deb > /dev/null 2>&1; then echo "kept already: $pkg"; exit 0; fi
+          apt-get download "$pkg"
+          echo "kept: $pkg"
+      register: _deb_kept
+      changed_when: "'kept already' not in _deb_kept.stdout"
+
     - name: Download containerd.io (installed from the download once the kubelet is stopped)
       ansible.builtin.command:
         argv: [apt-get, install, --download-only, --yes, --allow-change-held-packages, -o, "DPkg::Lock::Timeout=120",
