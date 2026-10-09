@@ -199,3 +199,62 @@
     - name: systemd reads production's unit (no restart)
       ansible.builtin.systemd:
         daemon_reload: true
+
+# The Pis' Gluster as production's have it before step 00 (read 2026-10-08): the copy's build runs today's
+# setup-gluster.yml, so step 00's own change - the fstab entries rewritten with the boot unit's ordering, the unit
+# added, forgejo-repos' and backup-git-mirror's owner options set (four live `gluster volume set`, client graph switches
+# under Forgejo's writes), the mirror's root given its user - never ran in a full run (step 00 changed nothing there).
+# Put back, it runs on every full run from step 00; a run from a later step builds production as step 00 left it
+- name: Gluster as production's Pis have it before step 00
+  hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Production's Gluster only until step 00 is done (a run from a later step - production has today's then)
+      ansible.builtin.meta: end_play
+      when: (upgrade_from | default('00-gluster-boot')) > '00-gluster-boot'
+
+    - name: The glusterfs mounts in fstab without the boot unit's ordering (no remount - as production's)
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: ',x-systemd\.after=gluster-volumes-ready\.service'
+        replace: ''
+
+    - name: No boot unit waiting for the volumes' bricks
+      ansible.builtin.systemd:
+        name: gluster-volumes-ready
+        enabled: false
+
+    - name: Its unit and its script gone
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: [/etc/systemd/system/gluster-volumes-ready.service, /usr/local/sbin/gluster-volumes-ready]
+
+    - name: systemd reads the fstab and units as production's
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: forgejo-repos' and backup-git-mirror's owner options unset (production's, read 2026-10-08)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        gluster volume reset forgejo-repos storage.owner-uid > /dev/null
+        gluster volume reset forgejo-repos storage.owner-gid > /dev/null
+        gluster volume reset backup-git-mirror storage.owner-uid > /dev/null
+        gluster volume reset backup-git-mirror storage.owner-gid > /dev/null
+      args:
+        executable: /bin/bash
+      run_once: true
+      changed_when: true
+
+    - name: The mirror's root root:root 0755 (production's - its sync refused every repository so)
+      ansible.builtin.file:
+        path: /mnt/backups/git-mirror
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      run_once: true

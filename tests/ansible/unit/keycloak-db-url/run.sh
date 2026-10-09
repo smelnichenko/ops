@@ -55,7 +55,10 @@ unit = next((v.get("content") for t in ps for m, v in actions(t) if isinstance(v
 masked = re.sub(r"(?m)^(Environment=KC_[A-Z_]*PASSWORD=).*$", r"\1***MASKED***", unit or "")
 check("the copy's Keycloak unit is production's, masked md5 as read on both Pis",
       hashlib.md5(masked.encode()).hexdigest(), PROD_MASKED_MD5)
-gone = sorted(str(x) for t in ps for m, v in actions(t) if isinstance(v, dict) and v.get("state") == "absent"
+# (the Keycloak play's own: production-state's other plays remove what is theirs)
+kc_ps = [t for q in load("tests/ansible/upgrade/production-state.yml") if "Keycloak" in str(q.get("name"))
+         for t in tasks([q])]
+gone = sorted(str(x) for t in kc_ps for m, v in actions(t) if isinstance(v, dict) and v.get("state") == "absent"
               for x in (t.get("loop") if v.get("path") == "{{ item }}" else [v.get("path")]))
 check("the copy without /etc/keycloak and Keycloak's restart stamp, as production",
       gone, ["/etc/keycloak", "/var/lib/config-loaded/keycloak.sha256"])
