@@ -1,10 +1,10 @@
 # ScyllaDB 6.2.3 -> 2025.1.16 in the test environment, before production's (operator 2026-10-05: the test
-# 2025.1 wants raft topology: system.topology upgrade_state done on production and test (read 2026-10-09).
 # environment first for every data version). Not in the Vagrant copy (it leaves schnappy-test out): here the step
 # changes nothing, so no inventory change; in production it is the test cluster's rolling restart by the operator,
 # watched before the production step. infra upgrade/16-scylladb-2025.1-test (also: the test values' duplicate scylla
 # key, the second block's values kept). Stateful: shown to the operator before it runs.
 # its change: the branch upgrade/16-scylladb-2025.1-test in infra
+# 2025.1 wants raft topology: system.topology upgrade_state done on production and test (read 2026-10-09).
 # outage: the test environment only: its ScyllaDB restarts
 # abort: none for its data - the test environment's ScyllaDB has no backup (no Manager task, its agent no store
 # credentials; Wave 0 skips it by name): its keyspaces rebuilt by the test environment's schema Job, test data lost
