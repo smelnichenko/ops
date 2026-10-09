@@ -225,6 +225,15 @@ check("S8 control: the test environment runs it - green", inv_with("image docker
                                                                    ["docker.io/scylladb/scylla 2025.1.16"]), True)
 check("S8 it still runs the old one - red", inv_with("image docker.io/scylladb/scylla 6.2.3\n",
                                                       ["docker.io/scylladb/scylla 2025.1.16"]), False)
+seen = []
+s8 = patched(read_ledger=lambda: (None, []), inventory_check=lambda *a: seen.append(a[1:]) or True,
+             settled=lambda *a, **k: (True, {}, []), ansible=lambda *a: True, running_digest_problems=lambda *a: [])
+try:
+    m.check("16-scylladb-2025.1-test")
+finally:
+    restore(s8)
+check("S8 production's check of the step passes its test-image lines to the inventory check",
+      seen, [(["docker.io/scylladb/scylla 2025.1.16"],)])
 print("runner-refusals: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_RUNNER_REFUSALS
