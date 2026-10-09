@@ -45,6 +45,9 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
     settle <minutes>                          (production waits this long for Argo to settle after each of the step's
                                                merges - scripts/upgrade-production.py; default 30)
     default <file>: <line> => <line>          (a playbook default the step moves - scripts/upgrade-defaults.py)
+    base <arguments>                          (setup-kubeadm's arguments for a copy built after this step: what the
+                                               step changed on ten that the playbook's defaults do not install - a full
+                                               run from a later step, the targets build)
 
 and a branch upgrade/NN-<name> in ../infra and/or ../platform carrying the change itself, each branch stacked on the
 previous step's branch in the same repo (merged to main in this order at the production rollout).
@@ -85,6 +88,8 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --clickhouse-users <step>              (prints the users, comma-separated)
        scripts/upgrade-expected-inventory.py --wave0 <step>               (prints its wave0 stores, space-separated)
        scripts/upgrade-expected-inventory.py --pg-major <step>    (the PostgreSQL major it moves to, or nothing)
+       scripts/upgrade-expected-inventory.py --base-args <step>  (every step's base arguments up to it, in order)
+       scripts/upgrade-expected-inventory.py --before <step>     (the step before it, or nothing for the first)
 """
 import os
 import re
@@ -100,7 +105,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
-          wave0=None, soak=None, settle=None, tempo_flush=None):
+          wave0=None, soak=None, settle=None, tempo_flush=None, base=None):
     changes, seen, undos = [], set(), []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -146,6 +151,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
                 settle.append(int(line.split()[1]))
         elif line.startswith("default "):
             pass  # scripts/upgrade-defaults.py
+        elif re.fullmatch(r"base( -e [A-Za-z_][A-Za-z0-9_]*=\S+)+", line):
+            if base is not None:
+                base.append(line[len("base "):])
         elif re.fullmatch(r"tempo-flush (infra|platform)", line):
             if tempo_flush is not None:
                 tempo_flush.append(line.split()[1])
@@ -254,7 +262,7 @@ def main():
                                    ["--barman-check"], ["--barman-after-merge"], ["--restore-check"], ["--cert-renew"],
                                    ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
-                                   ["--wave0"], ["--pg-major"]) else None
+                                   ["--wave0"], ["--pg-major"], ["--base-args"], ["--before"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -298,6 +306,16 @@ def main():
         for name in names[:names.index(args[0]) + 1]:
             parse(os.path.join(STEPS, name + ".txt"), compat=compat)
         print(compat[-1] if compat else "")
+        return
+    if mode == "--before":
+        i = names.index(args[0])
+        print(names[i - 1] if i else "")
+        return
+    if mode == "--base-args":
+        base = []
+        for name in names[:names.index(args[0]) + 1]:
+            parse(os.path.join(STEPS, name + ".txt"), base=base)
+        print(" ".join(base))
         return
     if mode == "--wave0":
         wave0 = []

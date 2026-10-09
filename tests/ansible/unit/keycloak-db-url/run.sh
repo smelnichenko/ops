@@ -69,6 +69,20 @@ check("the copy's systemd reloads production's unit after it and the removal, re
       (bool(reload_) and removal is not None and reload_[-1] > removal,
        [(ps[i].get("ansible.builtin.systemd") or ps[i].get("ansible.builtin.systemd_service")).get("state") for i in reload_]),
       (True, [None] * len(reload_)))
+# production's unit only until step 00 is done: a full run from a later step (its copy built as the steps before it
+# left production) gets the playbook's unit, as production has then - the play ends before writing it, after its guard
+import os  # noqa: E402
+kc_play = next((q for q in load("tests/ansible/upgrade/production-state.yml") if "Keycloak" in str(q.get("name"))), {})
+kc_tasks = kc_play.get("tasks") or []
+ends = [i for i, t in enumerate(kc_tasks) if (t.get("ansible.builtin.meta") or t.get("meta")) == "end_play"]
+unit_at = next((i for i, t in enumerate(kc_tasks) for _, v in actions(t) if isinstance(v, dict)
+                and v.get("dest") == "/etc/systemd/system/keycloak.service"), None)
+end_when = kc_tasks[ends[0]].get("when", "false") if ends else "false"
+step00 = sorted(f[:-4] for f in os.listdir("tests/ansible/upgrade/steps") if f.endswith(".txt"))[0]
+check("production's Keycloak unit only until step 00 is done: ended for a run from a later step, before the unit",
+      (len(ends), ends[0] < unit_at if ends and unit_at is not None else None,
+       [condition(end_when, **({"upgrade_from": f} if f else {})) for f in (None, step00, "01-argocd-root-retry")]),
+      (1, True, [False, False, True]))
 check("step 00 runs the tagged playbook", any("playbook setup-pi-services.yml --tags keycloak-db-url" == l.strip()
                                               for l in open("tests/ansible/upgrade/steps/00-gluster-boot.txt")), True)
 # step 00's tagged run (--tags keycloak-db-url) reaches everything the unit needs: the facts its URL is made of, the

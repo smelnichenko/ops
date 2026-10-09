@@ -148,6 +148,11 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
+    # a full run from a later step builds production as the steps before it left it: step 00 wrote the playbook's unit
+    - name: Production's unit only until step 00 is done (a run from a later step - production has the playbook's then)
+      ansible.builtin.meta: end_play
+      when: (upgrade_from | default('00-gluster-boot')) > '00-gluster-boot'
+
     - name: Its unit as production's (no restart)
       ansible.builtin.copy:
         dest: /etc/systemd/system/keycloak.service

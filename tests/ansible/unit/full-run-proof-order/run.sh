@@ -15,7 +15,8 @@ python3 - <<'PY' || { echo "FAIL test:upgrade:full does not run scripts/upgrade-
 import yaml
 cmds = yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:full"]["cmds"]
 text = lambda c: c.get("cmd", "") if isinstance(c, dict) else str(c)
-assert [text(c) for c in cmds if "upgrade-full-steps.sh" in text(c)] == ["scripts/upgrade-full-steps.sh"]
+assert [text(c) for c in cmds if "upgrade-full-steps.sh" in text(c)] == \
+    ["UPGRADE_FROM={{.START}} scripts/upgrade-full-steps.sh"]
 assert not any("for step in" in text(c) for c in cmds)
 PY
 cp scripts/upgrade-full-steps.sh "$W/run/scripts/" && cp scripts/lib/process-groups.sh "$W/run/scripts/lib/"
@@ -83,6 +84,12 @@ case_ "the digests after a step not read: the run ends there, failed - no proof,
 case_ "a step's refs not read: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests" REFS_FAIL_AT=02-b
 case_ "a step's branch not in a repository: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests" \
   GIT_FAILS_AT=upgrade/02-b
+# a run from where production stands (UPGRADE_FROM: the first step it has not done): the steps from there only, the
+# first given no step before it (none green in this run); a step that is none refused before anything runs
+case_ "from 02-b: 02-b and 03-c only, 02-b first in the run" none 0 \
+  "step 02-b PREV_STEP=;digests;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c" \
+  UPGRADE_FROM=02-b
+case_ "from a step that is none: refused, nothing run" none 1 "" UPGRADE_FROM=09-z
 case_ "(again, for the digests' files)" none 0 \
   "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c"
 check "each step's digests in a file of its own" "$(ls "$W/run/.upgrade/step-digests" | paste -sd' ')" \
@@ -130,6 +137,54 @@ steps = [c.get("cmd", "") for n in ("test:upgrade:argo", "test:upgrade:step") fo
 if len(steps) != 2 or any("{{.STEP_SETTLE}}" not in c or re.search(r"restart_quiet=|stable_polls=", c) for c in steps):
     bad.append(f"the build's (test:upgrade:argo) and the steps' deciding settles take STEP_SETTLE alone: {steps}")
 print(("PASS" if not bad else "FAIL") + " the final settle at production's own values, the step settles one set"
+      + "".join("\n  " + b for b in bad))
+sys.exit(1 if bad else 0)
+PY
+# the run from where production stands: its start (production's first step not done, else FROM) given to every part -
+# the record, the boot's checks of the steps from it on, the build after the step before it, the steps; the build's
+# copy as that step left production (its base arguments, refs, expected inventory, ClickHouse settings, production's
+# own state up to it)
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' || fails=$((fails + 1))
+import sys
+import yaml
+tf = yaml.safe_load(open("Taskfile.yml"))["tasks"]
+text = lambda c: c.get("cmd", "") if isinstance(c, dict) else str(c)
+calls = lambda t: {c["task"]: c.get("vars") or {} for c in tf[t]["cmds"] if isinstance(c, dict) and "task" in c}
+bad = []
+full = tf["test:upgrade:full"]
+if (full.get("vars") or {}).get("START") != {"sh": "scripts/upgrade-production.py resume-from {{.FROM}}"}:
+    bad.append(f"test:upgrade:full's START: {(full.get('vars') or {}).get('START')}")
+for want in ("scripts/upgrade-production.py proof-start {{.START}}", "scripts/upgrade-merge-order.py --from {{.START}}",
+             "scripts/argo-helm-diff.py --from {{.START}}", "UPGRADE_FROM={{.START}} scripts/upgrade-build-with-pin.sh",
+             "UPGRADE_FROM={{.START}} scripts/upgrade-full-steps.sh"):
+    if want not in [text(c) for c in full["cmds"]]:
+        bad.append(f"test:upgrade:full lacks: {want}")
+if any("--all" in text(c) for c in full["cmds"]):
+    bad.append("test:upgrade:full checks every step, not the run's")
+build = tf["test:upgrade:build"]
+v = build.get("vars") or {}
+if "--before {{.UPGRADE_FROM}}" not in str(v.get("AT")):
+    bad.append(f"test:upgrade:build's AT: {v.get('AT')}")
+for name, want in (("BASE_ARGS", "--base-args {{.AT}}"), ("REFS", "--refs {{.AT}}"),
+                   ("CLICKHOUSE_COMPAT", "--clickhouse-compat {{.AT}}"),
+                   ("CLICKHOUSE_USERS", "--clickhouse-users {{.AT}}")):
+    if want not in str(v.get(name)):
+        bad.append(f"test:upgrade:build's {name}: {v.get(name)}")
+c = calls("test:upgrade:build")
+if c.get("_upgrade:base", {}).get("BASE_ARGS") != "{{.BASE_ARGS}}":
+    bad.append(f"the build's base: {c.get('_upgrade:base')}")
+argo = c.get("test:upgrade:argo", {})
+for k in ("INFRA_REF", "PLATFORM_REF", "EXPECTED", "CLICKHOUSE_COMPAT", "CLICKHOUSE_USERS", "UPGRADE_FROM"):
+    if k not in argo:
+        bad.append(f"the build's Argo stage not given {k}")
+ps = [text(x) for x in tf["test:upgrade:argo"]["cmds"] if "production-state.yml" in text(x)]
+if len(ps) != 1 or "upgrade_from" not in ps[0]:
+    bad.append(f"production-state.yml not given the run's start: {ps}")
+targets = calls("test:upgrade:build-targets").get("_upgrade:base", {})
+tv = tf["test:upgrade:build-targets"].get("vars") or {}
+if "--base-args {{.LAST_STEP}}" not in str(tv.get("BASE_ARGS")) or targets.get("BASE_ARGS") != "{{.BASE_ARGS}}":
+    bad.append(f"the targets build restates its base arguments: {targets}")
+print(("PASS" if not bad else "FAIL") + " the run from its start: every part given it, the build at the step before"
       + "".join("\n  " + b for b in bad))
 sys.exit(1 if bad else 0)
 PY

@@ -13,6 +13,7 @@ OCI), with their value files from infra, inline values and parameters - CRDs inc
 
 Usage: scripts/argo-helm-diff.py <step>     (exit 0: the same objects, or the step has no helm-diff line)
        scripts/argo-helm-diff.py --all      (every step with one)
+       scripts/argo-helm-diff.py --from <step>   (every step with one from it on: a full run's start)
 """
 import hashlib
 import importlib.machinery
@@ -227,12 +228,14 @@ def check(step):
 
 def main():
     args = sys.argv[1:]
-    if len(args) != 1:
+    if len(args) != (2 if args[:1] == ["--from"] else 1):
         sys.exit(__doc__)
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
-    steps = names if args[0] == "--all" else [args[0]]
-    if steps[0] not in names:
-        sys.exit(f"no step {steps[0]}")
+    first = args[-1] if args[0] != "--all" else names[0]
+    if first not in names:
+        sys.exit(f"no step {first}")
+    # --from: the steps from a full run's start on (those before it production merged already)
+    steps = names[names.index(first):] if args[0] in ("--all", "--from") else [first]
     failed = 0
     for s in steps:  # every step judged, each printing its verdict - not stopped at the first
         failed += not check(s)

@@ -43,7 +43,9 @@ Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py backup <step> <store>
        scripts/upgrade-production.py merge <step> <infra|platform>
        scripts/upgrade-production.py check <step>              (read-only: as `done` checks, nothing recorded)
-       scripts/upgrade-production.py proof-start
+       scripts/upgrade-production.py resume-from [<step>]    (the step a full run starts from: production's first not
+                                                             done, read-only - or the one given)
+       scripts/upgrade-production.py proof-start [<step>]   (the run's record; its start, the first step by default)
        scripts/upgrade-production.py record-proof <step> <infra sha> <platform sha>
        scripts/upgrade-production.py prepull-images <step>   (the images the merge pre-pulls, by the branches' pins:
                                                              the Vagrant step runs the pre-pull with them)
@@ -251,6 +253,17 @@ def applied_steps(events):
     return sorted({s for _, s, e, _ in events if e == "done"})
 
 
+def resume_from(events, names=None):
+    """The first step production has not done: where a full run starts, its copy built as the steps before it left
+    production (`events`: the ledger's, None for no ledger - nothing done). Every step done: nothing to run."""
+    names = names or step_names()
+    finished = set(applied_steps(events or []))
+    left = [n for n in names if n not in finished]
+    if not left:
+        sys.exit("every step is done in production - no full run to start")
+    return left[0]
+
+
 # ---- the ledger on ten ----------------------------------------------------------------------------------------------
 
 def run(cmd, **kw):
@@ -279,10 +292,13 @@ def ten(command, stdin=None, check=True):
     return out
 
 
-def read_ledger():
+def read_ledger(missing_ok=False):
+    """The ledger (its object, its events) - (None, None) for none when `missing_ok`."""
     out = ten(f"kubectl -n {LEDGER_NAMESPACE} get configmap {LEDGER_NAME} -o json", check=False)
     if out.returncode:
         if "NotFound" in out.stderr:
+            if missing_ok:
+                return None, None
             sys.exit("no ledger on ten - task deploy:upgrade:ledger-init")
         sys.exit(f"reading the ledger: {out.stderr.strip()}")
     obj = json.loads(out.stdout)
@@ -476,16 +492,36 @@ def ops_unchanged_since(commit, paths):
     return changed + untracked
 
 
-def proof_start():
+def proof_start(from_step=None):
+    """The run's record (run.json): the ops commit, its start, every step branch, and the step it starts from - the
+    first step production has not done (resume-from): its copy is built as the steps before it left production, and
+    those count by production's ledger, not by this run. The tree's committed playbook defaults must then be exactly
+    those steps' (production commits a step's before its done): the copy builds from them."""
+    names = step_names()
+    from_step = from_step or names[0]
+    if from_step not in names:
+        sys.exit(f"REFUSED: no step {from_step}")
     dirty = run(["git", "-C", OPS, "status", "--porcelain", "--", *PROVEN_PATHS], capture_output=True,
                 check=True).stdout
     if dirty.strip():
         sys.exit("REFUSED: the ops tree is not committed - a full run proves a commit:\n" + dirty)
+    read = lambda p: open(os.path.join(OPS, p)).read()
+    with_lines = [s for s in names if dflt.default_lines(s)]
+    try:
+        left = dflt.pending(read)
+    except ValueError as e:
+        sys.exit(f"REFUSED: {e}")
+    committed = [s for s in with_lines if s not in left]
+    before = [s for s in with_lines if names.index(s) < names.index(from_step)]
+    if committed != before:
+        sys.exit(f"REFUSED: a run from {from_step} builds production as the steps before it left it - their playbook "
+                 f"defaults committed ({', '.join(before) or 'none'}), the tree has {', '.join(committed) or 'none'}")
     head = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
-    write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "branches": branch_shas()})
-    print(f"PROOF: run {started} of ops {head[:10]}")
+    write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "from": from_step,
+                                                  "branches": branch_shas()})
+    print(f"PROOF: run {started} of ops {head[:10]} from {from_step}")
 
 
 def branch_shas():
@@ -567,7 +603,8 @@ def record_proof(step, infra_sha, platform_sha):
         if names.index(step) else dict.fromkeys(REPOS, "main")
     ran = step_digests(step)
     moved = {f"{full_name(n)}:{t}" for n, t in step_images(step)}
-    proof = {"step": step, "run": run_info["run"], "ops": run_info["ops"], "repos": {}, "floating": floating_digests(),
+    proof = {"step": step, "run": run_info["run"], "from": run_info.get("from", names[0]), "ops": run_info["ops"],
+             "repos": {}, "floating": floating_digests(),
              "digests": {k: d for k, d in sorted(ran.items()) if k in moved}}
     for repo in REPOS:
         now_sha = run(["git", "-C", os.path.join(OPS, "..", repo), "rev-parse", refs[repo]], capture_output=True,
@@ -684,16 +721,24 @@ def proof_inventory(names, step, merged, partly=False):
     return inv.expected(names[:i + (1 if merged else 0)])
 
 
-def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, partly=False, tip=None):
+def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, partly=False, tip=None, done=()):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
     the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled; `partly`:
-    some of them (a two-repo step between its merges)."""
+    some of them (a two-repo step between its merges). `done`: the steps production's ledger has done - a step before
+    the run's start counts by it (the run built its copy as those left production), the rest by the same run."""
     path = proof_path(step)
     if not os.path.exists(path):
         return [f"{step} has no proof from a full run (.upgrade/proven/{step}.json)"]
     proof = json.load(open(path))
     out = []
+    start = proof.get("from", names[0])
     for earlier in names[:names.index(step)]:
+        if start in names and names.index(earlier) < names.index(start):
+            if earlier not in done:
+                out.append(f"{earlier} is not done in production - the full run that proved {step} started at "
+                           f"{start}, built as production after the steps before it")
+                break
+            continue
         p = proof_path(earlier)
         if not os.path.exists(p) or json.load(open(p))["run"] != proof["run"]:
             out.append(f"{earlier} was not proven by the same full run as {step} ({proof['run']})")
@@ -932,7 +977,8 @@ def vault_login_problems():
 
 def begin(step):
     names, events, _ = ledger_for(step, "begin")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)) + vault_login_problems())
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events))
+           + vault_login_problems())
     ok = inventory_check(applied_steps(events))
     # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
     before = [a for _, s, e, a in events if e == "apps" and s != step]
@@ -946,14 +992,15 @@ def begin(step):
 
 def backup(step, store):
     names, events, _ = ledger_for(step, "backup", store)
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events)))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events)))
     refuse([] if ansible("playbooks/upgrade-backup.yml", "-e", f"store={store}") else [f"the {store} backup failed"])
     record(step, "backup", store)
 
 
 def preview(step):
     names, events, _ = ledger_for(step, "preview")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
+                          done=applied_steps(events)))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if run([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
@@ -969,7 +1016,8 @@ def merge(step, repo):
         # pushed - a restack between the checks and the push (another shell) no longer pushes a commit nothing checked
         tip = run(["git", "-C", d, "rev-parse", "-q", "--verify", f"{BRANCH}{step}^{{commit}}"],
                   capture_output=True).stdout.strip() or None
-        refuse(proof_problems(step, names, repo, defaulted(events), partly=partly, tip=tip) + registry_problems(step))
+        refuse(proof_problems(step, names, repo, defaulted(events), partly=partly, tip=tip,
+                              done=applied_steps(events)) + registry_problems(step))
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
         if merged_base(d, step):
@@ -1063,7 +1111,8 @@ def cluster_runs(image):
 
 def playbooks(step):
     names, events, _ = ledger_for(step, "playbooks")
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
+                          done=applied_steps(events)))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if run([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")
@@ -1086,7 +1135,8 @@ def defaults(step):
     last = git("log", "-1", "--format=%H %s", "--", dflt.COMMITTED).split(" ", 1)
     if len(last) == 2 and last[1] == message:
         sha = last[0]
-        refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True)
+        refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True,
+                                 done=applied_steps(events))
                + ([] if git("rev-parse", "HEAD") == sha else [f"ops main is past the step's commit {sha[:10]}"]))
         if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode:
             refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
@@ -1123,7 +1173,8 @@ def check(step, since=None, deciding=False):
 def done(step):
     names, events, info = ledger_for(step, "done")
     # what it checks and what its first call runs (an ACME issuance, a base backup) must be what the full run proved
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True))
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
+                          done=applied_steps(events)))
     # by ten's clock, the one the first green check was recorded by: this machine's, ahead, would end the soak early
     checked, left = soak_state(events, step, info["soak"], ten_clock())
     if checked is not None and left > 0:
@@ -1199,7 +1250,8 @@ def status():
 
 def main():
     a = sys.argv[1:]
-    actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start, ("release", 1): release,
+    actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start,
+               ("proof-start", 1): proof_start, ("release", 1): release,
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof,
@@ -1208,6 +1260,16 @@ def main():
                                                    f"-e poll_seconds={SETTLE_POLL}")}
     if a[:1] == ["check"] and len(a) == 2:
         sys.exit(0 if check(a[1]) else 1)
+    if a[:1] == ["resume-from"] and len(a) <= 2:
+        # the step a full run starts from: given (a rehearsal, or a run proving the start again), else production's
+        # first not done - read-only, the ledger on ten (none yet: the first step)
+        if len(a) == 2:
+            if a[1] not in step_names():
+                sys.exit(f"no step {a[1]}")
+            print(a[1])
+        else:
+            print(resume_from(read_ledger(missing_ok=True)[1]))
+        return
     fn = actions.get((a[0] if a else "", len(a) - 1))
     if fn is None:
         sys.exit(__doc__)

@@ -10,7 +10,8 @@
 # step whole (its task in a session of its own, every process group of it TERMed, KILLed after STOP_GRACE; go-task
 # KILLed at once), its output read to the end, said, and the run ends 128+signal: no step after it, no proof for it.
 #
-# Usage: scripts/upgrade-full-steps.sh   (test:upgrade:full)
+# Usage: scripts/upgrade-full-steps.sh   (test:upgrade:full; UPGRADE_FROM: the step it starts from - production's
+#        first not done, its copy built as the steps before it left production - else the first)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 # own_jobs, child_alive, group_alive, stop_groups
@@ -101,6 +102,11 @@ for line in sys.stdin.buffer:
 steps=$(ls tests/ansible/upgrade/steps | sed -n 's/\.txt$//p' | sort -V)
 # an empty step list is a failure, not a green run (the loop just did nothing)
 [ -n "$steps" ] || { echo "no upgrade steps in tests/ansible/upgrade/steps"; exit 1; }
+# from the step the run starts at: the ones before it are production's done steps, its copy built as they left it
+if [ -n "${UPGRADE_FROM:-}" ]; then
+  grep -qx -- "$UPGRADE_FROM" <<< "$steps" || { echo "UPGRADE_FROM=$UPGRADE_FROM: no such step"; exit 1; }
+  steps=$(sed -n "/^$UPGRADE_FROM\$/,\$p" <<< "$steps")
+fi
 echo "=== $(echo "$steps" | wc -l) steps"
 mkfifo "$work/out" || exit 1
 prev=""

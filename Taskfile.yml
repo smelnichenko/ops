@@ -455,7 +455,7 @@ tasks:
       # isolate the cluster from production (DNS, network - proven by a probe) and connect ESO to the Vagrant Vault
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
       # objects ten has that no git repo creates (each documented in the playbook), production's wildcard certificate too
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
       # as on the Pis: Caddy serves git/auth/nexus.pmon.dev on 443 with that wildcard
       - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-caddy.yml'
       # the schnappy realm, which production keeps only in its Keycloak database: from the auth chart's import + Vault.
@@ -677,13 +677,15 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.LAST_STEP}}
       CLICKHOUSE_USERS:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.LAST_STEP}}
+      # what the steps changed on ten that the playbook defaults do not install (their base lines); and at the targets
+      # Argo owns External Secrets (the Vagrant inventory reproduces ten's Helm install of it)
+      BASE_ARGS:
+        sh: echo "$(scripts/upgrade-expected-inventory.py --base-args {{.LAST_STEP}}) -e external_secrets_by_helm_override=false"
     cmds:
       - cmd: mkdir -p .upgrade && scripts/upgrade-expected-inventory.py {{.LAST_STEP}} > .upgrade/expected-targets.txt
-      # the Vagrant inventory reproduces ten's history (External Secrets by Helm, the kubelet's grace only in its file);
-      # at the targets Argo owns External Secrets and the grace is in the kubelet-config ConfigMap
       - task: _upgrade:base
         vars:
-          BASE_ARGS: -e external_secrets_by_helm_override=false -e kubelet_grace_in_kubelet_config_map=true
+          BASE_ARGS: '{{.BASE_ARGS}}'
       # the Argo stage's own inventory check, against the targets' expected inventory instead of production's
       - task: test:upgrade:argo
         vars:
@@ -695,9 +697,26 @@ tasks:
           CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
 
   test:upgrade:build:
-    desc: Build the whole Vagrant copy of production from scratch - the baseline, a cold boot of every VM, then the Argo layer (VMs stay up)
+    desc: Build the whole Vagrant copy of production from scratch - the baseline (or production as the steps before UPGRADE_FROM left it), a cold boot of every VM, then the Argo layer (VMs stay up)
+    vars:
+      # the step the copy is built after: the one before the run's start (UPGRADE_FROM, a full run from production's
+      # first step not done) - none for the first: production's baseline. At it: the base arguments, the refs, the
+      # inventory and ClickHouse's settings of every step up to it, production's own state as it left it
+      AT:
+        sh: 'if [ -n "{{.UPGRADE_FROM}}" ]; then scripts/upgrade-expected-inventory.py --before {{.UPGRADE_FROM}}; fi'
+      BASE_ARGS:
+        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --base-args {{.AT}}; fi'
+      REFS:
+        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --refs {{.AT}}; else echo main main; fi'
+      CLICKHOUSE_COMPAT:
+        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --clickhouse-compat {{.AT}}; fi'
+      CLICKHOUSE_USERS:
+        sh: 'if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py --clickhouse-users {{.AT}}; fi'
     cmds:
+      - cmd: 'mkdir -p .upgrade && if [ -n "{{.AT}}" ]; then scripts/upgrade-expected-inventory.py {{.AT}} > .upgrade/expected-build.txt; fi'
       - task: _upgrade:base
+        vars:
+          BASE_ARGS: '{{.BASE_ARGS}}'
       # every VM shut down and booted cold once, as a node and the Pis come back after an outage: the boot order of the
       # Pi stack (Gluster mounts, Consul, Patroni, Vault's unseal) is part of what the run proves (defect 22 was found
       # this way)
@@ -705,33 +724,46 @@ tasks:
       - cmd: vagrant up --no-provision
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/vms-ready.yml
       - task: test:upgrade:argo
+        vars:
+          INFRA_REF: '{{index (splitList " " .REFS) 0}}'
+          PLATFORM_REF: '{{index (splitList " " .REFS) 1}}'
+          EXPECTED: '{{if .AT}}.upgrade/expected-build.txt{{else}}tests/ansible/upgrade/prod-inventory.txt{{end}}'
+          CLICKHOUSE_COMPAT: '{{.CLICKHOUSE_COMPAT}}'
+          CLICKHOUSE_USERS: '{{.CLICKHOUSE_USERS}}'
+          UPGRADE_FROM: '{{.UPGRADE_FROM}}'
 
   # The gate before the production rollout (operator, 2026-10-03): steps fixed and re-run one at a time prove each
   # step, not the chain; this proves the chain, unattended, from nothing.
   test:upgrade:full:
-    desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails); each green step's proof recorded for production's merge (.upgrade/proven)
+    desc: The whole upgrade from scratch, unattended - build the Vagrant copy of production, then every step in tests/ansible/upgrade/steps in order (stops at the first that fails); each green step's proof recorded for production's merge (.upgrade/proven). From production's first step not done (the ledger on ten, read-only), or FROM=<step>
+    vars:
+      # where the run starts: production's first step not done - its copy built as the steps before it left production,
+      # those counting by production's ledger (proof-start records it) - or the step given (FROM: a rehearsal; its
+      # proofs hold only once production stands there)
+      START:
+        sh: scripts/upgrade-production.py resume-from {{.FROM}}
     cmds:
       # before anything boots: the ops tree committed (the run proves a commit - production's phases compare with it),
       # every step's state between its two merges one the run proves, and an Argo CD upgrade's new Helm rendering every
       # application as its old one did (helm-diff lines)
       - cmd: echo "=== BOOT proof-start $(date +%T)"
-      - cmd: scripts/upgrade-production.py proof-start
+      - cmd: scripts/upgrade-production.py proof-start {{.START}}
       - cmd: echo "=== BOOT merge-order $(date +%T)"
-      - cmd: scripts/upgrade-merge-order.py --all
+      - cmd: scripts/upgrade-merge-order.py --from {{.START}}
       # every step preview (check mode) reads no result check mode skips - step 37's crashed three hours in once
       - cmd: echo "=== BOOT check-mode-lint $(date +%T)"
       - cmd: scripts/check-mode-lint.py
       - cmd: echo "=== BOOT helm-diff $(date +%T)"
-      - cmd: scripts/argo-helm-diff.py --all
+      - cmd: scripts/argo-helm-diff.py --from {{.START}}
       # the build, and beside it (no wall time) the ClickHouse rollback pin of steps 59 and 61 with the real images -
       # every line of it stamped with its time (where the boot's minutes go stays measurable)
       - cmd: echo "=== BOOT build $(date +%T)"
-      - cmd: scripts/upgrade-build-with-pin.sh
+      - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-build-with-pin.sh
       - cmd: echo "=== BOOT done $(date +%T)"
       # every step in order, each its own task test:upgrade:step, its lines stamped; stops at the first that fails - a
       # script of its own: go-task swallows a Ctrl-C or a TERM, and ran a step's remaining commands after one its
       # running command survived
-      - cmd: scripts/upgrade-full-steps.sh
+      - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-full-steps.sh
       # the backups restore on the upgraded copy: Postgres from its barman backup, Velero a volume's data
       - task: test:upgrade:restore-check
 

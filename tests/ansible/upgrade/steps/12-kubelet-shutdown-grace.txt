@@ -6,3 +6,5 @@
 # outage: none - the ConfigMap only (the kubelet reads it at the next kubeadm upgrade)
 # abort: the ConfigMap's old values (0s/0s) - not wanted: they turn the graceful shutdown off
 playbook configure-node.yml -e kubelet_grace_in_kubelet_config_map=true
+# a copy built after this step: the grace in the kubelet-config ConfigMap as the playbook line leaves it
+base -e kubelet_grace_in_kubelet_config_map=true
