@@ -103,6 +103,21 @@ if None in (lock, vault, leader, pause):
 at = every.index
 check("in order: Vault's handover, Patroni paused, Consul's handover, the backup's lock read, the restart at once",
       [at(vault) < at(pause) < at(leader) < at(lock), at(lock) + 1 == at(restart)], [True, True])
+# the backup's timer stopped here before the lock is read - a backup it started between the read and the restart took the
+# lock through this server's agent, and the restart ended it - and started again, only where it ran, whatever happens
+def timer(t, state):
+    v = t.get("ansible.builtin.systemd_service") or {}
+    return v.get("name") == "pi-tier0-backup.timer" and v.get("state") == state
+stop = next((t for t in every if timer(t, "stopped")), None)
+# the innermost block holding the restart: its always runs whatever happens in it
+blk = [t for t in every if "block" in t and restart in list(tasks(t["block"]))][-1:] or [{}]
+blk = blk[0]
+start = next((t for t in tasks(blk.get("always")) if timer(t, "started")), None)
+check("the backup's timer stopped before the lock is read, started again in the block's always where it ran",
+      (stop is not None and at(stop) < at(lock), start is not None,
+       condition((start or {}).get("when", "false"), _tier0_timer={"stdout": "active"}),
+       condition((start or {}).get("when", "true"), _tier0_timer={"stdout": "inactive"})),
+      (True, True, True, False))
 # its condition as Ansible evaluates it: a Pi whose Vault is active - not the third server, not a Pi whose Vault is
 # stopped, failed or not installed (a restart on the active Pi without a step-down: its Vault lost its storage agent)
 pis = {"pis": ["pi1", "pi2"]}
