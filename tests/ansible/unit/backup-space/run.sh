@@ -46,9 +46,10 @@ case_ "room for the copy, the floor kept after it" 0 "" 10 300 900
 case_ "room for the copy, under the eviction floor after it" 1 "under the kubelet's eviction floor" 170 300 900
 case_ "no room for the copy" 1 "not enough room" 310 300 900
 # 900 GiB, 300 free: a 130 GiB copy ends at 81.1% used - above the floor (15%), past the image store's 80%
-case_ "on the image store's filesystem: a copy past its GC threshold less 5 refused" 1 "the image store's bound" 130 300 900
+# the refusal by its number - 20% of 900 GiB (the failed task's cmd, printed beside it, holds the words without it)
+case_ "on the image store's filesystem: a copy past its GC threshold less 5 refused" 1 "past the image store's bound 193273528320" 130 300 900
 case_ "  the image store elsewhere: the eviction floor alone" 0 "" 130 300 900 b
-QUOTE=1 case_ "  containerd 2.x's quoting: the same refusal" 1 "the image store's bound" 130 300 900
+QUOTE=1 case_ "  containerd 2.x's quoting: the same refusal" 1 "past the image store's bound 193273528320" 130 300 900
 case_ "  a copy that stays under it passes" 0 "" 100 300 900
 echo "backup-space: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))
