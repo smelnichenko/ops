@@ -44,6 +44,45 @@ for name, env_, want in (("running on the cordoned node: not stopped", {"ANSWER"
     r = subprocess.run(["bash", "-c", driver], capture_output=True, text=True,
                        env=dict(os.environ, **{"FAIL": "", **env_}))
     check(f"Kafka: {name}", r.stdout.strip().endswith(want), r.stdout + r.stderr)
+# Kafka: the whole copy script, kubectl and tar stubs - the node cordoned before a broker is deleted; a broker running
+# when its copy would start: refused, nothing tarred, the node uncordoned all the same; the control copies
+kb = os.path.join(W, "kbin")
+os.makedirs(kb)
+open(os.path.join(kb, "kubectl"), "w").write("""#!/bin/bash
+echo "$*" >> "$W/kcalls"
+case "$*" in
+  *" get pod "*"--ignore-not-found"*) printf %s "$PHASE" ;;
+  *" get pod "*"{.spec.nodeName}"*) echo n1 ;;
+  *) ;;
+esac
+exit 0
+""")
+open(os.path.join(kb, "tar"), "w").write('#!/bin/bash\necho "tar $*" >> "$W/kcalls"\n')
+for f in ("kubectl", "tar"):
+    os.chmod(os.path.join(kb, f), 0o755)
+whole = by("Kafka - every broker stopped, its volume tarred")["ansible.builtin.shell"]["cmd"]
+os.makedirs(os.path.join(W, "brokerdir"))
+script = render(whole, kubectl="kubectl", _kafka_clusters={"stdout": "ns k1"},
+                _kafka={"stdout": "ns k1 broker-0 " + os.path.join(W, "brokerdir")}, local_dir=os.path.join(W, "local"),
+                _stamp="s")
+def copy(phase):
+    open(os.path.join(W, "kcalls"), "w").close()
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                       env=dict(os.environ, W=W, PHASE=phase, PATH=kb + ":" + os.environ["PATH"]))
+    calls = open(os.path.join(W, "kcalls")).read().splitlines()
+    at = lambda word: next((i for i, c in enumerate(calls) if word in c), None)
+    return r, calls, at
+r, calls, at = copy("Pending/n1")
+check("Kafka control: a broker kept out (Pending on the cordoned node) copied, the node uncordoned after",
+      (r.returncode, any(c.startswith("tar ") for c in calls), (at("uncordon n1") or 0) > (at("tar ") or 0)) == (0, True, True),
+      (r.returncode, calls))
+check("Kafka: the node cordoned before its broker is deleted",
+      at(" cordon n1") is not None and at("delete pod broker-0") is not None and at(" cordon n1") < at("delete pod broker-0"),
+      calls)
+r, calls, at = copy("Running/n1")
+check("Kafka: the broker running when its copy would start: refused, nothing tarred, the node uncordoned",
+      (r.returncode != 0, "running before its copy" in r.stdout, any(c.startswith("tar ") for c in calls),
+       at("uncordon n1") is not None) == (True, True, False, True), (r.returncode, r.stdout, calls))
 # ClickHouse: the cleanup, its data path from the query's third field
 clean = by("ClickHouse - the snapshot released")["ansible.builtin.shell"]["cmd"]
 data = os.path.join(W, "ch")

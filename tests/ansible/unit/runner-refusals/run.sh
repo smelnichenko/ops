@@ -57,6 +57,16 @@ check("A01 the proven branch: no problem", m.proof_problems("06-f", ["06-f"], "i
 open(os.path.join(T, "infra", "f"), "a").write("unproven\n"); g("commit", "-qam", "unproven")
 got = m.proof_problems("06-f", ["06-f"], "infra")
 check("A01 a commit added after the proof: refused", any("is not the change the full run proved" in p for p in got), True)
+# A22: origin's main moved on (another step merged) and the branch not restacked onto it
+g("reset", "-q", "--hard", "HEAD~1")
+other = os.path.join(T, "other")
+subprocess.run(["git", "clone", "-q", os.path.join(T, "origin.git"), other], check=True, capture_output=True)
+open(os.path.join(other, "g"), "w").write("x\n")
+for a in (["add", "g"], ["commit", "-qm", "another step"], ["push", "-q", "origin", "main"]):
+    subprocess.run(["git", "-C", other, *a], check=True, capture_output=True)
+got = m.proof_problems("06-f", ["06-f"], "infra")
+check("A22 the branch not on origin's main (moved on): refused, restack named",
+      any("does not contain origin/main" in p for p in got), True)
 # A02: the steps before proven by another run, or not at all
 N3 = m.step_names()[:3]
 for st, run in zip(N3, ("r1", "r2", "r2")):
@@ -160,6 +170,22 @@ s = patched(ten=lambda c, stdin=None, check=True: R(0, ""), remote=lambda *a, **
             run=lambda cmd, **k: R(1 if cmd[0].endswith("inventory-diff.sh") else 0), WORK=tempfile.mkdtemp())
 check("A11 inventory-diff.sh failing: the check is red", m.inventory_check([]), False)
 restore(s)
+# M01: a step line whose "before" is not in the inventory at that step (a stale step file): stops
+def expected_with(line):
+    d = tempfile.mkdtemp()
+    os.makedirs(os.path.join(d, "steps"))
+    open(os.path.join(d, "prod-inventory.txt"), "w").write("image a 1\n")
+    open(os.path.join(d, "steps", "01-x.txt"), "w").write(line + "\n")
+    saved = (m.inv.UPGRADE, m.inv.STEPS)
+    m.inv.UPGRADE, m.inv.STEPS = d, os.path.join(d, "steps")
+    try:
+        return sorted(m.inv.expected(["01-x"]))
+    except SystemExit as e:
+        return "stale" if "the step file is stale" in str(e.code) else str(e.code)
+    finally:
+        m.inv.UPGRADE, m.inv.STEPS = saved
+check("M01 control: a line from what the inventory holds applies", expected_with("image a 1 => image a 2"), ["image a 2"])
+check("M01 a line from what it does not hold: stopped as stale", expected_with("image a 0 => image a 2"), "stale")
 print("runner-refusals: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_RUNNER_REFUSALS
