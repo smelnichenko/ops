@@ -233,13 +233,15 @@
         - name: Install the minor's CNI plugins and crictl
           ansible.builtin.apt:
             name: "{{ minor_packages[target_minor] }}"
+            allow_change_held_packages: true
             allow_downgrade: false
 
+        # the minor's pair too: unheld, an apt upgrade on the node moved them past its pins
         - name: Keep the packages held
           ansible.builtin.dpkg_selections:
             name: "{{ item }}"
             selection: hold
-          loop: [kubeadm, kubelet, kubectl]
+          loop: [kubeadm, kubelet, kubectl, kubernetes-cni, cri-tools]
 
         - name: Restart the kubelet on the new version
           ansible.builtin.systemd_service:

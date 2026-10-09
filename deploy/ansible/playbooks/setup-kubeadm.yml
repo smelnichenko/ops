@@ -370,6 +370,7 @@
         mode: '0644'
       notify: Restart kubelet
 
+    # all five: an apt upgrade on the node moved the CNI plugins and crictl past the minor's pins otherwise
     - name: Hold kubernetes packages
       ansible.builtin.dpkg_selections:
         name: "{{ item }}"
@@ -378,6 +379,8 @@
         - kubeadm
         - kubelet
         - kubectl
+        - kubernetes-cni
+        - cri-tools
 
     # ================================================================
     # Phase 3: Kernel prerequisites
