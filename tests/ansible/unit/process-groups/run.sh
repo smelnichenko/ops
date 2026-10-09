@@ -291,12 +291,18 @@ setsid bash "$W/late-job" "$W" < /dev/null > /dev/null 2>&1 & s=$!
 sessions+=("$s")
 ready "$W/late.ready"
 t0=$SECONDS
-if mine "$s"; then stop_groups -n task 5 "$s" > "$W/late.out"; fi
+# a grace long enough for the job's chain (its TERM, a script, a fork, an exec) on a loaded machine - 5 s ran out under
+# a CPU hog beside the gate's one CPU, the job KILLed whole; "at once" is well under it
+if mine "$s"; then stop_groups -n task 20 "$s" > "$W/late.out"; fi
 wait "$s" 2> /dev/null
 lt=$(cat "$W/late.pid" 2> /dev/null)
+got="$((SECONDS - t0 < 10)) $(gone_or_zombie "${lt:-none}") $(grep -c '^caught$' "$W/late.pid.n" 2> /dev/null) \
+$(grep -c killed "$W/late.out")"
 check "-n task: a task started during the grace KILLed at once, what it started TERMed once; nothing killed at the end" \
-  "$((SECONDS - t0 < 3)) $(gone_or_zombie "${lt:-none}") $(grep -c '^caught$' "$W/late.pid.n" 2> /dev/null) \
-$(grep -c killed "$W/late.out")" "1 gone 1 0"
+  "$got" "1 gone 1 0"
+# what to read if it fails: whether the job ran its task at all, its child, the stop's words
+[ "$got" = "1 gone 1 0" ] || echo "    traces: $((SECONDS - t0)) s; task pid ${lt:-none}; child $(cat "$W/late.pid.n.pid" 2> /dev/null \
+  || echo none); the stop said: $(tr '\n' ';' < "$W/late.out")"
 for f in "$W/late.pid" "$W/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
