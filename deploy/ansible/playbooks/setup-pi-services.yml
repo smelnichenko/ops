@@ -740,7 +740,8 @@
       ansible.builtin.shell: |
         set -euo pipefail
         systemctl restart postgresql
-        for _ in $(seq 60); do pg_isready -q -h 127.0.0.1 -p 5432 && exit 0; sleep 2; done
+        end=$(( $(cut -d. -f1 /proc/uptime) + 120 ))
+        for _ in $(seq 60); do pg_isready -q -h 127.0.0.1 -p 5432 && exit 0; [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break; sleep 2; done
         echo "Postgres on {{ inventory_hostname }} not ready 120 s after its restart" >&2; exit 1
       args:
         executable: /bin/bash
@@ -756,7 +757,12 @@
           echo "REFUSED on {{ inventory_hostname }}: Forgejo serves here but not on the other Pi ({{ peer_ip }})" >&2; exit 1
         fi
         systemctl restart forgejo
-        for _ in $(seq 90); do curl -sf --max-time 10 -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0; sleep 2; done
+        end=$(( $(cut -d. -f1 /proc/uptime) + 180 ))
+        for _ in $(seq 90); do
+          curl -sf --max-time 10 -o /dev/null http://127.0.0.1:3000/api/v1/version && exit 0
+          [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+          sleep 2
+        done
         echo "Forgejo on {{ inventory_hostname }} not serving 180 s after its restart" >&2; exit 1
       args:
         executable: /bin/bash
@@ -773,10 +779,12 @@
           exit 1
         fi
         systemctl restart haproxy
+        end=$(( $(cut -d. -f1 /proc/uptime) + 180 ))
         for _ in $(seq 90); do
           systemctl is-active --quiet haproxy \
             && { ! systemctl is-enabled --quiet forgejo || curl -sf --max-time 10 -o /dev/null http://127.0.0.1:3000/api/v1/version; } \
             && exit 0
+          [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
           sleep 2
         done
         echo "HAProxy (or Forgejo behind it) on {{ inventory_hostname }} not back 180 s after its restart" >&2; exit 1

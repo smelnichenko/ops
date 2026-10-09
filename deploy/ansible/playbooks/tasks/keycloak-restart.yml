@@ -61,7 +61,9 @@
       fi
       systemctl daemon-reload
       systemctl restart keycloak
-      for _ in $(seq 120); do up 127.0.0.1 && exit 0; sleep 2; done
+      # by the clock, not the tries (each try can take curl's 10 s): /proc/uptime, which nothing sets back
+      end=$(( $(cut -d. -f1 /proc/uptime) + 240 ))
+      for _ in $(seq 120); do up 127.0.0.1 && exit 0; [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break; sleep 2; done
       echo "Keycloak on {{ inventory_hostname }} not serving 240 s after its restart" >&2; exit 1
   changed_when: true
   when:

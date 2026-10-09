@@ -35,15 +35,19 @@
       sealed() { python3 -c 'import json, sys; print(str(json.load(sys.stdin)["sealed"]).lower())'; }
       # Consul (Vault's storage) with a leader first: before that, Vault is up but sealed and an unseal silently
       # fails. At most 120 s.
+      end=$(( $(cut -d. -f1 /proc/uptime) + 120 ))
       for _ in $(seq 1 60); do
         [[ "$(curl -sf --max-time 2 http://127.0.0.1:8500/v1/status/leader 2>/dev/null)" == *:* ]] && break
+        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
         sleep 2
       done
       # Vault answering (seal-status answers sealed or not), at most 150 s
       st=""
+      end=$(( $(cut -d. -f1 /proc/uptime) + 150 ))
       for _ in $(seq 1 150); do
         st=$(curl -s --cacert /etc/vault.d/tls/ca-cert.pem --max-time 2 "$API/v1/sys/seal-status" 2>/dev/null) && [ -n "$st" ] && break
         st=""
+        [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
         sleep 1
       done
       [ -n "$st" ] || { echo "vault-unseal: Vault not answering on $API"; exit 1; }
