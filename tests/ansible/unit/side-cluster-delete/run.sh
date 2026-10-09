@@ -119,8 +119,16 @@ check_get = "--request-timeout=" in get
 fails += not check_get
 print(f"{'PASS' if check_get else 'FAIL'} each read bounded (--request-timeout): a hung one outlived the bound")
 # every place that removes a side cluster removes it so
-users = {f: open(f).read().count("side-cluster-delete.yml") for f in
-         ("tests/ansible/upgrade/tasks/wave0-pg-dump.yml", "tests/ansible/upgrade/restore-check.yml")}
+def _walk(ts):
+    for t in ts or []:
+        if isinstance(t, dict):
+            yield t
+            for k in ("block", "rescue", "always", "tasks"):
+                yield from _walk(t.get(k))
+# the includes as Ansible runs them (a comment naming the file counts for nothing)
+users = {f: sum(1 for t in _walk(yaml.safe_load(open(f)))
+                if str(t.get("ansible.builtin.include_tasks", "")).endswith("side-cluster-delete.yml"))
+         for f in ("tests/ansible/upgrade/tasks/wave0-pg-dump.yml", "tests/ansible/upgrade/restore-check.yml")}
 left = {f: open(f).read().count("outlived its delete") for f in users}
 ok = users == dict.fromkeys(users, 2) and left == dict.fromkeys(left, 0)
 fails += not ok

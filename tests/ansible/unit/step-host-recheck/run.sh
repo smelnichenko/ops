@@ -62,7 +62,8 @@ if iso:
     check("the Pis' isolation failing: the command fails there (go-task's shell goes on past a failed line)",
           ran(iso[0], fails="isolate-pis", HAS_PLAYBOOKS="yes"), (1, ["isolate-pis.yml"]))
 check("the full run passes each step the one before it (scripts/upgrade-full-steps.sh)",
-      open("scripts/upgrade-full-steps.sh").read().count('PREV_STEP="${prev%% *}"'), 1)
+      sum(1 for l in open("scripts/upgrade-full-steps.sh") if 'PREV_STEP="${prev%% *}"' in l
+          and not l.lstrip().startswith("#")), 1)
 # the proof the tag runs: every probe and the DNS answer - each named (a probe left untagged would silently not run)
 plays = yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml"))
 tagged = sorted(t["name"] for p in plays for t in p.get("tasks") or [] if "proof" in (t.get("tags") or []))
