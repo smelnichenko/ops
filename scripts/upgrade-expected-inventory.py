@@ -45,6 +45,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
     settle <minutes>                          (production waits this long for Argo to settle after each of the step's
                                                merges - scripts/upgrade-production.py; default 30)
     default <file>: <line> => <line>          (a playbook default the step moves - scripts/upgrade-defaults.py)
+    scrape-pool-gone <pool>                   (a Prometheus scrape pool the step removes on purpose: the metrics check
+                                               excuses it from then on)
     base <arguments>                          (setup-kubeadm's arguments for a copy built after this step: what the
                                                step changed on ten that the playbook's defaults do not install - a full
                                                run from a later step, the targets build)
@@ -90,6 +92,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --pg-major <step>    (the PostgreSQL major it moves to, or nothing)
        scripts/upgrade-expected-inventory.py --base-args <step>  (every step's base arguments up to it, in order)
        scripts/upgrade-expected-inventory.py --before <step>     (the step before it, or nothing for the first)
+       scripts/upgrade-expected-inventory.py --scrape-pools-gone <step>  (the pools the steps up to it removed, ',')
 """
 import os
 import re
@@ -105,7 +108,7 @@ WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla
 
 
 def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
-          wave0=None, soak=None, settle=None, tempo_flush=None, base=None):
+          wave0=None, soak=None, settle=None, tempo_flush=None, base=None, pools_gone=None):
     changes, seen, undos = [], set(), []
     for n, raw in enumerate(open(path), 1):
         line = raw.strip()
@@ -151,6 +154,9 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
                 settle.append(int(line.split()[1]))
         elif line.startswith("default "):
             pass  # scripts/upgrade-defaults.py
+        elif re.fullmatch(r"scrape-pool-gone [A-Za-z0-9/_.:-]+", line):
+            if pools_gone is not None:
+                pools_gone.append(line.split()[1])
         elif re.fullmatch(r"base( -e [A-Za-z_][A-Za-z0-9_]*=\S+)+", line):
             if base is not None:
                 base.append(line[len("base "):])
@@ -262,7 +268,8 @@ def main():
                                    ["--barman-check"], ["--barman-after-merge"], ["--restore-check"], ["--cert-renew"],
                                    ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
-                                   ["--wave0"], ["--pg-major"], ["--base-args"], ["--before"]) else None
+                                   ["--wave0"], ["--pg-major"], ["--base-args"], ["--before"],
+                                   ["--scrape-pools-gone"]) else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -306,6 +313,12 @@ def main():
         for name in names[:names.index(args[0]) + 1]:
             parse(os.path.join(STEPS, name + ".txt"), compat=compat)
         print(compat[-1] if compat else "")
+        return
+    if mode == "--scrape-pools-gone":
+        gone = []
+        for name in names[:names.index(args[0]) + 1]:
+            parse(os.path.join(STEPS, name + ".txt"), pools_gone=gone)
+        print(",".join(gone))
         return
     if mode == "--before":
         i = names.index(args[0])

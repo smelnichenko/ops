@@ -13,10 +13,10 @@
 # changing the copy). Ssh to the VMs gives up on a dead connection within a minute (Vagrant's own config sets no
 # keepalive: a stalled VM held a check for hours).
 #
-# Usage: scripts/upgrade-step-checks.sh <infra ref> <platform ref> <clickhouse compat> <clickhouse users>
+# Usage: scripts/upgrade-step-checks.sh <infra ref> <platform ref> <clickhouse compat> <clickhouse users> [<pools gone>]
 set -uo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
-infra_ref=$1 platform_ref=$2 clickhouse_compat=$3 clickhouse_users=$4
+infra_ref=$1 platform_ref=$2 clickhouse_compat=$3 clickhouse_users=$4 pools_gone=${5:-}
 cd "$ops" || exit 1
 # own_jobs, stop_groups
 source scripts/lib/process-groups.sh
@@ -105,7 +105,7 @@ start data play ../../tests/ansible/upgrade/data-check.yml -e mode=verify
 start survival play ../../tests/ansible/upgrade/survival-check.yml -e mode=verify \
   -e clickhouse_compat="$clickhouse_compat" -e clickhouse_users="$clickhouse_users"
 start storage play ../../tests/ansible/upgrade/storage-check.yml
-start metrics play ../../tests/ansible/upgrade/metrics-check.yml
+start metrics play ../../tests/ansible/upgrade/metrics-check.yml -e "scrape_pools_gone=$pools_gone"
 start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"
 
 # the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it while any other job runs, this

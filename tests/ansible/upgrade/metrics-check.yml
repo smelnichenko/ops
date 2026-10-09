@@ -173,13 +173,17 @@
           import collections, json, os, sys
           now = collections.Counter(t["scrapePool"] for t in json.load(sys.stdin)["data"]["activeTargets"])
           before = json.loads(os.environ["BEFORE"])
-          lost = ["%s: %d -> %d" % (p, n, now.get(p, 0)) for p, n in sorted(before.items()) if now.get(p, 0) < n]
+          # a pool a step up to this one removed on purpose (its scrape-pool-gone line)
+          gone = set(filter(None, os.environ.get("GONE", "").split(",")))
+          lost = ["%s: %d -> %d" % (p, n, now.get(p, 0)) for p, n in sorted(before.items())
+                  if now.get(p, 0) < n and p not in gone]
           for l in lost:
               print("  GONE OR SMALLER", l)
           print(json.dumps(dict(sorted(now.items()))))
           sys.exit(1 if lost or not now else 0)'
       environment:
         BEFORE: "{{ lookup('ansible.builtin.file', scrape_pools_file) if _pools_file.stat.exists and not record_scrape_pools | bool else '{}' }}"
+        GONE: "{{ scrape_pools_gone | default('') }}"
       register: _pools
       changed_when: false
       retries: 12

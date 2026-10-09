@@ -517,6 +517,9 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.STEP}}
       CLICKHOUSE_USERS:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.STEP}}
+      # the scrape pools the steps up to this one removed on purpose (their scrape-pool-gone lines)
+      SCRAPE_POOLS_GONE:
+        sh: scripts/upgrade-expected-inventory.py --scrape-pools-gone {{.STEP}}
       CERT_RENEW:
         sh: scripts/upgrade-expected-inventory.py --cert-renew {{.STEP}}
       RESTARTS_CONTROL_PLANE:
@@ -613,7 +616,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/argo-settled.yml -e expect_mirror=true -e allow_out_of_sync={{.OUT_OF_SYNC}} -e expect_apps=true -e restart_step={{.STEP}} -e restarts_expected={{.RESTARTS_CONTROL_PLANE}} {{.STEP_SETTLE}}
       # the step's independent checks at the same time - data, survival, storage, metrics, the k6 smoke
       # (scripts/upgrade-step-checks.sh says what each proves): a step pays the slowest, not their sum
-      - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}'
+      - cmd: scripts/upgrade-step-checks.sh '{{.INFRA_REF}}' '{{.PLATFORM_REF}}' '{{.CLICKHOUSE_COMPAT}}' '{{.CLICKHOUSE_USERS}}' '{{.SCRAPE_POOLS_GONE}}'
       - cmd: |
           if [ -n "{{.TEMPO_FLUSH}}" ]; then
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/tempo-flush.yml -e mode=verify
