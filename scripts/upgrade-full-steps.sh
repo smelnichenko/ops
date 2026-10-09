@@ -91,7 +91,7 @@ for line in sys.stdin.buffer:
   task_rc=0
   wait "$step_job" || task_rc=$?
   if group_alive "$step_job"; then
-    stop_groups "$stop_grace" "$step_job"
+    stop_groups -n task "$stop_grace" "$step_job"
     echo "=== STEP ${step:-} left processes running after it ended - stopped"
     task_rc=1
   fi

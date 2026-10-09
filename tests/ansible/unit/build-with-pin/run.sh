@@ -21,6 +21,8 @@ echo $$ > .upgrade/task.pid
 trap 'echo "task: signal received"' TERM
 bash "$BUILD_COMMAND" || exit $?
 [ -z "${NEXT_CMD:-}" ] || echo next > .upgrade/build.next
+# LEFTOVER: a process of the build left running in its session after go-task ended (a backgrounded command)
+if [ -n "${LEFTOVER:-}" ]; then sleep 30 > /dev/null 2>&1 & echo $! > .upgrade/left.pid; fi
 exit 0
 STUB
 # the build's command: BUILD (its exit), after BUILD_SECONDS; IGNORE_TERM: it ignores a TERM (its sleep too);
@@ -42,6 +44,8 @@ cat > "$T/tests/clickhouse-pin/run.sh" <<'STUB'
 echo $$ > .upgrade/pin.pid
 sleep "${PIN_SECONDS:-0}"
 echo "pin result line"; echo finished > .upgrade/pin.finished
+# PIN_LEFTOVER: a docker call of the pin left running after it ended
+if [ -n "${PIN_LEFTOVER:-}" ]; then sleep 30 > /dev/null 2>&1 & echo $! > .upgrade/pinleft.pid; fi
 exit "${PIN:-0}"
 STUB
 chmod +x "$T/bin/task" "$T/tests/clickhouse-pin/run.sh"
@@ -243,5 +247,16 @@ check "the traps set before the first job starts" \
      "$ROOT/scripts/upgrade-build-with-pin.sh")" 1
 check "test:upgrade:full runs it (not the block inline), given the run's start" \
   "$(grep -c '^      - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-build-with-pin.sh$' "$ROOT/Taskfile.yml")" 1
+# a process the build or the pin left running in its session once its own process ended: stopped, said, the run failed
+# - wait returns when go-task (the pin) ends, and the stop knew only the jobs still its children
+for mode in LEFTOVER PIN_LEFTOVER; do
+  rm -f "$T/.upgrade/left.pid" "$T/.upgrade/pinleft.pid"
+  run "$mode=1"
+  f=$T/.upgrade/left.pid; [ $mode = LEFTOVER ] || f=$T/.upgrade/pinleft.pid
+  lp=$(cat "$f" 2> /dev/null)
+  check "$mode: the process left behind stopped, said, the run failed" \
+    "$([ "$rc" != 0 ] && echo failed) $(grep -c 'left processes running' <<< "$out") $([ -n "$lp" ] && [ -z "$(proc_info "$lp")" ] && echo gone)" \
+    "failed 1 gone"
+done
 echo "build-with-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

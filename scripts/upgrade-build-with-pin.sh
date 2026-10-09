@@ -59,11 +59,22 @@ setsid tests/clickhouse-pin/run.sh > .upgrade/clickhouse-pin.log 2>&1 < /dev/nul
 pin=$!
 setsid task test:upgrade:build < /dev/null &
 build_job=$!
+# a job's end is its own process's (go-task's, the pin's): a process of its session left running after it - a command
+# it backgrounded - is stopped, said, and fails the run (the stop knows only the jobs still its children: it was
+# left behind)
+left_behind() {  # left_behind <job> <what>: 0 when nothing of its session runs on
+  group_alive "$1" || return 0
+  stop_groups -n task "${STOP_GRACE:-60}" "$1"
+  echo "$2 left processes running after it ended - stopped"
+  return 1
+}
 build=0
 wait "$build_job" || build=$?
+left_behind "$build_job" "THE BUILD" || build=1
 [ "$build" = 0 ] || { echo "THE BUILD FAILED (exit $build) - the ClickHouse pin stopped"; exit "$build"; }
 pinned=0
 wait "$pin" || pinned=$?
+left_behind "$pin" "THE CLICKHOUSE PIN" || pinned=1
 trap - EXIT
 if [ "$pinned" != 0 ]; then
   echo "THE CLICKHOUSE PIN FAILED (.upgrade/clickhouse-pin.log):"; tail -20 .upgrade/clickhouse-pin.log; exit 1
