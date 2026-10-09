@@ -679,8 +679,6 @@ tasks:
           else
             echo "SWEEPER CHECK: not after this step (no sweeper-check line)"
           fi
-      # the data paths, read only - the playbook production's check runs at every step
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/production-data-check.yml
       # the inventory last, after every check of the step (a check's leftovers show in its own step)
       - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/upgrade-expected-inventory.py {{.STEP}} > .upgrade/expected-inventory.txt

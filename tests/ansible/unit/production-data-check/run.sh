@@ -93,10 +93,12 @@ check "  one the inventory names: green" \
 # its wiring: production's check runs it; the full run's step task runs it on the copy; the copy names its own
 check "production's check runs it" \
   "$(sed -n '/^def check(step/,/^def done/p' scripts/upgrade-production.py | grep -c 'production-data-check.yml')" 1
-check "the full run's step task runs it on the copy" "$("$PY" -c '
+# on the copy: one of the step's parallel checks (no time of its own), not a command after them
+check "the full run runs it on the copy among the step's parallel checks, not after them" "$("$PY" -c '
 import yaml
 c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:step"]["cmds"]]
-print(any("playbooks/production-data-check.yml" in x and "inventory/vagrant.yml" in x for x in c))')" "True"
+print(any("production-data-check.yml" in x for x in c))') \
+$(grep -cx 'start prod play playbooks/production-data-check.yml' scripts/upgrade-step-checks.sh)" "False 1"
 check "the copy's inventory names its smartctl target and PublicEndpointDown; production's names none" "$("$PY" -c '
 import yaml
 v = yaml.safe_load(open("deploy/ansible/inventory/vagrant.yml"))["all"]["vars"]

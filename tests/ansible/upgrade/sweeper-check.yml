@@ -119,6 +119,7 @@
           {{ kubectl }} get secret vault-cleanup-token -o jsonpath='{.data.token}' | base64 -d | sha256sum | cut -c1-64
       register: _synced
       changed_when: true
+      no_log: true
       retries: 24
       delay: 5
       until: _synced.rc == 0 and _synced.stdout == hostvars['pi1']['_new_token_hash'].stdout

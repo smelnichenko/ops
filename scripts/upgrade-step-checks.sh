@@ -5,6 +5,7 @@
 #   storage    a new local-path volume provisioned, written and read back
 #   metrics    Prometheus reconciled, every target up, Mimir receiving, logs reaching ClickHouse
 #   smoke      production's k6 smoke
+#   prod       the data paths as production's check reads them (production-data-check.yml)
 # None reads what another writes. Each one's log is printed whole as it ends (with its time); the exit is non-zero when
 # any failed, naming them. A step paid their sum (a minute or more of every step); it now pays the slowest.
 #
@@ -107,6 +108,7 @@ start survival play ../../tests/ansible/upgrade/survival-check.yml -e mode=verif
 start storage play ../../tests/ansible/upgrade/storage-check.yml
 start metrics play ../../tests/ansible/upgrade/metrics-check.yml -e "scrape_pools_gone=$pools_gone"
 start smoke scripts/vagrant-smoke.sh "$infra_ref" "$platform_ref"
+start prod play playbooks/production-data-check.yml
 
 # the checks' own bound: one that never ends - stopped by a signal (wait -n waits on it while any other job runs, this
 # one always: measured on bash 5.2), or a hang none of them bounds - ends them after STEP_CHECKS_SECONDS, said, those

@@ -117,6 +117,7 @@
         body:
           token: "{{ _existing_token.secret.token }}"
         ca_path: /etc/vault.d/tls/ca-cert.pem
+        follow_redirects: none
         status_code: [200, 403]
       register: _token_lookup
       when: _existing_token.secret is defined and _existing_token.secret.token | default('') != ''

@@ -1,6 +1,6 @@
 ---
 # The data paths work, read only - every step's check, production's (scripts/upgrade-production.py's check, in done)
-# and the full run's (after the Vagrant-only checks, which write their canaries): Argo settled and the inventory as
+# and the full run's (one of the parallel step checks): Argo settled and the inventory as
 # expected say nothing of whether metrics, logs and the stores still move. Each read waits a while for the step's
 # restarts to settle:
 #   - Prometheus: every active scrape target up;
