@@ -1228,6 +1228,10 @@ checked in production, the ClickHouse pin run on ten's own build, apt keys pinne
 playbook defaults checked against the inventory at every step, chart versions required per environment, blackbox
 exporter 0.29.0, run time cuts.
 
+Kept on purpose: the copy's Wave 0 rehearsal restores Kafka, ScyllaDB and the gateway in place (the only drill of
+those restores; the steps after it check the restored data); schnappy-observability's chart defaults (only CI
+renders them - production and the copy set every version).
+
 After the rollout (not before - tests follow production): the apps' CI and ops' tests to PostgreSQL 18, Valkey 9.1,
 ClickHouse 26.8, Mimir 3 (monitor/admin/chat/chess Testcontainers; test-logs, test-grafana, test-dr); ClickHouse's
 compatibility pin removed once 26.8 has settled (its own change and review).
