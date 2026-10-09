@@ -54,9 +54,45 @@
     fail_msg: "REFUSED: versitygw {{ _installed_version }} is installed; this run would install {{ vgw_version }} - set vgw_version"
     quiet: true
 
+# The package's sha256 per version and arch (the release's checksums.txt, its assets' digests and the files' own sums
+# agreed, 2026-10-09): installed as root on both Pis, never unchecked. A new version adds its line.
+- name: The versitygw packages' checksums
+  ansible.builtin.set_fact:
+    vgw_checksums:
+      "1.6.0":
+        amd64: e6973164fae36318c9965c7f280360a16cf1392fc494c42a07b1879d1bcab8e3
+        arm64: c93371db77ee8ded21b27c60a7d60362e5fc7d8119b9d7887434ef17715b96b6
+      "1.8.0":
+        amd64: 75fbd1d2f6b640e5d7cb7ac596286de02972ece0ca7dae2c74f66ade914fcc9f
+        arm64: 06fcdf9ef14c0f7f8b000e17bd5409903f79eb602f6105ec4eb7d725c1ac3b4b
+
+- name: A checksum for versitygw {{ vgw_version }} on {{ forgejo_arch }}
+  ansible.builtin.assert:
+    that: forgejo_arch in vgw_checksums[vgw_version] | default({})
+    fail_msg: "REFUSED: no sha256 for versitygw {{ vgw_version }} ({{ forgejo_arch }}) in vgw_checksums - add it first"
+    quiet: true
+
+# fetched in a preview too (a file in apt's way, nothing installed): its checksum is checked before the real run
+- name: The package's directory
+  ansible.builtin.file:
+    path: /var/cache/versitygw
+    state: directory
+    mode: '0755'
+  check_mode: false
+  when: _installed_version != vgw_version
+
+- name: Download versitygw {{ vgw_version }}, its sha256 checked
+  ansible.builtin.get_url:
+    url: "https://github.com/versity/versitygw/releases/download/v{{ vgw_version }}/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
+    dest: "/var/cache/versitygw/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
+    checksum: "sha256:{{ vgw_checksums[vgw_version][forgejo_arch] }}"
+    mode: '0644'
+  check_mode: false
+  when: _installed_version != vgw_version
+
 - name: Install versitygw {{ vgw_version }}
   ansible.builtin.apt:
-    deb: "https://github.com/versity/versitygw/releases/download/v{{ vgw_version }}/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
+    deb: "/var/cache/versitygw/versitygw_{{ vgw_version }}_linux_{{ forgejo_arch }}.deb"
   when: _installed_version != vgw_version
 
 # Backend (buckets) and sidecar (metadata) live on the Gluster volume so both
