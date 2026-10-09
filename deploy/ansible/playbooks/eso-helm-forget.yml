@@ -29,7 +29,6 @@
       ansible.builtin.command:
         argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", -n, external-secrets, delete, secret, -l,
                "owner=helm,name=external-secrets", --request-timeout=60s]
-      when:
-        - not ansible_check_mode
-        - _records.stdout_lines | length > 0
+      # (a preview skips it: the command module runs nothing in check mode)
+      when: _records.stdout_lines | length > 0
       changed_when: true
