@@ -44,6 +44,8 @@ NOT_A_SECRET_TASK = {
         "a fixed text chosen by whether the API key is empty (its length), never the key",
     ("deploy/ansible/playbooks/setup-vault-cleanup-policy.yml", "Report"):
         "a fixed text chosen by whether the token task was skipped, never the token",
+    ("deploy/ansible/playbooks/eso-helm-forget.yml", "What goes - Helm's records only, no resource of the release"):
+        "the names of Helm's storage Secrets (kubectl get -o name), never their data - 'secret' is in external-secrets",
 }
 INSECURE = re.compile(r"VAULT_SKIP_VERIFY|validate_certs: (?:(?:false|no)\b|'(?:false|no)'|\"(?:false|no)\")"
                       r"|curl\b[^\n]* (-[a-zA-Z]*k[a-zA-Z]*|--insecure)\b")

@@ -207,12 +207,18 @@ if other:
     got = (r.returncode != 0, "REFUSED" in r.stdout + r.stderr, os.path.exists(os.path.join(tls, "ca-key.pem")))
     check("one there: refused, left as it is", got == (True, True, True), got)
 # a preview on a host without Vault: the download is check mode's (nothing fetched), so what reads the zip after it is
-# skipped - the unzip failed on a file the preview never wrote
+# skipped - the unzip failed on a file the preview never wrote. The private directory it goes to is made and removed
+# in a preview too (check_mode: false): the removal deletes that directory alone
 inst = next((t for t in tasks if t.get("name") == "Install Vault binary"), None)
-after = [x for x in (inst or {}).get("block", []) if not str(x.get("name", "")).startswith("Download")]
+block = (inst or {}).get("block", [])
+private = [x for x in block if "_vault_tmp" in str(x.get("register", "")) + str(x.get("ansible.builtin.file", ""))]
+after = [x for x in block if not str(x.get("name", "")).startswith("Download") and x not in private]
 check("the install's unzip and what follows it skipped in a preview, run otherwise", bool(after) and all(
     [condition(x.get("when", True), ansible_check_mode=cm) for cm in (True, False)] == [False, True] for x in after),
       [(x.get("name"), x.get("when")) for x in after])
+check("  its private directory made and removed in both, the removal that directory alone",
+      [(x.get("check_mode"), x.get("when"), (x.get("ansible.builtin.file") or {}).get("path")) for x in private],
+      [(False, None, None), (False, None, "{{ _vault_tmp.path }}")])
 # both Pis' certificates signed on pi1 against one serial file: one at a time (at once, two read the same serial)
 sign = next((t for t in tasks if "-CAserial" in str(t.get("ansible.builtin.shell", ""))), {})
 check("the signing one Pi at a time (one serial file)", sign.get("throttle") == 1 and sign.get("delegate_to") == "pi1",
