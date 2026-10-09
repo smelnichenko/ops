@@ -31,7 +31,8 @@ grep -qx "branch $repo" "$file" || { echo "REFUSED: step $step declares no $repo
 dir="$ops/../$repo"; branch="upgrade/$step"
 git -C "$dir" diff --quiet && git -C "$dir" diff --cached --quiet \
   || { echo "REFUSED: $repo has uncommitted changes" >&2; exit 1; }
-git -C "$dir" fetch -q origin main
+# main and the merged steps' tags (pushed with each merge: another clone knows what production merged)
+git -C "$dir" fetch -q origin main "refs/tags/upgrade-merged/*:refs/tags/upgrade-merged/*"
 git -C "$dir" rev-parse -q --verify "refs/heads/$branch" > /dev/null \
   || { echo "REFUSED: no $repo branch $branch" >&2; exit 1; }
 tag="upgrade-merged/$step"
@@ -57,8 +58,17 @@ if git -C "$dir" merge-base --is-ancestor "$head" origin/main \
     || { echo "REFUSED: $repo is on $(git -C "$dir" rev-parse --abbrev-ref HEAD) - check out main first" >&2; exit 1; }
   git -C "$dir" merge --ff-only -q "$head"
   git -C "$dir" tag -a -m "base $base" "$tag" "$head"
+  git -C "$dir" push -q origin "refs/tags/$tag"
   echo "$repo: $branch was pushed already (a run cut short before its tag) - tagged $tag," \
     "base $(git -C "$dir" rev-parse --short "$base")"
+  exit 0
+fi
+# cut short after its tag, before the tag's push: the tag (on this commit, in origin's main) pushed, nothing else
+if [ "$(git -C "$dir" rev-parse -q --verify "refs/tags/$tag^{commit}" || true)" = "$head" ] \
+   && git -C "$dir" merge-base --is-ancestor "$head" origin/main \
+   && [ -z "$(git -C "$dir" ls-remote --tags origin "refs/tags/$tag")" ]; then
+  git -C "$dir" push -q origin "refs/tags/$tag"
+  echo "$repo: $branch merged and tagged before - pushed its tag $tag"
   exit 0
 fi
 [ -z "$only" ] || { echo "REFUSED: take-up only, and $repo $branch is not in origin's main without $tag" >&2; exit 1; }
@@ -93,4 +103,5 @@ git -C "$dir" merge --ff-only -q "$head"
 # (their branches are in main now), and a re-run after an interrupted ledger record finds the step's own change
 # (base..tag) to compare with its proof
 git -C "$dir" tag -a -m "base $base" "$tag" "$head"
+git -C "$dir" push -q origin "refs/tags/$tag"
 echo "$repo: main is $(git -C "$dir" rev-parse --short main), pushed; tagged $tag"

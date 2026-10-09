@@ -262,5 +262,26 @@ git -C "$W/r/infra" commit -q --allow-empty -m other; git -C "$W/r/infra" push -
 m0=$(origin_main)
 check "a branch that does not contain main (main moved after 01): refused" 1 "does not contain main" "$R" 02-b infra "$(rtip 02-b)"
 check "  nothing pushed" 0 "$m0" origin_main
+# the merged tags live on origin too: another clone (a new controller, the operator's) knows what production merged
+fresh
+"$R" 01-a infra "$(rtip 01-a)" > /dev/null 2>&1
+check "a merge's tag pushed to origin" 0 "refs/tags/upgrade-merged/01-a" git -C "$W/r/origin.git" show-ref --tags
+# a clone with no tags and 01's branch gone: 02's predecessor read from origin's tag
+git -C "$W/r/infra" tag -d upgrade-merged/01-a > /dev/null; git -C "$W/r/infra" branch -q -D upgrade/01-a
+check "a clone without the tags: 02 merged, 01's tag fetched from origin" 0 "tagged upgrade-merged/02-b" \
+  "$R" 02-b infra "$(rtip 02-b)"
+# cut short after its tag, before the tag's push: the re-run pushes the tag, nothing else
+fresh
+git -C "$W/r/infra" push -q origin "$(rtip 01-a):refs/heads/main"; git -C "$W/r/infra" merge -q --ff-only upgrade/01-a
+git -C "$W/r/infra" tag -a -m "base $m0" upgrade-merged/01-a "$(rtip 01-a)"
+check "a tag left local (cut short before its push): the re-run pushes it" 0 "pushed its tag" "$R" 01-a infra "$(rtip 01-a)"
+check "  on origin now" 0 "refs/tags/upgrade-merged/01-a" git -C "$W/r/origin.git" show-ref --tags
+# production's checks read the merged tags from origin too: a clone without 01's tag gets it at the proof check
+fresh
+"$R" 01-a infra "$(rtip 01-a)" > /dev/null 2>&1
+git -C "$W/r/infra" tag -d upgrade-merged/01-a > /dev/null
+check "the proof check of a merged step on a clone without its tag: none" 0 "PROBLEMS: none" \
+  env W="$W/r" bash -c "$(declare -f proof); proof 01-a $m0..$(rtip 01-a)"
+check "  the tag fetched from origin" 0 "upgrade-merged/01-a" git -C "$W/r/infra" tag -l 'upgrade-merged/*'
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

@@ -467,7 +467,7 @@ def main_revisions():
     revs = {}
     for repo in REPOS:
         d = os.path.join(OPS, "..", repo)
-        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        fetch_main(d)
         revs[URLS[repo]] = run(["git", "-C", d, "rev-parse", ORIGIN_MAIN], capture_output=True,
                                check=True).stdout.strip()
     return revs
@@ -579,7 +579,7 @@ def proof_start(from_step=None):
     mains = {}
     for repo in REPOS:
         d = os.path.join(OPS, "..", repo)
-        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        fetch_main(d)
         local, origin = (run(["git", "-C", d, "rev-parse", r], capture_output=True, check=True).stdout.strip()
                          for r in ("main", ORIGIN_MAIN))
         if local != origin:
@@ -654,6 +654,13 @@ def pin_problems(step, platform_sha, ops_sha, path=None):
     if {k: got.get(k) for k in want} != want:
         return [f"{step}'s rollback pin was proven for {got}, not this step's {want}"]
     return []
+
+
+def fetch_main(d):
+    """origin's main and the merged steps' tags (scripts/upgrade-merge-step.sh pushes each): a clone that never ran a
+    merge - another controller's - knows what production merged."""
+    run(["git", "-C", d, "fetch", "-q", "origin", "main", "refs/tags/upgrade-merged/*:refs/tags/upgrade-merged/*"],
+        check=True)
 
 
 def write_json(path, obj, **kw):
@@ -824,7 +831,7 @@ def app_tag_problems():
     tag = lambda values, key: (((values or {}).get(key) or {}).get("image") or {}).get("tag")
     overlay = yaml.safe_load(open(os.path.join(OPS, APP_OVERLAY)))
     infra = os.path.join(OPS, "..", "infra")
-    run(["git", "-C", infra, "fetch", "-q", "origin", "main"], check=True)
+    fetch_main(infra)
     production = yaml.safe_load(run(["git", "-C", infra, "show", f"origin/main:{APP_VALUES}"], capture_output=True,
                                     check=True).stdout)
     return [f"{key}: production runs {tag(production, key)}, the full run ran {tag(overlay, key)} - promote it first, "
@@ -854,7 +861,7 @@ def main_problems(proof):
     for repo in REPOS:
         d = os.path.join(OPS, "..", repo)
         git = lambda *a: run(["git", "-C", d, *a], capture_output=True, check=True).stdout
-        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        fetch_main(d)
         base = proof["main"].get(repo)
         if not base or run(["git", "-C", d, "merge-base", "--is-ancestor", base, ORIGIN_MAIN]).returncode:
             out.append(f"{repo}: origin/main does not contain the main the full run mirrored ({(base or 'none')[:10]})")
@@ -919,7 +926,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
         d = os.path.join(OPS, "..", repo)
         # the commit the merge pushes (`tip`, read once by merge()), else the branch as it is now
         branch = tip or BRANCH + step
-        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        fetch_main(d)
         base = merged_base(d, step)
         pushed = None if base else pushed_base(d, step, tip)
         if base:
@@ -1042,7 +1049,7 @@ def merged_live_problems(step, repos):
         base = merged_base(d, step)
         if base is None:
             continue
-        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        fetch_main(d)
         files = run(["git", "-C", d, "diff", "--name-only", base, MERGED_TAG + step], capture_output=True,
                     check=True).stdout.split()
         changed = run(["git", "-C", d, "diff", "--name-only", MERGED_TAG + step, ORIGIN_MAIN, "--", *files],
@@ -1169,7 +1176,7 @@ def abort(step):
         base = merged_base(d, step)
         if base is None:
             continue
-        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        fetch_main(d)
         files = run(["git", "-C", d, "diff", "--name-only", base, MERGED_TAG + step], capture_output=True,
                     check=True).stdout.split()
         if not merged_live_problems(step, [repo]):
