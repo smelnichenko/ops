@@ -121,6 +121,26 @@
         w: "{{ _prod_wildcard.stdout | from_json }}"
       no_log: true
 
+    # ten's Gateway API CRDs were applied client-side (bootstrap.sh: the whole CRD in kubectl's last-applied annotation,
+    # its fields kubectl-client-side-apply's); the copy's build applies them server-side. Step 07's server-side
+    # --force-conflicts takeover of client-side owned fields runs on the copy only so - for a run from before it
+    - name: Gateway API's CRDs applied client-side, as on ten
+      when: (upgrade_from | default('00-gluster-boot')) <= '07-gateway-api'
+      block:
+        - name: The bundle the copy runs (its CRDs' own annotation)
+          ansible.builtin.command:
+            argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", get, crd, gateways.gateway.networking.k8s.io, -o,
+                   'jsonpath={.metadata.annotations.gateway\.networking\.k8s\.io/bundle-version}']
+          register: _gw_bundle
+          changed_when: false
+          failed_when: _gw_bundle.rc != 0 or _gw_bundle.stdout is not match('^v[0-9]+[.][0-9]+[.][0-9]+$')
+
+        - name: That bundle applied client-side, as bootstrap.sh applied ten's
+          ansible.builtin.command:
+            argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", apply, -f,
+                   "https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ _gw_bundle.stdout }}/standard-install.yaml"]
+          changed_when: true
+
     - name: The Vagrant wildcard is production's Let's Encrypt certificate, valid for at least another day
       ansible.builtin.shell: |
         set -euo pipefail
