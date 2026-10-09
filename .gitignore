@@ -5,6 +5,8 @@ deploy/ansible/vars/vault-pi-runtime.yml
 deploy/ansible/vars/sealed-secrets-key-backup.yaml
 deploy/ansible/vars/vault-recovery/
 deploy/ansible/venv
+# its collections, as requirements.yml pins them (deploy:install)
+deploy/ansible/collections
 # DR drill run logs (task dr:drill)
 .dr/
 __pycache__/

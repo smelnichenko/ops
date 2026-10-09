@@ -68,6 +68,10 @@ def exits(f, *a):
 names = m.step_names()
 at = datetime.datetime(2026, 10, 9, tzinfo=datetime.timezone.utc)
 done = lambda *steps: [(at, s, "done", []) for s in steps]
+# the Ansible the run uses (scripts/ansible-versions.py): stubbed here, the pinned set installed
+ANS = {"ansible-core": "2.20.3", "ansible": "13.4.0", "collections": {"kubernetes.core": "6.3.0"}}
+m.ansible_now = lambda: ANS
+m.ansible_pinned = lambda: ANS
 resume = getattr(m, "resume_from", None)
 check("resume-from: no ledger - the first step", resume(None) if resume else None, "01-a")
 check("resume-from: the first step the ledger has not done", resume(done("01-a")) if resume else None, "02-b")
@@ -196,6 +200,26 @@ check("a proof with no main recorded: refused", len(mp({}) if mp else [None]) >=
 kept_mp, m.main_problems = m.main_problems, (lambda proof: ["MAIN-X"])
 prove("03-c", "R", "02-b")
 check("every proof check judges production's main", "MAIN-X" in m.proof_problems("03-c", names, done=["01-a"]), True)
+m.main_problems = kept_mp
+
+# the Ansible the run used: recorded at its start (the pinned set installed, else refused), in each proof; production's
+# phases refuse another
+m.ansible_now = lambda: dict(ANS, collections={"kubernetes.core": "6.4.0"})
+check("proof-start with another Ansible installed than pinned: refused", "Ansible" in (start("03-c") or ""), True)
+m.ansible_now = lambda: ANS
+check("proof-start with the pinned Ansible: taken", start("03-c"), None)
+check("  run.json records it", json.load(open(os.path.join(m.PROVEN, "run.json"))).get("ansible"), ANS)
+m.main_problems = lambda proof: []
+prove("03-c", "R", "02-b")
+pa = lambda: [p for p in m.proof_problems("03-c", names, done=["01-a"]) if "Ansible" in p]
+proof_ = json.load(open(m.proof_path("03-c")))
+m.write_json(m.proof_path("03-c"), dict(proof_, ansible=ANS))
+check("production on the Ansible the run used: no problem", pa(), [])
+m.ansible_now = lambda: dict(ANS, collections={"kubernetes.core": "6.4.0"})
+check("production on another Ansible: refused", len(pa()), 1)
+m.ansible_now = lambda: ANS
+m.write_json(m.proof_path("03-c"), proof_)
+check("a proof with no Ansible recorded: refused", len(pa()), 1)
 m.main_problems = kept_mp
 
 # the copy's build at a step: every base line up to it

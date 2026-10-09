@@ -206,6 +206,7 @@ os.makedirs(m.PROVEN, exist_ok=True)
 with open(os.path.join(m.PROVEN, "01-a.json"), "w") as f:
     f.write('{"run": "r", "complete": true, "ops": "%s", "floating": ["x"]}' % proven)
 m.floating_problems, m.unproven_changes, m.main_problems = (lambda *a: []), (lambda *a: []), (lambda *a: [])
+m.ansible_now = lambda: None  # the fixture's proofs record none: the same
 check("every phase's proof check refuses it", any(p.startswith("app: production runs p1")
                                                   for p in proof_problems("01-a", ["01-a"])), True)
 production_tags("c1", "p2")

@@ -187,10 +187,12 @@ tasks:
     dir: deploy/ansible
     status:
       - test -f venv/bin/ansible-playbook
+      # installed again on any difference from the pins (a proof records them, production's phases compare)
+      - ../../scripts/ansible-versions.py --check
     cmds:
       - python3 -m venv venv
       - venv/bin/pip install -q -r requirements.txt
-      - venv/bin/ansible-galaxy collection install -r requirements.yml
+      - venv/bin/ansible-galaxy collection install -r requirements.yml -p collections
 
   deploy:bootstrap:
     desc: "Tier 0: Install pre-GitOps infrastructure (cert-manager, ESO, Istio, Velero)"

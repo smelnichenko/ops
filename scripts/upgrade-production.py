@@ -128,6 +128,18 @@ inv = _load("upgrade_expected_inventory", INVENTORY)
 dflt = _load("upgrade_defaults", os.path.join(OPS, "scripts", "upgrade-defaults.py"))
 
 
+def ansible_now():
+    """The Ansible installed here: ansible-core, the ansible package, the pinned collections' versions."""
+    av = _load("ansible_versions", os.path.join(OPS, "scripts", "ansible-versions.py"))
+    return av.versions(os.path.join(OPS, "deploy", "ansible"))
+
+
+def ansible_pinned():
+    """The Ansible requirements.txt and requirements.yml pin."""
+    av = _load("ansible_versions", os.path.join(OPS, "scripts", "ansible-versions.py"))
+    return av.pinned(os.path.join(OPS, "deploy", "ansible"))
+
+
 def proof_path(step):
     return os.path.join(PROVEN, step + ".json")
 
@@ -556,6 +568,10 @@ def proof_start(from_step=None):
     if committed != before:
         sys.exit(f"REFUSED: a run from {from_step} builds production as the steps before it left it - their playbook "
                  f"defaults committed ({', '.join(before) or 'none'}), the tree has {', '.join(committed) or 'none'}")
+    # the Ansible it runs on: the pinned set installed (deploy:install), recorded - production's phases run on the same
+    installed = ansible_now()
+    if installed != ansible_pinned():
+        sys.exit(f"REFUSED: the Ansible installed is not the pinned one ({installed}) - task deploy:install")
     # the main each repo's mirror takes (local main): production's, as the run starts - recorded, production's main
     # judged against it at every phase
     mains = {}
@@ -572,7 +588,7 @@ def proof_start(from_step=None):
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
     write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "from": from_step, "main": mains,
-                                                  "branches": branch_shas()})
+                                                  "ansible": installed, "branches": branch_shas()})
     print(f"PROOF: run {started} of ops {head[:10]} from {from_step}")
 
 
@@ -674,7 +690,7 @@ def record_proof(step, infra_sha, platform_sha):
     ran = step_digests(step)
     moved = {f"{full_name(n)}:{t}" for n, t in step_images(step)}
     proof = {"step": step, "run": run_info["run"], "from": run_info.get("from", names[0]), "ops": run_info["ops"],
-             "main": run_info.get("main"),
+             "main": run_info.get("main"), "ansible": run_info.get("ansible"),
              "repos": {}, "floating": floating_digests(),
              "digests": {k: d for k, d in sorted(ran.items()) if k in moved}}
     for repo in REPOS:
@@ -886,6 +902,10 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
         out += floating_problems(proof["floating"], proof_inventory(names, step, merged, partly))
     out += app_tag_problems()
     out += main_problems(proof)
+    # the Ansible production's phases run on: the one the run ran
+    if proof.get("ansible") != ansible_now():
+        out.append(f"the Ansible installed ({ansible_now()}) is not the one the full run ran "
+                   f"({proof.get('ansible')}) - task deploy:install at the run's pins")
     try:
         changed = unproven_changes(proof["ops"], defaulted_steps)
     except ValueError as e:
