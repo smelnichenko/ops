@@ -1,12 +1,13 @@
-# Argo CD v3.3.14 -> v3.4.6: chart 9.5.11 -> 10.2.2 through setup-argocd.yml (host-side), the chart's own version (no
-# image override). Chart 10 creates its six upstream NetworkPolicies by default; ten's own policies already select every
-# pod in argocd, so they can only add allowed paths - the settle and metrics checks would see a blocked repo-server or
-# scrape. Argo CD 3.4's notes checked: cluster-version format (no version-keyed cluster generators here), Missing health
+# Argo CD v3.3.15 -> v3.4.10: chart 9.5.11 -> 10.2.2 through setup-argocd.yml (host-side), v3.4.10 pinned (no
+# image override). Chart 10 creates four upstream NetworkPolicies by default (dex and notifications off), argocd-server's
+# with ingress [{}] - every pod of every namespace; policies only add allowed paths, so it would open argocd-server to
+# all: setup-argocd.yml turns them off (global.networkPolicy.create), ten's own policies standing alone as before.
+# Argo CD 3.4's notes checked: cluster-version format (no version-keyed cluster generators here), Missing health
 # narrowed (the settle check wants Healthy anyway). At the rollout argocd_version becomes 10.2.2.
 # outage: Argo CD restarts - no sync meanwhile, the applications keep running
 # abort: setup-argocd.yml with the old chart version - its no-downgrade check refuses: by hand, not rehearsed
 helm argocd/argocd argo-cd-9.5.11 v3.3.9 => helm argocd/argocd argo-cd-10.2.2 v3.4.6
-image quay.io/argoproj/argocd v3.3.14 => image quay.io/argoproj/argocd v3.4.6
+image quay.io/argoproj/argocd v3.3.15 => image quay.io/argoproj/argocd v3.4.10
 playbook setup-argocd.yml -e argocd_version=10.2.2
 # the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
 default deploy/ansible/playbooks/setup-argocd.yml: argocd_chart_version: "{{ argocd_version | default('9.5.11') }}" => argocd_chart_version: "{{ argocd_version | default('10.2.2') }}"
