@@ -4,10 +4,25 @@
 # sync waves the Vagrant mirror used to add (cert-manager first, Prometheus's operator and CRDs from wave 3 to -1 so
 # the ServiceMonitors after it apply, Scylla Manager after its operator, the environment sets and observability after
 # the infra they need). Annotations and the root's retry only: no version changes.
-# And the two charts that floated at "*" pinned to what production runs (nothing running changes):
-# outage: none - Argo CD settings, sync waves and pins; nothing restarts
-# abort: revert the step's merge on main (Argo syncs back)
+# And the two charts that floated at "*" pinned to what production runs (nothing running changes).
+# And the stale PR env sweeper (argocd/extras/stale-pr-envs-cronjob.yaml) made to work. Its Vault GC never ran: its pods
+# could not reach Vault (argocd's NetworkPolicy), its first listing failed TLS and passed as nothing to purge, its
+# periodic token died unrenewed; and busybox date read no Argo CD time - every preview app was pruned at its first
+# sweep. Now: its own NetworkPolicy to Vault, Vault read against its CA (argocd/vault-pi-ca - `task deploy:vault-eso`
+# puts it there, before step 1), renew-self at every run, times by jq, every failure a failed Job. Its token replaced
+# by the playbook line (production's is dead). External Secrets' token-review binding in git too (cluster-config;
+# bootstrap.sh still applies it on a new cluster, before Argo CD).
+# The first sweep after it (06:00) purges every secret/schnappy-pr-* prefix with no live preview app, for good (a
+# metadata delete). Which ones production holds is unknown: the dead token could list none.
+# outage: none - Argo CD settings, sync waves and pins, a CronJob and its NetworkPolicy; nothing restarts
+# abort: revert the step's merge on main (Argo syncs back); the new token stays (scoped, harmless); a purge does not
+# come back
 argo-chart metrics-server metrics-server@* => argo-chart metrics-server metrics-server@3.14.0
 argo-chart porkbun-webhook cert-manager-webhook-porkbun@* => argo-chart porkbun-webhook cert-manager-webhook-porkbun@1.0.0
 # its change: the branch upgrade/01-argocd-root-retry in infra
 branch infra
+# the sweeper's cleanup token replaced where Vault calls it dead (production's)
+playbook setup-vault-cleanup-policy.yml
+# the sweeper run against the copy's Vault: a dead token fails it, the replaced one is renewed and purges, a wrong CA
+# fails it
+sweeper-check

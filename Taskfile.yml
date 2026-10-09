@@ -511,6 +511,8 @@ tasks:
             && echo yes || echo no
       RESTORE_CHECK:
         sh: scripts/upgrade-expected-inventory.py --restore-check {{.STEP}}
+      SWEEPER_CHECK:
+        sh: scripts/upgrade-expected-inventory.py --sweeper-check {{.STEP}}
       CLICKHOUSE_COMPAT:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.STEP}}
       CLICKHOUSE_USERS:
@@ -668,6 +670,14 @@ tasks:
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
           else
             echo "SCYLLA BACKUP CHECK: not after this step (no scylla-backup-check line)"
+          fi
+      # the stale PR env sweeper against the copy's Vault: a dead token fails it, the replaced one is renewed and
+      # purges a preview prefix, a wrong CA fails it - only after a step that changes it (its sweeper-check line)
+      - cmd: |
+          if [ "{{.SWEEPER_CHECK}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/sweeper-check.yml
+          else
+            echo "SWEEPER CHECK: not after this step (no sweeper-check line)"
           fi
       # the data paths, read only - the playbook production's check runs at every step
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/production-data-check.yml

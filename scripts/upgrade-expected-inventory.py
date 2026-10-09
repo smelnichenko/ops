@@ -22,6 +22,8 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                a new PostgreSQL major has no point to recover to until it exists)
     restore-check                             (the step changes CNPG, Postgres or their store: the runner recovers a
                                                copy of Postgres from a fresh backup and its WAL after it)
+    sweeper-check                             (the step changes the stale PR env sweeper: the runner runs it against the
+                                               copy's Vault after it - tests/ansible/upgrade/sweeper-check.yml)
     cert-renew                                (the step changes cert-manager: the runner renews every Certificate
                                                after it and wants each Ready at a higher revision)
     tempo-flush <infra|platform>              (the step replaces Tempo's major, which does not replay the old one's WAL:
@@ -86,6 +88,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --barman-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --barman-after-merge <step>            (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --sweeper-check <step>                 (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --cert-renew <step>                    (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restarts-control-plane <step>        (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --tempo-flush <step>             (prints the repo before which, or nothing)
@@ -123,7 +126,7 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
         elif line in ("backup-check", "scylla-backup-check", "barman-check", "barman-after-merge", "restore-check",
-                      "cert-renew", "restarts-control-plane"):
+                      "sweeper-check", "cert-renew", "restarts-control-plane"):
             seen.add(line)
             if flags is not None:
                 flags.add(line)
@@ -270,7 +273,8 @@ def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
                                    ["--scylla-backup-check"],
-                                   ["--barman-check"], ["--barman-after-merge"], ["--restore-check"], ["--cert-renew"],
+                                   ["--barman-check"], ["--barman-after-merge"], ["--restore-check"],
+                                   ["--sweeper-check"], ["--cert-renew"],
                                    ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
                                    ["--wave0"], ["--pg-major"], ["--base-args"], ["--before"],
@@ -292,7 +296,7 @@ def main():
             print("\n".join(playbooks))
         return
     if mode in ("--backup-check", "--scylla-backup-check", "--barman-check", "--barman-after-merge",
-                "--restore-check", "--cert-renew", "--restarts-control-plane"):
+                "--restore-check", "--sweeper-check", "--cert-renew", "--restarts-control-plane"):
         flags = set()
         parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
         print("yes" if mode[2:] in flags else "no")
