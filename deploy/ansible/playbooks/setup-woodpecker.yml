@@ -89,6 +89,7 @@
         status_code: 201
       register: oauth_result
       when: existing_oauth_app is none
+      no_log: true  # its answer holds the application's client_secret
 
     - name: Set OAuth credentials
       ansible.builtin.set_fact:
