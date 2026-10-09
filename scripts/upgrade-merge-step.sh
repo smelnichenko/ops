@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# upgrade-merge-step.sh <step> <infra|platform> [take-up [<tip>] | <tip>] - the GitOps half of one production upgrade
+# upgrade-merge-step.sh <step> <infra|platform> <tip> | take-up [<tip>] - the GitOps half of one production upgrade
 # step: the step's branch (upgrade/<step>) in that repo fast-forwarded onto main and pushed. Argo CD reads main of both repos, so
 # the push is the production change (platform's CI lints the same commit alongside; it gates nothing). Called by
 # scripts/upgrade-production.py merge (`task deploy:upgrade:merge`) after its ledger, proof and merge-order checks.
@@ -11,12 +11,15 @@
 # push and before its tag is taken up by the next one. `take-up`: only that - any other state is refused, nothing
 # pushed (upgrade-production.py merge asks for it once its proof check found the push already live). <tip>: the
 # branch's commit the caller checked - a branch moved since is refused before anything (a take-up too), nothing pushed
-# or tagged. A step whose tag is there already (merged before) is refused: a forced tag moved it, its base another main.
+# or tagged; a push without it is refused (run by hand it pushed production's main with no question - the runner
+# asks first and passes the tip). A step whose tag is there already (merged before) is refused: a forced tag moved it,
+# its base another main.
 set -euo pipefail
 ops=$(cd "$(dirname "$0")/.." && pwd)
 step=${1:?step}; repo=${2:?infra or platform}; only=${3:-} tip=${4:-}
 case "$only" in
-  "") ;;
+  "") echo "REFUSED: a push needs the branch's commit the caller checked (40 hex) - scripts/upgrade-production.py merge" \
+        "passes it after its question" >&2; exit 1 ;;
   take-up) [ -z "$tip" ] || [[ $tip =~ ^[0-9a-f]{40}$ ]] || { echo "REFUSED: $tip (a commit)" >&2; exit 1; } ;;
   *) [[ $only =~ ^[0-9a-f]{40}$ ]] && [ -z "$tip" ] || { echo "REFUSED: $only (take-up, a commit, or nothing)" >&2; exit 1; }
      tip=$only only= ;;

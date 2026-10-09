@@ -25,24 +25,25 @@ echo base > "$W/infra/f"; g add f; g commit -q -m base; g push -q origin main
 for s in 01-a 02-b 03-c; do g checkout -q -b "upgrade/$s"; echo "$s" >> "$W/infra/f"; g commit -q -am "$s"; done
 g checkout -q main
 M="$W/ops/scripts/upgrade-merge-step.sh"
+tip() { git -C "$W/infra" rev-parse "upgrade/$1"; }  # the commit the runner checked and passes
 base_of() { g tag -l --format='%(contents:subject)' "upgrade-merged/$1"; }
 
 main0=$(g rev-parse main)
-check "a merge: pushed, fast-forwarded, tagged" 0 "tagged upgrade-merged/01-a" "$M" 01-a infra
+check "a merge: pushed, fast-forwarded, tagged" 0 "tagged upgrade-merged/01-a" "$M" 01-a infra "$(tip 01-a)"
 check "its tag carries the main it went onto" 0 "base $main0" base_of 01-a
 check "origin's main is the branch" 0 "$(g rev-parse upgrade/01-a)" git -C "$W/origin.git" rev-parse main
 
 # cut short after the push, before the fast-forward and the tag
 main1=$(g rev-parse main)
 g push -q origin upgrade/02-b:main
-check "pushed, not tagged, local main behind: taken up" 0 "pushed already" "$M" 02-b infra
+check "pushed, not tagged, local main behind: taken up" 0 "pushed already" "$M" 02-b infra "$(tip 02-b)"
 check "tagged with local main as its base" 0 "base $main1" base_of 02-b
 check "local main fast-forwarded" 0 "$(g rev-parse upgrade/02-b)" g rev-parse main
 
 # cut short after the push and the fast-forward, before the tag
 main2=$(g rev-parse main)
 g push -q origin upgrade/03-c:main; g merge -q --ff-only upgrade/03-c
-check "pushed and fast-forwarded, not tagged: taken up" 0 "pushed already" "$M" 03-c infra
+check "pushed and fast-forwarded, not tagged: taken up" 0 "pushed already" "$M" 03-c infra "$(tip 03-c)"
 check "tagged with main before the fast-forward (its reflog)" 0 "base $main2" base_of 03-c
 
 # a merged step's branch deleted after its merge: the next step's predecessor check reads its tag
@@ -50,14 +51,14 @@ printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/04-d.txt"
 g branch -q -D upgrade/03-c
 g checkout -q -b upgrade/04-d; echo d >> "$W/infra/f"; g commit -q -am d; g checkout -q main
 check "the step before (03) deleted after its merge: 04 merged, 03's tag read" 0 "tagged upgrade-merged/04-d" \
-  "$M" 04-d infra
+  "$M" 04-d infra "$(tip 04-d)"
 
 # someone else moved origin's main: refused
 git clone -q "$W/origin.git" "$W/other" 2> /dev/null
 echo cd >> "$W/other/g"; git -C "$W/other" add g; git -C "$W/other" commit -q -m cd; git -C "$W/other" push -q origin main
 printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/05-e.txt"
 g checkout -q -b upgrade/05-e; echo e >> "$W/infra/f"; g commit -q -am e; g checkout -q main
-check "origin's main moved by someone else: refused" 1 "main is not origin/main" "$M" 05-e infra
+check "origin's main moved by someone else: refused" 1 "main is not origin/main" "$M" 05-e infra "$(tip 05-e)"
 
 # production's merge phase (scripts/upgrade-production.py) on the same repos: the proof's check of a step pushed by a
 # run cut short before its tag compares the change with the main the push went onto - against origin's main it was an
@@ -169,7 +170,7 @@ printf 'branch infra\n' > "$W/ops/tests/ansible/upgrade/steps/13-m.txt"
 g checkout -q -b upgrade/13-m; echo m >> "$W/infra/f"; g commit -q -am m; g checkout -q main
 g tag -a -m "base earlier" upgrade-merged/13-m "$(g rev-parse main)"
 origin13=$(git -C "$W/origin.git" rev-parse main)
-check "its tag there already: refused" 1 "exists already" "$M" 13-m infra
+check "its tag there already: refused" 1 "exists already" "$M" 13-m infra "$(tip 13-m)"
 check "nothing pushed" 0 "$origin13" git -C "$W/origin.git" rev-parse main
 check "its tag unmoved" 0 "base earlier" base_of 13-m
 rm -f "$W/ops/tests/ansible/upgrade/steps/13-m.txt"
@@ -238,25 +239,28 @@ fresh() {
   m0=$(git -C "$W/r/origin.git" rev-parse main)
 }
 R="$W/r/ops/scripts/upgrade-merge-step.sh"
+rtip() { git -C "$W/r/infra" rev-parse "upgrade/$1"; }
 origin_main() { git -C "$W/r/origin.git" rev-parse main; }
 fresh
-check "control: 01 merges" 0 "tagged upgrade-merged/01-a" "$R" 01-a infra
+check "no tip (by hand): refused - a push needs the commit the caller checked" 1 "needs the branch's commit" "$R" 01-a infra
+check "  nothing pushed" 0 "$m0" origin_main
+check "control: 01 merges" 0 "tagged upgrade-merged/01-a" "$R" 01-a infra "$(rtip 01-a)"
 fresh
 printf 'branch platform\n' > "$W/r/ops/tests/ansible/upgrade/steps/01-a.txt"
-check "a step file declaring no infra branch: refused" 1 "declares no infra branch" "$R" 01-a infra
+check "a step file declaring no infra branch: refused" 1 "declares no infra branch" "$R" 01-a infra "$(rtip 01-a)"
 check "  nothing pushed" 0 "$m0" origin_main
 fresh
 echo dirty >> "$W/r/infra/f"
-check "uncommitted changes in the repo: refused" 1 "has uncommitted changes" "$R" 01-a infra
+check "uncommitted changes in the repo: refused" 1 "has uncommitted changes" "$R" 01-a infra "$(rtip 01-a)"
 check "  nothing pushed" 0 "$m0" origin_main
 fresh
-check "the step before (01) not merged: 02 refused" 1 "is not merged into main yet" "$R" 02-b infra
+check "the step before (01) not merged: 02 refused" 1 "is not merged into main yet" "$R" 02-b infra "$(rtip 02-b)"
 check "  nothing pushed" 0 "$m0" origin_main
 fresh
-"$R" 01-a infra > /dev/null 2>&1
+"$R" 01-a infra "$(rtip 01-a)" > /dev/null 2>&1
 git -C "$W/r/infra" commit -q --allow-empty -m other; git -C "$W/r/infra" push -q origin main
 m0=$(origin_main)
-check "a branch that does not contain main (main moved after 01): refused" 1 "does not contain main" "$R" 02-b infra
+check "a branch that does not contain main (main moved after 01): refused" 1 "does not contain main" "$R" 02-b infra "$(rtip 02-b)"
 check "  nothing pushed" 0 "$m0" origin_main
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))
