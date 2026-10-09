@@ -23,8 +23,9 @@
     proxy: /api/v1/namespaces/schnappy-infra/services
     record_scrape_pools: false
     scrape_pools_file: "{{ playbook_dir }}/../../../.upgrade/scrape-pools.json"
-    # how long each target must have been up after a step: from its last sample down, or its first
-    up_for_seconds: 120
+    # how long each target must have been up after a step: from its last sample down, or its first - four 15 s scrapes
+    # (120 s waited out after most steps' restarts was the step checks' slowest part; a flap later still fails a step)
+    up_for_seconds: 60
     # how long after t0 a target not yet up that long is waited for: a target first seen late (a pod the settle
     # replaced, a Job's) gets its own 2 minutes - a count of tries from the first poll cut one seen 40 s in; past it,
     # one that never stays up is given up on

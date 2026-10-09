@@ -89,29 +89,30 @@ def stayed_run(t0_ago, last_down_ago=None, first_ago=None):
     q = urllib.parse.unquote(open(os.path.join(W, "queries")).read())
     rng = re.search(r"max_over_time.*?\[(\d+)s:\d+s\]", q)
     return r, q, int(rng[1]) if rng else None, time.monotonic() - t
+U = int(play_vars["up_for_seconds"])  # each target up that long after a step: every time below derived from it
 r, q, rng, took = stayed_run(0)
-check("all up at once, none down in the 2 minutes before (the one down by nature allowed by its scrape pool): passes "
+check("all up at once, none down in the window before (the one down by nature allowed by its scrape pool): passes "
       "at once - no wait",
       (r.returncode, took < 5, "stayed up" in r.stdout), (0, True, True))
-check("judged from 2 minutes before t0 to now", rng is not None and 118 <= rng <= 125, True)
+check("judged from U before t0 to now", rng is not None and U - 2 <= rng <= U + 5, True)
 check("only the series of targets active now (a replaced pod's last scrape no flap)", "and on(job, instance) up" in q,
       True)
 check("the samples' own times (timestamp() of an expression gives the subquery's step times: a down sample at 90 s "
       "read 100 - promtool 3.10)", ("(timestamp(up) and up == 0)" in q, "timestamp(up == 0)" in q), (True, False))
 r, _, rng, _ = stayed_run(30)
-check("t0 30 s ago: the window reaches 2 minutes before it", rng is not None and 148 <= rng <= 155, True)
-r, _, _, _ = stayed_run(10, last_down_ago=40)
+check("t0 30 s ago: the window reaches U before it", rng is not None and U + 28 <= rng <= U + 35, True)
+r, _, _, _ = stayed_run(10, last_down_ago=U * 2 // 3)
 check("down 40 s ago, before t0 (the step's own recovery): not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
-r, _, _, _ = stayed_run(150, last_down_ago=170)
-check("down 170 s ago, before t0: up 2 minutes since - passes", (r.returncode, "stayed up" in r.stdout), (0, True))
+r, _, _, _ = stayed_run(U + 30, last_down_ago=U + 50)
+check("down U + 50 s ago, before t0: up U since - passes", (r.returncode, "stayed up" in r.stdout), (0, True))
 r, _, _, _ = stayed_run(60, last_down_ago=20)
 check("down 20 s ago, after t0: a flap", (r.returncode, "FLAPPED" in r.stdout), (1, True))
-r, _, _, _ = stayed_run(30, last_down_ago=90)
-check("down 90 s ago, before t0: not yet (up 2 minutes, not 1)", (r.returncode, "NOT YET" in r.stdout), (2, True))
-r, _, _, _ = stayed_run(100, last_down_ago=119)
-check("down 119 s ago: not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
-r, _, _, _ = stayed_run(100, last_down_ago=121)
-check("down 121 s ago: passes", (r.returncode, "stayed up" in r.stdout), (0, True))
+r, _, _, _ = stayed_run(30, last_down_ago=U - 15)
+check("down U - 15 s ago, before t0: not yet (up less than U)", (r.returncode, "NOT YET" in r.stdout), (2, True))
+r, _, _, _ = stayed_run(U - 20, last_down_ago=U - 1)
+check("down U - 1 s ago: not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
+r, _, _, _ = stayed_run(U - 20, last_down_ago=U + 1)
+check("down U + 1 s ago: passes", (r.returncode, "stayed up" in r.stdout), (0, True))
 r, _, _, _ = stayed_run(60, last_down_ago=55)
 check("down 5 s after t0: a flap", (r.returncode, "FLAPPED" in r.stdout), (1, True))
 r, _, _, _ = stayed_run(60, last_down_ago=59)
@@ -120,10 +121,10 @@ r, _, _, _ = stayed_run(60, last_down_ago=20, first_ago=30)
 check("a target first seen after t0, down in its first scrapes: no flap, not yet", (r.returncode, "NOT YET" in r.stdout),
       (2, True))
 r, _, _, _ = stayed_run(60, first_ago=30)
-check("a target first seen 30 s ago, never down: not yet - its 2 minutes from its first sample",
+check("a target first seen 30 s ago, never down: not yet - its U from its first sample",
       (r.returncode, "NOT YET" in r.stdout), (2, True))
-r, _, _, _ = stayed_run(150, first_ago=130)
-check("a target first seen 130 s ago, never down: passes", (r.returncode, "stayed up" in r.stdout), (0, True))
+r, _, _, _ = stayed_run(U + 30, first_ago=U + 10)
+check("a target first seen U + 10 s ago, never down: passes", (r.returncode, "stayed up" in r.stdout), (0, True))
 # a target first seen late (a pod the settle replaced, a Job's): its 2 minutes waited for while within the wait after
 # t0 - never cut by a count of tries from the first poll; past it, given up (a target that never stays up) - said
 wait_for = int(play_vars["up_wait_seconds"])
@@ -135,8 +136,8 @@ check("past the wait after t0, a target still not up 2 minutes: given up, said",
       (1, True))
 r, q, _, _ = stayed_run(30)
 frng = re.search(r"min_over_time.*?\[(\d+)s:\d+s\]", q)
-check("its first sample read over a window 2 minutes longer (an old target's first sample in it is the window's start, "
-      "give or take a scrape interval - never within 2 minutes of now)", frng is not None and 268 <= int(frng[1]) <= 275,
+check("its first sample read over a window U longer (an old target's first sample in it is the window's start, "
+      "give or take a scrape interval - never within U of now)", frng is not None and 2 * U + 28 <= int(frng[1]) <= 2 * U + 35,
       True)
 # the PromQL as Prometheus evaluates it: tests/promql/metrics-check.test.yml (promtool, CI's promql step) holds the
 # same expressions, its window named
