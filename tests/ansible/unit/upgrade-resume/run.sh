@@ -139,6 +139,19 @@ for script in ("upgrade-merge-order.py", "argo-helm-diff.py"):
     shutil.copy(os.path.join(os.environ["SRC"], "scripts", script), os.path.join(o, "scripts", script))
     r = subprocess.run([os.path.join(o, "scripts", script), "--from", "09-z"], capture_output=True, text=True)
     check(f"{script} --from a step that is none: refused, named", (r.returncode, "no step 09-z" in r.stderr), (1, True))
+    # the steps it judges: from the given one on, every one
+    sl = importlib.machinery.SourceFileLoader(script, os.path.join(o, "scripts", script))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(script, sl))
+    sl.exec_module(mod)
+    seen = []
+    mod.check = lambda st: seen.append(st) or True
+    sys.argv = [script, "--from", "02-b"]
+    try:
+        mod.main()
+        code = 0
+    except SystemExit as e:
+        code = e.code
+    check(f"{script} --from 02-b: 02-b and 03-c judged, all green", (code, seen), (0, ["02-b", "03-c"]))
 print("upgrade-resume: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
