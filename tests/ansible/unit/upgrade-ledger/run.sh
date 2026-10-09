@@ -1126,10 +1126,12 @@ check("pin: exactly 59 and 61 move ClickHouse's image",
 
 
 def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256:" + "3" * 64 + "\n"
-                         "other/image 1 sha256:" + "4" * 64 + "\n"):
-    """record-proof of 59 with git and the tree stubbed; `pin` the rollback pin's result (None: no file)."""
+                         "other/image 1 sha256:" + "4" * 64 + "\n", start="47-postgres-18"):
+    """record-proof of 59 with git and the tree stubbed; `pin` the rollback pin's result (None: no file); `start`: the
+    run's (None: a run.json from before runs recorded it)."""
     work = tempfile.mkdtemp()
-    json.dump({"run": "r", "ops": "o", "branches": {}}, open(os.path.join(work, "run.json"), "w"))
+    json.dump({"run": "r", "ops": "o", "branches": {}, **({"from": start} if start else {})},
+              open(os.path.join(work, "run.json"), "w"))
     if pin is not None:
         json.dump(pin, open(os.path.join(work, "pin.json"), "w"))
 
@@ -1168,6 +1170,10 @@ check("record-proof 59 with its pin proven: recorded",
       record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}), "recorded")
 check("record-proof 59: the digests the copy ran for the step's images, only those, as containerd names them",
       RECORDED[-1].get("digests"), {"docker.io/clickhouse/clickhouse-server:25.8.33.6-alpine": "sha256:" + "3" * 64})
+check("record-proof 59: the run's start in the proof (production counts the steps before it by its ledger)",
+      RECORDED[-1].get("from"), "47-postgres-18")
+record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, start=None)
+check("record-proof 59 of a run that recorded no start: from the first step", RECORDED[-1].get("from"), names[0])
 check("record-proof 59 without the digests the copy ran after it: refused, nothing recorded",
       record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, digests=None),
       "refused, nothing recorded: True")
