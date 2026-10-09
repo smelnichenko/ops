@@ -39,6 +39,8 @@ Taskfile.yml, Vagrantfile) as that run had it, but for the committed steps' play
 
 Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py release <step>         (a phase's open start closed - only when nothing runs)
+       scripts/upgrade-production.py abort <step>           (the step undone by its abort line, its merges reverted:
+                                                             recorded aborted - it starts again from its begin)
        scripts/upgrade-production.py begin|preview|playbooks|defaults|done <step>
        scripts/upgrade-production.py backup <step> <store>
        scripts/upgrade-production.py merge <step> <infra|platform>
@@ -155,6 +157,13 @@ def parse_events(text):
     return out
 
 
+def current(events):
+    """The ledger's events as they count: a step aborted (deploy:upgrade:abort - its abort line done, its merges
+    reverted) starts again from its begin, its events up to that abort no longer counted (the ledger keeps them)."""
+    last = {s: i for i, (_, s, e, _) in enumerate(events) if e == "aborted"}
+    return [ev for i, ev in enumerate(events) if i > last.get(ev[1], -1)]
+
+
 def problems(names, step, phase, events, info, arg=None):
     """What stands between `step` and `phase` - empty when the phase may run."""
     if step not in names:
@@ -173,6 +182,8 @@ def problems(names, step, phase, events, info, arg=None):
             + ([f"{step} has begun already"] if "begun" in kinds else [])
     if "begun" not in kinds:
         return [f"{step} has not begun (deploy:upgrade:begin)"]
+    if phase == "abort":
+        return []
     backed = {a[0] for _, e, a in mine if e == "backup"}
     settled = {a[0] for _, e, a in mine if e == "settled"}
     if phase == "backup":
@@ -917,6 +928,27 @@ def merged_base(repo_dir, step):
     return tag.split()[1]
 
 
+def merged_live_problems(step, repos):
+    """The step's merges as they went live, still on origin/main: each file a merge changed as its upgrade-merged tag
+    has it. A merge reverted by its abort line left the step's later phases running on a cluster without its GitOps
+    half (a re-run of merge recorded it settled); a later change to those files is refused too, named."""
+    out = []
+    for repo in repos:
+        d = os.path.join(OPS, "..", repo)
+        base = merged_base(d, step)
+        if base is None:
+            continue
+        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        files = run(["git", "-C", d, "diff", "--name-only", base, MERGED_TAG + step], capture_output=True,
+                    check=True).stdout.split()
+        changed = run(["git", "-C", d, "diff", "--name-only", MERGED_TAG + step, ORIGIN_MAIN, "--", *files],
+                      capture_output=True, check=True).stdout.split() if files else []
+        if changed:
+            out.append(f"{repo}: the step's merge is not on origin/main as it went live ({', '.join(changed)}) - "
+                       f"reverted by its abort line? then task deploy:upgrade:abort STEP={step}")
+    return out
+
+
 def pushed_base(repo_dir, step, tip=None):
     """None unless upgrade/<step>'s commit (`tip`, else the branch's) is in origin's main with no upgrade-merged/<step>
     tag (a run cut short after its push - CD may have pushed on top since); then the main it went onto as
@@ -972,6 +1004,7 @@ def ledger_for(step, phase, arg=None):
     """The phase's checks, then its claim on the step - start, written against the read the checks were made on."""
     names = step_names()
     obj, events = read_ledger()
+    events = current(events)
     info = step_info(step) if step in names else None
     refuse(problems(names, step, phase, events, info, arg))
     token = claim_token()
@@ -1018,6 +1051,42 @@ def release(step):
                          "any more - here, and on ten and the Pis (pgrep -af 'ansible|AnsiballZ|kubeadm|upgrade' there "
                          "finds none of it) - close it?") else ["not confirmed"])
     record(step, "end", started[1][0], "released", token, obj=obj)
+
+
+def abort(step):
+    """The step undone by its abort line, recorded: each of its merges reverted on origin/main (checked - its files as
+    before the merge), its defaults commit reverted, the operator's word that its host-side half is undone. Its merged
+    tags set aside (upgrade-aborted/<step>-<time>): the step starts again from its begin - a fixed branch, a new proof,
+    a fresh Wave 0 backup."""
+    names, events, info = ledger_for(step, "abort")
+    out = []
+    for repo in info["branches"]:
+        d = os.path.join(OPS, "..", repo)
+        base = merged_base(d, step)
+        if base is None:
+            continue
+        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        files = run(["git", "-C", d, "diff", "--name-only", base, MERGED_TAG + step], capture_output=True,
+                    check=True).stdout.split()
+        if not merged_live_problems(step, [repo]):
+            out.append(f"{repo}: its merge is still live on origin/main - revert it first (its abort line)")
+        elif run(["git", "-C", d, "diff", "--quiet", base, ORIGIN_MAIN, "--", *files]).returncode:
+            out.append(f"{repo}: {', '.join(files)} on origin/main are neither as the merge left them nor as before it "
+                       "- see what changed")
+    if any(e == "defaults" for _, s, e, _ in events if s == step) and \
+            step in open(os.path.join(OPS, dflt.COMMITTED)).read().split():
+        out.append("its playbook defaults are committed - revert that commit on ops main first")
+    refuse(out)
+    refuse([] if confirm(f"{step}: its merges reverted (checked), its host-side changes undone by its abort line - "
+                         "record it aborted? It then starts again from its begin.") else ["not confirmed"])
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    for repo in info["branches"]:
+        d = os.path.join(OPS, "..", repo)
+        if merged_base(d, step) is not None:
+            run(["git", "-C", d, "tag", "-m", f"aborted {stamp}", f"upgrade-aborted/{step}-{stamp}",
+                 MERGED_TAG + step], check=True)
+            run(["git", "-C", d, "tag", "-d", MERGED_TAG + step], check=True, capture_output=True)
+    record(step, "aborted")
 
 
 def ansible(*args):
@@ -1071,9 +1140,9 @@ def backup(step, store):
 
 
 def preview(step):
-    names, events, _ = ledger_for(step, "preview")
+    names, events, info = ledger_for(step, "preview")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
-                          done=applied_steps(events)))
+                          done=applied_steps(events)) + merged_live_problems(step, info["branches"]))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if host_work([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
@@ -1147,6 +1216,7 @@ def merge(step, repo):
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
     info = step_info(step)
+    refuse(merged_live_problems(step, [repo]))
     ok, revs, _ = settled(info["settle"], [], apps)
     refuse([] if ok else [f"Argo did not settle on the {repo} merge - the step stops here (its abort line)"])
     record(step, "settled", repo, revs[URLS[repo]])
@@ -1185,7 +1255,7 @@ def cluster_runs(image):
 def playbooks(step):
     names, events, info = ledger_for(step, "playbooks")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
-                          done=applied_steps(events)))
+                          done=applied_steps(events)) + merged_live_problems(step, info["branches"]))
     print(f"{step}'s playbook lines, against PRODUCTION (ten, the Pis):")
     for line in info["playbooks"]:
         print(f"  {line}")
@@ -1225,6 +1295,7 @@ def defaults(step):
         record(step, "defaults", sha)
         return
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True, done=applied_steps(events))
+           + merged_live_problems(step, step_info(step)["branches"])
            + ([] if git("rev-parse", "HEAD") == git("rev-parse", ORIGIN_MAIN) else ["ops is not at origin/main"]))
     refuse([] if run([os.path.join(OPS, "scripts", "upgrade-defaults.py"), "--apply", step]).returncode == 0
            else ["the default lines did not apply (above)"])
@@ -1245,7 +1316,7 @@ def check(step, since=None, deciding=False):
     ends a step): the restart history judged and recorded."""
     if step not in step_names():
         sys.exit(f"REFUSED: no step {step}")
-    _, events = read_ledger()
+    events = current(read_ledger()[1])
     ok = inventory_check(sorted(set(applied_steps(events)) | {step}))
     apps = step_apps(events, step) if any(s == step and e == "apps" for _, s, e, _ in events) else None
     info = step_info(step)
@@ -1258,7 +1329,7 @@ def done(step):
     names, events, info = ledger_for(step, "done")
     # what it checks and what its first call runs (an ACME issuance, a base backup) must be what the full run proved
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
-                          done=applied_steps(events)))
+                          done=applied_steps(events)) + merged_live_problems(step, info["branches"]))
     # by ten's clock, the one the first green check was recorded by: this machine's, ahead, would end the soak early
     checked, left = soak_state(events, step, info["soak"], ten_clock())
     if checked is not None and left > 0:
@@ -1315,6 +1386,7 @@ def status():
     _, events = read_ledger()
     for at, s, e, a in events:
         print(f"{at:%Y-%m-%d %H:%M} {s} {e} {' '.join(a)}")
+    events = current(events)
     pending = next((n for n in names if n not in applied_steps(events)), None)
     if pending is None:
         print("every step done")
@@ -1336,6 +1408,7 @@ def main():
     a = sys.argv[1:]
     actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start,
                ("proof-start", 1): proof_start, ("proof-complete", 0): proof_complete, ("release", 1): release,
+               ("abort", 1): abort,
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof,

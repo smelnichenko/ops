@@ -131,6 +131,12 @@ check("01 declined: nothing committed, pushed or recorded, the tree as it was",
        len(recorded)), (True, head0, head0, "", 0))
 check("  the change shown before the question", 'foo_version: "2.0"' in out.getvalue() and len(questions) == 1, True)
 m.confirm = lambda q: questions.append(q) or True
+# refused while the step's merge is not live (reverted by its abort line): nothing committed, pushed or recorded
+live_kept, m.merged_live_problems = m.merged_live_problems, (lambda *a: ["LIVE-X"])
+r = phase("01-a")
+check("01 refused while its merge is not live: nothing committed, pushed or recorded",
+      ("LIVE-X" in r, G("rev-parse", "HEAD"), G("status", "--porcelain"), len(recorded)), (True, head0, "", 0))
+m.merged_live_problems = live_kept
 # refused by the proof: nothing committed, pushed or recorded
 m.proof_problems = lambda *a, **k: ["PROOF-X"]
 r = phase("01-a")

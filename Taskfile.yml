@@ -1237,6 +1237,13 @@ tasks:
     cmds:
       - cmd: scripts/upgrade-production.py release {{.STEP}}
 
+  deploy:upgrade:abort:
+    desc: "PRODUCTION (the ledger): step STEP undone by its abort line - its merges reverted on main (checked), its defaults commit reverted, its host-side changes undone - recorded aborted (asked first); it starts again from its begin"
+    requires:
+      vars: [STEP]
+    cmds:
+      - cmd: scripts/upgrade-production.py abort {{.STEP}}
+
   deploy:upgrade:check:
     desc: "Read-only: ten's and the Pis' version inventory against what the done steps and STEP leave (the test environment listed apart), and Argo CD settled on main's commits, judged on ten - nothing recorded"
     requires:

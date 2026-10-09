@@ -324,11 +324,11 @@ ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its argument
 
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
-                pushed=None, revs=None, ten_out="abc1234", vault=()):
+                pushed=None, revs=None, ten_out="abc1234", vault=(), live=()):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "host_work", "ansible", "record",
                        "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
-                       "ten", "image_pins", "read_ledger", "vault_login_problems")
+                       "ten", "image_pins", "read_ledger", "vault_login_problems", "merged_live_problems")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.read_ledger = lambda: ({"data": {"events": ""}}, [])  # the claim's re-read before a push (none claimed here)
@@ -336,6 +336,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
         or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     m.vault_login_problems = lambda: list(vault)
+    m.merged_live_problems = lambda *a: list(live)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
         calls.append(("run", "tempo-flush.py" if flush else os.path.basename(cmd[0])))
@@ -380,6 +381,14 @@ for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "p
     did = [c for c in got if c != ("run", "git")]
     check(f"{name}: refused by the proof, nothing done", (len(did), did[-1][0], "PROOF-X" in did[-1][1]),
           (1, "refused", True))
+# a merge reverted (its abort line): the step's later phases refused before anything - a re-run of merge recorded it
+# settled on the reverted main, a preview or playbooks ran on a cluster without its GitOps half
+for name, fn, args in (("preview", m.preview, (S47,)), ("playbooks", m.playbooks, (S47,)), ("done", m.done, (S23,)),
+                       ("merge again", m.merge, (S47, "infra"))):
+    evs = ev(f"{S47} apps app", f"{S47} merged infra a") if name == "merge again" else ()
+    got = [c for c in phase_calls(fn, *args, live=["LIVE-X"], events=evs) if c != ("run", "git")]
+    check(f"{name}: refused while the step's merge is not live, nothing done",
+          ([c[0] for c in got], "LIVE-X" in got[-1][1] if got else False), (["refused"], True))
 # backup and playbooks ask first, in the script (a Taskfile prompt is skipped by task -y, and the script runs alone):
 # declined, nothing done or recorded
 for name, fn, args, acts in (("backup", m.backup, (S47, "postgres"), ("ansible",)),
