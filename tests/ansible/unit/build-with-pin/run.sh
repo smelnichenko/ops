@@ -241,7 +241,7 @@ check "the stamper gone: the deaf build KILLed all the same, the pin gone, the s
 check "the traps set before the first job starts" \
   "$(awk '/^trap stop EXIT/ {t = NR} /&$/ && !j {j = NR} END {print (t && j && t < j)}' \
      "$ROOT/scripts/upgrade-build-with-pin.sh")" 1
-check "test:upgrade:full runs it (not the block inline)" \
-  "$(grep -c '^      - cmd: scripts/upgrade-build-with-pin.sh$' "$ROOT/Taskfile.yml")" 1
+check "test:upgrade:full runs it (not the block inline), given the run's start" \
+  "$(grep -c '^      - cmd: UPGRADE_FROM={{.START}} scripts/upgrade-build-with-pin.sh$' "$ROOT/Taskfile.yml")" 1
 echo "build-with-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
