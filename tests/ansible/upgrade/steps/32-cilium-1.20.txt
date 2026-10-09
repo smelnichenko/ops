@@ -7,6 +7,7 @@
 # outage: as the 1.19.8 step: the agent and operator restart on the node
 # abort: `helm -n kube-system rollback cilium` to 1.19.8 (upgradeCompatibility 1.19 kept) - setup-kubeadm.yml refuses an
 # older Cilium (tasks/no-downgrade.yml); not rehearsed
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 helm kube-system/cilium cilium-1.19.8 1.19.8 => helm kube-system/cilium cilium-1.20.2 1.20.2
 image quay.io/cilium/cilium v1.19.8 => image quay.io/cilium/cilium v1.20.2
 image quay.io/cilium/hubble-relay v1.19.8 => image quay.io/cilium/hubble-relay v1.20.2

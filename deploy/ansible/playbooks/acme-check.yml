@@ -8,7 +8,7 @@
 # cert-manager upgrade that broke the webhook would show only at the wildcard's next renewal - weeks later, with no
 # one watching. Production's done phase runs it after a step that changes cert-manager (its cert-renew line).
 #
-# Usage: ansible-playbook -i inventory/production.yml playbooks/acme-check.yml
+# Usage: task deploy:upgrade:done STEP=<a cert-renew step>   (its first check runs it, asked first)
 - name: ACME issuance through production's DNS-01 solver (Let's Encrypt staging)
   hosts: target
   become: true

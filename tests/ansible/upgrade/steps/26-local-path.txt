@@ -4,6 +4,7 @@
 # outage: the provisioner restarts - no new volume meanwhile; the existing ones untouched
 # abort: the old provisioner's manifest applied by hand - setup-kubeadm.yml refuses an older one
 # (tasks/no-downgrade.yml); not rehearsed. Existing volumes are not touched either way
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 image rancher/local-path-provisioner v0.0.35 => image docker.io/rancher/local-path-provisioner v0.0.37
 playbook setup-kubeadm.yml --tags local-path -e local_path_provisioner_version=v0.0.37
 # the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)

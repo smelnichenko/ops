@@ -225,7 +225,7 @@
           set -euo pipefail
           K="kubectl --kubeconfig {{ kubeconfig }} -n schnappy-infra"
           p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
-          # as schnappy, the one user ClickHouse is meant to have (the image's `default` goes with the ClickHouse 25.8 step)
+          # as schnappy, the one user ClickHouse is meant to have (the image's `default` goes with the compatibility 24.8 step)
           $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ \
             "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120{{ logs_filter }}"
       vars:

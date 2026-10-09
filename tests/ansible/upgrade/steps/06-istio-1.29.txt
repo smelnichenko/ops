@@ -3,9 +3,11 @@
 # sidecars. Upgrade notes checked against production 2026-10-03: The base chart drops the RBAC it duplicated into
 # istiod's chart (istiod's copies already exist); Envoy metrics compressed by default (Prometheus reads gzip).
 # outage: istiod and istio-cni roll, then every mesh workload restarts (the data tier first) - each one-replica service
-# is unreachable for its own restart, seconds to a minute
+# is unreachable for its own restart, seconds to a minute; Valkey's restart empties it (emptyDir): sessions and caches
+# rebuild, Centrifugo's history is gone
 # abort: revert the step's merge (istiod and istio-cni back one minor - Istio's in-place downgrade, not rehearsed here)
 # and restart the mesh workloads again
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 argo-chart istio-base base@1.28.10 => argo-chart istio-base base@1.29.8
 argo-chart istio-cni cni@1.28.10 => argo-chart istio-cni cni@1.29.8
 argo-chart istiod istiod@1.28.10 => argo-chart istiod istiod@1.29.8

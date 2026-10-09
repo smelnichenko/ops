@@ -3,8 +3,8 @@
 # v1 only (an object still stored as v1beta2 then becomes unreadable, and the API server refuses 1.x's CRDs while
 # their status.storedVersions still lists v1beta2). Strimzi's own tool does it, from the running operator's image
 # (/opt/v1-api-conversion), as two Jobs with the RBAC its README gives:
-#   1. convert-resource --all-namespaces   rewrites every live Strimzi resource as v1 - git-managed or not (ten has
-#                                          13 KafkaTopics that no repo creates);
+#   1. convert-resource --all-namespaces   rewrites every live Strimzi resource as v1 - git-managed or not (of ten's
+#                                          13 KafkaTopics, 5 are created by no repo);
 #   2. crd-upgrade                         makes v1 the CRDs' storage version and storedVersions [v1].
 #
 # Argo CD must not be syncing Strimzi automatically meanwhile: its 0.51 chart CRDs store v1beta2, and a self-heal

@@ -8,6 +8,7 @@
 # abort: one-way: v1.5's safe-upgrades policy refuses the older CRDs, and setup-kubeadm.yml refuses an older bundle
 # (tasks/no-downgrade.yml); back only by hand, removing that policy first - not written down, not rehearsed - or the
 # Wave 0 etcd snapshot restored into the node's etcd (only its restore into a scratch data directory is rehearsed)
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 # one-way: etcd's snapshot backed up into the Pi store before the CRDs change (seconds)
 wave0 etcd
 crd gateway-api v1.2.1 => crd gateway-api v1.5.1

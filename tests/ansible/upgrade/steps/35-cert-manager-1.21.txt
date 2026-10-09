@@ -2,7 +2,8 @@
 # production: no serviceAccountRef to the controller's account, no hand-made ACME Challenges/Orders, none of the removed
 # prometheus.servicemonitor values. Still passes the deprecated ExperimentalGatewayAPISupport gate (not removed).
 # outage: cert-manager restarts - nothing issued or renewed meanwhile
-# abort: revert the step's merge on main (Argo syncs back)
+# abort: revert the step's merge on main (Argo syncs back) - not rehearsed
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 argo-chart cert-manager cert-manager@v1.20.4 => argo-chart cert-manager cert-manager@v1.21.2
 image quay.io/jetstack/cert-manager-cainjector v1.20.4 => image quay.io/jetstack/cert-manager-cainjector v1.21.2
 image quay.io/jetstack/cert-manager-controller v1.20.4 => image quay.io/jetstack/cert-manager-controller v1.21.2

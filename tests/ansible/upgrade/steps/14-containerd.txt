@@ -3,8 +3,12 @@
 # containers must survive. At the rollout setup-kubeadm.yml installs containerd.io at this version.
 # outage: containerd swapped under the running containers (they keep running: KillMode=process) with the kubelet
 # stopped for the install (the package downloaded before): past some 50 s without the kubelet the node goes
-# NotReady and every Service loses its endpoints (CoreDNS, the gateway, the webhooks) until it is back
-# abort: by hand, as upgrade-containerd.yml's header says: Debian's containerd and the kept config back (not rehearsed)
+# NotReady and every Service loses its endpoints (CoreDNS, the gateway, the webhooks) until it is back. If the
+# runtime lost a container (CONTAINERS LOST) the kubelet stays stopped - the outage lasts until the operator decides
+# (one node: nothing is evicted, the node lifecycle controller is in full disruption)
+# abort: effectively one-way - containerd 2.3 moves its metadata database (v3 -> v4), and 1.7 on a moved one is untested;
+# by hand, as upgrade-containerd.yml's header says: Debian's containerd and the kept config back (not rehearsed)
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 - pkg containerd 1.7.24~ds1-6+deb13u1
 - pkg runc 1.1.15+ds1-2+b4
 + pkg containerd.io 2.3.6-1~debian.13~trixie (held)

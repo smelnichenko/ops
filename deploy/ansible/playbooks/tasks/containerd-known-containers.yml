@@ -23,6 +23,6 @@
     msg: >-
       CONTAINERS LOST: {{ _lost | join(', ') }} ran before the swap and the runtime knows them no more
       ({{ _known.stderr | default('') }}). The kubelet stays stopped - it would start them again beside whatever
-      still holds their data. Decide with the operator (the step's abort line); pods are evicted 5 minutes after
-      the node went unreachable.
+      still holds their data. Decide with the operator (the step's abort line); meanwhile the node is NotReady and
+      every Service without endpoints (one node: nothing is evicted).
   when: _known.rc != 0 or (_lost | length) > 0

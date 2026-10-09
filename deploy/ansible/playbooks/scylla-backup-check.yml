@@ -10,7 +10,6 @@
 # ran a backup (its wave0 backup runs before it); Scylla Manager's own metrics are scraped from step 18 on.
 #
 # Usage: task deploy:upgrade:done STEP=<its step>   (its first check runs it, asked first)
-#        ansible-playbook -i inventory/<env>.yml playbooks/scylla-backup-check.yml
 - name: Scylla Manager backs up
   hosts: target
   become: true

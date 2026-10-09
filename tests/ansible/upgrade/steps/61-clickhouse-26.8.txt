@@ -6,7 +6,8 @@
 # abort: back to 25.8 while the pin keeps 25.8's formats (drop or unlock the renamed system.*_log_N tables first) -
 # 25.8 starts on the data and reads what 26.8 wrote and merged under the pin (rehearsed with the real images: task
 # test:clickhouse-pin - the system log tables not looked at, the revert through Argo not rehearsed); otherwise the
-# Wave 0 ClickHouse backup
+# Wave 0 ClickHouse backup (its restore rehearsed in the full run - a canary table's parts on the copy's small data,
+# not the whole server)
 # one-way: ClickHouse's data backed up into the Pi store before the step changes anything
 wave0 clickhouse
 image clickhouse/clickhouse-server 25.8.33.6-alpine => image clickhouse/clickhouse-server 26.8.15.10-alpine

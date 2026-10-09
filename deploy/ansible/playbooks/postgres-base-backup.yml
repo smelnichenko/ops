@@ -9,8 +9,8 @@
 # makes the new major live settled, for a barman-after-merge step (scripts/upgrade-production.py); the Vagrant runner
 # runs the same playbook once the step's merges settled (tests/ansible/upgrade/barman-check.yml).
 #
-# Usage: ansible-playbook -i inventory/<env>.yml playbooks/postgres-base-backup.yml
-#        [-e pg_namespace=schnappy-production -e cluster=schnappy-production-postgres] [-e pg_major=<the step's>]
+# Usage: task deploy:upgrade:done STEP=<a barman-check step>   (its first check runs it, asked first; its merge phase for a
+#        barman-after-merge step) - its variables: -e pg_namespace, -e cluster, -e pg_major (the step's)
 - name: CNPG backs Postgres up to its object store
   hosts: target
   become: true

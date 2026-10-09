@@ -6,7 +6,7 @@
 # Tempo 3 loses nothing it held; here, merged alone, its platform merge renders as before.
 # outage: Alertmanager, the blackbox exporter and kube-state-metrics restart - alerts wait for them; Tempo restarts once
 # (it replays its own WAL)
-# abort: revert the step's merge on main (Argo syncs back)
+# abort: revert the step's merge on main (Argo syncs back) - not rehearsed
 image prom/alertmanager v0.31.1 => image prom/alertmanager v0.34.1
 image prom/blackbox-exporter v0.27.0 => image prom/blackbox-exporter v0.28.0
 - image quay.io/prometheus-operator/prometheus-config-reloader v0.89.0

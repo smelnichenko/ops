@@ -253,7 +253,8 @@
     # the kubelet stays out of the swap: a container the new containerd lost track of would otherwise be started again
     # next to the one still running (two Postgres writers on one data directory - its interlocks do not cross pod
     # namespaces). It starts again only once the runtime knows every container that ran before (step 5). Down a minute
-    # or two: the node goes NotReady, pods are evicted only after 5 minutes unreachable.
+    # or two: the node goes NotReady and every Service loses its endpoints; nothing is evicted (one node: the node
+    # lifecycle controller is in full disruption and evicts no pod).
     - name: Stop the kubelet for the swap
       ansible.builtin.systemd_service:
         name: kubelet

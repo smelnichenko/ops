@@ -4,7 +4,10 @@
 # production's render (2026-10-06, the plan's support-matrix notes).
 # outage: the operator rolls Kafka - one broker, unavailable for its restart; before it, its Wave 0 copies the
 # broker's volume with the broker stopped (operator paused, node cordoned) - Kafka down for the copy too
-# abort: one-way: Strimzi 1.x serves v1 only; back by the Wave 0 Kafka backup with 0.51 (not rehearsed)
+# abort: first, revert the step's merge on main and sync Strimzi back to 0.51 by hand: since step 37 every resource is
+# stored as v1, which 0.51 serves too - plausible, not rehearsed. Else one-way: the Wave 0 Kafka backup with 0.51 (not
+# rehearsed)
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 # one-way: Kafka's volume (the broker stopped for the copy) backed up into the Pi store before the step changes anything
 wave0 kafka
 argo-chart strimzi strimzi-kafka-operator@0.51.0 => argo-chart strimzi strimzi-kafka-operator@1.2.0

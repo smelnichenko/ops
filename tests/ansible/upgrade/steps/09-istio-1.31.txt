@@ -6,9 +6,11 @@
 # 1.31 sends unhealthy endpoints to the proxies by default: PILOT_AUTO_SEND_UNHEALTHY_ENDPOINTS=false keeps the old
 # behaviour (one-replica services would otherwise send traffic to an unready pod).
 # outage: istiod and istio-cni roll, then every mesh workload restarts (the data tier first) - each one-replica service
-# is unreachable for its own restart, seconds to a minute
+# is unreachable for its own restart, seconds to a minute; Valkey's restart empties it (emptyDir): sessions and caches
+# rebuild, Centrifugo's history is gone
 # abort: revert the step's merge (istiod and istio-cni back one minor - Istio's in-place downgrade, not rehearsed here)
 # and restart the mesh workloads again
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 argo-chart istio-base base@1.30.5 => argo-chart istio-base base@1.31.1
 argo-chart istio-cni cni@1.30.5 => argo-chart istio-cni cni@1.31.1
 argo-chart istiod istiod@1.30.5 => argo-chart istiod istiod@1.31.1

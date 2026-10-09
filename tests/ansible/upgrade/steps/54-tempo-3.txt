@@ -6,8 +6,10 @@
 # outage: Tempo restarts - spans sent meanwhile are lost; the ones Tempo 2 still holds in its WAL (Tempo 3 does not
 # replay it) are flushed to the store first: the tempo-flush line below - production's merge calls Tempo's /flush right
 # before the infra merge, the full run before the step's push, and wants a trace pushed before the flush back after it
-# abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup (its restore rehearsed at this step in the full run; the
-# old version on it is not)
+# abort: one-way (Tempo 3 blocks): the Wave 0 gateway backup -
+# the object store's buckets (mimir-blocks, tempo-traces, hyperfoil-reports: Tempo's traces and Hyperfoil's reports
+# since then go back too) and Mimir's volumes, the node cordoned while they are copied back
+# (its restore rehearsed at this step in the full run; the old version on it is not)
 # one-way: the in-cluster object store (Mimir's and Tempo's blocks) backed up into the Pi store before the step changes anything
 wave0 gateway
 image grafana/tempo 2.7.2 => image grafana/tempo 3.1.0

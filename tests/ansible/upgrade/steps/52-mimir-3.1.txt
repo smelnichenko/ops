@@ -2,7 +2,9 @@
 # not set.
 # outage: Mimir restarts - Prometheus retries its remote write, queries fail briefly
 # abort: revert the step's merge on main (Argo syncs back to 3.0.8) - a 3.x minor's downgrade not rehearsed; past
-# that, step 51's Wave 0 gateway backup, 2.x's (what Mimir wrote since is lost)
+# that, step 51's Wave 0 gateway backup, 2.x's (what Mimir wrote since is lost) -
+# the object store's buckets (mimir-blocks, tempo-traces, hyperfoil-reports: Tempo's traces and Hyperfoil's reports
+# since then go back too) and Mimir's volumes, the node cordoned while they are copied back
 image grafana/mimir 3.0.8 => image grafana/mimir 3.1.6
 # its change: the branch upgrade/52-mimir-3.1 in infra
 branch infra

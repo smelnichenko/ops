@@ -13,7 +13,8 @@
 # gluster commands
 # abort: not by the older playbook - its re-run stops and unmounts every service and volume (defect 21). By hand on
 # each Pi: `systemctl disable gluster-volumes-ready`, `,x-systemd.after=gluster-volumes-ready.service` taken out of the
-# glusterfs lines' options in /etc/fstab, `systemctl daemon-reload` - not rehearsed
+# glusterfs lines' options in /etc/fstab, `systemctl daemon-reload`, and on one Pi `gluster volume reset <volume>
+# storage.owner-uid` and `... storage.owner-gid` for forgejo-repos and backup-git-mirror - not rehearsed
 playbook setup-gluster.yml
 # Keycloak's unit as ops main has it: its database URL taking any server (?targetServerType=any - PgBouncer keeps its
 # first server connection's startup parameters, and one made to the replica, HAProxy's servers up before their first

@@ -2,8 +2,8 @@
 # supports 1.37 yet): upgrade-kubeadm.yml. kubeadm 1.36.5 moves etcd to 3.6.8-0 and CoreDNS to v1.14.2 (its own image
 # list). At the rollout setup-kubeadm.yml's k8s_version becomes 1.36 and k8s_package_version 1.36.5-1.1. The etcd
 # backup CronJob follows to etcd 3.6.8-0 (infra upgrade/43-kubernetes-1.36).
-# outage: the control-plane pods restart one at a time (the API server away for seconds; workloads keep running), the
-# kubelet restarts
+# outage: the control-plane pods restart one at a time (workloads keep running): etcd's restart takes the API server
+# away for 26 s to 2 minutes (the full runs), the others' for seconds; the kubelet restarts
 # abort: one-way - kubeadm does not downgrade; back only by a rebuild at the old version (DR-PROCEDURE.md's full
 # rebuild: GitOps and each store's own backup), or the Wave 0 etcd snapshot restored into the node's etcd - for that
 # no procedure is written and it is not rehearsed (only the snapshot's restore into a scratch data directory is, at
@@ -11,6 +11,7 @@
 # component's own restart fails, so the ones it upgraded stay upgraded and the node is half-applied (full run
 # 2026-10-06 08:10: etcd's new manifest running, the rest still the old version) - deploy:upgrade:playbooks run
 # again finishes it
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 # one-way: etcd's snapshot backed up into the Pi store before the step changes anything (production's hourly copies
 # keep 7 days)
 wave0 etcd
@@ -30,6 +31,9 @@ playbook upgrade-kubeadm.yml -e k8s_upgrade_to=1.36.5
 # (cert-manager, CNPG, Cilium's and Scylla's operators in 42 and again in 43, 2026-10-06) - recorded by the settle
 # after it, not judged as a crash loop
 restarts-control-plane
+# A Velero backup after it: Velero 1.18 is tested up to Kubernetes 1.35 (its compatibility matrix) and runs on 1.36
+# from here.
+backup-check
 # its change: the branch upgrade/43-kubernetes-1.36 in infra
 branch infra
 # kubectl in the stale PR env sweeper to 1.35.9 - within one minor of the API server at 1.36 (the skew policy); Argo CD

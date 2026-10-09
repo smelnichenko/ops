@@ -3,6 +3,7 @@
 # outage: the operator restarts; the ScyllaDB pod rolls when its sidecar image changes - ScyllaDB (one node) unavailable
 # for that restart
 # abort: revert the step's merge on main (Argo syncs back) - the operator's downgrade not rehearsed
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 argo-chart scylla-manager scylla-manager@v1.20.2 => argo-chart scylla-manager scylla-manager@v1.20.3
 argo-chart scylla-operator scylla-operator@v1.20.2 => argo-chart scylla-operator scylla-operator@v1.20.3
 image scylladb/scylla-operator 1.20.2 => image scylladb/scylla-operator 1.20.3

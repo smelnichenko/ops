@@ -6,7 +6,8 @@
 # its change: the branch upgrade/41-eso-crds in infra
 # outage: none - the same version; Argo takes the CRDs over
 # abort: revert the step's merge on main (Argo syncs back) - never helm uninstall: that deletes every ExternalSecret and
-# its Secret
+# its Secret. Not rehearsed. The CRDs stay (Prune=false), and Argo shows the application OutOfSync for them for good:
+# the step's settle and checks stay red after this abort - expected
 # from here Argo CD never prunes or deletes them: every one carries Prune=false,Delete=false
 crd-protected external-secrets 0/23 => crd-protected external-secrets 23/23
 branch infra

@@ -1,5 +1,7 @@
 # Velero 1.18.0 -> 1.18.4 (chart 12.0.0 -> 12.2.0, image pinned to the newest patch) and the AWS plugin 1.11.1 ->
-# 1.14.4, the line that pairs with Velero 1.18. infra upgrade/10-velero.
+# 1.14.4, the line that pairs with Velero 1.18. infra upgrade/10-velero. Its CRDs stay the chart's, Velero 1.18.2's:
+# 1.18.4's Restore adds spec.resourcePolicy, which the API server then drops - nothing here sets it (compared
+# 2026-10-09: every other CRD the same).
 # outage: Velero restarts - no backup runs meanwhile
 # abort: revert the step's merge on main (Argo syncs back)
 argo-chart velero velero@12.0.0 => argo-chart velero velero@12.2.0

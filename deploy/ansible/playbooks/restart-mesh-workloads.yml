@@ -16,7 +16,7 @@
 # waits until every running pod's istio-proxy runs the target version. kagent's pods are restarted like any other:
 # the skew rule allows no older sidecar (operator, 2026-10-04).
 #
-# Usage: ansible-playbook -i inventory/<env>.yml playbooks/restart-mesh-workloads.yml -e istio_version=1.26.8
+# Usage: task deploy:upgrade:playbooks STEP=<an Istio step>   (its playbook line: -e istio_version=<the step's>)
 - name: Bring every sidecar to the control plane's version
   hosts: target
   become: true

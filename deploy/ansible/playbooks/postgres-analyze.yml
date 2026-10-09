@@ -12,7 +12,6 @@
 # copy, which has no test environment): then it says so and does nothing.
 #
 # Usage: task deploy:upgrade:playbooks STEP=<a PostgreSQL 18 step>   (its playbook line)
-#        ansible-playbook -i inventory/<env>.yml playbooks/postgres-analyze.yml -e pg_major=18 [-e pg_namespaces=schnappy-test]
 - name: Planner statistics after a PostgreSQL major upgrade
   hosts: target
   become: true

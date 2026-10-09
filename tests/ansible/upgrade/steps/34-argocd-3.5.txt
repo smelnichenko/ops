@@ -7,6 +7,7 @@
 helm-diff 3.19.4 4.2.1
 # outage: Argo CD restarts - no sync meanwhile, the applications keep running
 # abort: setup-argocd.yml with the old chart version - its no-downgrade check refuses: by hand, not rehearsed
+# Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 helm argocd/argocd argo-cd-10.2.2 v3.4.6 => helm argocd/argocd argo-cd-10.9.7 v3.5.4
 image quay.io/argoproj/argocd v3.4.10 => image quay.io/argoproj/argocd v3.5.4
 image ecr-public.aws.com/docker/library/redis 8.2.3-alpine => image ecr-public.aws.com/docker/library/redis 8.6.4-alpine

@@ -4,7 +4,8 @@
 # outage: ClickHouse restarts on 25.8 - log ingestion waits
 # abort: back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)) - 24.8 reads
 # what 25.8 wrote and merged under the pin (rehearsed with the real images: task test:clickhouse-pin; the revert through
-# Argo is not); otherwise the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run)
+# Argo is not); otherwise the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run - a canary
+# table's parts on the copy's small data, not the whole server)
 # one-way: ClickHouse's data backed up into the Pi store before the step changes anything
 wave0 clickhouse
 image clickhouse/clickhouse-server 24.8-alpine => image clickhouse/clickhouse-server 25.8.33.6-alpine

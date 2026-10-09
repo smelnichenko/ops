@@ -5,5 +5,5 @@
 # platform upgrade/36-strimzi-v1-templates.
 # its change: the branch upgrade/36-strimzi-v1-templates in platform
 # outage: none in production - both templates are switched off there
-# abort: revert the step's merge on main (Argo syncs back)
+# abort: revert the step's merge on main (Argo syncs back) - not rehearsed
 branch platform
