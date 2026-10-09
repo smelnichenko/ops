@@ -3,7 +3,7 @@
 # keys read - exactly one, the pinned fingerprint - then installed (dearmored for a .gpg keyring). Trusted on first use,
 # a key swapped at the source (or on the way) signed every package after it. Inputs: apt_key_url, apt_key_fingerprint
 # (40 hex), apt_key_dest, apt_key_dearmor. tests/ansible/unit/apt-key-pinned runs this file.
-- name: "{{ apt_key_dest | basename }} - the pinned key ({{ apt_key_fingerprint[-16:] }}) fetched and installed"
+- name: "The pinned apt key fetched and installed - {{ apt_key_dest | basename }}"
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |

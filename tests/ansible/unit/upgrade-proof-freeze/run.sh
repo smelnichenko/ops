@@ -173,7 +173,9 @@ if recorded:
 edit("docs/n.md", "later\n")
 G("commit", "-qam", "later")
 after = phase("03-c")
-check("a commit after the step's: refused", after.startswith("refused") and "past the step's commit" in after, True)
+# its own commit pushed, ops past it (another fix on top): recorded - the proof check judges what changed since (an
+# unpushed own commit with ops past it stays refused: proof-integrity)
+check("a commit after the step's pushed one: recorded", (after, last()), ("ok", ("03-c", "defaults", step03)))
 
 # the app tags the full run ran (the overlay's) against infra main's production values - pushed from another clone
 # (as CD does): the checkout next to ops sees them only by fetching

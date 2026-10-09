@@ -167,6 +167,8 @@ cat > "$E/bin/ssh" <<'STUB'
 #!/bin/bash
 cat > /dev/null
 case "${@: -1}" in
+  # the probe for a production container started lately: "recent" unless $E/no-recent is there
+  "sudo bash -s") [ -e "$E/no-recent" ] || echo recent ;;
   *"bash -s"*) n=$(( $(cat "$E/n" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$E/n"; echo "${@: -1}" >> "$E/runs"
     cat "$E/answer.$n" 2> /dev/null; exit "$(cat "$E/rc.$n" 2> /dev/null || echo 1)" ;;
 esac
@@ -204,6 +206,9 @@ runs() {  # runs <answers...>: the script's exit, its runs on the VM, their dist
 }
 check "its latency alone crossed, then passed: passed, two runs under two names" "$(runs latency pass)" "0 2 2"
 check "its latency alone crossed twice: failed, two runs" "$(runs latency latency)" "1 2 2"
+touch "$E/no-recent"
+check "its latency alone crossed, no container started lately: failed, no second run" "$(runs latency pass)" "1 1 1"
+rm -f "$E/no-recent"
 check "passed: one run" "$(runs pass)" "0 1 1"
 check "a check failed (its latency with it): failed, no second run" "$(runs check pass)" "1 1 1"
 check "a request failed: failed, no second run" "$(runs request pass)" "1 1 1"
