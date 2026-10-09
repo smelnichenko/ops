@@ -226,16 +226,18 @@ check("an error condition beside a green app: still green", rc, 0, out)
 
 
 # the poll loop, against a kubectl stub: one failed poll is a red poll, not the end; restarts between polls never settle
-def loop(mode, *args, apps=None):
+def loop(mode, *args, apps=None, apps_after=None):
+    """apps_after: what the apps poll answers from the second poll of the apps on (an error gone)."""
     d = tempfile.mkdtemp()
     json.dump({"items": apps or A}, open(os.path.join(d, "apps.json"), "w"))
+    json.dump({"items": apps_after or apps or A}, open(os.path.join(d, "apps-after.json"), "w"))
     with open(os.path.join(d, "kubectl"), "w") as f:
         f.write(f"""#!/bin/bash
 case "$*" in *" annotate "*) echo "$*" >> {d}/annotated; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
-if [ -z "${{p:-}}" ]; then cat {d}/apps.json; exit 0; fi
+if [ -z "${{p:-}}" ]; then [ $n -gt 2 ] && cat {d}/apps-after.json || cat {d}/apps.json; exit 0; fi
 r=0; [ {mode} = churn ] && r=$n
 printf '{{"items":[{{"metadata":{{"namespace":"ns","name":"p1","uid":"u1"}},"status":{{"phase":"Running",'
 printf '"containerStatuses":[{{"ready":true,"restartCount":%d}}]}}}}]}}' $r
@@ -255,6 +257,9 @@ check("a ComparisonError two polls running: hard-refreshed once, said",
        out.count("HARD REFRESH c:")), (1, 1, True, 1), out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0")
 check("  no error: nothing refreshed", [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [broken], apps_after=A + [app("c")])
+check("  an error one poll only (Argo retried by itself): nothing refreshed",
+      [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
 rc, out = loop("fail-first", "--minutes", "0.05", "--restart-quiet", "0")
 check("a failed poll first: red, then settled", (rc, "poll failed" in out, "ARGO SETTLED" in out), (0, True, True), out)
 rc, out = loop("churn", "--minutes", "0.02", "--restart-quiet", "0")
