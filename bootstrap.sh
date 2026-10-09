@@ -85,6 +85,26 @@ EOF
     err "Cannot apply Secret external-secrets/vault-pi-ca (Vault's CA for ESO)"
     return 1
   fi
+  # the same CA for the stale preview environments' sweeper (argocd): it reads Vault verified, not with curl -k. On a
+  # new cluster Argo CD's namespace comes later (setup-argocd.yml labels it): made bare here, never applied - an apply
+  # would own its labels, and the next one drop setup-argocd's
+  if ! kubectl get namespace argocd > /dev/null 2>&1 && ! kubectl create namespace argocd > /dev/null; then
+    err "Cannot create namespace argocd (for Vault's CA)"
+    return 1
+  fi
+  if ! kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-pi-ca
+  namespace: argocd
+data:
+  ca.crt: ${VAULT_CA_B64}
+EOF
+  then
+    err "Cannot apply Secret argocd/vault-pi-ca (Vault's CA for the preview environments' sweeper)"
+    return 1
+  fi
 
   # External Secrets' account may review tokens: Vault (no reviewer token of its own) reviews the short-lived token ESO
   # logs in with by that same token - a non-expiring token of this account, kept in Vault's config, was anyone's who

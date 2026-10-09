@@ -290,6 +290,20 @@
             ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
       no_log: true
 
+    # as bootstrap.sh: the same CA for the stale preview environments' sweeper, which reads Vault verified
+    - name: Create the vault-pi-ca Secret in argocd (the sweeper trusts the Vagrant Vault CA)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: vault-pi-ca
+            namespace: argocd
+          data:
+            ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
+      no_log: true
+
     # as bootstrap.sh: no reviewer token - Vault reviews the token External Secrets logs in with by that same token
     - name: External Secrets' account may review tokens (as bootstrap.sh)
       kubernetes.core.k8s:

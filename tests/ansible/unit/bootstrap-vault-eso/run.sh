@@ -30,7 +30,17 @@ case "\$*" in
     if [ -n "\${APPLY_FAILS:-}" ] || [ "\${APPLY_FAILS_AT:-0}" = "\$n" ]; then
       echo "error: the server is currently unable to handle the request" >&2; exit 1
     fi
-    { cat; echo ---; } >> "$W/applied" ;;
+    doc=\$(cat)
+    # a new cluster's: Argo CD's namespace comes after this step (setup-argocd.yml)
+    if [ -n "\${NO_ARGOCD_NS:-}" ] && [ ! -e "$W/argocd-ns" ] && grep -q '^  namespace: argocd$' <<< "\$doc"; then
+      echo 'Error from server (NotFound): namespaces "argocd" not found' >&2; exit 1
+    fi
+    { echo "\$doc"; echo ---; } >> "$W/applied" ;;
+  "get namespace argocd") [ -z "\${NO_ARGOCD_NS:-}" ] || [ -e "$W/argocd-ns" ] \
+      || { echo 'Error from server (NotFound): namespaces "argocd" not found' >&2; exit 1; } ;;
+  "create namespace argocd") [ -z "\${NS_CREATE_FAILS:-}" ] || { echo "error: etcdserver: request timed out" >&2; exit 1; }
+    touch "$W/argocd-ns" ;;
+  *" namespace "*) echo "unexpected namespace call: \$*" >&2; exit 1 ;;
   "get externalsecret -A -o jsonpath="*) [ -z "\${ES_LIST_FAILS:-}" ] || { echo "error: etcdserver: request timed out" >&2; exit 1; }
     [ -n "\${ES_NONE:-}" ] || printf 'cert-manager/porkbun-secret-es %s\nargocd/x %s\n' "\${ES_FIRST:-True}" "\${ES_SECOND:-True}" ;;
   # the proof's read: answered for the exact path the proof needs alone (any other read is a defect - one that read the
@@ -110,7 +120,7 @@ check() {  # check <name> <got> <want>
 # how to put it back: the JSON (the reviewer token in it) on vault's stdin (-), never a file written on the Pi
 said_before() { echo "$(grep -c "Vault's config before this run" <<< "$out") $(grep -c '"kubernetes_host": "https://192.168.11.2:6443"' <<< "$out") $(grep -c 'vault write auth/kubernetes/config - ' <<< "$out")$(grep -c 'config @' <<< "$out")"; }
 run() {  # run <env...>: bootstrap.sh vault-eso, its exit in $rc; its temp files under $W/tmp
-  rm -rf "$W"/{kubectl-calls,applied,applies,annotated,annotated-again,annotated-es,es-reads,rolled-back,ssh-argv} \
+  rm -rf "$W"/{kubectl-calls,applied,applies,argocd-ns,annotated,annotated-again,annotated-es,es-reads,rolled-back,ssh-argv} \
     "$W"/{vault-argv,vault-env,vault-files,vault-json,tmp} "$W"/pwned-*
   mkdir "$W/tmp"
   out=$(env "$@" PATH="$W/bin:$PATH" INFRA_DIR="$W/infra" VAULT_PI=pi.test TMPDIR="$W/tmp" ESO_PROOF_SECONDS=1 ESO_SETTLE_SECONDS=0 \
@@ -123,8 +133,8 @@ check "nothing of it kept in /tmp (the CA a cache any local user plants)" \
 run
 check "the step passes" "$rc" 0
 check "... proven: no config before said (nothing to put back)" "$(said_before)" "0 0 00"
-check "the cluster trusts the CA read from the Pi now" \
-  "$(grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")" "$W/applied")" 1
+check "the cluster trusts the CA read from the Pi now (External Secrets', the sweeper's in argocd)" \
+  "$(grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")" "$W/applied")" 2
 check "no non-expiring token of External Secrets' account made, none read" \
   "$(grep -c 'kubernetes.io/service-account-token' "$W/applied") $(grep 'get secret' "$W/kubectl-calls" | grep -vc ' -o name$')" \
   "0 0"
@@ -240,6 +250,20 @@ check "a kube context on another cluster: refused before any write - nothing app
 run SERVER=https://10.9.9.9:6443 K8S_EXPECTED=https://10.9.9.9:6443
 check "another pairing named (K8S_EXPECTED): passes" "$rc" 0
 run APPLY_FAILS_AT=2
+check "only the argocd CA's apply failing: the step fails, said so, nothing sent to the Pi" \
+  "$rc $(grep -c "argocd/vault-pi-ca" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 1 0"
+# a new cluster (deploy:full, a rebuild): no argocd namespace yet - made bare (setup-argocd.yml labels it later; an
+# apply would own its labels, and the next one drop setup-argocd's), the CA in it
+run NO_ARGOCD_NS=1
+check "a new cluster without Argo CD's namespace: the step passes, the namespace created (not applied), the CA in it" \
+  "$rc $(grep -c '^kubectl create namespace argocd$' "$W/kubectl-calls" 2> /dev/null) $(grep -c '^kind: Namespace' "$W/applied") \
+$(grep -c '^  namespace: argocd$' "$W/applied")" "0 1 0 1"
+run
+check "argocd there already: not created again" "$rc $(grep -c 'create namespace' "$W/kubectl-calls")" "0 0"
+run NO_ARGOCD_NS=1 NS_CREATE_FAILS=1
+check "the namespace not made: the step fails, said so, nothing sent to the Pi" \
+  "$rc $(grep -c 'namespace argocd' <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 1 0"
+run APPLY_FAILS_AT=3
 check "only the ClusterRoleBinding's apply failing: the step fails, said so, nothing sent to the Pi" \
   "$rc $(grep -c "ClusterRoleBinding" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 1 0"
 # what goes into the script run as root on the Pi, checked first: the cluster CA as base64 alone (a line of its own
@@ -310,5 +334,15 @@ c = [str(x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["deploy:full"
 at = lambda s: next((i for i, x in enumerate(c) if s in x), -1)
 print(at("seed-vault-secrets.yml") < at("bootstrap.sh vault-eso") < at("setup-argocd.yml"), at("setup-vault-pi.yml") >= 0)')" \
   "True True"
+# Vault's CA in argocd too (the stale preview environments' sweeper reads Vault verified, not with curl -k): the same
+# certificate, read from the Pi, in both namespaces - here and on the copy (isolate-cluster.yml)
+check "vault-eso: Vault's CA applied in external-secrets and in argocd, the same certificate" \
+  "$(sed -n '/name: vault-pi-ca/,/^---$/p' "$W/applied" | grep -c '^  namespace: argocd$') \
+$(sed -n '/namespace: argocd/,/^---$/p' "$W/applied" | grep -c "ca.crt: $(base64 -w0 < "$W/pi/etc/vault.d/tls/ca-cert.pem")")" "1 1"
+check "isolate-cluster.yml: the copy's Vault CA in argocd too" "$(python3 -c '
+import yaml
+t = [x for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml")) for x in p.get("tasks") or []]
+print(sorted(((x.get("kubernetes.core.k8s") or {}).get("definition") or {}).get("metadata", {}).get("namespace", "")
+             for x in t if "vault-pi-ca" in str(x.get("kubernetes.core.k8s", ""))))')" "['argocd', 'external-secrets']"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
