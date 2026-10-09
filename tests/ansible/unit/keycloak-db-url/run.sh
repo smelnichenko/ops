@@ -68,10 +68,24 @@ reload_ = [i for i, t in enumerate(ps) if (t.get("ansible.builtin.systemd") or t
                                            or {}).get("daemon_reload") is True]
 removal = max((i for i, t in enumerate(ps) if "/etc/keycloak" in str((t.get("ansible.builtin.file") or {}).get("path", ""))
                + str(t.get("loop", ""))), default=None)
-check("the copy's systemd reloads production's unit after it and the removal, restarting nothing",
-      (bool(reload_) and removal is not None and reload_[-1] > removal,
-       [(ps[i].get("ansible.builtin.systemd") or ps[i].get("ansible.builtin.systemd_service")).get("state") for i in reload_]),
-      (True, [None] * len(reload_)))
+check("the copy's systemd reloads production's unit after it and the removal",
+      bool(reload_) and removal is not None and reload_[-1] > removal, True)
+# and the copy's Keycloak then runs it, as production's does: PgBouncer restarted first (its startup parameters fresh,
+# as production's working ones), Keycloak restarted under production's unit, waited for until it serves - step 00's
+# guard then reads the password of a process booted from production's inline unit, not the playbook's secrets file
+# (with that, its comparison could not fail on the copy)
+kc_tasks = kc_ps
+svc = [(v.get("name"), v.get("state")) for t in kc_tasks for m, v in actions(t) if m.endswith("systemd")
+       and isinstance(v, dict) and v.get("state")]
+waits = [t for t in kc_tasks if (t.get("ansible.builtin.uri") or {}).get("url") == "http://127.0.0.1:8080/realms/master"
+         and t.get("until")]
+unit_i = next((i for i, t in enumerate(kc_tasks) for _, v in actions(t) if isinstance(v, dict)
+               and v.get("dest") == "/etc/systemd/system/keycloak.service"), None)
+restart_i = next((i for i, t in enumerate(kc_tasks) for m, v in actions(t) if isinstance(v, dict)
+                  and v.get("name") == "keycloak" and v.get("state") == "restarted"), None)
+check("the copy's Keycloak restarted under production's unit, PgBouncer first, waited for",
+      (svc, len(waits), unit_i is not None and restart_i is not None and restart_i > unit_i),
+      ([("pgbouncer", "restarted"), ("keycloak", "restarted")], 1, True))
 # production's unit only until step 00 is done: a full run from a later step (its copy built as the steps before it
 # left production) gets the playbook's unit, as production has then - the play ends before writing it, after its guard
 import os  # noqa: E402

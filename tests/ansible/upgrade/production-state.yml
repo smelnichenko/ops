@@ -135,11 +135,13 @@
         or 'DNS:*.pmon.dev' not in _wildcard_check.stdout
 
 # Keycloak's unit as production's Pis have it (read 2026-10-08, both alike): its URL without a server type, its
-# passwords inline (the copy's own here), no EnvironmentFile, no /etc/keycloak, no restart stamp - the file only: the
-# Keycloak running keeps what it booted with (the playbooks' unit and secrets file), so nothing on the copy meets
-# PgBouncer's kept startup parameters with it. Step 00 writes the playbook's unit and secrets file and restarts Keycloak,
-# the Pi without the VIP first, as it will on production. Given the URL alone, step 00 ran green on a unit production
-# does not have
+# passwords inline (the copy's own here), no EnvironmentFile, no /etc/keycloak, no restart stamp - and the Keycloak
+# running booted from it, as production's: step 00 compares the password the secrets file gives with the running
+# process's before writing the unit - booted from the playbook's own secrets file, that comparison could not fail on the
+# copy. PgBouncer restarted first: its startup parameters fresh, as production's working ones (a pool's first server
+# connection to the replica kept in_hot_standby=on, and the URL without a server type refused it - what step 00 fixes).
+# Step 00 writes the playbook's unit and secrets file and restarts Keycloak, the Pi without the VIP first, as it will on
+# production. Given the URL alone, step 00 ran green on a unit production does not have
 - name: Keycloak's unit as production's Pis have it
   hosts: pis
   become: true
@@ -194,11 +196,32 @@
         state: absent
       loop: [/etc/keycloak, /var/lib/config-loaded/keycloak.sha256]
 
-    # systemd reads it so (no restart): kept in memory, the playbook's unit named the file just removed - a crash
-    # restart before step 00 failed to load it
-    - name: systemd reads production's unit (no restart)
+    # systemd reads it so: kept in memory, the playbook's unit named the file just removed - a crash restart before step
+    # 00 failed to load it
+    - name: systemd reads production's unit
       ansible.builtin.systemd:
         daemon_reload: true
+
+    - name: PgBouncer's startup parameters fresh (as production's working ones)
+      ansible.builtin.systemd:
+        name: pgbouncer
+        state: restarted
+
+    - name: Keycloak booted from production's unit (its inline password - what step 00's guard reads)
+      ansible.builtin.systemd:
+        name: keycloak
+        state: restarted
+
+    - name: Keycloak serving on production's unit
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/realms/master
+        status_code: 200
+        timeout: 10
+        follow_redirects: none
+      register: _keycloak_on_production_unit
+      until: _keycloak_on_production_unit.status | default(0) == 200
+      retries: 120
+      delay: 2
 
 # The Pis' Gluster as production's have it before step 00 (read 2026-10-08): the copy's build runs today's
 # setup-gluster.yml, so step 00's own change - the fstab entries rewritten with the boot unit's ordering, the unit
