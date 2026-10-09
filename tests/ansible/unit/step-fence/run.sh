@@ -1,20 +1,32 @@
 #!/bin/bash
-# Every upgrade step's playbook lines within the production runner's allow-list (scripts/upgrade-step-playbooks.sh
-# --lint): only --tags and -e <step variable>=<plain value> may reach production - a Vagrant-only setting in a step
-# line would be carried to ten. A step file that does not parse fails the lint (it passed: the lines were read in a
-# here-string, whose failure set -e does not see).
+# scripts/upgrade-step-playbooks.sh --lint: each step line outside the allow-list fails, naming what it refused - a
+# playbook outside deploy/ansible/playbooks, an inventory, a variable no step owns, an extra-vars file, a value with shell
+# in it; a step's own line passes
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
-fails=0
-if scripts/upgrade-step-playbooks.sh --lint; then echo "PASS every step's lines"; else echo "FAIL every step's lines"; fails=1; fi
+script=scripts/upgrade-step-playbooks.sh
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/scripts" "$T/tests/ansible/upgrade/steps"
-cp scripts/upgrade-step-playbooks.sh scripts/upgrade-expected-inventory.py "$T/scripts/"
-printf 'playbook setup-gluster.yml\nnot a step line\n' > "$T/tests/ansible/upgrade/steps/01-broken.txt"
-if out=$("$T/scripts/upgrade-step-playbooks.sh" --lint 2>&1); then
-  echo "FAIL a step file that does not parse: the lint passed ($out)"; fails=1
-else
-  echo "PASS a step file that does not parse: the lint fails"
-fi
-if [ "$fails" = 0 ]; then echo "step-fence: ALL-PASS"; else echo "step-fence: FAILED"; exit 1; fi
+mkdir -p "$T/scripts" "$T/tests/ansible/upgrade/steps" "$T/deploy/ansible/playbooks"
+cp "$script" "$T/scripts/upgrade-step-playbooks.sh"
+cp scripts/upgrade-expected-inventory.py "$T/scripts/"
+chmod +x "$T/scripts/"*
+: > "$T/deploy/ansible/playbooks/setup-kubeadm.yml"
+printf 'x\n' > "$T/tests/ansible/upgrade/prod-inventory.txt"
+fails=0
+lint() {  # name, step line, word the refusal names
+  rm -f "$T"/tests/ansible/upgrade/steps/*.txt
+  printf 'playbook %s\n' "$2" > "$T/tests/ansible/upgrade/steps/01-x.txt"
+  out=$("$T/scripts/upgrade-step-playbooks.sh" --lint 2>&1); rc=$?
+  if [ "$rc" != 0 ] && grep -qF -- "$3" <<< "$out"; then echo "PASS $1"; else echo "FAIL $1 (rc $rc): $out"; fails=$((fails + 1)); fi
+}
+lint "C01/C04 a playbook outside deploy/ansible/playbooks refused" "../../tests/ansible/data-check.yml" "is not a playbook"
+lint "C01 an inventory argument refused" "setup-kubeadm.yml -i inventory/vagrant.yml" "argument '-i'"
+lint "C01/C02 a variable no step owns refused" "setup-kubeadm.yml -e forgejo_url=http://192.168.56.20:3000" "not a step variable"
+lint "C01/C02 an extra-vars file refused" "setup-kubeadm.yml -e @vars/vagrant.yml" "not a step variable"
+lint "C01/C02 a step variable with a non-plain value refused" "setup-kubeadm.yml -e cilium_version=1.20.2;id" "not a step variable"
+rm -f "$T"/tests/ansible/upgrade/steps/*.txt
+printf 'playbook setup-kubeadm.yml --tags cilium -e cilium_version=1.20.2\n' > "$T/tests/ansible/upgrade/steps/01-x.txt"
+if "$T/scripts/upgrade-step-playbooks.sh" --lint > /dev/null 2>&1; then echo "PASS a step's own line passes"; else echo "FAIL a step's own line refused"; fails=$((fails + 1)); fi
+echo "step-fence: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
+[ $fails = 0 ]
