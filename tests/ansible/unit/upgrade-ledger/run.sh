@@ -71,7 +71,10 @@ i37 = info["37-strimzi-conversion"]
 check("37 has playbooks and leaves strimzi out of sync", (bool(i37["playbooks"]), i37["out_of_sync"]),
       (True, ["strimzi"]))
 
-P = lambda step, phase, events, arg=None: m.problems(names, step, phase, events, info[step], arg)
+# judged a minute after the fixture's last event (its own clock: a wave0 backup or a preview ages against it)
+P = lambda step, phase, events, arg=None: m.problems(
+    names, step, phase, events, info[step], arg,
+    now=max((e[0] for e in events), default=T0) + datetime.timedelta(minutes=1))
 
 # begin: every earlier step done; once
 refused("begin 03 with 01 not done (00 and 02 are; 02 before the ledger)",

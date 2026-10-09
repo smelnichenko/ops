@@ -186,6 +186,27 @@ def expected_with(line):
         m.inv.UPGRADE, m.inv.STEPS = saved
 check("M01 control: a line from what the inventory holds applies", expected_with("image a 1 => image a 2"), ["image a 2"])
 check("M01 a line from what it does not hold: stopped as stale", expected_with("image a 0 => image a 2"), "stale")
+# S6: a step's wave0 backup and its preview fresh where the one-way change goes live (merge, playbooks)
+st = "43-kubernetes-1.36"
+info43 = m.step_info(st)
+now = datetime.datetime.now(datetime.timezone.utc)
+ago = lambda h: now - datetime.timedelta(hours=h)
+def ev(backup_h, preview_h=None, settled=False):
+    out = [(ago(30), st, "begun", []), (ago(backup_h), st, "backup", ["etcd"])]
+    if settled:
+        out += [(ago(1), st, "merged", ["infra", "c" * 40]), (ago(1), st, "settled", ["infra", "r"])]
+    if preview_h is not None:
+        out += [(ago(preview_h), st, "previewed", [])]
+    return out
+fresh = lambda ps: [p for p in ps if "ago" in p]
+check("S6 control: a backup an hour old - the merge may run", fresh(m.problems(m.step_names(), st, "merge", ev(1), info43, "infra")), [])
+check("S6 a backup 7 h old: the merge refused, named", len(fresh(m.problems(m.step_names(), st, "merge", ev(7), info43, "infra"))), 1)
+check("S6 control: backup and preview an hour old - the playbooks may run",
+      fresh(m.problems(m.step_names(), st, "playbooks", ev(1, 1, True), info43)), [])
+check("S6 a preview 7 h old: the playbooks refused, named",
+      len(fresh(m.problems(m.step_names(), st, "playbooks", ev(1, 7, True), info43))), 1)
+check("S6 a backup 7 h old: the playbooks refused too (the kubeadm upgrade is the one-way change)",
+      len(fresh(m.problems(m.step_names(), st, "playbooks", ev(7, 1, True), info43))), 1)
 print("runner-refusals: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_RUNNER_REFUSALS

@@ -182,7 +182,12 @@ def current(events):
     return [ev for i, ev in enumerate(events) if i > last.get(ev[1], -1)]
 
 
-def problems(names, step, phase, events, info, arg=None):
+# the most a wave0 backup and a preview may age before the one-way change they stand for goes live (a merge, the
+# playbooks): an older backup misses that much data on a restore, an older preview read another cluster
+FRESH_HOURS = 6
+
+
+def problems(names, step, phase, events, info, arg=None, now=None):
     """What stands between `step` and `phase` - empty when the phase may run."""
     if step not in names:
         return [f"no step {step}"]
@@ -204,6 +209,11 @@ def problems(names, step, phase, events, info, arg=None):
         return []
     backed = {a[0] for _, e, a in mine if e == "backup"}
     settled = {a[0] for _, e, a in mine if e == "settled"}
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    last = lambda kind, a0=None: max((at for at, e, a in mine if e == kind and (a0 is None or a[:1] == [a0])), default=None)
+    stale = lambda at, what: [f"{what} taken {(now - at).total_seconds() / 3600:.1f} h ago - more than {FRESH_HOURS} h "
+                              "before the change: take it again"] if at and now - at > datetime.timedelta(hours=FRESH_HOURS) else []
+    stale_backups = [p for s_ in info["wave0"] for p in stale(last("backup", s_), f"the {s_} backup")]
     if phase == "backup":
         return [] if arg in info["wave0"] else \
             [f"{step} backs up no {arg} (its wave0 stores: {', '.join(info['wave0']) or 'none'})"]
@@ -214,7 +224,7 @@ def problems(names, step, phase, events, info, arg=None):
             return out + [f"{step} has no {arg} branch line"]
         first = [r for r in info["branches"][:info["branches"].index(arg)] if r not in settled]
         return out + ([f"merge {', '.join(first)} first (the step file's order)"] if first else []) \
-            + ([f"{arg} is merged and settled already"] if arg in settled else [])
+            + ([f"{arg} is merged and settled already"] if arg in settled else []) + stale_backups
     unsettled = [r for r in info["branches"] if r not in settled]
     out += [f"not merged and settled yet: {', '.join(unsettled)} (deploy:upgrade:merge)"] if unsettled else []
     # the preview after the merges: a step's playbooks read the cluster the merge leaves (istiod at the target, ...)
@@ -224,7 +234,8 @@ def problems(names, step, phase, events, info, arg=None):
         if not info["playbooks"]:
             return out + [f"{step} has no playbook lines"]
         return out + (["not previewed (deploy:upgrade:preview)"] if "previewed" not in kinds else []) \
-            + (["its playbook lines ran already"] if "playbooks" in kinds else [])
+            + (["its playbook lines ran already"] if "playbooks" in kinds else []) \
+            + stale_backups + stale(last("previewed"), "the preview")
     played = ["its playbook lines have not run (deploy:upgrade:playbooks)"] \
         if info["playbooks"] and "playbooks" not in kinds else []
     if phase == "defaults":
