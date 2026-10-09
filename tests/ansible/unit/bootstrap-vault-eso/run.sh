@@ -261,8 +261,9 @@ $(grep -c '^  namespace: argocd$' "$W/applied")" "0 1 0 1"
 run
 check "argocd there already: not created again" "$rc $(grep -c 'create namespace' "$W/kubectl-calls")" "0 0"
 run NO_ARGOCD_NS=1 NS_CREATE_FAILS=1
-check "the namespace not made: the step fails, said so, nothing sent to the Pi" \
-  "$rc $(grep -c 'namespace argocd' <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 1 0"
+check "the namespace not made: the step fails, said so, goes no further (no apply into it), nothing sent to the Pi" \
+  "$rc $(grep -c 'namespace argocd' <<< "$out") $(cat "$W/applies") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" \
+  "1 1 1 0"
 run APPLY_FAILS_AT=3
 check "only the ClusterRoleBinding's apply failing: the step fails, said so, nothing sent to the Pi" \
   "$rc $(grep -c "ClusterRoleBinding" <<< "$out") $(cat "$W/ssh-argv" 2> /dev/null | grep -c 'bash -s')" "1 1 0"
