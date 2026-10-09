@@ -205,7 +205,7 @@ check("production runs another app tag: refused, naming it", m.app_tag_problems(
 os.makedirs(m.PROVEN, exist_ok=True)
 with open(os.path.join(m.PROVEN, "01-a.json"), "w") as f:
     f.write('{"run": "r", "complete": true, "ops": "%s", "floating": ["x"]}' % proven)
-m.floating_problems, m.unproven_changes = (lambda *a: []), (lambda *a: [])
+m.floating_problems, m.unproven_changes, m.main_problems = (lambda *a: []), (lambda *a: []), (lambda *a: [])
 check("every phase's proof check refuses it", any(p.startswith("app: production runs p1")
                                                   for p in proof_problems("01-a", ["01-a"])), True)
 production_tags("c1", "p2")

@@ -34,8 +34,12 @@ printf '# committed steps\n' > "$o/tests/ansible/upgrade/defaults-committed.txt"
 printf 'image a 1\nimage b 1\nimage c 1\n' > "$o/tests/ansible/upgrade/prod-inventory.txt"
 cp "$src/.gitignore" "$o/.gitignore"
 git -C "$o" init -q -b main && git -C "$o" add -A && git -C "$o" commit -q -m start
-# the repos proof-start reads the step branches of (none here)
-for r in infra platform; do git init -q -b main "$W/$r" && git -C "$W/$r" commit -q --allow-empty -m main; done
+# the repos proof-start reads the step branches and main of, each with its origin
+for r in infra platform; do
+  git init -q --bare -b main "$W/$r.git" && git clone -q "$W/$r.git" "$W/$r" 2> /dev/null
+  mkdir -p "$W/$r/clusters/production/app" && echo v1 > "$W/$r/clusters/production/app/values.yaml"
+  git -C "$W/$r" add -A && git -C "$W/$r" commit -q -m main && git -C "$W/$r" push -q origin main
+done
 SRC=$src PYTHONDONTWRITEBYTECODE=1 python3 - "$o" <<'PY'
 import contextlib, datetime, importlib.machinery, importlib.util, io, json, os, subprocess, sys
 o = sys.argv[1]
@@ -136,6 +140,59 @@ check("  the run's proofs marked, another run's not",
 check("a proof of a run marked complete: no problem", incomplete("03-c"), [])
 os.remove(os.path.join(m.PROVEN, "run.json"))
 check("proof-complete with no run started: refused", exits(complete) is not None if complete else None, True)
+
+# the main the run mirrored (each repo's, local main = origin's at its start), recorded; production's main then may hold
+# only the merged steps' commits and changes that render nothing for production (CD's test deploys, CI, docs)
+W_ = os.path.dirname(o)
+git_ = lambda r, *a: subprocess.run(["git", "-C", os.path.join(W_, r), *a], capture_output=True, text=True,
+                                    check=True).stdout.strip()
+for f in ("01-a", "02-b", "03-c"):
+    if os.path.exists(m.proof_path(f)):
+        os.remove(m.proof_path(f))
+check("proof-start: local main as origin's - taken", start("03-c"), None)
+run_main = json.load(open(os.path.join(m.PROVEN, "run.json"))).get("main")
+check("  each repo's main recorded", run_main, {r: git_(r, "rev-parse", "main") for r in ("infra", "platform")})
+
+
+def commit(repo, path, text, msg, push=True):
+    full = os.path.join(W_, repo, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    open(full, "w").write(text)
+    git_(repo, "add", "-A")
+    git_(repo, "commit", "-qm", msg)
+    if push:
+        git_(repo, "push", "-q", "origin", "main")
+
+
+commit("infra", "clusters/production/x.yaml", "local\n", "local only", push=False)
+check("proof-start: local main ahead of origin's - refused", "origin" in (start("03-c") or ""), True)
+git_("infra", "push", "-q", "origin", "main")
+check("proof-start again, main pushed: taken", start("03-c"), None)
+run_main = json.load(open(os.path.join(m.PROVEN, "run.json"))).get("main")
+mp = getattr(m, "main_problems", None)
+main_of = lambda: mp({"main": run_main}) if mp else ["no main_problems"]
+check("main as the run mirrored it: no problem", main_of(), [])
+commit("infra", "clusters/production/schnappy-test-apps/values.yaml", "t: 1\n", "deploy(test): x=1")
+commit("platform", ".woodpecker/ci.yaml", "steps: {}\n", "ci: a step")
+commit("platform", "helm/x/runbooks/README.md", "# r\n", "docs")
+check("CD's test deploy, CI and docs since: no problem", main_of(), [])
+commit("platform", "helm/schnappy/values.yaml", "masi: {}\n", "masi: a host")
+got = main_of()
+check("a change production renders since: refused, the commit and file named",
+      (len(got), "helm/schnappy/values.yaml" in str(got), "masi: a host" in str(got)), (1, True, True))
+git_("platform", "reset", "-q", "--hard", "HEAD~1")
+git_("platform", "push", "-q", "-f", "origin", "main")
+# a merged step's own commits: production's merges of the steps after the run's start
+git_("infra", "checkout", "-q", "-b", "upgrade/03-c")
+commit("infra", "clusters/production/app/values.yaml", "v2\n", "03-c", push=False)
+git_("infra", "checkout", "-q", "main")
+git_("infra", "merge", "-q", "--ff-only", "upgrade/03-c")
+git_("infra", "push", "-q", "origin", "main")
+git_("infra", "tag", "-m", "base x", "upgrade-merged/03-c", "upgrade/03-c")
+check("a merged step's commit since: no problem", main_of(), [])
+git_("infra", "tag", "-d", "upgrade-merged/03-c")
+check("the same commit with no merged tag: refused", len(main_of()), 1)
+check("a proof with no main recorded: refused", len(mp({}) if mp else [None]) >= 1, True)
 
 # the copy's build at a step: every base line up to it
 inv = lambda *a: subprocess.run([os.path.join(o, "scripts", "upgrade-expected-inventory.py"), *a],

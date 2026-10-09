@@ -110,6 +110,11 @@ APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
 APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "infra", APP_VALUES.replace(
     "values.yaml", "values.vagrant.yaml"))
 BEFORE_LEDGER = "02-istio-chart-repo"
+# what may land on infra's or platform's main after a full run without it proving it again: what renders nothing for
+# production - CD's deploys of the test environment, CI's own files, docs, a chart's unit tests (a merged step's own
+# commits aside)
+MAIN_UNRENDERED = (r"^clusters/production/schnappy-test-apps/values\.yaml$", r"^\.woodpecker/", r"\.md$",
+                   r"^helm/[^/]+/tests/")
 
 
 def _load(name, path):
@@ -551,10 +556,22 @@ def proof_start(from_step=None):
     if committed != before:
         sys.exit(f"REFUSED: a run from {from_step} builds production as the steps before it left it - their playbook "
                  f"defaults committed ({', '.join(before) or 'none'}), the tree has {', '.join(committed) or 'none'}")
+    # the main each repo's mirror takes (local main): production's, as the run starts - recorded, production's main
+    # judged against it at every phase
+    mains = {}
+    for repo in REPOS:
+        d = os.path.join(OPS, "..", repo)
+        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        local, origin = (run(["git", "-C", d, "rev-parse", r], capture_output=True, check=True).stdout.strip()
+                         for r in ("main", ORIGIN_MAIN))
+        if local != origin:
+            sys.exit(f"REFUSED: {repo}'s main is not origin/main - the run mirrors local main, production runs "
+                     f"origin's (git -C ../{repo} pull --ff-only, or push)")
+        mains[repo] = local
     head = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
-    write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "from": from_step,
+    write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "from": from_step, "main": mains,
                                                   "branches": branch_shas()})
     print(f"PROOF: run {started} of ops {head[:10]} from {from_step}")
 
@@ -657,6 +674,7 @@ def record_proof(step, infra_sha, platform_sha):
     ran = step_digests(step)
     moved = {f"{full_name(n)}:{t}" for n, t in step_images(step)}
     proof = {"step": step, "run": run_info["run"], "from": run_info.get("from", names[0]), "ops": run_info["ops"],
+             "main": run_info.get("main"),
              "repos": {}, "floating": floating_digests(),
              "digests": {k: d for k, d in sorted(ran.items()) if k in moved}}
     for repo in REPOS:
@@ -774,6 +792,35 @@ def proof_inventory(names, step, merged, partly=False):
     return inv.expected(names[:i + (1 if merged else 0)])
 
 
+def main_problems(proof):
+    """Production's main against the one the full run mirrored (the proof's): every commit since it a merged step's own
+    (in an upgrade-merged tag) or one that renders nothing for production (MAIN_UNRENDERED) - anything else runs a base
+    no full run rendered: refused, named, a new run (from where production stands) proves it."""
+    if not proof.get("main"):
+        return ["the full run recorded no main it mirrored - prove again"]
+    out = []
+    for repo in REPOS:
+        d = os.path.join(OPS, "..", repo)
+        git = lambda *a: run(["git", "-C", d, *a], capture_output=True, check=True).stdout
+        run(["git", "-C", d, "fetch", "-q", "origin", "main"], check=True)
+        base = proof["main"].get(repo)
+        if not base or run(["git", "-C", d, "merge-base", "--is-ancestor", base, ORIGIN_MAIN]).returncode:
+            out.append(f"{repo}: origin/main does not contain the main the full run mirrored ({(base or 'none')[:10]})")
+            continue
+        tags = git("for-each-ref", "--format=%(refname)", "refs/tags/" + MERGED_TAG).split()
+        stepwise = set(git("rev-list", *tags, "^" + base).split()) if tags else set()
+        for commit in git("rev-list", "--reverse", f"{base}..{ORIGIN_MAIN}").split():
+            if commit in stepwise:
+                continue
+            files = git("diff-tree", "--no-commit-id", "--name-only", "-r", commit).split()
+            rendered = [p for p in files if not any(re.search(r, p) for r in MAIN_UNRENDERED)]
+            if rendered:
+                subject = git("log", "-1", "--format=%s", commit).strip()
+                out.append(f"{repo}: {commit[:10]} '{subject}' on origin/main since the full run changes "
+                           f"{', '.join(rendered)} - production would run what no run rendered: prove again")
+    return out
+
+
 def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, partly=False, tip=None, done=()):
     """What the full run's proof says against running `step` (and merging `repo`) now. The ops tree may differ from
     the run's commit only by the default lines of `defaulted_steps`. `merged`: the step's merges settled; `partly`:
@@ -804,6 +851,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
     else:
         out += floating_problems(proof["floating"], proof_inventory(names, step, merged, partly))
     out += app_tag_problems()
+    out += main_problems(proof)
     try:
         changed = unproven_changes(proof["ops"], defaulted_steps)
     except ValueError as e:

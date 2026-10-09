@@ -79,7 +79,7 @@ base, tip = os.environ["OWN_OF"].split("..")
 own = m.own_change(os.path.join(W, "infra"), base, tip)
 json.dump({"run": "r", "complete": True, "ops": "x", "repos": {"infra": {"own": own}}, "floating": {"a": "b"}},
           open(m.proof_path(step), "w"))
-m.floating_problems = m.app_tag_problems = m.unproven_changes = lambda *a: []
+m.floating_problems = m.app_tag_problems = m.unproven_changes = m.main_problems = lambda *a: []
 print("PROBLEMS:", m.proof_problems(step, [step], "infra") or "none")
 PYP
 }
