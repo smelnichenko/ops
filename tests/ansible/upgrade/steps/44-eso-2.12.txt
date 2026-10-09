@@ -1,0 +1,17 @@
+# External Secrets 2.2.0 -> 2.12.0, CRDs with it through Argo (step 41) - 2.12, the supported release (2.11 at its end
+# of life 2026-10-06; ESO supports only its newest minor). Release notes 2.3-2.12: no breaking change for us (2.3.0
+# removed the getHostByName template function - nothing in infra or platform uses it). 2.12.0's chart: the same 25
+# CRDs, versions and storage flags as 2.11.0's. infra upgrade/44-eso-2.12.
+# outage: External Secrets restarts - no Secret refreshed meanwhile, the existing ones stay
+# abort: revert the step's merge on main (Argo syncs back) - not rehearsed. The CRDs do not stay: the app's automated
+# sync applies 2.2.0's over 2.12's (server-side; only the CRDs 2.2.0 lacks stay, Prune=false). The API server refuses
+# one whose stored versions the older one does not serve (the sync fails half-way); otherwise fields only the newer
+# schema knows are dropped
+argo-chart external-secrets external-secrets@2.2.0 => argo-chart external-secrets external-secrets@2.12.0
+image ghcr.io/external-secrets/external-secrets v2.2.0 => image ghcr.io/external-secrets/external-secrets v2.12.0
+# two generators more (25 CRDs, the chart rendered with production's values), each kept from Argo CD's prune
+crd-protected external-secrets 23/23 => crd-protected external-secrets 25/25
+# its change: the branch upgrade/44-eso-2.12 in infra
+branch infra
+# the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
+default deploy/ansible/playbooks/setup-kubeadm.yml: external_secrets_chart_version: "2.2.0" => external_secrets_chart_version: "2.12.0"
