@@ -1,8 +1,10 @@
 # apt-cacher-ng from its CI build: the hand-built 1.0 is gone from the registry, ten runs it only from its node cache.
 # platform upgrade/22-apt-cacher-ng - with it, CI's image pulled with the Forgejo registry secret, and the observability
-# chart's mimir.extraArgs (none by default: nothing renders differently).
+# chart's mimir.extraArgs (none by default: nothing renders differently). And the backup alerts: kube-state-metrics
+# reports CloudNativePG's Cluster status (a custom resource config), the infra-backups group alerts on it and on Scylla
+# Manager (scraped from step 18); schnappy-data's Postgres backup alerts on Jobs CNPG never runs are gone.
 # outage: apt-cacher-ng restarts (Recreate: the old pod goes before the new image is pulled) - CI's builds, its only
-# users, wait for it (the hosts' apt does not use it)
+# users, wait for it (the hosts' apt does not use it); kube-state-metrics restarts (its metrics a minute behind)
 # abort: revert the step's merge on main (Argo syncs back) - to the 1.0 image only ten's node cache still holds: once
 # the kubelet collects it, no way back
 image git.pmon.dev/schnappy/apt-cacher-ng 1.0 => image git.pmon.dev/schnappy/apt-cacher-ng 7b46aea
