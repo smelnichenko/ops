@@ -681,10 +681,9 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-compat {{.LAST_STEP}}
       CLICKHOUSE_USERS:
         sh: scripts/upgrade-expected-inventory.py --clickhouse-users {{.LAST_STEP}}
-      # what the steps changed on ten that the playbook defaults do not install (their base lines); and at the targets
-      # Argo owns External Secrets (the Vagrant inventory reproduces ten's Helm install of it)
+      # what the steps changed on ten that the playbook defaults do not install (their base lines)
       BASE_ARGS:
-        sh: echo "$(scripts/upgrade-expected-inventory.py --base-args {{.LAST_STEP}}) -e external_secrets_by_helm_override=false"
+        sh: scripts/upgrade-expected-inventory.py --base-args {{.LAST_STEP}}
     cmds:
       - cmd: mkdir -p .upgrade && scripts/upgrade-expected-inventory.py {{.LAST_STEP}} > .upgrade/expected-targets.txt
       - task: _upgrade:base

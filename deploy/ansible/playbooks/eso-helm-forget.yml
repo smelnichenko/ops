@@ -1,0 +1,35 @@
+---
+# External Secrets' Helm release record forgotten: ten's Helm install of 2026-04-05 (chart 2.2.0, installCRDs on) is
+# still recorded while Argo CD owns External Secrets (since step 41), and one `helm uninstall external-secrets` would
+# delete every CRD the record names, every ExternalSecret and, through owner references, their Secrets - the CRDs'
+# Prune=false/Delete=false hold against Argo only. Helm's storage Secrets of that release are deleted, nothing else:
+# nothing it installed is touched, Helm only no longer knows the release. Said first; a preview deletes nothing.
+#
+# Usage: task deploy:upgrade:playbooks STEP=<External Secrets' target step>   (its playbook line)
+- name: External Secrets' Helm release record forgotten
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: The release's records (Helm's storage Secrets, by Helm's own labels)
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", -n, external-secrets, get, secret, -l,
+               "owner=helm,name=external-secrets", -o, name, --request-timeout=60s]
+      register: _records
+      changed_when: false
+      check_mode: false  # a read: a preview says what would go
+
+    - name: What goes - Helm's records only, no resource of the release
+      ansible.builtin.debug:
+        msg: "{{ _records.stdout_lines or ['no record - Helm knows no external-secrets release'] }}"
+
+    - name: Forgotten
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", -n, external-secrets, delete, secret, -l,
+               "owner=helm,name=external-secrets", --request-timeout=60s]
+      when:
+        - not ansible_check_mode
+        - _records.stdout_lines | length > 0
+      changed_when: true

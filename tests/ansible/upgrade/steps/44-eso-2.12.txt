@@ -11,6 +11,12 @@ argo-chart external-secrets external-secrets@2.2.0 => argo-chart external-secret
 image ghcr.io/external-secrets/external-secrets v2.2.0 => image ghcr.io/external-secrets/external-secrets v2.12.0
 # two generators more (25 CRDs, the chart rendered with production's values), each kept from Argo CD's prune
 crd-protected external-secrets 23/23 => crd-protected external-secrets 25/25
+# Helm's record of ten's External Secrets install (2026-04-05, chart 2.2.0, installCRDs on) forgotten: Argo CD owns it
+# since step 41, and one `helm uninstall` would delete every CRD it names, every ExternalSecret and their Secrets. Only
+# Helm's storage Secrets go (eso-helm-forget.yml, said first); a copy built after this step installs no such release
+- helm external-secrets/external-secrets external-secrets-2.2.0 v2.2.0
+playbook eso-helm-forget.yml
+base -e external_secrets_by_helm_override=false
 # its change: the branch upgrade/44-eso-2.12 in infra
 branch infra
 # the playbook defaults this step moves (scripts/upgrade-defaults.py; production commits them after the step)
