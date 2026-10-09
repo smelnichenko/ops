@@ -48,7 +48,7 @@ start() {  # image [compat file]: the server on the case's volume, answering
   docker rm -f "$container" > /dev/null 2>&1
   local args=(-d --name "$container" -v "$container:/var/lib/clickhouse")
   [ -n "${2:-}" ] && args+=(-v "$W/$2:/etc/clickhouse-server/users.d/compat.xml:ro")
-  docker run "${args[@]}" "clickhouse/clickhouse-server:$1" > /dev/null || return 1
+  docker run "${args[@]}" "$(ref "$1")" > /dev/null || return 1
   for _ in $(seq 90); do
     docker exec "$container" clickhouse-client -q "SELECT 1" > /dev/null 2>&1 && return 0
     sleep 1
@@ -94,6 +94,21 @@ read -r old59 new59 < <(images 59)
 read -r old61 new61 < <(images 61)
 [ -n "${new59:-}" ] && [ -n "${new61:-}" ] \
   || { echo "clickhouse-pin: no ClickHouse image line in steps 59 and 61"; exit 2; }
+# a floating tag (24.8-alpine: at most two version numbers) by the build ten runs, read from its cache - whatever this
+# machine's docker held under the tag was another build; a full version is the same bits wherever pulled
+declare -A refs
+for tag in "$old59" "$new59" "$old61" "$new61"; do
+  if [[ $tag =~ ^v?[0-9]+(\.[0-9]+)?(-[a-z0-9]+)?$ ]]; then
+    img=docker.io/clickhouse/clickhouse-server:$tag
+    # shellcheck disable=SC2029  # $img (checked: a tag of digits and dots) is meant to expand into the remote command
+    digest=$(ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images ls name=='$img'" | awk -v i="$img" '$1 == i {print $3}')
+    [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "clickhouse-pin: ten holds no $img - the build production runs unknown"; exit 2; }
+    refs[$tag]=clickhouse/clickhouse-server@$digest
+  else
+    refs[$tag]=clickhouse/clickhouse-server:$tag
+  fi
+done
+ref() { echo "${refs[$1]}"; }
 
 fails=0
 check() {  # name, want (0 read back / 1 not), old, new, compat file
@@ -107,8 +122,8 @@ check "61: $new61 pinned to $pin61 - $old61 reads its parts" 0 "$old61" "$new61"
 check "61: $new61 unpinned - $old61 does not (the run sees the fault)" 1 "$old61" "$new61" ""
 echo "clickhouse-pin: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ] || exit 1
-{ printf '{"59": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s", "ops": "%s"},\n' \
-    "$sha59" "$old59" "$new59" "$pin59" "$ops_sha"
-  printf ' "61": {"platform": "%s", "images": ["%s", "%s"], "pin": "%s", "ops": "%s"}}\n' \
-    "$sha61" "$old61" "$new61" "$pin61" "$ops_sha"
+{ printf '{"59": {"platform": "%s", "images": ["%s", "%s"], "refs": ["%s", "%s"], "pin": "%s", "ops": "%s"},\n' \
+    "$sha59" "$old59" "$new59" "$(ref "$old59")" "$(ref "$new59")" "$pin59" "$ops_sha"
+  printf ' "61": {"platform": "%s", "images": ["%s", "%s"], "refs": ["%s", "%s"], "pin": "%s", "ops": "%s"}}\n' \
+    "$sha61" "$old61" "$new61" "$(ref "$old61")" "$(ref "$new61")" "$pin61" "$ops_sha"
 } > "$result"

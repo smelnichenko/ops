@@ -118,7 +118,7 @@ def record_sha(moved):
     s = patched(ops_unchanged_since=lambda *a: [], branch_moves=lambda *a: [], step_names=names,
                 run=lambda cmd, **k: R(0, "upgrade/02-b upgrade/02-b") if cmd[0] == m.INVENTORY else real(cmd, **k),
                 step_digests=lambda *a: {}, step_images=lambda *a: [], floating_digests=lambda: {},
-                step_info=lambda st: {"branches": ["infra"]}, own_change=lambda *a: "own", pin_problems=lambda *a: [],
+                step_info=lambda st: {"branches": ["infra"]}, own_change=lambda *a: "own", pin_problems=lambda *a, **k: [],
                 write_json=lambda path, data, **k: written.append(path))
     try:
         return outcome(m.record_proof, "02-b", shas["infra"], shas["platform"]), len(written)

@@ -1274,11 +1274,20 @@ check("pin: proven by another ops commit's pin test - refused", len(m.pin_proble
 pin_sh = open("tests/clickhouse-pin/run.sh").read()
 writer = pin_sh[pin_sh.index("{ printf '{\"59\""):pin_sh.index('} > "$result"') + len('} > "$result"')]
 written = os.path.join(tempfile.mkdtemp(), "written.json")
-subprocess.run(["bash", "-c", writer], check=True, env=dict(
+A64, B64 = "a" * 64, "b" * 64
+# run.sh's ref(): a floating tag by the digest ten runs (here A64), a full version by its tag
+ref_fn = ('ref() { case $1 in 24.8-alpine) echo clickhouse/clickhouse-server@sha256:%s ;; '
+          '*) echo clickhouse/clickhouse-server:$1 ;; esac; }\n' % A64)
+subprocess.run(["bash", "-c", ref_fn + writer], check=True, env=dict(
     os.environ, result=written, ops_sha="o", sha59="p59", old59=img[S59][0], new59=img[S59][1], pin59="24.8",
     sha61="p61", old61=img[S61][0], new61=img[S61][1], pin61="25.8"))
 check("pin: the result run.sh writes, read back - 59 and 61 proven",
       (m.pin_problems(S59, "p59", "o", written), m.pin_problems(S61, "p61", "o", written)), ([], []))
+fl = lambda d: {"docker.io/clickhouse/clickhouse-server:24.8-alpine": "sha256:" + d}
+check("pin: 59 proven on the build of 24.8-alpine the run ran (its floating digest): passes",
+      m.pin_problems(S59, "p59", "o", written, fl(A64)), [])
+check("pin: 59 proven on another build of 24.8-alpine than the run ran: refused",
+      len(m.pin_problems(S59, "p59", "o", written, fl(B64))), 1)
 json.dump({"61": {"platform": "p61", "images": img[S61], "ops": "o"}}, open(pin_file, "w"))
 check("pin: 59 with no result of its own (the run failed it) - refused",
       len(m.pin_problems(S59, "p59", "o", pin_file)), 1)
