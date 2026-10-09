@@ -54,8 +54,11 @@ check("one command for the isolation after the step's playbook lines", len(iso),
 if iso:
     check("after the step's playbook lines: the Pis' isolation and the cluster's applied again",
           ran(iso[0], HAS_PLAYBOOKS="yes"), (0, ["isolate-pis.yml", "isolate-cluster.yml"]))
-    check("no playbook lines: the cluster's proof alone", ran(iso[0], HAS_PLAYBOOKS="no"),
-          (0, ["isolate-cluster.yml --tags proof"]))
+    check("no playbook lines: nothing here - the cluster's proof is one of the step's parallel checks",
+          ran(iso[0], HAS_PLAYBOOKS="no"), (0, []))
+    check("the cluster's proof (--tags proof) one of the parallel step checks, every step",
+          open("scripts/upgrade-step-checks.sh").read().count(
+              "\nstart isolation play ../../tests/ansible/upgrade/isolate-cluster.yml --tags proof\n"), 1)
     check("the Pis' isolation failing: the command fails there (go-task's shell goes on past a failed line)",
           ran(iso[0], fails="isolate-pis", HAS_PLAYBOOKS="yes"), (1, ["isolate-pis.yml"]))
 check("the full run passes each step the one before it (scripts/upgrade-full-steps.sh)",

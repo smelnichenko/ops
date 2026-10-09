@@ -598,15 +598,13 @@ tasks:
       - cmd: scripts/upgrade-step-playbooks.sh {{.STEP}}
       # still isolated from production, proven every step: a Kubernetes upgrade rewrites CoreDNS - after a step's
       # playbook lines the isolation is applied again, the Pis' too (a playbook on a Pi may rewrite what isolates it -
-      # otherwise applied again only at the next step's start, the step's checks run in between); without, only the
-      # cluster's proof runs (nothing on a host changed)
+      # otherwise applied again only at the next step's start, the step's checks run in between); the cluster's proof is
+      # one of the step's parallel checks, every step
       - cmd: |
           set -euo pipefail
           if [ "{{.HAS_PLAYBOOKS}}" = yes ]; then
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/isolate-pis.yml
             venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml
-          else
-            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/isolate-cluster.yml --tags proof
           fi
       # settled again after the host-side changes: an Argo CD upgrade left the root app stuck (2026-10-03, Argo CD 3.3.14),
       # which only the next step's first wait saw

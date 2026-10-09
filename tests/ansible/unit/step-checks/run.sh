@@ -61,7 +61,7 @@ check() {
   echo "FAIL $1: got $2, want $3"; printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1))
 }
 check "no check read the caller's stdin" "$(grep -c "THE CALLER'S INPUT" <<< "$out")" 0
-check "six checks judged" "$(grep -c '^===== check ' <<< "$out")" 6
+check "seven checks judged" "$(grep -c '^===== check ' <<< "$out")" 7
 check "the failing one named, the run failed" "$rc $(grep -o 'STEP CHECKS FAILED: metrics' <<< "$out")" \
   "1 STEP CHECKS FAILED: metrics"
 check "it ends once its checks have: the bound's watchdog not waited out" "$([ "$took" -lt 15 ] && echo prompt || echo "$took s")" \
