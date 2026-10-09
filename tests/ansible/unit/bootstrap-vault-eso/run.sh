@@ -345,5 +345,17 @@ import yaml
 t = [x for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml")) for x in p.get("tasks") or []]
 print(sorted(((x.get("kubernetes.core.k8s") or {}).get("definition") or {}).get("metadata", {}).get("namespace", "")
              for x in t if "vault-pi-ca" in str(x.get("kubernetes.core.k8s", ""))))')" "['argocd', 'external-secrets']"
+# the build runs isolate-cluster before setup-argocd (test:upgrade:argo): Argo CD's namespace is made first, bare
+check "isolate-cluster.yml: argocd's namespace made before its CA (a first build has none yet), as setup-argocd runs after" \
+  "$(python3 -c '
+import yaml
+t = [x for p in yaml.safe_load(open("tests/ansible/upgrade/isolate-cluster.yml")) for x in p.get("tasks") or []]
+d = lambda x: ((x.get("kubernetes.core.k8s") or {}).get("definition") or {})
+ns = next((i for i, x in enumerate(t) if d(x).get("kind") == "Namespace" and d(x).get("metadata", {}).get("name") == "argocd"), None)
+ca = next((i for i, x in enumerate(t) if d(x).get("kind") == "Secret" and d(x).get("metadata", {}).get("namespace") == "argocd"), None)
+cmds = [str(c) for c in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:argo"]["cmds"]]
+iso = next(i for i, c in enumerate(cmds) if "isolate-cluster.yml" in c)
+argo = next(i for i, c in enumerate(cmds) if "setup-argocd.yml" in c)
+print(ns is not None and ca is not None and ns < ca, iso < argo)')" "True True"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

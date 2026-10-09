@@ -294,6 +294,17 @@
             ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
       no_log: true
 
+    # a first build runs this before setup-argocd.yml: Argo CD's namespace made bare (setup-argocd labels it), as
+    # bootstrap.sh does
+    - name: Argo CD's namespace there for the CA
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: argocd
+
     # as bootstrap.sh: the same CA for the stale preview environments' sweeper, which reads Vault verified
     - name: Create the vault-pi-ca Secret in argocd (the sweeper trusts the Vagrant Vault CA)
       kubernetes.core.k8s:
