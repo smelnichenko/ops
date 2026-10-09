@@ -58,8 +58,10 @@ m.remote, m.main_revisions = saved
 check("the settle's ssh bound past its own wait (30 and 90 minutes asked)",
       [(t is not None and t > n * 60 and f"--minutes {n} " in c) for (t, c), n in zip(bounds, (30, 90))], [True, True])
 # the class: no ssh call of the script without those options
-src = open("scripts/upgrade-production.py").read()
-check("every ssh call of the script goes through the options (ssh named once, in them)", src.count('"ssh"'), 1)
+import ast
+lits = [n.value for n in ast.walk(ast.parse(open("scripts/upgrade-production.py").read()))
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and (n.value == "ssh" or n.value.startswith("ssh "))]
+check("every ssh call of the script goes through the options (ssh named once, in them, any quoting)", lits, ["ssh"])
 print("remote-timeouts: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
