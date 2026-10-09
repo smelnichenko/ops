@@ -226,17 +226,24 @@
     - name: Install Vault binary
       when: current_vault_version.rc != 0
       block:
+        # a private directory: a zip swapped in at a fixed /tmp name after its check was unzipped into /usr/local/bin
+        - name: A private directory for the Vault download
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: .vault
+          check_mode: false
+          register: _vault_tmp
         - name: Download Vault, its sha256 checked
           ansible.builtin.get_url:
             url: "https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_linux_{{ vault_arch }}.zip"
-            dest: /tmp/vault.zip
+            dest: "{{ _vault_tmp.path }}/vault.zip"
             checksum: "sha256:{{ vault_checksums[vault_arch] }}"
             mode: '0644'
         # a preview's download fetched nothing: what reads the zip skipped then (it failed there). A fresh Pi's preview
         # fails later all the same - on the CA and the CSR it would have made - no flow previews one
         - name: Unzip Vault
           ansible.builtin.unarchive:
-            src: /tmp/vault.zip
+            src: "{{ _vault_tmp.path }}/vault.zip"
             dest: /usr/local/bin/
             remote_src: true
           when: not ansible_check_mode
@@ -247,11 +254,11 @@
             owner: root
             group: root
           when: not ansible_check_mode
-        - name: Remove Vault zip
+        - name: Remove the Vault download
           ansible.builtin.file:
-            path: /tmp/vault.zip
+            path: "{{ _vault_tmp.path }}"
             state: absent
-          when: not ansible_check_mode
+          check_mode: false
 
     # ── TLS: one CA, per-Pi certs signed by it (production's layout) ────
     # Production's Vault certs (2026-04-04) are signed by one CA and carry the node IP, the keepalived VIP and
@@ -904,7 +911,7 @@
         group: root
         content: |
           #!/bin/bash
-          # its own file: a fixed /tmp path a local user created first would have answered for Vault
+          # its own file: one at a fixed name a local user created first would have answered for Vault
           out=$(mktemp); trap 'rm -f "$out"' EXIT
           HEALTH=$(curl -s --max-time 10 --cacert /etc/vault.d/tls/ca-cert.pem \
             https://127.0.0.1:8200/v1/sys/health \

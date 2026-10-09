@@ -238,56 +238,51 @@
     # The SA token is legacy/non-expiring: an off-cluster Pi can't refresh a
     # bound token, and the SA can GET only the one Secret - the wildcard's
     # certificate AND its private key: the token is as secret as the key.
-    - name: Render the cert-sync RBAC manifest (cluster host)
-      ansible.builtin.copy:
-        dest: /tmp/caddy-cert-reader-rbac.yml
-        mode: '0600'
-        content: |
-          apiVersion: v1
-          kind: ServiceAccount
-          metadata:
-            name: caddy-cert-reader
-            namespace: schnappy-infra
-          ---
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: Role
-          metadata:
-            name: caddy-cert-reader
-            namespace: schnappy-infra
-          rules:
-            - apiGroups: [""]
-              resources: [secrets]
-              resourceNames: [pmon-dev-wildcard-tls]
-              verbs: [get]
-          ---
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: RoleBinding
-          metadata:
-            name: caddy-cert-reader
-            namespace: schnappy-infra
-          roleRef:
-            apiGroup: rbac.authorization.k8s.io
-            kind: Role
-            name: caddy-cert-reader
-          subjects:
-            - kind: ServiceAccount
-              name: caddy-cert-reader
-              namespace: schnappy-infra
-          ---
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: caddy-cert-reader-token
-            namespace: schnappy-infra
-            annotations:
-              kubernetes.io/service-account.name: caddy-cert-reader
-          type: kubernetes.io/service-account-token
-      delegate_to: target
-      run_once: true
-
+    # on stdin: a file at a fixed /tmp name a local user created first (a directory: kubectl applies every file in it)
+    # was applied as cluster-admin
     - name: Apply the cert-sync RBAC (cluster host)
       ansible.builtin.command:
-        argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, apply, -f, /tmp/caddy-cert-reader-rbac.yml]
+        argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, apply, -f, '-']
+        stdin: |
+            apiVersion: v1
+            kind: ServiceAccount
+            metadata:
+              name: caddy-cert-reader
+              namespace: schnappy-infra
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: Role
+            metadata:
+              name: caddy-cert-reader
+              namespace: schnappy-infra
+            rules:
+              - apiGroups: [""]
+                resources: [secrets]
+                resourceNames: [pmon-dev-wildcard-tls]
+                verbs: [get]
+            ---
+            apiVersion: rbac.authorization.k8s.io/v1
+            kind: RoleBinding
+            metadata:
+              name: caddy-cert-reader
+              namespace: schnappy-infra
+            roleRef:
+              apiGroup: rbac.authorization.k8s.io
+              kind: Role
+              name: caddy-cert-reader
+            subjects:
+              - kind: ServiceAccount
+                name: caddy-cert-reader
+                namespace: schnappy-infra
+            ---
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: caddy-cert-reader-token
+              namespace: schnappy-infra
+              annotations:
+                kubernetes.io/service-account.name: caddy-cert-reader
+            type: kubernetes.io/service-account-token
       delegate_to: target
       run_once: true
       register: _rbac

@@ -193,10 +193,12 @@
         set -e
         ARCH=$(dpkg --print-architecture)
         VERSION=2.0.3
-        curl -fsSL --connect-timeout 30 --speed-limit 10240 --speed-time 120 -o /tmp/nerdctl-full.tar.gz \
+        # a private directory: an archive planted under a fixed name in the shared temp directory was unpacked into
+        # /usr/local as root
+        d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+        curl -fsSL --connect-timeout 30 --speed-limit 10240 --speed-time 120 -o "$d/nerdctl-full.tar.gz" \
           "https://github.com/containerd/nerdctl/releases/download/v${VERSION}/nerdctl-full-${VERSION}-linux-${ARCH}.tar.gz"
-        tar -C /usr/local -xzf /tmp/nerdctl-full.tar.gz
-        rm -f /tmp/nerdctl-full.tar.gz
+        tar -C /usr/local -xzf "$d/nerdctl-full.tar.gz"
         # its bundled containerd must never start and its runc never run: the node runs the apt ones, as production
         # does (see below)
         rm -f /usr/local/lib/systemd/system/containerd.service /usr/local/bin/containerd \

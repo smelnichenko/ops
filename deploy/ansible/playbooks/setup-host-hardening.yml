@@ -381,25 +381,42 @@
       register: _smartctl_version
       changed_when: false
       failed_when: false
+      check_mode: false  # a read: a preview skipped it, and every task below went on an undefined version
 
-    - name: Download + install smartctl_exporter
+    # a private directory: a binary planted at a fixed /tmp name was installed as root
+    - name: A private directory for the smartctl_exporter download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .smartctl-exporter
+      check_mode: false
+      register: _smartctl_tmp
+      when: _smartctl_version.stdout != smartctl_exporter_version
+
+    - name: Download + unpack smartctl_exporter
       ansible.builtin.unarchive:
         src: "{{ smartctl_exporter_release_base }}/v{{ smartctl_exporter_version }}/{{ smartctl_exporter_archive_name }}"
-        dest: /tmp/
+        dest: "{{ _smartctl_tmp.path }}"
         remote_src: true
-        creates: "/tmp/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64/smartctl_exporter"
       when: _smartctl_version.stdout != smartctl_exporter_version
 
     - name: Move smartctl_exporter into place
       ansible.builtin.copy:
-        src: "/tmp/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64/smartctl_exporter"
+        src: "{{ _smartctl_tmp.path }}/smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64/smartctl_exporter"
         dest: /usr/local/bin/smartctl_exporter
         remote_src: true
         mode: '0755'
         owner: root
         group: root
-      when: _smartctl_version.stdout != smartctl_exporter_version
+      # a preview unpacks nothing (unarchive skips a remote source): nothing to move
+      when: _smartctl_version.stdout != smartctl_exporter_version and not ansible_check_mode
       register: _smartctl_bin
+
+    - name: Remove the smartctl_exporter download
+      ansible.builtin.file:
+        path: "{{ _smartctl_tmp.path }}"
+        state: absent
+      check_mode: false
+      when: _smartctl_version.stdout != smartctl_exporter_version
 
     # Discover stable per-drive identifiers (model+serial via /dev/disk/by-id)
     # so the exporter's `device` label is invariant across NVMe rename churn.

@@ -128,10 +128,18 @@
         nexus_version_file is failed or
         (nexus_version_file.content | default('') | b64decode | trim) != nexus_version
       block:
+        # a private directory: a tarball or tree planted at a fixed /tmp name was installed
+        - name: A private directory for the Nexus download
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: .nexus
+          check_mode: false
+          register: _nexus_tmp
+
         - name: Download Nexus tarball
           ansible.builtin.get_url:
             url: "https://download.sonatype.com/nexus/3/nexus-{{ nexus_version }}-linux-{{ nexus_arch }}.tar.gz"
-            dest: /tmp/nexus.tar.gz
+            dest: "{{ _nexus_tmp.path }}/nexus.tar.gz"
             checksum: "{{ nexus_checksums[nexus_arch] }}"
             mode: "0644"
 
@@ -150,22 +158,19 @@
 
         - name: Extract Nexus tarball
           ansible.builtin.unarchive:
-            src: /tmp/nexus.tar.gz
-            dest: /tmp
+            src: "{{ _nexus_tmp.path }}/nexus.tar.gz"
+            dest: "{{ _nexus_tmp.path }}"
             remote_src: true
+          when: not ansible_check_mode  # a preview fetched nothing to extract
 
+        # its extracted sonatype-work stays behind (we use the shared volume) and goes with the directory
         - name: Move Nexus files to install directory
           ansible.builtin.shell: |
-            mv /tmp/nexus-{{ nexus_version }}/* {{ nexus_install_dir }}/
-            mv /tmp/nexus-{{ nexus_version }}/.??* {{ nexus_install_dir }}/ 2>/dev/null || true
-            rm -rf /tmp/nexus-{{ nexus_version }}
+            mv {{ _nexus_tmp.path }}/nexus-{{ nexus_version }}/* {{ nexus_install_dir }}/
+            mv {{ _nexus_tmp.path }}/nexus-{{ nexus_version }}/.??* {{ nexus_install_dir }}/ 2>/dev/null || true
+            rm -rf {{ _nexus_tmp.path }}/nexus-{{ nexus_version }}
           args:
-            removes: /tmp/nexus-{{ nexus_version }}
-
-        - name: Discard extracted sonatype-work (we use shared volume)
-          ansible.builtin.file:
-            path: /tmp/sonatype-work
-            state: absent
+            removes: "{{ _nexus_tmp.path }}/nexus-{{ nexus_version }}"
 
         - name: Record installed version
           ansible.builtin.copy:
@@ -183,10 +188,11 @@
             group: "{{ nexus_user }}"
             recurse: true
 
-        - name: Clean up tarball
+        - name: Remove the Nexus download
           ansible.builtin.file:
-            path: /tmp/nexus.tar.gz
+            path: "{{ _nexus_tmp.path }}"
             state: absent
+          check_mode: false
 
     - name: Configure JVM options (karaf data → shared /mnt/data/nexus)
       ansible.builtin.copy:

@@ -97,10 +97,19 @@
   ansible.builtin.set_fact:
     _missing_wheels: "{{ _wheel_lookup.results | selectattr('status', 'eq', 404) | map(attribute='item') | list }}"
 
+# a private directory: a wheel planted at a fixed /var/tmp name after its check was uploaded
+- name: A private directory for the wheels
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: .wheels
+  check_mode: false
+  register: _wheels_tmp
+  when: _missing_wheels | length > 0
+
 - name: Download the missing wheels (checksummed)
   ansible.builtin.get_url:
     url: "{{ pytorch_cpu_base_url }}{{ item.file | urlencode }}"
-    dest: "/var/tmp/{{ item.file }}"
+    dest: "{{ _wheels_tmp.path }}/{{ item.file }}"
     checksum: "sha256:{{ item.sha256 }}"
     mode: "0644"
     timeout: 600
@@ -127,7 +136,7 @@
       - --config
       - "-"
       - --form
-      - "pypi.asset=@/var/tmp/{{ item.file }}"
+      - "pypi.asset=@{{ _wheels_tmp.path }}/{{ item.file }}"
       - "http://localhost:{{ nexus_port }}/service/rest/v1/components?repository=pytorch-cpu"
     # curl config quoting: a backslash or double quote in the password is escaped
     stdin: >-
@@ -139,7 +148,7 @@
 
 - name: Remove the downloaded wheels
   ansible.builtin.file:
-    path: "/var/tmp/{{ item.file }}"
+    path: "{{ _wheels_tmp.path }}"
     state: absent
-  loop: "{{ _missing_wheels }}"
-  loop_control: { label: "{{ item.file }}" }
+  check_mode: false
+  when: _missing_wheels | length > 0

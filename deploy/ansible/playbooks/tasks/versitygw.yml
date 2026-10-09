@@ -238,7 +238,9 @@
   ansible.builtin.shell: |
     set -ea; . /etc/versitygw/env; set +a
     # the rclone remote vgw is configured by environment alone (no config file); mkdir of an existing bucket is a no-op
-    export HOME=/tmp RCLONE_CONFIG="" RCLONE_CONFIG_VGW_TYPE=s3 RCLONE_CONFIG_VGW_PROVIDER=Other \
+    # a private HOME: nothing of rclone's under a fixed name in the shared temp directory
+    home=$(mktemp -d); trap 'rm -rf "$home"' EXIT
+    export HOME=$home RCLONE_CONFIG="" RCLONE_CONFIG_VGW_TYPE=s3 RCLONE_CONFIG_VGW_PROVIDER=Other \
       RCLONE_CONFIG_VGW_ENDPOINT=http://localhost:{{ vgw_port }} \
       RCLONE_CONFIG_VGW_ACCESS_KEY_ID="$ROOT_ACCESS_KEY" RCLONE_CONFIG_VGW_SECRET_ACCESS_KEY="$ROOT_SECRET_KEY"
     for b in velero pg-dump postgres-backups scylla-backups etcd-backups; do

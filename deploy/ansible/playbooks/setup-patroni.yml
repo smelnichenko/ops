@@ -150,7 +150,9 @@
             data_dir: {{ pg_data_dir.stdout }}
             config_dir: {{ pg_data_dir.stdout }}
             bin_dir: /usr/lib/postgresql/{{ pg_version.stdout }}/bin
-            pgpass: /tmp/pgpass
+            # postgres's own home: the superuser's and replicator's passwords, never under a fixed name in the shared
+            # temp directory
+            pgpass: /var/lib/postgresql/.pgpass_patroni
             use_unix_socket: true
             authentication:
               superuser:
