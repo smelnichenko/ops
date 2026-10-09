@@ -31,6 +31,8 @@ stub("curl", 'for a in "$@"; do case $a in http*) u=$a;; esac; done\n'
              'for x in $UP; do [ "$x" = "$h" ] && exit 0; done\nexit 22\n')
 stub("systemctl", 'echo "$*" >> "$WORK/calls"; case $1 in restart) touch "$WORK/restarted";; esac; exit 0\n')
 stub("sleep", "exit 0\n")
+# pg_isready (PgBouncer, 127.0.0.1 only): answers once restarted, unless $PGB_DOWN
+stub("pg_isready", '[ -z "${PGB_DOWN:-}" ] && [ -e "$WORK/restarted" ]\n')
 # rclone (versitygw's S3 check): S3 answers once restarted, unless $S3_DOWN
 stub("rclone", 'echo "rclone $*" >> "$WORK/calls"; [ -z "${S3_DOWN:-}" ] && [ -e "$WORK/restarted" ]\n')
 open(os.path.join(work, "vgw.env"), "w").write("ROOT_ACCESS_KEY=k\nROOT_SECRET_KEY=s\n")
@@ -91,6 +93,19 @@ vipt = next((t for t in yaml.safe_load(open("deploy/ansible/playbooks/tasks/vers
              if "keepalived_vip" in str(t.get("ansible.builtin.command", ""))), {})
 check("  each Pi reads whether it holds the VIP, in a preview too", (vipt.get("check_mode"), vipt.get("register")),
       (False, "_vgw_vip"))
+# PgBouncer (setup-pgbouncer.yml's handler): each Pi's apps reach their database through their own (127.0.0.1) - one Pi
+# at a time, each answering again before the next, and a failed restart stops the play there (no peer to read: its
+# PgBouncer listens on the Pi alone)
+pgb = next(h for h in yaml.safe_load(open("deploy/ansible/playbooks/setup-pgbouncer.yml"))[0]["handlers"]
+           if h.get("name") == "Restart pgbouncer")
+check("PgBouncer: one Pi at a time, a failed restart ends the play",
+      (pgb.get("throttle"), pgb.get("any_errors_fatal")), (1, True))
+pcmd = pgb.get("ansible.builtin.shell", "").replace("{{ pgbouncer_listen_port }}", "6432")
+rc, restarted, _ = run(pcmd, [])
+check("PgBouncer: restarted, answering again - done", (rc, restarted), (0, True))
+rc, restarted, err = run(pcmd, [], PGB_DOWN="1")
+check("PgBouncer: not answering after its restart - failed, said", (rc != 0, restarted, "not serving" in err),
+      (True, True, True))
 print("pi-restart-guard: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

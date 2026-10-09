@@ -229,7 +229,22 @@
     # will surface any auth_query issue immediately).
 
   handlers:
+    # one Pi at a time, each answering again before the next: each Pi's apps (Forgejo, Keycloak) reach their database
+    # through their own PgBouncer (127.0.0.1) - both at once cut every one. Its peer cannot be read from here (it
+    # listens on its own Pi alone): a failed restart ends the play instead, the other Pi's left serving
     - name: Restart pgbouncer
-      ansible.builtin.systemd_service:
-        name: pgbouncer
-        state: restarted
+      ansible.builtin.shell: |
+        set -euo pipefail
+        systemctl restart pgbouncer
+        end=$(( $(cut -d. -f1 /proc/uptime) + 60 ))
+        for _ in $(seq 30); do
+          pg_isready -q -h 127.0.0.1 -p {{ pgbouncer_listen_port }} && exit 0
+          [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ] || break
+          sleep 2
+        done
+        echo "PgBouncer on {{ inventory_hostname }} not serving 60 s after its restart" >&2; exit 1
+      args:
+        executable: /bin/bash
+      throttle: 1
+      any_errors_fatal: true
+      changed_when: true
