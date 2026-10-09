@@ -1401,9 +1401,12 @@ def defaults(step):
     last = git("log", "-1", "--format=%H %s", "--", dflt.COMMITTED).split(" ", 1)
     if len(last) == 2 and last[1] == message:
         sha = last[0]
+        # past it with later commits: fine once it is pushed (the proof check judges what changed since); not pushed,
+        # its push would carry them unasked
+        pushed = run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode == 0
         refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True,
                                  done=applied_steps(events))
-               + ([] if git("rev-parse", "HEAD") == sha else [f"ops main is past the step's commit {sha[:10]}"]))
+               + ([] if git("rev-parse", "HEAD") == sha or pushed else [f"ops main is past the step's commit {sha[:10]}"]))
         if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode:
             refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
                    else [f"the step's commit {sha[:10]} is not on origin/main's head"])

@@ -147,6 +147,31 @@ def defaults(state):
 check("defaults control: on main at origin/main goes on", defaults(None), "past it")
 check("defaults: ops on another branch - refused", "ops is not on main" in defaults("branch"), True)
 check("defaults: ops main ahead of origin/main - refused", "ops is not at origin/main" in defaults("ahead"), True)
+# defaults resumed: its commit made (and pushed or not) by a run cut short before its ledger record, then another ops
+# commit on top - pushed: recorded; not pushed: refused (its push would carry the later commit unasked)
+def defaults_resume(pushed):
+    t, o = repos()
+    rel = m.dflt.COMMITTED
+    os.makedirs(os.path.dirname(os.path.join(o, rel)), exist_ok=True)
+    open(os.path.join(o, rel), "a").write("02-b\n")
+    git(o, "add", rel); git(o, "commit", "-qm", "upgrade 02-b: its playbook defaults (in production)")
+    if pushed:
+        git(o, "push", "-q", "origin", "main")
+    open(os.path.join(o, "docs/n.md"), "a").write("later\n"); git(o, "commit", "-qam", "a later ops commit")
+    if pushed:
+        git(o, "push", "-q", "origin", "main")
+    recorded = []
+    s = patched(ledger_for=lambda st, ph, arg=None: (names(), [], {}), proof_problems=lambda *a, **k: [],
+                record=lambda st, ev, *a: recorded.append(ev), confirm=lambda q: False)
+    try:
+        return outcome(m.defaults, "02-b"), recorded
+    finally:
+        restore(s)
+got = defaults_resume(True)
+check("defaults resumed, its commit pushed, ops past it: recorded", got, ("returned", ["defaults"]))
+got = defaults_resume(False)
+check("defaults resumed, its commit not pushed, ops past it: refused, nothing recorded",
+      ("past the step's commit" in got[0], got[1]), (True, []))
 print("proof-integrity: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_PROOF_INTEGRITY
