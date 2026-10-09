@@ -6,6 +6,7 @@
       ansible.builtin.include_tasks: ../../../../deploy/ansible/playbooks/tasks/runtime-supported.yml
       vars:
         target_minor: "{{ case.target_minor }}"
+        running_minor: "{{ case.running_minor | default('') }}"
         runtime_version: "{{ case.runtime_version }}"
     - name: Accepted
       ansible.builtin.set_fact:

@@ -12,5 +12,6 @@ unset ANSIBLE_CONFIG
 out=$(ANSIBLE_NOCOLOR=1 "$AP" -i localhost, "$H/cases.yml" 2>&1); rc=$?
 printf '%s\n' "$out" | grep -oE '"msg": "(PASS|FAIL) [^"]*"' | sed 's/"msg": "//; s/"$//'
 n=$(printf '%s\n' "$out" | grep -cE '"msg": "PASS ')
-[ $rc -eq 0 ] && [ "$n" -eq 12 ] && echo "runtime-supported: ALL-PASS" \
-  || { printf '%s\n' "$out" | tail -15; echo "runtime-supported: FAILED (rc $rc, $n of 12 passed)"; exit 1; }
+want=$(grep -c "want: " "$H/cases.yml")  # every case, counted from the file
+[ $rc -eq 0 ] && [ "$n" -eq "$want" ] && echo "runtime-supported: ALL-PASS" \
+  || { printf '%s\n' "$out" | tail -15; echo "runtime-supported: FAILED (rc $rc, $n of $want passed)"; exit 1; }

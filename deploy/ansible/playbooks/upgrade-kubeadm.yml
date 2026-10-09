@@ -104,6 +104,7 @@
       ansible.builtin.include_tasks: tasks/runtime-supported.yml
       vars:
         runtime_version: "{{ _runtime.stdout }}"
+        running_minor: "{{ (_running.stdout | regex_replace('^v', '')).split('.')[:2] | join('.') }}"
 
     # kubeadm upgrade rewrites the kubelet's config.yaml from this ConfigMap: without them there, the upgrade turns the
     # graceful node shutdown off - configure-node.yml puts them there first

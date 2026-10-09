@@ -5,7 +5,15 @@
   gather_facts: false
   vars:
     cases:
-      - {target_minor: "1.34", runtime_version: "containerd://1.7.24", want: accepted}   # ten today
+      # a patch of the minor the node runs: no floor crossed (ten runs 1.34 on 1.7.24, below 1.34's 1.7.28)
+      - {target_minor: "1.34", running_minor: "1.34", runtime_version: "containerd://1.7.24", want: accepted}
+      # 1.34 as a new minor: containerd's table (1.7.28+, 2.0.6+, 2.1.3+)
+      - {target_minor: "1.34", running_minor: "1.33", runtime_version: "containerd://1.7.24", want: refused}
+      - {target_minor: "1.34", running_minor: "1.33", runtime_version: "containerd://1.7.28", want: accepted}
+      - {target_minor: "1.34", running_minor: "1.33", runtime_version: "containerd://2.1.2", want: refused}
+      - {target_minor: "1.34", running_minor: "1.33", runtime_version: "containerd://2.1.3", want: accepted}
+      # a minor the table does not list: refused, not waved through
+      - {target_minor: "1.37", running_minor: "1.36", runtime_version: "containerd://2.3.6", want: refused}
       - {target_minor: "1.35", runtime_version: "containerd://1.7.24", want: refused}
       - {target_minor: "1.35", runtime_version: "containerd://1.7.28", want: accepted}
       - {target_minor: "1.35", runtime_version: "containerd://2.1.4", want: refused}

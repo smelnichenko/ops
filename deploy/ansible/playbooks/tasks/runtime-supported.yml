@@ -1,11 +1,13 @@
 ---
-# A Kubernetes minor only on a container runtime it supports (containerd's release page, read 2026-10-04). Inputs:
-# target_minor ("1.35") and runtime_version (the node's containerRuntimeVersion, "containerd://2.3.6"). A minor not
-# listed here needs nothing newer than what runs (ten runs 1.34 on 1.7.24); a runtime that is not a containerd version
-# is refused. Included by upgrade-kubeadm.yml; tests/ansible/unit/runtime-supported runs the same file.
+# A Kubernetes minor only on a container runtime it supports (containerd's RELEASES.md table, read 2026-10-09).
+# Inputs: target_minor ("1.35"), running_minor (the node's, "1.34") and runtime_version (the node's
+# containerRuntimeVersion, "containerd://2.3.6"). A patch of the running minor crosses no floor (ten runs 1.34 on
+# 1.7.24, below 1.34's 1.7.28); a new minor the table here does not list is refused - list it first; a runtime that is
+# not a containerd version is refused. Included by upgrade-kubeadm.yml; tests/ansible/unit/runtime-supported runs it.
 - name: The target minor supports the node's container runtime
   vars:
     runtime_accepted:
+      "1.34": [["1.7.28", "1.8.0"], ["2.0.6", "2.1.0"], ["2.1.3", "99.0.0"]]
       "1.35": [["1.7.28", "1.8.0"], ["2.1.5", "2.2.0"], ["2.2.0", "99.0.0"]]
       "1.36": [["2.2.0", "99.0.0"]]
     runtime: "{{ runtime_version | regex_replace('^containerd://', '') }}"
@@ -16,8 +18,9 @@
   ansible.builtin.assert:
     that:
       - runtime_version is match('^containerd://[0-9]+\.[0-9]+\.[0-9]+')
-      - ranges | length == 0 or supported | bool
+      - target_minor == (running_minor | default('')) or (target_minor in runtime_accepted and supported | bool)
     fail_msg: >-
-      REFUSED: Kubernetes {{ target_minor }} on {{ runtime_version }} - it wants containerd
-      {{ ranges | map('join', ' to below ') | join(', or ') }} (upgrade-containerd.yml first)
+      REFUSED: Kubernetes {{ target_minor }} on {{ runtime_version }} -
+      {{ ('it wants containerd ' ~ (ranges | map('join', ' to below ') | join(', or ')) ~ ' (upgrade-containerd.yml first)')
+         if target_minor in runtime_accepted else 'no runtime floor listed for it (containerd RELEASES.md: list it here)' }}
     quiet: true
