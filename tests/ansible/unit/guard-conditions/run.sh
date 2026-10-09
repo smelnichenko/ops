@@ -73,6 +73,28 @@ nd = next(t for t in tasks("deploy/ansible/playbooks/tasks/no-downgrade.yml") if
 pk = lambda v: {"kubelet": [{"version": v}], "kubeadm": [{"version": v}], "kubectl": [{"version": v}]}
 check("E01 kubelet 1.35.9 under a 1.34.12 pin: refused", condition(nd["ansible.builtin.assert"]["that"], ansible_facts={"packages": pk("1.35.9-1.1")}, item="kubelet", k8s_package_version="1.34.12-1.1"), False)
 check("E01 the pinned version: on", condition(nd["ansible.builtin.assert"]["that"], ansible_facts={"packages": pk("1.34.12-1.1")}, item="kubelet", k8s_package_version="1.34.12-1.1"), True)
+# E04: containerd's live config differing from the render fails the upgrade
+cd = next(t for t in tasks("deploy/ansible/playbooks/upgrade-containerd.yml") if t.get("register") == "_config_diff")
+check("E04 the live config differing: failed; the same: on",
+      (condition(cd["failed_when"], _config_diff={"rc": 1}), condition(cd["failed_when"], _config_diff={"rc": 0})), (True, False))
+# E06: the data tier's sidecars waited for until none is left
+dl = next(t for t in tasks("deploy/ansible/playbooks/restart-mesh-workloads.yml") if t.get("register") == "_data_left")
+check("E06 a data-tier workload left on the old sidecar: still waiting; none left: done",
+      (condition(dl["until"], _data_left={"rc": 0, "stdout": "StatefulSet ns kafka"}),
+       condition(dl["until"], _data_left={"rc": 0, "stdout": ""})), (False, True))
+# K01: acme-check's certificate not Ready: the task fails (its script run against a kubectl stub)
+import subprocess, tempfile
+ac = task("deploy/ansible/playbooks/acme-check.yml", "The certificate, Ready")
+def acme(ready):
+    d = tempfile.mkdtemp()
+    open(os.path.join(d, "kubectl"), "w").write("#!/bin/bash\ncat > /dev/null 2>&1 < /dev/null\n"
+        'case "$*" in *"wait certificate"*) exit %d ;; esac\nexit 0\n' % (0 if ready else 1))
+    os.chmod(os.path.join(d, "kubectl"), 0o755)
+    script = render(ac["ansible.builtin.shell"]["cmd"], kubectl="kubectl", check_namespace="ns", check_name="c",
+                    check_dns_name="x.example")
+    return subprocess.run(["bash", "-c", script], env=dict(os.environ, PATH=d + ":" + os.environ["PATH"]),
+                          capture_output=True).returncode
+check("K01 the certificate not Ready: the task fails; Ready: passes", (acme(False) != 0, acme(True)), (True, 0))
 print("guard-conditions: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_GUARD_CONDITIONS
