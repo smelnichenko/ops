@@ -80,6 +80,15 @@ r = run_abort() if abort else "no abort"
 check("abort while its merge is live: refused, nothing recorded, the tag kept",
       ("live" in r, recorded, g("tag", "-l", "upgrade-merged/01-a")), (True, [], "upgrade-merged/01-a"))
 g("revert", "--no-edit", "upgrade-merged/01-a"); g("push", "-q", "origin", "main")
+# its defaults committed (recorded, in the committed-steps record): refused until that commit is reverted too
+committed = os.path.join(o, "tests/ansible/upgrade/defaults-committed.txt")
+kept_record = open(committed).read()
+open(committed, "a").write("01-a\n")
+events.append((at(3), "01-a", "defaults", ["c0ffee"]))
+r = run_abort() if abort else "no abort"
+check("abort with its defaults committed: refused, nothing recorded, the tag kept",
+      ("defaults" in r, recorded, g("tag", "-l", "upgrade-merged/01-a")), (True, [], "upgrade-merged/01-a"))
+open(committed, "w").write(kept_record)  # that commit reverted
 asked.clear()
 r = run_abort() if abort else "no abort"
 check("abort after the revert: asked, recorded aborted", (r, len(asked), recorded), ("ok", 1, [("01-a", "aborted")]))
