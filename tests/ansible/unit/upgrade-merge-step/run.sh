@@ -221,5 +221,42 @@ check "one moved: named" 0 "platform upgrade/20-p:" moves 'g("platform", "commit
 g("platform", "branch", "-f", "upgrade/20-p")'
 check "one made: named" 0 "infra upgrade/99-new: none ->" moves 'g("infra", "branch", "upgrade/99-new", "main")'
 check "one deleted: named" 0 "infra upgrade/99-new:" moves 'g("infra", "branch", "-D", "upgrade/99-new")'
+# the merge's own refusals, each on a fresh pair of repos (steps 01-a, 02-b stacked on main): a step file without the
+# repo's branch, uncommitted changes, the step before not merged, a branch that does not contain main - nothing pushed
+# in any; the control merges
+fresh() {
+  rm -rf "$W/r"; mkdir -p "$W/r/ops/scripts" "$W/r/ops/tests/ansible/upgrade/steps"
+  cp "$src/scripts/upgrade-merge-step.sh" "$W/r/ops/scripts/"
+  for s in 01-a 02-b; do printf 'branch infra\n' > "$W/r/ops/tests/ansible/upgrade/steps/$s.txt"; done
+  git init -q --bare -b main "$W/r/origin.git"; git clone -q "$W/r/origin.git" "$W/r/infra" 2> /dev/null
+  echo base > "$W/r/infra/f"; git -C "$W/r/infra" add f; git -C "$W/r/infra" commit -q -m base
+  git -C "$W/r/infra" push -q origin main
+  for s in 01-a 02-b; do
+    git -C "$W/r/infra" checkout -q -b "upgrade/$s"; echo "$s" >> "$W/r/infra/f"; git -C "$W/r/infra" commit -q -am "$s"
+  done
+  git -C "$W/r/infra" checkout -q main
+  m0=$(git -C "$W/r/origin.git" rev-parse main)
+}
+R="$W/r/ops/scripts/upgrade-merge-step.sh"
+origin_main() { git -C "$W/r/origin.git" rev-parse main; }
+fresh
+check "control: 01 merges" 0 "tagged upgrade-merged/01-a" "$R" 01-a infra
+fresh
+printf 'branch platform\n' > "$W/r/ops/tests/ansible/upgrade/steps/01-a.txt"
+check "a step file declaring no infra branch: refused" 1 "declares no infra branch" "$R" 01-a infra
+check "  nothing pushed" 0 "$m0" origin_main
+fresh
+echo dirty >> "$W/r/infra/f"
+check "uncommitted changes in the repo: refused" 1 "has uncommitted changes" "$R" 01-a infra
+check "  nothing pushed" 0 "$m0" origin_main
+fresh
+check "the step before (01) not merged: 02 refused" 1 "is not merged into main yet" "$R" 02-b infra
+check "  nothing pushed" 0 "$m0" origin_main
+fresh
+"$R" 01-a infra > /dev/null 2>&1
+git -C "$W/r/infra" commit -q --allow-empty -m other; git -C "$W/r/infra" push -q origin main
+m0=$(origin_main)
+check "a branch that does not contain main (main moved after 01): refused" 1 "does not contain main" "$R" 02-b infra
+check "  nothing pushed" 0 "$m0" origin_main
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))
