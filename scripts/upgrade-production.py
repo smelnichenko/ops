@@ -1342,6 +1342,12 @@ def playbooks(step):
     for line in info["playbooks"]:
         print(f"  {line}")
     refuse([] if confirm(f"Run {step}'s playbook lines against PRODUCTION?") else ["not confirmed"])
+    # a step with no branch line (Cilium, kubeadm, Argo CD by its playbook) pulls its images here, as a merge pulls a
+    # merged step's: by the digests the full run ran, before anything restarts on them
+    images = prepull_images(step) if not info["branches"] else []
+    if images:
+        refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
+               else ["the step's images did not pull on ten (above) - its playbook lines not run"])
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if host_work([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")

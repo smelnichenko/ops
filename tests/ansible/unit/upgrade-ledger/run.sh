@@ -399,6 +399,16 @@ for name, fn, args, acts in (("backup", m.backup, (S47, "postgres"), ("ansible",
           ([c[0] for c in no], "not confirmed" in no[-1][1] if no and no[-1][0] == "refused" else False),
           (["asked", "refused"], True))
     check(f"{name}: confirmed - asked before its work", [c[0] for c in yes][:2], ["asked", acts[0]])
+# a step with images and no branch line (Cilium, kubeadm, Argo CD's playbook): its images pulled on ten at its playbooks,
+# as a merge pulls a merged step's - asked first, then pulled, then the playbook lines; a step with branches pulled
+# them at its merges
+S13 = "13-kubernetes-1.34.12"
+got = [c for c in phase_calls(m.playbooks, S13) if c[0] in ("asked", "ansible", "run", "record")]
+check("playbooks of 13 (images, no branch): asked, its images pulled, then its playbook lines",
+      [c[:2] if c[0] != "record" else c for c in got][:3],
+      [("asked",), ("ansible", "playbooks/upgrade-prepull.yml"), ("run", "upgrade-step-playbooks.sh")])
+got = [c for c in phase_calls(m.playbooks, S47) if c[0] == "ansible"]
+check("playbooks of 47 (its merges pulled them): nothing pulled", got, [])
 # every proof check given production's done steps (a run from where production stands counts them by its ledger)
 import ast  # noqa: E402
 calls_ = [n for n in ast.walk(ast.parse(open("scripts/upgrade-production.py").read()))
