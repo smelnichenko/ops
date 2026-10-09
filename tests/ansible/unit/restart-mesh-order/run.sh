@@ -24,7 +24,9 @@ cat > "$W/bin/kubectl" <<'STUB'
 S=$W/s
 echo "kubectl $*" >> "$W/calls"
 a=" $* "
-ready() { [ -e "$S/$1" ] && [ "$(cat "$S/polls.$1" 2>/dev/null || echo 0)" -ge "${READY_AFTER:-3}" ]; }
+# READY_AFTER: polls until a data workload is ready; SLOW (one of db, pg, kafka) takes 6 - each kind's own wait shown
+after() { [ "$1" = "${SLOW:-}" ] && echo 6 || echo "${READY_AFTER:-3}"; }
+ready() { [ -e "$S/$1" ] && [ "$(cat "$S/polls.$1" 2>/dev/null || echo 0)" -ge "$(after "$1")" ]; }
 poll() { [ -e "$S/$1" ] && echo $(( $(cat "$S/polls.$1" 2>/dev/null || echo 0) + 1 )) > "$S/polls.$1"; }
 v() { [ -e "$S/$1" ] && echo 1.27.9 || echo 1.26.8; }
 case "$a" in
@@ -80,6 +82,10 @@ check "  the apps restarted onto a data tier that is ready again, not only on th
 check "  each data workload's readiness read" \
   "$(grep -c -e ' get statefulset db ' "$W/calls") $(grep -c ' get clusters.postgresql.cnpg.io pg ' "$W/calls") \
 $(grep -c ' get strimzipodsets.core.strimzi.io kafka ' "$W/calls")" "$(echo 3 3 3)"
+for slow in db pg kafka; do
+  run SLOW=$slow > /dev/null
+  check "  $slow the last one ready: the apps waited for it" "$(cat "$W/order" 2>/dev/null)" "web restarted: data tier ready"
+done
 check "an owner it cannot restart: refused before any restart" \
   "$(run ODD=1) $(grep -c -E ' rollout restart | annotate ' "$W/calls")" "rc=2 0"
 check "a data workload never ready: the apps not restarted" "$(run READY_AFTER=999 | cut -c1-4) $(grep -c 'deployment/web' "$W/calls")" \
