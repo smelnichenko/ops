@@ -60,7 +60,11 @@ fails, compared = [], 0
 for i in range(-1, len(names)):
     done = names[:i + 1]
     have = inv.expected(done)
-    files = dflt.applied(read, [s for s in done if dflt.default_lines(s)])
+    try:
+        files = dflt.applied(read, [s for s in done if dflt.default_lines(s)])
+    except ValueError as e:
+        fails.append(f"after {done[-1] if done else 'the baseline'}: the steps' default lines do not apply - {e}")
+        break
     for path, kind, key, pat in MAP:
         text = files.get(path) or read(path)
         live = [re.fullmatch(pat, l) for l in have]
