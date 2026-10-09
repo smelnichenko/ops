@@ -28,6 +28,8 @@
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
     target: "{{ k8s_upgrade_to | default('') }}"
     target_minor: "{{ target.split('.')[:2] | join('.') }}"
+    # pkgs.k8s.io's signing key, every minor's repository (read 2026-10-09: 1.34, 1.35, 1.36)
+    k8s_apt_key_fingerprint: DE15B14486CD377B9E876E1A234654DA9A296436
     control_plane: [kube-apiserver, kube-controller-manager, kube-scheduler]
     # the CNI plugins and crictl each minor gets: its repository's newest when the upgrade was proven (pkgs.k8s.io,
     # read 2026-10-05) - a newer one published later would install what no run tested
@@ -130,17 +132,13 @@
       when: not _proofs_only | bool
       block:
         # ── 2. the target minor's apt repository ─────────────────────────
-        - name: Kubernetes apt key for the target minor  # noqa: command-instead-of-module risky-shell-pipe
-          ansible.builtin.shell: |
-            set -euo pipefail
-            tmp=$(mktemp -d)
-            trap 'rm -rf "$tmp"' EXIT
-            curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key -o "$tmp/Release.key"
-            gpg --batch --dearmor -o "$tmp/keyring.gpg" "$tmp/Release.key"
-            install -m 0644 "$tmp/keyring.gpg" /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-          args:
-            executable: /bin/bash
-          changed_when: true
+        - name: Kubernetes apt key for the target minor
+          ansible.builtin.include_tasks: tasks/apt-key-pinned.yml
+          vars:
+            apt_key_url: https://pkgs.k8s.io/core:/stable:/v{{ target_minor }}/deb/Release.key
+            apt_key_fingerprint: "{{ k8s_apt_key_fingerprint }}"
+            apt_key_dest: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+            apt_key_dearmor: true
 
         - name: Kubernetes apt repository for the target minor
           ansible.builtin.copy:

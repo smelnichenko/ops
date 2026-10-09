@@ -1,0 +1,27 @@
+---
+# An apt repository's signing key installed only when it is the one pinned: fetched to a temporary file, its primary
+# keys read - exactly one, the pinned fingerprint - then installed (dearmored for a .gpg keyring). Trusted on first use,
+# a key swapped at the source (or on the way) signed every package after it. Inputs: apt_key_url, apt_key_fingerprint
+# (40 hex), apt_key_dest, apt_key_dearmor. tests/ansible/unit/apt-key-pinned runs this file.
+- name: "{{ apt_key_dest | basename }} - the pinned key ({{ apt_key_fingerprint[-16:] }}) fetched and installed"
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      tmp=$(mktemp -d)
+      trap 'rm -rf "$tmp"' EXIT
+      export GNUPGHOME=$tmp/gnupg
+      mkdir -m 0700 "$GNUPGHOME"
+      curl -fsSL --max-time 120 "$URL" -o "$tmp/key"
+      fprs=$(gpg --batch --show-keys --with-colons "$tmp/key" 2> /dev/null \
+        | awk -F: '$1 == "pub" {p = 1; next} p && $1 == "fpr" {print $10; p = 0}')
+      [ "$fprs" = "$FPR" ] || { echo "REFUSED: $URL holds $(echo $fprs) - not the pinned $FPR alone"; exit 1; }
+      if [ "$DEARMOR" = True ]; then gpg --batch --dearmor -o "$tmp/out" "$tmp/key"; else cp "$tmp/key" "$tmp/out"; fi
+      if cmp -s "$tmp/out" "$DEST"; then echo unchanged; else install -m 0644 "$tmp/out" "$DEST"; echo installed; fi
+  environment:
+    URL: "{{ apt_key_url }}"
+    FPR: "{{ apt_key_fingerprint }}"
+    DEST: "{{ apt_key_dest }}"
+    DEARMOR: "{{ apt_key_dearmor | default(false) | bool }}"
+  register: _apt_key
+  changed_when: "'installed' in _apt_key.stdout"

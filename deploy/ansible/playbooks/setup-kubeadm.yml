@@ -147,10 +147,11 @@
       when: containerd_io_version | length > 0
       block:
         - name: Docker's apt key
-          ansible.builtin.get_url:
-            url: https://download.docker.com/linux/debian/gpg
-            dest: /etc/apt/keyrings/docker.asc
-            mode: '0644'
+          ansible.builtin.include_tasks: tasks/apt-key-pinned.yml
+          vars:
+            apt_key_url: https://download.docker.com/linux/debian/gpg
+            apt_key_fingerprint: 9DC858229FC7DD38854AE2D88D81803C0EBFCD88  # Docker's release key (read 2026-10-09)
+            apt_key_dest: /etc/apt/keyrings/docker.asc
 
         - name: Docker's apt repository (as on ten - its docker.list)
           ansible.builtin.copy:
@@ -328,17 +329,14 @@
     # Phase 2: Install kubeadm, kubelet, kubectl
     # ================================================================
 
-    - name: Add Kubernetes apt key  # noqa: command-instead-of-module risky-shell-pipe
-      ansible.builtin.shell: |
-        set -euo pipefail
-        tmp=$(mktemp -d)
-        trap 'rm -rf "$tmp"' EXIT
-        curl -fsSL --max-time 120 https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key -o "$tmp/Release.key"
-        gpg --batch --dearmor -o "$tmp/keyring.gpg" "$tmp/Release.key"
-        install -m 0644 "$tmp/keyring.gpg" /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      args:
-        executable: /bin/bash
-      changed_when: true
+    - name: Add Kubernetes apt key
+      ansible.builtin.include_tasks: tasks/apt-key-pinned.yml
+      vars:
+        apt_key_url: https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key
+        # pkgs.k8s.io's signing key, every minor's repository (read 2026-10-09: 1.34, 1.35, 1.36)
+        apt_key_fingerprint: DE15B14486CD377B9E876E1A234654DA9A296436
+        apt_key_dest: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        apt_key_dearmor: true
 
     - name: Add Kubernetes apt repository
       ansible.builtin.copy:
