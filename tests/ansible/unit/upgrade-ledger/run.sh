@@ -380,6 +380,22 @@ for name, fn, args in (("begin", m.begin, (S47,)), ("backup", m.backup, (S47, "p
     did = [c for c in got if c != ("run", "git")]
     check(f"{name}: refused by the proof, nothing done", (len(did), did[-1][0], "PROOF-X" in did[-1][1]),
           (1, "refused", True))
+# backup and playbooks ask first, in the script (a Taskfile prompt is skipped by task -y, and the script runs alone):
+# declined, nothing done or recorded
+for name, fn, args, acts in (("backup", m.backup, (S47, "postgres"), ("ansible",)),
+                             ("playbooks", m.playbooks, (S47,), ("run",))):
+    no = [c for c in phase_calls(fn, *args, answer=False) if c != ("run", "git")]
+    yes = [c for c in phase_calls(fn, *args) if c != ("run", "git")]
+    check(f"{name}: asked first, declined - nothing done or recorded",
+          ([c[0] for c in no], "not confirmed" in no[-1][1] if no and no[-1][0] == "refused" else False),
+          (["asked", "refused"], True))
+    check(f"{name}: confirmed - asked before its work", [c[0] for c in yes][:2], ["asked", acts[0]])
+# every proof check given production's done steps (a run from where production stands counts them by its ledger)
+import ast  # noqa: E402
+calls_ = [n for n in ast.walk(ast.parse(open("scripts/upgrade-production.py").read()))
+          if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "proof_problems"]
+check("every proof check is given the done steps", [ast.unparse(n)[:60] for n in calls_
+                                                     if "done" not in {k.arg for k in n.keywords}], [])
 # production's External Secrets on the Vault login the copy proves every step on - no old reviewer token: a begin with
 # it there refuses before anything is done or recorded
 got = phase_calls(m.begin, S47, vault=["VAULT-X"])

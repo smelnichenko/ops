@@ -1062,6 +1062,10 @@ def begin(step):
 def backup(step, store):
     names, events, _ = ledger_for(step, "backup", store)
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events)))
+    # asked here, not only by the Taskfile's prompt (task -y skips that; this script runs alone too)
+    refuse([] if confirm(f"Back up {store} on PRODUCTION into the Pi store for {step}"
+                         + (" - Kafka is down while its volume is copied" if store == "kafka" else "") + "?")
+           else ["not confirmed"])
     refuse([] if ansible("playbooks/upgrade-backup.yml", "-e", f"store={store}") else [f"the {store} backup failed"])
     record(step, "backup", store)
 
@@ -1179,9 +1183,13 @@ def cluster_runs(image):
 
 
 def playbooks(step):
-    names, events, _ = ledger_for(step, "playbooks")
+    names, events, info = ledger_for(step, "playbooks")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
                           done=applied_steps(events)))
+    print(f"{step}'s playbook lines, against PRODUCTION (ten, the Pis):")
+    for line in info["playbooks"]:
+        print(f"  {line}")
+    refuse([] if confirm(f"Run {step}'s playbook lines against PRODUCTION?") else ["not confirmed"])
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if host_work([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")
@@ -1210,15 +1218,22 @@ def defaults(step):
         if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode:
             refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
                    else [f"the step's commit {sha[:10]} is not on origin/main's head"])
+            print(git("show", "--stat", "--format=%h %s", sha))
+            refuse([] if confirm(f"Push {step}'s defaults commit {sha[:10]} to ops main?") else ["not confirmed"])
             run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
         print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
         record(step, "defaults", sha)
         return
-    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True)
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True, done=applied_steps(events))
            + ([] if git("rev-parse", "HEAD") == git("rev-parse", ORIGIN_MAIN) else ["ops is not at origin/main"]))
     refuse([] if run([os.path.join(OPS, "scripts", "upgrade-defaults.py"), "--apply", step]).returncode == 0
            else ["the default lines did not apply (above)"])
     paths = sorted({p for p, _, _ in dflt.default_lines(step)} | {dflt.COMMITTED})
+    # shown and asked here, before anything is committed: declined, the tree as it was
+    print(git("diff", "--", *paths))
+    if not confirm(f"Commit {step}'s playbook defaults (above) to ops main and push them?"):
+        run(["git", "-C", OPS, "checkout", "--", *paths], check=True)
+        refuse(["not confirmed"])
     run(["git", "-C", OPS, "commit", "-q", "-m", message, "--", *paths], check=True)
     run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
     record(step, "defaults", git("rev-parse", "HEAD"))

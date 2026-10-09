@@ -25,7 +25,7 @@ cp "$src/.gitignore" "$o/.gitignore"  # as ops ignores them (bytecode, .upgrade/
 git -C "$o" init -q -b main && git -C "$o" add -A && git -C "$o" commit -q -m proven
 proven=$(git -C "$o" rev-parse HEAD)
 python3 - "$o" "$proven" <<'PY'
-import importlib.machinery, importlib.util, os, subprocess, sys
+import contextlib, importlib.machinery, importlib.util, io, os, subprocess, sys
 o, proven = sys.argv[1:]
 loader = importlib.machinery.SourceFileLoader("up", os.path.join(o, "scripts", "upgrade-production.py"))
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", loader))
@@ -119,8 +119,19 @@ def phase(step):
         return f"failed {' '.join(e.cmd[3:5])}"
 
 
-# refused by the proof: nothing committed, pushed or recorded
+# asked first, in the script, the change shown: declined, nothing committed, pushed or recorded, the tree as it was
 head0 = G("rev-parse", "HEAD")
+questions = []
+m.confirm = lambda q: questions.append(q) or False
+out = io.StringIO()
+with contextlib.redirect_stdout(out):
+    r = phase("01-a")
+check("01 declined: nothing committed, pushed or recorded, the tree as it was",
+      ("not confirmed" in r, G("rev-parse", "HEAD"), G("rev-parse", "origin/main"), G("status", "--porcelain"),
+       len(recorded)), (True, head0, head0, "", 0))
+check("  the change shown before the question", 'foo_version: "2.0"' in out.getvalue() and len(questions) == 1, True)
+m.confirm = lambda q: questions.append(q) or True
+# refused by the proof: nothing committed, pushed or recorded
 m.proof_problems = lambda *a, **k: ["PROOF-X"]
 r = phase("01-a")
 check("01 refused by the proof: nothing committed, pushed or recorded",
@@ -143,9 +154,11 @@ check("03's resume refused by the proof (asked with 03 committed): nothing pushe
       ("PROOF-X" in r, "03-c" in (asked[-1] if asked else []), G("rev-parse", "origin/main") != step03, len(recorded)),
       (True, True, True, n))
 m.proof_problems = lambda *a, **k: []
+asked_before = len(questions)
 check("03 again: its commit pushed and recorded, no second commit",
       (phase("03-c"), last(), G("rev-parse", "origin/main"), G("rev-parse", "HEAD")),
       ("ok", ("03-c", "defaults", step03), step03, step03))
+check("  its push asked first", len(questions) > asked_before, True)
 recorded.pop()
 check("03 once more (the ledger write lost): recorded, nothing pushed or committed",
       (phase("03-c"), last(), G("rev-parse", "HEAD")), ("ok", ("03-c", "defaults", step03), step03))
