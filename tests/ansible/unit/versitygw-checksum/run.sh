@@ -10,6 +10,7 @@ PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY'
 import glob, re, sys
+from ansible.errors import AnsibleError
 sys.path.insert(0, "tests/ansible/unit")
 from plays import actions, load, tasks  # noqa: E402
 from templar import condition, render  # noqa: E402
@@ -41,11 +42,21 @@ for s in glob.glob("tests/ansible/upgrade/steps/*.txt"):
     versions |= set(re.findall(r"-e vgw_version=([0-9.]+)", st))
     versions |= set(re.findall(r"vgw_version \| default\('([0-9.]+)'\)", st))
 check("the versions installed found", sorted(versions), ["1.6.0", "1.8.0"])
+
+
+def rendered(key, **variables):
+    """The get_url argument as Ansible renders it - None where it is missing or does not render (no checksum there)."""
+    try:
+        return render(get[2][key], **variables) if get and key in get[2] else None
+    except AnsibleError:
+        return None
+
+
 for v in sorted(versions):
     for arch in ("amd64", "arm64"):
-        got = render(get[2]["checksum"], vgw_version=v, forgejo_arch=arch, vgw_checksums=table) if get else None
+        got = rendered("checksum", vgw_version=v, forgejo_arch=arch, vgw_checksums=table)
         check(f"  {v} {arch}: its sha256 checked", bool(got and re.fullmatch(r"sha256:[0-9a-f]{64}", got)), True)
-        url = render(get[2]["url"], vgw_version=v, forgejo_arch=arch) if get else ""
+        url = rendered("url", vgw_version=v, forgejo_arch=arch)
         check(f"  {v} {arch}: from its release", url,
               f"https://github.com/versity/versitygw/releases/download/v{v}/versitygw_{v}_linux_{arch}.deb")
 guard = next((a for a in act if a[1] == "assert" and "vgw_checksums" in str(a[2].get("that"))), None)
