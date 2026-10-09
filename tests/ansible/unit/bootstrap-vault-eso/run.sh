@@ -295,5 +295,20 @@ import yaml
 t = yaml.safe_load(open("Taskfile.yml"))["tasks"]["deploy:vault-eso"]
 print(str(t.get("desc", "")).startswith("PRODUCTION"), "PRODUCTION" in str(t.get("prompt", "")),
       [str(c) for c in t.get("cmds", [])] == ["./bootstrap.sh vault-eso"])')" "True True True"
+# vault-eso is all bootstrap.sh does: its other components (cert-manager 1.20.0, External Secrets 2.2.0 by Helm with
+# its CRDs, Istio 1.25.2, Velero 12.0.0, Gateway API v1.2.1 applied with its errors dropped, a cilium-config patch the
+# Cilium playbook's guard refuses) are setup-kubeadm.yml's or Argo CD's - `bootstrap.sh all` after the upgrade steps
+# took each back, and installed External Secrets' Helm release again (one helm uninstall deletes every ExternalSecret)
+check "bootstrap.sh: vault-eso its only component, nothing else installed" \
+  "$(sed -n '/^main()/,/^}/p' bootstrap.sh | grep -oE '^    [a-z-]+\)' | tr -d ' )' | paste -sd' ') \
+$(grep -cE 'helm (upgrade|install)|kubectl apply -f https|kubectl patch configmap cilium' bootstrap.sh)" "vault-eso 0"
+check "every call of bootstrap.sh is vault-eso's" \
+  "$(grep -ho 'bootstrap\.sh [a-z-]*' Taskfile.yml | sort -u | paste -sd' ')" "bootstrap.sh vault-eso"
+check "deploy:full: vault-eso after the Pi Vault is set up and seeded, before Argo CD" "$(python3 -c '
+import yaml
+c = [str(x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["deploy:full"]["cmds"]]
+at = lambda s: next((i for i, x in enumerate(c) if s in x), -1)
+print(at("seed-vault-secrets.yml") < at("bootstrap.sh vault-eso") < at("setup-argocd.yml"), at("setup-vault-pi.yml") >= 0)')" \
+  "True True"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

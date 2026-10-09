@@ -194,11 +194,6 @@ tasks:
       - venv/bin/pip install -q -r requirements.txt
       - venv/bin/ansible-galaxy collection install -r requirements.yml -p collections
 
-  deploy:bootstrap:
-    desc: "Tier 0: Install pre-GitOps infrastructure (cert-manager, ESO, Istio, Velero)"
-    cmds:
-      - ./bootstrap.sh all
-
   # bootstrap's vault-eso alone: Vault's Kubernetes auth written for the kube context's cluster (refused unless it is
   # the one the Pi Vault serves), External Secrets' login on it proven, then the old reviewer token deleted
   deploy:vault-eso:
@@ -214,12 +209,13 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-nexus.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-kubeadm.yml
-      - cd ../.. && ./bootstrap.sh all
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-consul.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-services.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-patroni.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-vault-pi.yml -e @vars/vault.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e @vars/vault.yml
+      # External Secrets' login to the Pi Vault, once Vault serves (setup-kubeadm installed External Secrets)
+      - cd ../.. && ./bootstrap.sh vault-eso
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
 
   deploy:vault-pi:

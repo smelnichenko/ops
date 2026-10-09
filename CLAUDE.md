@@ -141,9 +141,8 @@ velero backup create --from-schedule velero-schnappy-daily my-snap  # From sched
 velero restore create --from-backup <name>     # Restore
 velero schedule get                            # List schedules
 
-# Tier 0 Bootstrap (pre-GitOps, no Forgejo/ArgoCD needed)
-./bootstrap.sh all           # Install cert-manager, ESO, Istio, Velero, cluster-config
-./bootstrap.sh cert-manager  # Single component
+# External Secrets' login to the Pi Vault (cert-manager, ESO, Istio: setup-kubeadm.yml; the rest: Argo CD)
+task deploy:vault-eso        # ./bootstrap.sh vault-eso
 ```
 
 ## Architecture
