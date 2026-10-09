@@ -24,6 +24,15 @@ loader = importlib.machinery.SourceFileLoader("upgrade_production", "scripts/upg
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_production", loader))
 loader.exec_module(m)
 
+
+def unstubbed_ansible(*a):
+    """A test that reaches the runner's ansible() without stubbing it ran a production playbook (check() reaching
+    production-data-check.yml did): it fails here, loudly, instead."""
+    raise AssertionError(f"ansible{a} called with no stub - a test must stub m.ansible")
+
+
+m.ansible = unstubbed_ansible
+
 fails = 0
 T0 = datetime.datetime(2026, 10, 6, 8, 0, tzinfo=datetime.timezone.utc)
 
@@ -644,10 +653,11 @@ SETTLED = inspect.signature(m.settled)
 def settle_args(step, since=None, deciding=True):
     """settled()'s arguments, by name, as check() calls it."""
     seen, saved = [], {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled",
-                                                  "running_digest_problems")}
+                                                  "running_digest_problems", "ansible")}
     m.read_ledger = lambda: (None, [])
     m.inventory_check = lambda *a: True
     m.running_digest_problems = lambda *a: []
+    m.ansible = lambda *a: True
     m.settled = lambda *a, **k: seen.append(SETTLED.bind(*a, **k).arguments) or (True, {}, [])
     try:
         m.check(step, since, deciding=deciding)
@@ -691,14 +701,24 @@ check("an image the step does not move: not judged", rdp(S59, pod("x/y:1", "x/y@
 json.dump({"step": S59}, open(m.proof_path(S59), "w"))
 check("a proof without digests: nothing judged", rdp(S59, pod(CH, "x@" + P2)) if rdp else None, [])
 m.PROVEN = kept_proven
-saved = {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled", "running_digest_problems")}
+saved = {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled", "running_digest_problems", "ansible")}
 m.read_ledger, m.inventory_check = (lambda: (None, [])), (lambda *a: True)
 m.settled = lambda *a, **k: (True, {}, [])
 m.running_digest_problems = lambda *a: ["DIGEST-X"]
+DATA = []
+m.ansible = lambda *a: DATA.append(a) or True
 out = io.StringIO()
 with contextlib.redirect_stdout(out):
     red = m.check(S59)
 check("check: red on a step image of another build, said", (red, "DIGEST-X" in out.getvalue()), (False, True))
+# the data paths read at every check (production-data-check.yml): red when they are, green when all is
+m.running_digest_problems = lambda *a: []
+DATA.clear()
+green = m.check(S59)
+check("check: the data paths read, read only, at every check", (green, DATA),
+      (True, [("playbooks/production-data-check.yml",)]))
+m.ansible = lambda *a: False
+check("check: red when a data path does not work", m.check(S59), False)
 for k, v in saved.items():
     setattr(m, k, v)
 

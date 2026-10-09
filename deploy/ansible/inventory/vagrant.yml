@@ -23,6 +23,12 @@ all:
     forgejo_db_host: "localhost:5432"
     keycloak_db_host: "localhost:5432"
     keepalived_vip: "192.168.56.50"
+    # deploy/ansible/playbooks/production-data-check.yml: what the copy lacks by nature - the smartctl exporter (the VM's
+    # virtio disk reports no SMART: nothing listens on 9633) and the public endpoints (no internet from the copy)
+    production_check_allowed_down:
+      - scrapeConfig/schnappy-infra/schnappy-smartctl-exporter
+    production_check_allowed_firing:
+      - PublicEndpointDown
     # the git mirror's user on the Pis (setup-gluster gives it the mirror's volume): the copy's VMs have no sm
     offsite_backup_user: vagrant
     # the node builds images (test:cicd, test:dr, test:microservices) and pulls them from a plain-HTTP registry

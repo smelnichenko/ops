@@ -1435,7 +1435,9 @@ def check(step, since=None, deciding=False):
     builds = running_digest_problems(step)
     for p in builds:
         print(f"IMAGE: {p}")
-    return ok and ok_settled and not builds
+    # the data paths, read only: metrics, logs, datasources, the stores, no critical alert (the full run reads the same)
+    data = ansible("playbooks/production-data-check.yml")
+    return ok and ok_settled and not builds and data
 
 
 def done(step):

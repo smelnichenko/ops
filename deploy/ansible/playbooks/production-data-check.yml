@@ -1,0 +1,198 @@
+---
+# The data paths work, read only - every step's check, production's (scripts/upgrade-production.py's check, in done)
+# and the full run's (after the Vagrant-only checks, which write their canaries): Argo settled and the inventory as
+# expected say nothing of whether metrics, logs and the stores still move. Each read waits a while for the step's
+# restarts to settle:
+#   - Prometheus: every active scrape target up;
+#   - Mimir: a sample remote-written in the last two minutes;
+#   - ClickHouse: container log rows of the last two minutes (Fluent Bit -> logs.podlogs);
+#   - Grafana: every datasource healthy;
+#   - Postgres: every CNPG cluster healthy, every instance ready, its replicas streaming, WAL archiving where set up;
+#   - Kafka: every Kafka Ready;
+#   - ScyllaDB: every node Up/Normal;
+#   - no critical alert firing.
+# What an environment lacks by nature its inventory names: production_check_allowed_down (scrape pools) and
+# production_check_allowed_firing (alert names) - none on production.
+#
+# Usage: task deploy:upgrade:done STEP=<step>   (every check of a step runs it)
+- name: Metrics, logs and the stores move
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
+    proxy: /api/v1/namespaces/schnappy-infra/services
+    allowed_down: "{{ production_check_allowed_down | default([]) }}"
+    allowed_firing: "{{ production_check_allowed_firing | default([]) }}"
+  tasks:
+    - name: Prometheus - every active scrape target up
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/targets?state=active' \
+            | ALLOWED='{{ allowed_down | to_json }}' python3 -c '
+          import json, os, sys
+          targets = json.load(sys.stdin)["data"]["activeTargets"]
+          allowed = set(json.loads(os.environ["ALLOWED"]))
+          down = ["%s %s: %s" % (t["scrapePool"], t["scrapeUrl"], t["lastError"][:100]) for t in targets
+                  if t["health"] != "up" and t["scrapePool"] not in allowed]
+          print("%d targets, %d down" % (len(targets), len(down)))
+          for x in down:
+              print("  DOWN", x)
+          sys.exit(1 if down or not targets else 0)'
+      register: _targets
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _targets.rc == 0
+
+    - name: Mimir - a sample remote-written in the last two minutes
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get --raw \
+            '{{ proxy }}/schnappy-mimir:9009/proxy/prometheus/api/v1/query?query=max(timestamp(up))' \
+            | python3 -c '
+          import json, sys, time
+          r = json.load(sys.stdin)["data"]["result"]
+          age = time.time() - float(r[0]["value"][1]) if r else None
+          print("newest sample", "none" if age is None else "%.0f s old" % age)
+          sys.exit(0 if age is not None and age < 120 else 1)'
+      register: _mimir
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _mimir.rc == 0
+
+    - name: ClickHouse - container log rows of the last two minutes
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          K="{{ kubectl }} -n schnappy-infra"
+          p=$($K get pods -l app.kubernetes.io/component=clickhouse -o jsonpath='{.items[0].metadata.name}')
+          $K exec "$p" -c clickhouse -- sh -c 'clickhouse-client --user schnappy --password "$CLICKHOUSE_PASSWORD" -q "$1"' _ \
+            "SELECT count() FROM logs.podlogs WHERE timestamp > now() - 120"
+      register: _logs
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _logs.rc == 0 and (_logs.stdout | trim | int) > 0
+
+    - name: Grafana - every datasource healthy
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          g() { {{ kubectl }} -n schnappy-infra exec deploy/schnappy-grafana -c grafana -- sh -c \
+            'curl -sf -u "$GF_SECURITY_ADMIN_USER:$GF_SECURITY_ADMIN_PASSWORD" "http://localhost:3000$1"' _ "$1"; }
+          for uid in $(g /api/datasources | python3 -c 'import json, sys; print(" ".join(d["uid"] for d in json.load(sys.stdin)))'); do
+            echo "$uid $(g "/api/datasources/uid/$uid/health" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("status"))')"
+          done
+      register: _datasources
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: >-
+        _datasources.rc == 0 and _datasources.stdout_lines | length > 0
+        and _datasources.stdout_lines | reject('match', '^\S+ OK$') | list | length == 0
+
+    # "<namespace>/<cluster> <what is wrong>" per cluster on stdout, nothing for a well one
+    - name: Postgres - every CNPG cluster healthy, its replicas streaming, WAL archiving where set up
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get clusters.postgresql.cnpg.io -A -o json | python3 -c '
+          import json, sys
+          for c in json.load(sys.stdin)["items"]:
+              s = c.get("status", {})
+              print(c["metadata"]["namespace"], c["metadata"]["name"], s.get("currentPrimary", ""), c["spec"]["instances"],
+                    s.get("phase", "").replace(" ", "_"), s.get("readyInstances", 0),
+                    {x["type"]: x["status"] for x in s.get("conditions", [])}.get("ContinuousArchiving", "-"))' \
+          | while read -r ns name primary n phase ready archiving; do
+            [ "$phase" = Cluster_in_healthy_state ] && [ "$ready" = "$n" ] || { echo "$ns/$name $phase, $ready of $n ready"; continue; }
+            [ "$archiving" != False ] || echo "$ns/$name WAL archiving failing"
+            streaming=$({{ kubectl }} -n "$ns" exec "$primary" -c postgres -- \
+              psql -qAt -c "select count(*) from pg_stat_replication where state = 'streaming'")
+            [ "$streaming" = $((n - 1)) ] || echo "$ns/$name $streaming of $((n - 1)) replicas streaming"
+          done
+      register: _postgres
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _postgres.rc == 0 and _postgres.stdout | trim | length == 0
+
+    - name: Kafka - every Kafka Ready
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get kafkas.kafka.strimzi.io -A -o json | python3 -c '
+          import json, sys
+          for k in json.load(sys.stdin)["items"]:
+              ready = {x["type"]: x["status"] for x in k.get("status", {}).get("conditions", [])}.get("Ready")
+              if ready != "True":
+                  print(k["metadata"]["namespace"] + "/" + k["metadata"]["name"], "not Ready:", ready)'
+      register: _kafka
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _kafka.rc == 0 and _kafka.stdout | trim | length == 0
+
+    - name: ScyllaDB - every node Up/Normal
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get pods -A -l scylla-operator.scylladb.com/pod-type=scylladb-node \
+            -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' \
+          | while read -r ns pod; do
+            [ -n "$pod" ] || continue
+            st=$({{ kubectl }} -n "$ns" exec "$pod" -c scylla -- nodetool status | awk '$1 ~ /^[UD][NLJM]$/ {print $1}')
+            [ -n "$st" ] || { echo "$ns/$pod nodetool status read no node"; continue; }
+            bad=$(grep -vx UN <<< "$st" || true)
+            [ -z "$bad" ] || echo "$ns/$pod sees nodes not Up/Normal: $(paste -sd, <<< "$bad")"
+          done
+      register: _scylla
+      changed_when: false
+      retries: 20
+      delay: 15
+      until: _scylla.rc == 0 and _scylla.stdout | trim | length == 0
+
+    - name: No critical alert firing
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          {{ kubectl }} get --raw '{{ proxy }}/schnappy-prometheus:9090/proxy/api/v1/alerts' \
+            | ALLOWED='{{ allowed_firing | to_json }}' python3 -c '
+          import json, os, sys
+          allowed = set(json.loads(os.environ["ALLOWED"]))
+          for a in json.load(sys.stdin)["data"]["alerts"]:
+              l = a["labels"]
+              if a["state"] == "firing" and l.get("severity") == "critical" and l["alertname"] not in allowed:
+                  print(l["alertname"], " ".join("%s=%s" % kv for kv in sorted(l.items()) if kv[0] != "alertname"))'
+      register: _alerts
+      changed_when: false
+      retries: 8
+      delay: 15
+      until: _alerts.rc == 0 and _alerts.stdout | trim | length == 0
+
+    - name: The data paths work
+      ansible.builtin.debug:
+        msg: >-
+          DATA PATHS OK: {{ _targets.stdout_lines | first }}; Mimir {{ _mimir.stdout }}; ClickHouse
+          {{ _logs.stdout | trim }} log rows in 2 minutes; Grafana {{ _datasources.stdout_lines | length }} datasources
+          healthy; Postgres, Kafka, ScyllaDB well; no critical alert
