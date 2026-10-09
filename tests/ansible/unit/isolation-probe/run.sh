@@ -113,6 +113,20 @@ for what, curl, env, want_fail in (("blocked, its names on the Vagrant VIP, the 
     ok = failed == want_fail
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} pi: {what}" + ("" if ok else f"\n  {reg}"))
+# the guards' boot units: in place before any interface is up (nftables.service's own ordering) - After= alone let the
+# network come up first, the copy reaching production until the rules loaded
+import configparser
+for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/upgrade/isolate-cluster.yml"):
+    unit = next(t["ansible.builtin.copy"]["content"] for pl in yaml.safe_load(open(book)) for t in pl.get("tasks") or []
+                if str((t.get("ansible.builtin.copy") or {}).get("dest", "")).endswith("vagrant-isolate-production.service"))
+    c = configparser.ConfigParser(strict=False)
+    c.read_string(unit)
+    u = c["Unit"]
+    ok = (u.get("DefaultDependencies") == "no", "network-pre.target" in u.get("Wants", "").split(),
+          "network-pre.target" in u.get("Before", "").split(), "network-pre.target" not in u.get("After", "").split())
+    fails += ok != (True, True, True, True)
+    print(f"{'PASS' if ok == (True, True, True, True) else 'FAIL'} {book}: its guard loads before the network "
+          f"(DefaultDependencies=no, Wants= and Before=network-pre.target)" + ("" if all(ok) else f" - {ok}"))
 print("isolation-probe: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

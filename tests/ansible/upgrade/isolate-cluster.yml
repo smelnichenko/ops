@@ -133,7 +133,11 @@
         content: |
           [Unit]
           Description=Vagrant upgrade test: no traffic to the production LAN
-          After=network-pre.target
+          # loaded before any interface is up, as nftables.service orders itself
+          DefaultDependencies=no
+          Wants=network-pre.target
+          Before=network-pre.target shutdown.target
+          Conflicts=shutdown.target
           [Service]
           Type=oneshot
           RemainAfterExit=true
