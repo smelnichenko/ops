@@ -30,12 +30,15 @@ def app(name):
                        "health": {"status": "Healthy"}, "operationState": {"phase": "Succeeded"}}}
 
 
-def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True):
+def pod(name, uid, restarts=0, finished="2026-10-06T10:00:00Z", ns="ns", ready=True, owner=None):
     c = {"ready": ready, "restartCount": restarts}
     if restarts:
         c["lastState"] = {"terminated": {"finishedAt": finished}}
-    return {"metadata": {"namespace": ns, "name": name, "uid": uid},
-            "status": {"phase": "Running", "containerStatuses": [c]}}
+    meta = {"namespace": ns, "name": name, "uid": uid}
+    if owner:  # a Deployment's pod: its ReplicaSet the controller, the template hash in its labels
+        meta["ownerReferences"] = [{"controller": True, "kind": "ReplicaSet", "name": f"{owner}-{uid}h"}]
+        meta["labels"] = {"pod-template-hash": f"{uid}h"}
+    return {"metadata": meta, "status": {"phase": "Running", "containerStatuses": [c]}}
 
 
 def run(apps, pods, *args, env=None):
@@ -247,6 +250,24 @@ rc, out = run(A, [pod("p1", "u9", 1)], "--restart-history", H, "--step", "15")
 check("a new pod (another uid) with a restart: one step only, green", rc, 0, out)
 rc, out = run(A, [pod("p1", "u1", 0)], "--restart-history", H)
 check("--restart-history without --step: bad arguments", rc, 2, out)
+
+# a workload's pod replaced by the next step (the Istio steps restart every meshed pod) still restarting in it: the
+# crash loop is the workload's - caught though the pod is new (by uid it was never in two steps running)
+H5 = os.path.join(work, "history-replaced.json")
+run(A, [pod("web-1", "w1", 0, owner="web")], "--restart-history", H5, "--step", "04")
+rc, out = run(A, [pod("web-1", "w1", 1, owner="web")], "--restart-history", H5, "--step", "05")
+check("a workload's pod restarting in a step: green", rc, 0, out)
+rc, out = run(A, [pod("web-2", "w2", 1, owner="web")], "--restart-history", H5, "--step", "06")
+check("its replacement restarting in the next: a crash loop, caught, the workload named",
+      (rc, "ns/web" in out and "(05, 06)" in out), (1, True), out)
+H6 = os.path.join(work, "history-replaced-quiet.json")
+run(A, [pod("web-1", "w1", 0, owner="web")], "--restart-history", H6, "--step", "04")
+run(A, [pod("web-1", "w1", 3, owner="web")], "--restart-history", H6, "--step", "05")
+rc, out = run(A, [pod("web-2", "w2", 0, owner="web")], "--restart-history", H6, "--step", "06")
+check("its replacement quiet in the next: green", rc, 0, out)
+rc, out = run(A, [pod("db-2", "d2", 2, owner="db"), pod("web-3", "w3", 0, owner="web")], "--restart-history", H6,
+              "--step", "07")
+check("another workload restarting a step later: green (one step of its own)", rc, 0, out)
 
 # control-plane upgrades in a row (steps 42 and 43): every leader-elected controller restarts in both, not after
 H2 = os.path.join(work, "history-control-plane.json")

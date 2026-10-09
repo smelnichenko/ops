@@ -204,10 +204,12 @@ def evaluate(apps, pods, allowed, mirror, now=None, quiet=0, expected=None, extr
 
 
 def restart_history(path, step, pods, expected=False):
-    """Pods (by uid) that restarted during `step` and during the step recorded before it, by name, and that step;
-    records this step. The first call (no file) records only; with `expected` (the step restarts the control plane)
-    nothing is judged - its restarts are recorded, and the next step judges against them. A file of the earlier form
-    (last_step, each pod's last_restart_step) is read as its one or two steps."""
+    """Workloads that restarted during `step` and during the step recorded before it, by name, and that step; records
+    this step. A pod's restarts counted by its uid (a counter is its pod's), the steps they fell in kept by its
+    workload (owner_key: a pod the next step replaced - every meshed pod at an Istio step - was never in two steps
+    running by uid; a pod with no owner by its uid). The first call (no file) records only; with `expected` (the step
+    restarts the control plane) nothing is judged - its restarts are recorded, and the next step judges against them.
+    A file of an earlier form (each pod's restart steps by uid, or last_step and last_restart_step) is read so."""
     try:
         with open(path) as f:
             hist = json.load(f)
@@ -217,23 +219,32 @@ def restart_history(path, step, pods, expected=False):
     if step not in steps:
         steps.append(step)
     prev = steps[steps.index(step) - 1] if steps.index(step) > 0 else None
-    twice, now = [], {}
+    old_pods, old_work = (hist or {}).get("pods") or {}, (hist or {}).get("workloads") or {}
+    now, work = {}, {}
     for pod in pods["items"]:
         meta = pod["metadata"]
+        owner = owner_key(pod)
+        key = "/".join(owner) if owner else meta["uid"]
+        name = f"{owner[0]}/{owner[2]}" if owner else f"{meta['namespace']}/{meta['name']}"
         count = sum(c.get("restartCount", 0) for c in (pod.get("status") or {}).get("containerStatuses") or [])
-        rec = ((hist or {}).get("pods") or {}).get(meta["uid"]) or {}
-        restart_steps = list(rec.get("restart_steps") or ([rec["last_restart_step"]] if rec.get("last_restart_step")
-                                                          else []))
+        rec = old_pods.get(meta["uid"]) or {}
+        # the workload's restart steps so far: its own record, else (an earlier file) its pod's by uid
+        before = work.get(key, {}).get("restart_steps") or old_work.get(key, {}).get("restart_steps") or list(
+            rec.get("restart_steps") or ([rec["last_restart_step"]] if rec.get("last_restart_step") else []))
+        restart_steps = list(before)
         if hist is not None and count > rec.get("count", 0) and step not in restart_steps:
             restart_steps.append(step)
-        if not expected and step in restart_steps and prev is not None and prev in restart_steps:
-            twice.append(f"{meta['namespace']}/{meta['name']}")
-        now[meta["uid"]] = {"name": f"{meta['namespace']}/{meta['name']}", "count": count,
-                            "restart_steps": restart_steps[-3:]}
+        work[key] = {"name": name, "restart_steps": restart_steps[-3:]}
+        now[meta["uid"]] = {"name": f"{meta['namespace']}/{meta['name']}", "count": count}
+    twice = sorted({w["name"] for w in work.values() if not expected and step in w["restart_steps"]
+                    and prev is not None and prev in w["restart_steps"]})
+    # a workload with no pod in this poll keeps its record (between its pods, scaled to none for a while)
+    for key, w in old_work.items():
+        work.setdefault(key, w)
     with open(path + ".new", "w") as f:
-        json.dump({"steps": steps, "pods": now}, f)
+        json.dump({"steps": steps, "pods": now, "workloads": work}, f)
     os.replace(path + ".new", path)
-    return sorted(twice), prev
+    return twice, prev
 
 
 def restarted(before, now):
