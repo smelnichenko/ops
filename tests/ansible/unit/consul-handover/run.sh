@@ -115,9 +115,11 @@ blk = blk[0]
 start = next((t for t in tasks(blk.get("always")) if timer(t, "started")), None)
 check("the backup's timer stopped before the lock is read, started again in the block's always where it ran",
       (stop is not None and at(stop) < at(lock), start is not None,
-       condition((start or {}).get("when", "false"), _tier0_timer={"stdout": "active"}),
-       condition((start or {}).get("when", "true"), _tier0_timer={"stdout": "inactive"})),
-      (True, True, True, False))
+       condition((start or {}).get("when", "false"), _tier0_timer={"status": {"ActiveState": "active"}}),
+       condition((start or {}).get("when", "true"), _tier0_timer={"status": {"ActiveState": "inactive"}}),
+       condition((start or {}).get("when", "true"), _tier0_timer={}),
+       condition((stop or {}).get("when", "false"), _tier0_timer={"status": {"ActiveState": "active"}})),
+      (True, True, True, False, False, True))
 # its condition as Ansible evaluates it: a Pi whose Vault is active - not the third server, not a Pi whose Vault is
 # stopped, failed or not installed (a restart on the active Pi without a step-down: its Vault lost its storage agent)
 pis = {"pis": ["pi1", "pi2"]}

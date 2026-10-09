@@ -478,17 +478,17 @@
             # its timer stopped here first: a backup it started between the lock's read and the restart took the lock
             # through this server's agent, and the restart ended it (started again in always, where it ran)
             - name: The tier-0 backup's timer here, before its lock is read
-              ansible.builtin.command: systemctl is-active pi-tier0-backup.timer
+              ansible.builtin.systemd_service:
+                name: pi-tier0-backup.timer
               register: _tier0_timer
-              changed_when: false
-              failed_when: false
+              failed_when: false  # a host without the timer: nothing to stop
               check_mode: false  # a read
 
             - name: The tier-0 backup's timer stopped for the restart
               ansible.builtin.systemd_service:
                 name: pi-tier0-backup.timer
                 state: stopped
-              when: _tier0_timer.stdout == 'active'
+              when: _tier0_timer.status.ActiveState | default('') == 'active'
 
             # the Pis' tier-0 backup (02:40 UTC, setup-pi-backups.yml) runs under a Consul lock: a restart of a server
             # ends its session, the lock, and the backup with it - read right before the restart (its timer may start the
@@ -539,7 +539,7 @@
               ansible.builtin.systemd_service:
                 name: pi-tier0-backup.timer
                 state: started
-              when: _tier0_timer.stdout | default('') == 'active'
+              when: (_tier0_timer.status | default({})).ActiveState | default('') == 'active'
 
             # only what this run paused
             - name: Patroni resumed
