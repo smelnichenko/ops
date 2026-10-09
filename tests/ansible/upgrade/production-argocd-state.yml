@@ -1,0 +1,44 @@
+---
+# Argo CD as production's until the first step that runs setup-argocd.yml on ten (31): the copy's build installs
+# today's, and two things in it production has not had since 2026-10-01 (read on ten 2026-10-09) - the Application
+# health check in argocd-cm (the root then waits for each sync wave's apps Healthy) and the root's sync retries. With
+# them steps 01-30 were proven with waves production does not wait on: at steps 15, 18 and 21 the Scylla operator was
+# Healthy on its new version before its Manager moved, while on ten both sync together. Taken away right after the
+# build's setup-argocd.yml, for a run from before that step; its own run on the copy puts them back, as on ten.
+#
+# Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml
+#        [-e upgrade_from=<the run's start>]  (test:upgrade:argo)
+- name: Argo CD as production's until setup-argocd.yml runs on ten
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Vagrant VMs only (fails closed on any other host)
+      ansible.builtin.import_tasks: ../vagrant-only.yml
+
+    - name: Production's only before 31 (a run from it or later - production has today's then)
+      ansible.builtin.meta: end_play
+      when: (upgrade_from | default('00-gluster-boot')) > '31-argocd'
+
+    - name: argocd-cm without the Application health check (production's)
+      kubernetes.core.k8s_json_patch:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: ConfigMap
+        namespace: argocd
+        name: argocd-cm
+        patch:
+          - op: remove
+            path: /data/resource.customizations.health.argoproj.io_Application
+
+    - name: The root Application without its sync retries (production's)
+      kubernetes.core.k8s_json_patch:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: argoproj.io/v1alpha1
+        kind: Application
+        namespace: argocd
+        name: root
+        patch:
+          - op: remove
+            path: /spec/syncPolicy/retry

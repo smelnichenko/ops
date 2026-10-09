@@ -464,6 +464,8 @@ tasks:
       # Before Argo: istiod fetches the realm's keys when it starts
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
+      # Argo CD as production's until step 31 runs setup-argocd on ten (no Application health check, no root retries)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
       # the Applications' names recorded: every step's waits want exactly these. The deciding settle's quiet (120 s,
       # 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up, and each restart began 300 s
       # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by the restart history once two
