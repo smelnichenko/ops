@@ -139,10 +139,15 @@ check("A07 control: begin as the done steps leave production: recorded", begin_c
 check("A07 begin, the inventory differing: refused, nothing recorded", begin_calls(False, True), ["refused"])
 check("A07 begin, Argo not settled: refused, nothing recorded", begin_calls(True, False), ["refused"])
 # A08: check() red on an inventory difference alone
-s = patched(read_ledger=lambda: (None, []), inventory_check=lambda *a: False, settled=lambda *a, **k: (True, {}, []),
-            ansible=lambda *a: True)
-check("A08 check: an inventory difference alone is red", m.check("01-argocd-root-retry"), False)
-restore(s)
+def check_with(inventory_ok):
+    s = patched(read_ledger=lambda: (None, []), inventory_check=lambda *a: inventory_ok,
+                settled=lambda *a, **k: (True, {}, []), ansible=lambda *a: True, running_digest_problems=lambda *a: [])
+    try:
+        return m.check("01-argocd-root-retry")
+    finally:
+        restore(s)
+check("A08 control: check with every part green is green", check_with(True), True)
+check("A08 check: an inventory difference alone is red", check_with(False), False)
 # A10: the step's app set reaches argo-settled as --expect-apps
 sent = []
 s = patched(main_revisions=lambda: dict.fromkeys(m.URLS.values(), "r"),
