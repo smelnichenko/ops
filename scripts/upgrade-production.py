@@ -562,6 +562,17 @@ def ops_unchanged_since(commit, paths):
     return changed + untracked
 
 
+def touched_since(started, paths):
+    """The tracked files under `paths` modified after `started` (TIME_FORMAT): an edit put back within a step leaves
+    the content as committed, not its time."""
+    try:
+        since = datetime.datetime.strptime(started, TIME_FORMAT).replace(tzinfo=datetime.timezone.utc).timestamp()
+    except ValueError:
+        sys.exit(f"REFUSED: run.json's run ({started!r}) is not its start time - the run proves nothing")
+    files = run(["git", "-C", OPS, "ls-files", "-z", "--", *paths], capture_output=True, check=True).stdout.split("\0")
+    return [f for f in files if f and os.path.getmtime(os.path.join(OPS, f)) > since]
+
+
 def proof_start(from_step=None):
     """The run's record (run.json): the ops commit, its start, every step branch, and the step it starts from - the
     first step production has not done (resume-from): its copy is built as the steps before it left production, and
@@ -703,6 +714,10 @@ def record_proof(step, infra_sha, platform_sha):
     changed = ops_unchanged_since(run_info["ops"], PROVEN_PATHS)
     if changed:
         sys.exit(f"REFUSED: the ops tree changed during the run ({', '.join(changed)}) - the run proves nothing")
+    touched = touched_since(run_info["run"], PROVEN_PATHS)
+    if touched:
+        sys.exit(f"REFUSED: proven files touched during the run ({', '.join(touched[:10])}) - an edit put back still "
+                 "ran in its steps; the run proves nothing")
     # every step branch as the run started: one rewritten meanwhile (a restack in the repos the run reads) mixed the
     # states its steps proved
     if "branches" not in run_info:

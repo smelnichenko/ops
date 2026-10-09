@@ -94,7 +94,7 @@ def record_ops(edit):
     json.dump({"ops": git(o, "rev-parse", "HEAD"), "run": "r", "branches": {}}, open(os.path.join(m.PROVEN, "run.json"), "w"))
     if edit:
         open(os.path.join(o, edit), "a").write("changed\n"); git(o, "commit", "-qam", "during")
-    s = patched(step_names=stop, branch_moves=lambda *a: [])
+    s = patched(step_names=stop, branch_moves=lambda *a: [], touched_since=lambda *a: [])
     try:
         return outcome(m.record_proof, "02-b", "a", "b")
     finally:
@@ -104,6 +104,35 @@ check("record_proof control: a change outside the proven paths goes on", record_
 for p in ("scripts/x.py", "Taskfile.yml"):
     got = record_ops(p)
     check(f"record_proof: {p} changed during the run - refused", "the ops tree changed during the run" in got, True)
+
+# record_proof: no proven file touched since the run started - an edit put back within a step leaves the content as
+# committed, its time does not
+def record_touch(touch):
+    t, o = repos()
+    started = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=30)
+    json.dump({"ops": git(o, "rev-parse", "HEAD"), "run": started.strftime(m.TIME_FORMAT), "branches": {}},
+              open(os.path.join(m.PROVEN, "run.json"), "w"))
+    old = (datetime.datetime.now() - datetime.timedelta(minutes=5)).timestamp()
+    for root, _, fs in os.walk(o):
+        for f in fs:
+            if ".git" not in root:
+                os.utime(os.path.join(root, f), (old, old))
+    if touch:
+        p = os.path.join(o, touch)
+        keep = open(p).read()
+        open(p, "w").write("edited\n")
+        open(p, "w").write(keep)
+    s = patched(step_names=stop, branch_moves=lambda *a: [])
+    try:
+        return outcome(m.record_proof, "02-b", "a", "b")
+    finally:
+        restore(s)
+import datetime
+check("record_proof control: nothing touched since the run started goes on", record_touch(None), "past it")
+check("record_proof control: a file outside the proven paths touched goes on", record_touch("docs/n.md"), "past it")
+got = record_touch("scripts/x.py")
+check("record_proof: a proven file edited and put back during the run - refused, named",
+      ("touched during the run" in got, "scripts/x.py" in got), (True, True))
 
 # record_proof: the step's branch as the step ran it
 def record_sha(moved):
@@ -115,7 +144,7 @@ def record_sha(moved):
         git(d, "checkout", "-q", "upgrade/02-b"); git(d, "commit", "-q", "--allow-empty", "-m", "moved")
     real = m.run
     written = []
-    s = patched(ops_unchanged_since=lambda *a: [], branch_moves=lambda *a: [], step_names=names,
+    s = patched(ops_unchanged_since=lambda *a: [], branch_moves=lambda *a: [], step_names=names, touched_since=lambda *a: [],
                 run=lambda cmd, **k: R(0, "upgrade/02-b upgrade/02-b") if cmd[0] == m.INVENTORY else real(cmd, **k),
                 step_digests=lambda *a: {}, step_images=lambda *a: [], floating_digests=lambda: {},
                 step_info=lambda st: {"branches": ["infra"]}, own_change=lambda *a: "own", pin_problems=lambda *a, **k: [],

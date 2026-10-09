@@ -1236,10 +1236,11 @@ check("a claim's token names its process group", m.claim_token().count(":") if h
 # the run then mixed states; a run.json from before that record refuses too
 import tempfile
 def proved(run_info, moved):
-    saved = {k: getattr(m, k) for k in ("PROVEN", "ops_unchanged_since", "branch_moves")}
+    saved = {k: getattr(m, k) for k in ("PROVEN", "ops_unchanged_since", "branch_moves", "touched_since")}
     m.PROVEN = tempfile.mkdtemp()
     json.dump(run_info, open(os.path.join(m.PROVEN, "run.json"), "w"))
     m.ops_unchanged_since = lambda *a: []
+    m.touched_since = lambda *a: []
     m.branch_moves = lambda recorded: list(moved)
     try:
         m.record_proof(S47, "i", "p")
@@ -1320,7 +1321,7 @@ def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256
             return _Out("upgrade/59-x upgrade/59-y")
         return _Out({"upgrade/59-x": "i59", "upgrade/59-y": "p59"}.get(cmd[-1], "z"))
     keep = ("PROVEN", "PIN_RESULT", "run", "ops_unchanged_since", "floating_digests", "own_change", "branch_moves",
-            "WORK")
+            "WORK", "touched_since")
     saved = {k: getattr(m, k) for k in keep}
     m.PROVEN, m.PIN_RESULT, m.run, m.WORK = work, os.path.join(work, "pin.json"), run, work
     if digests is not None:
@@ -1328,6 +1329,7 @@ def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256
         open(os.path.join(work, "step-digests", S59 + ".txt"), "w").write(digests)
     m.ops_unchanged_since, m.floating_digests, m.own_change = (lambda *a: []), (lambda: {}), (lambda *a: "own")
     m.branch_moves = lambda recorded: []
+    m.touched_since = lambda *a: []
     try:
         m.record_proof(S59, "i59", "p59")
         if not os.path.exists(os.path.join(work, S59 + ".json")):
