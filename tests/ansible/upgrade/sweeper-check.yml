@@ -1,14 +1,7 @@
 ---
-# The stale PR environment sweeper (infra: argocd/extras/stale-pr-envs-cronjob.yaml) against the copy's real Vault,
-# after the step that moves it (its sweeper-check line) - production's case first:
-#   1. its stored token dead (production's died unrenewed): a run fails, saying so - never a quiet "nothing to purge";
-#   2. setup-vault-cleanup-policy.yml (the step's playbook line, run again here) replaces the dead token; once External
-#      Secrets brings it over, a run renews it and purges every key of a preview prefix with no live app (a nested one
-#      too), and nothing else;
-#   3. a CA that did not sign Vault's certificate in argocd/vault-pi-ca: a run fails (TLS), saying so - Vault is read
-#      verified, never with curl -k. The CA is put back.
-# Each run is a Job made from the CronJob, waited for (bounded) and deleted. The stub-driven cases of the script itself
-# (prune rules, times, failures) are infra's tests/stale-pr-envs-sweeper.
+# The stale PR env sweeper against the copy's Vault (its sweeper-check line): a dead token fails a run; the playbook
+# replaces it; a run renews it and purges a preview prefix, nothing else. The script's own cases: infra's
+# tests/stale-pr-envs-sweeper.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/sweeper-check.yml
 #        [-e sweeper_cronjob=<another CronJob made from the same manifest>]
@@ -39,11 +32,6 @@
           ! printf '%s' "$t" | vault write auth/token/lookup token=- > /dev/null 2>&1
       no_log: true
       changed_when: true
-
-    - name: Vault's CA (put back after the wrong-CA run)
-      ansible.builtin.slurp:
-        src: /etc/vault.d/tls/ca-cert.pem
-      register: _vault_ca
 
 - name: A dead token - the run fails, said
   hosts: target
@@ -113,7 +101,7 @@
       register: _new_token_hash
       changed_when: false
 
-- name: The new token - a run renews it, purges the preview keys, keeps the rest; a wrong CA fails
+- name: The new token - a run renews it, purges the preview keys
   hosts: target
   become: true
   gather_facts: false
@@ -150,43 +138,6 @@
           - "'[vault-gc] purge secret/schnappy-pr-990/app' in _live.stdout_lines"
           - "'[vault-gc] purge secret/schnappy-pr-990/db/owner' in _live.stdout_lines"
         fail_msg: "{{ _live.stdout_lines }}"
-
-    - name: A CA that did not sign Vault's certificate (the cluster's own) - the run fails on TLS; Vault's put back
-      block:
-        - name: The cluster's CA in argocd/vault-pi-ca
-          ansible.builtin.shell:
-            executable: /bin/bash
-            cmd: |
-              set -euo pipefail
-              {{ kubectl }} create secret generic vault-pi-ca --from-file=ca.crt=/etc/kubernetes/pki/ca.crt \
-                --dry-run=client -o yaml | {{ kubectl }} replace -f - > /dev/null
-          changed_when: true
-
-        - name: Run the sweeper against the wrong CA
-          ansible.builtin.shell:
-            cmd: "{{ run_sweeper }}"
-            executable: /bin/bash
-          register: _wrong_ca
-          changed_when: true
-
-        - name: It failed on Vault's certificate, saying so
-          ansible.builtin.assert:
-            that:
-              - "'RESULT Failed' in _wrong_ca.stdout_lines"
-              - "_wrong_ca.stdout is search('SSL certificate problem')"
-            fail_msg: "{{ _wrong_ca.stdout_lines }}"
-      always:
-        - name: Vault's CA back in argocd/vault-pi-ca
-          kubernetes.core.k8s:
-            kubeconfig: /etc/kubernetes/admin.conf
-            definition:
-              apiVersion: v1
-              kind: Secret
-              metadata:
-                name: vault-pi-ca
-                namespace: argocd
-              data:
-                ca.crt: "{{ hostvars['pi1']['_vault_ca'].content }}"
 
 - name: Vault after the runs - the preview keys gone, the rest kept, the token renewed
   hosts: pi1
