@@ -184,24 +184,43 @@
   ansible.builtin.set_fact:
     _vgw_restart: "{{ _vgw_unit is changed or _vgw_env is changed or _vgw_running_exe.stdout != '/usr/bin/versitygw' }}"
 
+# the Pi holding the VIP restarts last: its gateway's restart then moves the VIP once, to a gateway restarted already
+- name: Whether this Pi holds the VIP
+  ansible.builtin.command: ip -o addr show to {{ keepalived_vip }}/32
+  register: _vgw_vip
+  changed_when: false
+  check_mode: false
+
+- name: Facts - the VIP here or not
+  ansible.builtin.set_fact:
+    _vgw_vip_here: "{{ _vgw_vip.stdout | length > 0 }}"
+
 # one Pi at a time, each serving again before the next: both gateways down at once is the backup store down. A failed
 # item does not stop the loop, so each restart first refuses to take down the last serving gateway: only while the
-# other Pi's serves, or this one's does not
-- name: Restart versitygw where needed - one Pi at a time, each healthy before the next  # noqa: command-instead-of-module
+# other Pi's serves, or this one's does not. Serving again is its S3 API answering (a bucket listing with the gateway
+# root key): /health answers before it does
+- name: Restart versitygw where needed - one Pi at a time, each serving S3 before the next  # noqa: command-instead-of-module
   ansible.builtin.shell: |
     set -euo pipefail
     up() { curl -fsS -o /dev/null --max-time 10 "http://$1:{{ vgw_port }}/health"; }
+    s3() (
+      set -a; . /etc/versitygw/env; set +a
+      home=$(mktemp -d); trap 'rm -rf "$home"' EXIT
+      HOME=$home RCLONE_CONFIG="" RCLONE_CONFIG_VGW_TYPE=s3 RCLONE_CONFIG_VGW_PROVIDER=Other \
+        RCLONE_CONFIG_VGW_ENDPOINT=http://localhost:{{ vgw_port }} RCLONE_CONFIG_VGW_ACCESS_KEY_ID="$ROOT_ACCESS_KEY" \
+        RCLONE_CONFIG_VGW_SECRET_ACCESS_KEY="$ROOT_SECRET_KEY" rclone lsd vgw: > /dev/null 2>&1
+    )
     if up localhost && ! up {{ _peer }}; then
       echo "REFUSED on {{ item }}: versitygw serves here but not on the other Pi ({{ _peer }})" >&2; exit 1
     fi
     systemctl restart versitygw
     for _ in $(seq 30); do
-      if curl -fsS -o /dev/null --max-time 10 http://localhost:{{ vgw_port }}/health; then
+      if up localhost && s3; then
         exit 0
       fi
       sleep 2
     done
-    echo "versitygw on {{ item }} not healthy 60 s after its restart" >&2
+    echo "versitygw on {{ item }} not serving S3 60 s after its restart" >&2
     exit 1
   args:
     executable: /bin/bash
@@ -210,7 +229,7 @@
   delegate_to: "{{ item }}"
   loop: >-
     {{ ansible_play_hosts | map('extract', hostvars) | selectattr('_vgw_restart', 'defined') | selectattr('_vgw_restart')
-       | map(attribute='inventory_hostname') | list }}
+       | sort(attribute='_vgw_vip_here') | map(attribute='inventory_hostname') | list }}
   run_once: true
   changed_when: true
 
