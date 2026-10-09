@@ -10,7 +10,8 @@
 # this step in the full run). A failed apply is not rolled back: kubeadm returns a component only when that
 # component's own restart fails, so the ones it upgraded stay upgraded and the node is half-applied (full run
 # 2026-10-06 08:10: etcd's new manifest running, the rest still the old version) - deploy:upgrade:playbooks run
-# again finishes it
+# again finishes it (its ledger is read through ten's API; API down: scripts/upgrade-step-playbooks.sh --production
+# 43-kubernetes-1.36, then deploy:upgrade:playbooks once it answers)
 # Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
 # one-way: etcd's snapshot backed up into the Pi store before the step changes anything (production's hourly copies
 # keep 7 days)

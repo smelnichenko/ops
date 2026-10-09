@@ -1205,8 +1205,12 @@ def abort(step):
     for repo in info["branches"]:
         d = os.path.join(OPS, "..", repo)
         if merged_base(d, step) is not None:
-            run(["git", "-C", d, "tag", "-m", f"aborted {stamp}", f"upgrade-aborted/{step}-{stamp}",
-                 MERGED_TAG + step], check=True)
+            aside = f"upgrade-aborted/{step}-{stamp}"
+            run(["git", "-C", d, "tag", "-m", f"aborted {stamp}", aside, MERGED_TAG + step], check=True)
+            # on origin too (merge-step pushes the merged tag, every fetch of main brings it): left there, the next
+            # fetch put it back and the re-merge was refused as merged before
+            run(["git", "-C", d, "push", "-q", "origin", f"refs/tags/{aside}", f":refs/tags/{MERGED_TAG}{step}"],
+                check=True)
             run(["git", "-C", d, "tag", "-d", MERGED_TAG + step], check=True, capture_output=True)
     record(step, "aborted")
 

@@ -25,6 +25,7 @@ base=$(g rev-parse main)
 g checkout -q -b upgrade/01-a; printf 'a: 2\n' > "$W/infra/a.yaml"; g commit -q -am 01-a; g checkout -q main
 # merged as scripts/upgrade-merge-step.sh merges: fast-forward, pushed, tagged with the main it went onto
 g merge -q --ff-only upgrade/01-a; g push -q origin main; g tag -m "base $base" upgrade-merged/01-a upgrade/01-a
+g push -q origin refs/tags/upgrade-merged/01-a
 PYTHONDONTWRITEBYTECODE=1 python3 - "$o" "$W/infra" <<'PY'
 import contextlib, datetime, importlib.machinery, importlib.util, io, os, subprocess, sys
 o, infra = sys.argv[1:]
@@ -95,6 +96,12 @@ check("abort after the revert: asked, recorded aborted", (r, len(asked), recorde
 check("  its merged tag set aside", (g("tag", "-l", "upgrade-merged/01-a"),
                                      g("tag", "-l", "upgrade-aborted/01-a-*").startswith("upgrade-aborted/01-a-")),
       ("", True))
+origin_tags = subprocess.run(["git", "-C", os.path.join(os.path.dirname(infra), "origin.git"), "tag", "-l"],
+                             capture_output=True, text=True).stdout.split()
+check("  on origin too: the merged tag gone, the aborted one there",
+      ("upgrade-merged/01-a" in origin_tags, any(t.startswith("upgrade-aborted/01-a-") for t in origin_tags)), (False, True))
+m.fetch_main(infra)
+check("  a fetch of main brings no merged tag back (it would refuse the re-merge)", g("tag", "-l", "upgrade-merged/01-a"), "")
 current = getattr(m, "current", None)
 after = events + [(at(5), "01-a", "aborted", []), (at(6), "01-a", "end", ["abort", "passed", "t"])]
 names = m.step_names()
