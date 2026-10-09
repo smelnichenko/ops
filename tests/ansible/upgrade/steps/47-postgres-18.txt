@@ -5,7 +5,10 @@
 # (infra), then the chart default follows (platform), both upgrade/47-postgres-18. Stateful, with downtime: shown to the
 # operator before production; a fresh base backup follows it there (the old major's WAL archive cannot restore 18).
 # outage: Postgres down for pg_upgrade (minutes) - every app's writes fail; the replica re-cloned after
-# abort: the step's restore-undo: PostgreSQL 17's latest backup recovered under the old server name (recovered into a
+# abort: the upgrade Job failed (the cluster still on 17, its status says so; platform not merged yet): revert the
+# step's infra merge on main (Argo syncs back) - CNPG deletes the Job and starts 17 on its data, which the upgrade never
+# changed (pg_upgrade --link into new directories, swapped in only on success; CNPG's documented rollback). Once it ran
+# on 18: the step's restore-undo: PostgreSQL 17's latest backup recovered under the old server name (recovered into a
 # side cluster in the full run; replacing production's cluster with it - its volumes deleted, writes since lost - is
 # neither written down nor rehearsed), or the Wave 0 dump
 # one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
@@ -27,5 +30,6 @@ branch platform
 # its undo, rehearsed after it: PostgreSQL 17's latest backup (under the old server name) recovered with the image
 # production runs now (its :17 is this digest, read from its pods 2026-10-06)
 restore-undo schnappy-production-postgres ghcr.io/cloudnative-pg/postgresql:17@sha256:b1885e2c8224bab6d75ce5fb7dfad339b4acf8976158d2dd561ab7458dee4f2b
-# then fresh planner statistics on every database (pg_upgrade carries none over; CNPG's major-upgrade notes)
+# then fresh planner statistics on every database (pg_upgrade carries most over, not the extended or cumulative ones;
+# PostgreSQL 18's pg_upgrade docs)
 playbook postgres-analyze.yml -e pg_major=18

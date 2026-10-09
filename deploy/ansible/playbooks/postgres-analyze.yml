@@ -1,9 +1,11 @@
 ---
-# After a PostgreSQL major upgrade: fresh planner statistics on every database (vacuumdb --all --analyze-in-stages, on
-# the primary) of every CNPG cluster, or of those in -e pg_namespaces (each environment's step). pg_upgrade carries no
-# statistics over, so until ANALYZE has run the planner guesses on every table - CloudNativePG's major-upgrade notes ask
-# for this. Waits first until each cluster is healthy with every instance on the major asked for; read-mostly (ANALYZE
-# writes statistics only).
+# After a PostgreSQL major upgrade: fresh planner statistics on every database, on the primary of every CNPG cluster, or
+# of those in -e pg_namespaces (each environment's step). From 18 on pg_upgrade carries most statistics over, but not
+# the extended ones (CREATE STATISTICS) nor the cumulative ones that trigger autovacuum; PostgreSQL 18's pg_upgrade docs
+# then ask for `vacuumdb --all --analyze-in-stages --missing-stats-only` (minimal statistics where there are none,
+# fast) and `vacuumdb --all --analyze-only` (every relation analysed), in that order. A major below 18 is refused: its
+# vacuumdb has no --missing-stats-only. Waits first until each cluster is healthy with every instance on the major
+# asked for; read-mostly (ANALYZE writes statistics only).
 #
 # With -e pg_namespaces=<ns>[,<ns>] only the clusters in those namespaces - the test environment's step, before
 # production's. None of them having a cluster fails, unless the inventory sets postgres_analyze_allow_none (the Vagrant
@@ -19,10 +21,10 @@
     kubeconfig: /etc/kubernetes/admin.conf
     kubectl: "kubectl --kubeconfig {{ kubeconfig }}"
   tasks:
-    - name: The major is given (-e pg_major=18)
+    - name: The major is given (-e pg_major=18), 18 or later
       ansible.builtin.assert:
-        that: pg_major | default('') | string is match('^[0-9]+$')
-        fail_msg: "-e pg_major=<major>, e.g. 18"
+        that: pg_major | default('') | string is match('^[0-9]+$') and pg_major | int >= 18
+        fail_msg: "-e pg_major=<major>, 18 or later (before 18 vacuumdb has no --missing-stats-only), e.g. 18"
 
     - name: The CNPG clusters (in the namespaces given, if any)
       check_mode: false
@@ -67,14 +69,14 @@
         _pg.rc == 0 and _pg.stdout_lines | length == 2 and _pg.stdout_lines[0].startswith('True ')
         and (_pg.stdout_lines[1] | int) // 10000 == pg_major | int
 
-    - name: Every database of each cluster analysed in stages
+    - name: Every database of each cluster - the missing statistics in stages, then every relation analysed
       ansible.builtin.command: >-
-        {{ kubectl }} -n {{ r.item.split()[0] }} exec {{ r.stdout_lines[0].split()[1] }} -c postgres --
-        vacuumdb --all --analyze-in-stages
-      loop: "{{ _pg.results }}"
+        {{ kubectl }} -n {{ r[0].item.split()[0] }} exec {{ r[0].stdout_lines[0].split()[1] }} -c postgres --
+        vacuumdb --all {{ r[1] }}
+      loop: "{{ _pg.results | product(['--analyze-in-stages --missing-stats-only', '--analyze-only']) | list }}"
       loop_control:
         loop_var: r
-        label: "{{ r.item }}"
+        label: "{{ r[0].item }}: {{ r[1] }}"
       register: _analyze
       changed_when: true
 

@@ -7,11 +7,14 @@
 # environment: shown before it runs.
 # its change: the branch upgrade/46-postgres-18-test in infra and platform
 # outage: the test environment only: its Postgres down for pg_upgrade (minutes)
-# abort: the test cluster's Wave 0 dump (the postgres store dumps every CNPG primary, this step's wave0 line)
-# restored into a PostgreSQL 17 cluster - the test cluster has no base backups
+# abort: the upgrade Job failed (the test cluster still on 17, its status says so): revert the step's merges on main
+# (Argo syncs back) - CNPG deletes the Job and starts 17 on its data, which the upgrade never changed (pg_upgrade --link
+# into new directories, swapped in only on success; CNPG's documented rollback). Once it ran on 18: the test cluster's
+# Wave 0 dump (the postgres store dumps every CNPG primary, this step's wave0 line) restored into a PostgreSQL 17
+# cluster - the test cluster has no base backups
 # one-way: every CNPG primary's dump and base backup, SonarQube's dump backed up into the Pi store before the step changes anything
 wave0 postgres
 branch infra
 branch platform
-# then fresh planner statistics in the test cluster (pg_upgrade carries none over)
+# then fresh planner statistics in the test cluster (pg_upgrade carries most over, not the extended or cumulative ones)
 playbook postgres-analyze.yml -e pg_major=18 -e pg_namespaces=schnappy-test
