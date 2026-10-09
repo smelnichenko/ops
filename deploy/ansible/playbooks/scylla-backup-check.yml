@@ -1,0 +1,91 @@
+---
+# Scylla Manager still backs up after a step that moves it, ScyllaDB or the agents (the step's scylla-backup-check
+# line): no backup or repair task whose last run failed (ERROR or ABORTED), and each production cluster's own backup
+# task, started now, ends DONE with a snapshot this run took - its tag no older than the node's clock at the start (the
+# clock the snapshots are named by; right after the start `sctool progress` may still show the last run, DONE). The
+# test environment's cluster has no backup task (no store credentials): skipped by name; any other cluster without one
+# fails. A preview reads the tasks only - a backup run writes to the store.
+#
+# Why: every pod can be green while Scylla Manager cannot reach an agent or the store, and nothing after such a step
+# ran a backup (its wave0 backup runs before it); Scylla Manager's own metrics are scraped from step 18 on.
+#
+# Usage: task deploy:upgrade:done STEP=<its step>   (its first check runs it, asked first)
+#        ansible-playbook -i inventory/<env>.yml playbooks/scylla-backup-check.yml
+- name: Scylla Manager backs up
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    kubeconfig: /etc/kubernetes/admin.conf
+    manager: "kubectl --kubeconfig {{ kubeconfig }} -n scylla-manager exec deploy/scylla-manager -c scylla-manager --"
+  tasks:
+    # "<cluster id> <cluster name> <backup task>" per production cluster on stdout; what is refused on stderr
+    - name: Each cluster's backup task - and no backup or repair task whose last run failed
+      check_mode: false
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          M="{{ manager }}"
+          clusters=$($M sctool cluster list \
+            | awk -F'|' '$2 ~ /[0-9a-f]{8}-/ {gsub(/ /, "", $2); gsub(/ /, "", $3); print $2, $3}')
+          [ -n "$clusters" ] || { echo "no cluster in Scylla Manager" >&2; exit 1; }
+          bad=0
+          while read -r c name; do
+            tasks=$($M sctool tasks -c "$c")
+            # | Task | Labels | Schedule | Window | Timezone | Success | Error | Last Success | Last Error | Status | Next |
+            failed=$(awk -F'|' '$2 ~ /^ *(backup|repair)\// && $11 ~ /ERROR|ABORTED/ {gsub(/ /, "", $2); print $2}' \
+              <<< "$tasks")
+            [ -z "$failed" ] || { echo "$name: the last run of $failed failed" >&2; bad=1; }
+            t=$(awk -F'|' '$2 ~ /^ *backup\// && t == "" {t = $2; gsub(/ /, "", t)} END {print t}' <<< "$tasks")
+            if [ -z "$t" ]; then
+              case "$name" in
+                schnappy-test/*) echo "SKIPPED $name: the test environment - no backup task" >&2;;
+                *) echo "$name has no backup task" >&2; bad=1;;
+              esac
+              continue
+            fi
+            echo "$c $name $t"
+          done <<< "$clusters"
+          exit $bad
+      register: _tasks
+      changed_when: false
+      failed_when: _tasks.rc != 0 or _tasks.stdout_lines | length == 0
+
+    - name: The node's clock, before the backups
+      ansible.builtin.command: date -u +%Y%m%d%H%M%S
+      register: _t0
+      changed_when: false
+      check_mode: false
+
+    - name: Each production cluster's backup task started now
+      ansible.builtin.command: "{{ manager }} sctool start -c {{ item.split()[0] }} {{ item.split()[2] }}"
+      loop: "{{ _tasks.stdout_lines }}"
+      changed_when: true
+
+    - name: Each backup DONE, with a snapshot this run took
+      ansible.builtin.command: "{{ manager }} sctool progress -c {{ item.split()[0] }} {{ item.split()[2] }}"
+      loop: "{{ _tasks.stdout_lines }}"
+      register: _progress
+      changed_when: false
+      retries: 90
+      delay: 20
+      until: >-
+        _progress.stdout is search('Status:\s+(ERROR|ABORTED)')
+        or (_progress.stdout is search('Status:\s+DONE')
+            and (_progress.stdout | regex_findall('sm_[0-9]{14}UTC') | first | default('sm_00000000000000UTC'))[3:17]
+                >= _t0.stdout)
+      failed_when: >-
+        _progress.stdout is not search('Status:\s+DONE')
+        or (_progress.stdout | regex_findall('sm_[0-9]{14}UTC') | first | default('sm_00000000000000UTC'))[3:17]
+           < _t0.stdout
+      when: not ansible_check_mode
+
+    - name: Backed up
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'PREVIEW: would back up' if ansible_check_mode else 'SCYLLA MANAGER BACKED UP:' }}
+          {% for r in (_progress.results | default([])) if r.stdout is defined %}{{ r.item.split()[1] }}
+          {{ r.stdout | regex_findall('sm_[0-9]{14}UTC') | first }}{{ '; ' if not loop.last }}{% endfor %}
+          {{ _tasks.stdout_lines | map('split') | map(attribute=1) | join(', ') if ansible_check_mode else '' }}
+          {{ _tasks.stderr_lines | select('match', 'SKIPPED') | join('; ') }}

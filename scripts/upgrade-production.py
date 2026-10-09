@@ -158,6 +158,7 @@ def step_info(name):
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
             "base_backup": "barman-check" in flags, "base_backup_after_merge": "barman-after-merge" in flags,
+            "scylla_backup": "scylla-backup-check" in flags,
             "restarts_expected": "restarts-control-plane" in flags,
             "tempo_flush": tempo_flush}
 
@@ -1447,11 +1448,13 @@ def done(step):
     if checked is not None and left > 0:
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
-    # the first check of a cert-renew or barman-check step changes production: the operator's yes first (a base backup
-    # its merge took already is not taken again)
+    # the first check of a cert-renew, barman-check or scylla-backup-check step changes production: the operator's yes
+    # first (a base backup its merge took already is not taken again, nor a Scylla backup the step ran already)
     base_backup = info["base_backup"] and not any(s == step and e == "base-backup" for _, s, e, _ in events)
+    scylla_backup = info["scylla_backup"] and not any(s == step and e == "scylla-backup" for _, s, e, _ in events)
     changes = (["a throwaway certificate through production's ACME solver (acme-check.yml)"] if info["acme"] else []) \
-        + (["a Postgres base backup (postgres-base-backup.yml)"] if base_backup else [])
+        + (["a Postgres base backup (postgres-base-backup.yml)"] if base_backup else []) \
+        + (["a Scylla Manager backup of each production cluster (scylla-backup-check.yml)"] if scylla_backup else [])
     if checked is None and changes:
         refuse([] if confirm(f"Step {step}'s first check changes PRODUCTION: {'; '.join(changes)} - run it?")
                else ["not confirmed - nothing run, nothing recorded"])
@@ -1462,6 +1465,10 @@ def done(step):
                else ["no fresh Postgres base backup (above)"])
         # recorded: a red check later starts the soak again, and its next first call does not take another
         record(step, "base-backup")
+    if checked is None and scylla_backup:
+        refuse([] if ansible("playbooks/scylla-backup-check.yml")
+               else ["Scylla Manager did not back up (above) - its abort line, or fix and run done again"])
+        record(step, "scylla-backup")
     # where the restarts are judged from, read before the first check by ten's clock (the restarts' times are its):
     # this machine's, after the check, let a restart as the check ran, or within the clocks' skew, slip past the
     # deciding check

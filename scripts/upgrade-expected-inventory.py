@@ -12,6 +12,9 @@ A step is a file tests/ansible/upgrade/steps/NN-<name>.txt listing its inventory
                                                sync off while the step changes what its chart would put back)
     backup-check                              (the step changes Velero or its store: the runner takes a Velero backup
                                                after it - production's schedule, every pod volume; ~8 min)
+    scylla-backup-check                       (the step changes Scylla Manager, ScyllaDB or the agents: the runner
+                                               runs each production cluster's backup task after it, DONE with a fresh
+                                               snapshot, and refuses a failed backup or repair task)
     barman-check                              (the step changes CNPG or Postgres: the runner checks WAL archiving and
                                                takes a CNPG barman base backup of Postgres after it)
     barman-after-merge                        (with barman-check: that base backup as soon as the step's merges settled,
@@ -79,6 +82,7 @@ Usage: scripts/upgrade-expected-inventory.py <step, e.g. 20-apt-cacher-ng>      
        scripts/upgrade-expected-inventory.py --playbooks <step>           (prints "<playbook> <arguments>" lines)
        scripts/upgrade-expected-inventory.py --out-of-sync <step>                   (prints "<app>,<app>" or nothing)
        scripts/upgrade-expected-inventory.py --backup-check <step>                  (prints "yes" or "no")
+       scripts/upgrade-expected-inventory.py --scylla-backup-check <step>           (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --barman-check <step>                  (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --barman-after-merge <step>            (prints "yes" or "no")
        scripts/upgrade-expected-inventory.py --restore-check <step>                 (prints "yes" or "no")
@@ -118,8 +122,8 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         if line.startswith("playbook "):
             if playbooks is not None:
                 playbooks.append(line[len("playbook "):].strip())
-        elif line in ("backup-check", "barman-check", "barman-after-merge", "restore-check", "cert-renew",
-                      "restarts-control-plane"):
+        elif line in ("backup-check", "scylla-backup-check", "barman-check", "barman-after-merge", "restore-check",
+                      "cert-renew", "restarts-control-plane"):
             seen.add(line)
             if flags is not None:
                 flags.add(line)
@@ -265,6 +269,7 @@ def pg_major(step):
 def main():
     args = sys.argv[1:]
     mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
+                                   ["--scylla-backup-check"],
                                    ["--barman-check"], ["--barman-after-merge"], ["--restore-check"], ["--cert-renew"],
                                    ["--restarts-control-plane"], ["--tempo-flush"],
                                    ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
@@ -286,8 +291,8 @@ def main():
         if playbooks:
             print("\n".join(playbooks))
         return
-    if mode in ("--backup-check", "--barman-check", "--barman-after-merge", "--restore-check", "--cert-renew",
-                "--restarts-control-plane"):
+    if mode in ("--backup-check", "--scylla-backup-check", "--barman-check", "--barman-after-merge",
+                "--restore-check", "--cert-renew", "--restarts-control-plane"):
         flags = set()
         parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
         print("yes" if mode[2:] in flags else "no")

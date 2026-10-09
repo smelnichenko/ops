@@ -9,5 +9,8 @@
 wave0 scylla
 image docker.io/scylladb/scylla 2025.1.16 => image docker.io/scylladb/scylla 2026.1.14
 image scylladb/scylla 6.2 => image scylladb/scylla 2026.1.14
+# A Scylla Manager backup of each production cluster after it (DONE, a fresh snapshot), and no failed backup or repair
+# task: Manager, its agents or ScyllaDB moved - every pod can be green while Manager cannot back up.
+scylla-backup-check
 # its change: the branch upgrade/20-scylladb-2026.1 in infra
 branch infra

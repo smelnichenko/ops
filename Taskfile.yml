@@ -496,6 +496,8 @@ tasks:
         sh: scripts/upgrade-expected-inventory.py --out-of-sync {{.STEP}}
       BACKUP_CHECK:
         sh: scripts/upgrade-expected-inventory.py --backup-check {{.STEP}}
+      SCYLLA_BACKUP_CHECK:
+        sh: scripts/upgrade-expected-inventory.py --scylla-backup-check {{.STEP}}
       BARMAN_CHECK:
         sh: scripts/upgrade-expected-inventory.py --barman-check {{.STEP}}
       # the PostgreSQL major the step moves to (its base backup taken on it), empty for none
@@ -657,6 +659,15 @@ tasks:
             cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/backup-check.yml
           else
             echo "BACKUP CHECK: not after this step (no backup-check line)"
+          fi
+      # a Scylla Manager backup of each production cluster, DONE with a fresh snapshot, no failed backup or repair
+      # task - only after a step that changes Scylla Manager, ScyllaDB or the agents (its scylla-backup-check line):
+      # the playbook production's done runs
+      - cmd: |
+          if [ "{{.SCYLLA_BACKUP_CHECK}}" = yes ]; then
+            cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/scylla-backup-check.yml
+          else
+            echo "SCYLLA BACKUP CHECK: not after this step (no scylla-backup-check line)"
           fi
       # the inventory last, after every check of the step (a check's leftovers show in its own step)
       - cmd: scripts/vagrant-inventory.sh

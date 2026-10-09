@@ -7,5 +7,8 @@
 # one-way: ScyllaDB (Scylla Manager's snapshot) backed up into the Pi store before the step changes anything
 wave0 scylla
 image docker.io/scylladb/scylla 6.2.3 => image docker.io/scylladb/scylla 2025.1.16
+# A Scylla Manager backup of each production cluster after it (DONE, a fresh snapshot), and no failed backup or repair
+# task: Manager, its agents or ScyllaDB moved - every pod can be green while Manager cannot back up.
+scylla-backup-check
 # its change: the branch upgrade/17-scylladb-2025.1 in infra
 branch infra
