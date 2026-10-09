@@ -51,7 +51,7 @@ if keep is not None:
           (r.returncode, calls, os.listdir(os.path.join(W, "keep"))),
           (0, ["apt-get download containerd=1.7.24~ds1-6+deb13u1"], ["containerd_1.7.24~ds1-6+deb13u1_amd64.deb"]))
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=env)
-    calls = open(os.path.join(W, "calls")).read().splitlines()
+    calls = open(os.path.join(W, "calls")).read().splitlines() if os.path.exists(os.path.join(W, "calls")) else []
     check("a re-run keeps it, downloads nothing", (r.returncode, len(calls), "kept already" in r.stdout), (0, 1, True))
 print("containerd-deb-kept: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
