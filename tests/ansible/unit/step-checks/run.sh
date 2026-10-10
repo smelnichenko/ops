@@ -105,9 +105,10 @@ check "the bound by default above every check's own (the longest: $budget s)" \
   above
 
 # the script stopped (a TERM, as an interrupted full run sends): the checks still running stopped with it - the storage
-# check runs on here until then; the script is this test's own child, checked so before it is signalled
-LONG="$T/long.pid" PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy < /dev/null \
-  > "$T/term.out" 2>&1 &
+# check runs on here until then; the script is this test's own child, checked so before it is signalled. The other
+# checks held until the TERM (a GO file never made): one ending first raced the TERM on a busy CI host
+LONG="$T/long.pid" GO="$T/never" PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy \
+  < /dev/null > "$T/term.out" 2>&1 &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
 if [ "$(proc_info "$sp" | awk '{print $1, $4}')" = "$$ bash" ]; then
@@ -209,7 +210,9 @@ check "STOP_GRACE=1.5: refused before any check, said" \
 rm -f "$T/long.pid" "$T/long.pid.finished"; rm -rf "$T/.upgrade"/step-checks.*
 mkfifo "$T/pipe"
 cat "$T/pipe" > /dev/null & reader=$!
-LONG="$T/long.pid" IGNORE_TERM=1 STOP_GRACE=1 PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 \
+# the other checks held until the TERM (a GO file never made): one ending between the reader's end and the TERM wrote
+# to the dead reader - SIGPIPE, 141, the case below's (a busy CI host)
+LONG="$T/long.pid" GO="$T/never" IGNORE_TERM=1 STOP_GRACE=1 PATH="$T/bin:$PATH" bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 \
   schnappy < /dev/null > "$T/pipe" 2>&1 &
 sp=$!
 timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
