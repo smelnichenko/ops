@@ -1,10 +1,10 @@
 # Plan 100 — upgrade the cluster to current releases
 
-Status: **IN PROGRESS** (2026-10-09): step 02 in production since 2026-10-03, nothing since. Reviews 1-10 done
-(10: the whole plan, 62 steps); full run 13 green (2026-10-08, 5 h 09 min); review 10's findings fixed, each with a
-failing test and a revert check. Next: gate (CI image), ops main pushed, a rehearsal from a late step, full run 14,
-review 11 - then production step by step with the operator's go: `task deploy:vault-eso` first, a Wave 0 backup before
-every one-way step, every stateful step shown before it runs.
+Status: **IN PROGRESS** (2026-10-11): step 02 in production since 2026-10-03, nothing since. Reviews 1-11 done; full
+run 14 found eight defects across seven restarts (2026-10-10, below), every step then green on the copy; review 11's
+findings fixed, each with a failing test. Next: gate, push, one full run (its proof), then production step by step with
+the operator's go: `task deploy:vault-eso` first, a Wave 0 backup before every one-way step, every stateful step shown
+before it runs.
 Run time: full run ~4.3 h projected after review 10's cuts (target 3 h; ~3.8 h is the floor without a snapshot of the
 built copy or cutting production's own procedure - both the operator's call). Rollout: 62 steps, 28 h of soaks (15
 min a step, 60 after a Wave 0 step's; 17 such) on top of each step's own phases.
@@ -329,7 +329,7 @@ plan-steps harness fails on a step missing or extra; Wave 0 = the stores backed 
 | 28 | grafana | Grafana 12.4.2 -> 12.4.12 (patch releases; 13.x is a later step) | infra | - |
 | 29 | mimir | Mimir 2.17.8 -> 2.17.11 (patch releases; 3.x is a later step) | infra | - |
 | 30 | fluent-bit | Fluent Bit 4.2.3.1 -> 4.2.8 (patch releases; 5.x is a later step) | infra | - |
-| 31 | argocd | Argo CD v3.3.8 -> v3.3.14 | playbook | - |
+| 31 | argocd | Argo CD v3.3.8 -> v3.3.14; with setup-argocd's Job health check (a Job Degraded once Kubernetes fails it, not at its first failed pod) | playbook | - |
 | 32 | cilium-1.20 | Cilium 1.19.8 -> 1.20.2 (the next minor, from the latest patch of the previous one, as Cilium requires) | playbook | - |
 | 33 | argocd-3.4 | Argo CD v3.3.14 -> v3.4.6 | playbook | - |
 | 34 | argocd-3.5 | Argo CD v3.4.6 -> v3.5.3 | playbook | - |
@@ -1241,6 +1241,35 @@ production action is a risk of its own); monitor's fix/warm-up-review promoted b
 (promoted between, every phase refuses on the app tag); Argo CD's Keycloak client secret rotated; the Keycloak admin and
 DB passwords split; an alert on the git mirror's failure; a Forgejo read-only user for the registry pull secret and
 Argo's repo-creds; CI's floating ansible-lint:latest; Sonar S3776.
+
+## Full run 14 (2026-10-10) and the eleventh full review - what they fixed, what is left
+
+Full run 14 (seven restarts, then one step-by-step continuation on the same copy) found, each fixed with a failing
+test: the copy's namespaces made before Argo without ten's `istio.io/rev` label (the apps ran unmeshed, Postgres reset
+them); the copy's kubernetes-cni and cri-tools held, as setup-kubeadm now does, while ten holds three packages until step
+13 (the step's upgrade-kubeadm holds all five; steps 13, 42, 43 expect them held); step 00's preview enabling a boot unit
+check mode never writes (production's Pis have none); VeleroDailyBackupMissing on a copy hours old (allowed on the copy
+alone - VeleroBSLUnavailable, a failed scheduled backup, split from it and never allowed); step 14's dpkg-query exit for
+containerd.io, never installed on production (it would have failed production's step 14 - only its exit 1 tolerated
+now); step 18's scylla-manager ServiceMonitor drift (the CRD's defaulted relabel `action`, ignored when `replace`);
+Argo's Job health failing the k6 smoke at its first cold pod (Degraded now once Kubernetes fails the Job - production
+gets it at step 31, the copy keeps ten's until then; the k6 Job's life bounded at 20 min); the smoke's latency-only
+rerun limited to app restarts (one rerun now after any step - production's Job retries three times). CI's flaky
+harnesses fixed (a stubbed clock, held checks), CI at 2 CPUs per container (the woodpecker namespace's LimitRange alone
+decides; no pipeline states a CPU - it caps each container, not a pipeline).
+
+Review 11 (ops bbd7578..1de4f9e, infra, platform) fixed: the copy's Job health as ten's before step 31 (critical: steps
+00-30 were proven with a check production does not have); the Job check's order (Kubernetes' Failed/FailureTarget
+first, Healthy only once complete, earlier failures said); a SIGPIPE then a signal cutting the stop short in
+upgrade-step-checks, upgrade-full-steps and upgrade-build-with-pin (each its own trap now, every exit deaf first);
+unbounded waits in the step-checks stubs; the baseline tasks' inventory diff; references to runs in code.
+
+The operator's: the smoke's rerun can pass a borderline latency regression (its SMOKE rerun line is in every step's
+log - fail the run above N reruns?); a namespace quota for a 2-CPU total per pipeline (a refused step fails, it does not
+wait); masi's pipeline comments still speak of 4 CPUs (another session's repo); api-gateway (archived) still asks 4000m;
+a DR rebuild's namespace-label race (cluster-config and the app sets share wave 0, and cluster-config needs Prometheus'
+CRDs first); SonarQube's quality gate (S3776 cognitive complexity in the runner scripts, security hotspots unreviewed;
+S5709 on `Interrupted` is deliberate - a signal must not be caught as an Exception).
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
