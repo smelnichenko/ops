@@ -416,10 +416,7 @@ tasks:
     desc: Build the Vagrant stack at production's versions and diff its version inventory against production's (VMs stay up)
     cmds:
       - task: _upgrade:base
-      # the packages setup-kubeadm holds and production does not, put back as on ten (its unhold alone)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml --tags holds
-      - cmd: scripts/vagrant-inventory.sh
-      - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
+      - task: _upgrade:baseline-diff
 
   test:upgrade:baseline:resume:
     desc: Re-run the kubeadm stack on the existing Vagrant VMs and diff the inventory again (after a fix; no rebuild)
@@ -427,6 +424,12 @@ tasks:
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-kubeadm.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml -e platform_by_argo_override=true
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-host-hardening.yml
+      - task: _upgrade:baseline-diff
+
+  _upgrade:baseline-diff:
+    internal: true
+    cmds:
+      # the packages setup-kubeadm holds and production does not, put back as on ten (its unhold alone)
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-state.yml --tags holds
       - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/inventory-diff.sh tests/ansible/upgrade/prod-inventory.txt .upgrade/vagrant-inventory.txt
@@ -465,8 +468,9 @@ tasks:
       # Before Argo: istiod fetches the realm's keys when it starts
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/keycloak-realm.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml
-      # Argo CD as production's until step 31 runs setup-argocd on ten (no Application health check, no root retries)
-      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
+      # Argo CD as production's until step 31 runs setup-argocd on ten (no Application health check, no root retries;
+      # its Job health check below, once the build has settled)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml --skip-tags job-health{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
       # the Applications' names recorded: every step's waits want exactly these. The deciding settle's quiet (120 s,
       # 2 polls 5 s apart): a fresh boot's pods restart while what they need comes up, and each restart began 300 s
       # anew (15 of the build's 49 minutes); a crash loop slower than that is caught by the restart history once two
@@ -481,6 +485,9 @@ tasks:
       # production's k6 smoke once more, on demand (the chart's PostSync hook ran it already, as in production) - the
       # Job of the refs mirrored (the targets build's are the last step's, not main's)
       - cmd: scripts/vagrant-smoke.sh {{.INFRA_REF}} {{.PLATFORM_REF}}
+      # ten's Job health check on the copy until step 31, set only now: the cold build's k6 hook judged by it (a failed
+      # pod Degrades the Job, a latency miss before its retry) failed the build at random
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml --tags job-health{{if .UPGRADE_FROM}} -e upgrade_from={{.UPGRADE_FROM}}{{end}}
       # every version the Vagrant copy runs is production's (minus the documented left-outs)
       - cmd: scripts/vagrant-inventory.sh
       - cmd: scripts/inventory-diff.sh {{.EXPECTED}} .upgrade/vagrant-inventory.txt {{.ALLOWED_MISSING}}

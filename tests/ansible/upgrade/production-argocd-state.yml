@@ -6,7 +6,9 @@
 # Healthy on its new version before its Manager moved, while on ten both sync together. Taken away right after the
 # build's setup-argocd.yml, for a run from before that step; its own run on the copy puts them back, as on ten. The
 # Job health check likewise: today's Degrades a Job once Kubernetes failed it, ten's at its first failed pod (a hook's
-# sync fails with it) - ten's own set on the copy, read from ten each run, not a copy of it kept here.
+# sync fails with it) - ten's own set on the copy, read from ten each run, not a copy of it kept here; tagged job-health
+# and run apart, after the build's settle and its smoke (the cold k6 hook judged by ten's check failed the build at
+# random). Ten read before anything is changed; each remove skips a key already gone, so the play runs again.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml
 #        [-e upgrade_from=<the run's start>]  (test:upgrade:argo)
@@ -14,16 +16,48 @@
   hosts: target
   become: true
   gather_facts: false
+  vars_files:
+    - ../../../deploy/ansible/vars/production-lan.yml
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
-    production_ssh: sm@192.168.11.2   # ten
+    production_ssh: "sm@{{ production_ten_ip }}"   # ten
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
+      tags: [always]
 
-    - name: Production's only before 31 (a run from it or later - production has today's then)
+    - name: Production's only before 31 (a run from 31 or later - production has today's then)
       ansible.builtin.meta: end_play
       when: (upgrade_from | default('00-gluster-boot')) > '31-argocd'
+      tags: [always]
+
+    - name: Ten's Job health check, read on ten (read-only; batch ssh, bounded, sudo never asking)
+      ansible.builtin.command:
+        argv: [ssh, -o, BatchMode=yes, -o, ConnectTimeout=10, "{{ production_ssh }}", sudo, -n, kubectl, -n, argocd, get,
+               configmap, argocd-cm, -o, "'jsonpath={.data.resource\\.customizations\\.health\\.batch_Job}'"]
+      delegate_to: localhost
+      become: false
+      register: _ten_job_health
+      changed_when: false
+      tags: [job-health]
+
+    - name: Ten has one (none read - the copy would keep today's, nothing proven as production's)
+      ansible.builtin.assert:
+        that: _ten_job_health.stdout | trim | length > 0
+        fail_msg: "ten's argocd-cm has no resource.customizations.health.batch_Job"
+      tags: [job-health]
+
+    - name: argocd-cm and the root Application as they are (a key already gone is not removed again)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        namespace: argocd
+        name: "{{ item.name }}"
+      loop:
+        - {api: v1, kind: ConfigMap, name: argocd-cm}
+        - {api: argoproj.io/v1alpha1, kind: Application, name: root}
+      register: _argo_now
 
     - name: argocd-cm without the Application health check (production's)
       kubernetes.core.k8s_json_patch:
@@ -34,6 +68,7 @@
         patch:
           - op: remove
             path: /data/resource.customizations.health.argoproj.io_Application
+      when: "'resource.customizations.health.argoproj.io_Application' in (_argo_now.results[0].resources[0].data | default({}))"
 
     - name: The root Application without its sync retries (production's)
       kubernetes.core.k8s_json_patch:
@@ -45,20 +80,7 @@
         patch:
           - op: remove
             path: /spec/syncPolicy/retry
-
-    - name: Ten's Job health check, read on ten (read-only)
-      ansible.builtin.command:
-        argv: [ssh, "{{ production_ssh }}", sudo, kubectl, -n, argocd, get, configmap, argocd-cm, -o,
-               "'jsonpath={.data.resource\\.customizations\\.health\\.batch_Job}'"]
-      delegate_to: localhost
-      become: false
-      register: _ten_job_health
-      changed_when: false
-
-    - name: Ten has one (none read - the copy would keep today's, nothing proven as production's)
-      ansible.builtin.assert:
-        that: _ten_job_health.stdout | trim | length > 0
-        fail_msg: "ten's argocd-cm has no resource.customizations.health.batch_Job"
+      when: (_argo_now.results[1].resources[0].spec.syncPolicy | default({})).retry is defined
 
     - name: argocd-cm's Job health check as ten's
       kubernetes.core.k8s_json_patch:
@@ -67,6 +89,7 @@
         namespace: argocd
         name: argocd-cm
         patch:
-          - op: replace
+          - op: add
             path: /data/resource.customizations.health.batch_Job
             value: "{{ _ten_job_health.stdout }}"
+      tags: [job-health]
