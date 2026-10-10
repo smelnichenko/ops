@@ -241,8 +241,10 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          pkg=$(dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}\n' containerd containerd.io 2> /dev/null \
-            | awk '$3 == "installed" {print $1 "=" $2; exit}')
+          # dpkg-query exits 1 for the one of the two never installed (containerd.io on production): its answer, not its
+          # exit, says which is - none installed fails below
+          pkg=$({ dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}\n' containerd containerd.io \
+            2> /dev/null || true; } | awk '$3 == "installed" {print $1 "=" $2; exit}')
           [ -n "$pkg" ] || { echo "no containerd package installed"; exit 1; }
           mkdir -p {{ upgrade_backup_dir }}
           cd {{ upgrade_backup_dir }}

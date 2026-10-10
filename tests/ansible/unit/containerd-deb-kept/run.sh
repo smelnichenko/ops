@@ -9,9 +9,13 @@ PY=python3
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/keep"
+# as dpkg-query answers on production (containerd.io never installed there): the known package's line, an error for
+# the other and exit 1 (full run 14: pipefail ended the task silently on it)
 cat > "$W/bin/dpkg-query" <<'STUB'
 #!/bin/bash
-printf 'containerd 1.7.24~ds1-6+deb13u1 installed\ncontainerd.io  not-installed\n'
+[ -n "${NONE:-}" ] || printf 'containerd 1.7.24~ds1-6+deb13u1 installed\n'
+echo "dpkg-query: no packages found matching containerd.io" >&2
+exit 1
 STUB
 cat > "$W/bin/apt-get" <<'STUB'
 #!/bin/bash
@@ -53,6 +57,9 @@ if keep is not None:
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=env)
     calls = open(os.path.join(W, "calls")).read().splitlines() if os.path.exists(os.path.join(W, "calls")) else []
     check("a re-run keeps it, downloads nothing", (r.returncode, len(calls), "kept already" in r.stdout), (0, 1, True))
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(env, NONE="1"))
+    check("neither package installed: fails, says so", (r.returncode, r.stdout.strip()),
+          (1, "no containerd package installed"))
 print("containerd-deb-kept: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_DEBKEPT
