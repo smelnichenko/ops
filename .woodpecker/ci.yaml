@@ -26,8 +26,8 @@ steps:
     backend_options:
       kubernetes:
         resources:
-          requests: { cpu: 100m, memory: 256Mi }
-          limits: { cpu: 1000m, memory: 512Mi }
+          requests: { memory: 256Mi }
+          limits: { memory: 512Mi }
 
   - name: ansible-unit
     image: git.pmon.dev/schnappy/ansible-lint:latest
@@ -36,8 +36,8 @@ steps:
     backend_options:
       kubernetes:
         resources:
-          requests: { cpu: 100m, memory: 256Mi }
-          limits: { cpu: 2000m, memory: 1Gi }
+          requests: { memory: 256Mi }
+          limits: { memory: 1Gi }
 
   # the tests' PromQL as Prometheus evaluates it (the unit harnesses' stubs answer whatever is asked) - on the version
   # production runs, pinned by its digest (the tag's manifest list, read 2026-10-08): a tag moves
@@ -48,8 +48,8 @@ steps:
     backend_options:
       kubernetes:
         resources:
-          requests: { cpu: 50m, memory: 64Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          requests: { memory: 64Mi }
+          limits: { memory: 256Mi }
 
   - name: skills
     image: git.pmon.dev/schnappy/ansible-lint:latest
@@ -58,8 +58,8 @@ steps:
     backend_options:
       kubernetes:
         resources:
-          requests: { cpu: 50m, memory: 128Mi }
-          limits: { cpu: 500m, memory: 256Mi }
+          requests: { memory: 128Mi }
+          limits: { memory: 256Mi }
 
   - name: sonar
     image: git.pmon.dev/schnappy/sonar-scanner:latest
