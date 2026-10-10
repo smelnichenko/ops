@@ -329,9 +329,9 @@ plan-steps harness fails on a step missing or extra; Wave 0 = the stores backed 
 | 28 | grafana | Grafana 12.4.2 -> 12.4.12 (patch releases; 13.x is a later step) | infra | - |
 | 29 | mimir | Mimir 2.17.8 -> 2.17.11 (patch releases; 3.x is a later step) | infra | - |
 | 30 | fluent-bit | Fluent Bit 4.2.3.1 -> 4.2.8 (patch releases; 5.x is a later step) | infra | - |
-| 31 | argocd | Argo CD v3.3.8 -> v3.3.14; with setup-argocd's Job health check (a Job Degraded once Kubernetes fails it, not at its first failed pod) | playbook | - |
+| 31 | argocd | Argo CD v3.3.8 -> v3.3.15; with setup-argocd's Job health check (a Job Degraded once Kubernetes fails it, not at its first failed pod) | playbook | - |
 | 32 | cilium-1.20 | Cilium 1.19.8 -> 1.20.2 (the next minor, from the latest patch of the previous one, as Cilium requires) | playbook | - |
-| 33 | argocd-3.4 | Argo CD v3.3.14 -> v3.4.6 | playbook | - |
+| 33 | argocd-3.4 | Argo CD v3.3.15 -> v3.4.10 | playbook | - |
 | 34 | argocd-3.5 | Argo CD v3.4.6 -> v3.5.3 | playbook | - |
 | 35 | cert-manager-1.21 | cert-manager v1.20.4 -> v1.21.2 | infra | - |
 | 36 | strimzi-v1-templates | The Strimzi templates still on v1beta2 - KafkaUsers (schnappy-data) and the realtime KafkaTopics - on the v1 API | platform | - |
@@ -1270,6 +1270,21 @@ wait); masi's pipeline comments still speak of 4 CPUs (another session's repo); 
 a DR rebuild's namespace-label race (cluster-config and the app sets share wave 0, and cluster-config needs Prometheus'
 CRDs first); SonarQube's quality gate (S3776 cognitive complexity in the runner scripts, security hotspots unreviewed;
 S5709 on `Interrupted` is deliberate - a signal must not be caught as an Exception).
+
+## Twelfth full review 2026-10-11 (review 11's fixes) - what it fixed, what is the operator's
+
+Fixed (ops): ten's Job health set on the copy only after the build's settle and smoke (the cold k6 hook judged by it
+failed the build at random), ten read first and the removes re-runnable, the read batch and bounded; the Job check for
+a suspended Job and a work queue; build-with-pin's stop forgetting a job `wait` had collected (its leftovers ran on after
+a Ctrl-C); on_signal's return re-arming the reader-gone trap; the remaining exits deaf first; the reverts the suite let
+pass (each now a failing case); ten's address from vars/production-lan.yml; the baseline tasks' shared tail.
+
+Pushed to production by me outside this plan (platform main, 2026-10-11 01:00): the Velero alert split and the k6 Job's
+20-minute deadline. The operator's: whether the platform fixes follow the same way (the k6 deadline too short for a cold
+attempt - a clock-bound wait and a k6 maxDuration; the Scylla schema and gateway hook Jobs without a deadline; Velero's
+runbooks naming the old alert, their fix steps not clearing it; VeleroBSLUnavailable renamed for what it watches);
+production's weekly Velero backup PartiallyFailed four weeks running (two 03:00 CronJob pods' emptyDirs - no data
+volume) with no alert for a partial failure or a missing weekly backup.
 
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 

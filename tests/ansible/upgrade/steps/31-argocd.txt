@@ -4,8 +4,10 @@
 # argocd_image_pins for chart 9.5.11 (not an -e override, which the rollout would make the default under the later
 # charts too). It is also ten's first setup-argocd.yml run since 2026-10-01, so it brings what the playbook gained
 # since: the Application health check (2026-10-02 - from then the root waits for each sync wave's apps to be Healthy,
-# retrying about 50 minutes, so one unhealthy app holds back every later wave), the root's sync retries and the
-# git-reading token (2026-10-04/05). Every app is Healthy before it (production's begin settles on that).
+# retrying about 50 minutes, so one unhealthy app holds back every later wave), the root's sync retries, the
+# git-reading token (2026-10-04/05) and the Job health check (2026-10-10: a Job Degraded once Kubernetes fails it, not
+# at its first failed pod - a hook's retries now run before its sync fails). Every app is Healthy before it
+# (production's begin settles on that).
 # outage: Argo CD restarts - no sync meanwhile, the applications keep running
 # abort: setup-argocd.yml with the old chart version - its no-downgrade check refuses: by hand, not rehearsed
 # Its defaults commit, if production made it, reverted first (deploy:upgrade:abort refuses while it stands).
