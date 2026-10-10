@@ -487,24 +487,35 @@
                 hs.status = "Progressing"
                 hs.message = "no pods have finished yet"
                 if obj.status ~= nil then
-                  -- failed only once Kubernetes failed it (its Failed condition: the backoff spent); a failed pod
-                  -- the Job retries is no failure yet (a PostSync hook was failed at its first pod, its retry passing)
-                  local failed = nil
+                  -- Kubernetes' verdict decides: failed (Failed, or FailureTarget while its pods terminate) or
+                  -- complete; a failed pod the Job retries is no failure yet (a PostSync hook was failed at its first
+                  -- pod, its retry passing), a Job short of its completions not done
+                  local failed, complete = nil, false
                   if obj.status.conditions ~= nil then
                     for _, c in ipairs(obj.status.conditions) do
-                      if c.type == "Failed" and c.status == "True" then
+                      if (c.type == "Failed" or c.type == "FailureTarget") and c.status == "True" then
                         failed = c
+                      elseif (c.type == "Complete" or c.type == "SuccessCriteriaMet") and c.status == "True" then
+                        complete = true
                       end
                     end
                   end
-                  if obj.status.succeeded ~= nil and obj.status.succeeded > 0 then
-                    hs.status = "Healthy"
-                    hs.message = obj.status.succeeded .. " pod(s) succeeded"
-                  elseif failed ~= nil then
+                  local want = 1
+                  if obj.spec ~= nil and obj.spec.completions ~= nil then
+                    want = obj.spec.completions
+                  end
+                  local succeeded = obj.status.succeeded or 0
+                  if failed ~= nil then
                     hs.status = "Degraded"
                     hs.message = (obj.status.failed or 0) .. " pod(s) failed: read the pod log, then the Job is deleted and re-synced"
                     if failed.message ~= nil then
                       hs.message = hs.message .. " (" .. failed.message .. ")"
+                    end
+                  elseif complete or succeeded >= want then
+                    hs.status = "Healthy"
+                    hs.message = succeeded .. " pod(s) succeeded"
+                    if obj.status.failed ~= nil and obj.status.failed > 0 then
+                      hs.message = hs.message .. ", after " .. obj.status.failed .. " failed"
                     end
                   elseif obj.status.failed ~= nil and obj.status.failed > 0 then
                     hs.message = obj.status.failed .. " pod(s) failed, the Job retrying"
