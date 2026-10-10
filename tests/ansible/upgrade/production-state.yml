@@ -24,9 +24,11 @@
   hosts: target
   become: true
   gather_facts: false
+  vars_files:
+    - ../../../deploy/ansible/vars/production-lan.yml
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
-    production_ssh: sm@192.168.11.2   # ten
+    production_ssh: "sm@{{ production_ten_ip }}"   # ten
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
