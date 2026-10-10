@@ -25,7 +25,8 @@ case "$*" in *storage-check*) [ -z "${LONG:-}" ] || { echo $$ > "$LONG"
   [ -z "${SLOW_TERM:-}" ] || trap 'echo > "$LONG.stopping"; sleep 1; echo > "$LONG.slow"; exit 143' TERM
   [ -z "${IGNORE_TERM:-}" ] || trap '' TERM
   sleep 30 & wait $!; echo > "$LONG.finished"; } ;; esac
-case "$*" in *storage-check*) ;; *) [ -z "${GO:-}" ] || until [ -e "$GO" ]; do sleep 0.05; done ;; esac
+# held for GO 120 s at most (a stop that never comes ends the hold, never spins on: the case fails, it does not hang)
+case "$*" in *storage-check*) ;; *) [ -z "${GO:-}" ] || for _ in $(seq 2400); do [ -e "$GO" ] && break; sleep 0.05; done ;; esac
 case "$*" in */data-check.yml*) [ -z "${STOPPER:-}" ] || { echo $$ > "$STOPPER"; kill -STOP $$; } ;; esac
 got=$(timeout 1 cat 2> /dev/null || true)
 echo "check $* read stdin: [$got]"
@@ -33,7 +34,7 @@ case "$*" in *metrics-check*) [ -n "${ALL_PASS:-}" ] || exit 1 ;; esac
 STUB
 cat > "$T/scripts/vagrant-smoke.sh" <<'STUB'
 #!/bin/bash
-[ -z "${GO:-}" ] || until [ -e "$GO" ]; do sleep 0.05; done
+[ -z "${GO:-}" ] || for _ in $(seq 2400); do [ -e "$GO" ] && break; sleep 0.05; done
 got=$(timeout 1 cat 2> /dev/null || true)
 echo "smoke read stdin: [$got]"
 STUB
@@ -226,7 +227,7 @@ out=""
 check "the output's reader gone: the check ignoring the TERM KILLed all the same, the work directory gone, 130" \
   "$rc $(gone "$T/long.pid") $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "130 gone 0"
 pid=$(cat "$T/long.pid" 2> /dev/null)
-if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playbook ]; then kill -KILL "$pid"; fi
+if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playboo ]; then kill -KILL "$pid"; fi
 rm -f "$T/pipe"
 
 # the output's reader gone with no signal to the script (a tee killed alone), the other checks ending only then: the
@@ -247,8 +248,45 @@ wait "$sp"; rc=$?
 check "the reader gone, no signal to the script: its cleanup run to its end - the deaf check gone, the work directory removed" \
   "$rc $(gone "$T/long.pid") $([ -e "$T/long.pid.finished" ] && echo ran-out || echo stopped) $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "141 gone stopped 0"
 pid=$(cat "$T/long.pid" 2> /dev/null)
-if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playbook ]; then kill -KILL "$pid"; fi
+if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playboo ]; then kill -KILL "$pid"; fi
 rm -f "$T/pipe2" "$T/go2"
+# ... and a TERM right after that SIGPIPE, landing in the cleanup before it turned deaf (forced: the cleanup's first line
+# sends it): the cleanup still runs to its end - the deaf check gone, the work directory removed (the TERM's trap ran
+# inside the cleanup and exited it, the checks left running: 20 in 60 by natural timing)
+sed 's|^  local groups$|&\n  kill -TERM $$|' "$T/scripts/upgrade-step-checks.sh" > "$T/scripts/term-in-cleanup.sh"
+rm -f "$T/long.pid" "$T/long.pid.finished" "$T/go3"; rm -rf "$T/.upgrade"/step-checks.*
+mkfifo "$T/pipe3"
+cat "$T/pipe3" > /dev/null & reader=$!
+GO="$T/go3" LONG="$T/long.pid" IGNORE_TERM=1 STOP_GRACE=1 PATH="$T/bin:$PATH" bash "$T/scripts/term-in-cleanup.sh" i p 24.8 \
+  schnappy < /dev/null > "$T/pipe3" 2>&1 &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
+[ "$(proc_info "$reader" | awk '{print $1, $4}')" = "$$ cat" ] && kill "$reader"
+wait "$reader" 2> /dev/null
+: > "$T/go3"
+wait "$sp"; rc=$?
+check "a TERM in the cleanup a SIGPIPE began: the cleanup still runs to its end - the deaf check gone, the work directory removed" \
+  "$(gone "$T/long.pid") $([ -e "$T/long.pid.finished" ] && echo ran-out || echo stopped) $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "gone stopped 0"
+pid=$(cat "$T/long.pid" 2> /dev/null)
+if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playboo ]; then kill -KILL "$pid"; fi
+rm -f "$T/pipe3" "$T/go3"
+# the bound reached with the output's reader gone: on_signal's own writes (not ended, not judged) go to a dead reader -
+# deaf to the SIGPIPE, it goes on: not judged (1), the deaf check gone, the work directory removed
+rm -f "$T/long.pid" "$T/long.pid.finished"; rm -rf "$T/.upgrade"/step-checks.*
+mkfifo "$T/pipe4"
+cat "$T/pipe4" > /dev/null & reader=$!
+GO="$T/never" LONG="$T/long.pid" IGNORE_TERM=1 STOP_GRACE=1 STEP_CHECKS_SECONDS=4 PATH="$T/bin:$PATH" \
+  bash "$T/scripts/upgrade-step-checks.sh" i p 24.8 schnappy < /dev/null > "$T/pipe4" 2>&1 &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/long.pid"
+[ "$(proc_info "$reader" | awk '{print $1, $4}')" = "$$ cat" ] && kill "$reader"
+wait "$reader" 2> /dev/null
+wait "$sp"; rc=$?
+check "the bound reached, the reader gone: not judged (1), the deaf check gone, the work directory removed" \
+  "$rc $(gone "$T/long.pid") $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "1 gone 0"
+pid=$(cat "$T/long.pid" 2> /dev/null)
+if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playboo ]; then kill -KILL "$pid"; fi
+rm -f "$T/pipe4"
 # ... and where no PID can be made reused (CI: no user namespaces): its watchdog ended and reaped just before the last
 # stop, the stops it asks for recorded - none names the watchdog's PID (one the system may give another process)
 python3 - "$T/scripts/upgrade-step-checks.sh" "$T/scripts/reaped-wd.sh" "$T" <<'PYSEAM'

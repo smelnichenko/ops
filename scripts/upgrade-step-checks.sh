@@ -51,6 +51,7 @@ not_judged() {  # the checks not judged named, each with its log, and the failur
   done
   failures failed
   [ "${#failed[@]}" -eq 0 ] || echo "STEP CHECKS FAILED: ${failed[*]}"
+  trap '' INT TERM HUP PIPE  # deaf before an exit: a signal's trap run inside the cleanup ended it, its checks left running
   exit 1
 }
 cleanup() {
@@ -85,6 +86,10 @@ on_signal() {  # on_signal <exit>: a signal's first act - no other cuts the stop
 trap cleanup EXIT
 trap 'on_signal 130' INT TERM
 trap 'on_signal 129' HUP
+# a write to an output whose reader is gone ends the run through the same first act: with no trap of its own, bash's
+# own handler entered the cleanup with the other signals still live - one arriving then ran its trap inside the cleanup
+# and exited it, the checks left running
+trap 'on_signal 141' PIPE
 # own process groups for the jobs (job control), so a group kill reaches each check's whole tree
 set -m
 
@@ -170,6 +175,8 @@ own_jobs left_
 failures failed
 if [ "${#failed[@]}" -gt 0 ]; then
   echo "STEP CHECKS FAILED: ${failed[*]}"
+  trap '' INT TERM HUP PIPE  # deaf before an exit: a signal's trap run inside the cleanup ended it, its checks left running
   exit 1
 fi
 echo "STEP CHECKS PASSED: ${names[*]}"
+trap '' INT TERM HUP PIPE  # deaf before an exit: a signal's trap run inside the cleanup ended it, its checks left running

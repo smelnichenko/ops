@@ -183,6 +183,25 @@ out=$(settled "$T/twice.out")
 check "a Ctrl-C pressed twice, the second during the stop: the stop goes on - the slow job's own stop done, both gone, the stop said" \
   "$([ -e "$T/.upgrade/build.slow" ] && echo slow-done || echo cut) $(gone "$T/.upgrade/build.pid") \
 $(gone "$T/.upgrade/pin.pid") $(grep -c 'STOPPED BY A SIGNAL' <<< "$out")" "slow-done gone gone 1"
+# a SIGPIPE to the script (its output's reader gone) with a TERM landing in the stop before it turned deaf (forced in a
+# copy: the stop's first line sends it): the stop still runs to its end - the pin stopped, its process gone. With no
+# trap of its own the SIGPIPE entered the stop with the other signals live: the TERM's trap ran inside it and exited it
+sed 's|^  local j own$|&\n  kill -TERM $$|' "$T/scripts/upgrade-build-with-pin.sh" > "$T/scripts/term-in-stop.sh"
+check "the copy with a TERM at the stop's start" "$(grep -c '^  kill -TERM \$\$$' "$T/scripts/term-in-stop.sh")" 1
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished" "$T/.upgrade/build.finished"
+(cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/term-in-stop.sh < /dev/null > "$T/pipe-term.out" 2>&1) &
+sp=$!
+timeout 10 bash -c 'until [ -s "$0" ]; do sleep 0.1; done' "$T/.upgrade/pin.pid"
+# the script itself is the subshell's child here (exec env ... bash): found by its command line
+spp=""
+for f in /proc/[0-9]*/cmdline; do
+  [[ $(tr '\0' ' ' 2> /dev/null < "$f") == "bash scripts/term-in-stop.sh "* ]] && { spp=${f#/proc/}; spp=${spp%/cmdline}; }
+done
+[ -n "$spp" ] && kill -PIPE "$spp"
+wait "$sp"
+check "a SIGPIPE, then a TERM in the stop: the pin stopped, its process gone" \
+  "$(pin_end) $(gone "$T/.upgrade/pin.pid")" "stopped gone"
 # a signal between a job's start and the line that keeps its PID: the job stopped all the same - every job of the
 # script's, not the PIDs it kept (a copy without `pin=$!` stands for one that landed there)
 sed '/^pin=\$!$/d' "$T/scripts/upgrade-build-with-pin.sh" > "$T/scripts/unkept.sh"

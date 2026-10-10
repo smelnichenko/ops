@@ -134,7 +134,7 @@ os.execvp("bash", ["bash", os.environ["W"] + "/wrapper"])') &
     local sp="" f c st
     for f in /proc/[0-9]*/cmdline; do
       c=$(tr '\0' ' ' 2> /dev/null < "$f") || continue
-      [[ $c == "bash scripts/upgrade-full-steps.sh "* ]] || continue
+      [[ $c == "bash scripts/upgrade-full-steps.sh "* || $c == "bash scripts/term-in-stop.sh "* ]] || continue
       read -r st 2> /dev/null < "${f%/cmdline}/stat" || continue
       set -- ${st##*) }
       [ "$4" = "$pg" ] && { sp=${f#/proc/}; sp=${sp%/cmdline}; }
@@ -176,6 +176,14 @@ done
 run INT DEAF=1
 check "a step deaf to the TERM: KILLed after the grace, said; the run ended 130" \
   "$(cat "$W/rc" 2> /dev/null || echo none) $alive $(grep -c 'outlived the stop by 1 s - killed' "$W/out")" "130 gone 1"
+# a SIGPIPE to the script (its output's reader gone) with a TERM landing in the stop before it turned deaf (forced in a
+# copy: the stop's first line sends it): the stop still runs to its end - the step stopped whole. With no trap of its
+# own the SIGPIPE entered the stop with the other signals live: the TERM's trap ran inside it and exited it, the step
+# left running in its session
+sed 's|^  local rc=\$? own j steps_=()$|&\n  kill -TERM $$|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/term-in-stop.sh"
+check "the copy with a TERM at the stop's start" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/term-in-stop.sh")" 1
+run script:PIPE SCRIPT=scripts/term-in-stop.sh
+check "a SIGPIPE, then a TERM in the stop: the step stopped whole (gone)" "$alive" gone
 # a TERM between the step's start and its record (forced in a copy: sent right after the start)
 sed 's|^  setsid task "\$@" .* &$|&\n  kill -TERM $$|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/unkept.sh"
 check "the copy with a TERM before the step's record made" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/unkept.sh")" 1

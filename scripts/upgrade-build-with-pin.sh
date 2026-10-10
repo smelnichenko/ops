@@ -47,8 +47,11 @@ trap stop EXIT
 # a signal's first act: no other cuts the stop short (a Ctrl-C pressed twice; a timeout forwarding one to its group -
 # measured: the second's exit ended the stop half done, the jobs left running, the stop unsaid). HUP (its terminal
 # closed) the same stop, said
-trap 'trap "" INT TERM HUP; signalled=1; exit 130' INT TERM
-trap 'trap "" INT TERM HUP; signalled=1; exit 129' HUP
+trap 'trap "" INT TERM HUP PIPE; signalled=1; exit 130' INT TERM
+trap 'trap "" INT TERM HUP PIPE; signalled=1; exit 129' HUP
+# its output's reader gone: the same first act - with no trap of its own, bash entered the stop with the other signals
+# live, and one arriving then ran its trap inside the stop and exited it, the jobs left running
+trap 'trap "" INT TERM HUP PIPE; signalled=1; exit 141' PIPE
 # the build and the pin each in a session of its own (setsid: no job control here, so neither leads a process group
 # and setsid runs it in place - its PID is $!, its session's and group's): stopped whole when this ends early - a
 # failed build, an interrupt, a TERM - the pin's docker calls with it (its own trap removes its containers). With no
@@ -71,7 +74,9 @@ left_behind() {  # left_behind <job> <what>: 0 when nothing of its session runs 
 build=0
 wait "$build_job" || build=$?
 left_behind "$build_job" "THE BUILD" || build=1
-[ "$build" = 0 ] || { echo "THE BUILD FAILED (exit $build) - the ClickHouse pin stopped"; exit "$build"; }
+# deaf first: a signal's trap run inside the stop ended it, the pin left running
+[ "$build" = 0 ] || { echo "THE BUILD FAILED (exit $build) - the ClickHouse pin stopped"; trap '' INT TERM HUP PIPE
+  exit "$build"; }
 pinned=0
 wait "$pin" || pinned=$?
 left_behind "$pin" "THE CLICKHOUSE PIN" || pinned=1
