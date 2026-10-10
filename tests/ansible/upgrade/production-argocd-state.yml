@@ -4,7 +4,9 @@
 # health check in argocd-cm (the root then waits for each sync wave's apps Healthy) and the root's sync retries. With
 # them steps 01-30 were proven with waves production does not wait on: at steps 15, 18 and 21 the Scylla operator was
 # Healthy on its new version before its Manager moved, while on ten both sync together. Taken away right after the
-# build's setup-argocd.yml, for a run from before that step; its own run on the copy puts them back, as on ten.
+# build's setup-argocd.yml, for a run from before that step; its own run on the copy puts them back, as on ten. The
+# Job health check likewise: today's Degrades a Job once Kubernetes failed it, ten's at its first failed pod (a hook's
+# sync fails with it) - ten's own set on the copy, read from ten each run, not a copy of it kept here.
 #
 # Usage: ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/upgrade/production-argocd-state.yml
 #        [-e upgrade_from=<the run's start>]  (test:upgrade:argo)
@@ -14,6 +16,7 @@
   gather_facts: false
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
+    production_ssh: sm@192.168.11.2   # ten
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
@@ -42,3 +45,28 @@
         patch:
           - op: remove
             path: /spec/syncPolicy/retry
+
+    - name: Ten's Job health check, read on ten (read-only)
+      ansible.builtin.command:
+        argv: [ssh, "{{ production_ssh }}", sudo, kubectl, -n, argocd, get, configmap, argocd-cm, -o,
+               "'jsonpath={.data.resource\\.customizations\\.health\\.batch_Job}'"]
+      delegate_to: localhost
+      become: false
+      register: _ten_job_health
+      changed_when: false
+
+    - name: Ten has one (none read - the copy would keep today's, nothing proven as production's)
+      ansible.builtin.assert:
+        that: _ten_job_health.stdout | trim | length > 0
+        fail_msg: "ten's argocd-cm has no resource.customizations.health.batch_Job"
+
+    - name: argocd-cm's Job health check as ten's
+      kubernetes.core.k8s_json_patch:
+        kubeconfig: "{{ kubeconfig }}"
+        kind: ConfigMap
+        namespace: argocd
+        name: argocd-cm
+        patch:
+          - op: replace
+            path: /data/resource.customizations.health.batch_Job
+            value: "{{ _ten_job_health.stdout }}"
