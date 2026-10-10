@@ -15,13 +15,19 @@ cat > "$W/bin/dpkg-query" <<'STUB'
 #!/bin/bash
 # DPKG=locked: dpkg's database unreadable (exit 2, its own message); DPKG=swapped: the Debian package removed, its config
 # kept, containerd.io installed (after the swap, a re-run)
-case "${DPKG:-}" in
-  locked) echo "dpkg-query: error: dpkg database locked" >&2; exit 2 ;;
-  swapped) printf 'containerd 1.7.24~ds1-6+deb13u1 config-files\ncontainerd.io 1.7.28-1 installed\n'; exit 0 ;;
-esac
-[ -n "${NONE:-}" ] || printf 'containerd 1.7.24~ds1-6+deb13u1 installed\n'
-echo "dpkg-query: no packages found matching containerd.io" >&2
-exit 1
+# each package answered only when named (a query that drops one finds none of it), as dpkg-query does
+[ "${DPKG:-}" != locked ] || { echo "dpkg-query: error: dpkg database locked" >&2; exit 2; }
+rc=0
+for a in "$@"; do
+  case "$a:${DPKG:-}" in
+    containerd:swapped) printf 'containerd 1.7.24~ds1-6+deb13u1 config-files\n' ;;
+    containerd.io:swapped) printf 'containerd.io 1.7.28-1 installed\n' ;;
+    containerd:*) [ -n "${NONE:-}" ] || printf 'containerd 1.7.24~ds1-6+deb13u1 installed\n'
+                  [ -z "${NONE:-}" ] || { echo "dpkg-query: no packages found matching containerd" >&2; rc=1; } ;;
+    containerd.io:*) echo "dpkg-query: no packages found matching containerd.io" >&2; rc=1 ;;
+  esac
+done
+exit "$rc"
 STUB
 cat > "$W/bin/apt-get" <<'STUB'
 #!/bin/bash
