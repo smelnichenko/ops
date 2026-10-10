@@ -110,6 +110,10 @@ APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
 APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "infra", APP_VALUES.replace(
     "values.yaml", "values.vagrant.yaml"))
 BEFORE_LEDGER = "02-istio-chart-repo"
+# the run's record, and the refusal a declined question gives
+RUN_JSON = os.path.join(PROVEN, "run.json")
+NOT_CONFIRMED = "not confirmed"
+
 # what may land on infra's or platform's main after a full run without it proving it again: what renders nothing for
 # production - CD's deploys of the test environment, CI's own files, docs, a chart's unit tests (a merged step's own
 # commits aside)
@@ -616,7 +620,7 @@ def proof_start(from_step=None):
     head = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
-    write_json(os.path.join(PROVEN, "run.json"), {"ops": head, "run": started, "from": from_step, "main": mains,
+    write_json(RUN_JSON, {"ops": head, "run": started, "from": from_step, "main": mains,
                                                   "ansible": installed, "branches": branch_shas()})
     print(f"PROOF: run {started} of ops {head[:10]} from {from_step}")
 
@@ -624,13 +628,13 @@ def proof_start(from_step=None):
 def proof_complete():
     """The run's proofs marked complete - test:upgrade:full's last act, after every step and the backups restored at
     its end: a run that failed there, or stopped at a step, leaves its proofs unmarked, and production refuses them."""
-    path = os.path.join(PROVEN, "run.json")
+    path = RUN_JSON
     if not os.path.exists(path):
         sys.exit("REFUSED: no run started (proof-start) - nothing to mark complete")
     run_id = json.load(open(path))["run"]
     marked = []
     for name in sorted(os.listdir(PROVEN)):
-        if not name.endswith(".json") or name == "run.json":
+        if not name.endswith(".json") or name == os.path.basename(RUN_JSON):
             continue
         proof = json.load(open(os.path.join(PROVEN, name)))
         if proof.get("run") == run_id:
@@ -710,7 +714,7 @@ def write_json(path, obj, **kw):
 
 
 def record_proof(step, infra_sha, platform_sha):
-    run_info = json.load(open(os.path.join(PROVEN, "run.json")))
+    run_info = json.load(open(RUN_JSON))
     changed = ops_unchanged_since(run_info["ops"], PROVEN_PATHS)
     if changed:
         sys.exit(f"REFUSED: the ops tree changed during the run ({', '.join(changed)}) - the run proves nothing")
@@ -1196,7 +1200,7 @@ def release(step):
                  "here - its ansible-playbook or merge script; let it end first")
     refuse([] if confirm(f"Nothing runs {step}'s {' '.join(started[1])} (started {started[0]:%Y-%m-%d %H:%M} UTC) "
                          "any more - here, and on ten and the Pis (pgrep -af 'ansible|AnsiballZ|kubeadm|upgrade' there "
-                         "finds none of it) - close it?") else ["not confirmed"])
+                         "finds none of it) - close it?") else [NOT_CONFIRMED])
     record(step, "end", started[1][0], "released", token, obj=obj)
 
 
@@ -1205,7 +1209,7 @@ def abort(step):
     before the merge), its defaults commit reverted, the operator's word that its host-side half is undone. Its merged
     tags set aside (upgrade-aborted/<step>-<time>): the step starts again from its begin - a fixed branch, a new proof,
     a fresh Wave 0 backup."""
-    names, events, info = ledger_for(step, "abort")
+    _, events, info = ledger_for(step, "abort")
     out = []
     for repo in info["branches"]:
         d = os.path.join(OPS, "..", repo)
@@ -1225,7 +1229,7 @@ def abort(step):
         out.append("its playbook defaults are committed - revert that commit on ops main first")
     refuse(out)
     refuse([] if confirm(f"{step}: its merges reverted (checked), its host-side changes undone by its abort line - "
-                         "record it aborted? It then starts again from its begin.") else ["not confirmed"])
+                         "record it aborted? It then starts again from its begin.") else [NOT_CONFIRMED])
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for repo in info["branches"]:
         d = os.path.join(OPS, "..", repo)
@@ -1283,9 +1287,9 @@ def backup(step, store):
     names, events, _ = ledger_for(step, "backup", store)
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events)))
     # asked here, not only by the Taskfile's prompt (task -y skips that; this script runs alone too)
-    refuse([] if confirm(f"Back up {store} on PRODUCTION into the Pi store for {step}"
-                         + (" - Kafka is down while its volume is copied" if store == "kafka" else "") + "?")
-           else ["not confirmed"])
+    kafka_down = " - Kafka is down while its volume is copied" if store == "kafka" else ""
+    refuse([] if confirm(f"Back up {store} on PRODUCTION into the Pi store for {step}{kafka_down}?")
+           else [NOT_CONFIRMED])
     refuse([] if ansible("playbooks/upgrade-backup.yml", "-e", f"store={store}") else [f"the {store} backup failed"])
     record(step, "backup", store)
 
@@ -1412,7 +1416,7 @@ def playbooks(step):
     print(f"{step}'s playbook lines, against PRODUCTION (ten, the Pis):")
     for line in info["playbooks"]:
         print(f"  {line}")
-    refuse([] if confirm(f"Run {step}'s playbook lines against PRODUCTION?") else ["not confirmed"])
+    refuse([] if confirm(f"Run {step}'s playbook lines against PRODUCTION?") else [NOT_CONFIRMED])
     # a step with no branch line (Cilium, kubeadm, Argo CD by its playbook) pulls its images here, as a merge pulls a
     # merged step's: by the digests the full run ran, before anything restarts on them
     images = prepull_images(step) if not info["branches"] else []
@@ -1451,7 +1455,7 @@ def defaults(step):
             refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
                    else [f"the step's commit {sha[:10]} is not on origin/main's head"])
             print(git("show", "--stat", "--format=%h %s", sha))
-            refuse([] if confirm(f"Push {step}'s defaults commit {sha[:10]} to ops main?") else ["not confirmed"])
+            refuse([] if confirm(f"Push {step}'s defaults commit {sha[:10]} to ops main?") else [NOT_CONFIRMED])
             run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
         print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
         record(step, "defaults", sha)
@@ -1466,7 +1470,7 @@ def defaults(step):
     print(git("diff", "--", *paths))
     if not confirm(f"Commit {step}'s playbook defaults (above) to ops main and push them?"):
         run(["git", "-C", OPS, "checkout", "--", *paths], check=True)
-        refuse(["not confirmed"])
+        refuse([NOT_CONFIRMED])
     run(["git", "-C", OPS, "commit", "-q", "-m", message, "--", *paths], check=True)
     run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
     record(step, "defaults", git("rev-parse", "HEAD"))
