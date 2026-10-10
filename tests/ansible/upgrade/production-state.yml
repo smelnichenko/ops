@@ -31,7 +31,10 @@
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
 
-    - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies their labels)
+    # ten's injection label from the start, as ten has it: made bare, a pod Argo started before its cluster-config
+    # labelled the namespace ran without a sidecar, and the STRICT-mTLS Postgres reset it (full run 14: four apps
+    # crash-looped; cluster-config added the label 36 s after their pods)
+    - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies the other labels)
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
         definition:
@@ -39,6 +42,8 @@
           kind: Namespace
           metadata:
             name: "{{ item }}"
+            labels:
+              istio.io/rev: default
       loop: [schnappy-production, schnappy-infra]
 
     # The CNPG owner secret as ten has it - CNPG's own (an earlier bootstrap path generated it), username "app" - not a
