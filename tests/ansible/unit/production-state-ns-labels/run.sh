@@ -1,6 +1,6 @@
 #!/bin/bash
 # The copy's namespaces made before Argo carry ten's injection label: made bare, the apps' pods started before Argo's
-# cluster-config labelled them, ran without sidecars and never reached the STRICT-mTLS Postgres (full run 14).
+# cluster-config labelled them, ran without sidecars and never reached the STRICT-mTLS Postgres (2026-10-10).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3

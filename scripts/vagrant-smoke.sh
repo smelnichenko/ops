@@ -141,7 +141,7 @@ latency_only() {
 if smoke "$name"; then exit 0; fi
 latency_only "$work/out" || exit 1
 # a second chance whatever the step restarted: the first requests after Tempo's or ClickHouse's step crossed it with no
-# production container restarted (full run 14); production's own Job retries any failure three times
+# production container restarted (2026-10-10); production's own Job retries any failure three times
 echo "SMOKE: its latency threshold alone crossed (the first requests after a step) - once more, that run decides"
 name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 smoke "$name"
