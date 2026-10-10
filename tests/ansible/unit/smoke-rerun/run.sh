@@ -1,7 +1,8 @@
 #!/bin/bash
-# scripts/vagrant-smoke.sh's second chance: a run failed on its latency threshold alone gets one more - only when a
-# production container started in the last minutes (the first requests after a restart); a step that restarted
-# nothing gets none (a latency regression would pass on a retry). Its own tail run with smoke() and vssh stubbed.
+# scripts/vagrant-smoke.sh's second chance: a run failed on its latency threshold alone (every check passed, no request
+# failed) gets one more, whatever the step restarted - the first requests after Tempo's or ClickHouse's step crossed it
+# with no production container restarted (full run 14: p95 2.09 and 2.69 s, 0.15-0.75 s at once after); production's
+# own Job retries any failure three times. Any other failure gets none. Its own tail run with smoke() stubbed.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 W=$(mktemp -d)
@@ -29,7 +30,8 @@ run() {  # run <first run's output> <a recent start: yes|no> -> "<exit> <smoke r
 }
 check "latency alone crossed, a container started minutes ago: run once more, that run decides" \
   "$(run "$latency_out" yes)" "0 2"
-check "latency alone crossed, nothing restarted: no second chance" "$(run "$latency_out" no)" "1 1"
+check "latency alone crossed, no production container restarted (an infra step's): run once more, that run decides" \
+  "$(run "$latency_out" no)" "0 2"
 check "another failure: no second chance" "$(run 'level=error msg="something else"' yes)" "1 1"
 echo "smoke-rerun: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

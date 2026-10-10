@@ -207,7 +207,8 @@ runs() {  # runs <answers...>: the script's exit, its runs on the VM, their dist
 check "its latency alone crossed, then passed: passed, two runs under two names" "$(runs latency pass)" "0 2 2"
 check "its latency alone crossed twice: failed, two runs" "$(runs latency latency)" "1 2 2"
 touch "$E/no-recent"
-check "its latency alone crossed, no container started lately: failed, no second run" "$(runs latency pass)" "1 1 1"
+check "its latency alone crossed, no container started lately (an infra step's): run once more, passed" \
+  "$(runs latency pass)" "0 2 2"
 rm -f "$E/no-recent"
 check "passed: one run" "$(runs pass)" "0 1 1"
 check "a check failed (its latency with it): failed, no second run" "$(runs check pass)" "1 1 1"

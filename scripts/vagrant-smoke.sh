@@ -10,7 +10,8 @@
 # copy serves production's own *.pmon.dev certificate (tests/ansible/upgrade/production-state.yml). Prints k6's checks;
 # exit 0 only if k6 passed (set -e + pipefail carry the remote shell's exit 1 out). One failure alone runs it once more:
 # its latency threshold crossed with every check passed and no request failed - the first requests after a step
-# restarted every pod (Istio's sidecar steps: 2 of 449 runs, p95 2.9 and 3.1 s over 12 requests); that run decides.
+# (Istio's sidecar steps restarting every pod: p95 2.9 and 3.1 s over 12 requests; Tempo's and ClickHouse's restarting
+# no app: 2.09 and 2.69 s); that run decides.
 # Any other failure stands (production's own Job retries every failure three times; this one, none but that).
 #
 # Leaves nothing behind: the remote shell deletes the run's Job and ConfigMap when it ends - also when its connection
@@ -137,23 +138,10 @@ latency_only() {
     END { exit !(dur && lat && passed && none_failed && !other) }' "$1"
 }
 
-# "recent" when a production container started in the last 15 minutes (the step rolled or restarted it)
-recent_start() {
-  vssh kubeadm "sudo bash -s" <<'RECENT' 2> /dev/null
-now=$(date +%s)
-kubectl --kubeconfig /etc/kubernetes/admin.conf --request-timeout=30s -n schnappy-production get pods \
-  -o jsonpath='{range .items[*].status.containerStatuses[*]}{.state.running.startedAt}{"\n"}{end}' \
-  | while read -r t; do
-      [ -n "$t" ] && [ $(( now - $(date -d "$t" +%s) )) -lt 900 ] && { echo recent; break; }
-    done
-RECENT
-}
-
 if smoke "$name"; then exit 0; fi
 latency_only "$work/out" || exit 1
-# a second chance only after a restart: with nothing restarted a slow run is the step's own latency
-[ "$(recent_start)" = recent ] \
-  || { echo "SMOKE: its latency threshold crossed, no production container started in 15 minutes - no second run"; exit 1; }
-echo "SMOKE: its latency threshold alone crossed (the first requests after a restart) - once more, that run decides"
+# a second chance whatever the step restarted: the first requests after Tempo's or ClickHouse's step crossed it with no
+# production container restarted (full run 14); production's own Job retries any failure three times
+echo "SMOKE: its latency threshold alone crossed (the first requests after a step) - once more, that run decides"
 name=vagrant-k6-smoke-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
 smoke "$name"
