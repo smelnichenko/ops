@@ -37,7 +37,14 @@ case "$*" in
     echo "{\"data\": {\"result\": [$r]}}" ;;
 esac
 STUB
-chmod +x "$W/bin/kubectl"
+# the check's clock this test's own: `date +%s` answers the "now" the case was built from (the check read its own a
+# moment later - over a second on a busy CI host - and a case one second from a bound passed or failed by chance)
+cat > "$W/bin/date" <<'STUB'
+#!/bin/bash
+[ "${1:-}" = +%s ] && [ -n "${FAKE_NOW:-}" ] && { echo "$FAKE_NOW"; exit 0; }
+PATH=/usr/bin:/bin exec date "$@"
+STUB
+chmod +x "$W/bin/kubectl" "$W/bin/date"
 W=$W PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PYCHECK'
 import os, re, subprocess, sys, time, urllib.parse
 import yaml
@@ -82,7 +89,7 @@ def stayed_run(t0_ago, last_down_ago=None, first_ago=None):
     ctx = {**v, reg: {"stdout": f"1 targets, 0 down\nUP AT {now - t0_ago}"}}
     script = render(cmd(stayed), **ctx)
     task_env = {n: str(render(str(x), **ctx)) for n, x in (stayed.get("environment") or {}).items()}
-    extra = {} if last_down_ago is None else {"LAST_DOWN": str(now - last_down_ago)}
+    extra = {"FAKE_NOW": str(now)} if last_down_ago is None else {"LAST_DOWN": str(now - last_down_ago), "FAKE_NOW": str(now)}
     extra.update({} if first_ago is None else {"FIRST": str(now - first_ago)})
     t = time.monotonic()
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env(**task_env, **extra))
@@ -94,13 +101,13 @@ r, q, rng, took = stayed_run(0)
 check("all up at once, none down in the window before (the one down by nature allowed by its scrape pool): passes "
       "at once - no wait",
       (r.returncode, took < 5, "stayed up" in r.stdout), (0, True, True))
-check("judged from U before t0 to now", rng is not None and U - 2 <= rng <= U + 5, True)
+check("judged from U before t0 to now", rng, U)
 check("only the series of targets active now (a replaced pod's last scrape no flap)", "and on(job, instance) up" in q,
       True)
 check("the samples' own times (timestamp() of an expression gives the subquery's step times: a down sample at 90 s "
       "read 100 - promtool 3.10)", ("(timestamp(up) and up == 0)" in q, "timestamp(up == 0)" in q), (True, False))
 r, _, rng, _ = stayed_run(30)
-check("t0 30 s ago: the window reaches U before it", rng is not None and U + 28 <= rng <= U + 35, True)
+check("t0 30 s ago: the window reaches U before it", rng, U + 30)
 r, _, _, _ = stayed_run(10, last_down_ago=U * 2 // 3)
 check("down 40 s ago, before t0 (the step's own recovery): not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
 r, _, _, _ = stayed_run(U + 30, last_down_ago=U + 50)
@@ -109,10 +116,8 @@ r, _, _, _ = stayed_run(60, last_down_ago=20)
 check("down 20 s ago, after t0: a flap", (r.returncode, "FLAPPED" in r.stdout), (1, True))
 r, _, _, _ = stayed_run(30, last_down_ago=U - 15)
 check("down U - 15 s ago, before t0: not yet (up less than U)", (r.returncode, "NOT YET" in r.stdout), (2, True))
-# times are this harness's "now", the check reads its own a moment later (over a second on a busy CI host): a case
-# that must not pass stays seconds clear of U, not one second (CI: "down U - 1 s ago" read U ago and passed)
-r, _, _, _ = stayed_run(U - 20, last_down_ago=U - 10)
-check("down U - 10 s ago: not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
+r, _, _, _ = stayed_run(U - 20, last_down_ago=U - 1)
+check("down U - 1 s ago: not yet", (r.returncode, "NOT YET" in r.stdout), (2, True))
 r, _, _, _ = stayed_run(U - 20, last_down_ago=U + 1)
 check("down U + 1 s ago: passes", (r.returncode, "stayed up" in r.stdout), (0, True))
 r, _, _, _ = stayed_run(30, last_down_ago=25)
