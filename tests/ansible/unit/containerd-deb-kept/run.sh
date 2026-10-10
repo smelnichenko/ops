@@ -10,9 +10,15 @@ W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 mkdir -p "$W/bin" "$W/keep"
 # as dpkg-query answers on production (containerd.io never installed there): the known package's line, an error for
-# the other and exit 1 (full run 14: pipefail ended the task silently on it)
+# the other and exit 1 (2026-10-10: pipefail ended the task silently on it)
 cat > "$W/bin/dpkg-query" <<'STUB'
 #!/bin/bash
+# DPKG=locked: dpkg's database unreadable (exit 2, its own message); DPKG=swapped: the Debian package removed, its config
+# kept, containerd.io installed (after the swap, a re-run)
+case "${DPKG:-}" in
+  locked) echo "dpkg-query: error: dpkg database locked" >&2; exit 2 ;;
+  swapped) printf 'containerd 1.7.24~ds1-6+deb13u1 config-files\ncontainerd.io 1.7.28-1 installed\n'; exit 0 ;;
+esac
 [ -n "${NONE:-}" ] || printf 'containerd 1.7.24~ds1-6+deb13u1 installed\n'
 echo "dpkg-query: no packages found matching containerd.io" >&2
 exit 1
@@ -60,6 +66,17 @@ if keep is not None:
     r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(env, NONE="1"))
     check("neither package installed: fails, says so", (r.returncode, r.stdout.strip()),
           (1, "no containerd package installed"))
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(env, DPKG="locked"))
+    check("dpkg's database unreadable: fails with dpkg's own error, never 'none installed'",
+          (r.returncode != 0, "database locked" in r.stdout + r.stderr, "no containerd package installed" in r.stdout),
+          (True, True, False))
+    open(os.path.join(W, "calls"), "w").close()
+    for f in os.listdir(os.path.join(W, "keep")):
+        os.remove(os.path.join(W, "keep", f))
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(env, DPKG="swapped"))
+    calls = open(os.path.join(W, "calls")).read().splitlines()
+    check("the Debian package removed (config-files), containerd.io installed: the installed one kept",
+          (r.returncode, calls), (0, ["apt-get download containerd.io=1.7.28-1"]))
 print("containerd-deb-kept: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_DEBKEPT

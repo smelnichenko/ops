@@ -241,10 +241,12 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          # dpkg-query exits 1 for the one of the two never installed (containerd.io on production): its answer, not its
-          # exit, says which is - none installed fails below
-          pkg=$({ dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}\n' containerd containerd.io \
-            2> /dev/null || true; } | awk '$3 == "installed" {print $1 "=" $2; exit}')
+          # dpkg-query exits 1 for the one of the two never installed (containerd.io on production): its answer, not that
+          # exit, says which is - none installed fails below; any other failure (its database unreadable) is its own
+          rc=0
+          out=$(dpkg-query -W -f='${binary:Package} ${Version} ${db:Status-Status}\n' containerd containerd.io) || rc=$?
+          [ "$rc" -le 1 ] || { echo "dpkg-query failed ($rc)"; exit "$rc"; }
+          pkg=$(awk '$3 == "installed" {print $1 "=" $2; exit}' <<< "$out")
           [ -n "$pkg" ] || { echo "no containerd package installed"; exit 1; }
           mkdir -p {{ upgrade_backup_dir }}
           cd {{ upgrade_backup_dir }}
