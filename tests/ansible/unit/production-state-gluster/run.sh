@@ -69,6 +69,17 @@ check("the mirror's root root:root 0755 (production's, read 2026-10-08)",
       [(r.get("owner"), r.get("group"), str(r.get("mode"))) for r in root], [("root", "root", "0755")])
 reload_ = [v for t in tasks for m, v in actions(t) if isinstance(v, dict) and v.get("daemon_reload") is True]
 check("systemd reads the fstab and units as production's", len(reload_) >= 1, True)
+# step 00's preview on that state (production's): check mode writes no unit, so systemd finds none to enable (full run
+# 14) - enabled in a preview only when its unit is there already
+sg = [t for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-gluster.yml")) for t in p.get("tasks") or []]
+unit = next(t for t in sg if str((t.get("ansible.builtin.copy") or {}).get("dest", "")).endswith(
+    "/gluster-volumes-ready.service"))
+enable = next(t for t in sg if (t.get("ansible.builtin.systemd_service") or {}).get("name") == "gluster-volumes-ready")
+reg = unit.get("register", "_none")
+w = enable.get("when", "true")
+check("setup-gluster's preview enables the boot unit only when it is there (new: skipped; applied, or there: enabled)",
+      [condition(w, ansible_check_mode=cm, **{reg: {"changed": ch}}) for cm, ch in
+       ((True, True), (True, False), (False, True), (False, False))], [False, True, True, True])
 print("production-state-gluster: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

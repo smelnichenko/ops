@@ -325,13 +325,16 @@
 
           [Install]
           WantedBy=remote-fs.target
+      register: _boot_unit
 
-    # not started: it is for the next boot - the volumes are mounted now
+    # not started: it is for the next boot - the volumes are mounted now. A preview writes no unit: a new one is not
+    # there to enable (production's Pis have none before step 00)
     - name: Enabled for the next boot
       ansible.builtin.systemd_service:
         name: gluster-volumes-ready
         enabled: true
         daemon_reload: true
+      when: not (ansible_check_mode and _boot_unit is changed)
 
 # ─── Mount GlusterFS on both Pis ────────────────────────────────────────────
 - name: Mount GlusterFS volume
