@@ -24,8 +24,8 @@ image registry.k8s.io/coredns/coredns v1.12.1 => image registry.k8s.io/coredns/c
 pkg kubeadm 1.34.12-1.1 (held) => pkg kubeadm 1.35.9-1.1 (held)
 pkg kubectl 1.34.12-1.1 (held) => pkg kubectl 1.35.9-1.1 (held)
 pkg kubelet 1.34.12-1.1 (held) => pkg kubelet 1.35.9-1.1 (held)
-pkg cri-tools 1.34.0-1.1 => pkg cri-tools 1.35.0-1.1
-pkg kubernetes-cni 1.7.1-1.1 => pkg kubernetes-cni 1.8.0-1.1
+pkg cri-tools 1.34.0-1.1 (held) => pkg cri-tools 1.35.0-1.1 (held)
+pkg kubernetes-cni 1.7.1-1.1 (held) => pkg kubernetes-cni 1.8.0-1.1 (held)
 k8s server v1.34.12 => k8s server v1.35.9
 playbook upgrade-kubeadm.yml -e k8s_upgrade_to=1.35.9
 # the playbook restarts the control plane: the controllers holding a leader lease restart with the API server

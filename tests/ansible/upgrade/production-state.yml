@@ -46,6 +46,15 @@
               istio.io/rev: default
       loop: [schnappy-production, schnappy-infra]
 
+    # ten holds kubeadm, kubelet and kubectl alone (read 2026-10-09); setup-kubeadm holds all five, as upgrade-kubeadm
+    # does from the first step that runs it - before that step the copy is ten's
+    - name: The CNI plugins and crictl unheld, as on ten (a run from before the first upgrade-kubeadm step)
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop: [kubernetes-cni, cri-tools]
+      when: (upgrade_from | default('00-gluster-boot')) <= '13-kubernetes-1.34.12'
+
     # The CNPG owner secret as ten has it - CNPG's own (an earlier bootstrap path generated it), username "app" - not a
     # fix of it: the CNPG steps must meet production's state. CNPG's instance manager then fails to sync the owner's
     # password from it, as on ten ("wrong username 'app' in secret, expected 'monitor'", about 6 an hour, read
