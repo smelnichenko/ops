@@ -99,11 +99,11 @@ import yaml
 c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:step"]["cmds"]]
 print(any("production-data-check.yml" in x for x in c))') \
 $(grep -cx 'start prod play playbooks/production-data-check.yml' scripts/upgrade-step-checks.sh)" "False 1"
-check "the copy's inventory names its smartctl target and PublicEndpointDown; production's names none" "$("$PY" -c '
+check "the copy's inventory names its smartctl target, PublicEndpointDown and VeleroBSLUnavailable; production's names none" "$("$PY" -c '
 import yaml
 v = yaml.safe_load(open("deploy/ansible/inventory/vagrant.yml"))["all"]["vars"]
 p = open("deploy/ansible/inventory/production.yml").read()
 print(v.get("production_check_allowed_down"), v.get("production_check_allowed_firing"), "production_check_allowed" in p)')" \
-  "['scrapeConfig/schnappy-infra/schnappy-smartctl-exporter'] ['PublicEndpointDown'] False"
+  "['scrapeConfig/schnappy-infra/schnappy-smartctl-exporter'] ['PublicEndpointDown', 'VeleroBSLUnavailable'] False"
 echo "production-data-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
