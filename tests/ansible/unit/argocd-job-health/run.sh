@@ -45,17 +45,17 @@ def table(v):
     return json.dumps(v)
 
 
-def health(status, completions=None):
+def health(status, completions=None, **spec):
     obj = {"status": status} if status is not None else {}
-    if completions is not None:
-        obj["spec"] = {"completions": completions}
+    if completions is not None or spec:
+        obj["spec"] = dict(spec, **({"completions": completions} if completions is not None else {}))
     prog = f"obj = {table(obj)}\nlocal f = assert(loadstring({json.dumps(lua)}))\nlocal hs = f()\nio.write(hs.status, '|', hs.message or '')\n"
     r = subprocess.run(["lua5.1", "-"], input=prog, capture_output=True, text=True)
     return r.stdout if r.returncode == 0 else "error: " + r.stderr.strip()
 
 
 check("the check found", isinstance(lua, str) and "hs.status" in lua, True)
-st = lambda s, **k: health(s, **k).split("|")[0]
+st = lambda s, **k: health(s if s else None, **k).split("|")[0]
 check("no status yet, one running: Progressing", (st(None), st({"active": 1})), ("Progressing", "Progressing"))
 check("a pod succeeded: Healthy - a failed one before it or not",
       (st({"succeeded": 1}), st({"succeeded": 1, "failed": 1})), ("Healthy", "Healthy"))
@@ -79,6 +79,18 @@ check("complete after a failed try: Healthy, the failed try said",
       ("Healthy", True))
 check("short of its completions (1 of 3 succeeded, one running): Progressing",
       st({"succeeded": 1, "active": 1}, completions=3), "Progressing")
+# completions reached by Kubernetes' own word (its success policy: SuccessCriteriaMet, before or with Complete), short of
+# completions by count; a condition not True is no verdict; a work queue (no completions, pods in parallel) done once
+# none runs; a suspended Job Suspended (Argo's own check's word), never "no pods have finished" for ever
+done = [{"type": "SuccessCriteriaMet", "status": "True"}]
+check("Kubernetes says complete (SuccessCriteriaMet, with or without Complete), 1 of 3 counted: Healthy",
+      (st({"succeeded": 1, "conditions": done + [{"type": "Complete", "status": "True"}]}, completions=3),
+       st({"succeeded": 1, "conditions": done}, completions=3)), ("Healthy", "Healthy"))
+check("a Failed condition not True: no verdict - Progressing", st({"failed": 1, "active": 1, "conditions":
+      [{"type": "Failed", "status": "False"}]}), "Progressing")
+check("a work queue (no completions, parallelism 3): one succeeded, two running - Progressing; none running - Healthy",
+      (st({"succeeded": 1, "active": 2}, parallelism=3), st({"succeeded": 3}, parallelism=3)), ("Progressing", "Healthy"))
+check("a suspended Job: Suspended", st({}, suspend=True), "Suspended")
 print("argocd-job-health: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

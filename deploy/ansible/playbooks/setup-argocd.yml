@@ -486,6 +486,11 @@
                 hs = {}
                 hs.status = "Progressing"
                 hs.message = "no pods have finished yet"
+                if obj.spec ~= nil and obj.spec.suspend == true then
+                  hs.status = "Suspended"
+                  hs.message = "the Job is suspended"
+                  return hs
+                end
                 if obj.status ~= nil then
                   -- Kubernetes' verdict decides: failed (Failed, or FailureTarget while its pods terminate) or
                   -- complete; a failed pod the Job retries is no failure yet (a PostSync hook was failed at its first
@@ -500,18 +505,22 @@
                       end
                     end
                   end
-                  local want = 1
+                  -- by count: its completions, or a work queue's (no completions, pods in parallel) once none runs
+                  local want, queue = 1, false
                   if obj.spec ~= nil and obj.spec.completions ~= nil then
                     want = obj.spec.completions
+                  elseif obj.spec ~= nil and obj.spec.parallelism ~= nil and obj.spec.parallelism > 1 then
+                    queue = true
                   end
                   local succeeded = obj.status.succeeded or 0
+                  local counted = succeeded >= want and not (queue and (obj.status.active or 0) > 0)
                   if failed ~= nil then
                     hs.status = "Degraded"
                     hs.message = (obj.status.failed or 0) .. " pod(s) failed: read the pod log, then the Job is deleted and re-synced"
                     if failed.message ~= nil then
                       hs.message = hs.message .. " (" .. failed.message .. ")"
                     end
-                  elseif complete or succeeded >= want then
+                  elseif complete or counted then
                     hs.status = "Healthy"
                     hs.message = succeeded .. " pod(s) succeeded"
                     if obj.status.failed ~= nil and obj.status.failed > 0 then
