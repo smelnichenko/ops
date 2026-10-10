@@ -34,6 +34,11 @@ stop() {
   # the rest. The time-stamping process is no job (a process substitution - `jobs -p` never lists it, measured on bash
   # 5.2): waiting for it would wait for this script's own end
   own_jobs own
+  # ... and a job `wait` collected whose session may still hold its leftovers (a signal during left_behind): stopped
+  # with the rest until left_behind has done with it
+  for j in "${build_job:-}" "${pin:-}"; do
+    [ -z "$j" ] || [[ " ${own[*]} " == *" $j "* ]] || own+=("$j")
+  done
   # go-task KILLed at once: it ran the build's next command once the running one ended, the grace still running. Each
   # job's processes - every group of its session - given STOP_GRACE seconds to end (the pin's trap removes its
   # containers), then killed, said: one that ignored the TERM held the stop for good
@@ -74,12 +79,14 @@ left_behind() {  # left_behind <job> <what>: 0 when nothing of its session runs 
 build=0
 wait "$build_job" || build=$?
 left_behind "$build_job" "THE BUILD" || build=1
+build_job=""
 # deaf first: a signal's trap run inside the stop ended it, the pin left running
 [ "$build" = 0 ] || { echo "THE BUILD FAILED (exit $build) - the ClickHouse pin stopped"; trap '' INT TERM HUP PIPE
   exit "$build"; }
 pinned=0
 wait "$pin" || pinned=$?
 left_behind "$pin" "THE CLICKHOUSE PIN" || pinned=1
+pin=""
 trap - EXIT
 if [ "$pinned" != 0 ]; then
   echo "THE CLICKHOUSE PIN FAILED (.upgrade/clickhouse-pin.log):"; tail -20 .upgrade/clickhouse-pin.log; exit 1

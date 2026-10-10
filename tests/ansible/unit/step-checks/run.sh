@@ -287,6 +287,27 @@ check "the bound reached, the reader gone: not judged (1), the deaf check gone, 
 pid=$(cat "$T/long.pid" 2> /dev/null)
 if [ -n "$pid" ] && [ "$(proc_info "$pid" | awk '{print $4}')" = ansible-playboo ]; then kill -KILL "$pid"; fi
 rm -f "$T/pipe4"
+# a TERM landing in the cleanup an ordinary exit began (forced: the cleanup's first line sends it): the verdict and the
+# cleanup stand - the exit's own code, the work directory removed (not 130 with the directory left)
+sed 's|^  local groups$|&\n  kill -TERM $$|' "$T/scripts/upgrade-step-checks.sh" > "$T/scripts/tic.sh"
+rm -rf "$T/.upgrade"/step-checks.*
+PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/tic.sh" i p 24.8 schnappy < /dev/null > /dev/null 2>&1; rc=$?
+check "a check failed, a TERM in the cleanup: 1, the work directory removed" \
+  "$rc $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "1 0"
+rm -rf "$T/.upgrade"/step-checks.*
+ALL_PASS=1 PATH="$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/tic.sh" i p 24.8 schnappy < /dev/null > /dev/null 2>&1; rc=$?
+check "every check passed, a TERM in the cleanup: 0, the work directory removed" \
+  "$rc $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "0 0"
+rm -rf "$T/.upgrade"/step-checks.*
+mkdir -p "$T/bin-novagrant"; printf '#!/bin/sh\nexit 1\n' > "$T/bin-novagrant/vagrant"; chmod +x "$T/bin-novagrant/vagrant"
+PATH="$T/bin-novagrant:$T/bin:$PATH" timeout -k 5 60 bash "$T/scripts/tic.sh" i p 24.8 schnappy < /dev/null > /dev/null 2>&1; rc=$?
+check "vagrant ssh-config failed, a TERM in the cleanup: 1, the work directory removed" \
+  "$rc $(ls -d "$T/.upgrade"/step-checks.* 2> /dev/null | wc -l)" "1 0"
+rm -rf "$T/.upgrade"/step-checks.* "$T/bin-novagrant"
+# on_signal's return (the bound reached as the last check ended - the verdict goes on) arms the reader-gone trap again:
+# the PIPE handler stays on_signal's, not left ignored
+check "on_signal's return arms the INT/TERM, HUP and PIPE traps again" \
+  "$(sed -n '/^on_signal() {/,/^}/p' "$T/scripts/upgrade-step-checks.sh" | grep -cE "trap 'on_signal (130' INT TERM|129' HUP|141' PIPE)")" 3
 # ... and where no PID can be made reused (CI: no user namespaces): its watchdog ended and reaped just before the last
 # stop, the stops it asks for recorded - none names the watchdog's PID (one the system may give another process)
 python3 - "$T/scripts/upgrade-step-checks.sh" "$T/scripts/reaped-wd.sh" "$T" <<'PYSEAM'

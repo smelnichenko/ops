@@ -202,10 +202,26 @@ done
 wait "$sp"
 check "a SIGPIPE, then a TERM in the stop: the pin stopped, its process gone" \
   "$(pin_end) $(gone "$T/.upgrade/pin.pid")" "stopped gone"
+# a TERM right after the build's go-task was waited for (forced in a copy), its session holding a leftover: the stop
+# still stops that session - a job `wait` collected is no job of the script's any more, and the stop forgot it
+sed 's#^wait "\$build_job" || build=\$?$#&\nkill -TERM $$#' "$T/scripts/upgrade-build-with-pin.sh" > "$T/scripts/term-after-wait.sh"
+check "the copy with a TERM right after the build's wait" "$(grep -c '^kill -TERM \$\$$' "$T/scripts/term-after-wait.sh")" 1
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/left.pid" "$T/.upgrade/pin.finished"
+(cd "$T" && exec env LEFTOVER=1 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/term-after-wait.sh < /dev/null > "$T/term-after-wait.out" 2>&1); rc=$?
+check "a TERM after the build's wait, a leftover in its session: 130, the leftover and the pin both gone" \
+  "$rc $(gone "$T/.upgrade/left.pid") $(gone "$T/.upgrade/pin.pid")" "130 gone gone"
+# the build failed, a TERM landing in the stop (forced: its first line sends it): the build's exit stands, the pin
+# stopped - the exit deaf first, or the TERM's trap ended the stop half done
+rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/pin.finished"
+(cd "$T" && exec env BUILD=2 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
+  bash scripts/term-in-stop.sh < /dev/null > "$T/fail-term.out" 2>&1); rc=$?
+check "the build failed, a TERM in the stop: its exit (2), the pin stopped, its process gone" \
+  "$rc $(pin_end) $(gone "$T/.upgrade/pin.pid")" "2 stopped gone"
 # a signal between a job's start and the line that keeps its PID: the job stopped all the same - every job of the
 # script's, not the PIDs it kept (a copy without `pin=$!` stands for one that landed there)
 sed '/^pin=\$!$/d' "$T/scripts/upgrade-build-with-pin.sh" > "$T/scripts/unkept.sh"
-check "the copy has no pin=\$! (the stand-in holds)" "$(grep -c "^pin=" "$T/scripts/unkept.sh")" 0
+check "the copy has no pin=\$! (the stand-in holds)" "$(grep -c '^pin=\$!$' "$T/scripts/unkept.sh")" 0
 rm -f "$T/.upgrade/pin.pid" "$T/.upgrade/build.pid" "$T/.upgrade/pin.finished"
 (cd "$T" && exec env BUILD_SECONDS=30 PIN_SECONDS=30 PATH="$T/bin:$PATH" timeout -k 5 30 \
   bash scripts/unkept.sh < /dev/null > "$T/unkept.out" 2>&1) &

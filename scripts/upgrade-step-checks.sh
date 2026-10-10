@@ -51,7 +51,7 @@ not_judged() {  # the checks not judged named, each with its log, and the failur
   done
   failures failed
   [ "${#failed[@]}" -eq 0 ] || echo "STEP CHECKS FAILED: ${failed[*]}"
-  trap '' INT TERM HUP PIPE  # deaf before an exit: a signal's trap run inside the cleanup ended it, its checks left running
+  trap '' INT TERM HUP PIPE  # deaf before an exit (a trap run inside the cleanup ended it)
   exit 1
 }
 cleanup() {
@@ -76,6 +76,7 @@ on_signal() {  # on_signal <exit>: a signal's first act - no other cuts the stop
     if [ "${#done_[@]}" -eq "${#pids[@]}" ]; then
       trap 'on_signal 130' INT TERM
       trap 'on_signal 129' HUP
+      trap 'on_signal 141' PIPE
       return
     fi
     echo "STEP CHECKS: not ended within $bound s - stopped"
@@ -95,7 +96,8 @@ set -m
 
 # the VMs' ssh config, read once: Vagrant runs one action per machine at a time, so parallel `vagrant ssh` calls fail;
 # keepalives so a dead connection ends
-vagrant ssh-config > "$logs/ssh-config" 2> /dev/null || { echo "vagrant ssh-config failed"; exit 1; }
+vagrant ssh-config > "$logs/ssh-config" 2> /dev/null || { echo "vagrant ssh-config failed"; trap '' INT TERM HUP PIPE
+  exit 1; }
 printf '\nHost *\n  ServerAliveInterval 15\n  ServerAliveCountMax 4\n  ConnectTimeout 30\n  LogLevel ERROR\n' \
   >> "$logs/ssh-config"
 export VAGRANT_SSH_CONFIG=$logs/ssh-config
@@ -175,8 +177,8 @@ own_jobs left_
 failures failed
 if [ "${#failed[@]}" -gt 0 ]; then
   echo "STEP CHECKS FAILED: ${failed[*]}"
-  trap '' INT TERM HUP PIPE  # deaf before an exit: a signal's trap run inside the cleanup ended it, its checks left running
+  trap '' INT TERM HUP PIPE  # deaf before an exit (a trap run inside the cleanup ended it)
   exit 1
 fi
 echo "STEP CHECKS PASSED: ${names[*]}"
-trap '' INT TERM HUP PIPE  # deaf before an exit: a signal's trap run inside the cleanup ended it, its checks left running
+trap '' INT TERM HUP PIPE  # deaf before an exit (a trap run inside the cleanup ended it)

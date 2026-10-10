@@ -184,6 +184,17 @@ sed 's|^  local rc=\$? own j steps_=()$|&\n  kill -TERM $$|' "$W/run/scripts/upg
 check "the copy with a TERM at the stop's start" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/term-in-stop.sh")" 1
 run script:PIPE SCRIPT=scripts/term-in-stop.sh
 check "a SIGPIPE, then a TERM in the stop: the step stopped whole (gone)" "$alive" gone
+# an INT, then a SIGPIPE landing in the stop (forced: the stop's first line sends it): each signal's trap deaf to the
+# others, PIPE among them - the step stopped whole, ended 130
+sed 's|^  local rc=\$? own j steps_=()$|&\n  kill -PIPE $$|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/pipe-in-stop.sh"
+check "the copy with a SIGPIPE at the stop's start" "$(grep -c '^  kill -PIPE \$\$$' "$W/run/scripts/pipe-in-stop.sh")" 1
+run INT SCRIPT=scripts/pipe-in-stop.sh
+check "an INT, then a SIGPIPE in the stop: the step stopped whole (gone), ended 130" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $alive" "130 gone"
+# an ordinary failure's exit (no such step), a TERM in the stop: its own exit (1) - every exit deaf first
+WAIT_FOR=file:rc run none SCRIPT=scripts/term-in-stop.sh UPGRADE_FROM=99-none
+check "a refusal's exit (no such step), a TERM in the stop: ended 1, said" \
+  "$(cat "$W/rc" 2> /dev/null || echo none) $(grep -c 'no such step' "$W/out")" "1 1"
 # a TERM between the step's start and its record (forced in a copy: sent right after the start)
 sed 's|^  setsid task "\$@" .* &$|&\n  kill -TERM $$|' "$W/run/scripts/upgrade-full-steps.sh" > "$W/run/scripts/unkept.sh"
 check "the copy with a TERM before the step's record made" "$(grep -c '^  kill -TERM \$\$$' "$W/run/scripts/unkept.sh")" 1
