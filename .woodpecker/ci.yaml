@@ -37,7 +37,7 @@ steps:
       kubernetes:
         resources:
           requests: { cpu: 100m, memory: 256Mi }
-          limits: { cpu: 1000m, memory: 512Mi }
+          limits: { cpu: 2000m, memory: 1Gi }
 
   # the tests' PromQL as Prometheus evaluates it (the unit harnesses' stubs answer whatever is asked) - on the version
   # production runs, pinned by its digest (the tag's manifest list, read 2026-10-08): a tag moves
