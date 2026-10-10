@@ -111,7 +111,7 @@ APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "in
     "values.yaml", "values.vagrant.yaml"))
 BEFORE_LEDGER = "02-istio-chart-repo"
 # the run's record, and the refusal a declined question gives
-RUN_JSON = os.path.join(PROVEN, "run.json")
+RUN_JSON = "run.json"  # under PROVEN, joined where used (a test moves PROVEN)
 NOT_CONFIRMED = "not confirmed"
 
 # what may land on infra's or platform's main after a full run without it proving it again: what renders nothing for
@@ -620,7 +620,7 @@ def proof_start(from_step=None):
     head = run(["git", "-C", OPS, "rev-parse", "HEAD"], capture_output=True, check=True).stdout.strip()
     os.makedirs(PROVEN, exist_ok=True)
     started = datetime.datetime.now(datetime.timezone.utc).strftime(TIME_FORMAT)
-    write_json(RUN_JSON, {"ops": head, "run": started, "from": from_step, "main": mains,
+    write_json(os.path.join(PROVEN, RUN_JSON), {"ops": head, "run": started, "from": from_step, "main": mains,
                                                   "ansible": installed, "branches": branch_shas()})
     print(f"PROOF: run {started} of ops {head[:10]} from {from_step}")
 
@@ -628,13 +628,13 @@ def proof_start(from_step=None):
 def proof_complete():
     """The run's proofs marked complete - test:upgrade:full's last act, after every step and the backups restored at
     its end: a run that failed there, or stopped at a step, leaves its proofs unmarked, and production refuses them."""
-    path = RUN_JSON
+    path = os.path.join(PROVEN, RUN_JSON)
     if not os.path.exists(path):
         sys.exit("REFUSED: no run started (proof-start) - nothing to mark complete")
     run_id = json.load(open(path))["run"]
     marked = []
     for name in sorted(os.listdir(PROVEN)):
-        if not name.endswith(".json") or name == os.path.basename(RUN_JSON):
+        if not name.endswith(".json") or name == RUN_JSON:
             continue
         proof = json.load(open(os.path.join(PROVEN, name)))
         if proof.get("run") == run_id:
@@ -714,7 +714,7 @@ def write_json(path, obj, **kw):
 
 
 def record_proof(step, infra_sha, platform_sha):
-    run_info = json.load(open(RUN_JSON))
+    run_info = json.load(open(os.path.join(PROVEN, RUN_JSON)))
     changed = ops_unchanged_since(run_info["ops"], PROVEN_PATHS)
     if changed:
         sys.exit(f"REFUSED: the ops tree changed during the run ({', '.join(changed)}) - the run proves nothing")
