@@ -47,6 +47,19 @@ check(f"only for a run from {first} or before",
       [condition(gate, **({"upgrade_from": f} if f else {})) for f in (None, steps[0], first,
                                                                        steps[steps.index(first) + 1])],
       [True, True, True, False])
+# every task that diffs a fresh copy against production's inventory puts the pair back first: the baseline tasks diffed
+# right after setup-kubeadm and always differed (its run, tagged holds - the guard with it)
+tf = yaml.safe_load(open("Taskfile.yml"))["tasks"]
+diffing = {n: [str(c.get("cmd", c)) if isinstance(c, dict) else str(c) for c in (t or {}).get("cmds") or []]
+           for n, t in tf.items() if "prod-inventory.txt" in str((t or {}).get("cmds"))}
+order = {n: (next((i for i, c in enumerate(cs) if "production-state.yml" in c and "--tags holds" in c), None),
+             next((i for i, c in enumerate(cs) if "prod-inventory.txt" in c), None)) for n, cs in diffing.items()
+         if not any("test:upgrade:argo" in c or "production-state.yml" in c and "--tags" not in c for c in cs)}
+check("the baseline tasks put the pair back (production-state.yml --tags holds) before their diff",
+      sorted(n for n, (h, d) in order.items() if d is not None and (h is None or h > d)), [])
+check("... its task tagged holds, its guard always",
+      ("holds" in (t.get("tags") or []), "always" in (tasks[0].get("tags") or []), "vagrant-only" in str(tasks[0])),
+      (True, True, True))
 print("k8s-holds-follow-production: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

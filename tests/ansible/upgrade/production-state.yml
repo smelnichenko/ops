@@ -30,9 +30,10 @@
   tasks:
     - name: Vagrant VMs only (fails closed on any other host)
       ansible.builtin.import_tasks: ../vagrant-only.yml
+      tags: [always]
 
     # ten's injection label from the start, as ten has it: made bare, a pod Argo started before its cluster-config
-    # labelled the namespace ran without a sidecar, and the STRICT-mTLS Postgres reset it (full run 14: four apps
+    # labelled the namespace ran without a sidecar, and the STRICT-mTLS Postgres reset it (2026-10-10: four apps
     # crash-looped; cluster-config added the label 36 s after their pods)
     - name: Namespaces the objects below live in (this runs before Argo; its cluster-config applies the other labels)
       kubernetes.core.k8s:
@@ -54,6 +55,7 @@
         selection: install
       loop: [kubernetes-cni, cri-tools]
       when: (upgrade_from | default('00-gluster-boot')) <= '13-kubernetes-1.34.12'
+      tags: [holds]   # the baseline tasks run this alone, before their diff against production's inventory
 
     # The CNPG owner secret as ten has it - CNPG's own (an earlier bootstrap path generated it), username "app" - not a
     # fix of it: the CNPG steps must meet production's state. CNPG's instance manager then fails to sync the owner's
