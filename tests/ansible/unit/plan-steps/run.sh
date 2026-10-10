@@ -13,6 +13,12 @@ files = sorted(f[:-4] for f in os.listdir("tests/ansible/upgrade/steps") if f.en
 ok = rows == files
 print(("PASS" if ok else "FAIL") + f" the plan's step table: {len(rows)} rows, {len(files)} step files"
       + ("" if ok else f" - missing {sorted(set(files) - set(rows))}, extra {sorted(set(rows) - set(files))}"))
+# the playbooks gate on a run's start by comparing step names as strings (upgrade_from <= '13-...'): sound while every
+# name starts with two digits and a dash - a step 100, or a 13a, would sort out of place
+bad = [f for f in files if not re.match(r"^[0-9]{2}-[a-z0-9]", f)]
+print(("PASS" if not bad else "FAIL") + " every step named NN-... (the playbooks compare step names as strings)"
+      + ("" if not bad else f" - {bad}"))
+ok = ok and not bad
 print("plan-steps: " + ("ALL-PASS" if ok else "1 FAILED"))
 sys.exit(0 if ok else 1)
 PY_PLANSTEPS
