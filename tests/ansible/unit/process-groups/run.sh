@@ -343,13 +343,17 @@ cp "$W/late/bin/task" "$W/forced/late/bin/task"
 sed 's/^if os.fork() == 0:/time.sleep(0.5)\nif os.fork() == 0:/' "$W/late/start-task" > "$W/forced/late/start-task"
 chmod +x "$W/forced/late/start-task"
 eval "orig_$(declare -f job_processes)"
-forced=0
+forced=0 fdir=forced
 job_processes() {
   orig_job_processes "$@"
   local c
   [ "${FUNCNAME[1]}" = resend_term ] || return 0
   if [ "$forced" = 0 ] && [ -s "$W/forced/late.pid" ] && [ ! -e "$W/forced/late.pid.n.pid" ]; then
-    forced=${FUNCNAME[1]}
+    local -n _held=$2
+    local lp x kid=no
+    lp=$(cat "$W/$fdir/late.pid" 2> /dev/null)
+    for x in "${_held[@]}"; do [ "${x#* }" = "$lp" ] && kid=yes; done
+    [ "$kid" = yes ] || forced=1
     for _ in $(seq 100); do
       read -r c 2> /dev/null < "/proc/$(cat "$W/forced/late.pid")/comm"
       [ "$c" = task ] && break
@@ -366,7 +370,7 @@ wait "$s" 2> /dev/null
 eval "$(declare -f orig_job_processes | sed '1s/^orig_//')"
 check "-n task, a child forked during the look's scan: forced so; the child TERMed once, nothing killed at the end" \
   "$forced $((SECONDS - t0 < 10)) $(grep -c '^caught$' "$W/forced/late.pid.n" 2> /dev/null) $(grep -c killed "$W/forced/late.out")" \
-  "resend_term 1 1 0"
+  "1 1 1 0"
 for f in "$W/forced/late.pid" "$W/forced/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
@@ -402,12 +406,16 @@ cat > "$W/named/late/start-task" <<'NAMEDSTART'
 exec "$(dirname "$0")/bin/task" "$1"
 NAMEDSTART
 chmod +x "$W/named/late/start-task"
-forced=0
+forced=0 fdir=named
 job_processes() {
   orig_job_processes "$@"
   [ "${FUNCNAME[1]}" = resend_term ] || return 0
   if [ "$forced" = 0 ] && [ -s "$W/named/late.pid" ] && [ ! -e "$W/named/late.pid.n.pid" ]; then
-    forced=${FUNCNAME[1]}
+    local -n _held=$2
+    local lp x kid=no
+    lp=$(cat "$W/$fdir/late.pid" 2> /dev/null)
+    for x in "${_held[@]}"; do [ "${x#* }" = "$lp" ] && kid=yes; done
+    [ "$kid" = yes ] || forced=1
     for _ in $(seq 40); do [ -s "$W/named/late.pid.n.pid" ] && break; sleep 0.05; done
   fi
 }
@@ -421,7 +429,7 @@ eval "$(declare -f orig_job_processes | sed '1s/^orig_//')"
 child=$(cat "$W/named/late.pid.n.pid" 2> /dev/null)
 check "-n task, named from its start, forking during the look's scan: forced so; stopped first - no child left unTERMed, nothing killed at the end" \
   "$forced $((SECONDS - t0 < 10)) $({ [ -z "$child" ] || grep -qx caught "$W/named/late.pid.n"; } && echo ok) $(grep -c killed "$W/named/late.out")" \
-  "resend_term 1 ok 0"
+  "1 1 ok 0"
 for f in "$W/named/late.pid" "$W/named/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
@@ -461,6 +469,69 @@ _procfs_root=$W/nwproc stop_named "$s" task named_set2
 check "stop_named: a thread still running at the deadline - out of the KILL set; every thread stopped - in it" \
   "$([[ $named_set == *" $s "* ]] && echo in || echo out) $([[ $named_set2 == *" $s "* ]] && echo in || echo out)" "out in"
 kill -KILL -- "-$s" 2> /dev/null
+
+# stop_named: the one left out (not wholly stopped) stays stopped - STOP-pending, never continued - for the next look
+setsid "$W/named-wait/bin/task" 60 < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+for _ in $(seq 100); do read -r c 2> /dev/null < "/proc/$s/comm"; [ "$c" = task ] && break; sleep 0.05; done
+rm -rf "$W/nwproc2"; mkdir -p "$W/nwproc2/$s/task/$s" "$W/nwproc2/$s/task/99999"
+printf '%s (task) T 1 %s %s\n' "$s" "$s" "$s" | tee "$W/nwproc2/$s/stat" > "$W/nwproc2/$s/task/$s/stat"
+printf '99999 (task) R 1 %s %s\n' "$s" "$s" > "$W/nwproc2/$s/task/99999/stat"
+_procfs_root=$W/nwproc2 stop_named "$s" task named_set
+read -r st < "/proc/$s/stat"; set -- ${st##*) }
+check "stop_named: the one left out of the KILL set is still stopped (state T), not continued" "$1" T
+kill -KILL -- "-$s" 2> /dev/null
+
+# resend_term -n: a process stopped whose look's list left it out is not continued (a pid not listed may be another's
+# by now); one whose start is not the stopped one's is neither KILLed nor continued (its pid reused)
+setsid "$W/named-wait/bin/task" 60 < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+for _ in $(seq 100); do read -r c 2> /dev/null < "/proc/$s/comm"; [ "$c" = task ] && break; sleep 0.05; done
+leave_out=$s
+eval "orig_jp_$(declare -f job_processes)"
+job_processes() {  # resend_term's own list without the left-out pid
+  orig_jp_job_processes "$@"
+  [ "${FUNCNAME[1]}" = resend_term ] || return 0
+  local -n _list=$2
+  local kept=() y
+  for y in "${_list[@]}"; do [ "${y% *}" = "$leave_out" ] || kept+=("$y"); done
+  _list=("${kept[@]}")
+}
+sent_lo=" "
+resend_term "$s" 0 sent_lo task
+read -r st < "/proc/$s/stat"; set -- ${st##*) }
+check "resend_term -n: stopped, left out of its look's list: not continued (state T), not KILLed" "$1" T
+eval "$(declare -f orig_jp_job_processes | sed '1s/^orig_jp_//')"
+kill -KILL -- "-$s" 2> /dev/null
+setsid "$W/named-wait/bin/task" 60 < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+for _ in $(seq 100); do read -r c 2> /dev/null < "/proc/$s/comm"; [ "$c" = task ] && break; sleep 0.05; done
+eval "orig_sn_$(declare -f stop_named)"
+stop_named() {  # as stop_named, its record of the process's start then made another's
+  orig_sn_stop_named "$@"
+  _pg_started[$s]=1
+}
+sent_id=" "
+resend_term "$s" 0 sent_id task
+read -r st < "/proc/$s/stat"; set -- ${st##*) }
+check "resend_term -n: a pid whose start is not the stopped process's: not KILLed, not continued" "$1" T
+eval "$(declare -f orig_sn_stop_named | sed '1s/^orig_sn_//')"
+kill -KILL -- "-$s" 2> /dev/null
+
+# wait_stopped: several never stopping share the one deadline (not one each); traced, zombie and dead threads count
+for q in 5001 5002 5003 5004; do
+  mkdir -p "$W/sharedproc/$q/task/$q"
+  printf '%s (task) R 1 %s %s\n' "$q" "$q" "$q" | tee "$W/sharedproc/$q/stat" > "$W/sharedproc/$q/task/$q/stat"
+done
+mkdir -p "$W/sharedproc/6001/task/6001" "$W/sharedproc/6001/task/6002" "$W/sharedproc/6001/task/6003"
+printf '6001 (task) T 1 6001 6001\n' | tee "$W/sharedproc/6001/stat" > "$W/sharedproc/6001/task/6001/stat"
+printf '6002 (task) t 1 6001 6001\n' > "$W/sharedproc/6001/task/6002/stat"
+printf '6003 (task) Z 1 6001 6001\n' > "$W/sharedproc/6001/task/6003/stat"
+t0=$(cut -d' ' -f1 /proc/uptime)
+_procfs_root=$W/sharedproc wait_stopped running 5001 5002 5003 5004 6001
+t1=$(cut -d' ' -f1 /proc/uptime)
+check "wait_stopped: four never stopping, one deadline for all (under 0.9 s); T, t and Z threads stopped" \
+  "$running $(awk -v a="$t0" -v b="$t1" 'BEGIN {print (b - a < 0.9)}')" " 5001 5002 5003 5004  1"
 
 # a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
 # between that read and the TERM (here as -n's named kill runs: the job forks it then) that lost the TERM - deaf at it,
