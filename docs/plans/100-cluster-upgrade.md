@@ -1286,6 +1286,17 @@ runbooks naming the old alert, their fix steps not clearing it; VeleroBSLUnavail
 production's weekly Velero backup PartiallyFailed four weeks running (two 03:00 CronJob pods' emptyDirs - no data
 volume) with no alert for a partial failure or a missing weekly backup.
 
+Operator 2026-10-11: both yes; pushed 11:44 (platform 571959a, infra e9d765d). The hook Jobs: a clock-bound wait in
+each, k6's maxDuration 2 m, deadlines 1560 / 1200 / 900 s, chart-render-checks failing an unbounded one. The weekly
+backup: every failed volume was a Job pod's emptyDir (hyperfoil-load at 03:00 UTC every week, the hourly etcd-backup
+twice) - a 70-minute backup always overlaps an hourly Job, so no schedule move avoids them; every chart Job and
+CronJob pod and etcd-backup's carry velero.io/exclude-from-backup. Alerts: VeleroScheduledBackupFailed (the rename),
+VeleroBackupPartiallyFailed and VeleroWeeklyBackupMissing (warnings); both age alerts wait one period after a Velero
+start - Velero keeps the last success in memory only, so every restart (the upgrade's included) fired
+VeleroDailyBackupMissing for up to 30 h - and fire with Velero down; promtool tests, each case red reverted.
+VeleroWeeklyBackupMissing fires in production until the next weekly (2026-10-18) completes: no full weekly since
+the Velero start of 2026-10-03.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io

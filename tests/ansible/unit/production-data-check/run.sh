@@ -99,7 +99,7 @@ import yaml
 c = [str(x.get("cmd", x) if isinstance(x, dict) else x) for x in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgrade:step"]["cmds"]]
 print(any("production-data-check.yml" in x for x in c))') \
 $(grep -cx 'start prod play playbooks/production-data-check.yml' scripts/upgrade-step-checks.sh)" "False 1"
-check "the copy's inventory names its smartctl target, PublicEndpointDown and VeleroDailyBackupMissing (a failed backup, VeleroBSLUnavailable, never); production's names none" "$("$PY" -c '
+check "the copy's inventory names its smartctl target, PublicEndpointDown and VeleroDailyBackupMissing (a failed backup, VeleroScheduledBackupFailed, never); production's names none" "$("$PY" -c '
 import yaml
 v = yaml.safe_load(open("deploy/ansible/inventory/vagrant.yml"))["all"]["vars"]
 p = open("deploy/ansible/inventory/production.yml").read()

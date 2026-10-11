@@ -26,7 +26,7 @@ all:
     # deploy/ansible/playbooks/production-data-check.yml: what the copy lacks by nature - the smartctl exporter (the VM's
     # virtio disk reports no SMART: nothing listens on 9633), the public endpoints (no internet from the copy) and a
     # daily backup in the last 30 h (a copy hours old never ran its daily schedule; tests/ansible/upgrade/backup-check.yml
-    # proves Velero's backups instead) - a failed scheduled backup (VeleroBSLUnavailable) is never allowed
+    # proves Velero's backups instead) - a failed scheduled backup (VeleroScheduledBackupFailed) is never allowed
     production_check_allowed_down:
       - scrapeConfig/schnappy-infra/schnappy-smartctl-exporter
     production_check_allowed_firing:
