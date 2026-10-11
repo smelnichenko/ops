@@ -72,6 +72,13 @@ check("etcdAPICall is kubeadm's own upgradeManifests (the time any static pod ge
       seconds(c["timeouts"]["etcdAPICall"]), seconds(defaults["timeouts"]["upgradeManifests"]))
 check("etcdAPICall longer than kubeadm's default (which failed step 13)",
       seconds(c["timeouts"]["etcdAPICall"]) > seconds(defaults["timeouts"]["etcdAPICall"]), True)
+# the API server is down while etcd restarts (one control-plane node): kubeadm's next API call (the etcd endpoints'
+# list, right after etcd's upgrade) waits for it as long as for etcd, not its default (2026-10-11: step 13's apply,
+# "context deadline exceeded" on that list - the copy's API server back after kubeadm's default)
+check("kubernetesAPICall as long as etcdAPICall, longer than kubeadm's default",
+      ("kubernetesAPICall" in c["timeouts"] and seconds(c["timeouts"]["kubernetesAPICall"]) == seconds(c["timeouts"]["etcdAPICall"]),
+       "kubernetesAPICall" in c["timeouts"] and seconds(c["timeouts"]["kubernetesAPICall"]) > seconds(defaults["timeouts"]["kubernetesAPICall"])),
+      (True, True))
 check("the target, the skipped kube-proxy phase, the preflight errors",
       (c["apply"]["kubernetesVersion"], c["apply"]["skipPhases"], c["apply"]["ignorePreflightErrors"]),
       ("v1.34.12", ["addon/kube-proxy"], ["CoreDNSUnsupportedPlugins"]))

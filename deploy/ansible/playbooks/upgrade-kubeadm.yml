@@ -211,8 +211,11 @@
               timeouts:
                 upgradeManifests: {{ _restart_wait }}
                 etcdAPICall: {{ _restart_wait }}
+                kubernetesAPICall: {{ _restart_wait }}
           vars:
-            _restart_wait: 5m0s  # kubeadm's own upgradeManifests
+            # kubeadm's own upgradeManifests: the time any static pod gets to restart - etcd's takes the API server down
+            # with it (one control-plane node), so kubeadm's next API call waits as long (its default ran out once)
+            _restart_wait: 5m0s
 
         - name: Kubeadm upgrade apply - without the kube-proxy addon (Cilium replaces it)
           ansible.builtin.command: kubeadm upgrade apply --config /etc/kubernetes/kubeadm-upgrade.yaml --yes
