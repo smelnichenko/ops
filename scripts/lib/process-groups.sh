@@ -104,23 +104,28 @@ term_default() {  # term_default <pid>
 }
 
 # every process of the job of that name stopped (STOP), waited for until stopped (bounded): one stopped forks no more,
-# and a fork it was in completes first - so a look after it sees every child it has (a list read before its fork, its
-# name read after its exec: the child never TERMed, KILLed at the grace's end - the review, 2026-10-11)
-stop_named() {  # stop_named <pgid> <name>
-  local g=$1 name=$2 procs x p comm st stopped=() i
+# and a fork it was in completes first - so a look after it sees every child it has. Only these are KILLed by name: a
+# process named so only after this read (forked, then exec'd as the name) waits for the next look, stopped first -
+# KILLed on a list read before its fork, its child was never TERMed (the reviews, 2026-10-11). One not seen stopped
+# (gone, a zombie, traced, the wait out) is continued at once; one stopped and not KILLed, once the look is done
+stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each seen stopped>
+  local g=$1 name=$2 procs x p comm st i sent_stop=()
+  local -n _stopped=$3
+  _stopped=" "
   job_processes "$g" procs
   for x in "${procs[@]}"; do
     p=${x% *}
     read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] || continue
-    kill -STOP "$p" 2> /dev/null && stopped+=("$p")
+    kill -STOP "$p" 2> /dev/null && sent_stop+=("$p")
   done
-  for p in "${stopped[@]}"; do
+  for p in "${sent_stop[@]}"; do
     for ((i = 0; i < 50; i++)); do
       read -r st 2> /dev/null < "/proc/$p/stat" || break
       set -- ${st##*) }
-      [ "$1" != T ] || break
+      case $1 in T) _stopped+="$p "; break ;; Z | X | t) break ;; esac
       sleep 0.01
     done
+    [[ $_stopped == *" $p "* ]] || kill -CONT "$p" 2> /dev/null
   done
 }
 
@@ -132,10 +137,10 @@ stop_named() {  # stop_named <pgid> <name>
 # the TERM and ran the step's next command), what it started since the TERM a lost process's. Never again to one that
 # catches the TERM (its handler runs once), nor to what a handler started (a cleanup's own commands)
 resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variable: " <pid> ... "> [<command name>]
-  local g=$1 term_at=$2 name=${4:-} procs x p comm st lost=" " changed=1
+  local g=$1 term_at=$2 name=${4:-} procs x p comm st lost=" " changed=1 stopped=" " killed=" "
   local -n _sent=$3
   local -A parent=() deflt=()
-  [ -z "$name" ] || stop_named "$g" "$name"
+  [ -z "$name" ] || stop_named "$g" "$name" stopped
   job_processes "$g" procs
   for x in "${procs[@]}"; do
     p=${x% *}
@@ -147,8 +152,9 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
       set -- ${st##*) }
       (( ${20} * 100 / _clk_tck >= term_at )) || [[ $_sent == *" $p "* ]] || _sent+="$p "
     fi
-    if [ -n "$name" ] && read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ]; then
+    if [[ $stopped == *" $p "* ]] && read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ]; then
       kill -KILL "$p" 2> /dev/null
+      killed+="$p "
       lost+="$p "
     fi
   done
@@ -171,6 +177,7 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
     kill -TERM "$p" 2> /dev/null
     [ -n "${deflt[$p]:-}" ] || [[ $_sent == *" $p "* ]] || _sent+="$p "
   done
+  for p in $stopped; do [[ $killed == *" $p "* ]] || kill -CONT "$p" 2> /dev/null; done
 }
 
 # every process of the session the job leads with that command name KILLed at once - no other of the session, none

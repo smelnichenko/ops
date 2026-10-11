@@ -335,8 +335,9 @@ for f in "$W/late.pid" "$W/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
 # -n task: a task whose child was forked during a look's scan - the list read before the fork, the name read after its
-# exec - KILLed with the child still TERMed (its handler run), not KILLed at the grace's end (the review, 2026-10-11:
-# forced here - start-task pauses before its fork, the first look's list held until the exec)
+# exec - not KILLed on that list: the next look stops it first, its child TERMed (its handler run), nothing KILLed at
+# the grace's end (the reviews, 2026-10-11: forced here - start-task pauses before its fork, the look's own list read
+# held until the exec)
 mkdir -p "$W/forced/late/bin"
 cp "$W/late/bin/task" "$W/forced/late/bin/task"
 sed 's/^if os.fork() == 0:/time.sleep(0.5)\nif os.fork() == 0:/' "$W/late/start-task" > "$W/forced/late/start-task"
@@ -346,6 +347,7 @@ forced=0
 job_processes() {
   orig_job_processes "$@"
   local c
+  [ "${FUNCNAME[1]}" = resend_term ] || return 0
   if [ "$forced" = 0 ] && [ -s "$W/forced/late.pid" ] && [ ! -e "$W/forced/late.pid.n.pid" ]; then
     forced=1
     for _ in $(seq 100); do
@@ -366,6 +368,61 @@ check "-n task, a child forked during the look's scan: forced so; the child TERM
   "$forced $((SECONDS - t0 < 10)) $(grep -c '^caught$' "$W/forced/late.pid.n" 2> /dev/null) $(grep -c killed "$W/forced/late.out")" \
   "1 1 1 0"
 for f in "$W/forced/late.pid" "$W/forced/late.pid.n.pid"; do
+  x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
+done
+# -n task: a process named task from its start that forks a TERM-catching child during the look's scan - stopped
+# before the scan, it forks no more: no child left unTERMed, nothing KILLed at the grace's end (forced: the look's own
+# list read held until the child would have been forked)
+mkdir -p "$W/named/late/bin"
+# the interpreter by its path (env would exec python3 - named so, not task)
+printf '#!%s\n' "$(command -v python3)" > "$W/named/late/bin/task"
+cat >> "$W/named/late/bin/task" <<'NAMED'
+import os, signal, sys, time
+out = sys.argv[1]
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(out, "w").write(f"{os.getpid()}\n")
+time.sleep(0.5)
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+if os.fork() == 0:
+    def caught(*_):
+        open(out + ".n", "a").write("caught\n")
+        os._exit(143)
+    signal.signal(signal.SIGTERM, caught)
+    open("/proc/self/comm", "w").write("cleanup")
+    open(out + ".n.pid", "w").write(f"{os.getpid()}\n")
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+    for _ in range(600):
+        time.sleep(0.1)
+    os._exit(0)
+time.sleep(60)
+NAMED
+chmod +x "$W/named/late/bin/task"
+cat > "$W/named/late/start-task" <<'NAMEDSTART'
+#!/bin/bash
+exec "$(dirname "$0")/bin/task" "$1"
+NAMEDSTART
+chmod +x "$W/named/late/start-task"
+forced=0
+job_processes() {
+  orig_job_processes "$@"
+  [ "${FUNCNAME[1]}" = resend_term ] || return 0
+  if [ "$forced" = 0 ] && [ -s "$W/named/late.pid" ] && [ ! -e "$W/named/late.pid.n.pid" ]; then
+    forced=1
+    for _ in $(seq 40); do [ -s "$W/named/late.pid.n.pid" ] && break; sleep 0.05; done
+  fi
+}
+setsid bash "$W/late-job" "$W/named" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+ready "$W/named/late-job.ready" || check "-n task, named from its start: the job's trap set before the stop" no yes
+t0=$SECONDS
+if mine "$s"; then stop_groups -n task 20 "$s" > "$W/named/late.out"; fi
+wait "$s" 2> /dev/null
+eval "$(declare -f orig_job_processes | sed '1s/^orig_//')"
+child=$(cat "$W/named/late.pid.n.pid" 2> /dev/null)
+check "-n task, named from its start, forking during the look's scan: forced so; stopped first - no child left unTERMed, nothing killed at the end" \
+  "$forced $((SECONDS - t0 < 10)) $({ [ -z "$child" ] || grep -qx caught "$W/named/late.pid.n"; } && echo ok) $(grep -c killed "$W/named/late.out")" \
+  "1 1 ok 0"
+for f in "$W/named/late.pid" "$W/named/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
 # a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
