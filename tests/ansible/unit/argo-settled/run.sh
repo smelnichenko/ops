@@ -233,7 +233,7 @@ def loop(mode, *args, apps=None, apps_after=None):
     json.dump({"items": apps_after or apps or A}, open(os.path.join(d, "apps-after.json"), "w"))
     with open(os.path.join(d, "kubectl"), "w") as f:
         f.write(f"""#!/bin/bash
-case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; exit 0;; esac
+case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = patch-fails ] && case "$*" in *" patch "*) exit 1;; esac; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
@@ -262,46 +262,64 @@ check("  an error one poll only (Argo retried by itself): nothing refreshed",
       [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
 # Argo 3.3 never auto-syncs an app again whose last operation has no results ("Already attempted sync: sync does not
 # have any results"; the copy 2026-10-11: a status update from an older copy of the app, under load, nulled a finished
-# operation's results and finishedAt) - two polls running so, that app synced by its .operation, once, as its policy
+# operation's results) - with --sync-stalled, two polls running so, that app synced by its .operation, once: never
+# pruning, its retry policy, the polled resourceVersion a precondition
 stalled = app("c")
-stalled["spec"]["syncPolicy"] = {"automated": {"prune": False, "selfHeal": True}, "syncOptions": ["CreateNamespace=true"]}
+stalled["metadata"]["resourceVersion"] = "4711"
+stalled["spec"]["syncPolicy"] = {"automated": {"prune": True, "selfHeal": True}, "syncOptions": ["CreateNamespace=true"],
+                                 "retry": {"limit": 5}}
 stalled["status"]["sync"].update(status="OutOfSync", revision="def")
-stalled["status"]["operationState"] = {"phase": "Succeeded", "startedAt": "2026-10-11T12:27:26Z"}
+stalled["status"]["operationState"] = {"phase": "Succeeded", "startedAt": "2026-10-11T12:27:26Z",
+                                       "operation": {"initiatedBy": {"automated": True}}}
+
+
+def patches(out):
+    return [x for x in out.splitlines() if x.startswith("ANNOTATED ") and " patch " in x]
+
+
+def variant(change):
+    x = json.loads(json.dumps(stalled))
+    change(x)
+    return x
+
+
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled])
+body = json.loads(patches(out)[0].split(" -p ", 1)[1]) if patches(out) else {}
+check("stalled (its last operation Argo's, without results), --sync-stalled: synced once - no prune, its retry, the"
+      " resourceVersion a precondition - said",
+      (rc, len(patches(out)), (body.get("operation") or {}).get("sync"), (body.get("operation") or {}).get("retry"),
+       (body.get("metadata") or {}).get("resourceVersion"), out.count("SYNC c:")),
+      (1, 1, {"prune": False, "syncOptions": ["CreateNamespace=true"], "revision": "def"}, {"limit": 5}, "4711", 1), out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [stalled])
-synced = [x for x in out.splitlines() if x.startswith("ANNOTATED ") and " patch " in x]
-body = json.loads(synced[0].split(" -p ", 1)[1]) if synced else {}
-check("an auto-sync Argo will not retry (no results): synced once by its .operation, as its policy, said",
-      (rc, len(synced), (body.get("operation") or {}).get("sync"), out.count("SYNC c:")),
-      (1, 1, {"revision": "def", "prune": False, "syncOptions": ["CreateNamespace=true"]}, 1), out)
-with_results = json.loads(json.dumps(stalled))
-with_results["status"]["operationState"]["syncResult"] = {"revision": "abc"}
-rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [with_results])
-check("  its last operation with results (Argo retries by itself): nothing synced",
-      [x for x in out.splitlines() if " patch " in x], [], out)
-manual = json.loads(json.dumps(stalled))
-del manual["spec"]["syncPolicy"]
-rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [manual])
-check("  no automated sync policy (a manual app's choice): nothing synced",
-      [x for x in out.splitlines() if " patch " in x], [], out)
-running = json.loads(json.dumps(stalled))
-running["status"]["operationState"]["phase"] = "Running"
-rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [running])
-check("  an operation running: nothing synced", [x for x in out.splitlines() if " patch " in x], [], out)
-# a sync failed past its retries (the copy 2026-10-11, its node loaded: Deployments past their progress deadline, ready
-# later) - Argo never retries that revision: synced once, as its policy; a fault fails it again and it stays red
-failed = json.loads(json.dumps(stalled))
-failed["status"]["sync"]["status"] = "Synced"
-failed["status"]["operationState"] = {"phase": "Failed", "message": "one or more synchronization tasks completed "
-                                      "unsuccessfully (retried 5 times).", "syncResult": {"revision": "def"}}
-rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [failed])
-check("a sync failed past its retries: synced once, said",
-      (rc, len([x for x in out.splitlines() if " patch " in x]), out.count("SYNC c:")), (1, 1, 1), out)
-failed_manual = json.loads(json.dumps(failed))
-del failed_manual["spec"]["syncPolicy"]
-rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [failed_manual])
-check("  no automated sync policy: nothing synced", [x for x in out.splitlines() if " patch " in x], [], out)
-rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [stalled], apps_after=A + [app("c")])
-check("  so one poll only (synced by itself): nothing synced", [x for x in out.splitlines() if " patch " in x], [], out)
+check("  without --sync-stalled (production's settle): nothing synced, said STALLED",
+      (patches(out), "STALLED" in out), ([], True), out)
+for name, change, extra in (
+        ("its last operation with results (Argo retries by itself)",
+         lambda x: x["status"]["operationState"].update(syncResult={"revision": "abc"}), ()),
+        ("no automated sync policy (a manual app's choice)", lambda x: x["spec"].pop("syncPolicy"), ()),
+        ("automated switched off (enabled: false)",
+         lambda x: x["spec"]["syncPolicy"]["automated"].update(enabled=False), ()),
+        ("an operation running", lambda x: x["status"]["operationState"].update(phase="Running"), ()),
+        ("an operation pending (.operation set)", lambda x: x.update(operation={"sync": {}}), ()),
+        ("its last operation a person's (terminate-op, a manual sync)",
+         lambda x: x["status"]["operationState"].update(operation={"initiatedBy": {"username": "sm"}}), ()),
+        ("its last operation failed (red, never synced again here)",
+         lambda x: x["status"]["operationState"].update(phase="Failed", syncResult={"revision": "def"}), ()),
+        ("a ComparisonError (refreshed first)",
+         lambda x: x["status"].update(conditions=[{"type": "ComparisonError", "message": "cached"}]), ()),
+        ("an app allowed out of sync", lambda x: None, ("--allow-out-of-sync", "c")),
+        ("an extra app (a preview environment)", lambda x: x["metadata"].update(name="pr-7-site"),
+         ("--allow-extra-apps", "^pr-[0-9]+-")),
+        ("root (its sync is the operator's)", lambda x: x["metadata"].update(name="root"), ())):
+    rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", *extra,
+                   apps=A + [variant(change)])
+    check(f"  {name}: nothing synced", patches(out), [], out)
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+               apps_after=A + [app("c")])
+check("  so one poll only (synced by itself): nothing synced", patches(out), [], out)
+rc, out = loop("patch-fails", "--minutes", "0.03", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled])
+check("  kubectl refusing the patch (a conflict): tried again at the next poll, said so",
+      (len(patches(out)) >= 2, "tried at the next poll" in out), (True, True), out)
 rc, out = loop("fail-first", "--minutes", "0.05", "--restart-quiet", "0")
 check("a failed poll first: red, then settled", (rc, "poll failed" in out, "ARGO SETTLED" in out), (0, True, True), out)
 rc, out = loop("churn", "--minutes", "0.02", "--restart-quiet", "0")

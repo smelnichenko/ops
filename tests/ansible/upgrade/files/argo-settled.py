@@ -35,6 +35,14 @@ An app not green says its error conditions (a ComparisonError: the render failed
 repo-server's paused generation: after 3 failures it serves the cached error for 60 minutes, longer than a settle). An
 app with a ComparisonError two polls running is hard-refreshed, once - the generation is tried again past the cache.
 
+An app Argo will never auto-sync again is said STALLED: automated, OutOfSync, its last operation one Argo started
+itself, over and without results (Argo 3.3 counts it attempted for good - "Already attempted sync: sync does not have
+any results"; the copy, 2026-10-11, its node loaded: a status update from an older copy of the app nulled a finished
+operation's results). --sync-stalled (the copy's settle only - production's stays red, for the operator): such an app,
+two polls running, is synced once by its .operation as the CLI does - never pruning, its retry policy, the polled
+resourceVersion a precondition - never root, an app allowed out of sync or extra, one with a ComparisonError or an
+operation pending; the settled line names it. A failed sync is never synced again here: it stays red.
+
 Exit 0 settled, 1 not settled in --minutes (the state of everything not green is printed), 2 bad arguments.
 --once evaluates one poll and exits; --apps-json/--pods-json evaluate saved `kubectl get -o json` output instead of
 the cluster (both for checking this script).
@@ -101,6 +109,8 @@ def app_problems(app, allowed, mirror):
         problems.append(f"operation {op['phase']}")
     if op.get("phase") in FAILED_PHASES:
         problems.append(f"last sync {op['phase']}: {(op.get('message') or '')[:200]}")
+    if stalled(app):
+        problems.append("STALLED: its last operation over without results - Argo will not auto-sync it again; sync it")
     if without_empty(sources(sync.get("comparedTo") or {})) != without_empty(sources(spec)):
         problems.append("compared against an older spec")
     if mirror:
@@ -121,48 +131,83 @@ def comparison_errors(apps):
 
 def hard_refresh(kubeconfig, name):
     """Argo regenerates the app's manifests past its repo-server's cache (a paused generation serves a cached error)."""
-    out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "annotate", "applications.argoproj.io",
-                          name, "argocd.argoproj.io/refresh=hard", "--overwrite"], capture_output=True, text=True,
-                         timeout=60)
+    try:
+        out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "annotate",
+                              "applications.argoproj.io", name, "argocd.argoproj.io/refresh=hard", "--overwrite"],
+                             capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
     return out.returncode == 0
 
 
-def stalled_auto_syncs(apps):
-    """The automated apps Argo will not sync again by itself (it never retries a revision it attempted) - the copy,
-    2026-10-11, its node loaded: (a) OutOfSync, the last operation over and without results: Argo 3.3 counts it as
-    attempted for good ("Already attempted sync: sync does not have any results"; a status update from an older copy
-    of the app had nulled a finished operation's results); (b) the last sync failed past its retries (Deployments past
-    their progress deadline, ready later). Their names."""
-    out = set()
-    for x in apps["items"]:
-        spec, status = x.get("spec") or {}, x.get("status") or {}
-        op = status.get("operationState") or {}
-        if (spec.get("syncPolicy") or {}).get("automated") is None or op.get("phase") in RUNNING_PHASES:
-            continue
-        no_results = ((status.get("sync") or {}).get("status") == "OutOfSync" and op.get("phase")
-                      and not op.get("syncResult"))
-        if no_results or op.get("phase") in FAILED_PHASES:
-            out.add(x["metadata"]["name"])
-    return out
+def stalled(app):
+    """Argo will not auto-sync the app again (the docstring's STALLED): automated (not switched off), OutOfSync, no
+    operation pending, its last operation Argo's own, over and without results."""
+    spec, status = app.get("spec") or {}, app.get("status") or {}
+    automated = (spec.get("syncPolicy") or {}).get("automated")
+    op = status.get("operationState") or {}
+    return (automated is not None and automated.get("enabled") is not False
+            and (status.get("sync") or {}).get("status") == "OutOfSync" and app.get("operation") is None
+            and bool(op.get("phase")) and op.get("phase") not in RUNNING_PHASES and not op.get("syncResult")
+            and ((op.get("operation") or {}).get("initiatedBy") or {}).get("automated") is True)
+
+
+def stalled_auto_syncs(apps, allowed, extra):
+    """The stalled apps the settle may sync: never root (its sync is the operator's), an app allowed out of sync or an
+    extra one (not this settle's to judge), one with a ComparisonError (refreshed first: a sync would render the cached
+    error). Their names."""
+    errs = comparison_errors(apps)
+    return {x["metadata"]["name"] for x in apps["items"]
+            if stalled(x) and x["metadata"]["name"] not in allowed | errs | {"root"}
+            and not (extra and re.search(extra, x["metadata"]["name"]))}
 
 
 def sync_now(kubeconfig, app):
-    """The sync Argo will not start, started as its CLI does: the app's .operation, its automated policy's prune and
-    its sync options, on the revision it compared."""
+    """The sync Argo will not start, started as its CLI does: the app's .operation, on the revision it compared, its
+    sync options and retry policy - never pruning (an automated sync refuses an empty render's prune; this one would
+    not), the polled resourceVersion a precondition (an operation Argo started since: refused, tried at the next
+    poll). True when kubectl took it."""
     spec, sync = app.get("spec") or {}, (app.get("status") or {}).get("sync") or {}
     policy = spec.get("syncPolicy") or {}
-    op = {"prune": bool((policy.get("automated") or {}).get("prune")), "syncOptions": policy.get("syncOptions") or []}
+    op = {"prune": False, "syncOptions": policy.get("syncOptions") or []}
     if spec.get("sources"):
         op["revisions"] = sync.get("revisions") or []
     else:
         op["revision"] = sync.get("revision") or ""
-    patch = {"operation": {"initiatedBy": {"username": "argo-settled"},
-                           "info": [{"name": "Reason", "value": "auto-sync stalled: Argo does not retry the revision"}],
-                           "sync": op}}
-    out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "patch", "applications.argoproj.io",
-                          app["metadata"]["name"], "--type", "merge", "-p", json.dumps(patch)],
-                         capture_output=True, text=True, timeout=60)
+    operation = {"initiatedBy": {"username": "argo-settled"},
+                 "info": [{"name": "Reason", "value": "auto-sync stalled: its last operation without results"}],
+                 "sync": op}
+    if policy.get("retry"):
+        operation["retry"] = policy["retry"]
+    patch = {"metadata": {"resourceVersion": app["metadata"].get("resourceVersion", "")}, "operation": operation}
+    try:
+        out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "patch", "applications.argoproj.io",
+                              app["metadata"]["name"], "--type", "merge", "-p", json.dumps(patch)],
+                             capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
     return out.returncode == 0
+
+
+def remedies(a, apps, allowed, state):
+    """One poll's remedies: an app with a ComparisonError two polls running hard-refreshed, once; with --sync-stalled a
+    stalled app two polls running synced, once (it counts once kubectl took it - refused, tried at the next poll)."""
+    erring, stalling = state["erring"], state["stalling"]
+    state["erring"] = {n: erring.get(n, 0) + 1 for n in comparison_errors(apps)}
+    for n in sorted(n for n, k in state["erring"].items() if k >= 2 and n not in state["refreshed"]):
+        state["refreshed"].add(n)
+        print(f"HARD REFRESH {n}: a ComparisonError two polls running -"
+              f" {'requested' if hard_refresh(a.kubeconfig, n) else 'refused by kubectl'}", flush=True)
+    if not a.sync_stalled:
+        return
+    state["stalling"] = {n: stalling.get(n, 0) + 1 for n in stalled_auto_syncs(apps, allowed, a.allow_extra_apps)}
+    by_name = {x["metadata"]["name"]: x for x in apps["items"]}
+    for n in sorted(n for n, k in state["stalling"].items() if k >= 2 and n not in state["synced"]):
+        ok = sync_now(a.kubeconfig, by_name[n])
+        if ok:
+            state["synced"].add(n)
+        print(f"SYNC {n}: stalled two polls running (its last operation without results: Argo will not auto-sync it"
+              f" again) - {'started' if ok else 'refused by kubectl, tried at the next poll'}", flush=True)
 
 
 def node_shutdown_leftover(status):
@@ -343,6 +388,7 @@ def main():
     ap.add_argument("--restart-history")
     ap.add_argument("--step")
     ap.add_argument("--restarts-expected", action="store_true")
+    ap.add_argument("--sync-stalled", action="store_true", help="sync a stalled app once (the copy's settle only)")
     ap.add_argument("--restarted-since", help="no container restarted at or after this time (ISO 8601)")
     a = ap.parse_args()
     if a.stable_polls < 1 or bool(a.apps_json) != bool(a.pods_json) or bool(a.restart_history) != bool(a.step):
@@ -386,8 +432,8 @@ def main():
 
     deadline = time.monotonic() + a.minutes * 60
     first, last, streak = None, None, 0
-    erring, refreshed = {}, set()  # polls running with a ComparisonError per app; the apps hard-refreshed
-    stalling, synced = {}, set()  # polls running with an auto-sync Argo will not retry per app; the apps synced
+    # polls running with a ComparisonError / stalled, per app; the apps hard-refreshed / synced
+    state = {"erring": {}, "refreshed": set(), "stalling": {}, "synced": set()}
     while True:
         apps = None  # this poll's (a failed poll has none: no app counted erring from it)
         try:
@@ -399,20 +445,7 @@ def main():
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
             green, problems, not_ready, restarts, line = False, {}, [], last or {}, f"poll failed: {e}"
         if apps is not None:
-            errs = comparison_errors(apps)
-            erring = {n: erring.get(n, 0) + 1 for n in errs}
-            for n in sorted(n for n, k in erring.items() if k >= 2 and n not in refreshed):
-                refreshed.add(n)
-                print(f"HARD REFRESH {n}: a ComparisonError two polls running -"
-                      f" {'requested' if hard_refresh(a.kubeconfig, n) else 'refused by kubectl'}", flush=True)
-            stalled = stalled_auto_syncs(apps)
-            stalling = {n: stalling.get(n, 0) + 1 for n in stalled}
-            by_name = {x["metadata"]["name"]: x for x in apps["items"]}
-            for n in sorted(n for n, k in stalling.items() if k >= 2 and n not in synced):
-                synced.add(n)
-                print(f"SYNC {n}: Argo will not sync it again by itself (its last operation failed, or over without"
-                      f" results), two polls running - "
-                      f"{'started' if sync_now(a.kubeconfig, by_name[n]) else 'refused by kubectl'}", flush=True)
+            remedies(a, apps, allowed, state)
         first = first if first is not None else restarts
         churn = restarted(last, restarts) if last is not None else []
         last = restarts
@@ -427,7 +460,8 @@ def main():
             return finish(apps, pods) if green else 1
         if streak >= a.stable_polls:
             since = restarted(first, restarts)
-            print(f"ARGO SETTLED: {line}; restarted during the wait: {','.join(since) or 'none'}")
+            print(f"ARGO SETTLED: {line}; restarted during the wait: {','.join(since) or 'none'}"
+                  f"; synced by this settle: {','.join(sorted(state['synced'])) or 'none'}")
             return finish(apps, pods)
         if time.monotonic() >= deadline:
             print(f"NOT SETTLED in {a.minutes:g} min: {line}")

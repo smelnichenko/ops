@@ -79,10 +79,13 @@
         mode: '0700'
       when: restart_step | length > 0
 
+    # --sync-stalled: an app Argo will not auto-sync again synced once (the copy only - production's settle says it
+    # STALLED and stays red for the operator)
     - name: Wait until every app is green and every pod is ready, held for stable_polls polls in a row
       ansible.builtin.script:
         cmd: >-
-          files/argo-settled.py --kubeconfig {{ kubeconfig }} --minutes {{ settle_minutes }} --poll {{ poll_seconds }}
+          files/argo-settled.py --sync-stalled --kubeconfig {{ kubeconfig }} --minutes {{ settle_minutes }}
+          --poll {{ poll_seconds }}
           --stable-polls {{ stable_polls }} --restart-quiet {{ restart_quiet }} --allow-out-of-sync '{{ allow_out_of_sync }}'
           {{ '--print-apps' if record_apps | bool else '' }}
           {{ ('--expect-apps ' ~ (lookup('ansible.builtin.file', apps_file).split() | join(','))) if expect_apps | bool else '' }}
