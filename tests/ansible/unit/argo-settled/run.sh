@@ -255,6 +255,12 @@ hard = [x for x in out.splitlines() if x.startswith("ANNOTATED ")]
 check("a ComparisonError two polls running: hard-refreshed once, said",
       (rc, len(hard), "applications.argoproj.io c argocd.argoproj.io/refresh=hard --overwrite" in (hard or [""])[0],
        out.count("HARD REFRESH c:")), (1, 1, True, 1), out)
+preview = json.loads(json.dumps(broken))
+preview["metadata"]["name"] = "pr-7-site"
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--allow-extra-apps", "^pr-[0-9]+-",
+               apps=A + [preview])
+check("  an extra app's ComparisonError (a preview environment's): nothing refreshed",
+      [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0")
 check("  no error: nothing refreshed", [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [broken], apps_after=A + [app("c")])

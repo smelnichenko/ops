@@ -43,7 +43,7 @@ case "$a" in
   *"nodetool status"*) printf 'Datacenter: dc1\n--  Address  Load\n%s  10.0.0.1  1 MB\n' "${SCYLLA:-UN}" ;;
   *"/api/v1/alerts"*)
     extra=""
-    [ -z "${ALERT:-}" ] || extra=", {\"state\": \"firing\", \"labels\": {\"alertname\": \"$ALERT\", \"severity\": \"critical\"}}"
+    [ -z "${ALERT:-}" ] || extra=", {\"state\": \"firing\", \"labels\": {\"alertname\": \"$ALERT\", \"severity\": \"${SEVERITY:-critical}\"}}"
     echo "{\"data\": {\"alerts\": [{\"state\": \"firing\", \"labels\": {\"alertname\": \"Watchdog\", \"severity\": \"none\"}}$extra]}}" ;;
   *) echo "unexpected: $*" >&2; exit 9 ;;
 esac
@@ -88,6 +88,8 @@ check "WAL archiving failing: red" "$(run ARCHIVING=False)" "rc=2"
 check "a Kafka not Ready (its Warning beside Ready does not count): red" "$(run KAFKA=False)" "rc=2"
 check "a ScyllaDB node down: red" "$(run SCYLLA=DN)" "rc=2"
 check "a critical alert firing: red" "$(run ALERT=PostgreSQLDown)" "rc=2"
+# production fires warnings (VeleroWeeklyBackupMissing until a full weekly completes): the check reads critical alone
+check "a warning firing: green" "$(run ALERT=VeleroWeeklyBackupMissing SEVERITY=warning)" "rc=0"
 check "  one the inventory names: green" \
   "$(run ALERT=PublicEndpointDown -- -e '{"production_check_allowed_firing": ["PublicEndpointDown"]}')" "rc=0"
 # its wiring: production's check runs it; the full run's step task runs it on the copy; the copy names its own

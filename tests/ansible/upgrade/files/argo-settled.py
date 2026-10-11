@@ -123,10 +123,11 @@ def app_problems(app, allowed, mirror):
     return problems
 
 
-def comparison_errors(apps):
-    """The apps whose manifests Argo could not generate: their names."""
+def comparison_errors(apps, extra=None):
+    """The apps whose manifests Argo could not generate: their names - an extra app's never (not this settle's)."""
     return {x["metadata"]["name"] for x in apps["items"]
-            if any(c.get("type") == "ComparisonError" for c in (x.get("status") or {}).get("conditions") or [])}
+            if any(c.get("type") == "ComparisonError" for c in (x.get("status") or {}).get("conditions") or [])
+            and not (extra and re.search(extra, x["metadata"]["name"]))}
 
 
 def hard_refresh(kubeconfig, name):
@@ -193,7 +194,7 @@ def remedies(a, apps, allowed, state):
     """One poll's remedies: an app with a ComparisonError two polls running hard-refreshed, once; with --sync-stalled a
     stalled app two polls running synced, once (it counts once kubectl took it - refused, tried at the next poll)."""
     erring, stalling = state["erring"], state["stalling"]
-    state["erring"] = {n: erring.get(n, 0) + 1 for n in comparison_errors(apps)}
+    state["erring"] = {n: erring.get(n, 0) + 1 for n in comparison_errors(apps, a.allow_extra_apps)}
     for n in sorted(n for n, k in state["erring"].items() if k >= 2 and n not in state["refreshed"]):
         state["refreshed"].add(n)
         print(f"HARD REFRESH {n}: a ComparisonError two polls running -"
