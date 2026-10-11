@@ -349,7 +349,7 @@ job_processes() {
   local c
   [ "${FUNCNAME[1]}" = resend_term ] || return 0
   if [ "$forced" = 0 ] && [ -s "$W/forced/late.pid" ] && [ ! -e "$W/forced/late.pid.n.pid" ]; then
-    forced=1
+    forced=${FUNCNAME[1]}
     for _ in $(seq 100); do
       read -r c 2> /dev/null < "/proc/$(cat "$W/forced/late.pid")/comm"
       [ "$c" = task ] && break
@@ -366,7 +366,7 @@ wait "$s" 2> /dev/null
 eval "$(declare -f orig_job_processes | sed '1s/^orig_//')"
 check "-n task, a child forked during the look's scan: forced so; the child TERMed once, nothing killed at the end" \
   "$forced $((SECONDS - t0 < 10)) $(grep -c '^caught$' "$W/forced/late.pid.n" 2> /dev/null) $(grep -c killed "$W/forced/late.out")" \
-  "1 1 1 0"
+  "resend_term 1 1 0"
 for f in "$W/forced/late.pid" "$W/forced/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
@@ -407,7 +407,7 @@ job_processes() {
   orig_job_processes "$@"
   [ "${FUNCNAME[1]}" = resend_term ] || return 0
   if [ "$forced" = 0 ] && [ -s "$W/named/late.pid" ] && [ ! -e "$W/named/late.pid.n.pid" ]; then
-    forced=1
+    forced=${FUNCNAME[1]}
     for _ in $(seq 40); do [ -s "$W/named/late.pid.n.pid" ] && break; sleep 0.05; done
   fi
 }
@@ -421,7 +421,7 @@ eval "$(declare -f orig_job_processes | sed '1s/^orig_//')"
 child=$(cat "$W/named/late.pid.n.pid" 2> /dev/null)
 check "-n task, named from its start, forking during the look's scan: forced so; stopped first - no child left unTERMed, nothing killed at the end" \
   "$forced $((SECONDS - t0 < 10)) $({ [ -z "$child" ] || grep -qx caught "$W/named/late.pid.n"; } && echo ok) $(grep -c killed "$W/named/late.out")" \
-  "1 1 ok 0"
+  "resend_term 1 ok 0"
 for f in "$W/named/late.pid" "$W/named/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
