@@ -1,0 +1,8 @@
+# The copy's Velero schedules paused: Velero runs one backup at a time, and a full run crossing a schedule's hour queued
+# its own backup checks behind production's full backup (the restore check timed out on a Queued backup). The checks
+# prove the backup path; backup-check.yml reads the daily schedule's template, paused or not.
+schedules:
+  schnappy-daily:
+    paused: true
+  full-weekly:
+    paused: true
