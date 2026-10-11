@@ -266,30 +266,53 @@ check "a lost process's child started after the TERM, catching it: TERMed once -
 # a command after the TERM: it swallows one and runs the step's next command) too, at the next look, not at the
 # grace's end - and what it started since the TERM TERMed once (its handler run, not KILLed)
 mkdir -p "$W/late"
-# (it is "task" only once its child has set its trap: the named KILL, at once, otherwise found the child at its
-# default - TERMed so, no handler run; 1 in 12 at one CPU. A copy of sleep named task, the TERM ignored before its exec)
+# (it is "task" only once its child has set its handler: the named KILL, at once, otherwise found the child at its
+# default - TERMed so, no handler run; 1 in 12 at one CPU. The child is new since the TERM, so stop_groups TERMs it once
+# at any look - before its handler too: it starts with TERM blocked, a TERM in that window pending until the
+# handler is set. Python, since bash sets no signal mask. A copy of sleep named task, the TERM
+# ignored and blocked before its exec)
 mkdir -p "$W/late/bin"
 cp "$(command -v sleep)" "$W/late/bin/task"
 cat > "$W/late/start-task" <<'TASK'
-#!/bin/bash
-trap '' TERM
-echo $$ > "$1"
-( trap - TERM; exec bash -c 'trap "echo caught >> \"$0\"; exit 143" TERM; echo $$ > "$0.pid"; for _ in $(seq 600); do sleep 0.1; done' "$1.n" ) &
-for _ in $(seq 100); do [ -s "$1.n.pid" ] && break; sleep 0.05; done
-exec "$(dirname "$0")/bin/task" 60
+#!/usr/bin/env python3
+import os, signal, sys, time
+out = sys.argv[1]
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(out, "w").write(f"{os.getpid()}\n")
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+if os.fork() == 0:
+    def caught(*_):
+        open(out + ".n", "a").write("caught\n")
+        os._exit(143)
+    signal.signal(signal.SIGTERM, caught)
+    open(out + ".n.pid", "w").write(f"{os.getpid()}\n")
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+    for _ in range(600):
+        time.sleep(0.1)
+    os._exit(0)
+for _ in range(100):
+    if os.path.exists(out + ".n.pid") and os.path.getsize(out + ".n.pid"):
+        break
+    time.sleep(0.05)
+task = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "bin", "task")
+os.execv(task, [task, "60"])
 TASK
 chmod +x "$W/late/start-task"
 cat > "$W/late-job" <<'JOB'
 #!/bin/bash
 trap 'term=1' TERM
-echo $$ > "$1/late.ready"
+# its own ready file: an earlier case leaves late.ready behind, so a wait on it returned before this trap
+echo $$ > "$1/late-job.ready"
 term=""
 for _ in $(seq 600); do [ -z "$term" ] || break; sleep 0.1; done
+# start-task is new since the TERM, TERMed once at any look: it starts with the TERM ignored (kept across the exec),
+# not ignoring it from its own first line - a look during its start-up killed it (the gate, 2026-10-11: no task pid)
+trap '' TERM
 "$1/late/start-task" "$1/late.pid"
 JOB
 setsid bash "$W/late-job" "$W" < /dev/null > /dev/null 2>&1 & s=$!
 sessions+=("$s")
-ready "$W/late.ready"
+ready "$W/late-job.ready"
 t0=$SECONDS
 # a grace long enough for the job's chain (its TERM, a script, a fork, an exec) on a loaded machine - 5 s ran out under
 # a CPU hog beside the gate's one CPU, the job KILLed whole; "at once" is well under it
