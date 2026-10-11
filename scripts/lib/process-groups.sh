@@ -103,29 +103,34 @@ term_default() {  # term_default <pid>
   [ -n "$ign" ] && [ -n "$cgt" ] && (( ((16#$ign | 16#$cgt) & 0x4000) == 0 ))
 }
 
-# every process of the job of that name stopped (STOP), waited for until stopped (bounded): one stopped forks no more,
-# and a fork it was in completes first - so a look after it sees every child it has. Only these are KILLed by name: a
-# process named so only after this read (forked, then exec'd as the name) waits for the next look, stopped first -
-# KILLed on a list read before its fork, its child was never TERMed (the reviews, 2026-10-11). One not seen stopped
-# (gone, a zombie, traced, the wait out) is continued at once; one stopped and not KILLed, once the look is done
-stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each seen stopped>
-  local g=$1 name=$2 procs x p comm st i sent_stop=()
+# every process of the job of that name stopped (STOP) and waited for, one deadline for all (bounded): until every
+# thread of each is stopped - a fork any thread was in (go-task runs 20 and more) completes first, so a look after it
+# sees every child it has (a main thread read alone showed T with another thread's fork still running: 17 in 20 -
+# the reviews, 2026-10-11). The variable gets every one STOPped: KILLed by name, at its wait's end stopped or not (one
+# traced or in the kernel forks no more meanwhile). A process named so only after this read (forked, then exec'd as
+# the name) waits for the next look, stopped first - KILLed on a list read before its fork, its child was never TERMed
+stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each STOPped>
+  local g=$1 name=$2 procs x p comm st t i pending=() left
   local -n _stopped=$3
   _stopped=" "
   job_processes "$g" procs
   for x in "${procs[@]}"; do
     p=${x% *}
     read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] || continue
-    kill -STOP "$p" 2> /dev/null && sent_stop+=("$p")
+    kill -STOP "$p" 2> /dev/null && { pending+=("$p"); _stopped+="$p "; }
   done
-  for p in "${sent_stop[@]}"; do
-    for ((i = 0; i < 50; i++)); do
-      read -r st 2> /dev/null < "/proc/$p/stat" || break
-      set -- ${st##*) }
-      case $1 in T) _stopped+="$p "; break ;; Z | X | t) break ;; esac
-      sleep 0.01
+  for ((i = 0; i < 50 && ${#pending[@]} > 0; i++)); do
+    left=()
+    for p in "${pending[@]}"; do
+      [ -e "/proc/$p/stat" ] || continue
+      for t in "/proc/$p/task/"[0-9]*/stat; do
+        read -r st 2> /dev/null < "$t" || continue
+        set -- ${st##*) }
+        case $1 in T | t | Z | X) ;; *) left+=("$p"); break ;; esac
+      done
     done
-    [[ $_stopped == *" $p "* ]] || kill -CONT "$p" 2> /dev/null
+    pending=("${left[@]}")
+    [ ${#pending[@]} -eq 0 ] || sleep 0.01
   done
 }
 
@@ -177,7 +182,10 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
     kill -TERM "$p" 2> /dev/null
     [ -n "${deflt[$p]:-}" ] || [[ $_sent == *" $p "* ]] || _sent+="$p "
   done
-  for p in $stopped; do [[ $killed == *" $p "* ]] || kill -CONT "$p" 2> /dev/null; done
+  # one stopped and not KILLed (its name changed) runs on - only one this look listed (a pid gone since may be reused)
+  for p in $stopped; do
+    [[ $killed == *" $p "* ]] || [ -z "${parent[$p]+x}" ] || kill -CONT "$p" 2> /dev/null
+  done
 }
 
 # every process of the session the job leads with that command name KILLed at once - no other of the session, none

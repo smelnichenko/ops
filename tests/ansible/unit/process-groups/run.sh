@@ -425,6 +425,47 @@ check "-n task, named from its start, forking during the look's scan: forced so;
 for f in "$W/named/late.pid" "$W/named/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
+# stop_named: a process of the name with threads (go-task runs 20 and more) counts stopped only once every thread is -
+# a fork another thread was in completes first: no child of it appears after the stop (a main thread read alone
+# showed it stopped with the fork still running, 17 in 20 - the reviews, 2026-10-11). A target named task whose second
+# thread forks in a loop, its memory large enough to make each fork take a while; 10 stops
+mkdir -p "$W/mt/bin"
+printf '#!%s\n' "$(command -v python3)" > "$W/mt/bin/task"
+cat >> "$W/mt/bin/task" <<'MT'
+import os, sys, threading, time
+ballast = bytearray(200 * 1024 * 1024)
+def forker():
+    while True:
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        os.waitpid(pid, 0)
+threading.Thread(target=forker, daemon=True).start()
+open(sys.argv[1], "w").write("ready\n")
+time.sleep(120)
+MT
+chmod +x "$W/mt/bin/task"
+setsid "$W/mt/bin/task" "$W/mt/ready" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+ready "$W/mt/ready" || check "stop_named, threads: the target ready" no yes
+late=0 stopped_seen=0
+for _ in $(seq 10); do
+  mine "$s" || break
+  stop_named "$s" task st_set
+  [[ $st_set == *" $s "* ]] && stopped_seen=$((stopped_seen + 1))
+  job_processes "$s" first
+  sleep 0.05
+  job_processes "$s" second
+  had=" "
+  for x in "${first[@]}"; do had+="${x% *} "; done
+  for x in "${second[@]}"; do [[ $had == *" ${x% *} "* ]] || { late=$((late + 1)); break; }; done
+  kill -CONT "$s"
+  sleep 0.05
+done
+check "stop_named, a named process with a forking thread: stopped each time, no child appearing after it" \
+  "$stopped_seen $late" "10 0"
+kill -KILL -- "-$s" 2> /dev/null
+
 # a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
 # between that read and the TERM (here as -n's named kill runs: the job forks it then) that lost the TERM - deaf at it,
 # at its default half a second later - is sent it again, ends at once; read so, it was KILLed at the grace, said
