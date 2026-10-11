@@ -6,8 +6,10 @@
 # list.
 # its change: the branch upgrade/57-sonarqube-26.9 in infra and platform
 # outage: SonarQube down while it migrates its database (production only)
-# production waits up to 50 minutes for Argo after each merge (the migration hook's own deadline is 45)
-settle 50
+# production waits up to 60 minutes for Argo after each merge: the migration hook starts after SonarQube's rollout
+# and boot, and its own deadline is up to 50 minutes (its 40-minute wait and the setup calls) - a settle no longer than
+# the hook would call a migration still inside its bound failed, and invite the revert its abort forbids by then
+settle 60
 # abort: before its database migration ran (the setup hook's migrate_db not started, or refused before it): revert the
 # step's merges on main - 26.3 starts on its unchanged database. Once the migration ran: one-way - SonarQube's Postgres
 # dump from Wave 0 (the postgres store) restored, with 26.3. Neither rehearsed

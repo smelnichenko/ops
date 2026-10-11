@@ -18,6 +18,7 @@ import datetime
 import importlib.machinery
 import importlib.util
 import os
+import re
 import sys
 
 loader = importlib.machinery.SourceFileLoader("upgrade_production", "scripts/upgrade-production.py")
@@ -124,8 +125,10 @@ refused("preview 47 before its merges", P(S47, "preview", ev(*bb)), ["not merged
 refused("preview 47 with only infra settled", P(S47, "preview", ev(*bs)), ["platform"])
 check("preview 47 after both merges settled", P(S47, "preview", ev(*ball)), [])
 # Argo's settle after a merge: a step's settle line, else 30 minutes (SonarQube's migration hook allows 45 at 57)
-check("57 settles 50 minutes, 42 the default 30",
-      (info["57-sonarqube-26.9"]["settle"], info["42-kubernetes-1.35"]["settle"]), (50, 30))
+# the settle line read from the step file as written (never restated here); a step without one takes the default 30
+S57 = int(re.search(r"^settle (\d+)$", open("tests/ansible/upgrade/steps/57-sonarqube-26.9.txt").read(), re.M).group(1))
+check(f"57 settles its settle line's {S57} minutes, 42 the default 30",
+      (info["57-sonarqube-26.9"]["settle"], info["42-kubernetes-1.35"]["settle"]), (S57, 30))
 # the step's new images from production's own registry, there before the merge (asked of Forgejo)
 asked = []
 check("22's apt-cacher-ng tag there", m.registry_problems("22-apt-cacher-ng", lambda n, v: asked.append((n, v)) or 200),
@@ -467,11 +470,11 @@ got = phase_calls(m.merge, "22-apt-cacher-ng", "platform", registry=["REGISTRY-X
 check("merge: refused by the registry check, nothing merged",
       (len([c for c in got if c != ("run", "git")]), "REGISTRY-X" in got[-1][1]), (1, True))
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"))
-check("merge 57: the change shown (log, stat, diff) and asked about, merged, then Argo given its settle line's 50 "
+check(f"merge 57: the change shown (log, stat, diff) and asked about, merged, then Argo given its settle line's {S57} "
       "minutes", [c for c in got if c[0] in ("run", "settled", "record", "asked")],
       [("run", "git"), ("run", "git"), ("run", "git"), ("run", "upgrade-merge-order.py"), ("run", "git"),
        ("run", "git"), ("run", "git"), ("asked",), ("run", "upgrade-merge-step.sh"), ("run", "git"), ("record", "merged"),
-       ("settled", 50), ("record", "settled")])
+       ("settled", S57), ("record", "settled")])
 # the merge checks and shows the change against production's main (origin's): a local main behind it - CD pushed
 # meanwhile - refuses before the yes; the tip it checked is the one the merge pushes (the branch moved since: refused)
 got = phase_calls(m.merge, "57-sonarqube-26.9", "infra", events=ev("57-sonarqube-26.9 apps app"),
