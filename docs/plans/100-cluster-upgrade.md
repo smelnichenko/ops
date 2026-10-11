@@ -1297,6 +1297,15 @@ VeleroDailyBackupMissing for up to 30 h - and fire with Velero down; promtool te
 VeleroWeeklyBackupMissing fires in production until the next weekly (2026-10-18) completes: no full weekly since
 the Velero start of 2026-10-03.
 
+The final run's builds, 2026-10-11, on a host loaded by other work (load 24-29 on 18 cores): 12:32 failed - the s3gw
+bucket hook Job ran past 120 s (aws-cli at ~37 s a call under 200m; now 1 CPU, 300 s, derived in chart-render-checks:
+platform c1a9e17, pushed 14:26) and two apps' syncs failed past 5 retries (Deployments past their progress deadline,
+ready later); 14:26 failed at step 01 - cluster-config OutOfSync 40 min: a status update from an older copy of the app
+nulled its finished operation's results, and Argo 3.3 never auto-syncs an app whose last operation has none. Both are
+Argo never retrying a revision it attempted: argo-settled.py now starts that sync once (the app's .operation, as the
+CLI does), two polls running, and says SYNC - production's runner runs the same script on ten, so in the production
+upgrade it does the manual sync an operator would. Proven on the copy's stuck cluster-config.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
