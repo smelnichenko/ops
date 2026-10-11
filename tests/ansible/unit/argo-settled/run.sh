@@ -234,10 +234,12 @@ def loop(mode, *args, apps=None, apps_after=None, env=None):
     with open(os.path.join(d, "kubectl"), "w") as f:
         f.write(f"""#!/bin/bash
 case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = patch-fails ] && case "$*" in *" patch "*) exit 1;; esac; [ {mode} = patch-hangs ] && case "$*" in *" patch "*) sleep 3;; esac
+  [ {mode} = annotate-hangs ] && case "$*" in *" annotate "*) sleep 3;; esac
   [ {mode} = patch-heals ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json;; esac; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
+if [ {mode} = fail-second-apps ] && [ $n = 3 ]; then echo "connection refused" >&2; exit 1; fi
 if [ -z "${{p:-}}" ]; then
   if [ {mode} != patch-heals ] && [ $n -gt 2 ]; then cat {d}/apps-after.json; else cat {d}/apps.json; fi; exit 0
 fi
@@ -264,6 +266,11 @@ rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--allow-ex
                apps=A + [preview])
 check("  an extra app's ComparisonError (a preview environment's): nothing refreshed",
       [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
+rc, out = loop("annotate-hangs", "--minutes", "0.06", "--restart-quiet", "0", apps=A + [broken],
+               env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "1"})
+hard = [x for x in out.splitlines() if x.startswith("ANNOTATED ") and " annotate " in x]
+check("  kubectl hanging on the hard refresh: said not known, tried again", (len(hard) >= 2, "not known" in out,
+                                                                          "Traceback" in out), (True, True, False), out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0")
 check("  no error: nothing refreshed", [x for x in out.splitlines() if x.startswith("ANNOTATED ")], [], out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [broken], apps_after=A + [app("c")])
@@ -318,6 +325,8 @@ for name, change, extra in (
          lambda x: x["status"]["operationState"].update(phase="Failed", syncResult={"revision": "def"}), ()),
         ("its last operation failed without results (red, never synced here)",
          lambda x: x["status"]["operationState"].update(phase="Failed"), ()),
+        ("its last operation in error without results (red, never synced here)",
+         lambda x: x["status"]["operationState"].update(phase="Error"), ()),
         ("a ComparisonError (refreshed first)",
          lambda x: x["status"].update(conditions=[{"type": "ComparisonError", "message": "cached"}]), ()),
         ("an app allowed out of sync", lambda x: None, ("--allow-out-of-sync", "c")),
@@ -353,6 +362,14 @@ rc, out = loop("patch-hangs", "--minutes", "0.05", "--restart-quiet", "0", "--sy
                env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "1"})
 check("  kubectl hanging on the patch: said not known, the wait goes on to its end",
       ("not sent or not known" in out, "Traceback" in out, "NOT SETTLED in" in out), (True, False, True), out)
+rc, out = loop("fail-second-apps", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+               apps_after=A + [stalled])
+lines = out.splitlines()
+failed_at = next((i for i, x in enumerate(lines) if "poll failed" in x), None)
+sync_at = next((i for i, x in enumerate(lines) if x.startswith("SYNC c:")), None)
+between = sum("green_polls=" in x for x in lines[failed_at + 1:sync_at]) if None not in (failed_at, sync_at) else -1
+check("  stalled, a failed poll, stalled: the failed poll breaks the run - a read poll between it and the sync",
+      (failed_at is not None, sync_at is not None and sync_at > failed_at, between >= 1), (True, True, True), out)
 rc, out = loop("patch-heals", "--minutes", "0.05", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  synced, then green: the settled line names it", (rc, "synced by this settle: c" in out), (0, True), out)
