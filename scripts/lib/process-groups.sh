@@ -110,7 +110,7 @@ term_default() {  # term_default <pid>
 # traced or in the kernel forks no more meanwhile). A process named so only after this read (forked, then exec'd as
 # the name) waits for the next look, stopped first - KILLed on a list read before its fork, its child was never TERMed
 stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each STOPped>
-  local g=$1 name=$2 procs x p comm st t i pending=() left
+  local g=$1 name=$2 procs x p comm pending=() _
   local -n _stopped=$3
   _stopped=" "
   job_processes "$g" procs
@@ -119,11 +119,20 @@ stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each STOPped
     read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] || continue
     kill -STOP "$p" 2> /dev/null && { pending+=("$p"); _stopped+="$p "; }
   done
+  wait_stopped _ "${pending[@]}"
+}
+
+# each process waited for, one deadline for all (0.5 s), until every one of its threads is stopped (or it is gone);
+# the variable gets those still not wholly stopped at the deadline. The proc root is a variable for its test only
+wait_stopped() {  # wait_stopped <variable: " <pid> ... "> <pid>...
+  local -n _left=$1
+  shift
+  local pending=("$@") left p t st i root=${_procfs_root:-/proc}
   for ((i = 0; i < 50 && ${#pending[@]} > 0; i++)); do
     left=()
     for p in "${pending[@]}"; do
-      [ -e "/proc/$p/stat" ] || continue
-      for t in "/proc/$p/task/"[0-9]*/stat; do
+      [ -e "$root/$p/stat" ] || continue
+      for t in "$root/$p/task/"[0-9]*/stat; do
         read -r st 2> /dev/null < "$t" || continue
         set -- ${st##*) }
         case $1 in T | t | Z | X) ;; *) left+=("$p"); break ;; esac
@@ -132,6 +141,7 @@ stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each STOPped
     pending=("${left[@]}")
     [ ${#pending[@]} -eq 0 ] || sleep 0.01
   done
+  _left=" ${pending[*]} "
 }
 
 # the stop's TERM sent again where it was lost: a process of the job's there when it was sent (started before it) still
