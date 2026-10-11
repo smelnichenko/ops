@@ -57,6 +57,7 @@ import sys
 import time
 
 FAILED_PHASES = {"Failed", "Error"}
+APPLICATIONS = "applications.argoproj.io"
 RUNNING_PHASES = {"Running", "Terminating"}
 
 
@@ -109,7 +110,7 @@ def app_problems(app, allowed, mirror):
         problems.append(f"operation {op['phase']}")
     if op.get("phase") in FAILED_PHASES:
         problems.append(f"last sync {op['phase']}: {(op.get('message') or '')[:200]}")
-    if stalled(app):
+    if stalled(app) and name not in allowed:
         problems.append("STALLED: its last operation over without results - Argo will not auto-sync it again; sync it")
     if without_empty(sources(sync.get("comparedTo") or {})) != without_empty(sources(spec)):
         problems.append("compared against an older spec")
@@ -133,8 +134,7 @@ def comparison_errors(apps, extra=None):
 def hard_refresh(kubeconfig, name):
     """Argo regenerates the app's manifests past its repo-server's cache (a paused generation serves a cached error)."""
     try:
-        out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "annotate",
-                              "applications.argoproj.io", name, "argocd.argoproj.io/refresh=hard", "--overwrite"],
+        out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "annotate", APPLICATIONS, name, "argocd.argoproj.io/refresh=hard", "--overwrite"],
                              capture_output=True, text=True, timeout=60)
     except (subprocess.TimeoutExpired, OSError):
         return False
@@ -143,13 +143,14 @@ def hard_refresh(kubeconfig, name):
 
 def stalled(app):
     """Argo will not auto-sync the app again (the docstring's STALLED): automated (not switched off), OutOfSync, no
-    operation pending, its last operation Argo's own, over and without results."""
+    operation pending, its last operation Argo's own, Succeeded and without results (a failed one is never synced
+    here: it stays red)."""
     spec, status = app.get("spec") or {}, app.get("status") or {}
     automated = (spec.get("syncPolicy") or {}).get("automated")
     op = status.get("operationState") or {}
     return (automated is not None and automated.get("enabled") is not False
             and (status.get("sync") or {}).get("status") == "OutOfSync" and app.get("operation") is None
-            and bool(op.get("phase")) and op.get("phase") not in RUNNING_PHASES and not op.get("syncResult")
+            and op.get("phase") == "Succeeded" and not op.get("syncResult")
             and ((op.get("operation") or {}).get("initiatedBy") or {}).get("automated") is True)
 
 
@@ -180,12 +181,16 @@ def sync_now(kubeconfig, app):
                  "sync": op}
     if policy.get("retry"):
         operation["retry"] = policy["retry"]
-    patch = {"metadata": {"resourceVersion": app["metadata"].get("resourceVersion", "")}, "operation": operation}
+    if not app["metadata"].get("resourceVersion"):
+        return None  # no precondition to send: never an unconditional patch
+    patch = {"metadata": {"resourceVersion": app["metadata"]["resourceVersion"]}, "operation": operation}
     try:
-        out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "patch", "applications.argoproj.io",
+        out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "patch", APPLICATIONS,
                               app["metadata"]["name"], "--type", "merge", "-p", json.dumps(patch)],
                              capture_output=True, text=True, timeout=60)
-    except (subprocess.TimeoutExpired, OSError):
+    except subprocess.TimeoutExpired:
+        return None  # unknown: kubectl may have applied it - the next poll sees the operation, or the app stalled still
+    except OSError:
         return False
     return out.returncode == 0
 
@@ -207,8 +212,10 @@ def remedies(a, apps, allowed, state):
         ok = sync_now(a.kubeconfig, by_name[n])
         if ok:
             state["synced"].add(n)
+        said = {True: "started", False: "refused by kubectl, tried at the next poll",
+                None: "not sent or not known (no resourceVersion, or kubectl timed out) - judged at the next poll"}[ok]
         print(f"SYNC {n}: stalled two polls running (its last operation without results: Argo will not auto-sync it"
-              f" again) - {'started' if ok else 'refused by kubectl, tried at the next poll'}", flush=True)
+              f" again) - {said}", flush=True)
 
 
 def node_shutdown_leftover(status):
@@ -438,7 +445,7 @@ def main():
     while True:
         apps = None  # this poll's (a failed poll has none: no app counted erring from it)
         try:
-            apps = kubectl(a.kubeconfig, "-n", "argocd", "get", "applications.argoproj.io", "-o", "json")
+            apps = kubectl(a.kubeconfig, "-n", "argocd", "get", APPLICATIONS, "-o", "json")
             pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json"), a.ignore_namespaces)
             green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror, None, a.restart_quiet,
                                                             expected, a.allow_extra_apps, since)

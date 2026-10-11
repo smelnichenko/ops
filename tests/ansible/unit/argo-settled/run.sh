@@ -299,6 +299,8 @@ check("stalled (its last operation Argo's, without results), --sync-stalled: syn
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", apps=A + [stalled])
 check("  without --sync-stalled (production's settle): nothing synced, said STALLED",
       (patches(out), "STALLED" in out), ([], True), out)
+rc, out = run(A + [stalled], P, "--allow-out-of-sync", "c")
+check("  an app allowed out of sync: never STALLED (green)", (rc, "STALLED" in out), (0, False), out)
 for name, change, extra in (
         ("its last operation with results (Argo retries by itself)",
          lambda x: x["status"]["operationState"].update(syncResult={"revision": "abc"}), ()),
@@ -311,6 +313,8 @@ for name, change, extra in (
          lambda x: x["status"]["operationState"].update(operation={"initiatedBy": {"username": "sm"}}), ()),
         ("its last operation failed (red, never synced again here)",
          lambda x: x["status"]["operationState"].update(phase="Failed", syncResult={"revision": "def"}), ()),
+        ("its last operation failed without results (red, never synced here)",
+         lambda x: x["status"]["operationState"].update(phase="Failed"), ()),
         ("a ComparisonError (refreshed first)",
          lambda x: x["status"].update(conditions=[{"type": "ComparisonError", "message": "cached"}]), ()),
         ("an app allowed out of sync", lambda x: None, ("--allow-out-of-sync", "c")),
@@ -336,6 +340,10 @@ for name, change in (("no operation yet (a new app: Argo's first auto-sync to co
                       lambda x: x["status"]["sync"].update(status="Synced"))):
     rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [variant(change)])
     check(f"  {name}: nothing synced", patches(out), [], out)
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled",
+               apps=A + [variant(lambda x: x["metadata"].pop("resourceVersion"))])
+check("  no resourceVersion (no precondition to send): nothing patched, said, no crash",
+      (patches(out), "not sent or not known" in out, "Traceback" in out), ([], True, False), out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  so one poll only (synced by itself): nothing synced", patches(out), [], out)
