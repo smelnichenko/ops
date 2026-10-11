@@ -63,8 +63,9 @@ KUBECTL_TIMEOUT = float(os.environ.get("ARGO_SETTLED_KUBECTL_TIMEOUT") or 60)
 RUNNING_PHASES = {"Running", "Terminating"}
 
 
-def kubectl(kubeconfig, *args):
-    out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, *args], capture_output=True, text=True, timeout=60)
+def kubectl(kubeconfig, *args, timeout=60):
+    out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, *args], capture_output=True, text=True,
+                         timeout=timeout)
     if out.returncode != 0:
         raise RuntimeError(f"kubectl {' '.join(args)}: rc {out.returncode}: {out.stderr.strip()[:300]}")
     return json.loads(out.stdout)
@@ -205,10 +206,17 @@ def remedies(a, apps, allowed, state):
     """One poll's remedies: an app with a ComparisonError two polls running hard-refreshed, once; with --sync-stalled a
     stalled app two polls running synced, once (it counts once kubectl took it - refused, tried at the next poll)."""
     erring, stalling = state["erring"], state["stalling"]
-    # a call's time-out within the wait's own deadline: remedies never carry a poll past --minutes
-    budget = lambda: max(1.0, min(KUBECTL_TIMEOUT, state["deadline"] - time.monotonic()))  # noqa: E731
+    # one budget for the poll's remedies, within the wait's own deadline: never past --minutes; spent, nothing more
+    # is sent (a write past the deadline nobody would read)
+    poll_end = min(state["deadline"], time.monotonic() + KUBECTL_TIMEOUT)
+
+    def budget():
+        return poll_end - time.monotonic()
     state["erring"] = {n: erring.get(n, 0) + 1 for n in comparison_errors(apps, a.allow_extra_apps)}
     for n in sorted(n for n, k in state["erring"].items() if k >= 2 and n not in state["refreshed"]):
+        if budget() < 0.5:
+            print(f"HARD REFRESH {n}: not sent - the poll's time spent", flush=True)
+            continue
         ok = hard_refresh(a.kubeconfig, n, budget())
         if ok is not None:
             state["refreshed"].add(n)
@@ -219,6 +227,9 @@ def remedies(a, apps, allowed, state):
     state["stalling"] = {n: stalling.get(n, 0) + 1 for n in stalled_auto_syncs(apps, allowed, a.allow_extra_apps)}
     by_name = {x["metadata"]["name"]: x for x in apps["items"]}
     for n in sorted(n for n, k in state["stalling"].items() if k >= 2 and n not in state["synced"]):
+        if budget() < 0.5:
+            print(f"SYNC {n}: not sent - the poll's time spent", flush=True)
+            continue
         ok = sync_now(a.kubeconfig, by_name[n], budget())
         if ok:
             state["synced"].add(n)
@@ -454,12 +465,21 @@ def main():
     first, last, streak = None, None, 0
     # polls running with a ComparisonError / stalled, per app; the apps hard-refreshed / synced
     state = {"erring": {}, "refreshed": set(), "stalling": {}, "synced": set(), "unconfirmed": set(),
-             "deadline": time.monotonic() + a.minutes * 60}
+             "deadline": deadline}
+
+    def remedied():
+        """The settle's own syncs, said at its end - settled or not."""
+        unconfirmed = state["unconfirmed"] - state["synced"]
+        return (f"; synced by this settle: {','.join(sorted(state['synced'])) or 'none'}"
+                + (f" (sent, not confirmed: {','.join(sorted(unconfirmed))})" if unconfirmed else ""))
     while True:
-        apps = None  # this poll's (a failed poll has none: no app counted erring from it)
+        apps = None  # this poll's apps (a poll whose apps read failed has none: nothing counted from it)
+        # the poll's reads within the wait's deadline too (at least 10 s: a read must have a chance)
+        read_timeout = max(10.0, min(60.0, deadline - time.monotonic()))
         try:
-            apps = kubectl(a.kubeconfig, "-n", "argocd", "get", APPLICATIONS, "-o", "json")
-            pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json"), a.ignore_namespaces)
+            apps = kubectl(a.kubeconfig, "-n", "argocd", "get", APPLICATIONS, "-o", "json", timeout=read_timeout)
+            pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json", timeout=read_timeout),
+                           a.ignore_namespaces)
             green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror, None, a.restart_quiet,
                                                             expected, a.allow_extra_apps, since)
             line = summary(apps, problems, not_ready, allowed)
@@ -467,7 +487,7 @@ def main():
             green, problems, not_ready, restarts, line = False, {}, [], last or {}, f"poll failed: {e}"
         if apps is not None:
             remedies(a, apps, allowed, state)
-        else:  # "two polls running" means two polls read: a failed one breaks the run
+        else:  # "two polls running" means two polls whose apps were read: a failed read breaks the run
             state["erring"], state["stalling"] = {}, {}
         first = first if first is not None else restarts
         churn = restarted(last, restarts) if last is not None else []
@@ -483,13 +503,10 @@ def main():
             return finish(apps, pods) if green else 1
         if streak >= a.stable_polls:
             since = restarted(first, restarts)
-            print(f"ARGO SETTLED: {line}; restarted during the wait: {','.join(since) or 'none'}"
-                  f"; synced by this settle: {','.join(sorted(state['synced'])) or 'none'}"
-                  + (f" (sent, not confirmed: {','.join(sorted(state['unconfirmed'] - state['synced']))})"
-                     if state["unconfirmed"] - state["synced"] else ""))
+            print(f"ARGO SETTLED: {line}; restarted during the wait: {','.join(since) or 'none'}" + remedied())
             return finish(apps, pods)
         if time.monotonic() >= deadline:
-            print(f"NOT SETTLED in {a.minutes:g} min: {line}")
+            print(f"NOT SETTLED in {a.minutes:g} min: {line}" + remedied())
             report(problems, not_ready)
             return 1
         time.sleep(a.poll)

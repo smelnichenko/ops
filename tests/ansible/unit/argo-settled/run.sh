@@ -21,6 +21,8 @@ S = "tests/ansible/upgrade/files/argo-settled.py"
 NOW = "2026-10-06T12:00:00Z"
 fails = 0
 work = tempfile.mkdtemp()
+import time  # noqa: E402
+import shutil  # noqa: E402
 
 
 def app(name):
@@ -219,6 +221,10 @@ broken["status"]["conditions"] = [{"type": "ComparisonError", "message": "Manife
 rc, out = run(A + [broken], P)
 check("an app not green: its ComparisonError said", (rc, "ComparisonError: Manifest generation error (cached)" in out,
                                                      "OrphanedResourceWarning" in out), (1, True, False), out)
+errored = app("c")
+errored["status"]["operationState"] = {"phase": "Error", "message": "one or more objects failed to apply"}
+rc, out = run(A + [errored], P)
+check("a green app whose last operation is in Error: not green, said", (rc, "last sync Error" in out), (1, True), out)
 stale = app("c")
 stale["status"]["conditions"] = [{"type": "ComparisonError", "message": "old"}]
 rc, out = run(A + [stale], P)
@@ -235,13 +241,15 @@ def loop(mode, *args, apps=None, apps_after=None, env=None):
         f.write(f"""#!/bin/bash
 case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = patch-fails ] && case "$*" in *" patch "*) exit 1;; esac; [ {mode} = patch-hangs ] && case "$*" in *" patch "*) sleep 3;; esac
   [ {mode} = annotate-hangs ] && case "$*" in *" annotate "*) sleep 3;; esac
-  [ {mode} = patch-heals ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json;; esac; exit 0;; esac
+  [ {mode} = patch-heals ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json;; esac
+  [ {mode} = patch-heals-hangs ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json; sleep 3;; esac; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
 if [ {mode} = fail-second-apps ] && [ $n = 3 ]; then echo "connection refused" >&2; exit 1; fi
 if [ -z "${{p:-}}" ]; then
-  if [ {mode} != patch-heals ] && [ $n -gt 2 ]; then cat {d}/apps-after.json; else cat {d}/apps.json; fi; exit 0
+  if [ {mode} != patch-heals ] && [ {mode} != patch-heals-hangs ] && [ $n -gt 2 ]; then cat {d}/apps-after.json
+  else cat {d}/apps.json; fi; exit 0
 fi
 r=0; [ {mode} = churn ] && r=$n
 printf '{{"items":[{{"metadata":{{"namespace":"ns","name":"p1","uid":"u1"}},"status":{{"phase":"Running",'
@@ -252,6 +260,7 @@ printf '"containerStatuses":[{{"ready":true,"restartCount":%d}}]}}}}]}}' $r
                        capture_output=True, text=True, env={**os.environ, "PATH": d + ":" + os.environ["PATH"],
                                                              "MIRROR_REVISIONS": "", **(env or {})})
     annotated = open(os.path.join(d, "annotated")).read().splitlines() if os.path.exists(os.path.join(d, "annotated")) else []
+    shutil.rmtree(d, ignore_errors=True)
     return r.returncode, r.stdout + r.stderr + "".join(f"\nANNOTATED {x}" for x in annotated)
 # a ComparisonError two polls running: that app hard-refreshed, once (a paused generation serves a cached error for 60
 # minutes - longer than a settle)
@@ -373,6 +382,15 @@ check("  stalled, a failed poll, stalled: the failed poll breaks the run - a rea
 rc, out = loop("patch-heals", "--minutes", "0.05", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  synced, then green: the settled line names it", (rc, "synced by this settle: c" in out), (0, True), out)
+rc, out = loop("patch-heals-hangs", "--minutes", "0.1", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+               apps_after=A + [app("c")], env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "1"})
+check("  the patch timing out, then the app green: the settled line names it sent, not confirmed",
+      (rc, "(sent, not confirmed: c)" in out), (0, True), out)
+t0 = time.monotonic()
+rc, out = loop("patch-hangs", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+               env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "6"})
+check("  a patch hanging: the poll's budget within --minutes (1.2 s), not kubectl's own 6 s",
+      (time.monotonic() - t0 < 4, "Traceback" in out), (True, False), out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  so one poll only (synced by itself): nothing synced", patches(out), [], out)

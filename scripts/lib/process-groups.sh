@@ -111,6 +111,18 @@ term_default() {  # term_default <pid>
 # look waits for it again; one that never stops is KILLed at the grace's end. A process named so only after this read
 # (forked, then exec'd as the name) waits for the next look, stopped first - KILLed on a list read before its fork,
 # its child was never TERMed
+# a process's start (clock ticks since boot, /proc/<pid>/stat field 22) into the variable named; empty when gone
+start_of() {  # start_of <pid> <variable>
+  local _so_st
+  printf -v "$2" '%s' ""
+  read -r _so_st 2> /dev/null < "/proc/$1/stat" || return 0
+  set -- "$2" ${_so_st##*) }
+  printf -v "$1" '%s' "${21}"
+}
+
+# each process STOPped: its start (start_of), so a KILL or CONT later goes to that process, never to a pid reused
+declare -gA _pg_started=()
+
 stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each wholly stopped>
   local g=$1 name=$2 procs x p comm pending=() notyet
   local -n _stopped=$3
@@ -119,7 +131,7 @@ stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each wholly 
   for x in "${procs[@]}"; do
     p=${x% *}
     read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] || continue
-    kill -STOP "$p" 2> /dev/null && { pending+=("$p"); _stopped+="$p "; }
+    kill -STOP "$p" 2> /dev/null && { pending+=("$p"); _stopped+="$p "; start_of "$p" "_pg_started[$p]"; }
   done
   wait_stopped notyet "${pending[@]}"
   for p in $notyet; do _stopped=${_stopped/ $p / }; done
@@ -176,7 +188,8 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
       set -- ${st##*) }
       (( ${20} * 100 / _clk_tck >= term_at )) || [[ $_sent == *" $p "* ]] || _sent+="$p "
     fi
-    if [[ $stopped == *" $p "* ]] && read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ]; then
+    if [[ $stopped == *" $p "* ]] && read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] \
+      && start_of "$p" st && [ -n "$st" ] && [ "$st" = "${_pg_started[$p]:-}" ]; then
       kill -KILL "$p" 2> /dev/null
       killed+="$p "
       lost+="$p "
@@ -201,9 +214,13 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
     kill -TERM "$p" 2> /dev/null
     [ -n "${deflt[$p]:-}" ] || [[ $_sent == *" $p "* ]] || _sent+="$p "
   done
-  # one stopped and not KILLed (its name changed) runs on - only one this look listed (a pid gone since may be reused)
+  # one stopped and not KILLed (its name changed) runs on - only one this look listed, and only the process stopped
+  # (its start the same: a pid gone since may be reused)
   for p in $stopped; do
-    [[ $killed == *" $p "* ]] || [ -z "${parent[$p]+x}" ] || kill -CONT "$p" 2> /dev/null
+    [[ $killed == *" $p "* ]] && continue
+    [ -n "${parent[$p]+x}" ] || continue
+    start_of "$p" st
+    [ "$st" = "${_pg_started[$p]:-}" ] && kill -CONT "$p" 2> /dev/null
   done
 }
 
