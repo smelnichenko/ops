@@ -242,6 +242,7 @@ def loop(mode, *args, apps=None, apps_after=None, env=None):
 case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = patch-fails ] && case "$*" in *" patch "*) exit 1;; esac; [ {mode} = patch-hangs ] && case "$*" in *" patch "*) sleep 3;; esac
   [ {mode} = annotate-hangs ] && case "$*" in *" annotate "*) sleep 3;; esac
   [ {mode} = patch-heals ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json;; esac
+  [ {mode} = patch-hangs-long ] && case "$*" in *" patch "*) sleep 10;; esac
   [ {mode} = patch-heals-hangs ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json; sleep 3;; esac; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
@@ -387,7 +388,7 @@ rc, out = loop("patch-heals-hangs", "--minutes", "0.1", "--restart-quiet", "0", 
 check("  the patch timing out, then the app green: the settled line names it sent, not confirmed",
       (rc, "(sent, not confirmed: c)" in out), (0, True), out)
 t0 = time.monotonic()
-rc, out = loop("patch-hangs", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+rc, out = loop("patch-hangs-long", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "6"})
 check("  a patch hanging: the poll's budget within --minutes (1.2 s), not kubectl's own 6 s",
       (time.monotonic() - t0 < 4, "Traceback" in out), (True, False), out)
