@@ -444,6 +444,24 @@ t1=$(cut -d' ' -f1 /proc/uptime)
 check "wait_stopped: every thread stopped: none left, no wait" \
   "$running $(awk -v a="$t0" -v b="$t1" 'BEGIN {print (b - a < 0.3)}')" "   1"
 
+# stop_named: a process of the name not wholly stopped at the deadline (a thread still in a fork) is left out of the
+# set KILLed by name - STOP-pending for the next look; wholly stopped, it is in the set (its threads read from a proc
+# tree where they are R, then T; the process itself real, named task, in its own session)
+mkdir -p "$W/named-wait/bin"
+cp "$(command -v sleep)" "$W/named-wait/bin/task"
+setsid "$W/named-wait/bin/task" 60 < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+for _ in $(seq 100); do read -r c 2> /dev/null < "/proc/$s/comm"; [ "$c" = task ] && break; sleep 0.05; done
+mkdir -p "$W/nwproc/$s/task/$s" "$W/nwproc/$s/task/99999"
+printf '%s (task) T 1 %s %s\n' "$s" "$s" "$s" | tee "$W/nwproc/$s/stat" > "$W/nwproc/$s/task/$s/stat"
+printf '99999 (task) R 1 %s %s\n' "$s" "$s" > "$W/nwproc/$s/task/99999/stat"
+_procfs_root=$W/nwproc stop_named "$s" task named_set
+printf '99999 (task) T 1 %s %s\n' "$s" "$s" > "$W/nwproc/$s/task/99999/stat"
+_procfs_root=$W/nwproc stop_named "$s" task named_set2
+check "stop_named: a thread still running at the deadline - out of the KILL set; every thread stopped - in it" \
+  "$([[ $named_set == *" $s "* ]] && echo in || echo out) $([[ $named_set2 == *" $s "* ]] && echo in || echo out)" "out in"
+kill -KILL -- "-$s" 2> /dev/null
+
 # a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
 # between that read and the TERM (here as -n's named kill runs: the job forks it then) that lost the TERM - deaf at it,
 # at its default half a second later - is sent it again, ends at once; read so, it was KILLed at the grace, said

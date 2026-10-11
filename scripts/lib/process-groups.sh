@@ -103,14 +103,16 @@ term_default() {  # term_default <pid>
   [ -n "$ign" ] && [ -n "$cgt" ] && (( ((16#$ign | 16#$cgt) & 0x4000) == 0 ))
 }
 
-# every process of the job of that name stopped (STOP) and waited for, one deadline for all (bounded): until every
-# thread of each is stopped - a fork any thread was in (go-task runs 20 and more) completes first, so a look after it
-# sees every child it has (a main thread read alone showed T with another thread's fork still running: 17 in 20 -
-# the reviews, 2026-10-11). The variable gets every one STOPped: KILLed by name, at its wait's end stopped or not (one
-# traced or in the kernel forks no more meanwhile). A process named so only after this read (forked, then exec'd as
-# the name) waits for the next look, stopped first - KILLed on a list read before its fork, its child was never TERMed
-stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each STOPped>
-  local g=$1 name=$2 procs x p comm pending=() _
+# every process of the job of that name stopped (STOP) and waited for, one deadline for all (0.5 s on the clock):
+# until every thread of each is stopped - a fork any thread was in (go-task runs 20 and more) completes first, so a
+# look after it sees every child it has (a main thread read alone showed T with another thread's fork still running:
+# 17 in 20 - the reviews, 2026-10-11). The variable gets the wholly stopped ones: KILLed by name. One not wholly
+# stopped at the deadline (a thread still in a fork, or in the kernel) stays STOP-pending, out of this look - the next
+# look waits for it again; one that never stops is KILLed at the grace's end. A process named so only after this read
+# (forked, then exec'd as the name) waits for the next look, stopped first - KILLed on a list read before its fork,
+# its child was never TERMed
+stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each wholly stopped>
+  local g=$1 name=$2 procs x p comm pending=() notyet
   local -n _stopped=$3
   _stopped=" "
   job_processes "$g" procs
@@ -119,29 +121,36 @@ stop_named() {  # stop_named <pgid> <name> <variable: " <pid> ... " each STOPped
     read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] || continue
     kill -STOP "$p" 2> /dev/null && { pending+=("$p"); _stopped+="$p "; }
   done
-  wait_stopped _ "${pending[@]}"
+  wait_stopped notyet "${pending[@]}"
+  for p in $notyet; do _stopped=${_stopped/ $p / }; done
 }
 
-# each process waited for, one deadline for all (0.5 s), until every one of its threads is stopped (or it is gone);
-# the variable gets those still not wholly stopped at the deadline. The proc root is a variable for its test only
+# each process waited for, one deadline for all (0.5 s on uptime_cs's clock), until every one of its threads is
+# stopped (or it is gone); the variable gets those still not wholly stopped at the deadline. Locals prefixed: the
+# caller's variable is a nameref. The proc root is a variable for its test only
 wait_stopped() {  # wait_stopped <variable: " <pid> ... "> <pid>...
-  local -n _left=$1
+  local -n _ws_left=$1
   shift
-  local pending=("$@") left p t st i root=${_procfs_root:-/proc}
-  for ((i = 0; i < 50 && ${#pending[@]} > 0; i++)); do
-    left=()
-    for p in "${pending[@]}"; do
-      [ -e "$root/$p/stat" ] || continue
-      for t in "$root/$p/task/"[0-9]*/stat; do
-        read -r st 2> /dev/null < "$t" || continue
-        set -- ${st##*) }
-        case $1 in T | t | Z | X) ;; *) left+=("$p"); break ;; esac
+  local _ws_pending=("$@") _ws_next _ws_p _ws_t _ws_st _ws_now _ws_end _ws_root=${_procfs_root:-/proc}
+  uptime_cs _ws_now
+  _ws_end=$((_ws_now + 50))
+  while ((${#_ws_pending[@]} > 0)); do
+    _ws_next=()
+    for _ws_p in "${_ws_pending[@]}"; do
+      [ -e "$_ws_root/$_ws_p/stat" ] || continue
+      for _ws_t in "$_ws_root/$_ws_p/task/"[0-9]*/stat; do
+        read -r _ws_st 2> /dev/null < "$_ws_t" || continue
+        set -- ${_ws_st##*) }
+        case $1 in T | t | Z | X) ;; *) _ws_next+=("$_ws_p"); break ;; esac
       done
     done
-    pending=("${left[@]}")
-    [ ${#pending[@]} -eq 0 ] || sleep 0.01
+    _ws_pending=("${_ws_next[@]}")
+    ((${#_ws_pending[@]} > 0)) || break
+    uptime_cs _ws_now
+    ((_ws_now < _ws_end)) || break
+    sleep 0.01
   done
-  _left=" ${pending[*]} "
+  _ws_left=" ${_ws_pending[*]} "
 }
 
 # the stop's TERM sent again where it was lost: a process of the job's there when it was sent (started before it) still
