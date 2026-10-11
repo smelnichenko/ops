@@ -103,6 +103,27 @@ term_default() {  # term_default <pid>
   [ -n "$ign" ] && [ -n "$cgt" ] && (( ((16#$ign | 16#$cgt) & 0x4000) == 0 ))
 }
 
+# every process of the job of that name stopped (STOP), waited for until stopped (bounded): one stopped forks no more,
+# and a fork it was in completes first - so a look after it sees every child it has (a list read before its fork, its
+# name read after its exec: the child never TERMed, KILLed at the grace's end - the review, 2026-10-11)
+stop_named() {  # stop_named <pgid> <name>
+  local g=$1 name=$2 procs x p comm st stopped=() i
+  job_processes "$g" procs
+  for x in "${procs[@]}"; do
+    p=${x% *}
+    read -r comm 2> /dev/null < "/proc/$p/comm" && [ "$comm" = "$name" ] || continue
+    kill -STOP "$p" 2> /dev/null && stopped+=("$p")
+  done
+  for p in "${stopped[@]}"; do
+    for ((i = 0; i < 50; i++)); do
+      read -r st 2> /dev/null < "/proc/$p/stat" || break
+      set -- ${st##*) }
+      [ "$1" != T ] || break
+      sleep 0.01
+    done
+  done
+}
+
 # the stop's TERM sent again where it was lost: a process of the job's there when it was sent (started before it) still
 # running with TERM at its default never got it - a job just forked loses one (its signals still its parent's
 # handlers until it resets them; the step's checks' stop waited out their bound) - and with it what it started since:
@@ -114,6 +135,7 @@ resend_term() {  # resend_term <pgid> <the TERM's time, uptime_cs> <sent variabl
   local g=$1 term_at=$2 name=${4:-} procs x p comm st lost=" " changed=1
   local -n _sent=$3
   local -A parent=() deflt=()
+  [ -z "$name" ] || stop_named "$g" "$name"
   job_processes "$g" procs
   for x in "${procs[@]}"; do
     p=${x% *}

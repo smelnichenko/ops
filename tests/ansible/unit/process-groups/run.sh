@@ -33,9 +33,10 @@ mine() {  # mine <pid>: the process is this shell's child
 }
 # bounded waits on what a process of this test writes once its traps are set - never a sleep before a signal (a slow
 # start took the signal before the trap: the case passed or failed on the machine's load)
-ready() {  # ready <file>...: each there, 5 s at most
+ready() {  # ready <file>...: each there, 5 s at most - non-zero when one is not (the stop then races the trap)
   local f
   for f; do for _ in $(seq 100); do [ -s "$f" ] && break; sleep 0.05; done; done
+  for f; do [ -s "$f" ] || return 1; done
 }
 set +m
 # a job in this shell's group (no job control): what a setsid job is until setsid has run - its group none yet
@@ -281,14 +282,18 @@ signal.signal(signal.SIGTERM, signal.SIG_IGN)
 open(out, "w").write(f"{os.getpid()}\n")
 signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
 if os.fork() == 0:
+    got = []
     def caught(*_):
         open(out + ".n", "a").write("caught\n")
-        os._exit(143)
+        got.append(time.monotonic())
     signal.signal(signal.SIGTERM, caught)
     open(out + ".n.pid", "w").write(f"{os.getpid()}\n")
     signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+    # two looks (0.6 s) after the first TERM before it ends: a second TERM runs the handler again, counted
     for _ in range(600):
         time.sleep(0.1)
+        if got and time.monotonic() - got[0] > 0.6:
+            os._exit(143)
     os._exit(0)
 for _ in range(100):
     if os.path.exists(out + ".n.pid") and os.path.getsize(out + ".n.pid"):
@@ -305,14 +310,14 @@ trap 'term=1' TERM
 echo $$ > "$1/late-job.ready"
 term=""
 for _ in $(seq 600); do [ -z "$term" ] || break; sleep 0.1; done
-# start-task is new since the TERM, TERMed once at any look: it starts with the TERM ignored (kept across the exec),
-# not ignoring it from its own first line - a look during its start-up killed it (the gate, 2026-10-11: no task pid)
+# start-task starts with the TERM ignored (kept across the exec): a look never TERMs it (its parent in the job, catching
+# the TERM), and ignored from the exec on it has no window if one did
 trap '' TERM
 "$1/late/start-task" "$1/late.pid"
 JOB
 setsid bash "$W/late-job" "$W" < /dev/null > /dev/null 2>&1 & s=$!
 sessions+=("$s")
-ready "$W/late-job.ready"
+ready "$W/late-job.ready" || check "-n task: the job's trap set before the stop" no yes
 t0=$SECONDS
 # a grace long enough for the job's chain (its TERM, a script, a fork, an exec) on a loaded machine - 5 s ran out under
 # a CPU hog beside the gate's one CPU, the job KILLed whole; "at once" is well under it
@@ -327,6 +332,40 @@ check "-n task: a task started during the grace KILLed at once, what it started 
 [ "$got" = "1 gone 1 0" ] || echo "    traces: $((SECONDS - t0)) s; task pid ${lt:-none}; child $(cat "$W/late.pid.n.pid" 2> /dev/null \
   || echo none); the stop said: $(tr '\n' ';' < "$W/late.out")"
 for f in "$W/late.pid" "$W/late.pid.n.pid"; do
+  x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
+done
+# -n task: a task whose child was forked during a look's scan - the list read before the fork, the name read after its
+# exec - KILLed with the child still TERMed (its handler run), not KILLed at the grace's end (the review, 2026-10-11:
+# forced here - start-task pauses before its fork, the first look's list held until the exec)
+mkdir -p "$W/forced/late/bin"
+cp "$W/late/bin/task" "$W/forced/late/bin/task"
+sed 's/^if os.fork() == 0:/time.sleep(0.5)\nif os.fork() == 0:/' "$W/late/start-task" > "$W/forced/late/start-task"
+chmod +x "$W/forced/late/start-task"
+eval "orig_$(declare -f job_processes)"
+forced=0
+job_processes() {
+  orig_job_processes "$@"
+  local c
+  if [ "$forced" = 0 ] && [ -s "$W/forced/late.pid" ] && [ ! -e "$W/forced/late.pid.n.pid" ]; then
+    forced=1
+    for _ in $(seq 100); do
+      read -r c 2> /dev/null < "/proc/$(cat "$W/forced/late.pid")/comm"
+      [ "$c" = task ] && break
+      sleep 0.05
+    done
+  fi
+}
+setsid bash "$W/late-job" "$W/forced" < /dev/null > /dev/null 2>&1 & s=$!
+sessions+=("$s")
+ready "$W/forced/late-job.ready" || check "-n task, forced: the job's trap set before the stop" no yes
+t0=$SECONDS
+if mine "$s"; then stop_groups -n task 20 "$s" > "$W/forced/late.out"; fi
+wait "$s" 2> /dev/null
+eval "$(declare -f orig_job_processes | sed '1s/^orig_//')"
+check "-n task, a child forked during the look's scan: forced so; the child TERMed once, nothing killed at the end" \
+  "$forced $((SECONDS - t0 < 10)) $(grep -c '^caught$' "$W/forced/late.pid.n" 2> /dev/null) $(grep -c killed "$W/forced/late.out")" \
+  "1 1 1 0"
+for f in "$W/forced/late.pid" "$W/forced/late.pid.n.pid"; do
   x=$(cat "$f" 2> /dev/null) && in_session "$x" "$s" && kill -KILL "$x"
 done
 # a process there when the TERM went that lost it is told by its start, not by a list read before the TERM: one forked
