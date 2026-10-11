@@ -127,6 +127,44 @@ def hard_refresh(kubeconfig, name):
     return out.returncode == 0
 
 
+def stalled_auto_syncs(apps):
+    """The automated apps Argo will not sync again by itself (it never retries a revision it attempted) - the copy,
+    2026-10-11, its node loaded: (a) OutOfSync, the last operation over and without results: Argo 3.3 counts it as
+    attempted for good ("Already attempted sync: sync does not have any results"; a status update from an older copy
+    of the app had nulled a finished operation's results); (b) the last sync failed past its retries (Deployments past
+    their progress deadline, ready later). Their names."""
+    out = set()
+    for x in apps["items"]:
+        spec, status = x.get("spec") or {}, x.get("status") or {}
+        op = status.get("operationState") or {}
+        if (spec.get("syncPolicy") or {}).get("automated") is None or op.get("phase") in RUNNING_PHASES:
+            continue
+        no_results = ((status.get("sync") or {}).get("status") == "OutOfSync" and op.get("phase")
+                      and not op.get("syncResult"))
+        if no_results or op.get("phase") in FAILED_PHASES:
+            out.add(x["metadata"]["name"])
+    return out
+
+
+def sync_now(kubeconfig, app):
+    """The sync Argo will not start, started as its CLI does: the app's .operation, its automated policy's prune and
+    its sync options, on the revision it compared."""
+    spec, sync = app.get("spec") or {}, (app.get("status") or {}).get("sync") or {}
+    policy = spec.get("syncPolicy") or {}
+    op = {"prune": bool((policy.get("automated") or {}).get("prune")), "syncOptions": policy.get("syncOptions") or []}
+    if spec.get("sources"):
+        op["revisions"] = sync.get("revisions") or []
+    else:
+        op["revision"] = sync.get("revision") or ""
+    patch = {"operation": {"initiatedBy": {"username": "argo-settled"},
+                           "info": [{"name": "Reason", "value": "auto-sync stalled: Argo does not retry the revision"}],
+                           "sync": op}}
+    out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "patch", "applications.argoproj.io",
+                          app["metadata"]["name"], "--type", "merge", "-p", json.dumps(patch)],
+                         capture_output=True, text=True, timeout=60)
+    return out.returncode == 0
+
+
 def node_shutdown_leftover(status):
     """A pod the kubelet's graceful node shutdown terminated: Failed for good. They stay until the pod GC threshold
     (ten 2026-10-04: 13 of them, 2 to 8 days old, every one replaced) - one counts as settled only when its owner runs
@@ -349,6 +387,7 @@ def main():
     deadline = time.monotonic() + a.minutes * 60
     first, last, streak = None, None, 0
     erring, refreshed = {}, set()  # polls running with a ComparisonError per app; the apps hard-refreshed
+    stalling, synced = {}, set()  # polls running with an auto-sync Argo will not retry per app; the apps synced
     while True:
         apps = None  # this poll's (a failed poll has none: no app counted erring from it)
         try:
@@ -366,6 +405,14 @@ def main():
                 refreshed.add(n)
                 print(f"HARD REFRESH {n}: a ComparisonError two polls running -"
                       f" {'requested' if hard_refresh(a.kubeconfig, n) else 'refused by kubectl'}", flush=True)
+            stalled = stalled_auto_syncs(apps)
+            stalling = {n: stalling.get(n, 0) + 1 for n in stalled}
+            by_name = {x["metadata"]["name"]: x for x in apps["items"]}
+            for n in sorted(n for n, k in stalling.items() if k >= 2 and n not in synced):
+                synced.add(n)
+                print(f"SYNC {n}: Argo will not sync it again by itself (its last operation failed, or over without"
+                      f" results), two polls running - "
+                      f"{'started' if sync_now(a.kubeconfig, by_name[n]) else 'refused by kubectl'}", flush=True)
         first = first if first is not None else restarts
         churn = restarted(last, restarts) if last is not None else []
         last = restarts
