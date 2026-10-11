@@ -314,6 +314,22 @@ for name, change, extra in (
     rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", *extra,
                    apps=A + [variant(change)])
     check(f"  {name}: nothing synced", patches(out), [], out)
+check("  the patch: that app, in argocd, a merge patch",
+      [x.split(" -p ", 1)[0].removeprefix("ANNOTATED ").strip() for x in patches(
+          loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled])[1])][:1],
+      ["--kubeconfig x -n argocd patch applications.argoproj.io c --type merge"])
+multi = variant(lambda x: (x["spec"].pop("source"), x["spec"].update(sources=[{"repoURL": "r", "path": "p"}, {"ref": "v"}]),
+                           x["status"]["sync"].update(revisions=["d1", "d2"])))
+rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [multi])
+body = json.loads(patches(out)[0].split(" -p ", 1)[1]) if patches(out) else {}
+check("  a multi-source app: its revisions", ((body.get("operation") or {}).get("sync") or {}).get("revisions"),
+      ["d1", "d2"], out)
+for name, change in (("no operation yet (a new app: Argo's first auto-sync to come)",
+                      lambda x: x["status"].pop("operationState")),
+                     ("Synced, its last operation without results (nothing to sync)",
+                      lambda x: x["status"]["sync"].update(status="Synced"))):
+    rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [variant(change)])
+    check(f"  {name}: nothing synced", patches(out), [], out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  so one poll only (synced by itself): nothing synced", patches(out), [], out)
