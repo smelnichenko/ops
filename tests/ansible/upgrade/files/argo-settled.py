@@ -58,6 +58,8 @@ import time
 
 FAILED_PHASES = {"Failed", "Error"}
 APPLICATIONS = "applications.argoproj.io"
+# a remedy's kubectl call: past this it is unknown whether it took (lowered by this script's tests only)
+KUBECTL_TIMEOUT = float(os.environ.get("ARGO_SETTLED_KUBECTL_TIMEOUT") or 60)
 RUNNING_PHASES = {"Running", "Terminating"}
 
 
@@ -135,7 +137,7 @@ def hard_refresh(kubeconfig, name):
     """Argo regenerates the app's manifests past its repo-server's cache (a paused generation serves a cached error)."""
     try:
         out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "annotate", APPLICATIONS, name, "argocd.argoproj.io/refresh=hard", "--overwrite"],
-                             capture_output=True, text=True, timeout=60)
+                             capture_output=True, text=True, timeout=KUBECTL_TIMEOUT)
     except (subprocess.TimeoutExpired, OSError):
         return False
     return out.returncode == 0
@@ -187,7 +189,7 @@ def sync_now(kubeconfig, app):
     try:
         out = subprocess.run(["kubectl", "--kubeconfig", kubeconfig, "-n", "argocd", "patch", APPLICATIONS,
                               app["metadata"]["name"], "--type", "merge", "-p", json.dumps(patch)],
-                             capture_output=True, text=True, timeout=60)
+                             capture_output=True, text=True, timeout=KUBECTL_TIMEOUT)
     except subprocess.TimeoutExpired:
         return None  # unknown: kubectl may have applied it - the next poll sees the operation, or the app stalled still
     except OSError:

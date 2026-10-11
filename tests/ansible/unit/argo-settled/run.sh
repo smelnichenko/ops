@@ -226,18 +226,21 @@ check("an error condition beside a green app: still green", rc, 0, out)
 
 
 # the poll loop, against a kubectl stub: one failed poll is a red poll, not the end; restarts between polls never settle
-def loop(mode, *args, apps=None, apps_after=None):
+def loop(mode, *args, apps=None, apps_after=None, env=None):
     """apps_after: what the apps poll answers from the second poll of the apps on (an error gone)."""
     d = tempfile.mkdtemp()
     json.dump({"items": apps or A}, open(os.path.join(d, "apps.json"), "w"))
     json.dump({"items": apps_after or apps or A}, open(os.path.join(d, "apps-after.json"), "w"))
     with open(os.path.join(d, "kubectl"), "w") as f:
         f.write(f"""#!/bin/bash
-case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = patch-fails ] && case "$*" in *" patch "*) exit 1;; esac; exit 0;; esac
+case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = patch-fails ] && case "$*" in *" patch "*) exit 1;; esac; [ {mode} = patch-hangs ] && case "$*" in *" patch "*) sleep 3;; esac
+  [ {mode} = patch-heals ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json;; esac; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
-if [ -z "${{p:-}}" ]; then [ $n -gt 2 ] && cat {d}/apps-after.json || cat {d}/apps.json; exit 0; fi
+if [ -z "${{p:-}}" ]; then
+  if [ {mode} != patch-heals ] && [ $n -gt 2 ]; then cat {d}/apps-after.json; else cat {d}/apps.json; fi; exit 0
+fi
 r=0; [ {mode} = churn ] && r=$n
 printf '{{"items":[{{"metadata":{{"namespace":"ns","name":"p1","uid":"u1"}},"status":{{"phase":"Running",'
 printf '"containerStatuses":[{{"ready":true,"restartCount":%d}}]}}}}]}}' $r
@@ -245,7 +248,7 @@ printf '"containerStatuses":[{{"ready":true,"restartCount":%d}}]}}}}]}}' $r
     os.chmod(os.path.join(d, "kubectl"), 0o755)
     r = subprocess.run([sys.executable, S, "--kubeconfig", "x", "--poll", "0", "--stable-polls", "2", *args],
                        capture_output=True, text=True, env={**os.environ, "PATH": d + ":" + os.environ["PATH"],
-                                                             "MIRROR_REVISIONS": ""})
+                                                             "MIRROR_REVISIONS": "", **(env or {})})
     annotated = open(os.path.join(d, "annotated")).read().splitlines() if os.path.exists(os.path.join(d, "annotated")) else []
     return r.returncode, r.stdout + r.stderr + "".join(f"\nANNOTATED {x}" for x in annotated)
 # a ComparisonError two polls running: that app hard-refreshed, once (a paused generation serves a cached error for 60
@@ -323,7 +326,9 @@ for name, change, extra in (
         ("root (its sync is the operator's)", lambda x: x["metadata"].update(name="root"), ())):
     rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", *extra,
                    apps=A + [variant(change)])
-    check(f"  {name}: nothing synced", patches(out), [], out)
+    check(f"  {name}: nothing synced, the wait to its end", (patches(out), "Traceback" in out,
+                                                             "NOT SETTLED in" in out or "ARGO SETTLED" in out),
+          ([], False, True), out)
 check("  the patch: that app, in argocd, a merge patch",
       [x.split(" -p ", 1)[0].removeprefix("ANNOTATED ").strip() for x in patches(
           loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled])[1])][:1],
@@ -344,6 +349,13 @@ rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-sta
                apps=A + [variant(lambda x: x["metadata"].pop("resourceVersion"))])
 check("  no resourceVersion (no precondition to send): nothing patched, said, no crash",
       (patches(out), "not sent or not known" in out, "Traceback" in out), ([], True, False), out)
+rc, out = loop("patch-hangs", "--minutes", "0.05", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+               env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "1"})
+check("  kubectl hanging on the patch: said not known, the wait goes on to its end",
+      ("not sent or not known" in out, "Traceback" in out, "NOT SETTLED in" in out), (True, False, True), out)
+rc, out = loop("patch-heals", "--minutes", "0.05", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
+               apps_after=A + [app("c")])
+check("  synced, then green: the settled line names it", (rc, "synced by this settle: c" in out), (0, True), out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  so one poll only (synced by itself): nothing synced", patches(out), [], out)
@@ -446,6 +458,7 @@ for step, asked, want in (("20", "no", (True, False)), ("20", "yes", (True, True
     argv = render(script, **{**base, "restart_step": step, "restarts_expected": asked}).split()
     check(f"the playbook's command line, step {step or 'none'}, restarts expected {asked}: history, expected",
           ("--restart-history" in argv, "--restarts-expected" in argv), want)
+    check(f"  the copy's settle syncs a stalled app (--sync-stalled), step {step or 'none'}", "--sync-stalled" in argv, True)
 
 # the settle's values reach the script as given (the full run's step settles: the Taskfile's STEP_SETTLE) and are
 # production's by default (upgrade-production.py's SETTLE_*) - a wiring that dropped one ran every settle at the

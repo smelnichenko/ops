@@ -165,6 +165,8 @@ s = patched(main_revisions=lambda: dict.fromkeys(m.URLS.values(), "r"),
 m.settled(1, [], ["a", "b"])
 restore(s)
 check("A10 settled(apps): --expect-apps a,b", "--expect-apps a,b" in sent[0], True)
+# production's settle only says a stalled app STALLED - never syncs it (the operator's): no --sync-stalled
+check("A10 settled: production's settle never syncs a stalled app (no --sync-stalled)", "--sync-stalled" in sent[0], False)
 # A11: inventory-diff.sh red is the inventory check red
 s = patched(ten=lambda c, stdin=None, check=True: R(0, ""), remote=lambda *a, **k: R(0, ""),
             run=lambda cmd, **k: R(1 if cmd[0].endswith("inventory-diff.sh") else 0), WORK=tempfile.mkdtemp())
