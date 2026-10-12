@@ -567,6 +567,8 @@ check("merge 47 platform, the backup not confirmed: settled recorded, no backup,
 # stops it with nothing live, and the rollout does not wait on the pull with the old pod gone
 S54 = "54-tempo-3"
 m.image_pins = lambda step, name, tag: set()  # no pins in the step's branches (read on real repos: upgrade-merge-step)
+# and no digest from a proof: a full run's proofs on this host (.upgrade/proven) would pin these tags, CI has none
+m.proven_digest = lambda step, name, tag: None
 check("prepull: 54's public image, as containerd names it", m.prepull_images(S54), ["docker.io/grafana/tempo:3.1.0"])
 check("prepull: an added image (+ image) too", "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.1"
       in m.prepull_images("27-kube-prometheus-stack"), True)

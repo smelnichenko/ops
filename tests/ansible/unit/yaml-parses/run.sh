@@ -7,10 +7,18 @@ cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" - <<'PYCHECK'
-import glob, sys
+import fnmatch, subprocess, sys
 import yaml
-files = sorted(f for pat in ("deploy/**/*.y*ml", "tests/**/*.y*ml", ".woodpecker/*.y*ml", "Taskfile.yml", "*.y*ml")
-               for f in glob.glob(pat, recursive=True) if "/venv/" not in f and "/.venv/" not in f)
+# the repo's own files - tracked, or new and not ignored: what a checkout has (git-ignored collections and venvs
+# installed here are no file of the repo; CI's clone never had them)
+# (safe.directory: a checkout owned by another user than the one testing it - a container's root - is still read)
+ls = subprocess.run(["git", "-c", "safe.directory=*", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                    capture_output=True)
+if ls.returncode:
+    sys.exit("yaml-parses: FAILED - git cannot list the repo's files: " + ls.stderr.decode().strip())
+own = ls.stdout.decode().split("\0")
+files = sorted({f for f in own for pat in ("deploy/*.y*ml", "tests/*.y*ml", ".woodpecker/*.y*ml", "Taskfile.yml")
+                if fnmatch.fnmatch(f, pat)} | {f for f in own if "/" not in f and fnmatch.fnmatch(f, "*.y*ml")})
 bad = []
 for f in files:
     try:
