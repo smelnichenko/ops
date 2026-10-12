@@ -1306,6 +1306,31 @@ Argo never retrying a revision it attempted: argo-settled.py now starts that syn
 CLI does), two polls running, and says SYNC - production's runner runs the same script on ten, so in the production
 upgrade it does the manual sync an operator would. Proven on the copy's stuck cluster-config.
 
+## Fourth review round 2026-10-12 and the proof run of 12:07 - what it fixed, what is the operator's
+
+Fixed and pushed 01:38 (ops 750ebcb, platform 5d0a1ee, infra 0572b50; the operator's "fix everything", old bugs
+included): the full run's process stop by start identity; Argo's settle deadline per poll and step 57's settle 60 min;
+the SonarQube setup hook fail-closed (a token Vault never confirmed revoked whatever ends the run, gates set every run,
+its deadline from its projects); every hook Job call costed at its own time-out; init-users' deadline per database and a
+held lock ending it; VeleroDown's 15 minutes pinned both ways; the Velero namespace out of the weekly backup. Step 45's
+branch: the SonarQube migration wait reads the migration's state every pass (a failure ends it at once, one running is
+never started again, admin only on 401/403, an unanswered start read again) - 9 stub scenarios, 8 reverts red.
+
+The runs that failed after it, each on my defect, each fixed before the next: 01:48 - `kubectl --request-timeout` in a
+pod drops the in-cluster config (the gateway hook never saw its service; preview cleanup skipped its topics): `timeout
+N kubectl`, chart-render-checks refuses the flags (platform b755a08). 03:12 - the node-Ready wait after the reboot failed
+at once on a refused connection: retried (tasks/node-ready.yml). 03:45 stopped - ops CI failed on a reformatted nft line
+(isolation-ipv6 reads chains as lines): restored; the whole unit suite run locally then found harnesses passing in CI
+only (a host's proofs and git-ignored collections read): the repo's own files only. 04:51 - step 24's inventory read
+local-path's helper pod (busybox latest) deleting the restore check's volume: a side cluster is gone when its PVs are.
+
+**Proof run 2026-10-12 07:36-12:07: GREEN** - build, all 62 steps, the restore check; proof-complete recorded (ops
+097d3f7, platform b755a08, infra 0572b50; .upgrade/full-run-20261012-073613.log). CI green: ops 810, platform 417,
+infra 236.
+
+The operator's: the go for production; seed-vault-secrets.yml a second writer of sonar_token (from .env); SonarQube's
+auto-migration behind a value or not; the 31 ops Sonar complexity issues.
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
