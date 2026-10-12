@@ -124,11 +124,15 @@ check("playbooks 47 after the preview", P(S47, "playbooks", ev(*ball, f"{S47} pr
 refused("preview 47 before its merges", P(S47, "preview", ev(*bb)), ["not merged and settled yet"])
 refused("preview 47 with only infra settled", P(S47, "preview", ev(*bs)), ["platform"])
 check("preview 47 after both merges settled", P(S47, "preview", ev(*ball)), [])
-# Argo's settle after a merge: a step's settle line, else 30 minutes (SonarQube's migration hook allows 45 at 57)
-# the settle line read from the step file as written (never restated here); a step without one takes the default 30
+# Argo's settle after a merge: a step's settle line, else the default (SETTLE_MINUTES, read - never restated here: 40,
+# init-users' 35 minutes and a rollout); the settle line read from the step file as written
 S57 = int(re.search(r"^settle (\d+)$", open("tests/ansible/upgrade/steps/57-sonarqube-26.9.txt").read(), re.M).group(1))
-check(f"57 settles its settle line's {S57} minutes, 42 the default 30",
-      (info["57-sonarqube-26.9"]["settle"], info["42-kubernetes-1.35"]["settle"]), (S57, 30))
+check(f"57 settles its settle line's {S57} minutes, 42 the default {m.SETTLE_MINUTES}",
+      (info["57-sonarqube-26.9"]["settle"], info["42-kubernetes-1.35"]["settle"]), (S57, m.SETTLE_MINUTES))
+# the default outlasts init-users' deadline (2095 s with production's 5 databases) and a rollout: a merge of the data
+# apps (16 steps) waits it out; and no step's own settle is shorter than it
+check("the default settle outlasts init-users' 35 minutes", m.SETTLE_MINUTES * 60 > 2095 + 120, True)
+check("no step's settle line shorter than the default", [n for n in names if info[n]["settle"] < m.SETTLE_MINUTES], [])
 # the step's new images from production's own registry, there before the merge (asked of Forgejo)
 asked = []
 check("22's apt-cacher-ng tag there", m.registry_problems("22-apt-cacher-ng", lambda n, v: asked.append((n, v)) or 200),

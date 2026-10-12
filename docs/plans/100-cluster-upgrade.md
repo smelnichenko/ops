@@ -1437,7 +1437,7 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    it with nothing live, and the rollout does not wait on a pull with the old pod gone);
    a step with a tempo-flush line (54) flushes Tempo's WAL to the store right before that repo's merge. Pushed and
    tagged upgrade-merged/<step> (a run cut short between the two is taken up); Argo settled on the pushed commits
-   within 30 minutes (a step's `settle` line overrides: 57, SonarQube's migration), nothing out of sync. A
+   within 40 minutes (init-users' 35 at most; a step's `settle` line overrides: 57, SonarQube's migration), nothing out of sync. A
    barman-after-merge step (47) then takes its Postgres base backup, asked first (declined or failed, done takes it).
 4. `deploy:upgrade:preview STEP=N` - a step with playbook lines, after its merges settled: check mode with diffs
    (read-only probes run, waits on changes the preview does not make are skipped), read by the operator. The full run

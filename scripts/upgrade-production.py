@@ -89,7 +89,11 @@ URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https:/
 # are listed, not compared
 TEST_NAMESPACES = "schnappy-test"
 SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
-SETTLE_MINUTES = 30
+# Argo's settle after a merge, a step's settle line aside: longer than the longest hook a merge can start and its
+# rollout - init-users (schnappy-data's Sync hook) may take its whole deadline in a major's restarts: 2095 s (~35 min)
+# with production's 5 databases (platform cnpg-init-users.yaml, derived from them); 30 min called a hook still within
+# its bound failed (the reviews, 2026-10-12)
+SETTLE_MINUTES = 40
 # production's settle: green held SETTLE_STABLE polls SETTLE_POLL s apart, no container restarted in the last
 # SETTLE_QUIET s (CrashLoopBackOff's longest back-off) - the full run's final settle takes the same (settle-values)
 SETTLE_POLL, SETTLE_STABLE, SETTLE_QUIET = 10, 4, 300
