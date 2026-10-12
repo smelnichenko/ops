@@ -1331,6 +1331,35 @@ infra 236.
 The operator's: the go for production; seed-vault-secrets.yml a second writer of sonar_token (from .env); SonarQube's
 auto-migration behind a value or not; the 31 ops Sonar complexity issues.
 
+## After the proof run of 12:07 (2026-10-12) - what changed, what it means for the go
+
+The 12:07 proof no longer clears production: the runner refuses every phase until a new full run. Two changes void it -
+the Woodpecker upgrade (infra e68b59f: a rendered path on infra main) and its inventory pins (ops 4568421: under
+tests/). Woodpecker v3.19.0 went in outside the steps on the operator's order ("upgrade woodpecker, no full runs",
+13:16): v3.18.1 hung a pipeline whose service stopped within moments of its delete (masi CD 525; #7158). Its SQLite
+copied first (woodpecker.sqlite.pre-v3.19.0-20261012 beside it; v3.19 only added a nullable column - a rollback is the
+tag, not the copy). The copy runs no Woodpecker: a new full run proves the steps against the new baseline only.
+
+The full review of the day's work (architecture, concurrency, reliability, test quality, Sonar) - fixed, each with a
+test seen red first and its mechanism reverted red:
+- platform: the SonarQube setup hook quits its proxy on success only (a failed try restarts in the same pod and
+  reached nothing), revokes a token Vault never got until a search shows none, runs its revoke on a TERM; every hook
+  script set -eu (checked); the Scylla ALTERs take only a column there already; preview cleanup's failures fail it; the
+  Scylla CQL in files/; a stub test runs the gateway, Scylla and cleanup scripts; WoodpeckerBuildFailed and
+  ArgoCDAppSyncFailed see the first failure after a restart; the checks render production's 9 SonarQube projects and
+  test their own loop and call bounds. Step 45: the same hook fixes, a lost migration start started again (tested).
+- ops: the side-cluster delete within one deadline on the boot clock, its volumes matched by namespace; node-ready
+  wants a heartbeat after the kubelet's start (the Node keeps its old Ready) within a deadline; argo-settled's reads each
+  bounded by what is left, its budget and not-settled line tested; the full run's TERM read after the clock ticks (a
+  fork in the same hundredth was never TERMed again); start_of tested against an independent parse; plays.files
+  refuses an empty walk; production's settle default 40 minutes (init-users' 35).
+- infra: Woodpecker's server and agent one release (checked); masi: the CI browser queues none, its CPU comments the
+  LimitRange's; sonar-scanner: the npm scanner pinned to 4.4.0 (5.0 dropped the command - today's rebuild failed every
+  repo's sonar step).
+
+Production besides (operator's order): a weekly Velero backup run by hand at 14:41 for VeleroWeeklyBackupMissing (the
+10-11 weekly PartiallyFailed on the hyperfoil pod, since excluded).
+
 ## Support matrices and the new step order (R14; official pages read 2026-10-04)
 
 Kubernetes ranges per version (sources: istio.io supported-releases, docs.cilium.io compatibility, containerd.io
