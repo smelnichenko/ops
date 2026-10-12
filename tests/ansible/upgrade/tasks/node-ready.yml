@@ -1,12 +1,40 @@
 ---
-# The node Ready after a reboot or a kubelet restart. The API server may still be starting: kubectl wait fails at once
-# on a refused connection - it waits only on an API that answers - so it is asked again, each call bounded by its own
-# --timeout; in all at most node_ready_retries x (30 s + node_ready_delay)
-- name: The node is Ready (asked again while the API server is still starting)
-  ansible.builtin.command: >-
-    kubectl --kubeconfig /etc/kubernetes/admin.conf wait node --all --for=condition=Ready --timeout=30s
-  register: _node_ready
+# The node Ready after a reboot or a kubelet restart, its kubelet reporting. Two things a plain `kubectl wait` missed:
+# the API server may still be starting (a refused connection fails it at once - the 03:12 full run, 2026-10-12), and
+# the Node object keeps the Ready it had before the restart (the node controller marks it NotReady only after its grace
+# period) - a Ready whose heartbeat is older than the kubelet's start proves nothing about the new kubelet. Asked again
+# until every node is Ready with a heartbeat after the kubelet started, within one deadline on the boot clock
+# (node_ready_seconds, 600), each read bounded.
+# Tested: tests/ansible/unit/node-ready.
+- name: The node is Ready, its heartbeat after the kubelet's start (asked again while the API server starts)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    now() { local u; read -r u _ < /proc/uptime; echo "${u%.*}"; }
+    end=$(( $(now) + {{ node_ready_seconds | default(600) }} ))
+    # the kubelet start as epoch seconds (systemd 257 on ten and the copy prints "@<seconds>")
+    since=$(systemctl show --timestamp=unix -p ActiveEnterTimestamp --value kubelet)
+    since=${since#@}
+    last="nothing read yet"
+    while (( $(now) < end )); do
+      if out=$(kubectl --kubeconfig /etc/kubernetes/admin.conf get nodes --request-timeout=10s \
+          -o jsonpath='{range .items[*]}{.metadata.name} {range .status.conditions[?(@.type=="Ready")]}{.status} {.lastHeartbeatTime}{end}{"\n"}{end}' \
+          2>&1); then
+        stale=""
+        while read -r node status heartbeat; do
+          [ -n "$node" ] || continue
+          if [ "$status" != True ] || [ "$(date -d "$heartbeat" +%s)" -lt "$since" ]; then
+            stale+=" $node: Ready=$status at $heartbeat"
+          fi
+        done <<< "$out"
+        if [ -n "$out" ] && [ -z "$stale" ]; then echo "Ready: $out"; exit 0; fi
+        last="not yet:${stale:- no node}"
+      else
+        last="not read: $out"
+      fi
+      sleep {{ node_ready_delay | default(5) }}
+    done
+    echo "the node not Ready within {{ node_ready_seconds | default(600) }} s of a kubelet started $(date -d @"$since"): $last"
+    exit 1
+  args:
+    executable: /bin/bash
   changed_when: false
-  retries: "{{ node_ready_retries | default(20) }}"
-  delay: "{{ node_ready_delay | default(5) }}"
-  until: _node_ready.rc == 0
