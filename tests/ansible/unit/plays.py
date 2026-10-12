@@ -5,7 +5,7 @@ pre_tasks, post_tasks or handlers - and a task's keywords from Ansible's own cla
     sys.path.insert(0, "tests/ansible/unit"); from plays import files, load, plays, tasks, actions, KEYWORDS
     for f in files(): for t in tasks(load(f)): for module, value in actions(t): ...
 """
-import glob
+import subprocess
 
 import yaml
 from ansible.playbook.handler import Handler
@@ -17,9 +17,14 @@ SECTIONS = ("pre_tasks", "tasks", "post_tasks", "handlers")
 
 
 def files(*roots):
-    """Every .yml file under the roots (default deploy/ansible and tests/ansible), a virtualenv's aside."""
+    """Every .yml file of the repo under the roots (default deploy/ansible and tests/ansible) - tracked, or new and not
+    ignored: what a checkout has. Git-ignored trees installed here (the collections, a virtualenv) are no file of the
+    repo, and CI's clone never had them. Run from the repo's root; a checkout git cannot list fails the harness."""
     roots = roots or ("deploy/ansible", "tests/ansible")
-    return sorted(f for r in roots for f in glob.glob(f"{r}/**/*.yml", recursive=True) if "/venv/" not in f)
+    # safe.directory: a checkout owned by another user than the one testing it (a container's root) is still read
+    ls = subprocess.run(["git", "-c", "safe.directory=*", "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                         "--", *roots], capture_output=True, check=True)
+    return sorted(f for f in ls.stdout.decode().split("\0") if f.endswith(".yml") and "/venv/" not in f)
 
 
 def load(path):

@@ -8,15 +8,16 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PY'
-import glob, re, sys
+import re, sys
 # pg_isready authenticates nothing - it never asks for a password
 CLIENT = re.compile(r"\b(psql|pg_dump|pg_dumpall|pg_restore|createdb|dropdb|vacuumdb|pg_basebackup)\b")
 OVER_TCP = re.compile(r"(^|\s)-h\s|PGPASSFILE=|\bPGHOST\b|postgres(ql)?://|\bhost=")
 # a client's connection arguments kept in an array (P=(-h ...)) and passed as "${P[@]}"
 ARGS = re.compile(r"^\s*\w+=\([^)]*-h\s")
 bad, seen = [], 0
-for f in sorted(glob.glob("deploy/ansible/**/*.yml", recursive=True) + glob.glob("tests/ansible/**/*.yml",
-                                                                                   recursive=True)):
+sys.path.insert(0, "tests/ansible/unit")
+from plays import files  # noqa: E402 - the repo's own files, never git-ignored collections
+for f in files():
     if "/venv/" in f:
         continue
     # a command continued over lines (a trailing backslash) read as one, at its first line's number

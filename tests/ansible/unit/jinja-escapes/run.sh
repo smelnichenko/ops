@@ -11,7 +11,7 @@ PY=python3
 "$PY" -c 'import ansible, yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
 "$PY" -c 'import ansible, yaml' || { echo "jinja-escapes: no python3 with ansible and yaml"; exit 2; }
 "$PY" - <<'PY'
-import glob, re, sys
+import re, sys
 import yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render
@@ -37,7 +37,8 @@ def strings(node, key=""):
 
 
 bad = []
-for f in sorted(glob.glob("deploy/ansible/**/*.yml", recursive=True) + glob.glob("tests/ansible/**/*.yml", recursive=True)):
+from plays import files  # noqa: E402 - the repo's own files, never git-ignored collections
+for f in files():
     if "/venv/" in f:
         continue
     try:
