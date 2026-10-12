@@ -1,0 +1,37 @@
+---
+- name: "The stub's count reset - {{ c.name }}"
+  ansible.builtin.copy:
+    content: "0\n"
+    dest: "{{ stub_dir }}/calls"
+    mode: "0644"
+
+- name: "The wait - {{ c.name }}"
+  environment:
+    PATH: "{{ stub_dir }}:{{ ansible_env_path }}"
+    STUB_REFUSALS: "{{ c.refusals }}"
+    STUB_DIR: "{{ stub_dir }}"
+  block:
+    - name: "The task file - {{ c.name }}"
+      ansible.builtin.include_tasks: ../../upgrade/tasks/node-ready.yml
+      vars:
+        node_ready_retries: 5  # not ansible's default 3: the variable is what retries
+        node_ready_delay: 0
+    - name: "Ready - {{ c.name }}"
+      ansible.builtin.set_fact:
+        _got: ready
+  rescue:
+    - name: "Failed - {{ c.name }}"
+      ansible.builtin.set_fact:
+        _got: failed
+
+- name: "The verdict - {{ c.name }}"
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'PASS' if (_got == c.want and _calls == c.calls and _args == _want_args) else 'FAIL' }} {{ c.name }}:
+      {{ _got }} after {{ _calls }} calls (want {{ c.want }} after {{ c.calls }}){{ '' if _args == _want_args else
+      ', called as ' ~ _args }}
+  vars:
+    _calls: "{{ lookup('ansible.builtin.file', stub_dir ~ '/calls') | int }}"
+    _args: "{{ lookup('ansible.builtin.file', stub_dir ~ '/args') }}"
+    _want_args: --kubeconfig /etc/kubernetes/admin.conf wait node --all --for=condition=Ready --timeout=30s
+  failed_when: not (_got == c.want and _calls == c.calls and _args == _want_args)

@@ -49,9 +49,8 @@
       register: _kubelet
       failed_when: _kubelet.status.ActiveState != 'active'
 
-    - name: The node is Ready
-      ansible.builtin.command: kubectl --kubeconfig /etc/kubernetes/admin.conf wait node --all --for=condition=Ready --timeout=300s
-      changed_when: false
+    - name: The node is Ready (the API server may still be starting)
+      ansible.builtin.import_tasks: upgrade/tasks/node-ready.yml
 
     - name: The list removed with the kubelet running
       ansible.builtin.stat:

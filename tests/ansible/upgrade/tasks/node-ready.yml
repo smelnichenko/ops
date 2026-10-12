@@ -1,0 +1,12 @@
+---
+# The node Ready after a reboot or a kubelet restart. The API server may still be starting: kubectl wait fails at once
+# on a refused connection - it waits only on an API that answers - so it is asked again, each call bounded by its own
+# --timeout; in all at most node_ready_retries x (30 s + node_ready_delay)
+- name: The node is Ready (asked again while the API server is still starting)
+  ansible.builtin.command: >-
+    kubectl --kubeconfig /etc/kubernetes/admin.conf wait node --all --for=condition=Ready --timeout=30s
+  register: _node_ready
+  changed_when: false
+  retries: "{{ node_ready_retries | default(20) }}"
+  delay: "{{ node_ready_delay | default(5) }}"
+  until: _node_ready.rc == 0

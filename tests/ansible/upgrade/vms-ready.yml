@@ -70,7 +70,5 @@
       delay: 5
       until: _vault.status == 200
 
-    - name: The node is Ready
-      ansible.builtin.command: >-
-        kubectl --kubeconfig /etc/kubernetes/admin.conf wait node --all --for=condition=Ready --timeout=300s
-      changed_when: false
+    - name: The node is Ready (the API server may still be starting)
+      ansible.builtin.import_tasks: tasks/node-ready.yml
