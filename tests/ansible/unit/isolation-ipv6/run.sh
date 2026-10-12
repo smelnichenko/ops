@@ -70,7 +70,10 @@ for book in ("tests/ansible/isolate-pis.yml", "tests/ansible/upgrade/isolate-clu
     chains = [l for l in text.splitlines() if "chain " in l and "daddr" in l]
     ok = bool(chains) and all("ip6 daddr fd0a:94e6:20b4:9f6b::/64 drop" in l for l in chains)
     fails += not ok
-    print(f"{'PASS' if ok else 'FAIL'} {book}: the guard drops production's IPv6 prefix in every chain" + ("" if ok else f" ({chains})"))
+    # read as one line a chain: one split over lines (its rules below its "chain" line) is no chain read here - said so
+    why = (f" ({chains})" if chains else " (no chain written on one line with its daddr rules - this check reads each"
+           " chain as one line: keep it so, or read the split form)")
+    print(f"{'PASS' if ok else 'FAIL'} {book}: the guard drops production's IPv6 prefix in every chain" + ("" if ok else why))
 print("isolation-ipv6: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
