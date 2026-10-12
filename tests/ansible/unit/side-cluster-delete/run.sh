@@ -17,6 +17,11 @@ mkdir "$W/bin"
 # server not answering the first n reads
 cat > "$W/bin/kubectl" <<'STUB'
 #!/bin/bash
+if [ -n "${SLOW:-}" ]; then
+  case "$*" in *" get "*)
+    rt=$(printf '%s\n' "$*" | sed -n 's/.*--request-timeout=\([0-9]*\)s.*/\1/p')
+    /bin/sleep "${rt:-30}"; echo "timed out" >&2; exit 1 ;; esac
+fi
 case "$*" in
   *delete*) d=$(( $(cat "$W/d" 2> /dev/null || echo 0) + 1 )); echo $d > "$W/d"
     # REASK_HANGS: a delete asked again hangs (a finalizer stuck, the API server holding the call) - unless it neither
@@ -39,13 +44,17 @@ case "$*" in
     [ -z "${STDERR_NOTE:-}" ] || echo "E1008 memcache.go:265] couldn't get resource list for metrics.k8s.io/v1beta1" >&2
     [ -z "${NO_PODS:-}" ] || exit 0
     if [ ! -e "$W/deleted" ] || [ "$n" -le "${LEFT_FOR:-0}" ]; then echo pod/side-1; fi ;;
-  # the PVs: each volume's, named by its claim - the side cluster's released one still being deleted by the provisioner
-  # (its helper pod running) for the first PV_LEFT_FOR reads; another cluster's look-alike claim (sidecar-1) always
+  # the Cluster's namespace, read before its delete
+  *"get clusters.postgresql.cnpg.io"*) echo ns ;;
+  # the PVs: each volume's, named by its claim's namespace and name - the side cluster's released one still being deleted
+  # by the provisioner (its helper pod running) for the first PV_LEFT_FOR reads; a look-alike claim (sidecar-1) and the
+  # same claim name in another namespace always. A Cluster that has no pod yet has no volume either (NO_PODS)
   *"get pv "*)
     p=$(( $(cat "$W/p" 2> /dev/null || echo 0) + 1 )); echo $p > "$W/p"
     [ "$p" -gt "${PV_GET_FAIL_FOR:-0}" ] || { echo "connection refused" >&2; exit 1; }
-    echo "pvc-7 sidecar-1"
-    if [ ! -e "$W/deleted" ] || [ "$p" -le "${PV_LEFT_FOR:-0}" ]; then echo "pvc-1 side-1"; fi ;;
+    echo "pvc-7 ns/sidecar-1"
+    echo "pvc-8 other/side-1"
+    if [ -z "${NO_PODS:-}" ] && { [ ! -e "$W/deleted" ] || [ "$p" -le "${PV_LEFT_FOR:-0}" ]; }; then echo "pvc-1 ns/side-1"; fi ;;
 esac
 STUB
 chmod +x "$W/bin/kubectl"
@@ -57,7 +66,8 @@ from templar import render
 W = os.environ["W"]
 task = yaml.safe_load(open("tests/ansible/upgrade/tasks/side-cluster-delete.yml"))[0]
 script = render(task["ansible.builtin.shell"],
-                side_kubectl="kubectl -n ns", side_cluster="side", side_gone_seconds=1, side_poll=0.1)
+                side_kubectl="kubectl -n ns", side_cluster="side", side_gone_seconds=1, side_delete_seconds=1,
+                side_poll=0.1)
 fails = 0
 for name, env, want_rc, words in (("gone at once", {}, 0, ""),
                                   ("a pod still terminating, gone after a while; the delete asked once",
@@ -103,7 +113,7 @@ for name, env, want_rc, words in (("gone at once", {}, 0, ""),
 # the delete asked again bounded - neither waiting for its end nor outliving its own timeout: a hung one held the task
 # past side_gone_seconds
 import time
-for f in ("n", "d", "deleted"):
+for f in ("n", "d", "deleted", "p"):
     os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
 t = time.monotonic()
 try:
@@ -118,7 +128,7 @@ fails += not ok
 print(f"{'PASS' if ok else 'FAIL'} the delete asked again, hanging: each ask bounded - the task ends at its bound, failing"
       + ("" if ok else f" (got {got})"))
 # the first call too: its wait bounded (--timeout), its request as well - a hung call held the task past its bound
-for f in ("n", "d", "deleted"):
+for f in ("n", "d", "deleted", "p"):
     os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
 t = time.monotonic()
 try:
@@ -131,12 +141,29 @@ ok = got == (0, True)
 fails += not ok
 print(f"{'PASS' if ok else 'FAIL'} the first delete hanging: bounded, asked again, the side cluster gone"
       + ("" if ok else f" (got {got})"))
-# the read as bash reads it (its continuation joined), up to its redirection
-get = task["ansible.builtin.shell"].replace("\\\n", " ").split("get pods,pvc")[1].split("2>")[0] \
-    if "get pods,pvc" in task["ansible.builtin.shell"] else ""
-check_get = "--request-timeout=" in get
+# every call as bash reads it (continuations joined): each kubectl read and each del call carries its own bound
+import re
+shell = task["ansible.builtin.shell"].replace("\\\n", " ")
+calls = re.findall(r"\{\{ side_kubectl \}\} (?:get|delete)[^\n]*", shell) + re.findall(r"(?<![a-z_])del --[^\n]*", shell)
+unbounded = [c for c in calls if "--request-timeout=" not in c and "--request-timeout \"$@\"" not in c and not c.rstrip().endswith('"$@"; }')]
+check_get = len(calls) >= 4 and not unbounded
 fails += not check_get
-print(f"{'PASS' if check_get else 'FAIL'} each read bounded (--request-timeout): a hung one outlived the bound")
+print(f"{'PASS' if check_get else 'FAIL'} every call bounded (--request-timeout): a hung one outlived the bound"
+      + ("" if check_get else f" ({len(calls)} calls, unbounded: {unbounded})"))
+# an API holding every read for its whole time-out: the task ends at its one deadline (side_delete_seconds +
+# side_gone_seconds, 2 s here), not after a count of polls each 30 s or more
+for f in ("n", "d", "deleted", "p"):
+    os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
+t0 = time.monotonic()
+try:
+    r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                       env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, SLOW="1"))
+    got = (min(r.returncode, 1), time.monotonic() - t0 < 8)
+except subprocess.TimeoutExpired:
+    got = ("hung", False)
+ok = got == (1, True)
+fails += not ok
+print(f"{'PASS' if ok else 'FAIL'} an API holding every read: the task ends at its deadline, failing" + ("" if ok else f" (got {got})"))
 # every place that removes a side cluster removes it so
 def _walk(ts):
     for t in ts or []:

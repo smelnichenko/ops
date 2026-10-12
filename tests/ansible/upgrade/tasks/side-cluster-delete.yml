@@ -1,33 +1,46 @@
 ---
-# A CNPG side cluster deleted (foreground: its pods and volumes first) and proven gone - no pod or volume of it left,
-# waited for up to side_gone_seconds (default 300): read a single time, a pod still terminating when the delete
-# returned failed the run once. A read that fails is read again (one failed get - the API server a moment away -
-# ended the run), each bounded; failing to the bound fails, saying so; what a read logs on stderr is no leftover; the
-# delete's own call failing (it may never have reached the cluster) is asked again at each poll until one does. Its
-# volumes too: a released one is deleted by the storage provisioner after its claim is gone, with a helper pod of its
-# own (local-path's: an untagged busybox the next inventory counted, 10-12) - gone means its PV gone as well.
+# A CNPG side cluster deleted (foreground: its pods and volumes first) and proven gone - no pod, claim or volume of it
+# left - within one deadline on the boot clock: side_delete_seconds (600) for the delete's own wait and side_gone_seconds
+# (300) for the polls after it, each call's --request-timeout what is left of it (30 s at most). Read a single time, a
+# pod still terminating when the delete returned failed the run once. A read that fails is read again (one failed get -
+# the API server a moment away - ended the run); failing to the deadline fails, saying so; what a read logs on stderr is
+# no leftover; the delete's own call failing (it may never have reached the cluster) is asked again at each poll until
+# one does. Its volumes too: a released one is deleted by the storage provisioner after its claim is gone, with a helper
+# pod of its own (local-path's: an untagged busybox the next inventory counted, 10-12) - gone means its PV gone as well,
+# matched by its claim's namespace and name.
 # Expects: side_kubectl (kubectl with the cluster's namespace), side_cluster.
 # Tested: tests/ansible/unit/side-cluster-delete.
 - name: "The side cluster deleted, nothing of it left: {{ side_cluster }}"
   ansible.builtin.shell: |
     set -euo pipefail
     err=$(mktemp); trap 'rm -f "$err"' EXIT
+    now() { local u; read -r u _ < /proc/uptime; echo "${u%.*}"; }
+    end=$(( $(now) + {{ side_delete_seconds | default(600) }} + {{ side_gone_seconds | default(300) }} ))
+    left_s() { local r=$(( end - $(now) )); (( r > 30 )) && r=30; (( r < 1 )) && r=1; echo "$r"; }
     del() { {{ side_kubectl }} delete clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found \
       --cascade=foreground "$@"; }
+    # its namespace, for its volumes' claims (a PV is cluster-wide): read before the delete; unread, any namespace's
+    ns=$({{ side_kubectl }} get clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found \
+      -o jsonpath='{.metadata.namespace}' --request-timeout=$(left_s)s 2> /dev/null) || ns=""
     # the delete call failing (an API blip) is no verdict: asked again at each poll until a call reaches the cluster,
     # the polls judging what is left
     asked=0
-    if del --wait=true --timeout=600s --request-timeout=60s; then asked=1; else echo "the delete returned $? - asked again below"; fi
-    for i in $(seq 1 {{ [1, ((side_gone_seconds | default(300)) / (side_poll | default(5))) | int] | max }}); do
+    wait_s=$(( {{ side_delete_seconds | default(600) }} ))
+    if del --wait=true --timeout=${wait_s}s --request-timeout=$(( wait_s + 10 ))s; then asked=1
+    else echo "the delete returned $? - asked again below"; fi
+    left="nothing read yet"
+    while (( $(now) < end )); do
       # stderr apart: a read that answers can log besides (discovery, an aggregated API down) - no leftover
       if left=$({{ side_kubectl }} get pods,pvc -l cnpg.io/cluster={{ side_cluster }} -o name \
-          --request-timeout=30s 2> "$err"); then
+          --request-timeout=$(left_s)s 2> "$err"); then
         # nothing left passes only once a delete reached the cluster: a Cluster with no pod or volume yet is still one
         if [ -z "$left" ] && [ "$asked" = 1 ]; then
           # and once its PVs are gone (each PV named by its claim: <cluster>-<n>, -wal or -tbs-... after it)
-          if pvs=$({{ side_kubectl }} get pv --request-timeout=30s \
-              -o jsonpath='{range .items[*]}{.metadata.name} {.spec.claimRef.name}{"\n"}{end}' 2> "$err"); then
-            left=$(printf '%s\n' "$pvs" | awk -v c='{{ side_cluster }}' '$2 ~ ("^" c "-[0-9]+(-wal|-tbs-.*)?$") {print "pv/" $1}')
+          if pvs=$({{ side_kubectl }} get pv --request-timeout=$(left_s)s \
+              -o jsonpath='{range .items[*]}{.metadata.name} {.spec.claimRef.namespace}/{.spec.claimRef.name}{"\n"}{end}' \
+              2> "$err"); then
+            left=$(printf '%s\n' "$pvs" | awk -v c='{{ side_cluster }}' -v ns="$ns" \
+              '$2 ~ ("^" (ns == "" ? "[^/]*" : ns) "/" c "-[0-9]+(-wal|-tbs-.*)?$") {print "pv/" $1}')
             [ -n "$left" ] || exit 0
           else
             left="not read: $(cat "$err")"
@@ -38,12 +51,12 @@
         left="not read: $(cat "$err")"
       fi
       if [ "$asked" = 0 ]; then
-        if del --wait=false --request-timeout=30s > /dev/null 2> "$err"; then asked=1
+        if del --wait=false --request-timeout=$(left_s)s > /dev/null 2> "$err"; then asked=1
         else left+=" (its delete not taken: $(cat "$err"))"; fi
       fi
       sleep {{ side_poll | default(5) }}
     done
-    echo "the side cluster outlived its delete by {{ side_gone_seconds | default(300) }} s: $left"
+    echo "the side cluster outlived its deadline ({{ side_delete_seconds | default(600) }} + {{ side_gone_seconds | default(300) }} s): $left"
     exit 1
   args:
     executable: /bin/bash
