@@ -24,7 +24,13 @@ def files(*roots):
     # safe.directory: a checkout owned by another user than the one testing it (a container's root) is still read
     ls = subprocess.run(["git", "-c", "safe.directory=*", "ls-files", "-z", "--cached", "--others", "--exclude-standard",
                          "--", *roots], capture_output=True, check=True)
-    return sorted(f for f in ls.stdout.decode().split("\0") if f.endswith(".yml") and "/venv/" not in f)
+    found = sorted(f for f in ls.stdout.decode().split("\0") if f.endswith(".yml") and "/venv/" not in f)
+    # an empty or near-empty walk passes every harness that judges what it finds: refused (150 under the default roots
+    # on 2026-10-12; a root asked for by name has at least one)
+    floor = 100 if roots == ("deploy/ansible", "tests/ansible") else 1
+    if len(found) < floor:
+        raise SystemExit(f"plays.files: {len(found)} .yml files under {', '.join(roots)} - fewer than {floor}: not the repo")
+    return found
 
 
 def load(path):

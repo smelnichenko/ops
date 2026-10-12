@@ -50,6 +50,18 @@ check("a file Ansible cannot read: fails, not skipped", got, "failed")
 os.remove(bad.name)
 check("the repo's files: playbooks and tests found, no virtualenv", (len(files()) > 100,
       any("/venv/" in f for f in files())), (True, False))
+# a walk that finds next to nothing (an empty listing) fails its harness, never passes it on nothing
+import subprocess as _sp
+_run = _sp.run
+_sp.run = lambda *a, **k: type("R", (), {"stdout": b"", "returncode": 0})()
+try:
+    files()
+    got = "returned"
+except SystemExit as e:
+    got = "refused" if "fewer than 100" in str(e) else str(e)
+finally:
+    _sp.run = _run
+check("an empty walk: refused, not passed on nothing", got, "refused")
 print("plays-walk: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
