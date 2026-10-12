@@ -39,6 +39,13 @@ case "$*" in
     [ -z "${STDERR_NOTE:-}" ] || echo "E1008 memcache.go:265] couldn't get resource list for metrics.k8s.io/v1beta1" >&2
     [ -z "${NO_PODS:-}" ] || exit 0
     if [ ! -e "$W/deleted" ] || [ "$n" -le "${LEFT_FOR:-0}" ]; then echo pod/side-1; fi ;;
+  # the PVs: each volume's, named by its claim - the side cluster's released one still being deleted by the provisioner
+  # (its helper pod running) for the first PV_LEFT_FOR reads; another cluster's look-alike claim (sidecar-1) always
+  *"get pv "*)
+    p=$(( $(cat "$W/p" 2> /dev/null || echo 0) + 1 )); echo $p > "$W/p"
+    [ "$p" -gt "${PV_GET_FAIL_FOR:-0}" ] || { echo "connection refused" >&2; exit 1; }
+    echo "pvc-7 sidecar-1"
+    if [ ! -e "$W/deleted" ] || [ "$p" -le "${PV_LEFT_FOR:-0}" ]; then echo "pvc-1 side-1"; fi ;;
 esac
 STUB
 chmod +x "$W/bin/kubectl"
@@ -69,8 +76,16 @@ for name, env, want_rc, words in (("gone at once", {}, 0, ""),
                                   # no pod nor volume yet (the Cluster just made), its delete not taken: no pass on an
                                   # empty read - the Cluster itself is still there; asked again, then gone
                                   ("no pods yet, the delete's first call failing: asked again before any pass",
-                                   {"DELETE_FAIL_FOR": "1", "NO_PODS": "1"}, 0, "")):
-    for f in ("n", "d", "deleted"):
+                                   {"DELETE_FAIL_FOR": "1", "NO_PODS": "1"}, 0, ""),
+                                  # the claims gone, a volume still being deleted (the provisioner's helper pod - an
+                                  # image the inventory then counts): waited for, another cluster's look-alike aside
+                                  ("its pods and claims gone, a volume still being deleted: waited for",
+                                   {"PV_LEFT_FOR": "3"}, 0, ""),
+                                  ("a volume still there at the bound: fails, naming it", {"PV_LEFT_FOR": "999"}, 1,
+                                   "pv/pvc-1"),
+                                  ("the volumes' read failing once: read again, then gone", {"PV_GET_FAIL_FOR": "1"}, 0,
+                                   "")):
+    for f in ("n", "d", "deleted", "p"):
         os.path.exists(os.path.join(W, f)) and os.remove(os.path.join(W, f))
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
                        env=dict(os.environ, PATH=os.path.join(W, "bin") + ":" + os.environ["PATH"], W=W, **env))
@@ -78,9 +93,13 @@ for name, env, want_rc, words in (("gone at once", {}, 0, ""),
     # asked again while its calls fail; once one reached the cluster, never again
     fail_for = int(env.get("DELETE_FAIL_FOR", 0))
     once = asked == fail_for + 1 if fail_for < 100 else asked > 1
-    ok = min(r.returncode, 1) == want_rc and words in r.stdout + r.stderr and once
+    # a pass read the volumes too, and after the last one still left: the wait saw them gone
+    pv_reads = int(open(os.path.join(W, "p")).read()) if os.path.exists(os.path.join(W, "p")) else 0
+    waited = want_rc or pv_reads > int(env.get("PV_LEFT_FOR", 0)) + int(env.get("PV_GET_FAIL_FOR", 0))
+    ok = min(r.returncode, 1) == want_rc and words in r.stdout + r.stderr and once and waited
     fails += not ok
-    print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f" (rc {r.returncode}, {asked} deletes: {r.stdout}{r.stderr})"))
+    print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f" (rc {r.returncode}, {asked} deletes, {pv_reads} volume "
+                                                      f"reads: {r.stdout}{r.stderr})"))
 # the delete asked again bounded - neither waiting for its end nor outliving its own timeout: a hung one held the task
 # past side_gone_seconds
 import time
