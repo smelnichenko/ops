@@ -67,11 +67,7 @@
           table inet vagrant_isolation
           delete table inet vagrant_isolation
           table inet vagrant_isolation {
-            chain output {
-              type filter hook output priority 0;
-              ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop;
-              ip6 daddr {{ production_lan6 }} drop;
-            }
+            chain output { type filter hook output priority 0; ip daddr { {{ ([production_lan] + production_public) | join(', ') }} } drop; ip6 daddr {{ production_lan6 }} drop; }
           }
     - name: Apply the Pi guard now and at boot
       ansible.builtin.systemd_service:
