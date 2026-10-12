@@ -69,11 +69,17 @@ session_groups() {  # session_groups <sid> <array>
 }
 
 # a signal to the job whole: its group, every group of the session it leads; by its PID while it leads no group yet -
-# only while it is this shell's child. With a variable: the time just before it was sent (uptime_cs)
+# only while it is this shell's child. With a variable: the time just before it was sent (uptime_cs), read the moment
+# the clock has ticked over - a process started in the same hundredth before the signal (forked during the scan) then
+# reads as started before it, not after (its lost TERM would never be sent again: the concurrency review, 2026-10-12)
 signal_job() {  # signal_job <signal> <pgid> [<variable>]
-  local sig=$1 g=$2 x groups
+  local sig=$1 g=$2 x groups _sj_a _sj_b _sj_i
   session_groups "$g" groups
-  [ -z "${3:-}" ] || uptime_cs "$3"
+  if [ -n "${3:-}" ]; then
+    uptime_cs _sj_a
+    for ((_sj_i = 0; _sj_i < 1000000; _sj_i++)); do uptime_cs _sj_b; ((_sj_b > _sj_a)) && break; done
+    printf -v "$3" '%s' "$_sj_b"
+  fi
   kill "-$sig" -- "-$g" 2> /dev/null || { child_alive "$g" && kill "-$sig" "$g" 2> /dev/null; }
   for x in "${groups[@]}"; do [ "$x" = "$g" ] || kill "-$sig" -- "-$x" 2> /dev/null; done
 }

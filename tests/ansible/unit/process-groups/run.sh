@@ -592,5 +592,37 @@ check "every caller's wait after a stop skips stop_left's" \
   "scripts/upgrade-build-with-pin.sh:1 scripts/upgrade-step-checks.sh:1 "
 mine "$h" && kill -KILL -- "-$h"
 wait "$h" 2> /dev/null
+# the TERM's time is later than every process started before it was sent: a process forked in the same hundredth
+# as the TERM (the clock's grain) read as started after it - never TERMed again, its lost TERM unsent until the
+# grace's KILL (the concurrency review, 2026-10-12). Five tries, each forking right after the clock ticks over
+# and signalling at once - the same hundredth on nearly every try for a read that does not wait for the next one
+# the fork made where the window is: after signal_job's scan of the session, right after the clock ticked over
+eval "pg_scan_orig() $(declare -f session_groups | tail -n +2)"
+session_groups() {
+  pg_scan_orig "$@"
+  uptime_cs t_a; for spin in $(seq 1 100000); do uptime_cs t_b; (( t_b > t_a )) && break; done
+  sleep 30 & child=$!
+}
+same_hundredth=0
+for try in 1 2 3 4 5; do
+  setsid sleep 30 & sg=$!
+  signal_job TERM "$sg" term_at
+  start_of "$child" child_start
+  (( child_start < term_at )) || same_hundredth=$((same_hundredth + 1))
+  kill -KILL "$child" "$sg" 2> /dev/null; kill -KILL -- "-$sg" 2> /dev/null; wait "$child" "$sg" 2> /dev/null
+done
+eval "session_groups() $(declare -f pg_scan_orig | tail -n +2)"
+check "a process started before the TERM: its start earlier than the TERM's time, every try" "$same_hundredth" 0
+# start_of reads field 22 (the start, clock ticks since boot): against an independent parse (Python, after the last
+# ") " - a comm may hold one), on a process whose name holds ") ", and two processes started apart differ
+mkdir -p "$W/so"; cp /bin/sleep "$W/so/a) b"
+"$W/so/a) b" 30 & odd=$!
+for spin in $(seq 1 100000); do uptime_cs t_c; (( t_c > t_b )) && break; done
+sleep 30 & later=$!
+start_of "$odd" s_odd; start_of "$later" s_later
+oracle=$(python3 -c 'import sys; s=open(f"/proc/{sys.argv[1]}/stat").read(); print(s[s.rindex(") ") + 2:].split()[19])' "$odd")
+check "start_of: field 22, as an independent parse reads it, a name holding \") \"" "$s_odd" "$oracle"
+check "start_of: two processes started apart differ" "$([ -n "$s_odd" ] && [ "$s_odd" != "$s_later" ] && echo differ)" differ
+kill -KILL "$odd" "$later" 2> /dev/null; wait "$odd" "$later" 2> /dev/null
 echo "process-groups: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
