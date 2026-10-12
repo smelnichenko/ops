@@ -474,11 +474,13 @@ def main():
                 + (f" (sent, not confirmed: {','.join(sorted(unconfirmed))})" if unconfirmed else ""))
     while True:
         apps = None  # this poll's apps (a poll whose apps read failed has none: nothing counted from it)
-        # the poll's reads within the wait's deadline too (at least 10 s: a read must have a chance)
-        read_timeout = max(10.0, min(60.0, deadline - time.monotonic()))
+        # each of the poll's reads within what is left of the wait (at least 10 s: a read must have a chance) - one
+        # time-out for both let the second run its whole length past the deadline
+        def read_timeout():
+            return max(10.0, min(60.0, deadline - time.monotonic()))
         try:
-            apps = kubectl(a.kubeconfig, "-n", "argocd", "get", APPLICATIONS, "-o", "json", timeout=read_timeout)
-            pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json", timeout=read_timeout),
+            apps = kubectl(a.kubeconfig, "-n", "argocd", "get", APPLICATIONS, "-o", "json", timeout=read_timeout())
+            pods = without(kubectl(a.kubeconfig, "get", "pods", "-A", "-o", "json", timeout=read_timeout()),
                            a.ignore_namespaces)
             green, problems, not_ready, restarts = evaluate(apps, pods, allowed, mirror, None, a.restart_quiet,
                                                             expected, a.allow_extra_apps, since)

@@ -243,9 +243,12 @@ case "$*" in *" annotate "*|*" patch "*) echo "$*" >> {d}/annotated; [ {mode} = 
   [ {mode} = annotate-hangs ] && case "$*" in *" annotate "*) sleep 3;; esac
   [ {mode} = patch-heals ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json;; esac
   [ {mode} = patch-hangs-long ] && case "$*" in *" patch "*) sleep 10;; esac
+  [ {mode} = annotate-hangs-long ] && case "$*" in *" annotate "*) sleep 10;; esac
   [ {mode} = patch-heals-hangs ] && case "$*" in *" patch "*) cp {d}/apps-after.json {d}/apps.json; sleep 3;; esac; exit 0;; esac
 n=$(cat {d}/n 2>/dev/null || echo 0); n=$((n + 1)); echo $n > {d}/n
 case "$*" in *applications*) ;; *) p=1;; esac
+# apps-hangs: the applications read held by the API server (killed by the caller's own time-out only)
+[ {mode} = apps-hangs ] && [ -z "${{p:-}}" ] && sleep 120
 if [ {mode} = fail-first ] && [ $n = 1 ]; then echo "connection refused" >&2; exit 1; fi
 if [ {mode} = fail-second-apps ] && [ $n = 3 ]; then echo "connection refused" >&2; exit 1; fi
 if [ -z "${{p:-}}" ]; then
@@ -392,6 +395,29 @@ rc, out = loop("patch-hangs-long", "--minutes", "0.02", "--restart-quiet", "0", 
                env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "6"})
 check("  a patch hanging: the poll's budget within --minutes (1.2 s), not kubectl's own 6 s",
       (time.monotonic() - t0 < 4, "Traceback" in out), (True, False), out)
+# the poll's ONE budget: a remedy hanging spends it, and the next one is not sent - said - never sent past --minutes
+rc, out = loop("patch-hangs-long", "--minutes", "0.1", "--restart-quiet", "0", "--sync-stalled",
+               apps=A + [stalled, variant(lambda x: x["metadata"].update(name="d"))],
+               env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "2"})
+check("  two stalled, the first patch hanging: the second not sent within the poll's budget, said",
+      ("SYNC d: not sent - the poll's time spent" in out, "Traceback" in out), (True, False), out)
+broken_d = json.loads(json.dumps(broken))
+broken_d["metadata"]["name"] = "d"
+rc, out = loop("annotate-hangs-long", "--minutes", "0.1", "--restart-quiet", "0", apps=A + [broken, broken_d],
+               env={"ARGO_SETTLED_KUBECTL_TIMEOUT": "2"})
+check("  two to hard-refresh, the first hanging: the second not sent within the poll's budget, said",
+      ("HARD REFRESH d: not sent - the poll's time spent" in out, "Traceback" in out), (True, False), out)
+# each read bounded by what is left of the wait (10 s at least): an applications read held by the API server ends the
+# poll at its own time-out, not kubectl's 60 s - the wait ends near --minutes
+t0 = time.monotonic()
+rc, out = loop("apps-hangs", "--minutes", "0.05", "--restart-quiet", "0")
+check("  the applications read hanging: each read bounded by what is left (10 s at least), the wait ends near --minutes",
+      (rc, time.monotonic() - t0 < 30), (1, True), out)
+# a wait that does not settle says what it synced too
+rc, out = loop("patch-fails", "--minutes", "0.03", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled])
+not_settled = [x for x in out.splitlines() if x.startswith("NOT SETTLED")]
+check("  not settled: its line says what this settle synced", bool(not_settled) and "; synced by this settle: " in not_settled[0],
+      True, out)
 rc, out = loop("plain", "--minutes", "0.02", "--restart-quiet", "0", "--sync-stalled", apps=A + [stalled],
                apps_after=A + [app("c")])
 check("  so one poll only (synced by itself): nothing synced", patches(out), [], out)
