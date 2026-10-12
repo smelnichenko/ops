@@ -15,8 +15,8 @@ crd-name sandboxagents.kagent.dev
 crd-name toolservers.kagent.dev
 image docker.io/library/postgres 18.3-alpine
 argo-chart woodpecker woodpecker@3.7.3
-image docker.io/woodpeckerci/woodpecker-agent v3.18.1
-image docker.io/woodpeckerci/woodpecker-server v3.18.1
+image docker.io/woodpeckerci/woodpecker-agent v3.19.0
+image docker.io/woodpeckerci/woodpecker-server v3.19.0
 image sonarqube 26.3.0.120487-community
 image sonarqube 26.9.0.129388-community
 image curlimages/curl 8.12.1

@@ -55,7 +55,7 @@ min a step, 60 after a Wave 0 step's; 17 such) on top of each step's own phases.
 | ClickHouse | 24.8 LTS | 26.8 LTS | 24.8 → 25.8 → 26.8 |
 | Centrifugo | 6.7.1 | 6.9.7 | direct (expired sub tokens now disconnect: 3006) |
 | SonarQube CE | 26.3.0 | 26.9.0 | direct; the setup hook starts the DB migration (`/setup`'s call) |
-| Woodpecker | 3.18.1 | — | already latest |
+| Woodpecker | 3.19.0 | — | upgraded 2026-10-12 outside the steps (infra e68b59f: #7158, a hung service wait) |
 
 ## Defects to fix first (they break the upgrades)
 
