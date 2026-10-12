@@ -19,7 +19,7 @@
     left_s() { local r=$(( end - $(now) )); (( r > 30 )) && r=30; (( r < 1 )) && r=1; echo "$r"; }
     del() { {{ side_kubectl }} delete clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found \
       --cascade=foreground "$@"; }
-    # its namespace, for its volumes' claims (a PV is cluster-wide): read before the delete; unread, any namespace's
+    # its namespace, for the claims of its volumes (a PV is cluster-wide): read before the delete; unread, any namespace
     ns=$({{ side_kubectl }} get clusters.postgresql.cnpg.io {{ side_cluster }} --ignore-not-found \
       -o jsonpath='{.metadata.namespace}' --request-timeout=$(left_s)s 2> /dev/null) || ns=""
     # the delete call failing (an API blip) is no verdict: asked again at each poll until a call reaches the cluster,
