@@ -2,7 +2,9 @@
 # The playbook defaults that restate what Argo CD (or a step's playbook) runs in production - cert-manager, External
 # Secrets, metrics-server, Istio, Gateway API, Cilium, local-path, the Kubernetes packages, the Argo CD chart, the data
 # operators' charts - equal production's inventory at the baseline and after every step, the step's default lines
-# applied: a step that moves the one and not the other (two sources of truth) fails here, naming both.
+# applied: a step that moves the one and not the other (two sources of truth) fails here, naming both. The working tree
+# holds the steps production committed (defaults-committed.txt) already: their lines are reverted, newest first, to
+# read the baseline.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PY=python3
@@ -57,16 +59,27 @@ norm = lambda v: str(v).lstrip("v")
 read = lambda p: open(p).read()
 names = dflt.step_names()
 fails, compared = [], 0
+# the baseline's files: the committed steps' default lines reverted (a committed step's new line not there fails)
+committed = [l.strip() for l in read(dflt.COMMITTED).split("\n") if l.strip() and not l.startswith("#")]
+base = {}
+try:
+    dflt.pending(read)
+    for step in reversed(committed):
+        for path, old, new in reversed(dflt.default_lines(step)):
+            base[path] = dflt.apply(base[path] if path in base else read(path), new, old, f"{step} reverted: {path}")
+except ValueError as e:
+    fails.append(f"the committed steps do not revert to the baseline - {e}")
+start = lambda p: base[p] if p in base else read(p)
 for i in range(-1, len(names)):
     done = names[:i + 1]
     have = inv.expected(done)
     try:
-        files = dflt.applied(read, [s for s in done if dflt.default_lines(s)])
+        files = dflt.applied(start, [s for s in done if dflt.default_lines(s)])
     except ValueError as e:
         fails.append(f"after {done[-1] if done else 'the baseline'}: the steps' default lines do not apply - {e}")
         break
     for path, kind, key, pat in MAP:
-        text = files.get(path) or read(path)
+        text = files.get(path) or start(path)
         live = [re.fullmatch(pat, l) for l in have]
         live = [m.group(1) for m in live if m]
         if len(live) != 1 or live[0] == "*":
