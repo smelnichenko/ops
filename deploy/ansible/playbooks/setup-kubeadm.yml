@@ -36,7 +36,7 @@
     # the container runtime: Debian's containerd (empty, as ten was built) or containerd.io at this version from
     # Docker's apt repository - what ten runs after the containerd step (upgrade-containerd.yml); a rebuild after the
     # rollout sets it, and the no-downgrade check refuses a full run on a containerd.io node without it
-    containerd_io_version: ""
+    containerd_io_version: "2.3.6"
     # On ten, Argo CD (infra clusters/production/argocd/apps) owns Istio, cert-manager, metrics-server, the Prometheus
     # stack and the data operators; this playbook installs them only where no Argo will (most Vagrant tests).
     platform_by_argo: "{{ platform_by_argo_override | default(false) }}"
