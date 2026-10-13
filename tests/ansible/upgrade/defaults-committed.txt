@@ -8,3 +8,4 @@
 08-istio-1.30
 09-istio-1.31
 11-cilium
+13-kubernetes-1.34.12
