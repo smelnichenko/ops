@@ -4,3 +4,4 @@
 04-istio-1.27
 05-istio-1.28
 06-istio-1.29
+07-gateway-api

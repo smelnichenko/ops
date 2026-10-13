@@ -54,7 +54,7 @@
     external_secrets_chart_version: "2.2.0"
     metrics_server_chart_version: "3.14.0"
     prometheus_operator_crds_chart_version: "27.0.1"  # operator v0.89.0
-    gateway_api_version: "v1.2.1"
+    gateway_api_version: "v1.5.1"
     local_path_provisioner_version: "v0.0.35"
     # the provisioner's node paths - upstream's default, as ten runs (/opt/local-path-provisioner, on the NVMe root)
     local_path_node_paths: [{node: DEFAULT_PATH_FOR_NON_LISTED_NODES, paths: [/opt/local-path-provisioner]}]
