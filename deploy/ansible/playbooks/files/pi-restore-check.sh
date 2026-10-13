@@ -294,10 +294,13 @@ trap 'echo "PI RESTORE CHECK: failed at line $LINENO" >&2' ERR
 mkdir -p "$PI_RESTORE_WORK"
 # what a killed run left (SIGKILL past the unit's timeout, a reboot - its EXIT trap never ran): its containers and its
 # directory, before this run takes the room. Under the lock, so never a running one's
-# (one still being torn down after the kill may refuse: said, and the run goes on - it takes memory, not the check's
-# names, which are this run's own)
-podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; } \
-  | xargs -r podman rm -f -t 0 > /dev/null || echo "PI RESTORE CHECK: a killed run's container not removed now" >&2
+# A container whose run was killed lost its conmon with it: the first removal fails ("conmon exited prematurely") and
+# records it exited, the second removes it (seen on the Vagrant copy). One refusing both is said, and the run goes on -
+# it takes memory, not this run's names
+for c in $(podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; }); do
+  podman rm -f -t 0 "$c" > /dev/null 2>&1 || podman rm -f -t 0 "$c" > /dev/null \
+    || echo "PI RESTORE CHECK: a killed run's container $c not removed now" >&2
+done
 rm -rf "$PI_RESTORE_WORK"/run.*
 # room for a restore: a full disk on a Pi stops Vault, Consul and Patroni with it
 free_gb=$(( $(df --output=avail -k "$PI_RESTORE_WORK" | tail -1) / 1024 / 1024 ))

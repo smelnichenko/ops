@@ -61,8 +61,13 @@ case "$cmd" in
   ps) cat "$W/leftover-containers" 2> /dev/null; exit 0 ;;
   rm|logs)
     [ "$cmd" = logs ] && echo "LOG: recovery stopped"
-    # RM_REFUSES: a container still being torn down refuses its removal
-    if [ "$cmd" = rm ] && [ -n "${RM_REFUSES:-}" ] && [[ "$*" == *4242* ]]; then echo "Error: cannot remove: container state improper" >&2; exit 2; fi
+    # RM_REFUSES=once: the first removal of a killed run's container fails (its conmon gone), the next one works;
+    # RM_REFUSES=always: every one fails
+    if [ "$cmd" = rm ] && [ -n "${RM_REFUSES:-}" ] && [[ "$*" == *4242* ]]; then
+      if [ "$RM_REFUSES" = always ] || [ ! -e "$W/rm-refused" ]; then
+        touch "$W/rm-refused"; echo "Error: cannot remove container: conmon exited prematurely" >&2; exit 125
+      fi
+    fi
     exit 0 ;;
   inspect) case "$*" in *pi-restore-etcd-*) echo "${ETCD_RUNNING:-true}" ;; *) echo "${PG_RUNNING:-true}" ;; esac; exit 0 ;;
   run)
@@ -147,7 +152,7 @@ chmod +x "$W/bin"/*
 
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
-  rm -rf "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
+  rm -rf "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
     "$W/leftover-containers"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
@@ -262,11 +267,18 @@ mkdir -p "$W/work/run.KILLED/pg/pgdata"
 printf 'pi-restore-pg-4242\npi-restore-etcd-4242\nsomething-else\n' > "$W/leftover-containers"
 check "a killed run's leftovers: its directory and its containers removed before the run, nothing else" \
   "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|etcd)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
-  "rc=0 0 1 0"
+  "rc=0 0 2 0"
 store
 printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
-check "a killed run's container refusing its removal: said, and the run goes on green" \
-  "$(run RM_REFUSES=1) $(grep -c "a killed run's container not removed now" "$W/out")" "rc=0 1"
+rm -f "$W/rm-refused"
+check "a killed run's container refusing its first removal (its conmon gone): removed by the second, nothing said" \
+  "$(run RM_REFUSES=once) $(grep -c '^podman rm -f -t 0 pi-restore-pg-4242' "$W/calls") $(grep -c 'not removed now' "$W/out")" \
+  "rc=0 2 0"
+store
+printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
+rm -f "$W/rm-refused"
+check "a killed run's container refusing every removal: said, and the run goes on green" \
+  "$(run RM_REFUSES=always) $(grep -c "a killed run's container pi-restore-pg-4242 not removed now" "$W/out")" "rc=0 1"
 store
 check "too little room for a restore: none started, red" \
   "$(run PI_RESTORE_MIN_FREE_GB=999999) $(grep -c 'no restore' "$W/out") $(grep -c '^podman run' "$W/calls" || true)" "rc=1 1 0"
