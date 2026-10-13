@@ -39,9 +39,15 @@
   become: true
   gather_facts: false
   vars:
+    # the check as pi-restore-check.service runs it: systemd reads the settings file (a value with spaces, a secret's $
+    # as written - never sourced by a shell); env after it sets a test's overrides (EnvironmentFile wins over -E)
+    as_unit: systemd-run --quiet --wait --pipe --collect -p EnvironmentFile=/etc/pi-restore-check/env /usr/bin/env
+    # the store's settings for the test's own reads, each line exported as written
+    store_env: >-
+      while IFS= read -r l; do export "$l"; done < <(grep -E '^(RCLONE_|PI_RESTORE_WORK=)' /etc/pi-restore-check/env)
     # every WAL history file in the archive: a restored Postgres that archived would add its new timeline's
     history: >-
-      set -a; . /etc/pi-restore-check/env; set +a;
+      {{ store_env }};
       rclone lsf -R --files-only store:postgres-backups | grep -E '\.history(\.[a-z0-9]+)?$' | sort
   tasks:
     - name: The archive's timelines before
@@ -51,13 +57,8 @@
       register: _hist_before
       changed_when: false
 
-    - name: The check, its day forced (the lock, then every part)
-      ansible.builtin.shell:
-        executable: /bin/bash
-        cmd: |
-          set -euo pipefail
-          set -a; . /etc/pi-restore-check/env; set +a
-          PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
+    - name: The check, its day forced (the lock, then every part) - run as its unit runs it
+      ansible.builtin.command: "{{ as_unit }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh"
       register: _run
       changed_when: true
       failed_when: false
@@ -71,7 +72,7 @@
         executable: /bin/bash
         cmd: |
           set -euo pipefail
-          set -a; . /etc/pi-restore-check/env; set +a
+          {{ store_env }}
           echo "containers=$(podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -c '^pi-restore-' || true)"
           echo "work=$(find "$PI_RESTORE_WORK" -mindepth 1 -maxdepth 1 | wc -l)"
           echo "agents=$(pgrep -fc 'consul agent -dev -node=restore-check' || true)"
@@ -101,22 +102,26 @@
   hosts: pi2
   become: true
   gather_facts: false
+  vars:
+    # the check as pi-restore-check.service runs it: systemd reads the settings file (a value with spaces, a secret's $
+    # as written - never sourced by a shell); env after it sets a test's overrides (EnvironmentFile wins over -E)
+    as_unit: systemd-run --quiet --wait --pipe --collect -p EnvironmentFile=/etc/pi-restore-check/env /usr/bin/env
+    # the store's settings for the test's own reads, each line exported as written
+    store_env: >-
+      while IFS= read -r l; do export "$l"; done < <(grep -E '^(RCLONE_|PI_RESTORE_WORK=)' /etc/pi-restore-check/env)
   tasks:
     - name: No last-success of pi2's from an earlier run
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
-          set -a; . /etc/pi-restore-check/env; set +a
+          {{ store_env }}
           rclone deletefile store:restore-checks/pi2/last-success 2> /dev/null || true
       changed_when: true
 
-    - name: Each fault (the etcd snapshot older than a limit of -1 h; a database the backup lacks)
+    - name: Each fault (the etcd snapshot older than a limit of -1 h; a database the backup lacks), run as its unit runs
       ansible.builtin.shell:
         executable: /bin/bash
-        cmd: |
-          set -uo pipefail
-          set -a; . /etc/pi-restore-check/env; set +a
-          {{ item.env }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
+        cmd: "{{ as_unit }} {{ item.env }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh"
       loop:
         - { name: etcd, env: "PI_RESTORE_ETCD_MAX_AGE_H=-1", red: ETCD }
         - { name: postgres, env: "PI_RESTORE_PG_DATABASES='monitor no_such_database'", red: POSTGRES }
@@ -130,7 +135,7 @@
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: |
-          set -a; . /etc/pi-restore-check/env; set +a
+          {{ store_env }}
           rclone cat store:restore-checks/pi2/last-success 2> /dev/null || echo none
       register: _pi2_success
       changed_when: false

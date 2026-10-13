@@ -14,6 +14,9 @@
 #
 # Usage: task deploy:pi-restore-check   (production; after deploy:pi-backups - tier0 restores its backup)
 #        task test:pi-restore-check     (the Vagrant rehearsal)
+# A run by hand, today whatever the day (as the unit runs it - systemd reads the settings, never a shell):
+#   sudo systemd-run --wait --pipe --collect -p EnvironmentFile=/etc/pi-restore-check/env \
+#     /usr/bin/env PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
 - name: The Pis' restore check
   hosts: pis
   become: true
