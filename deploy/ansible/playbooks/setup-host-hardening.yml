@@ -59,6 +59,15 @@
     smartctl_exporter_bind: "{{ node_ip_override | default('192.168.11.2') }}"
     smartctl_exporter_release_base: "https://github.com/prometheus-community/smartctl_exporter/releases/download"
     smartctl_exporter_archive_name: "smartctl_exporter-{{ smartctl_exporter_version }}.linux-amd64.tar.gz"
+    # node_exporter - the host's filesystems, memory, CPU and network to Prometheus: until it ran, nothing watched ten's
+    # disk (the kubelet evicts pods at 10 % free, and no alert said so before). Bound like smartctl's, scraped by the
+    # schnappy-observability chart's ScrapeConfig. The checksum is the release's sha256sums.txt line
+    node_exporter_version: "1.12.1"
+    node_exporter_sha256: "b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63"
+    node_exporter_port: 9100
+    node_exporter_bind: "{{ node_ip_override | default('192.168.11.2') }}"
+    node_exporter_archive_name: "node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+    node_exporter_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/{{ node_exporter_archive_name }}"
 
   tasks:
     - name: Detect EFI firmware (efi_pstore is a no-op without it)
@@ -515,6 +524,118 @@
               | select('match', '^smartctl_device') | first
               | default('no smartctl_ metrics yet') }}"
       when: _smartctl_devices.stdout_lines | length > 0
+
+    # ================================================================
+    # node_exporter - the host's own metrics (filesystems above all).
+    # Cluster scrape config + alerts live in the schnappy-observability
+    # chart, as smartctl's do.
+    # ================================================================
+
+    - name: Check installed node_exporter version
+      ansible.builtin.shell: |
+        set -o pipefail
+        /usr/local/bin/node_exporter --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+      args:
+        executable: /bin/bash
+      register: _node_exporter_version
+      changed_when: false
+      failed_when: false
+      check_mode: false  # a read: a preview skipped it, and every task below went on an undefined version
+
+    - name: A private directory for the node_exporter download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .node-exporter
+      check_mode: false
+      register: _node_exporter_tmp
+      when: _node_exporter_version.stdout != node_exporter_version
+
+    # get_url checks the release's sha256 before anything is unpacked (unarchive from a URL checks nothing)
+    - name: Download node_exporter, its checksum checked
+      ansible.builtin.get_url:
+        url: "{{ node_exporter_url }}"
+        dest: "{{ _node_exporter_tmp.path }}/{{ node_exporter_archive_name }}"
+        checksum: "sha256:{{ node_exporter_sha256 }}"
+        mode: '0600'
+      check_mode: false
+      when: _node_exporter_version.stdout != node_exporter_version
+
+    - name: Unpack node_exporter
+      ansible.builtin.unarchive:
+        src: "{{ _node_exporter_tmp.path }}/{{ node_exporter_archive_name }}"
+        dest: "{{ _node_exporter_tmp.path }}"
+        remote_src: true
+      check_mode: false
+      when: _node_exporter_version.stdout != node_exporter_version
+
+    - name: Move node_exporter into place
+      ansible.builtin.copy:
+        src: "{{ _node_exporter_tmp.path }}/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter"
+        dest: /usr/local/bin/node_exporter
+        remote_src: true
+        mode: '0755'
+        owner: root
+        group: root
+      when: _node_exporter_version.stdout != node_exporter_version
+      register: _node_exporter_bin
+
+    - name: Remove the node_exporter download
+      ansible.builtin.file:
+        path: "{{ _node_exporter_tmp.path }}"
+        state: absent
+      check_mode: false
+      when: _node_exporter_version.stdout != node_exporter_version
+
+    - name: Write node_exporter systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node_exporter.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Prometheus node_exporter
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          # reads /proc, /sys and statfs - no root needed
+          DynamicUser=true
+          # every pod's volume (kubelet) and container root (containerd) is a mount of its own: hundreds of series that
+          # come and go with the pods, and the disk they sit on is / already
+          ExecStart=/usr/local/bin/node_exporter \
+            --web.listen-address={{ node_exporter_bind }}:{{ node_exporter_port }} \
+            --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run/credentials/.+|run/containerd/.+|run/netns/.+|var/lib/kubelet/.+|var/lib/containerd/.+)($|/)
+          Restart=on-failure
+          RestartSec=10s
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=read-only
+          PrivateTmp=true
+          ProtectKernelTunables=true
+          ProtectControlGroups=true
+
+          [Install]
+          WantedBy=multi-user.target
+      register: _node_exporter_unit
+
+    - name: Enable + start node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        enabled: true
+        state: "{{ 'restarted' if (_node_exporter_bin.changed or _node_exporter_unit.changed) else 'started' }}"
+        daemon_reload: true
+
+    - name: Verify node_exporter serves the root filesystem
+      ansible.builtin.uri:
+        url: "http://{{ node_exporter_bind }}:{{ node_exporter_port }}/metrics"
+        return_content: true
+      register: _node_exporter_check
+      retries: 5
+      delay: 2
+      until: _node_exporter_check.status == 200 and 'node_filesystem_avail_bytes{' in _node_exporter_check.content
+        and 'mountpoint="/"' in _node_exporter_check.content
+      check_mode: false
+      when: not ansible_check_mode
 
   handlers:
     - name: Re-exec systemd
