@@ -84,6 +84,9 @@ part_postgres() {
     -c "restore_command=barman-cloud-wal-restore --cloud-provider aws-s3 --endpoint-url $STORE_ENDPOINT s3://postgres-backups $server %f %p" \
     > /dev/null
   echo "$name" >> "$1/containers"
+  # gone when this part ends, its memory free before the next part starts (the run's cleanup removes it on a kill)
+  # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
+  trap "podman rm -f $name > /dev/null 2>&1 || true" EXIT
   local i state r=""
   for i in $(seq "$PI_RESTORE_PG_WAIT_POLLS"); do
     state=$(podman inspect -f '{{.State.Running}}' "$name")
@@ -147,13 +150,24 @@ part_etcd() {
     --listen-peer-urls http://127.0.0.1:2380 --initial-advertise-peer-urls http://127.0.0.1:2380 \
     --initial-cluster restore=http://127.0.0.1:2380 > /dev/null
   echo "$name" >> "$1/containers"
-  local i ns=""
-  for i in $(seq 60); do
+  # gone when this part ends, its memory free before the next part starts (the run's cleanup removes it on a kill)
+  # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
+  trap "podman rm -f $name > /dev/null 2>&1 || true" EXIT
+  local i ns=0
+  for i in $(seq "$PI_RESTORE_ETCD_WAIT_POLLS"); do
+    if [ "$(podman inspect -f '{{.State.Running}}' "$name")" != true ]; then
+      podman logs --tail 30 "$name" 2>&1 || true
+      echo "$snap: etcd stopped on the restored data"; return 1
+    fi
     ns=$(podman exec "$name" etcdctl --endpoints http://127.0.0.1:2379 get /registry/namespaces/ --prefix --keys-only 2> /dev/null \
       | grep -c '^/registry/namespaces/' || true)
     [ "$ns" -gt 0 ] && break
     sleep 2
   done
+  if [ "$ns" -eq 0 ]; then
+    podman logs --tail 30 "$name" 2>&1 || true
+    echo "$snap: etcd on the restored data served no namespace within $(( PI_RESTORE_ETCD_WAIT_POLLS * 2 )) s"; return 1
+  fi
   podman exec "$name" etcdctl --endpoints http://127.0.0.1:2379 get /registry/namespaces/kube-system --keys-only \
     | grep -qx /registry/namespaces/kube-system || { echo "$snap: restored, but no kube-system namespace in it"; return 1; }
   echo "ETCD OK: $snap ($age h old; $status) restored, $ns namespaces in it, kube-system among them"
@@ -241,7 +255,7 @@ fi
 : "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
 : "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
 : "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}" "${PI_RESTORE_MIN_FREE_GB:?}"
-: "${PI_RESTORE_CONTAINER_MEMORY:?}"
+: "${PI_RESTORE_CONTAINER_MEMORY:?}" "${PI_RESTORE_ETCD_WAIT_POLLS:?}"
 
 if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   # the clock synchronized first (as pi-tier0-backup's): the day's parity and every age below read it

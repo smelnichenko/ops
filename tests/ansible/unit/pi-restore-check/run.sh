@@ -59,7 +59,7 @@ case "$cmd" in
   pull) exit 0 ;;
   ps) cat "$W/leftover-containers" 2> /dev/null; exit 0 ;;
   rm|logs) [ "$cmd" = logs ] && echo "LOG: recovery stopped"; exit 0 ;;
-  inspect) echo "${PG_RUNNING:-true}"; exit 0 ;;
+  inspect) case "$*" in *pi-restore-etcd-*) echo "${ETCD_RUNNING:-true}" ;; *) echo "${PG_RUNNING:-true}" ;; esac; exit 0 ;;
   run)
     vol=""; ep=""; detach=""
     while [ $# -gt 0 ]; do
@@ -96,7 +96,7 @@ case "$cmd" in
         # pg_dump 15+ fsyncs its file: /dev/null takes none (found on the Vagrant copy)
         case "$*" in *--no-sync*) ;; *) echo 'pg_dump: error: could not fsync file "/dev/null": Invalid argument' >&2; exit 1 ;; esac
         [ -z "${DUMP_FAIL:-}" ] || { echo "pg_dump: error: could not read block 3" >&2; exit 1; } ;;
-      *"get /registry/namespaces/ --prefix"*) printf '/registry/namespaces/default\n/registry/namespaces/kube-system\n' ;;
+      *"get /registry/namespaces/ --prefix"*) [ -n "${ETCD_SILENT:-}" ] || printf '/registry/namespaces/default\n/registry/namespaces/kube-system\n' ;;
       *"get /registry/namespaces/kube-system"*) [ -n "${NO_KUBE_SYSTEM:-}" ] || echo /registry/namespaces/kube-system ;;
     esac ;;
 esac
@@ -185,7 +185,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H=26 PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
-    PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m "$@" bash "$SCRIPT" > "$W/out" 2>&1
+    PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 "$@" bash "$SCRIPT" > "$W/out" 2>&1
   echo "rc=$?"
 }
 agents() {  # the throwaway Consul agents (the stub's sleep 120) still running
@@ -232,7 +232,9 @@ check "  the store written under restore-checks/pi1/ only (and the bucket made),
   "$(sed 's/^WRITE //' "$W/writes" | sort -u | paste -sd,)" \
   "mkdir store:restore-checks,rcat store:restore-checks/pi1/last-report,rcat store:restore-checks/pi1/last-success"
 check "  the work directory gone, the containers removed, the throwaway Consul stopped" \
-  "$(ls "$W/work" | wc -l) $(grep -c '^podman rm -f' "$W/calls") $(agents)" "0 2 0"
+  "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f pi-restore-(pg|etcd)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 2 0"
+check "  each part's container gone when the part ends - Postgres's before etcd's first container" \
+  "$(awk '/^podman rm -f pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls")" 1
 
 check "  every container memory-bounded (podman runs them outside the unit's cgroup)" \
   "$(( $(grep -c '^podman run' "$W/calls") - $(wc -l < "$W/memory") )) $(sort -u "$W/memory")" "0 memory 1536m"
@@ -277,6 +279,9 @@ check "  the run's exit says it" "$(grep -c 'PI RESTORE CHECK .* FAILED: POSTGRE
 red "etcd: the newest snapshot 5 h old: red" ETCD ETCD_AGE_H=5
 red "etcd: the snapshot does not restore (hash): red" ETCD ETCD_RESTORE_FAIL=1
 red "etcd: no kube-system in it: red" ETCD NO_KUBE_SYSTEM=1
+red "etcd: stopped on the restored data: red" ETCD ETCD_RUNNING=false
+red "etcd: serves no namespace within its wait: red" ETCD ETCD_SILENT=1
+check "  said so, with etcd's own log" "$(grep -c 'served no namespace within 4 s' "$W/out") $(grep -c 'LOG: ' "$W/out")" "1 1"
 red "tier0: no Pi backup at all: red" TIER0 NO_TIER0=1
 red "tier0: the newest 40 h old: red" TIER0 TIER0_AGE_H=40
 red "tier0: its Keycloak export failed: red" TIER0 KC_FAILED=1
