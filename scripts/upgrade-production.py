@@ -21,7 +21,7 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
              cert-renew line - first a throwaway certificate issued through production's ACME solver: acme-check.yml;
              a barman-check step whose merge took no base backup - declined or failed there - takes it here).
              The first green call records checked as it ends (and when it began); a call at
-             least the step's soak later (its soak line; else 60 minutes after a wave0 step, 15 otherwise) that is
+             least the step's soak later (its soak line; else 15 minutes) that is
              green again with no container restarted since the first began records done. A red call after checked records
              check-failed: the soak starts again from the next green call.
 A phase that fails records nothing of its own. Every phase claims the step first - start <phase> <host:pid>, written
@@ -88,7 +88,9 @@ URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https:/
 # production's test environment: not in the Vagrant copy, moved apart from production by its own steps - its images
 # are listed, not compared
 TEST_NAMESPACES = "schnappy-test"
-SOAK_MINUTES, SOAK_MINUTES_WAVE0 = 15, 60
+# a step's soak unless its soak line says otherwise - a one-way (wave0) step's too: the second done checks the same
+# things after 15 minutes or 60, and no failure is known to show only in between (operator 2026-10-13)
+SOAK_MINUTES = 15
 # Argo's settle after a merge, a step's settle line aside: longer than the longest hook a merge can start and its
 # rollout - init-users (schnappy-data's Sync hook) may take its whole deadline in a major's restarts: 2095 s (~35 min)
 # with production's 5 databases (platform cnpg-init-users.yaml, derived from them); 30 min called a hook still within
@@ -161,9 +163,8 @@ def step_info(name):
     test_images = []
     inv.parse(os.path.join(inv.STEPS, name + ".txt"), playbooks=playbooks, wave0=wave0, soak=soak, settle=settle,
               out_of_sync=out_of_sync, flags=flags, tempo_flush=tempo_flush, test_images=test_images)
-    default_soak = SOAK_MINUTES_WAVE0 if wave0 else SOAK_MINUTES
     return {"branches": inv.branch_order(name), "playbooks": playbooks, "wave0": wave0, "out_of_sync": out_of_sync,
-            "soak": soak[-1] if soak else default_soak,
+            "soak": soak[-1] if soak else SOAK_MINUTES,
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
             "base_backup": "barman-check" in flags, "base_backup_after_merge": "barman-after-merge" in flags,

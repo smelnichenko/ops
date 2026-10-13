@@ -64,8 +64,9 @@ done_upto = lambda last: [f"{n} done" for n in names[:names.index(last) + 1]]
 # the real step files' facts the rules below lean on (a change to them should fail here, not in production)
 check("47 merges infra, then platform", info["47-postgres-18"]["branches"], ["infra", "platform"])
 check("54 merges platform, then infra", info["54-tempo-3"]["branches"], ["platform", "infra"])
-check("47 backs up postgres first, soaks 60 min", (info["47-postgres-18"]["wave0"], info["47-postgres-18"]["soak"]),
-      (["postgres"], 60))
+# a one-way (wave0) step soaks as long as any other: the second done checks the same things after 15 minutes or 60
+check("47 backs up postgres first, soaks 15 min like any step", (info["47-postgres-18"]["wave0"],
+                                                                 info["47-postgres-18"]["soak"]), (["postgres"], 15))
 i01 = info["01-argocd-root-retry"]
 check("01 has no wave0 line, soaks 15 min", (i01["wave0"], i01["soak"]), ([], 15))
 i37 = info["37-strimzi-conversion"]
@@ -858,8 +859,8 @@ try:
         m.status()
 finally:
     m.read_ledger, m.ten_now = saved
-check("status of a step soaking: its time left by ten's clock (5 minutes into 13's 60)",
-      [l.strip().split(", ")[-1] for l in buf.getvalue().splitlines() if "soaking since" in l], ["55 of 60 minutes left"])
+check("status of a step soaking: its time left by ten's clock (5 minutes into 13's 15)",
+      [l.strip().split(", ")[-1] for l in buf.getvalue().splitlines() if "soaking since" in l], ["10 of 15 minutes left"])
 
 # begin records the app set before begun: cut short between them, it runs again rather than stranding the step
 got = phase_calls(m.begin, S47, events=ev(*done_upto("46-postgres-18-test")))
