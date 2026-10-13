@@ -111,8 +111,8 @@ part_postgres() {
     tables=$(q "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind = 'r' and n.nspname not in ('pg_catalog', 'information_schema')" "$db")
     [ "$tables" -gt 0 ] || { echo "$server/$id: database $db has no table"; return 1; }
-    # every row read: a page the restore got wrong fails the dump
-    podman exec "$name" pg_dump -h /w -U postgres --format=custom --file=/dev/null "$db"
+    # every row read: a page the restore got wrong fails the dump (--no-sync: /dev/null takes no fsync)
+    podman exec "$name" pg_dump -h /w -U postgres --no-sync --format=custom --file=/dev/null "$db"
   done
   echo "POSTGRES OK: $server/$id (PostgreSQL $major, $image) replayed to $seg (newest archived at the start: $wal);" \
     "databases $PI_RESTORE_PG_DATABASES each read back whole"

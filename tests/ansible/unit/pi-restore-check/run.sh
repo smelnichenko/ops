@@ -90,7 +90,10 @@ case "$cmd" in
       *pg_walfile_name*) echo "${SEG:-000000040000001D00000028}" ;;
       *string_agg*) echo "${DBS:-postgres monitor admin chat chess masi}" ;;
       *"from pg_class"*) echo "${TABLES:-7}" ;;
-      pg_dump*) [ -z "${DUMP_FAIL:-}" ] || { echo "pg_dump: error: could not read block 3" >&2; exit 1; } ;;
+      pg_dump*)
+        # pg_dump 15+ fsyncs its file: /dev/null takes none (found on the Vagrant copy)
+        case "$*" in *--no-sync*) ;; *) echo 'pg_dump: error: could not fsync file "/dev/null": Invalid argument' >&2; exit 1 ;; esac
+        [ -z "${DUMP_FAIL:-}" ] || { echo "pg_dump: error: could not read block 3" >&2; exit 1; } ;;
       *"get /registry/namespaces/ --prefix"*) printf '/registry/namespaces/default\n/registry/namespaces/kube-system\n' ;;
       *"get /registry/namespaces/kube-system"*) [ -n "${NO_KUBE_SYSTEM:-}" ] || echo /registry/namespaces/kube-system ;;
     esac ;;
