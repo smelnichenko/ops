@@ -48,7 +48,7 @@
     # every WAL history file in the archive: a restored Postgres that archived would add its new timeline's
     history: >-
       {{ store_env }};
-      rclone lsf -R --files-only store:postgres-backups | grep -E '\.history(\.[a-z0-9]+)?$' | sort
+      rclone lsf -R --files-only store:postgres-backups | { grep -E '\.history(\.[a-z0-9]+)?$' || true; } | sort
   tasks:
     - name: The archive's timelines before
       ansible.builtin.shell:
