@@ -3,3 +3,4 @@
 03-istio-1.26
 04-istio-1.27
 05-istio-1.28
+06-istio-1.29
