@@ -1073,7 +1073,7 @@ tasks:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-dr.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml{{if .TEST_PG_IMAGE}} -e test_pg_image={{.TEST_PG_IMAGE}}{{end}}
 
   dr:drill:
-    desc: Run the full DR drill (test:dr) and, only on a passing run, record restore_verify_success to the prod pushgateway (resets the RestoreVerificationFailing alert)
+    desc: Run the full DR drill (test:dr) and, only on a passing run, record restore_verify_success to the prod pushgateway (a record only - the Pis' daily restore check, setup-pi-restore-check.yml, is what alerts)
     vars:
       # Repo-local, not /tmp: a generic /tmp name invites another process to
       # tee over a live drill's log (it happened).
