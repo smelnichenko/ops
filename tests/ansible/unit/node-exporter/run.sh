@@ -24,7 +24,13 @@ env = jinja2.Environment(undefined=jinja2.StrictUndefined)
 for _ in range(3):
     v = {k: env.from_string(x).render(**v) if isinstance(x, str) else x for k, x in v.items()}
 unit = env.from_string(tasks["Write node_exporter systemd unit"]["ansible.builtin.copy"]["content"]).render(**v)
-start = " ".join(l.strip().rstrip("\\") for l in unit.split("ExecStart=", 1)[1].splitlines()[:3])
+# ExecStart and its continuation lines (each ending in a backslash)
+lines = []
+for l in unit.split("ExecStart=", 1)[1].splitlines():
+    lines.append(l.strip().rstrip("\\"))
+    if not l.rstrip().endswith("\\"):
+        break
+start = " ".join(lines)
 args = shlex.split(start)
 flag = lambda f: next((a.split("=", 1)[1] for a in args if a.startswith(f + "=")), None)
 check("bound to ten's LAN address on 9100", flag("--web.listen-address"), "192.168.11.2:9100")
@@ -36,6 +42,12 @@ gone = ["/dev", "/proc", "/sys", "/run/credentials/x.service", "/var/lib/kubelet
         "/run/netns/cni-1"]
 check("the root filesystem and its peers kept", [m for m in kept if exclude.search(m)], [])
 check("per-pod and pseudo mounts left out", [m for m in gone if not exclude.search(m)], [])
+# Cilium's per-pod veths (lxc*) out of netdev and netclass; the node's own interfaces in
+for f in ("--collector.netdev.device-exclude", "--collector.netclass.ignored-devices"):
+    rx = re.compile(flag(f) or "^$never")
+    check(f"{f}: the pods' lxc veths out, the node's own interfaces in",
+          ([d for d in ("lxc4a1b2c3d4e5f", "lxc_health") if not rx.search(d)],
+           [d for d in ("enp3s0", "eno1", "br0", "cilium_host", "cilium_vxlan", "lo") if rx.search(d)]), ([], []))
 get = tasks["Download node_exporter, its checksum checked"]["ansible.builtin.get_url"]
 check("the download checked against the pinned sha256", env.from_string(get["checksum"]).render(**v),
       "sha256:" + v["node_exporter_sha256"])

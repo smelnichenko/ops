@@ -66,7 +66,8 @@ part_postgres() {
   podman pull -q "$image" > /dev/null
   # the image's postgres user (CNPG's images: 26) owns the data
   chown 26:26 "$w"
-  podman run --rm --network host --user 26:26 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -v "$w:/w" \
+  podman run --rm --network host --memory "$PI_RESTORE_CONTAINER_MEMORY" --user 26:26 -e AWS_ACCESS_KEY_ID \
+    -e AWS_SECRET_ACCESS_KEY -v "$w:/w" \
     --entrypoint barman-cloud-restore "$image" --cloud-provider aws-s3 --endpoint-url "$STORE_ENDPOINT" \
     s3://postgres-backups "$server" "$id" /w/pgdata
   # recovery to the end of the archive, then promoted; CNPG's own settings that point at its controller (sockets,
@@ -75,7 +76,8 @@ part_postgres() {
   rm -f "$w/pgdata/standby.signal"
   printf 'local all all trust\n' > "$w/hba.conf"
   chown 26:26 "$w/pgdata/recovery.signal" "$w/hba.conf"
-  podman run -d --name "$name" --network host --user 26:26 -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -v "$w:/w" \
+  podman run -d --name "$name" --network host --memory "$PI_RESTORE_CONTAINER_MEMORY" --user 26:26 -e AWS_ACCESS_KEY_ID \
+    -e AWS_SECRET_ACCESS_KEY -v "$w:/w" \
     --entrypoint postgres "$image" -D /w/pgdata -c listen_addresses= -c unix_socket_directories=/w -c port=5432 \
     -c ssl=off -c archive_mode=off -c logging_collector=off -c log_destination=stderr -c hba_file=/w/hba.conf \
     -c shared_buffers=256MB \
@@ -133,13 +135,14 @@ part_etcd() {
   [ "$age" -le "$PI_RESTORE_ETCD_MAX_AGE_H" ] || { echo "the newest etcd snapshot $snap is $age h old (limit $PI_RESTORE_ETCD_MAX_AGE_H h)"; return 1; }
   rclone copyto "store:etcd-backups/$snap" "$w/snap.db"
   podman pull -q "$PI_RESTORE_ETCD_IMAGE" > /dev/null
-  local e=(podman run --rm --network none -v "$w:/w" "$PI_RESTORE_ETCD_IMAGE")
+  local e=(podman run --rm --network none --memory "$PI_RESTORE_CONTAINER_MEMORY" -v "$w:/w" "$PI_RESTORE_ETCD_IMAGE")
   local status
   status=$("${e[@]}" etcdutl snapshot status /w/snap.db -w json)
   # the restore checks the snapshot's hash
   "${e[@]}" etcdutl snapshot restore /w/snap.db --data-dir /w/data --name restore \
     --initial-cluster restore=http://127.0.0.1:2380 --initial-advertise-peer-urls http://127.0.0.1:2380 > /dev/null
-  podman run -d --name "$name" --network none -v "$w:/w" "$PI_RESTORE_ETCD_IMAGE" etcd --data-dir /w/data --name restore \
+  podman run -d --name "$name" --network none --memory "$PI_RESTORE_CONTAINER_MEMORY" -v "$w:/w" "$PI_RESTORE_ETCD_IMAGE" \
+    etcd --data-dir /w/data --name restore \
     --listen-client-urls http://127.0.0.1:2379 --advertise-client-urls http://127.0.0.1:2379 \
     --listen-peer-urls http://127.0.0.1:2380 --initial-advertise-peer-urls http://127.0.0.1:2380 \
     --initial-cluster restore=http://127.0.0.1:2380 > /dev/null
@@ -159,7 +162,7 @@ part_etcd() {
 part_tier0() {
   local w=$1/tier0 d age
   mkdir -p "$w"
-  d=$(rclone lsf --dirs-only store:pi-backups 2> /dev/null | grep -E '^[0-9]{8}T[0-9]{6}Z/$' | sort | tail -1)
+  d=$(rclone lsf --dirs-only store:pi-backups | grep -E '^[0-9]{8}T[0-9]{6}Z/$' | sort | tail -1)
   d=${d%/}
   [ -n "$d" ] || { echo "no backup in pi-backups"; return 1; }
   age=$(store_age_h "${d%Z}")
@@ -193,7 +196,9 @@ part_tier0() {
   echo "$w/pg" > "$1/scratch-pg"
   local P=(-h "$w/sock" -p 55432 -U postgres)
   # the roles first (the dumps' owners); postgres itself exists already - its CREATE fails, nothing else may
-  runuser -u postgres -- "$bin/psql" "${P[@]}" -q -f "$w/b/pg-globals.sql" > "$w/globals.log" 2>&1 || true
+  local rc=0
+  runuser -u postgres -- "$bin/psql" "${P[@]}" -q -f "$w/b/pg-globals.sql" > "$w/globals.log" 2>&1 || rc=$?
+  [ "$rc" = 0 ] || { cat "$w/globals.log"; echo "$d: psql could not run pg-globals.sql (exit $rc)"; return 1; }
   if grep 'ERROR' "$w/globals.log" | grep -v 'role "postgres" already exists' | grep -q .; then
     cat "$w/globals.log"; echo "$d: pg-globals.sql did not restore"; return 1
   fi
@@ -235,7 +240,8 @@ fi
 
 : "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
 : "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
-: "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}"
+: "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}" "${PI_RESTORE_MIN_FREE_GB:?}"
+: "${PI_RESTORE_CONTAINER_MEMORY:?}"
 
 if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   # the clock synchronized first (as pi-tier0-backup's): the day's parity and every age below read it
@@ -259,6 +265,14 @@ if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
 fi
 
 mkdir -p "$PI_RESTORE_WORK"
+# what a killed run left (SIGKILL past the unit's timeout, a reboot - its EXIT trap never ran): its containers and its
+# directory, before this run takes the room. Under the lock, so never a running one's
+podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; } | xargs -r podman rm -f > /dev/null
+rm -rf "$PI_RESTORE_WORK"/run.*
+# room for a restore: a full disk on a Pi stops Vault, Consul and Patroni with it
+free_gb=$(( $(df --output=avail -k "$PI_RESTORE_WORK" | tail -1) / 1024 / 1024 ))
+[ "$free_gb" -ge "$PI_RESTORE_MIN_FREE_GB" ] \
+  || { echo "PI RESTORE CHECK: $free_gb GiB free under $PI_RESTORE_WORK, under $PI_RESTORE_MIN_FREE_GB GiB - no restore"; exit 1; }
 work=$(mktemp -d "$PI_RESTORE_WORK/run.XXXXXX")
 chmod 0755 "$work"
 trap 'cleanup "$work"' EXIT

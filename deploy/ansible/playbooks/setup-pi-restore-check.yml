@@ -43,6 +43,12 @@
     pi_restore_check_tier0_max_age_h: 30
     # the recovery's wait, 5 s a poll: an hour
     pi_restore_check_pg_wait_polls: 720
+    # room a run needs before it starts: production's Postgres volume (20Gi) and the etcd and tier-0 copies, with margin
+    pi_restore_check_min_free_gb: 30
+    # each container's memory (podman runs them outside the unit's cgroup) and the unit's own (the throwaway Consul,
+    # the scratch Postgres): the Pi's 8 GB serves Vault, Consul and Patroni first
+    pi_restore_check_container_memory: 1536m
+    pi_restore_check_unit_memory: 1G
     pi_restore_check_work: /var/lib/pi-restore-check
   tasks:
     # podman for production's own images (host network or none: it never adds a network or a firewall rule); rclone
@@ -82,6 +88,7 @@
         mode: '0600'
         content: |
           STORE_ENDPOINT=http://{{ keepalived_vip }}:9000
+          RCLONE_CONFIG=
           RCLONE_CONFIG_STORE_TYPE=s3
           RCLONE_CONFIG_STORE_PROVIDER=Other
           RCLONE_CONFIG_STORE_ENDPOINT=http://{{ keepalived_vip }}:9000
@@ -102,6 +109,8 @@
           PI_RESTORE_TIER0_MAX_AGE_H={{ pi_restore_check_tier0_max_age_h }}
           PI_RESTORE_PG_WAIT_POLLS={{ pi_restore_check_pg_wait_polls }}
           PI_RESTORE_WORK={{ pi_restore_check_work }}
+          PI_RESTORE_MIN_FREE_GB={{ pi_restore_check_min_free_gb }}
+          PI_RESTORE_CONTAINER_MEMORY={{ pi_restore_check_container_memory }}
       no_log: true
 
     - name: The check's script
@@ -127,7 +136,7 @@
             ExecStart=/usr/local/sbin/pi-restore-check.sh
             # the Pi's own services come first
             Nice=10
-            IOSchedulingClass=idle
+            MemoryMax={{ pi_restore_check_unit_memory }}
             # a hung run must not block the next turn
             TimeoutStartSec=3h
         - name: pi-restore-check.timer

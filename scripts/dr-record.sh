@@ -46,4 +46,4 @@ if ! out="$(kubectl --context "$PROD_CTX" -n schnappy-infra exec deploy/schnappy
   exit 1
 fi
 echo "$out" | grep -m1 'HTTP/' || true
-echo ">> Recorded restore_verify_success=1 (job=dr-drill); RestoreVerificationFailing reset."
+echo ">> Recorded restore_verify_success=1 (job=dr-drill) - a record only: the Pis' daily restore check is what alerts."

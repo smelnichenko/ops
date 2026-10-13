@@ -61,7 +61,7 @@
       ansible.builtin.command: "{{ as_unit }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh"
       register: _run
       changed_when: true
-      failed_when: false
+      failed_when: false  # its rc asserted below, with what it left
 
     - name: The run's output
       ansible.builtin.debug:
@@ -130,7 +130,7 @@
         label: "{{ item.name }}"
       register: _faults
       changed_when: true
-      failed_when: false
+      failed_when: false  # each rc asserted below
 
     - name: Pi2's last-success after them
       ansible.builtin.shell:
@@ -144,7 +144,8 @@
     - name: Each red alone, the other parts restored, no last-success
       ansible.builtin.assert:
         that:
-          - item.rc == 1
+          # consul lock -child-exit-code: 2 when the run under it failed
+          - item.rc != 0
           - item.stdout is search(item.item.red ~ ' FAILED:')
           - (item.stdout | regex_findall('^[A-Z0-9]+ OK:', multiline=True) | length) == 2
           - "item.stdout is search('PI RESTORE CHECK [0-9TZ]+ FAILED: ' ~ item.item.red)"
@@ -157,6 +158,58 @@
       ansible.builtin.assert:
         that: "_pi2_success.stdout == 'none'"
         fail_msg: "pi2's last-success: {{ _pi2_success.stdout }}"
+
+- name: Pi2 - a run killed mid-restore, its leftovers cleared by the next
+  hosts: pi2
+  become: true
+  gather_facts: false
+  vars:
+    containers: "podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -c '^pi-restore-' || true"
+  tasks:
+    - name: A run started, killed (SIGKILL - its EXIT trap never runs) once its restored Postgres is up
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          systemd-run --quiet --unit=pi-restore-killed --collect -p EnvironmentFile=/etc/pi-restore-check/env \
+            /usr/bin/env PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
+          for i in $(seq 150); do
+            podman ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -q '^pi-restore-pg-' && break
+            [ "$i" != 150 ] || { echo "no restored Postgres within 5 minutes"; exit 1; }
+            sleep 2
+          done
+          systemctl kill -s KILL pi-restore-killed.service
+          for i in $(seq 30); do systemctl is-active -q pi-restore-killed.service || break; sleep 1; done
+          echo "left=$(find /var/lib/pi-restore-check -mindepth 1 -maxdepth 1 | wc -l) $(( $({{ containers }}) ))"
+      register: _killed
+      changed_when: true
+
+    - name: The kill left its directory and its container
+      ansible.builtin.assert:
+        that: _killed.stdout_lines[-1] is match('left=[1-9][0-9]* [1-9]')
+        fail_msg: "{{ _killed.stdout_lines }}"
+
+    - name: The next run, as its unit runs it (the lock waits out the killed run's session)
+      ansible.builtin.command: "{{ as_unit }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh"
+      vars:
+        as_unit: systemd-run --quiet --wait --pipe --collect -p EnvironmentFile=/etc/pi-restore-check/env /usr/bin/env
+      register: _next
+      changed_when: true
+      failed_when: false  # its rc and what it left asserted below
+
+    - name: What is left after it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "echo \"$(find /var/lib/pi-restore-check -mindepth 1 -maxdepth 1 | wc -l) $(( $({{ containers }}) ))\""
+      register: _left
+      changed_when: false
+
+    - name: Green, the killed run's directory and containers gone
+      ansible.builtin.assert:
+        that:
+          - _next.rc == 0
+          - _left.stdout == '0 0'
+        fail_msg: "{{ _next.stdout_lines + [_left.stdout] }}"
 
 - name: Both Pis - the timer on, opposite days
   hosts: pis

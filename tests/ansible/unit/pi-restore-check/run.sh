@@ -57,6 +57,7 @@ echo "podman $*" >> "$W/calls"
 cmd=$1; shift
 case "$cmd" in
   pull) exit 0 ;;
+  ps) cat "$W/leftover-containers" 2> /dev/null; exit 0 ;;
   rm|logs) [ "$cmd" = logs ] && echo "LOG: recovery stopped"; exit 0 ;;
   inspect) echo "${PG_RUNNING:-true}"; exit 0 ;;
   run)
@@ -65,6 +66,7 @@ case "$cmd" in
       case "$1" in
         -v) vol=${2%%:*}; shift ;; --entrypoint) ep=$2; shift ;; -d) detach=1 ;;
         --name|--network|--user|-e) shift ;; --rm) ;;
+        --memory) echo "memory $2" >> "$W/memory"; shift ;;
         *) break ;;
       esac
       shift
@@ -139,7 +141,8 @@ chmod +x "$W/bin"/*
 
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
-  rm -rf "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start"
+  rm -rf "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
+    "$W/leftover-containers"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
@@ -182,7 +185,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H=26 PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
-    PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" "$@" bash "$SCRIPT" > "$W/out" 2>&1
+    PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m "$@" bash "$SCRIPT" > "$W/out" 2>&1
   echo "rc=$?"
 }
 agents() {  # the throwaway Consul agents (the stub's sleep 120) still running
@@ -230,6 +233,20 @@ check "  the store written under restore-checks/pi1/ only (and the bucket made),
   "mkdir store:restore-checks,rcat store:restore-checks/pi1/last-report,rcat store:restore-checks/pi1/last-success"
 check "  the work directory gone, the containers removed, the throwaway Consul stopped" \
   "$(ls "$W/work" | wc -l) $(grep -c '^podman rm -f' "$W/calls") $(agents)" "0 2 0"
+
+check "  every container memory-bounded (podman runs them outside the unit's cgroup)" \
+  "$(( $(grep -c '^podman run' "$W/calls") - $(wc -l < "$W/memory") )) $(sort -u "$W/memory")" "0 memory 1536m"
+
+# a run killed (SIGKILL, a reboot) left its directory and containers: the next run clears them first
+store
+mkdir -p "$W/work/run.KILLED/pg/pgdata"
+printf 'pi-restore-pg-4242\npi-restore-etcd-4242\nsomething-else\n' > "$W/leftover-containers"
+check "a killed run's leftovers: its directory and its containers removed before the run, nothing else" \
+  "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f pi-restore-(pg|etcd)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
+  "rc=0 0 1 0"
+store
+check "too little room for a restore: none started, red" \
+  "$(run PI_RESTORE_MIN_FREE_GB=999999) $(grep -c 'no restore' "$W/out") $(grep -c '^podman run' "$W/calls" || true)" "rc=1 1 0"
 
 store
 check "not this Pi's day: nothing done" \

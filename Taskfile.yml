@@ -1180,7 +1180,7 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-backups.yml
 
   test:pi-restore-check:
-    desc: "Vagrant: the Pis' restore check (setup-pi-restore-check.yml) on store contents made for it - a CNPG-format base backup and WAL, an etcd snapshot, the Pis' tier-0 backup - green; each part red on a backup gone, stale or unrestorable"
+    desc: "Vagrant: the Pis' restore check (setup-pi-restore-check.yml) against the copy's real backups - its CNPG base backups and WAL, its etcd snapshots, the Pis' tier-0 backup (one taken first) - green on pi1, nothing left behind, nothing archived; on pi2 a stale etcd snapshot and a missing database each red alone; a killed run's leftovers cleared by the next"
     deps: [deploy:install]
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-restore-check.yml
