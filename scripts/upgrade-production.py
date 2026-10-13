@@ -71,6 +71,7 @@ import socket
 import sys
 import tempfile
 import termios
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -461,6 +462,80 @@ def excluded_namespaces():
     return " ".join([TEST_NAMESPACES, *(n for n in names if re.search(PREVIEW_NAMESPACES, n))])
 
 
+HELPER_POD = "helper-pod-"  # the local-path provisioner's: a CI pipeline's workspace volume made and removed (busybox)
+
+
+def helper_state():
+    """The local-path provisioner's helper pods running on ten, and its events about them ((name, time, count) each) -
+    None when not read."""
+    out = ten("kubectl -n local-path-storage get pods,events -o json --request-timeout=30s", check=False)
+    if out.returncode:
+        return None
+    items = json.loads(out.stdout or "{}").get("items", [])
+    running = sorted(o["metadata"]["name"] for o in items
+                     if o.get("kind") == "Pod" and o["metadata"]["name"].startswith(HELPER_POD))
+    seen = {((o.get("involvedObject") or {}).get("name"), o.get("lastTimestamp") or o.get("eventTime"), o.get("count"))
+            for o in items if o.get("kind") == "Event"
+            and ((o.get("involvedObject") or {}).get("name") or "").startswith(HELPER_POD)}
+    return running, seen
+
+
+def ci_quiet_read(read, tries=5, wait_s=900, poll=5, sleep=time.sleep, clock=time.monotonic):
+    """read() - ten's inventory - while no CI helper pod runs: their busybox is no step's image, yet one caught by the
+    inventory failed a done (2026-10-13, 03:56 and 18:16). Waited for (up to wait_s), and read again when a helper ran
+    meanwhile (a new event about one): one lives some 20 s, at a pipeline's start and end. Helpers not read: refused."""
+    for _ in range(tries):
+        end = clock() + wait_s
+        while True:
+            state = helper_state()
+            if state is None:
+                sys.exit("REFUSED: ten's local-path helper pods not read - the inventory waits for none to run")
+            if not state[0]:
+                break
+            if clock() >= end:
+                sys.exit(f"REFUSED: CI's helper pods still run after {wait_s} s ({', '.join(state[0])})")
+            print(f"waiting for CI's helper pods to end before the inventory: {', '.join(state[0])}")
+            sleep(poll)
+        out = read()
+        after = helper_state()
+        if after is not None and not after[0] and not after[1] - state[1]:
+            return out
+        print("a CI helper pod ran while the inventory was read - read again")
+    sys.exit(f"REFUSED: a CI helper pod ran during each of {tries} inventory reads")
+
+
+def finished_job_hints(extra, jobs=None):
+    """Each image line production has beyond the expected inventory that a finished Job (Complete or Failed, no
+    CronJob's) carries: the inventory lists every such Job's template, and Velero keeps its maintenance Jobs for hours
+    with the image they ran - after its upgrade too (10-velero, 2026-10-13). Named with its delete. `jobs`: kubectl's
+    get jobs -A -o json (read on ten without)."""
+    want = {l for l in extra if l.startswith("image ")}
+    if not want:
+        return []
+    if jobs is None:
+        out = ten("kubectl get jobs -A -o json --request-timeout=60s", check=False)
+        if out.returncode:
+            return [f"the Jobs not read: {out.stderr.strip()}"]
+        jobs = json.loads(out.stdout)
+    hints = []
+    for o in jobs.get("items", []):
+        meta = o["metadata"]
+        if any(r.get("kind") == "CronJob" for r in meta.get("ownerReferences") or []):
+            continue
+        done = [c["type"] for c in (o.get("status") or {}).get("conditions") or []
+                if c.get("type") in ("Complete", "Failed") and c.get("status") == "True"]
+        if not done:
+            continue
+        spec = o["spec"]["template"]["spec"]
+        for c in spec.get("containers", []) + spec.get("initContainers", []):
+            ref = c["image"].split("@")[0]
+            name, tag = ref.rsplit(":", 1) if ":" in ref.split("/")[-1] else (ref, "latest")
+            if f"image {name} {tag}" in want:
+                hints.append(f"{meta['namespace']}/{meta['name']} ({done[0]}) still carries image {name} {tag} - "
+                             f"kubectl delete job -n {meta['namespace']} {meta['name']}")
+    return sorted(set(hints))
+
+
 def inventory_check(applied, test_images=()):
     """ten's and the Pis' inventory (the test environment and open preview environments left out, the test
     environment listed apart) against production's with the given steps applied; `test_images` ("<name> <tag>", a
@@ -475,7 +550,8 @@ def inventory_check(applied, test_images=()):
         with open(expected, "w") as f:
             f.write("\n".join(sorted(inv.expected(applied))) + "\n")
         script = open(os.path.join(OPS, "scripts", "version-inventory.sh")).read()
-        lines = ten(f"INVENTORY_EXCLUDE_NAMESPACES={shlex.quote(excluded_namespaces())} bash -s", stdin=script).stdout
+        lines = ci_quiet_read(lambda: ten(f"INVENTORY_EXCLUDE_NAMESPACES={shlex.quote(excluded_namespaces())} bash -s",
+                                          stdin=script).stdout)
         pi_script = open(os.path.join(OPS, "scripts", "version-inventory-pi.sh")).read()
         for pi in PIS:
             out = remote(pi, "sudo -n bash -s", pi_script)
@@ -490,8 +566,13 @@ def inventory_check(applied, test_images=()):
         missing = [t for t in test_images if f"image {t}" not in apart.splitlines()]
         for t in missing:
             print(f"TEST ENVIRONMENT: not running {t} (the step's test-image line)")
-        return not missing and run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
+        same = run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
                     os.path.join(inv.UPGRADE, "prod-transient.txt")]).returncode == 0
+        if not same:
+            extra = set(open(now).read().splitlines()) - set(open(expected).read().splitlines())
+            for h in finished_job_hints(sorted(extra)):
+                print(f"FINISHED JOB: {h}")
+        return not missing and same
     finally:
         for path in (expected, now):
             os.remove(path)
@@ -1347,6 +1428,11 @@ def preview(step):
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
                           done=applied_steps(events)) + merged_live_problems(step, info["branches"]))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
+    # root's Helm repository indexes on ten (the playbooks' Helm runs as root) refreshed first: check mode skips the
+    # playbooks' own refresh, and an install then asks the index as it was - 11-cilium's (2026-10-13) was April's
+    out = ten("sudo -n helm repo update", check=False)
+    print("\n".join(l for l in (out.stdout + out.stderr).splitlines() if "update from" in l or "Error" in l)
+          or f"helm repo update: rc {out.returncode}")
     refuse([] if host_work([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
 
