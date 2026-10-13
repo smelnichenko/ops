@@ -280,6 +280,10 @@ rm -f "$W/rm-refused"
 check "a killed run's container refusing every removal: said, and the run goes on green" \
   "$(run RM_REFUSES=always) $(grep -c "a killed run's container pi-restore-pg-4242 not removed now" "$W/out")" "rc=0 1"
 store
+touch "$W/not-a-directory"
+check "an early failure (its work directory cannot be made): red, and its line named - no run ends without a word" \
+  "$(run PI_RESTORE_WORK="$W/not-a-directory/work") $(grep -c 'PI RESTORE CHECK: failed at line [0-9]' "$W/out")" "rc=1 1"
+store
 check "too little room for a restore: none started, red" \
   "$(run PI_RESTORE_MIN_FREE_GB=999999) $(grep -c 'no restore' "$W/out") $(grep -c '^podman run' "$W/calls" || true)" "rc=1 1 0"
 
