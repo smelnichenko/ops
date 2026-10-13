@@ -68,6 +68,10 @@
     node_exporter_bind: "{{ node_ip_override | default('192.168.11.2') }}"
     node_exporter_archive_name: "node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
     node_exporter_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/{{ node_exporter_archive_name }}"
+    # the pseudo filesystems and every pod's volume (kubelet) and container root (containerd): mounts that come and go
+    # with the pods, on the disk / already reports
+    node_exporter_mount_points_exclude: >-
+      ^/(dev|proc|sys|run/credentials/.+|run/containerd/.+|run/netns/.+|var/lib/kubelet/.+|var/lib/containerd/.+)($|/)
 
   tasks:
     - name: Detect EFI firmware (efi_pstore is a no-op without it)
@@ -606,7 +610,7 @@
           # and Cilium's one veth a pod (lxc*): series that come and go with every pod, preview environments' too
           ExecStart=/usr/local/bin/node_exporter \
             --web.listen-address={{ node_exporter_bind }}:{{ node_exporter_port }} \
-            --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run/credentials/.+|run/containerd/.+|run/netns/.+|var/lib/kubelet/.+|var/lib/containerd/.+)($|/) \
+            --collector.filesystem.mount-points-exclude={{ node_exporter_mount_points_exclude }} \
             --collector.netdev.device-exclude=^lxc \
             --collector.netclass.ignored-devices=^lxc
           Restart=on-failure
