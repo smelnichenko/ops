@@ -75,7 +75,8 @@
           {{ store_env }}
           echo "containers=$(podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -c '^pi-restore-' || true)"
           echo "work=$(find "$PI_RESTORE_WORK" -mindepth 1 -maxdepth 1 | wc -l)"
-          echo "agents=$(pgrep -fc 'consul agent -dev -node=restore-check' || true)"
+          # (by the process's own name: a pattern on the whole command line also counts this shell, which holds it)
+          echo "agents=$(ps -eo comm=,args= | awk '$1 == "consul" && /-node=restore-check/' | wc -l)"
           echo "success=$(rclone cat store:restore-checks/pi1/last-success)"
           echo "report=$(rclone cat store:restore-checks/pi1/last-report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')"
           echo "timelines-same=$([ "$({{ history }})" = '{{ _hist_before.stdout }}' ] && echo yes || echo no)"
