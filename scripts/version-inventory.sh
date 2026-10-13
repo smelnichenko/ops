@@ -55,8 +55,7 @@ for a in json.load(sys.stdin)["items"]:
   # each CronJob's template, each Job no CronJob owns. A finished pod runs nothing, like a removed package: a CronJob
   # keeps its last runs' pods for hours, with the image they ran - after its image moves too. A CI pipeline's pods are
   # not the node's: Woodpecker's own (wp-...) and the local-path provisioner's helper pods that make and remove each
-  # pipeline's workspace volume (helper-pod-..., busybox, seconds each). A Job that has finished (Complete or Failed)
-  # runs nothing either: Velero keeps its maintenance Jobs for hours, with the image they ran - after its upgrade too.
+  # pipeline's workspace volume (helper-pod-..., busybox, seconds each).
   kubectl get pods,cronjobs,jobs -A -o json \
     | python3 -c 'import json,os,sys
 ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY_ONLY_NAMESPACES"].split()
@@ -73,8 +72,6 @@ for o in json.load(sys.stdin)["items"]:
         spec=o["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     else:
         if any(r["kind"]=="CronJob" for r in meta.get("ownerReferences",[])): continue
-        if any(c.get("type") in ("Complete","Failed") and c.get("status")=="True"
-               for c in (o.get("status") or {}).get("conditions") or []): continue
         spec=o["spec"]["template"]["spec"]
     for c in spec.get("containers",[])+spec.get("initContainers",[]):
         img=c["image"].split("@")[0]
