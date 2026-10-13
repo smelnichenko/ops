@@ -289,10 +289,15 @@ if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   PI_RESTORE_LOCKED=1 exec consul lock -child-exit-code -timeout=30m pi-restore-check "$0"
 fi
 
+# an early failure here names its line: no run ends without a word
+trap 'echo "PI RESTORE CHECK: failed at line $LINENO" >&2' ERR
 mkdir -p "$PI_RESTORE_WORK"
 # what a killed run left (SIGKILL past the unit's timeout, a reboot - its EXIT trap never ran): its containers and its
 # directory, before this run takes the room. Under the lock, so never a running one's
-podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; } | xargs -r podman rm -f -t 0 > /dev/null
+# (one still being torn down after the kill may refuse: said, and the run goes on - it takes memory, not the check's
+# names, which are this run's own)
+podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; } \
+  | xargs -r podman rm -f -t 0 > /dev/null || echo "PI RESTORE CHECK: a killed run's container not removed now" >&2
 rm -rf "$PI_RESTORE_WORK"/run.*
 # room for a restore: a full disk on a Pi stops Vault, Consul and Patroni with it
 free_gb=$(( $(df --output=avail -k "$PI_RESTORE_WORK" | tail -1) / 1024 / 1024 ))

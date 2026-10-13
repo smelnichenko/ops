@@ -211,7 +211,7 @@
         that:
           - _next.rc == 0
           - _left.stdout == '0 0'
-        fail_msg: "{{ _next.stdout_lines + [_left.stdout] }}"
+        fail_msg: "{{ _next.stdout_lines + _next.stderr_lines + [_left.stdout] }}"
 
 - name: Both Pis - the timer on, opposite days
   hosts: pis

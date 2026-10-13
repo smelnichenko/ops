@@ -59,7 +59,11 @@ case "$cmd" in
   pull) [ -z "${PULL_FAIL:-}" ] || { echo "Error: initializing source: pinging container registry: i/o timeout" >&2; exit 125; }; exit 0 ;;
   image) if [ "$1" = exists ] && [ -n "${IMAGE_MISSING:-}" ]; then exit 1; fi; exit 0 ;;
   ps) cat "$W/leftover-containers" 2> /dev/null; exit 0 ;;
-  rm|logs) [ "$cmd" = logs ] && echo "LOG: recovery stopped"; exit 0 ;;
+  rm|logs)
+    [ "$cmd" = logs ] && echo "LOG: recovery stopped"
+    # RM_REFUSES: a container still being torn down refuses its removal
+    if [ "$cmd" = rm ] && [ -n "${RM_REFUSES:-}" ] && [[ "$*" == *4242* ]]; then echo "Error: cannot remove: container state improper" >&2; exit 2; fi
+    exit 0 ;;
   inspect) case "$*" in *pi-restore-etcd-*) echo "${ETCD_RUNNING:-true}" ;; *) echo "${PG_RUNNING:-true}" ;; esac; exit 0 ;;
   run)
     vol=""; ep=""; detach=""
@@ -259,6 +263,10 @@ printf 'pi-restore-pg-4242\npi-restore-etcd-4242\nsomething-else\n' > "$W/leftov
 check "a killed run's leftovers: its directory and its containers removed before the run, nothing else" \
   "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|etcd)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
   "rc=0 0 1 0"
+store
+printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
+check "a killed run's container refusing its removal: said, and the run goes on green" \
+  "$(run RM_REFUSES=1) $(grep -c "a killed run's container not removed now" "$W/out")" "rc=0 1"
 store
 check "too little room for a restore: none started, red" \
   "$(run PI_RESTORE_MIN_FREE_GB=999999) $(grep -c 'no restore' "$W/out") $(grep -c '^podman run' "$W/calls" || true)" "rc=1 1 0"
