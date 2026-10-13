@@ -110,7 +110,9 @@ INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
 ORIGIN_MAIN = "origin/main"
 BRANCH = "upgrade/"  # + step: a step's branch in infra and platform
 MERGED_TAG = "upgrade-merged/"  # + step: the tag a production merge leaves (scripts/upgrade-merge-step.sh)
-PROVEN_PATHS = ("deploy", "scripts", "tests", "Taskfile.yml", "Vagrantfile")
+# git pathspecs: the unit tests are left out - they test the scripts, no step runs them, so one fixed during a rollout
+# changes nothing a proof covers
+PROVEN_PATHS = ("deploy", "scripts", "tests", ":(exclude)tests/ansible/unit", "Taskfile.yml", "Vagrantfile")
 # the app images the full run ran: production's values with these tags over them (the Vagrant overlay)
 APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
 APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "infra", APP_VALUES.replace(

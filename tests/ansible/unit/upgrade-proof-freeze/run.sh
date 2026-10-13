@@ -1,14 +1,16 @@
 #!/bin/bash
 # What production refuses as changed since the full run's proof (scripts/upgrade-production.py unproven_changes): the
 # whole tree the proof covers - playbooks, every step file, the inventories and allow-lists, the scripts that judge a
-# step green - but for the committed steps' playbook default lines. In a throwaway ops repo with the real scripts.
+# step green - but for the committed steps' playbook default lines, and the unit tests (tests/ansible/unit: they test
+# the scripts, nothing runs them in a step). In a throwaway ops repo with the real scripts.
 set -u
 src=$(cd "$(dirname "$0")/../../../.." && pwd)
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 o=$W/ops
-mkdir -p "$o/scripts" "$o/deploy/ansible/playbooks" "$o/tests/ansible/upgrade/steps" "$o/docs"
+mkdir -p "$o/scripts" "$o/deploy/ansible/playbooks" "$o/tests/ansible/upgrade/steps" "$o/docs" "$o/tests/ansible/unit/t" \
+  "$o/tests/ansible/units"
 for f in upgrade-production.py upgrade-defaults.py upgrade-expected-inventory.py; do
   cp "$src/scripts/$f" "$o/scripts/"
 done
@@ -21,6 +23,8 @@ printf '# committed steps\n' > "$o/tests/ansible/upgrade/defaults-committed.txt"
 printf 'image a 1\n' > "$o/tests/ansible/upgrade/prod-inventory.txt"
 printf '#!/bin/sh\n' > "$o/scripts/inventory-diff.sh"
 printf 'notes\n' > "$o/docs/n.md"
+printf '#!/bin/sh\n' > "$o/tests/ansible/unit/t/run.sh"
+printf 'x\n' > "$o/tests/ansible/units/data.txt"
 cp "$src/.gitignore" "$o/.gitignore"  # as ops ignores them (bytecode, .upgrade/)
 git -C "$o" init -q -b main && git -C "$o" add -A && git -C "$o" commit -q -m proven
 proven=$(git -C "$o" rev-parse HEAD)
@@ -69,6 +73,14 @@ check("an untracked script", m.unproven_changes(proven, []), ["scripts/new-judge
 reset()
 edit("docs/n.md", "more\n")
 check("docs are not proven", m.unproven_changes(proven, []), [])
+reset()
+edit("tests/ansible/unit/t/run.sh", "echo more\n")
+os.makedirs(os.path.join(o, "tests/ansible/unit/new"))
+edit("tests/ansible/unit/new/run.sh", "#!/bin/sh\n")
+check("a unit test edited, one added: not proven", m.unproven_changes(proven, []), [])
+edit("tests/ansible/units/data.txt", "y\n")
+check("  a path that only starts like it (tests/ansible/units): proven", m.unproven_changes(proven, []),
+      ["tests/ansible/units/data.txt"])
 reset()
 # the defaults phase: --apply the next step only, its lines and the record; the proof check excuses exactly those
 check("--apply out of order refuses", defaults("--apply", "03-c").returncode, 1)
