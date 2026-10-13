@@ -280,6 +280,7 @@
     # ================================================================
 
     - name: Add vmware-tanzu Helm repo
+      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: vmware-tanzu
         repo_url: https://vmware-tanzu.github.io/helm-charts
