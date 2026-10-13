@@ -155,23 +155,29 @@ part_etcd() {
   # gone when this part ends, its memory free before the next part starts (the run's cleanup removes it on a kill)
   # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
   trap "podman rm -f -t 0 $name > /dev/null 2>&1 || true" EXIT
-  local i ns=0
+  # the namespaces, read once etcd serves (it elects itself first): kube-system among them. One read - judged on what it
+  # returned (a second query on its own once failed with nothing to show)
+  local i ns=0 keys=""
   for i in $(seq "$PI_RESTORE_ETCD_WAIT_POLLS"); do
     if [ "$(podman inspect -f '{{.State.Running}}' "$name")" != true ]; then
       podman logs --tail 30 "$name" 2>&1 || true
       echo "$snap: etcd stopped on the restored data"; return 1
     fi
-    ns=$(podman exec "$name" etcdctl --endpoints http://127.0.0.1:2379 get /registry/namespaces/ --prefix --keys-only 2> /dev/null \
-      | grep -c '^/registry/namespaces/' || true)
+    keys=$(podman exec "$name" etcdctl --endpoints http://127.0.0.1:2379 get /registry/namespaces/ --prefix --keys-only 2>&1 \
+      || true)
+    ns=$(grep -c '^/registry/namespaces/' <<< "$keys" || true)
     [ "$ns" -gt 0 ] && break
     sleep 2
   done
   if [ "$ns" -eq 0 ]; then
     podman logs --tail 30 "$name" 2>&1 || true
+    echo "$keys" | tail -5
     echo "$snap: etcd on the restored data served no namespace within $(( PI_RESTORE_ETCD_WAIT_POLLS * 2 )) s"; return 1
   fi
-  podman exec "$name" etcdctl --endpoints http://127.0.0.1:2379 get /registry/namespaces/kube-system --keys-only \
-    | grep -qx /registry/namespaces/kube-system || { echo "$snap: restored, but no kube-system namespace in it"; return 1; }
+  if ! grep -qx /registry/namespaces/kube-system <<< "$keys"; then
+    grep '^/registry/namespaces/' <<< "$keys" | head -30
+    echo "$snap: restored, but no kube-system namespace in it"; return 1
+  fi
   echo "ETCD OK: $snap ($age h old; $status) restored, $ns namespaces in it, kube-system among them"
 }
 

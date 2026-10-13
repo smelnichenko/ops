@@ -97,8 +97,9 @@ case "$cmd" in
         # pg_dump 15+ fsyncs its file: /dev/null takes none (found on the Vagrant copy)
         case "$*" in *--no-sync*) ;; *) echo 'pg_dump: error: could not fsync file "/dev/null": Invalid argument' >&2; exit 1 ;; esac
         [ -z "${DUMP_FAIL:-}" ] || { echo "pg_dump: error: could not read block 3" >&2; exit 1; } ;;
-      *"get /registry/namespaces/ --prefix"*) [ -n "${ETCD_SILENT:-}" ] || printf '/registry/namespaces/default\n/registry/namespaces/kube-system\n' ;;
-      *"get /registry/namespaces/kube-system"*) [ -n "${NO_KUBE_SYSTEM:-}" ] || echo /registry/namespaces/kube-system ;;
+      *"get /registry/namespaces/ --prefix"*)
+        [ -n "${ETCD_SILENT:-}" ] || printf '/registry/namespaces/default\n'
+        [ -n "${ETCD_SILENT:-}${NO_KUBE_SYSTEM:-}" ] || printf '/registry/namespaces/kube-system\n' ;;
     esac ;;
 esac
 STUB_PODMAN
