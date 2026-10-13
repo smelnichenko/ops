@@ -1,7 +1,7 @@
 ---
 # The backups restored for real, on the Pis, every day - by the two Pis in turn (UTC days: pi1 the even ones, pi2 the
 # odd ones; Consul's lock keeps two runs from ever overlapping). files/pi-restore-check.sh restores:
-#   postgres  production's CNPG cluster: the newest complete base backup, then every WAL archived after it, in
+#   postgres  production's CNPG cluster: the newest restorable base backup, then every WAL archived after it, in
 #             production's own Postgres image (podman) - replayed to the end, the newest WAL archived when the run began
 #             reached, every database of pi_restore_check_databases there and read back whole
 #   etcd      ten's newest hourly snapshot: restored (its hash checked), an etcd started on it, kube-system there
@@ -34,10 +34,11 @@
     # the etcd production runs (its etcdutl reads the snapshot)
     pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.5-0"
     # how old each backup may be: CNPG's base backups hourly (its ScheduledBackup "30 1 * * *" reads seconds first:
-    # :01:30 every hour) - a day missed is old; WAL archived at least every 5 minutes (CNPG's archive_timeout); etcd's
+    # :01:30 every hour) - the newest restorable one a day old is a day of backups that cannot be restored; etcd's
     # snapshots hourly; the Pis' own daily at 02:40
     pi_restore_check_pg_base_max_age_h: 26
-    pi_restore_check_wal_max_age_m: 60
+    # the base backups looked at for the newest restorable one: a day and more of hourly ones
+    pi_restore_check_pg_backups_looked_at: 30
     pi_restore_check_etcd_max_age_h: 3
     pi_restore_check_tier0_max_age_h: 30
     # the recovery's wait, 5 s a poll: an hour
@@ -51,14 +52,19 @@
         name: [podman, rclone]
         state: present
 
-    - name: The check's directories, root only
+    - name: The check's settings directory, root only
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: /etc/pi-restore-check
         state: directory
         mode: '0700'
-      loop:
-        - /etc/pi-restore-check
-        - "{{ pi_restore_check_work }}"
+
+    # passed through, not listed, by the restores' own users (the Pi's postgres, the Postgres image's uid 26): each run's
+    # directory under it is made by the run
+    - name: The check's work directory
+      ansible.builtin.file:
+        path: "{{ pi_restore_check_work }}"
+        state: directory
+        mode: '0711'
 
     # an empty one would leave the check failing with nothing but the unit to say why
     - name: Its credentials are all there
@@ -91,7 +97,7 @@
           {% endfor %}
           PI_RESTORE_ETCD_IMAGE={{ pi_restore_check_etcd_image }}
           PI_RESTORE_PG_BASE_MAX_AGE_H={{ pi_restore_check_pg_base_max_age_h }}
-          PI_RESTORE_WAL_MAX_AGE_M={{ pi_restore_check_wal_max_age_m }}
+          PI_RESTORE_PG_BACKUPS_LOOKED_AT={{ pi_restore_check_pg_backups_looked_at }}
           PI_RESTORE_ETCD_MAX_AGE_H={{ pi_restore_check_etcd_max_age_h }}
           PI_RESTORE_TIER0_MAX_AGE_H={{ pi_restore_check_tier0_max_age_h }}
           PI_RESTORE_PG_WAIT_POLLS={{ pi_restore_check_pg_wait_polls }}

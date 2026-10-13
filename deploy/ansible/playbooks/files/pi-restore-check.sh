@@ -2,7 +2,7 @@
 # The backups restored on a Pi, every other day - setup-pi-restore-check.yml (ops) explains it. Settings and
 # credentials from the unit's EnvironmentFile. Three parts, each run whatever the others did, each its own process
 # (a function run as an `if` condition runs with set -e off):
-#   postgres  production's CNPG cluster from the store: the newest complete base backup, every WAL archived after it,
+#   postgres  production's CNPG cluster from the store: the newest restorable base backup, every WAL archived after it,
 #             in production's own Postgres image - replayed to the end, the newest WAL archived when the run began
 #             reached, every database there and read back whole (pg_dump)
 #   etcd      ten's newest hourly snapshot: restored (its hash checked), an etcd started on it, kube-system there
@@ -34,13 +34,25 @@ part_postgres() {
     if [ -n "$b" ] && [[ "$b" > "$newest" ]]; then newest=$b; server=$s; fi
   done
   [ -n "$server" ] || { echo "no base backup in postgres-backups"; return 1; }
-  # its newest complete backup (one still being written has no status=DONE yet)
-  local info=""
-  for b in $(rclone lsf --dirs-only "store:postgres-backups/$server/base" | grep -E '^[0-9]{8}T[0-9]{6}/$' | sort -r | head -5); do
+  # every WAL segment archived (the timeline aside, as a recovery reads them), and the newest of them: the restore
+  # must reach it
+  local wals wal
+  wals=$(rclone lsf -R --files-only "store:postgres-backups/$server/wals" \
+    | awk '{ n = $0; sub(/.*\//, "", n); if (n ~ /^[0-9A-F]{24}(\.[a-z0-9]+)?$/) print substr(n, 1, 24) }' | sort -u)
+  wal=$(tail -1 <<< "$wals")
+  [ -n "$wal" ] || { echo "$server: no WAL archived"; return 1; }
+  # its newest restorable backup: complete (one still being written has no status=DONE) and its end WAL archived - an
+  # idle database leaves the newest backup's end segment unfinished, so unarchived, for as long as nothing writes. A
+  # day of hourly backups looked at: archiving stopped leaves none restorable, and the age below says so
+  local info="" end_wal
+  for b in $(rclone lsf --dirs-only "store:postgres-backups/$server/base" | grep -E '^[0-9]{8}T[0-9]{6}/$' | sort -r \
+      | head -"$PI_RESTORE_PG_BACKUPS_LOOKED_AT"); do
     info=$(rclone cat "store:postgres-backups/$server/base/${b}backup.info")
-    if grep -qx 'status=DONE' <<< "$info"; then id=${b%/}; break; fi
+    grep -qx 'status=DONE' <<< "$info" || continue
+    end_wal=$(sed -n 's/^end_wal=//p' <<< "$info")
+    if [ -n "$end_wal" ] && grep -qx "$end_wal" <<< "$wals"; then id=${b%/}; break; fi
   done
-  [ -n "$id" ] || { echo "$server: none of its 5 newest base backups is complete"; return 1; }
+  [ -n "$id" ] || { echo "$server: none of its $PI_RESTORE_PG_BACKUPS_LOOKED_AT newest base backups is restorable (complete, its end WAL archived)"; return 1; }
   local version major image
   version=$(sed -n 's/^version=//p' <<< "$info")
   major=$(( version / 10000 ))
@@ -50,18 +62,7 @@ part_postgres() {
   local age
   age=$(store_age_h "$id")
   [ "$age" -le "$PI_RESTORE_PG_BASE_MAX_AGE_H" ] \
-    || { echo "$server's newest complete base backup $id is $age h old (limit $PI_RESTORE_PG_BASE_MAX_AGE_H h)"; return 1; }
-  # the newest WAL segment archived now: the restore must reach it. Its time: archiving still going on
-  local wal wal_time
-  # (rclone prints the time in this host's zone: read back as local time)
-  IFS=';' read -r wal wal_time < <(rclone lsf -R --files-only --format pt --separator ';' "store:postgres-backups/$server/wals" \
-    | awk -F';' '{ n = $1; sub(/.*\//, "", n); if (n ~ /^[0-9A-F]{24}(\.[a-z0-9]+)?$/) print substr(n, 1, 24) ";" $2 }' \
-    | sort | tail -1)
-  [ -n "$wal" ] || { echo "$server: no WAL archived"; return 1; }
-  local wal_age_m
-  wal_age_m=$(( ($(date +%s) - $(date -d "$wal_time" +%s)) / 60 ))
-  [ "$wal_age_m" -le "$PI_RESTORE_WAL_MAX_AGE_M" ] \
-    || { echo "$server: its newest WAL $wal was archived $wal_age_m min ago (limit $PI_RESTORE_WAL_MAX_AGE_M min)"; return 1; }
+    || { echo "$server's newest restorable base backup $id is $age h old (limit $PI_RESTORE_PG_BASE_MAX_AGE_H h)"; return 1; }
   podman pull -q "$image" > /dev/null
   # the image's postgres user (CNPG's images: 26) owns the data
   chown 26:26 "$w"
@@ -113,8 +114,8 @@ part_postgres() {
     # every row read: a page the restore got wrong fails the dump
     podman exec "$name" pg_dump -h /w -U postgres --format=custom --file=/dev/null "$db"
   done
-  echo "POSTGRES OK: $server/$id (PostgreSQL $major, $image) replayed to $seg (newest archived at the start: $wal," \
-    "$wal_age_m min old); databases $PI_RESTORE_PG_DATABASES each read back whole"
+  echo "POSTGRES OK: $server/$id (PostgreSQL $major, $image) replayed to $seg (newest archived at the start: $wal);" \
+    "databases $PI_RESTORE_PG_DATABASES each read back whole"
 }
 
 part_etcd() {
@@ -229,7 +230,7 @@ if [ "${1:-}" = --part ]; then
 fi
 
 : "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
-: "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_WAL_MAX_AGE_M:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
+: "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
 : "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}"
 
 if [ -z "${PI_RESTORE_LOCKED:-}" ]; then

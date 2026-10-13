@@ -138,24 +138,28 @@ utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
   rm -rf "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start"
   local S=$W/store pg=$W/store/postgres-backups
-  # an old server (a rename ago) and production's: three base backups, the newest still being written
+  # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
+  # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
+  # segments 25-27 archived
   mkdir -p "$pg/schnappy-postgres/base/20260410T140130"
-  echo status=DONE > "$pg/schnappy-postgres/base/20260410T140130/backup.info"
-  local b
+  printf 'status=DONE\nend_wal=000000010000000000000001\n' > "$pg/schnappy-postgres/base/20260410T140130/backup.info"
+  local b end
   for h in 3 2 1; do
     b=$(utc "-$h hours" +%Y%m%dT%H0130)
     mkdir -p "$pg/schnappy-production-postgres/base/$b"
-    printf 'version=%s\nstatus=%s\n' "${PG_VERSION:-170004}" "$([ "$h" = 1 ] && echo STARTED || echo DONE)" \
+    end=000000030000001D000000$(( 28 - h ))
+    if { [ "$h" = 2 ] && [ -n "${END_MISSING:-}" ]; } || [ -n "${NONE_RESTORABLE:-}" ]; then end=000000030000001D00000099; fi
+    printf 'version=%s\nstatus=%s\nend_wal=%s\n' "${PG_VERSION:-170004}" "$([ "$h" = 1 ] && echo STARTED || echo DONE)" "$end" \
       > "$pg/schnappy-production-postgres/base/$b/backup.info"
   done
   if [ -n "${BASE_OLD:-}" ]; then
     rm -rf "$pg/schnappy-production-postgres/base/"*
     b=$(utc "-30 hours" +%Y%m%dT%H0130); mkdir -p "$pg/schnappy-production-postgres/base/$b"
-    printf 'version=170004\nstatus=DONE\n' > "$pg/schnappy-production-postgres/base/$b/backup.info"
+    printf 'version=170004\nstatus=DONE\nend_wal=000000030000001D00000025\n' > "$pg/schnappy-production-postgres/base/$b/backup.info"
   fi
   mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001D"
-  for s in 25 26 27; do touch -d "${WAL_AGE:--3 minutes}" "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D000000$s.gz"; done
-  touch -d "-1 minute" "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D00000027.00000060.backup.gz"
+  for s in 25 26 27; do touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D000000$s.gz"; done
+  touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D00000027.00000060.backup.gz"
   mkdir -p "$S/etcd-backups"
   touch "$S/etcd-backups/etcd-$(utc "-${ETCD_AGE_H:-1} hours" +%Y%m%d-%H0003).db" "$S/etcd-backups/etcd-$(utc "-5 hours" +%Y%m%d-%H0003).db"
   if [ -z "${NO_TIER0:-}" ]; then
@@ -174,7 +178,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=s PI_RESTORE_NAME=pi1 PI_RESTORE_PARITY=0 PI_RESTORE_ANY_DAY=1 \
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
-    PI_RESTORE_PG_BASE_MAX_AGE_H=26 PI_RESTORE_WAL_MAX_AGE_M=60 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
+    PI_RESTORE_PG_BASE_MAX_AGE_H=26 PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" "$@" bash "$SCRIPT" > "$W/out" 2>&1
   echo "rc=$?"
 }
@@ -200,8 +204,14 @@ store
 check "every part restores: green" "$(run)" "rc=0"
 check "  last-success this run's" "$(success | grep -cE '^[0-9]{8}T[0-9]{6}Z$') $(success | grep -c 2020)" "1 0"
 check "  last-report: the three parts OK" "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')" 3
-check "  production's server (not the old one), its newest COMPLETE backup (not the one still written)" \
+check "  production's server (not the old one), its newest RESTORABLE backup (not the one still written)" \
   "$(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" "$(utc '-2 hours' +%Y%m%dT%H0130)"
+(export END_MISSING=1; store)
+check "an idle database (the newest complete backup's end segment unarchived): the backup before it restored, green" \
+  "$(run END_MISSING=1) $(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" \
+  "rc=0 $(utc '-3 hours' +%Y%m%dT%H0130)"
+store
+run > /dev/null
 check "  the newest WAL archived (not the .backup label) is what the replay had to reach" \
   "$(report | grep -oE 'newest archived at the start: [0-9A-F]+' | sed 's/.* //')" 000000030000001D00000027
 check "  production's image for its major" "$(report | grep -oE '\(PostgreSQL 17, [^)]+\)')" \
@@ -230,7 +240,7 @@ check "its day: the lock taken (consul lock), then the run" \
 
 red "postgres: a major with no image: red" POSTGRES PG_VERSION=190002
 red "postgres: the newest complete base backup 30 h old: red" POSTGRES BASE_OLD=1
-red "postgres: WAL archived last 2 h ago (archiving stopped): red" POSTGRES WAL_AGE="-2 hours"
+red "postgres: no backup restorable - every end WAL unarchived (archiving stopped): red" POSTGRES NONE_RESTORABLE=1
 red "postgres: the restore fails: red" POSTGRES PG_RESTORE_FAIL=1
 red "postgres: Postgres stops during the recovery: red" POSTGRES PG_RUNNING=false
 red "postgres: replayed short of the newest WAL archived: red" POSTGRES SEG=000000040000001D00000026
