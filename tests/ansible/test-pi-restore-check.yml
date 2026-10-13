@@ -137,7 +137,9 @@
         executable: /bin/bash
         cmd: |
           {{ store_env }}
-          rclone cat store:restore-checks/pi2/last-success 2> /dev/null || echo none
+          # (the store answers a missing object with nothing, and success)
+          s=$(rclone cat store:restore-checks/pi2/last-success 2> /dev/null || true)
+          echo "${s:-none}"
       register: _pi2_success
       changed_when: false
 

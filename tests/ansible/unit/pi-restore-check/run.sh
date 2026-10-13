@@ -56,7 +56,8 @@ cat > "$W/bin/podman" <<'STUB_PODMAN'
 echo "podman $*" >> "$W/calls"
 cmd=$1; shift
 case "$cmd" in
-  pull) exit 0 ;;
+  pull) [ -z "${PULL_FAIL:-}" ] || { echo "Error: initializing source: pinging container registry: i/o timeout" >&2; exit 125; }; exit 0 ;;
+  image) if [ "$1" = exists ] && [ -n "${IMAGE_MISSING:-}" ]; then exit 1; fi; exit 0 ;;
   ps) cat "$W/leftover-containers" 2> /dev/null; exit 0 ;;
   rm|logs) [ "$cmd" = logs ] && echo "LOG: recovery stopped"; exit 0 ;;
   inspect) case "$*" in *pi-restore-etcd-*) echo "${ETCD_RUNNING:-true}" ;; *) echo "${PG_RUNNING:-true}" ;; esac; exit 0 ;;
@@ -157,6 +158,8 @@ store() {  # a store as production's, made relative to now
     if { [ "$h" = 2 ] && [ -n "${END_MISSING:-}" ]; } || [ -n "${NONE_RESTORABLE:-}" ]; then end=000000030000001D00000099; fi
     printf 'version=%s\nstatus=%s\nend_wal=%s\n' "${PG_VERSION:-170004}" "$([ "$h" = 1 ] && echo STARTED || echo DONE)" "$end" \
       > "$pg/schnappy-production-postgres/base/$b/backup.info"
+    # NO_INFO: the 2 h one without its backup.info (barman writes it last)
+    if [ "$h" = 2 ] && [ -n "${NO_INFO:-}" ]; then rm "$pg/schnappy-production-postgres/base/$b/backup.info"; fi
   done
   if [ -n "${BASE_OLD:-}" ]; then
     rm -rf "$pg/schnappy-production-postgres/base/"*
@@ -216,6 +219,15 @@ check "  production's server (not the old one), its newest RESTORABLE backup (no
 check "an idle database (the newest complete backup's end segment unarchived): the backup before it restored, green" \
   "$(run END_MISSING=1) $(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" \
   "rc=0 $(utc '-3 hours' +%Y%m%dT%H0130)"
+(export NO_INFO=1; store)
+check "a base backup without its backup.info (still uploading): the one before it restored, green" \
+  "$(run NO_INFO=1) $(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" \
+  "rc=0 $(utc '-3 hours' +%Y%m%dT%H0130)"
+store
+check "the registry down, the images here already: green" "$(run PULL_FAIL=1)" "rc=0"
+store
+check "the registry down and an image not here: red" \
+  "$(run PULL_FAIL=1 IMAGE_MISSING=1) $(report | grep -cE '^(POSTGRES|ETCD) FAILED:')" "rc=1 2"
 store
 run > /dev/null
 check "  the newest WAL archived (not the .backup label) is what the replay had to reach" \
@@ -232,9 +244,9 @@ check "  the store written under restore-checks/pi1/ only (and the bucket made),
   "$(sed 's/^WRITE //' "$W/writes" | sort -u | paste -sd,)" \
   "mkdir store:restore-checks,rcat store:restore-checks/pi1/last-report,rcat store:restore-checks/pi1/last-success"
 check "  the work directory gone, the containers removed, the throwaway Consul stopped" \
-  "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f pi-restore-(pg|etcd)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 2 0"
+  "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f -t 0 pi-restore-(pg|etcd)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 2 0"
 check "  each part's container gone when the part ends - Postgres's before etcd's first container" \
-  "$(awk '/^podman rm -f pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls")" 1
+  "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls")" 1
 
 check "  every container memory-bounded (podman runs them outside the unit's cgroup)" \
   "$(( $(grep -c '^podman run' "$W/calls") - $(wc -l < "$W/memory") )) $(sort -u "$W/memory")" "0 memory 1536m"
@@ -244,7 +256,7 @@ store
 mkdir -p "$W/work/run.KILLED/pg/pgdata"
 printf 'pi-restore-pg-4242\npi-restore-etcd-4242\nsomething-else\n' > "$W/leftover-containers"
 check "a killed run's leftovers: its directory and its containers removed before the run, nothing else" \
-  "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f pi-restore-(pg|etcd)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
+  "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|etcd)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
   "rc=0 0 1 0"
 store
 check "too little room for a restore: none started, red" \

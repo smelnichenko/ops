@@ -15,7 +15,7 @@
 # Usage: task deploy:pi-restore-check   (production; after deploy:pi-backups - tier0 restores its backup)
 #        task test:pi-restore-check     (the Vagrant rehearsal)
 # A run by hand, today whatever the day (as the unit runs it - systemd reads the settings, never a shell):
-#   sudo systemd-run --wait --pipe --collect -p EnvironmentFile=/etc/pi-restore-check/env \
+#   sudo systemd-run --wait --pipe --collect -p RuntimeMaxSec=3h -p EnvironmentFile=/etc/pi-restore-check/env \
 #     /usr/bin/env PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
 - name: The Pis' restore check
   hosts: pis
@@ -34,9 +34,10 @@
     # the etcd production runs (its etcdutl reads the snapshot)
     pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.5-0"
     # how old each backup may be: CNPG's base backups hourly (its ScheduledBackup "30 1 * * *" reads seconds first:
-    # :01:30 every hour) - the newest restorable one a day old is a day of backups that cannot be restored; etcd's
-    # snapshots hourly; the Pis' own daily at 02:40
-    pi_restore_check_pg_base_max_age_h: 26
+    # :01:30 every hour) and the newest restorable one an hour or two behind (an idle database leaves the newest's end
+    # segment unarchived) - 12 h of none restorable is archiving stopped; etcd's snapshots hourly; the Pis' own daily
+    # at 02:40
+    pi_restore_check_pg_base_max_age_h: 12
     # the base backups looked at for the newest restorable one: a day and more of hourly ones
     pi_restore_check_pg_backups_looked_at: 30
     pi_restore_check_etcd_max_age_h: 3
@@ -132,6 +133,10 @@
             [Unit]
             Description=The backups restored on this Pi (every other day; the other Pi takes the rest)
             After=network-online.target consul.service versitygw.service
+            # a failed run tried twice more, 20 minutes apart: a blip (the VIP moving, a registry, a Consul election)
+            # is no failed turn - and a failed turn is two days of KubeJobFailed until this Pi's next one
+            StartLimitIntervalSec=6h
+            StartLimitBurst=3
             [Service]
             Type=oneshot
             EnvironmentFile=/etc/pi-restore-check/env
@@ -141,6 +146,8 @@
             MemoryMax={{ pi_restore_check_unit_memory }}
             # a hung run must not block the next turn
             TimeoutStartSec=3h
+            Restart=on-failure
+            RestartSec=20min
         - name: pi-restore-check.timer
           content: |
             [Unit]

@@ -47,7 +47,8 @@ part_postgres() {
   local info="" end_wal
   for b in $(rclone lsf --dirs-only "store:postgres-backups/$server/base" | grep -E '^[0-9]{8}T[0-9]{6}/$' | sort -r \
       | head -"$PI_RESTORE_PG_BACKUPS_LOOKED_AT"); do
-    info=$(rclone cat "store:postgres-backups/$server/base/${b}backup.info")
+    # none yet (barman writes it last), or unreadable now: not this one
+    info=$(rclone cat "store:postgres-backups/$server/base/${b}backup.info" 2> /dev/null) || continue
     grep -qx 'status=DONE' <<< "$info" || continue
     end_wal=$(sed -n 's/^end_wal=//p' <<< "$info")
     if [ -n "$end_wal" ] && grep -qx "$end_wal" <<< "$wals"; then id=${b%/}; break; fi
@@ -63,7 +64,8 @@ part_postgres() {
   age=$(store_age_h "$id")
   [ "$age" -le "$PI_RESTORE_PG_BASE_MAX_AGE_H" ] \
     || { echo "$server's newest restorable base backup $id is $age h old (limit $PI_RESTORE_PG_BASE_MAX_AGE_H h)"; return 1; }
-  podman pull -q "$image" > /dev/null
+  # a registry down is no reason to fail when the image is here already
+  podman pull -q "$image" > /dev/null || podman image exists "$image"
   # the image's postgres user (CNPG's images: 26) owns the data
   chown 26:26 "$w"
   podman run --rm --network host --memory "$PI_RESTORE_CONTAINER_MEMORY" --user 26:26 -e AWS_ACCESS_KEY_ID \
@@ -86,7 +88,7 @@ part_postgres() {
   echo "$name" >> "$1/containers"
   # gone when this part ends, its memory free before the next part starts (the run's cleanup removes it on a kill)
   # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
-  trap "podman rm -f $name > /dev/null 2>&1 || true" EXIT
+  trap "podman rm -f -t 0 $name > /dev/null 2>&1 || true" EXIT
   local i state r=""
   for i in $(seq "$PI_RESTORE_PG_WAIT_POLLS"); do
     state=$(podman inspect -f '{{.State.Running}}' "$name")
@@ -137,7 +139,7 @@ part_etcd() {
   age=$(store_age_h "${t:0:8}T${t:9:6}")
   [ "$age" -le "$PI_RESTORE_ETCD_MAX_AGE_H" ] || { echo "the newest etcd snapshot $snap is $age h old (limit $PI_RESTORE_ETCD_MAX_AGE_H h)"; return 1; }
   rclone copyto "store:etcd-backups/$snap" "$w/snap.db"
-  podman pull -q "$PI_RESTORE_ETCD_IMAGE" > /dev/null
+  podman pull -q "$PI_RESTORE_ETCD_IMAGE" > /dev/null || podman image exists "$PI_RESTORE_ETCD_IMAGE"
   local e=(podman run --rm --network none --memory "$PI_RESTORE_CONTAINER_MEMORY" -v "$w:/w" "$PI_RESTORE_ETCD_IMAGE")
   local status
   status=$("${e[@]}" etcdutl snapshot status /w/snap.db -w json)
@@ -152,7 +154,7 @@ part_etcd() {
   echo "$name" >> "$1/containers"
   # gone when this part ends, its memory free before the next part starts (the run's cleanup removes it on a kill)
   # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
-  trap "podman rm -f $name > /dev/null 2>&1 || true" EXIT
+  trap "podman rm -f -t 0 $name > /dev/null 2>&1 || true" EXIT
   local i ns=0
   for i in $(seq "$PI_RESTORE_ETCD_WAIT_POLLS"); do
     if [ "$(podman inspect -f '{{.State.Running}}' "$name")" != true ]; then
@@ -236,7 +238,8 @@ part_tier0() {
 cleanup() {  # cleanup <work>: what the parts started, then the work directory
   local w=$1 c
   if [ -f "$w/containers" ]; then
-    while read -r c; do podman rm -f "$c" > /dev/null 2>&1 || true; done < "$w/containers"
+    # -t 0: no stop wait - consul lock's SIGKILL follows its SIGTERM within seconds
+    while read -r c; do podman rm -f -t 0 "$c" > /dev/null 2>&1 || true; done < "$w/containers"
   fi
   [ ! -f "$w/consul.pid" ] || kill "$(cat "$w/consul.pid")" 2> /dev/null || true
   if [ -f "$w/scratch-pg" ]; then
@@ -244,6 +247,8 @@ cleanup() {  # cleanup <work>: what the parts started, then the work directory
       -D "$(cat "$w/scratch-pg")" -m immediate stop > /dev/null 2>&1 || true
   fi
   rm -rf "$w"
+  # the images a moved tag left behind
+  podman image prune -f > /dev/null 2>&1 || true
 }
 
 # a part: its own process, so set -e holds in it
@@ -281,7 +286,7 @@ fi
 mkdir -p "$PI_RESTORE_WORK"
 # what a killed run left (SIGKILL past the unit's timeout, a reboot - its EXIT trap never ran): its containers and its
 # directory, before this run takes the room. Under the lock, so never a running one's
-podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; } | xargs -r podman rm -f > /dev/null
+podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; } | xargs -r podman rm -f -t 0 > /dev/null
 rm -rf "$PI_RESTORE_WORK"/run.*
 # room for a restore: a full disk on a Pi stops Vault, Consul and Patroni with it
 free_gb=$(( $(df --output=avail -k "$PI_RESTORE_WORK" | tail -1) / 1024 / 1024 ))
