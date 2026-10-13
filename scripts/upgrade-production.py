@@ -13,7 +13,9 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
              (upgrade-merge-step.sh); then Argo settled on the pushed commits        -> merged <repo>, settled <repo>
              a barman-after-merge step's merge that makes its new PostgreSQL major live (or its last): then,
              asked first, a base backup on it (postgres-base-backup.yml)                              -> base-backup
-  preview    the step's playbook lines in check mode, with diffs, on the cluster the merges left        -> previewed
+  preview    the playbooks' Helm repositories refreshed on ten (root's chart index: check mode skips the playbooks'
+             own refresh); then the step's playbook lines in check mode, with diffs, on the cluster the merges left
+                                                                                                         -> previewed
   playbooks  the step's playbook lines against production                                               -> playbooks
   defaults   the step's default lines (scripts/upgrade-defaults.py) committed to ops main and pushed: a playbook
              run from now on installs what production runs                                             -> defaults
@@ -33,9 +35,11 @@ ledger: init records it done.
 The proof (record-proof, run by test:upgrade:full once the next step's deciding settle has judged the step's restarts
 too - the last step's after a final settle at production's values; proof-start at the run's start): each repo's
 branch SHA and own change (its changed lines and files against the repo's ref at the step before), the ops commit the
-run ran from - refused if deploy/, scripts/, tests/ or Taskfile.yml differ from it. Production's merge wants the same
-own change and every step up to N proven by one run; its phases want the same tree (deploy/, scripts/, tests/,
-Taskfile.yml, Vagrantfile) as that run had it, but for the committed steps' playbook defaults.
+run ran from - refused if the proven paths differ from it. Production's merge wants the same own change and every step
+up to N proven by one run; its phases want the proven paths as that run had them, but for the committed steps'
+playbook defaults. The proven paths (scripts/upgrade-rules.py, proven itself, with every other value that judges a step
+proven and green): deploy/, scripts/, tests/, Taskfile.yml, Vagrantfile - but for this controller and the unit tests,
+which a phase runs only as ops main has them (committed and pushed), so its fixes ship during a rollout.
 
 Usage: scripts/upgrade-production.py init | status
        scripts/upgrade-production.py release <step>         (a phase's open start closed - only when nothing runs)
@@ -86,27 +90,13 @@ PIS = ("sm@192.168.11.4", "sm@192.168.11.6")
 LEDGER_NAMESPACE, LEDGER_NAME = "kube-system", "upgrade-ledger"
 REPOS = ("infra", "platform")
 URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https://git.pmon.dev/schnappy/platform.git"}
-# production's test environment: not in the Vagrant copy, moved apart from production by its own steps - its images
-# are listed, not compared
-TEST_NAMESPACES = "schnappy-test"
-# a step's soak unless its soak line says otherwise - a one-way (wave0) step's too: the second done checks the same
-# things (green, the data paths, no container restarted since the first check). What it catches is a restart: a crash
-# loop (seconds) or a failing liveness probe - production's slowest to restart a container, counted from its start,
-# is 305 s (cilium, cilium-envoy, SonarQube: initial delay + period x failures + timeout, read 2026-10-13), so 5
-# minutes covers every one. Shorter would not. (Operator 2026-10-13: 60 for wave0 steps, 15, 10 - none measured - then
-# this.)
+# a step's soak unless its soak line says otherwise - a one-way (wave0) step's too. What it waits out is a restart: a
+# crash loop (seconds) or a failing liveness probe - production's slowest to restart a container, counted from its
+# start, is 305 s (cilium, cilium-envoy, SonarQube: initial delay + period x failures + timeout, read 2026-10-13). The
+# soak runs from the first green check's end, which is at least its settle (SETTLE_STABLE polls) after its start, and
+# restarts count from that start: a container started before the first check restarts before the second. A fault
+# slower than a restart is the checks' to find, not the soak's: the deciding check counts a pending critical alert red.
 SOAK_MINUTES = 5
-# Argo's settle after a merge, a step's settle line aside: longer than the longest hook a merge can start and its
-# rollout - init-users (schnappy-data's Sync hook) may take its whole deadline in a major's restarts: 2095 s (~35 min)
-# with production's 5 databases (platform cnpg-init-users.yaml, derived from them); 30 min called a hook still within
-# its bound failed (the reviews, 2026-10-12)
-SETTLE_MINUTES = 40
-# production's settle: green held SETTLE_STABLE polls SETTLE_POLL s apart, no container restarted in the last
-# SETTLE_QUIET s (CrashLoopBackOff's longest back-off) - the full run's final settle takes the same (settle-values)
-SETTLE_POLL, SETTLE_STABLE, SETTLE_QUIET = 10, 4, 300
-# preview environments come and go (an Argo app per pull request): never part of the app set a step must keep
-PREVIEW_APPS = r"^pr-\d+-"
-PREVIEW_NAMESPACES = r"^schnappy-pr-\d+$"  # ...and their pods
 # on ten, sm's: each done step's restart counts, so a pod restarting in two steps running fails the second
 RESTART_HISTORY = "$HOME/.upgrade-restart-history.json"
 WORK = os.path.join(OPS, ".upgrade")  # the runs' own files, git-ignored
@@ -115,12 +105,6 @@ INVENTORY = os.path.join(OPS, "scripts", "upgrade-expected-inventory.py")
 ORIGIN_MAIN = "origin/main"
 BRANCH = "upgrade/"  # + step: a step's branch in infra and platform
 MERGED_TAG = "upgrade-merged/"  # + step: the tag a production merge leaves (scripts/upgrade-merge-step.sh)
-# git pathspecs. Two parts are left out: the unit tests (they test the scripts, no step runs them) and this script - the
-# rollout's controller (its ledger, soak, prompts and phase order run on production only: a full run calls none of its
-# production phases, so none was ever proven by one; its unit tests hold it). What a step does and what judges it green
-# stays proven: the playbooks, step files, inventories, the other scripts, the Taskfile, the Vagrantfile.
-PROVEN_PATHS = ("deploy", "scripts", "tests", ":(exclude)tests/ansible/unit", ":(exclude)scripts/upgrade-production.py",
-                "Taskfile.yml", "Vagrantfile")
 # the app images the full run ran: production's values with these tags over them (the Vagrant overlay)
 APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
 APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "infra", APP_VALUES.replace(
@@ -130,11 +114,6 @@ BEFORE_LEDGER = "02-istio-chart-repo"
 RUN_JSON = "run.json"  # under PROVEN, joined where used (a test moves PROVEN)
 NOT_CONFIRMED = "not confirmed"
 
-# what may land on infra's or platform's main after a full run without it proving it again: what renders nothing for
-# production - CD's deploys of the test environment, CI's own files, docs, a chart's unit tests (a merged step's own
-# commits aside)
-MAIN_UNRENDERED = (r"^clusters/production/schnappy-test-apps/values\.yaml$", r"^\.woodpecker/", r"\.md$",
-                   r"^helm/[^/]+/tests/")
 
 
 def _load(name, path):
@@ -146,6 +125,13 @@ def _load(name, path):
 
 inv = _load("upgrade_expected_inventory", INVENTORY)
 dflt = _load("upgrade_defaults", os.path.join(OPS, "scripts", "upgrade-defaults.py"))
+# what judges a step proven and green - the proof's paths, the settle, the check, the environments left out, what may
+# land on main unproven: proven itself (scripts/upgrade-rules.py), not this controller's to change unproven
+rules = _load("upgrade_rules", os.path.join(OPS, "scripts", "upgrade-rules.py"))
+TEST_NAMESPACES, PREVIEW_APPS, PREVIEW_NAMESPACES = rules.TEST_NAMESPACES, rules.PREVIEW_APPS, rules.PREVIEW_NAMESPACES
+SETTLE_MINUTES, CHECK_MINUTES = rules.SETTLE_MINUTES, rules.CHECK_MINUTES
+SETTLE_POLL, SETTLE_STABLE, SETTLE_QUIET = rules.SETTLE_POLL, rules.SETTLE_STABLE, rules.SETTLE_QUIET
+PROVEN_PATHS, MAIN_UNRENDERED = rules.PROVEN_PATHS, rules.MAIN_UNRENDERED
 
 
 def ansible_now():
@@ -178,7 +164,7 @@ def step_info(name):
             "settle": settle[-1] if settle else SETTLE_MINUTES,
             "defaults": bool(dflt.default_lines(name)), "acme": "cert-renew" in flags,
             "base_backup": "barman-check" in flags, "base_backup_after_merge": "barman-after-merge" in flags,
-            "scylla_backup": "scylla-backup-check" in flags,
+            "scylla_backup": "scylla-backup-check" in flags, "velero_backup": "backup-check" in flags,
             "restarts_expected": "restarts-control-plane" in flags,
             "tempo_flush": tempo_flush, "test_images": test_images}
 
@@ -392,7 +378,15 @@ def claim_problems(step, obj):
     return [f"this run's claim on {step} was closed meanwhile (deploy:upgrade:release?)"]
 
 
-class Interrupted(BaseException):
+def image_name_tag(ref):
+    """An image reference as the inventory reads it (scripts/version-inventory.sh): its digest dropped, then its tag -
+    after the last path part's colon, "latest" without one (a registry's port is no tag)."""
+    ref = ref.split("@")[0]
+    return tuple(ref.rsplit(":", 1)) if ":" in ref.split("/")[-1] else (ref, "latest")
+
+
+# a BaseException on purpose: a phase's own `except Exception` must not swallow it
+class Interrupted(BaseException):  # NOSONAR (python:S5709)
     """A signal while the phase's work ran on ten or the Pis (host_work): that work may still run there - Ansible's
     tasks go over pipelined ssh, which signals no remote command, and a detached copy runs on by design. main() leaves
     the phase's start open: the next phase refuses until nothing runs there and the start is released."""
@@ -465,50 +459,128 @@ def excluded_namespaces():
 HELPER_POD = "helper-pod-"  # the local-path provisioner's: a CI pipeline's workspace volume made and removed (busybox)
 
 
-def helper_state():
-    """The local-path provisioner's helper pods running on ten, and its events about them ((name, time, count) each) -
-    None when not read."""
-    out = ten("kubectl -n local-path-storage get pods,events -o json --request-timeout=30s", check=False)
+def helper_state(events_first=True):
+    """The local-path provisioner's helper pods running on ten (not finished: a finished one runs nothing, and the
+    inventory skips finished pods), and its events about them ((name, time, count) each) - None when not read. Before
+    an inventory read the events are listed first: a helper created between the two lists then shows as running;
+    after it the pods first: one ending between them leaves its events. Core v1 Events only - another shape would read
+    as none and the check would silently be the running pods alone."""
+    kinds = "events,pods" if events_first else "pods,events"
+    out = ten(f"kubectl -n local-path-storage get {kinds} -o json --request-timeout=30s", check=False)
     if out.returncode:
         return None
-    items = json.loads(out.stdout or "{}").get("items", [])
+    try:
+        items = json.loads(out.stdout or "{}").get("items", [])
+    except ValueError:
+        return None
+    if any(o.get("kind") == "Event" and o.get("apiVersion") != "v1" for o in items):
+        return None
     running = sorted(o["metadata"]["name"] for o in items
-                     if o.get("kind") == "Pod" and o["metadata"]["name"].startswith(HELPER_POD))
+                     if o.get("kind") == "Pod" and o["metadata"]["name"].startswith(HELPER_POD)
+                     and (o.get("status") or {}).get("phase") not in ("Succeeded", "Failed"))
     seen = {((o.get("involvedObject") or {}).get("name"), o.get("lastTimestamp") or o.get("eventTime"), o.get("count"))
             for o in items if o.get("kind") == "Event"
             and ((o.get("involvedObject") or {}).get("name") or "").startswith(HELPER_POD)}
     return running, seen
 
 
-def ci_quiet_read(read, tries=5, wait_s=900, poll=5, sleep=time.sleep, clock=time.monotonic):
+def ci_quiet_read(read, suspect=None, tries=5, wait_s=900, poll=5, sleep=time.sleep, clock=time.monotonic):
     """read() - ten's inventory - while no CI helper pod runs: their busybox is no step's image, yet one caught by the
     inventory failed a done (2026-10-13, 03:56 and 18:16). Waited for (up to wait_s), and read again when a helper ran
-    meanwhile (a new event about one): one lives some 20 s, at a pipeline's start and end. Helpers not read: refused."""
+    meanwhile - a new event about one, or the read holding what only a helper puts there (`suspect(read)`): one lives
+    some 20 s, at a pipeline's start and end, and its events may come late. Helpers not read: refused."""
     for _ in range(tries):
-        end = clock() + wait_s
+        end, said = clock() + wait_s, None
         while True:
-            state = helper_state()
+            state = helper_state(events_first=True)
             if state is None:
                 sys.exit("REFUSED: ten's local-path helper pods not read - the inventory waits for none to run")
             if not state[0]:
                 break
             if clock() >= end:
                 sys.exit(f"REFUSED: CI's helper pods still run after {wait_s} s ({', '.join(state[0])})")
-            print(f"waiting for CI's helper pods to end before the inventory: {', '.join(state[0])}")
+            if state[0] != said:
+                print(f"waiting for CI's helper pods to end before the inventory: {', '.join(state[0])}")
+                said = state[0]
             sleep(poll)
         out = read()
-        after = helper_state()
-        if after is not None and not after[0] and not after[1] - state[1]:
+        after = helper_state(events_first=False)
+        if after is None:
+            sys.exit("REFUSED: ten's local-path helper pods not read after the inventory - it may hold a helper's image")
+        if not after[0] and not after[1] - state[1] and not (suspect and suspect(out)):
             return out
         print("a CI helper pod ran while the inventory was read - read again")
     sys.exit(f"REFUSED: a CI helper pod ran during each of {tries} inventory reads")
 
 
-def finished_job_hints(extra, jobs=None):
+def helper_image_line():
+    """The inventory line a helper pod's container makes ("image busybox latest" on ten): the provisioner's helper pod
+    template, read from its config - None when not read."""
+    out = ten("kubectl -n local-path-storage get configmap local-path-config -o json --request-timeout=30s", check=False)
+    if out.returncode:
+        return None
+    try:
+        pod = yaml.safe_load(json.loads(out.stdout)["data"]["helperPod.yaml"])
+        ref = pod["spec"]["containers"][0]["image"].split("@")[0]
+    except (ValueError, KeyError, IndexError, TypeError, yaml.YAMLError):
+        return None
+    name, tag = image_name_tag(ref)
+    return f"image {name} {tag}"
+
+
+def velero_backup_check(wait_s=900, poll=10, sleep=time.sleep, clock=time.monotonic):
+    """A backup-check step's proof that Velero still backs up (its server and plugin are paired versions; every pod can
+    be green while backups fail): one backup from production's daily schedule, its template, Valkey's pods only (the
+    same path - node-agent, kopia, the Pi store - in seconds), must end Completed with no errors and each pod volume
+    backup Completed; deleted after. The full run's tests/ansible/upgrade/backup-check.yml, on production."""
+    k = "kubectl -n velero"
+    read = lambda c: ten(f"{k} {c} --request-timeout=30s", check=False)
+    out = read("get backupstoragelocations.velero.io default -o jsonpath={.status.phase}")
+    if out.returncode or out.stdout.strip() != "Available":
+        return [f"Velero's backup storage location is not Available: {(out.stdout + out.stderr).strip()}"]
+    out = read("get schedules.velero.io velero-schnappy-daily -o json")
+    if out.returncode:
+        return [f"Velero's daily schedule not read: {out.stderr.strip()}"]
+    name = f"upgrade-check-{secrets.token_hex(4)}"
+    spec = dict(json.loads(out.stdout)["spec"]["template"], ttl="1h0m0s",
+                labelSelector={"matchLabels": {"app.kubernetes.io/component": "valkey"}})
+    backup = {"apiVersion": "velero.io/v1", "kind": "Backup", "metadata": {"name": name, "namespace": "velero"},
+              "spec": spec}
+    out = ten(f"{k} create -f -", stdin=json.dumps(backup), check=False)
+    if out.returncode:
+        return [f"the backup {name} not created: {out.stderr.strip()}"]
+    print(f"Velero backup {name}: Valkey's pods from the daily schedule's template")
+    try:
+        end, status = clock() + wait_s, {}
+        while clock() < end:
+            got = read(f"get backups.velero.io {name} -o json")
+            status = json.loads(got.stdout).get("status") or {} if got.returncode == 0 else {}
+            if status.get("phase") in ("Completed", "PartiallyFailed", "Failed", "FailedValidation"):
+                break
+            sleep(poll)
+        if status.get("phase") != "Completed" or status.get("errors"):
+            return [f"the backup {name} ended {status.get('phase') or 'not within ' + str(wait_s) + ' s'} with "
+                    f"{status.get('errors', 0)} errors"]
+        got = read(f"get podvolumebackups.velero.io -l velero.io/backup-name={name} -o json")
+        pvbs = json.loads(got.stdout).get("items", []) if got.returncode == 0 else []
+        bad = [p["metadata"]["name"] for p in pvbs if (p.get("status") or {}).get("phase") != "Completed"]
+        if not pvbs or bad:
+            return [f"the backup {name}: {len(pvbs)} pod volume backups, not Completed: {', '.join(bad) or 'none made'}"]
+        print(f"Velero backup {name}: Completed, {len(pvbs)} pod volume backups Completed")
+        return []
+    finally:
+        req = {"apiVersion": "velero.io/v1", "kind": "DeleteBackupRequest",
+               "metadata": {"generateName": f"{name}-", "namespace": "velero"}, "spec": {"backupName": name}}
+        if ten(f"{k} create -f -", stdin=json.dumps(req), check=False).returncode:
+            print(f"the backup {name} not deleted - its ttl (1 h) removes it")
+
+
+def finished_job_hints(extra, jobs=None, excluded=None):
     """Each image line production has beyond the expected inventory that a finished Job (Complete or Failed, no
     CronJob's) carries: the inventory lists every such Job's template, and Velero keeps its maintenance Jobs for hours
-    with the image they ran - after its upgrade too (10-velero, 2026-10-13). Named with its delete. `jobs`: kubectl's
-    get jobs -A -o json (read on ten without)."""
+    with the image they ran - after its upgrade too (10-velero, 2026-10-13). Named with its delete (a Failed one's logs
+    first). Only the Jobs the inventory reads: not in the namespaces it leaves out (`excluded`, excluded_namespaces()
+    without), not Woodpecker's pipelines. `jobs`: kubectl's get jobs -A -o json (read on ten without)."""
     want = {l for l in extra if l.startswith("image ")}
     if not want:
         return []
@@ -517,10 +589,13 @@ def finished_job_hints(extra, jobs=None):
         if out.returncode:
             return [f"the Jobs not read: {out.stderr.strip()}"]
         jobs = json.loads(out.stdout)
+    excluded = set((excluded if excluded is not None else excluded_namespaces()).split())
     hints = []
     for o in jobs.get("items", []):
         meta = o["metadata"]
         if any(r.get("kind") == "CronJob" for r in meta.get("ownerReferences") or []):
+            continue
+        if meta["namespace"] in excluded or (meta["namespace"] == "woodpecker" and meta["name"].startswith("wp-")):
             continue
         done = [c["type"] for c in (o.get("status") or {}).get("conditions") or []
                 if c.get("type") in ("Complete", "Failed") and c.get("status") == "True"]
@@ -529,10 +604,12 @@ def finished_job_hints(extra, jobs=None):
         spec = o["spec"]["template"]["spec"]
         for c in spec.get("containers", []) + spec.get("initContainers", []):
             ref = c["image"].split("@")[0]
-            name, tag = ref.rsplit(":", 1) if ":" in ref.split("/")[-1] else (ref, "latest")
+            name, tag = image_name_tag(ref)
             if f"image {name} {tag}" in want:
+                logs = (f"kubectl logs -n {meta['namespace']} job/{meta['name']} (its logs go with it), then "
+                        if done[0] == "Failed" else "")
                 hints.append(f"{meta['namespace']}/{meta['name']} ({done[0]}) still carries image {name} {tag} - "
-                             f"kubectl delete job -n {meta['namespace']} {meta['name']}")
+                             f"{logs}kubectl delete job -n {meta['namespace']} {meta['name']}")
     return sorted(set(hints))
 
 
@@ -550,8 +627,12 @@ def inventory_check(applied, test_images=()):
         with open(expected, "w") as f:
             f.write("\n".join(sorted(inv.expected(applied))) + "\n")
         script = open(os.path.join(OPS, "scripts", "version-inventory.sh")).read()
+        # a read holding the helper's image while the expected inventory does not: a helper caught (its events late)
+        helper = helper_image_line()
+        want = set(open(expected).read().splitlines())
         lines = ci_quiet_read(lambda: ten(f"INVENTORY_EXCLUDE_NAMESPACES={shlex.quote(excluded_namespaces())} bash -s",
-                                          stdin=script).stdout)
+                                          stdin=script).stdout,
+                              suspect=lambda out: bool(helper) and helper not in want and helper in out.splitlines())
         pi_script = open(os.path.join(OPS, "scripts", "version-inventory-pi.sh")).read()
         for pi in PIS:
             out = remote(pi, "sudo -n bash -s", pi_script)
@@ -907,7 +988,7 @@ def running_digest_problems(step, pods=None):
                    + status.get("initContainerStatuses", [])}
         for c in o["spec"].get("containers", []) + o["spec"].get("initContainers", []):
             ref = c["image"].split("@")[0]
-            name, tag = ref.rsplit(":", 1) if ":" in ref.split("/")[-1] else (ref, "latest")
+            name, tag = image_name_tag(ref)
             want = proven.get(f"{full_name(name)}:{tag}")
             got = running.get(c.get("name"), "").partition("@")[2]
             if want and got and got != want:
@@ -1252,11 +1333,29 @@ def ledger_for(step, phase, arg=None):
     obj, events = read_ledger()
     events = current(events)
     info = step_info(step) if step in names else None
-    refuse(problems(names, step, phase, events, info, arg))
+    refuse(problems(names, step, phase, events, info, arg) + controller_problems())
     token = claim_token()
     record(step, "start", phase, *([arg] if arg else []), token, obj=obj)
     CLAIMED.append((step, phase, token))
     return names, events, info
+
+
+CONTROLLER_PATHS = ("scripts/upgrade-production.py", "tests/ansible/unit")
+
+
+def controller_problems():
+    """The controller and its tests as ops main has them: left out of the proof (PROVEN_PATHS), a phase runs them only
+    committed and pushed - an edit in the tree, or a commit not on origin/main, judges production unreviewed."""
+    dirty = run(["git", "-C", OPS, "status", "--porcelain", "--", *CONTROLLER_PATHS], capture_output=True)
+    diff = run(["git", "-C", OPS, "diff", "--name-only", ORIGIN_MAIN, "HEAD", "--", *CONTROLLER_PATHS],
+               capture_output=True)
+    if dirty.returncode or diff.returncode:
+        return [f"the controller's state in ops not read: {(dirty.stderr + diff.stderr).strip()}"]
+    out = [f"the controller or its tests changed, not committed: {' '.join(dirty.stdout.split())}"] \
+        if dirty.stdout.strip() else []
+    out += [f"the controller or its tests differ from {ORIGIN_MAIN}: {' '.join(diff.stdout.split())} - push or pull"] \
+        if diff.stdout.strip() else []
+    return out
 
 
 def claim_token():
@@ -1367,22 +1466,25 @@ def vault_login_problems():
 LEFT_ALONE_NAMESPACES = ("kagent",)
 
 
-def recreate_leftover_problems(objs=None):
-    """A finished pod (Succeeded or Failed) left under a Deployment whose strategy is Recreate: it held that Deployment's
-    next rollout - 10-velero's merge (2026-10-13) stopped the new pod for the chart's second change and started no next
-    one until the pod Velero had left finished since 10-03 was deleted. Each named with its delete (a finished pod runs
-    nothing). `objs`: kubectl's get deployments,replicasets,pods -A -o json (read on ten without)."""
+def finished_pod_problems(objs=None):
+    """A finished pod (Succeeded or Failed) left under a Deployment: the Deployment controller requeues a Deployment on a
+    pod's delete only once none of its pods is left - a finished one counted - so a Recreate rollout whose old pod goes
+    is never woken to start its new one (10-velero's merge, 2026-10-13: Velero at 0 pods until the pod it had left
+    finished since 10-03 was deleted - then within 4 s). Any Deployment, not only one that is Recreate now: a step's
+    chart may switch it. Each named with its delete (a finished pod runs nothing). Asked before each phase that rolls
+    something out. `objs`: kubectl's get deployments,replicasets,pods -A -o json (read on ten without)."""
     if objs is None:
         out = ten("kubectl get deployments,replicasets,pods -A -o json --request-timeout=60s", check=False)
-        if out.returncode:
-            return [f"production's Deployments not read: {out.stderr.strip()}"]
-        objs = json.loads(out.stdout)
+        try:
+            objs = json.loads(out.stdout) if out.returncode == 0 else None
+        except ValueError:
+            objs = None
+        if objs is None:
+            return [f"production's Deployments not read: {(out.stderr or out.stdout).strip()[:200]}"]
     items = objs.get("items", [])
     key = lambda o: (o["metadata"]["namespace"], o["metadata"]["name"])
     owner = lambda o, kind: next((r["name"] for r in o["metadata"].get("ownerReferences") or []
                                   if r.get("kind") == kind and r.get("controller")), None)
-    recreate = {key(o) for o in items if o.get("kind") == "Deployment"
-                and ((o.get("spec") or {}).get("strategy") or {}).get("type") == "Recreate"}
     deployment_of = {key(o): owner(o, "Deployment") for o in items if o.get("kind") == "ReplicaSet"}
     out = []
     for o in items:
@@ -1391,8 +1493,8 @@ def recreate_leftover_problems(objs=None):
         if o.get("kind") != "Pod" or phase not in ("Succeeded", "Failed") or ns in LEFT_ALONE_NAMESPACES:
             continue
         d = deployment_of.get((ns, owner(o, "ReplicaSet")))
-        if d and (ns, d) in recreate:
-            out.append(f"{ns}/{d}: its finished pod {name} ({phase}) holds its next Recreate rollout back - "
+        if d:
+            out.append(f"{ns}/{d}: its finished pod {name} ({phase}) keeps its next rollout from being woken - "
                        f"kubectl delete pod -n {ns} {name}")
     return sorted(out)
 
@@ -1400,7 +1502,7 @@ def recreate_leftover_problems(objs=None):
 def begin(step):
     names, events, _ = ledger_for(step, "begin")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events))
-           + vault_login_problems() + recreate_leftover_problems())
+           + vault_login_problems() + finished_pod_problems())
     ok = inventory_check(applied_steps(events))
     # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
     before = [a for _, s, e, a in events if e == "apps" and s != step]
@@ -1423,16 +1525,30 @@ def backup(step, store):
     record(step, "backup", store)
 
 
+def playbook_helm_repos():
+    """The Helm repositories the playbooks add (their kubernetes.core.helm_repository tasks' names), sorted."""
+    names = set()
+    for root, _, files in os.walk(os.path.join(OPS, "deploy", "ansible", "playbooks")):
+        for f in files:
+            if f.endswith(".yml"):
+                text = open(os.path.join(root, f)).read()
+                names.update(re.findall(r"kubernetes\.core\.helm_repository:\s*\n\s+name:\s*([\w.-]+)", text))
+    return sorted(names)
+
+
 def preview(step):
     names, events, info = ledger_for(step, "preview")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
                           done=applied_steps(events)) + merged_live_problems(step, info["branches"]))
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
-    # root's Helm repository indexes on ten (the playbooks' Helm runs as root) refreshed first: check mode skips the
-    # playbooks' own refresh, and an install then asks the index as it was - 11-cilium's (2026-10-13) was April's
-    out = ten("sudo -n helm repo update", check=False)
-    print("\n".join(l for l in (out.stdout + out.stderr).splitlines() if "update from" in l or "Error" in l)
-          or f"helm repo update: rc {out.returncode}")
+    # root's Helm repository indexes on ten (the playbooks' Helm runs as root) refreshed first - the playbooks' own
+    # repositories only: check mode skips the playbooks' refresh, and an install then asks the index as it was
+    # (11-cilium's, 2026-10-13, was April's). Not refreshed: refused - a preview against a stale index proves nothing
+    repos = playbook_helm_repos()
+    out = ten("sudo -n helm repo update " + " ".join(shlex.quote(r) for r in repos), check=False)
+    print("\n".join(l for l in (out.stdout + out.stderr).splitlines() if l.strip()))
+    refuse([] if out.returncode == 0 else [f"root's Helm repositories on ten not refreshed ({', '.join(repos)}): "
+                                           f"rc {out.returncode} (above)"])
     refuse([] if host_work([script, "--production", "--check", step]).returncode == 0 else ["the preview failed"])
     record(step, "previewed")
 
@@ -1448,7 +1564,7 @@ def merge(step, repo):
         tip = run(["git", "-C", d, "rev-parse", "-q", "--verify", f"{BRANCH}{step}^{{commit}}"],
                   capture_output=True).stdout.strip() or None
         refuse(proof_problems(step, names, repo, defaulted(events), partly=partly, tip=tip,
-                              done=applied_steps(events)) + registry_problems(step))
+                              done=applied_steps(events)) + registry_problems(step) + finished_pod_problems())
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
         if merged_base(d, step):
@@ -1546,7 +1662,8 @@ def cluster_runs(image):
 def playbooks(step):
     names, events, info = ledger_for(step, "playbooks")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
-                          done=applied_steps(events)) + merged_live_problems(step, info["branches"]))
+                          done=applied_steps(events)) + merged_live_problems(step, info["branches"])
+           + finished_pod_problems())
     print(f"{step}'s playbook lines, against PRODUCTION (ten, the Pis):")
     for line in info["playbooks"]:
         print(f"  {line}")
@@ -1562,7 +1679,6 @@ def playbooks(step):
     record(step, "playbooks")
 
 
-CHECK_MINUTES = 15
 
 
 def defaults(step):
@@ -1610,6 +1726,25 @@ def defaults(step):
     record(step, "defaults", git("rev-parse", "HEAD"))
 
 
+PROMETHEUS_ALERTS = "/api/v1/namespaces/schnappy-infra/services/schnappy-prometheus:9090/proxy/api/v1/alerts"
+
+
+def critical_alert_problems(alerts=None):
+    """Production's critical alerts pending or firing (production-data-check.yml's leg reads firing only). `alerts`:
+    Prometheus' /api/v1/alerts answer (read on ten without); not read: a problem."""
+    if alerts is None:
+        out = ten(f"kubectl get --raw {PROMETHEUS_ALERTS} --request-timeout=30s", check=False)
+        if out.returncode:
+            return [f"Prometheus' alerts not read: {out.stderr.strip()}"]
+        try:
+            alerts = json.loads(out.stdout)
+        except ValueError:
+            return ["Prometheus' alerts not read: no JSON"]
+    return sorted(f"{a['labels'].get('alertname')} {a['state']} {a['labels'].get('namespace', '')}".strip()
+                  for a in (alerts.get("data") or {}).get("alerts", [])
+                  if a.get("labels", {}).get("severity") == "critical" and a.get("state") in ("pending", "firing"))
+
+
 def check(step, since=None, deciding=False):
     """ten as the done steps and this one leave it, Argo settled, the step's app set kept. With `since` (a time - the
     first green check's): no container restarted at or after it, however long ago that was. `deciding` (the call that
@@ -1628,7 +1763,12 @@ def check(step, since=None, deciding=False):
         print(f"IMAGE: {p}")
     # the data paths, read only: metrics, logs, datasources, the stores, no critical alert (the full run reads the same)
     data = ansible("playbooks/production-data-check.yml")
-    return ok and ok_settled and not builds and data
+    # the deciding call: a critical alert pending counts too - several wait 10 min to an hour before firing, longer
+    # than the soak, and a step done is past its abort
+    alerts = critical_alert_problems() if deciding else []
+    for a in alerts:
+        print(f"ALERT: {a}")
+    return ok and ok_settled and not builds and data and not alerts
 
 
 def done(step):
@@ -1645,9 +1785,11 @@ def done(step):
     # first (a base backup its merge took already is not taken again, nor a Scylla backup the step ran already)
     base_backup = info["base_backup"] and not any(s == step and e == "base-backup" for _, s, e, _ in events)
     scylla_backup = info["scylla_backup"] and not any(s == step and e == "scylla-backup" for _, s, e, _ in events)
+    velero_backup = info["velero_backup"] and not any(s == step and e == "velero-backup" for _, s, e, _ in events)
     changes = (["a throwaway certificate through production's ACME solver (acme-check.yml)"] if info["acme"] else []) \
         + (["a Postgres base backup (postgres-base-backup.yml)"] if base_backup else []) \
-        + (["a Scylla Manager backup of each production cluster (scylla-backup-check.yml)"] if scylla_backup else [])
+        + (["a Scylla Manager backup of each production cluster (scylla-backup-check.yml)"] if scylla_backup else []) \
+        + (["a Velero backup of Valkey's volumes from the daily schedule, deleted after"] if velero_backup else [])
     if checked is None and changes:
         refuse([] if confirm(f"Step {step}'s first check changes PRODUCTION: {'; '.join(changes)} - run it?")
                else ["not confirmed - nothing run, nothing recorded"])
@@ -1662,6 +1804,10 @@ def done(step):
         refuse([] if ansible("playbooks/scylla-backup-check.yml")
                else ["Scylla Manager did not back up (above) - its abort line, or fix and run done again"])
         record(step, "scylla-backup")
+    if checked is None and velero_backup:
+        problems_ = velero_backup_check()
+        refuse(problems_ and problems_ + ["Velero did not back up (above) - its abort line, or fix and run done again"])
+        record(step, "velero-backup")
     # where the restarts are judged from, read before the first check by ten's clock (the restarts' times are its):
     # this machine's, after the check, let a restart as the check ran, or within the clocks' skew, slip past the
     # deciding check

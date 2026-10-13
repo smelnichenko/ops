@@ -10,7 +10,7 @@ trap 'rm -rf "$W"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 o=$W/ops
 mkdir -p "$o/scripts" "$o/tests/ansible/upgrade/steps"
-for f in upgrade-production.py upgrade-defaults.py upgrade-expected-inventory.py; do cp "$src/scripts/$f" "$o/scripts/"; done
+for f in upgrade-production.py upgrade-defaults.py upgrade-expected-inventory.py upgrade-rules.py; do cp "$src/scripts/$f" "$o/scripts/"; done
 printf 'image a 1 => image a 2\nbranch infra\n' > "$o/tests/ansible/upgrade/steps/01-a.txt"
 printf 'image b 1 => image b 2\nbranch infra\n' > "$o/tests/ansible/upgrade/steps/02-b.txt"
 printf '# committed steps\n' > "$o/tests/ansible/upgrade/defaults-committed.txt"

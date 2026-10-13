@@ -12,7 +12,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 o=$W/ops
 mkdir -p "$o/scripts" "$o/deploy/ansible/playbooks" "$o/tests/ansible/upgrade/steps" "$o/docs" "$o/tests/ansible/unit/t" \
   "$o/tests/ansible/units"
-for f in upgrade-production.py upgrade-defaults.py upgrade-expected-inventory.py; do
+for f in upgrade-production.py upgrade-defaults.py upgrade-expected-inventory.py upgrade-rules.py; do
   cp "$src/scripts/$f" "$o/scripts/"
 done
 printf 'other: 1\nfoo_version: "1.0"\n' > "$o/deploy/ansible/playbooks/x.yml"
@@ -24,6 +24,10 @@ printf '# committed steps\n' > "$o/tests/ansible/upgrade/defaults-committed.txt"
 printf 'image a 1\n' > "$o/tests/ansible/upgrade/prod-inventory.txt"
 printf '#!/bin/sh\n' > "$o/scripts/inventory-diff.sh"
 printf 'notes\n' > "$o/docs/n.md"
+printf 'version: 3\n' > "$o/Taskfile.yml"
+printf '# v\n' > "$o/Vagrantfile"
+mkdir -p "$o/tests/ansible/upgrade/vagrant-overlay"
+printf 'a: 1\n' > "$o/tests/ansible/upgrade/vagrant-overlay/values.yaml"
 printf '#!/bin/sh\n' > "$o/tests/ansible/unit/t/run.sh"
 printf 'x\n' > "$o/tests/ansible/units/data.txt"
 cp "$src/.gitignore" "$o/.gitignore"  # as ops ignores them (bytecode, .upgrade/)
@@ -90,10 +94,11 @@ for path in ("scripts/upgrade-defaults.py", "scripts/upgrade-expected-inventory.
     edit(path, "# x\n")
     check(f"  a script beside it edited: proven ({path})", m.unproven_changes(proven, []), [path])
     reset()
-# exactly what the proof check covers, entry by entry: a controller change that drops one shows here
-check("the proven paths, pinned", m.PROVEN_PATHS,
-      ("deploy", "scripts", "tests", ":(exclude)tests/ansible/unit", ":(exclude)scripts/upgrade-production.py",
-       "Taskfile.yml", "Vagrantfile"))
+# the rest the proof covers, by behaviour: an edit to each is unproven
+for path in ("Taskfile.yml", "Vagrantfile", "tests/ansible/upgrade/vagrant-overlay/values.yaml"):
+    edit(path, "# x\n")
+    check(f"proven: {path}", m.unproven_changes(proven, []), [path])
+    reset()
 # the defaults phase: --apply the next step only, its lines and the record; the proof check excuses exactly those
 check("--apply out of order refuses", defaults("--apply", "03-c").returncode, 1)
 check("--apply out of order: nothing written", m.unproven_changes(proven, []), [])

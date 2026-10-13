@@ -1302,7 +1302,7 @@ tasks:
       - cmd: scripts/upgrade-production.py backup {{.STEP}} {{.STORE}}
 
   deploy:upgrade:preview:
-    desc: "Read-only (records it in the ledger): what step STEP's playbook lines would change on ten and the Pis, after the step's merges settled - ansible's check mode with diffs (read-only probes run; waits on changes the preview does not make are skipped; proven by the full run at every step)"
+    desc: "What step STEP's playbook lines would change on ten and the Pis, after the step's merges settled - ansible's check mode with diffs (read-only probes run; waits on changes the preview does not make are skipped; proven by the full run at every step). Records it in the ledger; writes only root's Helm chart index on ten (refreshed first)"
     deps: [deploy:install]
     requires:
       vars: [STEP]

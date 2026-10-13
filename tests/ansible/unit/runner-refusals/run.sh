@@ -15,6 +15,8 @@ os.environ.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAM
 L = importlib.machinery.SourceFileLoader("up", os.path.join(ops, "scripts", "upgrade-production.py"))
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", L))
 L.exec_module(m)
+# Prometheus' alerts are read from ten at a deciding check: stubbed none here (runner-ci-quiet tests the read and its use)
+m.critical_alert_problems = lambda: []
 # anything that reaches a host fails here unless a case stubs it (a case once ran production's data check for real)
 def _unstubbed(name):
     def f(*a, **k):
@@ -102,7 +104,8 @@ def merge_calls(step, repo, fail=(), settled_ok=True, events=None):
         calls.append("tempo-flush" if "flush" in (stdin or "") else "remote")
         return R(1 if "tempo-flush" in fail else 0)
     s = patched(ledger_for=lambda st, ph, arg=None: (names, events or [], m.step_info(st)), proof_problems=lambda *a, **k: [],
-                registry_problems=lambda *a, **k: [], run=run, remote=remote, confirm=lambda q: True,
+                registry_problems=lambda *a, **k: [], finished_pod_problems=lambda: [], run=run, remote=remote,
+                confirm=lambda q: True,
                 ansible=lambda *a: calls.append(a[0]) or True, prepull_images=lambda *a: [],
                 merged_base=lambda *a: None, pushed_base=lambda *a: None, read_ledger=lambda: ({"data": {"events": ""}}, []),
                 record=lambda st, ev, *a, **k: calls.append("record " + ev), step_apps=lambda *a: ["app"],
@@ -135,7 +138,7 @@ def begin_calls(inv_ok, settle_ok):
     calls = []
     names = m.step_names()
     s = patched(ledger_for=lambda st, ph, arg=None: (names, [], m.step_info(st)), proof_problems=lambda *a, **k: [],
-                vault_login_problems=lambda: [], recreate_leftover_problems=lambda: [], inventory_check=lambda *a: inv_ok,
+                vault_login_problems=lambda: [], finished_pod_problems=lambda: [], inventory_check=lambda *a: inv_ok,
                 settled=lambda *a, **k: (settle_ok, {}, ["app"]), record=lambda st, ev, *a, **k: calls.append(ev))
     try:
         m.begin("01-argocd-root-retry")

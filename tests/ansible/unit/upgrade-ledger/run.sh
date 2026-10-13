@@ -24,6 +24,8 @@ import sys
 loader = importlib.machinery.SourceFileLoader("upgrade_production", "scripts/upgrade-production.py")
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_production", loader))
 loader.exec_module(m)
+# Prometheus' alerts are read from ten at a deciding check: stubbed none here (runner-ci-quiet tests the read and its use)
+m.critical_alert_problems = lambda: []
 
 
 def unstubbed_ansible(*a):
@@ -359,7 +361,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
                        "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
                        "ten", "image_pins", "read_ledger", "vault_login_problems", "merged_live_problems",
-                       "recreate_leftover_problems")
+                       "finished_pod_problems")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.read_ledger = lambda: ({"data": {"events": ""}}, [])  # the claim's re-read before a push (none claimed here)
@@ -367,7 +369,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
         or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     m.vault_login_problems = lambda: list(vault)
-    m.recreate_leftover_problems = lambda: list(leftovers)
+    m.finished_pod_problems = lambda: list(leftovers)
     m.merged_live_problems = lambda *a: list(live)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
@@ -452,10 +454,14 @@ check("every proof check is given the done steps", [ast.unparse(n)[:60] for n in
 got = phase_calls(m.begin, S47, vault=["VAULT-X"])
 check("begin: refused while production logs into Vault with the old reviewer token, nothing done",
       (len(got), got[-1][0], "VAULT-X" in got[-1][1]), (1, "refused", True))
-# a finished pod left under a Recreate Deployment holds its next rollout (recreate-leftovers): begin refuses, naming it
-got = phase_calls(m.begin, S47, leftovers=["LEFTOVER-X"])
-check("begin: refused while a finished pod holds a Recreate rollout, nothing done",
-      (len(got), got[-1][0], "LEFTOVER-X" in got[-1][1]), (1, "refused", True))
+# a finished pod left under a Deployment keeps its next rollout from being woken (finished-pods): begin, merge and
+# playbooks refuse, naming it, before anything is done
+for name_, fn_, args_ in (("begin", m.begin, (S47,)), ("merge", m.merge, (S47, "infra")),
+                          ("playbooks", m.playbooks, (S47,))):
+    got = phase_calls(fn_, *args_, leftovers=["LEFTOVER-X"])
+    # merge reads its branch's tip (git rev-parse) before its checks - read only; nothing else before the refusal
+    check(f"{name_}: refused while a finished pod is left under a Deployment, nothing done",
+          ([c for c in got[:-1] if c != ("run", "git")], got[-1][0], "LEFTOVER-X" in got[-1][1]), ([], "refused", True))
 def vault_login(rc, out, err=""):
     saved = m.ten
     sent = []
@@ -936,7 +942,8 @@ class _Rc:
     def __init__(self, rc, err=""):
         self.returncode, self.stdout, self.stderr = rc, "", err
 def claim(replace_rc, err="Error from server (Conflict): the object has been modified"):
-    sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten")}
+    sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten", "controller_problems")}
+    m.controller_problems = lambda: []
     reads = iter(range(7, 99))  # each read a newer resourceVersion: a claim that re-read would send another
     m.read_ledger = lambda: ({"metadata": {"resourceVersion": str(next(reads))}, "data": {"events": ""}}, ev(*base47))
     m.ten = lambda command, stdin=None, check=True: sent.append(json.loads(stdin)) or _Rc(replace_rc, err)
@@ -1048,7 +1055,8 @@ check("a phase dying of an exception: its end recorded failed", main_ends(Runtim
 # another phase's record) made nothing: read again, its claim checked, written again - three times at most. Through the
 # real record(): ten refuses the replace as kubectl does
 def main_conflicts(n):
-    sent, saved = [], {k: getattr(m, k) for k in ("begin", "read_ledger", "ten")}
+    sent, saved = [], {k: getattr(m, k) for k in ("begin", "read_ledger", "ten", "controller_problems")}
+    m.controller_problems = lambda: []
     text = f"2026-10-06T08:00:00Z {S47} start begin host:1:aa"
     m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text))
     def fake_ten(command, stdin=None, check=True):
@@ -1103,7 +1111,8 @@ check("a phase whose claim was released meanwhile: no end written (its release i
 # a run whose claim was closed meanwhile (released by hand, its run still alive) records nothing more: its events would
 # land in another phase's claim
 def recorded(lines):
-    sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten")}
+    sent, saved = [], {k: getattr(m, k) for k in ("read_ledger", "ten", "controller_problems")}
+    m.controller_problems = lambda: []
     text = "\n".join(f"2026-10-06T08:0{i}:00Z {l}" for i, l in enumerate(lines))
     m.read_ledger = lambda: ({"metadata": {"resourceVersion": "9"}, "data": {"events": text}}, m.parse_events(text))
     m.ten = lambda command, stdin=None, check=True: sent.append(stdin) or _Rc(0)
@@ -1130,7 +1139,9 @@ def merged_by(released_at_confirm):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "proof_problems", "registry_problems", "step_apps",
                                                   "merged_base", "pushed_base", "run", "host_work", "confirm",
                                                   "prepull_images",
-                                                  "step_info", "settled", "record", "read_ledger")}
+                                                  "step_info", "settled", "record", "read_ledger",
+                                                  "finished_pod_problems")}
+    m.finished_pod_problems = lambda: []
     claimed = f"{S47} start merge infra host:1:aa"
     text = [claimed]
     class Out:

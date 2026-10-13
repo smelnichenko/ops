@@ -1440,6 +1440,36 @@ Production runs one Kafka broker, one ScyllaDB node, one ClickHouse and two Post
 | 59 | clickhouse-25.8 (Wave 0: clickhouse) | ClickHouse restarts on 25.8 - log ingestion waits | back to 24.8 while the pin keeps 24.8's formats (revert the step's merge on main (Argo syncs back)) - 24.8 reads what 25.8 wrote and merged under the pin (rehearsed with the real images: task test:clickhouse-pin; the revert through Argo is not); otherwise the Wave 0 ClickHouse backup (its restore rehearsed at this step in the full run) |
 | 61 | clickhouse-26.8 (Wave 0: clickhouse) | ClickHouse restarts on 26.8 - log ingestion waits | back to 25.8 while the pin keeps 25.8's formats (drop or unlock the renamed system.*_log_N tables first) - 25.8 starts on the data and reads what 26.8 wrote and merged under the pin (rehearsed with the real images: task test:clickhouse-pin - the system log tables not looked at, the revert through Argo not rehearsed); otherwise the Wave 0 ClickHouse backup |
 
+## The rollout of 2026-10-13 - what the runner learned, the review after it
+
+Steps 00-10 went to production on 2026-10-13. What production met that no full run had, and what the runner does now:
+
+- **The controller left the proof.** A full run never ran the production phases (begin to done), so their fixes need
+  no new proof: scripts/upgrade-production.py and tests/ansible/unit are out of PROVEN_PATHS. What judges a step
+  proven and green moved into scripts/upgrade-rules.py, which stays proven (the proof's paths, the settle values the
+  full run also takes, the check window, the environments left out, what may land on main unproven). Every phase
+  refuses while the controller or its tests differ from ops main.
+- **The soak is 5 minutes**, a wave0 step's too: the 60 and 15 before were measured against nothing; production's
+  slowest liveness probe restarts a container within 305 s, and the soak runs from the first check's end. A slower
+  fault is the checks' to find: the deciding check counts a pending critical alert red.
+- **CI's helper pods.** A CI pipeline's local-path helper pod (busybox, some 20 s) caught by the inventory refused a
+  done twice. The inventory leaves them out (version-inventory.sh), and the controller reads it while none runs.
+- **Finished Jobs** (Velero's maintenance Jobs of the version before) refused 10-velero's done: the inventory leaves a
+  finished Job out; a refusal still names any with its delete.
+- **A finished pod under a Deployment** kept Velero's Recreate rollout at 0 pods: the Deployment controller requeues a
+  Deployment on a pod's delete only once none of its pods is left, a finished one counted. begin, merge and playbooks
+  refuse while one is left, naming its delete.
+- **ten's Helm chart index** was April's: 11-cilium's preview (check mode, which skips the playbooks' refresh) asked it
+  for cilium 1.19.8. Every helm_repository task now runs in check mode too, and preview refreshes the playbooks'
+  repositories first, refusing when that fails.
+- **backup-check** was never read in production: the first done of steps 25 and 43 now takes a Velero backup
+  (10-velero went to production without one).
+
+Left for the operator: production checks of Kafka (a produce/consume round trip, consumer lag) and ClickHouse (merges)
+before steps 38, 40, 59 and 61; the data check's retries let a store that flaps within its window pass; the root Helm
+repositories ten no longer uses (sealed-secrets, the retired googleapis Istio URL); the kubelet's terminated-pod
+collection threshold (12500, never reached here), which would remove finished pods for good.
+
 ## Production, step by step (after the gate and the operator's approval)
 
 Gate: the latest full run green on the commit rolled out (`task test:upgrade:full`: built from nothing, every step in
@@ -1482,11 +1512,14 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    step's too (a step's `soak` line overrides). Called again after it
    - green, with no container restarted since the first green call - the step is done. A red call during the soak
    restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a
-   barman-check step's takes a Postgres base backup (unless its merge took one): that call asks first.
+   barman-check step's takes a Postgres base backup (unless its merge took one), a backup-check step's a Velero
+   backup of Valkey's volumes from the daily schedule (deleted after): that call asks first. The deciding call counts
+   a critical alert pending red, as a firing one - several wait 10 minutes to an hour, longer than the soak.
 Each phase that changes production asks first (the phase's own question, after showing what it will change) - the
 operator approves each. Every phase first checks the full run's proof: the step and every step before it proven by
-that one run; the ops paths it ran (deploy/, scripts/, tests/, Taskfile.yml, Vagrantfile) as it had them, but for the
-committed steps' default lines; production's app tags (infra main) those it ran (the Vagrant overlay's: the candidate
+that one run; the ops paths it ran (scripts/upgrade-rules.py's PROVEN_PATHS: deploy/, scripts/, tests/, Taskfile.yml,
+Vagrantfile, but for the controller scripts/upgrade-production.py and tests/ansible/unit) as it had them, but for the
+committed steps' default lines - the controller and its tests as ops main has them, committed and pushed; production's app tags (infra main) those it ran (the Vagrant overlay's: the candidate
 images are promoted before the rollout's first step); the floating-tag images at the digests it ran. A phase claims
 the step in the ledger (a start event, then its end): another phase of the step is refused while one runs, and a run
 killed before its end is closed by `task deploy:upgrade:release STEP=N` (it asks first).
