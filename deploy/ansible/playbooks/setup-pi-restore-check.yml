@@ -1,0 +1,142 @@
+---
+# The backups restored for real, on the Pis, every day - by the two Pis in turn (UTC days: pi1 the even ones, pi2 the
+# odd ones; Consul's lock keeps two runs from ever overlapping). files/pi-restore-check.sh restores:
+#   postgres  production's CNPG cluster: the newest complete base backup, then every WAL archived after it, in
+#             production's own Postgres image (podman) - replayed to the end, the newest WAL archived when the run began
+#             reached, every database of pi_restore_check_databases there and read back whole
+#   etcd      ten's newest hourly snapshot: restored (its hash checked), an etcd started on it, kube-system there
+#   tier0     the Pis' own newest backup (setup-pi-backups.yml): Consul's snapshot into a throwaway agent, every
+#             Patroni database dump into a scratch Postgres
+# Everything is read through the VIP (the store both Pis serve); the run writes only restore-checks/<this Pi>/ -
+# last-report each run, last-success when every part restored. infra's restore-check-age (kube-system) fails, and
+# KubeJobFailed fires, when either Pi's last-success is older than two of its turns. Nothing here holds the cluster's
+# credentials: the check cannot touch production.
+#
+# Usage: task deploy:pi-restore-check   (production; after deploy:pi-backups - tier0 restores its backup)
+#        task test:pi-restore-check     (the Vagrant rehearsal)
+- name: The Pis' restore check
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars:
+    # after every backup window - CNPG's base backups, Velero (02:00, Sunday 03:00), the Pis' (02:40), Scylla's
+    # (03:00, its repair Sunday 04:00) - all UTC
+    pi_restore_check_on_calendar: "*-*-* 05:30:00 UTC"
+    # production's CNPG databases (infra's schnappy-production-data values, postgres.databases)
+    pi_restore_check_databases: [monitor, admin, chat, chess, masi]
+    # production's Postgres image per major: the 17 its chart runs, the 18 its step 47 moves to
+    pi_restore_check_pg_images:
+      "17": "ghcr.io/cloudnative-pg/postgresql:17"
+      "18": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye"
+    # the etcd production runs (its etcdutl reads the snapshot)
+    pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.5-0"
+    # how old each backup may be: CNPG's base backups hourly (its ScheduledBackup "30 1 * * *" reads seconds first:
+    # :01:30 every hour) - a day missed is old; WAL archived at least every 5 minutes (CNPG's archive_timeout); etcd's
+    # snapshots hourly; the Pis' own daily at 02:40
+    pi_restore_check_pg_base_max_age_h: 26
+    pi_restore_check_wal_max_age_m: 60
+    pi_restore_check_etcd_max_age_h: 3
+    pi_restore_check_tier0_max_age_h: 30
+    # the recovery's wait, 5 s a poll: an hour
+    pi_restore_check_pg_wait_polls: 720
+    pi_restore_check_work: /var/lib/pi-restore-check
+  tasks:
+    # podman for production's own images (host network or none: it never adds a network or a firewall rule); rclone
+    # for the store
+    - name: Podman and rclone, Debian's
+      ansible.builtin.apt:
+        name: [podman, rclone]
+        state: present
+
+    - name: The check's directories, root only
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0700'
+      loop:
+        - /etc/pi-restore-check
+        - "{{ pi_restore_check_work }}"
+
+    # an empty one would leave the check failing with nothing but the unit to say why
+    - name: Its credentials are all there
+      ansible.builtin.assert:
+        that:
+          - backup_root_user | length > 0
+          - backup_root_password | length > 0
+        fail_msg: "REFUSED: an empty credential (BACKUP_ACCESS_KEY or BACKUP_SECRET_KEY in .env)"
+        quiet: true
+      no_log: true
+
+    - name: Its settings and the store's credentials, root only
+      ansible.builtin.copy:
+        dest: /etc/pi-restore-check/env
+        mode: '0600'
+        content: |
+          STORE_ENDPOINT=http://{{ keepalived_vip }}:9000
+          RCLONE_CONFIG_STORE_TYPE=s3
+          RCLONE_CONFIG_STORE_PROVIDER=Other
+          RCLONE_CONFIG_STORE_ENDPOINT=http://{{ keepalived_vip }}:9000
+          RCLONE_CONFIG_STORE_ACCESS_KEY_ID={{ backup_root_user }}
+          RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY={{ backup_root_password }}
+          AWS_ACCESS_KEY_ID={{ backup_root_user }}
+          AWS_SECRET_ACCESS_KEY={{ backup_root_password }}
+          PI_RESTORE_NAME={{ inventory_hostname }}
+          PI_RESTORE_PARITY={{ groups['pis'].index(inventory_hostname) % 2 }}
+          PI_RESTORE_PG_DATABASES={{ pi_restore_check_databases | join(' ') }}
+          {% for major, image in pi_restore_check_pg_images.items() %}
+          PI_RESTORE_PG_IMAGE_{{ major }}={{ image }}
+          {% endfor %}
+          PI_RESTORE_ETCD_IMAGE={{ pi_restore_check_etcd_image }}
+          PI_RESTORE_PG_BASE_MAX_AGE_H={{ pi_restore_check_pg_base_max_age_h }}
+          PI_RESTORE_WAL_MAX_AGE_M={{ pi_restore_check_wal_max_age_m }}
+          PI_RESTORE_ETCD_MAX_AGE_H={{ pi_restore_check_etcd_max_age_h }}
+          PI_RESTORE_TIER0_MAX_AGE_H={{ pi_restore_check_tier0_max_age_h }}
+          PI_RESTORE_PG_WAIT_POLLS={{ pi_restore_check_pg_wait_polls }}
+          PI_RESTORE_WORK={{ pi_restore_check_work }}
+      no_log: true
+
+    - name: The check's script
+      ansible.builtin.copy:
+        src: files/pi-restore-check.sh
+        dest: /usr/local/sbin/pi-restore-check.sh
+        mode: '0700'
+
+    - name: The service and its daily timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        mode: '0644'
+        content: "{{ item.content }}"
+      loop:
+        - name: pi-restore-check.service
+          content: |
+            [Unit]
+            Description=The backups restored on this Pi (every other day; the other Pi takes the rest)
+            After=network-online.target consul.service versitygw.service
+            [Service]
+            Type=oneshot
+            EnvironmentFile=/etc/pi-restore-check/env
+            ExecStart=/usr/local/sbin/pi-restore-check.sh
+            # the Pi's own services come first
+            Nice=10
+            IOSchedulingClass=idle
+            # a hung run must not block the next turn
+            TimeoutStartSec=3h
+        - name: pi-restore-check.timer
+          content: |
+            [Unit]
+            Description=The restore check, daily (each Pi acts on its own days)
+            [Timer]
+            OnCalendar={{ pi_restore_check_on_calendar }}
+            RandomizedDelaySec=300
+            Persistent=true
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: The timer on
+      ansible.builtin.systemd:
+        name: pi-restore-check.timer
+        enabled: true
+        state: started
+        daemon_reload: true

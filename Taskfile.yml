@@ -1179,6 +1179,21 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-backups.yml
 
+  test:pi-restore-check:
+    desc: "Vagrant: the Pis' restore check (setup-pi-restore-check.yml) on store contents made for it - a CNPG-format base backup and WAL, an etcd snapshot, the Pis' tier-0 backup - green; each part red on a backup gone, stale or unrestorable"
+    deps: [deploy:install]
+    cmds:
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-restore-check.yml
+
+  deploy:pi-restore-check:
+    desc: "PRODUCTION: the backups restored on the Pis, in turn every day - production's Postgres from its base backup and WAL, ten's etcd snapshot, the Pis' tier-0 backup (setup-pi-restore-check.yml; after deploy:pi-backups)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Install the daily restore check on PRODUCTION's Pis?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-pi-restore-check.yml
+
   deploy:patroni:upgrade:
     desc: "PRODUCTION: Patroni on both Pis to vars/patroni.yml's version - the cluster paused (Postgres keeps serving, no failover), each node upgraded and restarted, resumed"
     dir: deploy/ansible
