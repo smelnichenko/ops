@@ -89,7 +89,7 @@ case "$cmd" in
       *pg_is_in_recovery*) echo f ;;
       *pg_walfile_name*) echo "${SEG:-000000040000001D00000028}" ;;
       *string_agg*) echo "${DBS:-postgres monitor admin chat chess masi}" ;;
-      *"from pg_class"*) echo "${TABLES:-7}" ;;
+      *"from pg_class"*) if [ "${!#}" = "${EMPTY_DB:-}" ]; then echo 0; else echo "${TABLES:-7}"; fi ;;
       pg_dump*)
         # pg_dump 15+ fsyncs its file: /dev/null takes none (found on the Vagrant copy)
         case "$*" in *--no-sync*) ;; *) echo 'pg_dump: error: could not fsync file "/dev/null": Invalid argument' >&2; exit 1 ;; esac
@@ -248,7 +248,10 @@ red "postgres: the restore fails: red" POSTGRES PG_RESTORE_FAIL=1
 red "postgres: Postgres stops during the recovery: red" POSTGRES PG_RUNNING=false
 red "postgres: replayed short of the newest WAL archived: red" POSTGRES SEG=000000040000001D00000026
 red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin chat masi"
-red "postgres: a database with no table: red" POSTGRES TABLES=0
+red "postgres: no table in any database: red" POSTGRES TABLES=0
+store
+check "postgres: one database empty (an app not deployed - masi in production), the rest with tables: green, the counts said" \
+  "$(run EMPTY_DB=masi) $(report | grep -oE 'databases \(tables\) [^,]+' )" "rc=0 databases (tables) monitor:7 admin:7 chat:7 chess:7 masi:0"
 red "postgres: a database not read back whole: red" POSTGRES DUMP_FAIL=1
 store
 run PG_RESTORE_FAIL=1 > /dev/null
