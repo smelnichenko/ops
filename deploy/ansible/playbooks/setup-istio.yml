@@ -21,7 +21,7 @@
   gather_facts: false
 
   vars:
-    istio_version: "1.26.8"
+    istio_version: "1.27.9"
     # the gateway that serves pmon.dev: the infra environment's - the mesh chart's Gateway <release>-gateway in its
     # namespace (the ApplicationSet's path segment), Istio's Service for it <gateway>-istio (production, 2026-10-08)
     ns: schnappy-infra

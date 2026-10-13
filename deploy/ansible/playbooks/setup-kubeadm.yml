@@ -106,7 +106,7 @@
       # asks: 1.20's own would switch envoy-xds-mode to ads - the one change it makes to ten's config besides keys of
       # its new features (rendered 2026-10-04)
       upgradeCompatibility: "1.19"
-    istio_version: "1.26.8"
+    istio_version: "1.27.9"
     data_dir: "/mnt/storage"
 
   tasks:
