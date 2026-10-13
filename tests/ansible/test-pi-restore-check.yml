@@ -1,0 +1,181 @@
+---
+# The Pis' restore check (setup-pi-restore-check.yml) on the Vagrant copy, against what its store really holds: the
+# copy's CNPG base backups and WAL, the etcd snapshots of its CronJob, and the Pis' own backup (setup-pi-backups.yml,
+# one taken here first).
+#   pi1, its day forced    every part restored (production's Postgres image under podman, replayed to the end; etcd
+#                          started on the snapshot; Consul's snapshot and every Patroni dump), last-success this run's;
+#                          the lock taken; nothing left behind (containers, work directory, the throwaway Consul); no
+#                          WAL timeline written into the archive (the restored Postgres archives nothing)
+#   pi2, faults            the etcd snapshot too old for its limit: that part red alone; a database the backup lacks:
+#                          Postgres red alone; last-success never written
+#   both                   the timer on, pi1 the even UTC days, pi2 the odd ones
+# Vagrant only (the guard play first). Usage: task test:pi-restore-check
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: The Pis' own backup playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/setup-pi-backups.yml
+
+- name: One backup of the Pis' own data now
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The tier-0 backup taken
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-backup/env; set +a
+          PI_BACKUP_LOCKED=1 PI_BACKUP_EVEN_TODAY=1 /usr/local/sbin/pi-tier0-backup.sh
+      register: _tier0
+      changed_when: true
+
+- name: Production's restore check playbook
+  ansible.builtin.import_playbook: ../../deploy/ansible/playbooks/setup-pi-restore-check.yml
+
+- name: Pi1 - every part restored
+  hosts: pi1
+  become: true
+  gather_facts: false
+  vars:
+    # every WAL history file in the archive: a restored Postgres that archived would add its new timeline's
+    history: >-
+      set -a; . /etc/pi-restore-check/env; set +a;
+      rclone lsf -R --files-only store:postgres-backups | grep -E '\.history(\.[a-z0-9]+)?$' | sort
+  tasks:
+    - name: The archive's timelines before
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: "set -euo pipefail; {{ history }}"
+      register: _hist_before
+      changed_when: false
+
+    - name: The check, its day forced (the lock, then every part)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-restore-check/env; set +a
+          PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
+      register: _run
+      changed_when: true
+      failed_when: false
+
+    - name: The run's output
+      ansible.builtin.debug:
+        msg: "{{ _run.stdout_lines + _run.stderr_lines }}"
+
+    - name: What it left behind and wrote
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          set -a; . /etc/pi-restore-check/env; set +a
+          echo "containers=$(podman ps -a --format '{{ '{{' }}.Names{{ '}}' }}' | grep -c '^pi-restore-' || true)"
+          echo "work=$(find "$PI_RESTORE_WORK" -mindepth 1 -maxdepth 1 | wc -l)"
+          echo "agents=$(pgrep -fc 'consul agent -dev -node=restore-check' || true)"
+          echo "success=$(rclone cat store:restore-checks/pi1/last-success)"
+          echo "report=$(rclone cat store:restore-checks/pi1/last-report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')"
+          echo "timelines-same=$([ "$({{ history }})" = '{{ _hist_before.stdout }}' ] && echo yes || echo no)"
+      register: _after
+      changed_when: false
+
+    - name: Green, every part restored, nothing left, no timeline archived
+      ansible.builtin.assert:
+        that:
+          - _run.rc == 0
+          - "_run.stdout is search('PI RESTORE CHECK [0-9TZ]+: every part restored')"
+          - "_run.stdout is search('POSTGRES OK: schnappy-production-postgres')"
+          - _run.stdout is search('ETCD OK:')
+          - _run.stdout is search('TIER0 OK:')
+          - "'containers=0' in _after.stdout_lines"
+          - "'work=0' in _after.stdout_lines"
+          - "'agents=0' in _after.stdout_lines"
+          - "'report=3' in _after.stdout_lines"
+          - "'timelines-same=yes' in _after.stdout_lines"
+          - (_after.stdout | regex_search('success=([0-9TZ]+)', '\\1') | first) == (_run.stdout | regex_search('PI RESTORE CHECK ([0-9TZ]+):', '\\1') | first)
+        fail_msg: "{{ _run.stdout_lines + _after.stdout_lines }}"
+
+- name: Pi2 - each fault red alone, last-success never written
+  hosts: pi2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: No last-success of pi2's from an earlier run
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -a; . /etc/pi-restore-check/env; set +a
+          rclone deletefile store:restore-checks/pi2/last-success 2> /dev/null || true
+      changed_when: true
+
+    - name: Each fault (the etcd snapshot older than a limit of -1 h; a database the backup lacks)
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
+          set -a; . /etc/pi-restore-check/env; set +a
+          {{ item.env }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh
+      loop:
+        - { name: etcd, env: "PI_RESTORE_ETCD_MAX_AGE_H=-1", red: ETCD }
+        - { name: postgres, env: "PI_RESTORE_PG_DATABASES='monitor no_such_database'", red: POSTGRES }
+      loop_control:
+        label: "{{ item.name }}"
+      register: _faults
+      changed_when: true
+      failed_when: false
+
+    - name: Pi2's last-success after them
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -a; . /etc/pi-restore-check/env; set +a
+          rclone cat store:restore-checks/pi2/last-success 2> /dev/null || echo none
+      register: _pi2_success
+      changed_when: false
+
+    - name: Each red alone, the other parts restored, no last-success
+      ansible.builtin.assert:
+        that:
+          - item.rc == 1
+          - item.stdout is search(item.item.red ~ ' FAILED:')
+          - (item.stdout | regex_findall('^[A-Z0-9]+ OK:', multiline=True) | length) == 2
+          - "item.stdout is search('PI RESTORE CHECK [0-9TZ]+ FAILED: ' ~ item.item.red)"
+        fail_msg: "{{ item.item.name }}: {{ item.stdout_lines }}"
+      loop: "{{ _faults.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: No last-success written by a failed run
+      ansible.builtin.assert:
+        that: "_pi2_success.stdout == 'none'"
+        fail_msg: "pi2's last-success: {{ _pi2_success.stdout }}"
+
+- name: Both Pis - the timer on, opposite days
+  hosts: pis
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The timer and the Pi's parity
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          echo "$(systemctl is-enabled pi-restore-check.timer) $(systemctl is-active pi-restore-check.timer)" \
+            "$(sed -n 's/^PI_RESTORE_PARITY=//p' /etc/pi-restore-check/env)"
+      register: _timer
+      changed_when: false
+
+    - name: Enabled and waiting, pi1 even (0), pi2 odd (1)
+      ansible.builtin.assert:
+        that: "_timer.stdout == 'enabled active ' ~ ({'pi1': '0', 'pi2': '1'}[inventory_hostname])"
+        fail_msg: "{{ inventory_hostname }}: {{ _timer.stdout }}"
+
+- name: Done
+  hosts: pi1
+  gather_facts: false
+  tasks:
+    - name: The restore check works
+      ansible.builtin.debug:
+        msg: "PI RESTORE CHECK TEST PASSED"
