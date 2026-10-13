@@ -24,8 +24,10 @@ import sys
 loader = importlib.machinery.SourceFileLoader("upgrade_production", "scripts/upgrade-production.py")
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_production", loader))
 loader.exec_module(m)
-# Prometheus' alerts are read from ten at a deciding check: stubbed none here (runner-ci-quiet tests the read and its use)
+# Prometheus' alerts are read from ten at the checks: stubbed none here (runner-ci-quiet tests the read and its use);
+# the controller as pushed: stubbed so here (runner-ci-quiet tests it; release's use of it below)
 m.critical_alert_problems = lambda: []
+_controller_problems, m.controller_problems = m.controller_problems, (lambda: [])
 
 
 def unstubbed_ansible(*a):
@@ -252,7 +254,8 @@ def done_calls(step, answer, events=()):
     return calls
 S23 = "23-cert-manager"
 check("done 23 (cert-renew), no", done_calls(S23, False), ["asked", "refused"])
-check("done 23 (cert-renew), yes", done_calls(S23, True), ["asked", "playbooks/acme-check.yml", "checked"])
+check("done 23 (cert-renew), yes - the ACME check recorded (a red check after it does not issue again)",
+      done_calls(S23, True), ["asked", "playbooks/acme-check.yml", "acme-check", "checked"])
 check("done 24 (barman-check), yes: the backup taken and recorded (a red check later does not take it again)",
       done_calls("24-cnpg", True), ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
 check("done 24 after a check-failed, its backup recorded: not taken again",
@@ -369,7 +372,9 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
         or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     m.vault_login_problems = lambda: list(vault)
-    m.finished_pod_problems = lambda: list(leftovers)
+    # `leftovers`: what each call answers in turn (a list of lists), the last again - or one answer for every call
+    seq = [list(x) for x in leftovers] if leftovers and isinstance(leftovers[0], list) else [list(leftovers)]
+    m.finished_pod_problems = lambda: seq.pop(0) if len(seq) > 1 else list(seq[0])
     m.merged_live_problems = lambda *a: list(live)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
@@ -454,6 +459,16 @@ check("every proof check is given the done steps", [ast.unparse(n)[:60] for n in
 got = phase_calls(m.begin, S47, vault=["VAULT-X"])
 check("begin: refused while production logs into Vault with the old reviewer token, nothing done",
       (len(got), got[-1][0], "VAULT-X" in got[-1][1]), (1, "refused", True))
+# finished pods asked again where they may have appeared since the first check (the pre-pull's evictions): right before
+# the merge's push, after the playbooks' pre-pull - refused there, nothing merged, no playbook line run
+got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"), leftovers=[[], ["LEFTOVER-Y"]])
+check("merge: a finished pod since the check (the pre-pull's eviction) - refused before the push, nothing merged",
+      (got[-1][0], "LEFTOVER-Y" in got[-1][1], any("upgrade-merge-step.sh" in str(c) for c in got)),
+      ("refused", True, False))
+got = phase_calls(m.playbooks, S13, leftovers=[[], ["LEFTOVER-Y"]])
+check("playbooks: a finished pod after the pre-pull - refused, no playbook line run",
+      (got[-1][0], "LEFTOVER-Y" in got[-1][1], any("upgrade-step-playbooks.sh" in str(c) for c in got)),
+      ("refused", True, False))
 # a finished pod left under a Deployment keeps its next rollout from being woken (finished-pods): begin, merge and
 # playbooks refuse, naming it, before anything is done
 for name_, fn_, args_ in (("begin", m.begin, (S47,)), ("merge", m.merge, (S47, "infra")),
@@ -1184,8 +1199,9 @@ check("its claim released during the yes: refused before the push, nothing pushe
 # release closes a start only when the run that made it is gone - not one alive on this host (a process this test
 # starts, its command line naming the script, and stops)
 import socket, subprocess, time
-def released(pid):
-    ends, saved = [], {k: getattr(m, k) for k in ("read_ledger", "confirm", "record")}
+def released(pid, controller=()):
+    ends, saved = [], {k: getattr(m, k) for k in ("read_ledger", "confirm", "record", "controller_problems")}
+    m.controller_problems = lambda: list(controller)
     token = f"{socket.gethostname()}:{pid}:cc"
     m.read_ledger = lambda: ({}, ev(f"{S47} start merge infra {token}"))
     m.confirm = lambda q: True
@@ -1194,7 +1210,7 @@ def released(pid):
         m.release(S47)
         got = ends
     except SystemExit as e:
-        got = "refused" if "alive" in str(e) else str(e)
+        got = "refused" if "alive" in str(e) else ("controller" if "CONTROLLER-X" in str(e) else str(e))
     finally:
         for k, v in saved.items():
             setattr(m, k, v)
@@ -1210,6 +1226,8 @@ child.kill()
 child.wait()
 got, token = released(child.pid)
 check("release: that run gone - its start closed, with its token", got, [("end", "merge", "released", token)])
+got, _ = released(child.pid, controller=["CONTROLLER-X"])
+check("release: the controller not as pushed - refused, nothing closed", got, "controller")
 
 # the phase's work on the hosts runs to its own end through a signal (subprocess KILLed ansible-playbook 0.25 s after a
 # Ctrl-C, its remote tasks running on), then the phase ends interrupted

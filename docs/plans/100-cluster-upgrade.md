@@ -1446,29 +1446,46 @@ Steps 00-10 went to production on 2026-10-13. What production met that no full r
 
 - **The controller left the proof.** A full run never ran the production phases (begin to done), so their fixes need
   no new proof: scripts/upgrade-production.py and tests/ansible/unit are out of PROVEN_PATHS. What judges a step
-  proven and green moved into scripts/upgrade-rules.py, which stays proven (the proof's paths, the settle values the
-  full run also takes, the check window, the environments left out, what may land on main unproven). Every phase
-  refuses while the controller or its tests differ from ops main.
+  proven and green as values moved into scripts/upgrade-rules.py, which stays proven (the proof's paths, the settle
+  values the full run also takes, the check window, the environments left out, what may land on main unproven; an
+  edit to it shows as unproven even when it excludes itself). The logic stays the controller's, unproven: how check()
+  combines its parts, the proof check, the alert and backup checks, the soak. Every phase - and release, init -
+  refuses unless the controller as loaded is ops main's (fetched first), its tests too. Its docstring still says
+  every judging value moved; corrected at the next full run (the file is proven).
 - **The soak is 5 minutes**, a wave0 step's too: the 60 and 15 before were measured against nothing; production's
   slowest liveness probe restarts a container within 305 s, and the soak runs from the first check's end. A slower
   fault is the checks' to find: the deciding check counts a pending critical alert red.
 - **CI's helper pods.** A CI pipeline's local-path helper pod (busybox, some 20 s) caught by the inventory refused a
-  done twice. The inventory leaves them out (version-inventory.sh), and the controller reads it while none runs.
-- **Finished Jobs** (Velero's maintenance Jobs of the version before) refused 10-velero's done: the inventory leaves a
-  finished Job out; a refusal still names any with its delete.
+  done twice. The inventory leaves them out (version-inventory.sh).
+- **Velero's maintenance Jobs** of the version before refused 10-velero's done: the inventory leaves out Jobs labelled
+  velero.io/repo-name (they run Velero's own image, listed by its Deployment) - not every finished Job: a hook's
+  finished Job carries a version the steps move (leaving all out failed a full run's build). A refusal still names a
+  finished Job carrying an extra image with its delete.
 - **A finished pod under a Deployment** kept Velero's Recreate rollout at 0 pods: the Deployment controller requeues a
   Deployment on a pod's delete only once none of its pods is left, a finished one counted. begin, merge and playbooks
-  refuse while one is left, naming its delete.
+  refuse while one is left (preview environments aside), naming its delete and the pod's reason - asked again right
+  before the merge's push and after the playbooks' pre-pull, whose evictions leave such pods.
 - **ten's Helm chart index** was April's: 11-cilium's preview (check mode, which skips the playbooks' refresh) asked it
-  for cilium 1.19.8. Every helm_repository task now runs in check mode too, and preview refreshes the playbooks'
-  repositories first, refusing when that fails.
-- **backup-check** was never read in production: the first done of steps 25 and 43 now takes a Velero backup
-  (10-velero went to production without one).
+  for cilium 1.19.8. Every helm_repository task now runs in check mode too, and preview refreshes the step's own
+  playbooks' repositories first (--fail-on-repo-update-fail), refusing when that fails.
+- **backup-check** was never read in production: the first done of steps 25 and 43 now takes a Velero backup on
+  the full run's terms - every Valkey emptyDir backed up, 30 minutes (it queues behind the 02:00 daily), the storage
+  location asked again after a restart, its delete request read (10-velero went to production without one).
+- **Critical alerts**: begin refuses on one pending or firing (production's own, not the test or preview
+  environments'), and both checks of done follow a pending one until it ends or fires - one sample is no verdict.
+  Prometheus' rules must be loaded: an empty alert list from a Prometheus with none is no green.
 
 Left for the operator: production checks of Kafka (a produce/consume round trip, consumer lag) and ClickHouse (merges)
 before steps 38, 40, 59 and 61; the data check's retries let a store that flaps within its window pass; the root Helm
 repositories ten no longer uses (sealed-secrets, the retired googleapis Istio URL); the kubelet's terminated-pod
 collection threshold (12500, never reached here), which would remove finished pods for good.
+
+For the next full run (each changes a proven file): the verdict's logic into a proven module beside
+scripts/upgrade-rules.py - check()'s combination, the proof check (unproven_changes, main_problems, own_hash), the
+alert filter, image_name_tag, SOAK_MINUTES, FRESH_HOURS and begin's settle window - leaving the controller its I/O and
+ordering; the Velero backup check as a proven production-safe playbook both the full run and done call; the rules'
+and the Taskfile's done description corrected; upgrade-step-playbooks.sh's comment on check mode (helm_repository now
+writes in it); version-inventory.sh to take the preview namespaces' pattern itself (one list, read with its own reads).
 
 ## Production, step by step (after the gate and the operator's approval)
 

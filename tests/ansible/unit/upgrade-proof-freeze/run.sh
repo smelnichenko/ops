@@ -94,6 +94,20 @@ for path in ("scripts/upgrade-defaults.py", "scripts/upgrade-expected-inventory.
     edit(path, "# x\n")
     check(f"  a script beside it edited: proven ({path})", m.unproven_changes(proven, []), [path])
     reset()
+# the rules (what judges proven and green) are proven - and cannot hide an edit by excluding themselves
+R_ = "scripts/upgrade-rules.py"
+edit(R_, "CHECK_MINUTES = 1\n")
+check("the rules edited: unproven", m.unproven_changes(proven, []), [R_])
+reset()
+src_ = open(os.path.join(o, R_)).read().replace('"Taskfile.yml", "Vagrantfile")',
+                                                 '"Taskfile.yml", "Vagrantfile", ":(exclude)scripts/upgrade-rules.py")')
+edit(R_, src_ + "CHECK_MINUTES = 1\n", "w")
+fresh = importlib.util.module_from_spec(importlib.util.spec_from_loader("up2", importlib.machinery.SourceFileLoader(
+    "up2", os.path.join(o, "scripts", "upgrade-production.py"))))
+fresh.__spec__.loader.exec_module(fresh)
+check("the rules edited and excluding themselves (loaded as edited): still unproven",
+      (":(exclude)scripts/upgrade-rules.py" in fresh.PROVEN_PATHS, fresh.unproven_changes(proven, [])), (True, [R_]))
+reset()
 # the rest the proof covers, by behaviour: an edit to each is unproven
 for path in ("Taskfile.yml", "Vagrantfile", "tests/ansible/upgrade/vagrant-overlay/values.yaml"):
     edit(path, "# x\n")

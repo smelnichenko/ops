@@ -281,7 +281,7 @@ fresh
 "$R" 01-a infra "$(rtip 01-a)" > /dev/null 2>&1
 git -C "$W/r/infra" tag -d upgrade-merged/01-a > /dev/null
 check "the proof check of a merged step on a clone without its tag: none" 0 "PROBLEMS: none" \
-  env W="$W/r" bash -c "$(declare -f proof); proof 01-a $m0..$(rtip 01-a)"
+  env W="$W/r" src="$src" bash -c "$(declare -f proof); proof 01-a $m0..$(rtip 01-a)"
 check "  the tag fetched from origin" 0 "upgrade-merged/01-a" git -C "$W/r/infra" tag -l 'upgrade-merged/*'
 echo "upgrade-merge-step: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

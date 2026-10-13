@@ -60,6 +60,17 @@ check("none left: nothing refused (a running pod; kagent's left as they are)",
 check("a pod no ReplicaSet owns (a Job's): not one", m.finished_pod_problems(
     {"items": [deploy("x", "d", "Recreate"), {"kind": "Pod", "metadata": {"namespace": "x", "name": "j-1",
      "ownerReferences": owned("Job", "j")}, "status": {"phase": "Succeeded"}}]}), [])
+# a preview environment's: no step's (it comes and goes with its pull request) - not one
+check("a preview environment's finished pod: not one", m.finished_pod_problems({"items": [
+    deploy("schnappy-pr-12", "web", "Recreate"), rs("schnappy-pr-12", "web-1", "web"),
+    pod("schnappy-pr-12", "web-1-a", "web-1", "Succeeded")]}), [])
+# the reason the pod ended named (an eviction is seen before its delete)
+evicted = pod("app", "web-1-b", "web-1", "Failed")
+evicted["status"]["reason"] = "Evicted"
+check("its reason named (Evicted)", m.finished_pod_problems({"items": [deploy("app", "web", "RollingUpdate"),
+                                                                       rs("app", "web-1", "web"), evicted]}),
+      ["app/web: its finished pod web-1-b (Failed, Evicted) keeps its next rollout from being woken - "
+       "kubectl delete pod -n app web-1-b"])
 print("finished-pods: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_RL

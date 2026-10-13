@@ -14,7 +14,7 @@ def walk(ts):
             yield t
             for k in ("block", "rescue", "always"):
                 yield from walk(t.get(k))
-found, bad = 0, []
+found, bad, installs = 0, [], []
 for path in sorted(glob.glob("deploy/ansible/playbooks/**/*.yml", recursive=True)):
     doc = yaml.safe_load(open(path))
     plays = doc if isinstance(doc, list) else []
@@ -25,12 +25,18 @@ for path in sorted(glob.glob("deploy/ansible/playbooks/**/*.yml", recursive=True
             found += 1
             if t.get("check_mode") is not False:
                 bad.append(f"{path}: {t.get('name')}")
+        # the opposite for an install: a chart that ran in check mode would upgrade production from a preview
+        if ("kubernetes.core.helm" in t or "helm" in t) and t.get("check_mode") is False:
+            installs.append(f"{path}: {t.get('name')}")
 fails = 0
 print(("PASS" if found >= 12 else "FAIL") + f" {found} Helm repository tasks found (at least 12)")
 fails += found < 12
 for b in bad:
     print(f"FAIL runs not in check mode: {b}")
 fails += len(bad)
+for b in installs:
+    print(f"FAIL a Helm install runs in check mode (a preview would install): {b}")
+fails += len(installs)
 print("helm-repo-check-mode: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_HRCM

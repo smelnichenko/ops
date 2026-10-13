@@ -36,6 +36,8 @@ failed='{"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]}'
   job velero repo-maintain-3 velero/velero:v1.18.2 '{"active": 1}' "$maint"; echo ,
   job schnappy-production init-users postgres:17-alpine "$done"; echo ,
   job schnappy-production scylla-schema scylladb/scylla:6.2 "$failed"; echo ,
+  job velero velero-upgrade-crds bitnami/kubectl:1.34 "$done"; echo ,
+  job schnappy-production gateway-patch example/patch:2.0 "$done" '{"velero.io/exclude-from-backup": "true"}'; echo ,
   pod schnappy-infra local-registry registry.local:5000/tools/busybox
   echo ']}'
 } > "$W/pods.json"
@@ -61,7 +63,11 @@ check "the provisioner's helper pods (busybox) left out" "$(grep -c '^image busy
 check "Woodpecker's pipeline pods left out" "$(grep -c '^image alpine' <<< "$out")" 0
 check "the provisioner itself, a lookalike name elsewhere, a hook Job complete or failed listed (a registry's port no \
 tag); a finished pod, Velero's maintenance Jobs (any state) not" "$images" \
-  "image example/app 1.0,image postgres 17-alpine,image rancher/local-path-provisioner v0.0.31,\
-image registry.local:5000/tools/busybox latest,image scylladb/scylla 6.2"
+  "image bitnami/kubectl 1.34,image example/app 1.0,image example/patch 2.0,image postgres 17-alpine,\
+image rancher/local-path-provisioner v0.0.31,image registry.local:5000/tools/busybox latest,image scylladb/scylla 6.2"
+# the skip is Velero's maintenance Jobs only: a Velero hook Job (no repo-name label), a Job carrying another velero.io
+# label - listed
+check "a Velero hook Job, a Job with another velero.io/ label: listed" \
+  "$(grep -cE '^image (bitnami/kubectl 1.34|example/patch 2.0)$' <<< "$out")" 2
 echo "version-inventory-pods: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
