@@ -64,11 +64,11 @@ done_upto = lambda last: [f"{n} done" for n in names[:names.index(last) + 1]]
 # the real step files' facts the rules below lean on (a change to them should fail here, not in production)
 check("47 merges infra, then platform", info["47-postgres-18"]["branches"], ["infra", "platform"])
 check("54 merges platform, then infra", info["54-tempo-3"]["branches"], ["platform", "infra"])
-# a one-way (wave0) step soaks as long as any other: the second done checks the same things after 10 minutes or 60
-check("47 backs up postgres first, soaks 10 min like any step", (info["47-postgres-18"]["wave0"],
-                                                                 info["47-postgres-18"]["soak"]), (["postgres"], 10))
+# a one-way (wave0) step soaks as long as any other: the second done checks the same things after 5 minutes or 60
+check("47 backs up postgres first, soaks 5 min like any step", (info["47-postgres-18"]["wave0"],
+                                                                info["47-postgres-18"]["soak"]), (["postgres"], 5))
 i01 = info["01-argocd-root-retry"]
-check("01 has no wave0 line, soaks 10 min", (i01["wave0"], i01["soak"]), ([], 10))
+check("01 has no wave0 line, soaks 5 min", (i01["wave0"], i01["soak"]), ([], 5))
 i37 = info["37-strimzi-conversion"]
 check("37 has playbooks and leaves strimzi out of sync", (bool(i37["playbooks"]), i37["out_of_sync"]),
       (True, ["strimzi"]))
@@ -850,7 +850,7 @@ check("status after 13's defaults (the event carries the commit): done next",
 # the soak's time left as status shows it, by ten's clock (the first green check's): this machine's, a day later here,
 # showed it over
 soaking = mid13 + [f"{S13} defaults deadbeef", f"{S13} checked"]
-at = (T0 + datetime.timedelta(minutes=len(soaking) - 1 + 5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+at = (T0 + datetime.timedelta(minutes=len(soaking) - 1 + 2)).strftime("%Y-%m-%dT%H:%M:%SZ")
 saved = m.read_ledger, m.ten_now
 m.read_ledger, m.ten_now = (lambda: (None, ev(*soaking))), (lambda: at)
 buf = io.StringIO()
@@ -859,8 +859,8 @@ try:
         m.status()
 finally:
     m.read_ledger, m.ten_now = saved
-check("status of a step soaking: its time left by ten's clock (5 minutes into 13's 10)",
-      [l.strip().split(", ")[-1] for l in buf.getvalue().splitlines() if "soaking since" in l], ["5 of 10 minutes left"])
+check("status of a step soaking: its time left by ten's clock (2 minutes into 13's 5)",
+      [l.strip().split(", ")[-1] for l in buf.getvalue().splitlines() if "soaking since" in l], ["3 of 5 minutes left"])
 
 # begin records the app set before begun: cut short between them, it runs again rather than stranding the step
 got = phase_calls(m.begin, S47, events=ev(*done_upto("46-postgres-18-test")))

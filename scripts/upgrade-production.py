@@ -21,7 +21,7 @@ Per step N (tests/ansible/upgrade/steps/N.txt), in this order:
              cert-renew line - first a throwaway certificate issued through production's ACME solver: acme-check.yml;
              a barman-check step whose merge took no base backup - declined or failed there - takes it here).
              The first green call records checked as it ends (and when it began); a call at
-             least the step's soak later (its soak line; else 10 minutes) that is
+             least the step's soak later (its soak line; else 5 minutes) that is
              green again with no container restarted since the first began records done. A red call after checked records
              check-failed: the soak starts again from the next green call.
 A phase that fails records nothing of its own. Every phase claims the step first - start <phase> <host:pid>, written
@@ -89,10 +89,12 @@ URLS = {"infra": "https://git.pmon.dev/schnappy/infra.git", "platform": "https:/
 # are listed, not compared
 TEST_NAMESPACES = "schnappy-test"
 # a step's soak unless its soak line says otherwise - a one-way (wave0) step's too: the second done checks the same
-# things (green, the data paths, no container restarted since the first check) after 10 minutes or 60; a crash loop or
-# a failing probe restarts a container within minutes, and no failure is known to show only later (operator
-# 2026-10-13: 60 for wave0 steps, then 15, both never measured, then 10)
-SOAK_MINUTES = 10
+# things (green, the data paths, no container restarted since the first check). What it catches is a restart: a crash
+# loop (seconds) or a failing liveness probe - production's slowest to restart a container, counted from its start,
+# is 305 s (cilium, cilium-envoy, SonarQube: initial delay + period x failures + timeout, read 2026-10-13), so 5
+# minutes covers every one. Shorter would not. (Operator 2026-10-13: 60 for wave0 steps, 15, 10 - none measured - then
+# this.)
+SOAK_MINUTES = 5
 # Argo's settle after a merge, a step's settle line aside: longer than the longest hook a merge can start and its
 # rollout - init-users (schnappy-data's Sync hook) may take its whole deadline in a major's restarts: 2095 s (~35 min)
 # with production's 5 databases (platform cnpg-init-users.yaml, derived from them); 30 min called a hook still within

@@ -6,9 +6,9 @@ findings fixed, each with a failing test. Next: gate, push, one full run (its pr
 the operator's go: `task deploy:vault-eso` first, a Wave 0 backup before every one-way step, every stateful step shown
 before it runs.
 Run time: full run ~4.3 h projected after review 10's cuts (target 3 h; ~3.8 h is the floor without a snapshot of the
-built copy or cutting production's own procedure - both the operator's call). Rollout: 62 steps, about 10 h of soaks (10
-min a step, a Wave 0 step's too - 60 for those until 2026-10-13, then 15, measured against nothing) on top of each
-step's own phases.
+built copy or cutting production's own procedure - both the operator's call). Rollout: 62 steps, about 5 h of soaks (5
+min a step, a Wave 0 step's too: production's slowest liveness probe restarts a container within 305 s; 60, 15 and 10
+before it, 2026-10-13, measured against nothing) on top of each step's own phases.
 
 ## Decisions (operator, 2026-10-01)
 
@@ -1478,7 +1478,8 @@ deploy:upgrade:status` names the next phase and what stands before it. Per step 
    `upgrade-defaults.py --lint` and the targets branch start after the recorded ones). A run cut short after its commit
    or its push is taken up where it stopped. The proof check then allows exactly those lines and that record.
 7. `deploy:upgrade:done STEP=N` - ten as the step leaves it (its argo-out-of-sync apps allowed). The first green call
-   starts the soak: 10 minutes, a wave0 step's too (a step's `soak` line overrides). Called again after it
+   starts the soak: 5 minutes (production's slowest liveness probe restarts a container within 305 s), a wave0
+   step's too (a step's `soak` line overrides). Called again after it
    - green, with no container restarted since the first green call - the step is done. A red call during the soak
    restarts it. A cert-renew step's first call issues a throwaway certificate through production's ACME solver, a
    barman-check step's takes a Postgres base backup (unless its merge took one): that call asks first.
