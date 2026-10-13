@@ -53,9 +53,7 @@ for a in json.load(sys.stdin)["items"]:
 
   # every container image that runs or is set to run (digests dropped: the tag is the version): pods not finished,
   # each CronJob's template, each Job no CronJob owns. A finished pod runs nothing, like a removed package: a CronJob
-  # keeps its last runs' pods for hours, with the image they ran - after its image moves too. A CI pipeline's pods are
-  # not the node's: Woodpecker's own (wp-...) and the local-path provisioner's helper pods that make and remove each
-  # pipeline's workspace volume (helper-pod-..., busybox, seconds each).
+  # keeps its last runs' pods for hours, with the image they ran - after its image moves too.
   kubectl get pods,cronjobs,jobs -A -o json \
     | python3 -c 'import json,os,sys
 ex,only=os.environ["INVENTORY_EXCLUDE_NAMESPACES"].split(),os.environ["INVENTORY_ONLY_NAMESPACES"].split()
@@ -63,7 +61,6 @@ seen=set()
 for o in json.load(sys.stdin)["items"]:
     meta=o["metadata"]
     if meta["namespace"]=="woodpecker" and meta["name"].startswith("wp-"): continue
-    if meta["namespace"]=="local-path-storage" and meta["name"].startswith("helper-pod-"): continue
     if meta["namespace"] in ex or (only and meta["namespace"] not in only): continue
     if o["kind"]=="Pod":
         if o["status"].get("phase") in ("Succeeded","Failed"): continue
