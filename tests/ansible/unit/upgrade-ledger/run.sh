@@ -354,11 +354,12 @@ ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its argument
 
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
-                pushed=None, revs=None, ten_out="abc1234", vault=(), live=()):
+                pushed=None, revs=None, ten_out="abc1234", vault=(), live=(), leftovers=()):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "host_work", "ansible", "record",
                        "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
-                       "ten", "image_pins", "read_ledger", "vault_login_problems", "merged_live_problems")
+                       "ten", "image_pins", "read_ledger", "vault_login_problems", "merged_live_problems",
+                       "recreate_leftover_problems")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.read_ledger = lambda: ({"data": {"events": ""}}, [])  # the claim's re-read before a push (none claimed here)
@@ -366,6 +367,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
         or list(proof)
     m.registry_problems = lambda *a, **k: list(registry)
     m.vault_login_problems = lambda: list(vault)
+    m.recreate_leftover_problems = lambda: list(leftovers)
     m.merged_live_problems = lambda *a: list(live)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
@@ -450,6 +452,10 @@ check("every proof check is given the done steps", [ast.unparse(n)[:60] for n in
 got = phase_calls(m.begin, S47, vault=["VAULT-X"])
 check("begin: refused while production logs into Vault with the old reviewer token, nothing done",
       (len(got), got[-1][0], "VAULT-X" in got[-1][1]), (1, "refused", True))
+# a finished pod left under a Recreate Deployment holds its next rollout (recreate-leftovers): begin refuses, naming it
+got = phase_calls(m.begin, S47, leftovers=["LEFTOVER-X"])
+check("begin: refused while a finished pod holds a Recreate rollout, nothing done",
+      (len(got), got[-1][0], "LEFTOVER-X" in got[-1][1]), (1, "refused", True))
 def vault_login(rc, out, err=""):
     saved = m.ten
     sent = []

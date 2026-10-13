@@ -135,7 +135,7 @@ def begin_calls(inv_ok, settle_ok):
     calls = []
     names = m.step_names()
     s = patched(ledger_for=lambda st, ph, arg=None: (names, [], m.step_info(st)), proof_problems=lambda *a, **k: [],
-                vault_login_problems=lambda: [], inventory_check=lambda *a: inv_ok,
+                vault_login_problems=lambda: [], recreate_leftover_problems=lambda: [], inventory_check=lambda *a: inv_ok,
                 settled=lambda *a, **k: (settle_ok, {}, ["app"]), record=lambda st, ev, *a, **k: calls.append(ev))
     try:
         m.begin("01-argocd-root-retry")

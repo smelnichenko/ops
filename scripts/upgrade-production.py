@@ -1282,10 +1282,44 @@ def vault_login_problems():
     return []
 
 
+# left as they are, whatever they hold (operator 2026-10-01: "leave kagent as is")
+LEFT_ALONE_NAMESPACES = ("kagent",)
+
+
+def recreate_leftover_problems(objs=None):
+    """A finished pod (Succeeded or Failed) left under a Deployment whose strategy is Recreate: it held that Deployment's
+    next rollout - 10-velero's merge (2026-10-13) stopped the new pod for the chart's second change and started no next
+    one until the pod Velero had left finished since 10-03 was deleted. Each named with its delete (a finished pod runs
+    nothing). `objs`: kubectl's get deployments,replicasets,pods -A -o json (read on ten without)."""
+    if objs is None:
+        out = ten("kubectl get deployments,replicasets,pods -A -o json --request-timeout=60s", check=False)
+        if out.returncode:
+            return [f"production's Deployments not read: {out.stderr.strip()}"]
+        objs = json.loads(out.stdout)
+    items = objs.get("items", [])
+    key = lambda o: (o["metadata"]["namespace"], o["metadata"]["name"])
+    owner = lambda o, kind: next((r["name"] for r in o["metadata"].get("ownerReferences") or []
+                                  if r.get("kind") == kind and r.get("controller")), None)
+    recreate = {key(o) for o in items if o.get("kind") == "Deployment"
+                and ((o.get("spec") or {}).get("strategy") or {}).get("type") == "Recreate"}
+    deployment_of = {key(o): owner(o, "Deployment") for o in items if o.get("kind") == "ReplicaSet"}
+    out = []
+    for o in items:
+        ns, name = key(o)
+        phase = (o.get("status") or {}).get("phase")
+        if o.get("kind") != "Pod" or phase not in ("Succeeded", "Failed") or ns in LEFT_ALONE_NAMESPACES:
+            continue
+        d = deployment_of.get((ns, owner(o, "ReplicaSet")))
+        if d and (ns, d) in recreate:
+            out.append(f"{ns}/{d}: its finished pod {name} ({phase}) holds its next Recreate rollout back - "
+                       f"kubectl delete pod -n {ns} {name}")
+    return sorted(out)
+
+
 def begin(step):
     names, events, _ = ledger_for(step, "begin")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events))
-           + vault_login_problems())
+           + vault_login_problems() + recreate_leftover_problems())
     ok = inventory_check(applied_steps(events))
     # the app set the step must keep: the previous step's (a done step's apps), or, for the first, what runs now
     before = [a for _, s, e, a in events if e == "apps" and s != step]
