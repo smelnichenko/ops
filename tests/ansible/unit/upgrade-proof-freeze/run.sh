@@ -2,7 +2,8 @@
 # What production refuses as changed since the full run's proof (scripts/upgrade-production.py unproven_changes): the
 # whole tree the proof covers - playbooks, every step file, the inventories and allow-lists, the scripts that judge a
 # step green - but for the committed steps' playbook default lines, and the unit tests (tests/ansible/unit: they test
-# the scripts, nothing runs them in a step). In a throwaway ops repo with the real scripts.
+# the scripts, nothing runs them in a step) and the controller itself (scripts/upgrade-production.py: its production
+# phases run on production only). In a throwaway ops repo with the real scripts.
 set -u
 src=$(cd "$(dirname "$0")/../../../.." && pwd)
 W=$(mktemp -d)
@@ -82,6 +83,17 @@ edit("tests/ansible/units/data.txt", "y\n")
 check("  a path that only starts like it (tests/ansible/units): proven", m.unproven_changes(proven, []),
       ["tests/ansible/units/data.txt"])
 reset()
+edit("scripts/upgrade-production.py", "# a controller change\n")
+check("the controller edited: not proven", m.unproven_changes(proven, []), [])
+reset()
+for path in ("scripts/upgrade-defaults.py", "scripts/upgrade-expected-inventory.py"):
+    edit(path, "# x\n")
+    check(f"  a script beside it edited: proven ({path})", m.unproven_changes(proven, []), [path])
+    reset()
+# exactly what the proof check covers, entry by entry: a controller change that drops one shows here
+check("the proven paths, pinned", m.PROVEN_PATHS,
+      ("deploy", "scripts", "tests", ":(exclude)tests/ansible/unit", ":(exclude)scripts/upgrade-production.py",
+       "Taskfile.yml", "Vagrantfile"))
 # the defaults phase: --apply the next step only, its lines and the record; the proof check excuses exactly those
 check("--apply out of order refuses", defaults("--apply", "03-c").returncode, 1)
 check("--apply out of order: nothing written", m.unproven_changes(proven, []), [])

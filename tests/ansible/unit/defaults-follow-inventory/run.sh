@@ -18,6 +18,7 @@ def load(name, path):
     return m
 inv = load("inv", "scripts/upgrade-expected-inventory.py")
 dflt = load("dflt", "scripts/upgrade-defaults.py")
+helper = load("defaults_baseline", "tests/ansible/unit/defaults_baseline.py")
 P = "deploy/ansible/playbooks/"
 MAP = [
     (P + "setup-kubeadm.yml", "var", "cert_manager_version", r"argo-chart cert-manager cert-manager@(\S+)"),
@@ -60,13 +61,9 @@ read = lambda p: open(p).read()
 names = dflt.step_names()
 fails, compared = [], 0
 # the baseline's files: the committed steps' default lines reverted (a committed step's new line not there fails)
-committed = [l.strip() for l in read(dflt.COMMITTED).split("\n") if l.strip() and not l.startswith("#")]
 base = {}
 try:
-    dflt.pending(read)
-    for step in reversed(committed):
-        for path, old, new in reversed(dflt.default_lines(step)):
-            base[path] = dflt.apply(base[path] if path in base else read(path), new, old, f"{step} reverted: {path}")
+    base = helper.baseline(dflt, read)
 except ValueError as e:
     fails.append(f"the committed steps do not revert to the baseline - {e}")
 start = lambda p: base[p] if p in base else read(p)

@@ -1,6 +1,7 @@
 #!/bin/bash
 # scripts/upgrade-defaults.py: a default line replaces every line equal to its old one, keeping the indentation, and
-# refuses a file without it; the steps' lines apply in step order to the working tree's playbooks (--lint).
+# refuses a file without it; the steps' lines apply in step order to the working tree's playbooks (--lint); the
+# committed ones revert to the baseline (production commits them during the rollout: defaults_baseline.py).
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PY'
@@ -11,6 +12,9 @@ import sys
 loader = importlib.machinery.SourceFileLoader("upgrade_defaults", "scripts/upgrade-defaults.py")
 d = importlib.util.module_from_spec(importlib.util.spec_from_loader("upgrade_defaults", loader))
 loader.exec_module(d)
+hl = importlib.machinery.SourceFileLoader("defaults_baseline", "tests/ansible/unit/defaults_baseline.py")
+helper = importlib.util.module_from_spec(importlib.util.spec_from_loader("defaults_baseline", hl))
+hl.exec_module(helper)
 fails = 0
 
 
@@ -74,7 +78,20 @@ except ValueError:
 # the steps production committed (the record, which --apply extends): lint and the targets branch start after them
 with_lines = [s for s in d.step_names() if d.default_lines(s)]
 H = "# header\n"
-rec = lambda text, read=tree: (lambda p: text if p == d.COMMITTED else read(p))
+# the baseline (what a full run proved): the tree with the committed steps' lines reverted - nothing committed in it
+B = helper.baseline(d, tree)
+base = lambda p: B[p] if p in B else tree(p)
+rec = lambda text, read=base: (lambda p: text if p == d.COMMITTED else read(p))
+done = [s for s in with_lines if s not in d.pending(tree)]
+check("the baseline: every committed step's lines applied to it give the tree back",
+      {p: c == tree(p) for p, c in d.applied(rec(H), done).items() if p != d.COMMITTED}, {p: True for p in B})
+path1, _, new1 = d.default_lines(with_lines[0])[0]
+one = rec(H + with_lines[0] + "\n", d.applied(base, with_lines[:1]).get)  # the first step committed, nothing else
+try:
+    helper.baseline(d, lambda p: one(p).replace(new1, "# gone") if p == path1 else (one(p) or base(p)))
+    check("a committed step whose new line is gone: no baseline", "reverted", "refused")
+except ValueError as e:
+    check("a committed step whose new line is gone: no baseline, naming it", with_lines[0] in str(e), True)
 check("the record in the tree is a valid one", d.pending(tree)[-1], with_lines[-1])
 check("nothing committed: every step with default lines pending", d.pending(rec(H)), with_lines)
 check("the first committed: the rest pending", d.pending(rec(H + with_lines[0] + "\n")), with_lines[1:])
@@ -94,7 +111,7 @@ try:
 except ValueError:
     check("after the first step's commit: every step from the first no longer applies (why the record)", True, True)
 path0, old0, _ = d.default_lines(with_lines[0])[0]
-wrong = lambda p: tree(p).replace(old0, "# gone") if p == path0 else rec(H)(p)
+wrong = lambda p: base(p).replace(old0, "# gone") if p == path0 else rec(H)(p)
 try:
     d.applied(wrong, d.pending(wrong))
     check("an uncommitted step's missing old line still fails", "applied", "refused")
