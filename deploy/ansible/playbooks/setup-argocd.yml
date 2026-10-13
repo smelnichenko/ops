@@ -397,7 +397,6 @@
       no_log: true
 
     - name: Add Argo Helm repository
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: argo
         repo_url: "{{ argocd_chart_repo }}"

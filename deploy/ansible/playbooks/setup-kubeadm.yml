@@ -608,7 +608,6 @@
     # force_update refreshes the repo's index: an existing repo is otherwise never refreshed, and ten's index (April)
     # lists neither 1.19.8 nor 1.20.2 (2026-10-04)
     - name: Add Cilium Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: cilium
         repo_url: https://helm.cilium.io/
@@ -699,7 +698,6 @@
     # ================================================================
 
     - name: Add Istio Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: istio
         repo_url: https://blob.istio.io/istio-release/charts  # GCP-hosted repo retired (Istio 1.31); same charts
@@ -942,7 +940,6 @@
     # ================================================================
 
     - name: Add metrics-server Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: metrics-server
         repo_url: https://kubernetes-sigs.github.io/metrics-server/
@@ -967,7 +964,6 @@
     # ================================================================
 
     - name: Add Jetstack Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: jetstack
         repo_url: https://charts.jetstack.io
@@ -1011,7 +1007,6 @@
     # ================================================================
 
     - name: Add External Secrets Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: external-secrets
         repo_url: https://charts.external-secrets.io
@@ -1030,7 +1025,6 @@
       when: external_secrets_by_helm | bool
 
     - name: Add Prometheus Operator CRDs Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: prometheus-community
         repo_url: https://prometheus-community.github.io/helm-charts
@@ -1057,7 +1051,6 @@
     # ================================================================
 
     - name: Add CNPG Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: cnpg
         repo_url: https://cloudnative-pg.github.io/charts
@@ -1084,7 +1077,6 @@
 
       when: not platform_by_argo | bool
     - name: Add Strimzi Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: strimzi
         repo_url: https://strimzi.io/charts/
@@ -1109,7 +1101,6 @@
 
       when: not platform_by_argo | bool
     - name: Add ScyllaDB operator Helm repo
-      check_mode: false  # the node's chart index only: a preview then installs against a current one
       kubernetes.core.helm_repository:
         name: scylla-operator
         repo_url: https://scylla-operator-charts.storage.googleapis.com/stable
