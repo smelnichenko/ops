@@ -66,8 +66,8 @@
     cilium_version: "1.19.8"
     # the Scylla Manager chart's values where Argo does not install it: its and its agents' image tags (production's
     # pins from the step that needs them; empty: the chart's) - tags apart, so a step's default line stays one short line
-    scylla_manager_tag: ""
-    scylla_manager_agent_tag: ""
+    scylla_manager_tag: "3.12.1@sha256:ba54287094e7097fb6685717187dca4bee304130b5fbdde1473e70e2bc6e998a"
+    scylla_manager_agent_tag: "3.12.1@sha256:f47697d38da94a1e367286d232783199abb7477db026febfd125ee3b2aded7b0"
     scylla_manager_values: >-
       {{ {'scylla': {'developerMode': true}}
          | combine({'image': {'tag': scylla_manager_tag}} if scylla_manager_tag else {})
@@ -1120,7 +1120,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: scylla-operator
         chart_ref: scylla-operator/scylla-operator
-        chart_version: "v1.21.1"
+        chart_version: "v1.22.0"
         release_namespace: scylla-operator
         create_namespace: true
         wait: true
@@ -1132,7 +1132,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: scylla-manager
         chart_ref: scylla-operator/scylla-manager
-        chart_version: "v1.21.1"
+        chart_version: "v1.22.0"
         release_namespace: scylla-manager
         create_namespace: true
         values: "{{ scylla_manager_values }}"

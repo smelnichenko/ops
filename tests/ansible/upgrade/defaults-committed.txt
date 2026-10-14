@@ -12,3 +12,4 @@
 14-containerd
 15-scylla-operator-1.20.3
 18-scylla-operator-1.21
+21-scylla-operator-1.22
