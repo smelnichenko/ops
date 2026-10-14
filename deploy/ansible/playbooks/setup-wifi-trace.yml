@@ -69,8 +69,9 @@
         daemon_reload: true
 
     - name: Its first run now (armed, or the trace already armed by hand kept)
-      ansible.builtin.command: systemctl start wifi-trace.service
-      changed_when: true
+      ansible.builtin.systemd_service:
+        name: wifi-trace.service
+        state: started
 
     - name: The trace armed
       ansible.builtin.command: /usr/local/sbin/wifi-trace status
