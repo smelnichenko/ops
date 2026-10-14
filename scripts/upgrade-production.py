@@ -110,6 +110,7 @@ BRANCH = "upgrade/"  # + step: a step's branch in infra and platform
 MERGED_TAG = "upgrade-merged/"  # + step: the tag a production merge leaves (scripts/upgrade-merge-step.sh)
 # the app images the full run ran: production's values with these tags over them (the Vagrant overlay)
 APP_VALUES = "clusters/production/schnappy-production-apps/values.yaml"
+PG_NAMESPACE, PG_CLUSTER = "schnappy-production", "schnappy-production-postgres"  # production's CNPG cluster
 APP_OVERLAY = os.path.join("tests", "ansible", "upgrade", "vagrant-overlay", "infra", APP_VALUES.replace(
     "values.yaml", "values.vagrant.yaml"))
 BEFORE_LEDGER = "02-istio-chart-repo"
@@ -1694,7 +1695,7 @@ def merge(step, repo):
         if not confirm(f"Step {step}'s merges settled: take PRODUCTION's Postgres base backup now "
                        "(postgres-base-backup.yml)?"):
             print("no base backup now - deploy:upgrade:done takes it at its first call")
-        elif ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_major={inv.pg_major(step)}"):
+        elif take_base_backup(step):
             record(step, "base-backup")
         else:
             print("the base backup failed (above) - deploy:upgrade:done takes it again at its first call")
@@ -1711,9 +1712,25 @@ def postgres_target(step):
 
 def cluster_runs(image):
     """Whether production's Postgres cluster runs `image` (name:tag, its digest aside) - CNPG's status."""
-    now = ten("kubectl -n schnappy-production get clusters.postgresql.cnpg.io schnappy-production-postgres "
+    now = ten(f"kubectl -n {PG_NAMESPACE} get clusters.postgresql.cnpg.io {PG_CLUSTER} "
               "-o jsonpath={.status.image}").stdout.strip()
     return now == image or now.startswith(image + "@")
+
+
+def take_base_backup(step):
+    """postgres-base-backup.yml on production's cluster - whether it passed. Its pg_switch_wal() on an idle server
+    closes nothing: it names the WAL file still open, never archived, and the playbook waits on it in vain
+    (25-versitygw, 2026-10-14). So first, on the primary: a message, a switch (archive_timeout's 5 minutes start
+    again - it cannot close the file before the playbook does), a message (the playbook's switch has a file to close)."""
+    emit = "select pg_logical_emit_message(false, 'upgrade-wal-switch', 'x')"
+    out = ten(f"kubectl -n {PG_NAMESPACE} exec $(kubectl -n {PG_NAMESPACE} get clusters.postgresql.cnpg.io {PG_CLUSTER} "
+              f"-o jsonpath={{.status.currentPrimary}}) -c postgres -- psql -U postgres -At -v ON_ERROR_STOP=1 "
+              f'-c "{emit}" -c "select pg_switch_wal()" -c "{emit}"', check=False)
+    if out.returncode:
+        print(f"no WAL written on the primary: rc {out.returncode}: {out.stderr.strip()}")
+        return False
+    return ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_namespace={PG_NAMESPACE}", "-e",
+                   f"cluster={PG_CLUSTER}", "-e", f"pg_major={inv.pg_major(step)}")
 
 
 def playbooks(step):
@@ -1885,8 +1902,7 @@ def done(step):
         refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
         record(step, "acme-check")
     if checked is None and base_backup:
-        refuse([] if ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_major={inv.pg_major(step)}")
-               else ["no fresh Postgres base backup (above)"])
+        refuse([] if take_base_backup(step) else ["no fresh Postgres base backup (above)"])
         # recorded: a red check later starts the soak again, and its next first call does not take another
         record(step, "base-backup")
     if checked is None and scylla_backup:
