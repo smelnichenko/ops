@@ -63,5 +63,24 @@ out=$(PATH="$W/bin:$PATH" env -u VAGRANT_SSH_CONFIG bash scripts/vagrant-image-d
 if [ $rc = 0 ] && grep -q -- "--request-timeout=" "$W/vagrant-args" && grep -q -- "-- .*ServerAliveInterval=" "$W/vagrant-args"; then
   echo "PASS by vagrant ssh: the same digests, keep-alives handed to its ssh, a request timeout on kubectl"
 else echo "FAIL by vagrant ssh (rc $rc): $(cat "$W/vagrant-args" 2> /dev/null)"; fails=$((fails + 1)); fi
+# scripts/vagrant-image-listing.sh: crictl's image listing from the copy's node, kept beside each step's digests (the
+# proof's image IDs come from it) - its JSON whole, the terminal's \r gone, bounded the same way, a failed read failed
+printf '{"images": [{"id": "%s", "repoDigests": ["git.pmon.dev/s/own@%s"]}]}\n' "$G" "$A" > "$W/images.json"
+for how in ssh vagrant; do
+  : > "$W/args"
+  printf '#!/bin/bash\necho "$*" >> "%s/args"\n[ -z "${LISTING_FAILS:-}" ] || exit 255\nsed "s/\\$/\\r/" "%s/images.json"\n' \
+    "$W" "$W" > "$W/bin/$how"
+  chmod +x "$W/bin/$how"
+  if [ "$how" = ssh ]; then run=(env VAGRANT_SSH_CONFIG=/dev/null); else run=(env -u VAGRANT_SSH_CONFIG); fi
+  out=$(PATH="$W/bin:$PATH" "${run[@]}" bash scripts/vagrant-image-listing.sh 2>&1); rc=$?
+  if [ $rc = 0 ] && [ "$out" = "$(cat "$W/images.json")" ] && grep -q "sudo crictl images --digests -o json" "$W/args" \
+    && grep -q "ServerAliveInterval=" "$W/args"; then
+    echo "PASS the image listing by $how: crictl's JSON whole, no \\r, keep-alives on the connection"
+  else echo "FAIL the image listing by $how (rc $rc): $out / $(cat "$W/args")"; fails=$((fails + 1)); fi
+  PATH="$W/bin:$PATH" LISTING_FAILS=1 "${run[@]}" bash scripts/vagrant-image-listing.sh > /dev/null 2>&1; rc=$?
+  if [ $rc != 0 ]; then echo "PASS the image listing by $how: a failed read fails (rc $rc)"
+  else echo "FAIL the image listing by $how: a failed read ended 0"; fails=$((fails + 1)); fi
+  rm "$W/bin/$how"
+done
 echo "image-digests: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

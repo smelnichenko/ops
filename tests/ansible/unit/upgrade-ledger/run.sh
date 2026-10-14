@@ -821,6 +821,29 @@ ids = getattr(m, "copy_image_ids", None)
 check("the copy's ID read for the proven digest, nothing else", ids({AC: P1}, listing) if ids else None, {AC: I1})
 check("a proven digest the copy no longer holds: refused", ids({AC: "sha256:" + "9" * 64}, listing) if ids else None,
       "refused")
+# the full run's proof records those IDs itself, from the copy's listing right after the step
+# (.upgrade/step-digests/<step>.images.json, scripts/vagrant-image-listing.sh): none, or one lacking an image the step
+# ran, refused - no proof
+import tempfile as _tf_ids
+kept_work, m.WORK = m.WORK, _tf_ids.mkdtemp()
+os.makedirs(os.path.join(m.WORK, "step-digests"))
+sid = getattr(m, "step_image_ids", None)
+def sid_out(digests):
+    try:
+        return sid(S59, digests) if sid else None
+    except SystemExit as e:
+        return "refused: " + str(e)
+no_listing = sid_out({AC: P1})
+open(os.path.join(m.WORK, "step-digests", S59 + ".images.json"), "w").write(listing)
+got = (sid_out({AC: P1}), str(sid_out({AC: "sha256:" + "9" * 64})).startswith("refused: "))
+m.WORK = kept_work
+check("a proof's image IDs: no listing after the step - refused, named",
+      str(no_listing).startswith("refused: ") and S59 + ".images.json" in str(no_listing), True)
+check("a proof's image IDs: from the listing; an image it lacks refused", got, ({AC: I1}, True))
+src = inspect.getsource(m.record_proof)
+check("record_proof reads the IDs before it writes the proof, and writes them beside it",
+      ("step_image_ids(" in src and src.index("step_image_ids(") < src.index("write_json(proof_path"),
+       "write_json(image_ids_path(step)" in src), (True, True))
 m.PROVEN = kept_proven
 saved = {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled", "running_digest_problems", "ansible")}
 m.read_ledger, m.inventory_check = (lambda: (None, [])), (lambda *a: True)
@@ -1418,9 +1441,12 @@ check("pin: exactly 59 and 61 move ClickHouse's image",
 
 
 def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256:" + "3" * 64 + "\n"
-                         "other/image 1 sha256:" + "4" * 64 + "\n", start="47-postgres-18"):
+                         "other/image 1 sha256:" + "4" * 64 + "\n", start="47-postgres-18",
+              listing=json.dumps({"images": [{"id": "sha256:" + "c" * 64,
+                                              "repoDigests": ["docker.io/clickhouse/clickhouse-server@sha256:" + "3" * 64]}]})):
     """record-proof of 59 with git and the tree stubbed; `pin` the rollback pin's result (None: no file); `start`: the
-    run's (None: a run.json from before runs recorded it)."""
+    run's (None: a run.json from before runs recorded it); `listing`: the copy's image listing after the step (None:
+    none)."""
     work = tempfile.mkdtemp()
     json.dump({"run": "r", "ops": "o", "branches": {}, "main": {"infra": "mi", "platform": "mp"},
                **({"from": start} if start else {})},
@@ -1443,6 +1469,8 @@ def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256
     if digests is not None:
         os.makedirs(os.path.join(work, "step-digests"))
         open(os.path.join(work, "step-digests", S59 + ".txt"), "w").write(digests)
+        if listing is not None:
+            open(os.path.join(work, "step-digests", S59 + ".images.json"), "w").write(listing)
     m.ops_unchanged_since, m.floating_digests, m.own_change = (lambda *a: []), (lambda: {}), (lambda *a: "own")
     m.branch_moves = lambda recorded: []
     m.touched_since = lambda *a: []
@@ -1451,6 +1479,8 @@ def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256
         if not os.path.exists(os.path.join(work, S59 + ".json")):
             return "nothing"
         RECORDED.append(json.load(open(os.path.join(work, S59 + ".json"))))
+        ids_file = os.path.join(work, S59 + ".image-ids.json")
+        RECORDED_IDS.append(json.load(open(ids_file)) if os.path.exists(ids_file) else None)
         return "recorded"
     except SystemExit as e:
         return f"refused, nothing recorded: {not os.path.exists(os.path.join(work, S59 + '.json'))}"
@@ -1459,11 +1489,19 @@ def record_59(pin, digests="clickhouse/clickhouse-server 25.8.33.6-alpine sha256
             setattr(m, k, v)
 
 
-RECORDED = []
+RECORDED, RECORDED_IDS = [], []
 check("record-proof 59 with its pin proven: recorded",
       record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}), "recorded")
 check("record-proof 59: the digests the copy ran for the step's images, only those, as containerd names them",
       RECORDED[-1].get("digests"), {"docker.io/clickhouse/clickhouse-server:25.8.33.6-alpine": "sha256:" + "3" * 64})
+check("record-proof 59: the copy's image ID behind each proven digest beside the proof", RECORDED_IDS[-1],
+      {"docker.io/clickhouse/clickhouse-server:25.8.33.6-alpine": "sha256:" + "c" * 64})
+check("record-proof 59 without the copy's image listing after it: refused, nothing recorded",
+      record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, listing=None),
+      "refused, nothing recorded: True")
+check("record-proof 59 with a listing lacking an image the step ran: refused, nothing recorded",
+      record_59({"59": {"platform": "p59", "images": img[S59], "ops": "o"}}, listing='{"images": []}'),
+      "refused, nothing recorded: True")
 check("record-proof 59: the run's start in the proof (production counts the steps before it by its ledger)",
       RECORDED[-1].get("from"), "47-postgres-18")
 check("record-proof 59: the main the run mirrored in the proof", RECORDED[-1].get("main"),

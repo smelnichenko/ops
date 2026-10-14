@@ -904,7 +904,9 @@ def record_proof(step, infra_sha, platform_sha):
     pin = pin_problems(step, shas["platform"], run_info["ops"], floating=proof["floating"])
     if pin:
         sys.exit("REFUSED: " + "; ".join(pin))
+    ids = step_image_ids(step, proof["digests"])
     write_json(proof_path(step), proof, indent=1)
+    write_json(image_ids_path(step), ids, indent=1)
     print(f"PROOF: {step} " + " ".join(f"{r}={p['sha'][:10]}" for r, p in proof["repos"].items()))
 
 
@@ -958,6 +960,19 @@ def copy_image_ids(digests, listing):
             held[ref.partition("@")[2]] = img["id"]
     out = {key: held.get(digest) for key, digest in digests.items()}
     return "refused" if None in out.values() else out
+
+
+def step_image_ids(step, digests):
+    """{image: ID} for `digests` (the step's proven ones) from the copy's image listing right after the step
+    (scripts/vagrant-image-listing.sh into .upgrade/step-digests/<step>.images.json) - refused with none, or with an
+    image the step ran missing from it."""
+    path = os.path.join(WORK, "step-digests", step + ".images.json")
+    if not os.path.exists(path):
+        sys.exit(f"REFUSED: no {path} - the run records the images its copy holds after each step")
+    ids = copy_image_ids(digests, open(path).read())
+    if ids == "refused":
+        sys.exit(f"REFUSED: {path} lacks an image {step} ran - no proof")
+    return ids
 
 
 def record_image_ids(step):

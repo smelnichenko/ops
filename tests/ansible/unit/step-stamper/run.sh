@@ -90,6 +90,8 @@ printf '#!/bin/bash\necho "proof $2" >> "$LOG"\n' > "$W/run/scripts/upgrade-prod
 # the digests read after a step: DIGESTS_HANG - it hangs (a stalled VM), its PID recorded
 printf '#!/bin/bash\n[ -z "${DIGESTS_HANG:-}" ] || { echo $$ > "$W/digests.pid"; sleep 30; }\necho digests\n' \
   > "$W/run/scripts/vagrant-image-digests.sh"
+# the copy's image listing read after the digests (vagrant-image-listing.sh)
+printf '#!/bin/bash\necho "{\\"images\\": []}"\n' > "$W/run/scripts/vagrant-image-listing.sh"
 chmod +x "$W/bin/"* "$W/run/scripts/"*.py "$W/run/scripts/"*.sh
 fails=0
 check() {

@@ -47,6 +47,13 @@ echo digests >> "$LOG"
 n=$(grep -c '^digests$' "$LOG")
 [ "$n" != "${DIGESTS_FAIL_AT:-none}" ] || exit 1
 STUB
+cat > "$W/run/scripts/vagrant-image-listing.sh" <<'STUB'
+#!/bin/bash
+echo images >> "$LOG"
+n=$(grep -c '^images$' "$LOG")
+[ "$n" != "${IMAGES_FAIL_AT:-none}" ] || exit 1
+echo '{"images": []}'
+STUB
 chmod +x "$W/bin/"* "$W/run/scripts/"*
 fails=0
 case_() {  # case_ <name> <step that fails, or none> <want rc 0|1> <want log, ; between> [<env>...]
@@ -61,39 +68,42 @@ case_() {  # case_ <name> <step that fails, or none> <want rc 0|1> <want log, ; 
 }
 # each step given the one before it, green in this run (PREV_STEP: what it need not check again), the first none
 case_ "three steps green: each proof after the next step, the last after the final settle; digests after each step" \
-  none 0 "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c"
+  none 0 "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images;proof 01-a;step 03-c PREV_STEP=02-b;digests;images;proof 02-b;final-settle 03-c;proof 03-c"
 case_ "the second step fails: the first one unproven (its restarts not judged by a passing step)" 02-b 1 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a"
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a"
 case_ "the last step fails: the one before unproven, no final settle" 03-c 1 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b"
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images;proof 01-a;step 03-c PREV_STEP=02-b"
 check() {
   if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got $2, want $3"; fails=$((fails + 1)); fi
 }
 # each of the run's own acts failing ends the run there, failed (no -e: each guarded on its own - one guard dropped, a
 # failed final settle still recorded the last step's proof, a failed proof or digests went on to the next step)
 case_ "the final settle fails: the last step unproven, the run failed" none 1 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c" \
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images;proof 01-a;step 03-c PREV_STEP=02-b;digests;images;proof 02-b;final-settle 03-c" \
   SETTLE_FAILS=1
 case_ "a proof refused: the run ends there, failed - no step after it" none 1 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a" PROOF_FAILS_AT=01-a
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images;proof 01-a" PROOF_FAILS_AT=01-a
 case_ "the last proof refused: the run failed" none 1 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c" \
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images;proof 01-a;step 03-c PREV_STEP=02-b;digests;images;proof 02-b;final-settle 03-c;proof 03-c" \
   PROOF_FAILS_AT=03-c
 case_ "the digests after a step not read: the run ends there, failed - no proof, no step after it" none 1 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests" DIGESTS_FAIL_AT=2
-case_ "a step's refs not read: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests" REFS_FAIL_AT=02-b
-case_ "a step's branch not in a repository: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests" \
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests" DIGESTS_FAIL_AT=2
+case_ "the copy's image listing after a step not read: the run ends there, failed - no proof, no step after it" none 1 \
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images" IMAGES_FAIL_AT=2
+case_ "a step's refs not read: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests;images" REFS_FAIL_AT=02-b
+case_ "a step's branch not in a repository: the run ends before it, failed" none 1 "step 01-a PREV_STEP=;digests;images" \
   GIT_FAILS_AT=upgrade/02-b
 # a run from where production stands (UPGRADE_FROM: the first step it has not done): the steps from there only, the
 # first given no step before it (none green in this run); a step that is none refused before anything runs
 case_ "from 02-b: 02-b and 03-c only, 02-b first in the run" none 0 \
-  "step 02-b PREV_STEP=;digests;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c" \
+  "step 02-b PREV_STEP=;digests;images;step 03-c PREV_STEP=02-b;digests;images;proof 02-b;final-settle 03-c;proof 03-c" \
   UPGRADE_FROM=02-b
 case_ "from a step that is none: refused, nothing run" none 1 "" UPGRADE_FROM=09-z
 case_ "(again, for the digests' files)" none 0 \
-  "step 01-a PREV_STEP=;digests;step 02-b PREV_STEP=01-a;digests;proof 01-a;step 03-c PREV_STEP=02-b;digests;proof 02-b;final-settle 03-c;proof 03-c"
-check "each step's digests in a file of its own" "$(ls "$W/run/.upgrade/step-digests" | paste -sd' ')" \
-  "01-a.txt 02-b.txt 03-c.txt"
+  "step 01-a PREV_STEP=;digests;images;step 02-b PREV_STEP=01-a;digests;images;proof 01-a;step 03-c PREV_STEP=02-b;digests;images;proof 02-b;final-settle 03-c;proof 03-c"
+check "each step's digests and image listing in files of its own" \
+  "$(ls "$W/run/.upgrade/step-digests" | paste -sd' ')" \
+  "01-a.images.json 01-a.txt 02-b.images.json 02-b.txt 03-c.images.json 03-c.txt"
 # no step at all: a failure, not a green run
 mv "$W/run/tests/ansible/upgrade/steps" "$W/steps.kept" && mkdir "$W/run/tests/ansible/upgrade/steps"
 case_ "no step in the directory: the run failed, nothing run" none 1 ""

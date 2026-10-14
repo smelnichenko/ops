@@ -129,6 +129,9 @@ for step in $steps; do
   mkdir -p .upgrade/step-digests
   setsid scripts/vagrant-image-digests.sh > ".upgrade/step-digests/$step.txt" < /dev/null &
   wait $! || leave 1
+  # and the images the copy holds then: the proof records the image ID behind each digest it keeps
+  setsid scripts/vagrant-image-listing.sh > ".upgrade/step-digests/$step.images.json" < /dev/null &
+  wait $! || leave 1
   if [ -n "$prev" ]; then
     # shellcheck disable=SC2086 # step, infra and platform sha: three words
     scripts/upgrade-production.py record-proof $prev || leave 1
