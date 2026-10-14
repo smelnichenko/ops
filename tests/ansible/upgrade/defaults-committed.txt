@@ -21,3 +21,4 @@
 31-argocd
 32-cilium-1.20
 33-argocd-3.4
+34-argocd-3.5
