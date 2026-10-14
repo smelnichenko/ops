@@ -220,6 +220,12 @@
   become: true
   gather_facts: false
   tasks:
+    - name: The unit's drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/pi-restore-check.service.d
+        state: directory
+        mode: '0755'
+
     # a second settings file after the first (the later one wins): its day forced, an etcd limit no snapshot meets;
     # the retries 5 s apart instead of 20 min
     - name: The test's settings and retry pace
