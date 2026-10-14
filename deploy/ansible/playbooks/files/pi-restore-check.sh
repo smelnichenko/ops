@@ -19,7 +19,8 @@ store_age_h() {  # store_age_h <yyyymmddThhmmss UTC>: hours since then
 }
 
 pg_bin() {  # this Pi's newest Postgres (the major Patroni runs here)
-  echo "/usr/lib/postgresql/$(find /usr/lib/postgresql -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -1)/bin"
+  local root=${PI_RESTORE_PG_ROOT:-/usr/lib/postgresql}
+  echo "$root/$(find "$root" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -1)/bin"
 }
 
 part_postgres() {

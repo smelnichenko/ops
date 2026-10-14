@@ -61,6 +61,11 @@ check("the unpack reads the checked file, not the URL",
       tasks["Unpack node_exporter"]["ansible.builtin.unarchive"]["src"].endswith("/{{ node_exporter_archive_name }}"), True)
 verify = tasks["Verify node_exporter serves the root filesystem"]["until"]
 check("the check at the end reads /'s free space", "'mountpoint=\"/\"'" in verify and "node_filesystem_avail_bytes" in verify, True)
+svc = tasks["Enable + start node_exporter"]["ansible.builtin.systemd"]
+st = lambda b, u: env.from_string(svc["state"]).render(_node_exporter_bin={"changed": b}, _node_exporter_unit={"changed": u})
+check("restarted on a new binary or a new unit, else only started (a changed flag takes effect now)",
+      [st(True, False), st(False, True), st(False, False)], ["restarted", "restarted", "started"])
+check("  enabled, the unit re-read", (svc.get("enabled"), svc.get("daemon_reload")), (True, True))
 print("node-exporter: " + ("ALL-PASS" if fails == 0 else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY_NODEEXP

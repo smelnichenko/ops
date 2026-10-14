@@ -98,7 +98,7 @@ case "$cmd" in
   exec)
     shift  # the container
     case "$*" in
-      *pg_is_in_recovery*) echo f ;;
+      *pg_is_in_recovery*) [ -n "${RECOVERING:-}" ] && echo t || echo f ;;
       *pg_walfile_name*) echo "${SEG:-000000040000001D00000028}" ;;
       *string_agg*) echo "${DBS:-postgres monitor admin chat chess masi}" ;;
       *"from pg_class"*) if [ "${!#}" = "${EMPTY_DB:-}" ]; then echo 0; else echo "${TABLES:-7}"; fi ;;
@@ -121,9 +121,14 @@ case "$1 $2" in
   "kv get")
     case "$*" in
       *vault/core/*) for i in $(seq "${VAULT_KEYS:-3}"); do echo "vault/core/k$i:x"; done ;;
-      *service/*) echo "service/pi/leader:pi1"; echo "service/pi/members/pi1:x" ;;
+      *service/*) [ -n "${NO_PATRONI:-}" ] || echo "service/pi/leader:pi1"; echo "service/pi/members/pi1:x" ;;
     esac ;;
-  "lock -child-exit-code") shift 5; exec "$@" ;;
+  "lock -child-exit-code")
+    # LOCK_HELD: another run holds it - consul lock gives up after its timeout, the child never started
+    [ -z "${LOCK_HELD:-}" ] || { echo "lock held" >&2; exit 1; }
+    # a second lock inside the first (the child not marked as holding it) waits for ever in production
+    [ ! -e "$W/locked" ] || { echo "NESTED LOCK" >> "$W/calls"; exit 99; }
+    touch "$W/locked"; shift 4; exec "$@" ;;
 esac
 STUB_CONSUL
 cat > "$W/bin/curl" <<'STUB_CURL'
@@ -141,18 +146,22 @@ case "$tool" in
   pg_restore) [ -z "${PGRESTORE_FAIL:-}" ] || { echo "pg_restore: error: could not execute query" >&2; exit 1; } ;;
   psql)
     case "$*" in
-      *"-f "*) echo 'psql:/x/pg-globals.sql:5: ERROR:  role "postgres" already exists'
+      *"-f "*) [ -z "${PSQL_FAIL:-}" ] || { echo 'psql: error: connection to server on socket failed'; exit 2; }
+               echo 'psql:/x/pg-globals.sql:5: ERROR:  role "postgres" already exists'
                [ -z "${GLOBALS_ERROR:-}" ] || echo 'psql:/x/pg-globals.sql:9: ERROR:  syntax error at or near "ROLE"' ;;
       *) echo "${T0_TABLES:-12}" ;;
     esac ;;
 esac
 STUB_RUNUSER
-for t in chown timedatectl; do printf '#!/bin/bash\n[ "$1" != show ] || echo yes\n' > "$W/bin/$t"; done
+printf '#!/bin/bash\n' > "$W/bin/chown"
+printf '#!/bin/bash\n[ "$1" != show ] || echo "${NTP:-yes}"\n' > "$W/bin/timedatectl"
+printf '#!/bin/bash\n[ -z "${CHRONY_NORMAL:-}" ] || echo "Leap status     : Normal"\n' > "$W/bin/chronyc"
+printf '#!/bin/bash\necho "sleep $*" >> "$W/sleeps"\n' > "$W/bin/sleep"
 chmod +x "$W/bin"/*
 
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
-  rm -rf "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
+  rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
     "$W/leftover-containers"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
@@ -179,21 +188,25 @@ store() {  # a store as production's, made relative to now
   mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001D"
   for s in 25 26 27; do touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D000000$s.gz"; done
   touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D00000027.00000060.backup.gz"
+  # a promotion just archived: the new timeline's history, its first segment not yet - a name that sorts after every WAL
+  touch "$pg/schnappy-production-postgres/wals/00000004.history.gz"
   mkdir -p "$S/etcd-backups"
   touch "$S/etcd-backups/etcd-$(utc "-${ETCD_AGE_H:-1} hours" +%Y%m%d-%H0003).db" "$S/etcd-backups/etcd-$(utc "-5 hours" +%Y%m%d-%H0003).db"
   if [ -z "${NO_TIER0:-}" ]; then
     local t
     t=$S/pi-backups/$(utc "-${TIER0_AGE_H:-3} hours" +%Y%m%dT%H4000Z)
     mkdir -p "$t"
-    touch "$t/consul.snap" "$t/pg-forgejo.dump" "$t/pg-keycloak.dump" "$t/pg-globals.sql"
+    touch "$t/consul.snap" "$t/pg-globals.sql"
+    [ -n "${NO_DUMPS:-}" ] || touch "$t/pg-forgejo.dump" "$t/pg-keycloak.dump"
     [ -z "${KC_FAILED:-}" ] || touch "$t/KEYCLOAK-EXPORT-FAILED"
   fi
-  mkdir -p "$S/restore-checks/pi1"
+  # the Pi's Postgres majors: text order and version order disagree
+  mkdir -p "$S/restore-checks/pi1" "$W/pgroot/9.6/bin" "$W/pgroot/15/bin" "$W/pgroot/17/bin"
   echo 20200101T000000Z > "$S/restore-checks/pi1/last-success"
 }
 run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTORE_LOCKED), the exit
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
-  env -i PATH="$W/bin:/usr/bin:/bin" W="$W" HOME="$W" STORE_ENDPOINT=http://192.168.11.5:9000 \
+  env -i PATH="$W/bin:/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
     AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=s PI_RESTORE_NAME=pi1 PI_RESTORE_PARITY=0 PI_RESTORE_ANY_DAY=1 \
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
@@ -258,6 +271,9 @@ check "  the work directory gone, the containers removed, the throwaway Consul s
 check "  each part's container gone when the part ends - Postgres's before etcd's first container" \
   "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls")" 1
 
+check "  the scratch Postgres stopped" "$(grep -cE '^runuser .*/pg_ctl -D .*/tier0/pg -m immediate stop' "$W/calls")" 1
+check "  the Pi's newest Postgres (17 - text order would take 9.6)" \
+  "$(grep -oE '^runuser [^ ]*/pg_restore' "$W/calls" | sort -u | sed 's#.*/pgroot/##')" "17/bin/pg_restore"
 check "  every container memory-bounded (podman runs them outside the unit's cgroup)" \
   "$(( $(grep -c '^podman run' "$W/calls") - $(wc -l < "$W/memory") )) $(sort -u "$W/memory")" "0 memory 1536m"
 
@@ -296,6 +312,18 @@ store
 check "its day: the lock taken (consul lock), then the run" \
   "$(run PI_RESTORE_ANY_DAY= PI_RESTORE_LOCKED= PI_RESTORE_PARITY=$(( $(date -u +%s) / 86400 % 2 ))) $(grep -c '^consul lock -child-exit-code -timeout=30m pi-restore-check' "$W/calls")" \
   "rc=0 1"
+check "  the run under the lock: every part, last-success this run's, the lock not taken twice" \
+  "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK') $(success | grep -c 2020) $(grep -c 'NESTED LOCK' "$W/calls")" "3 0 0"
+store
+printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
+check "another run holds the lock: its containers untouched, nothing restored" \
+  "$(run PI_RESTORE_ANY_DAY=1 PI_RESTORE_LOCKED= LOCK_HELD=1) $(grep -c 'rm .*pi-restore-pg-4242' "$W/calls") $(grep -c '^rclone' "$W/calls")" "rc=1 0 0"
+store
+check "the clock never synchronized: no restore check, nothing read" \
+  "$(run PI_RESTORE_LOCKED= NTP=no) $(grep -c 'not synchronized' "$W/out") $(cat "$W/calls" 2> /dev/null | grep -c '^rclone') $(wc -l < "$W/sleeps")" \
+  "rc=1 1 0 59"
+store
+check "  chrony synchronized (timedatectl says no): the run goes on" "$(run PI_RESTORE_LOCKED= NTP=no CHRONY_NORMAL=1) $(report | grep -cE ' OK')" "rc=0 3"
 
 red "postgres: a major with no image: red" POSTGRES PG_VERSION=190002
 red "postgres: the newest complete base backup 30 h old: red" POSTGRES BASE_OLD=1
@@ -303,6 +331,7 @@ red "postgres: no backup restorable - every end WAL unarchived (archiving stoppe
 red "postgres: the restore fails: red" POSTGRES PG_RESTORE_FAIL=1
 red "postgres: Postgres stops during the recovery: red" POSTGRES PG_RUNNING=false
 red "postgres: replayed short of the newest WAL archived: red" POSTGRES SEG=000000040000001D00000026
+red "postgres: still recovering after its polls: red" POSTGRES RECOVERING=1
 red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin chat masi"
 red "postgres: no table in any database: red" POSTGRES TABLES=0
 store
@@ -326,6 +355,9 @@ red "tier0: Consul's snapshot without Vault's keys: red" TIER0 VAULT_KEYS=0
 red "tier0: pg-globals.sql fails beyond postgres' own role: red" TIER0 GLOBALS_ERROR=1
 red "tier0: a dump does not restore: red" TIER0 PGRESTORE_FAIL=1
 red "tier0: a database restored with no table: red" TIER0 T0_TABLES=0
+red "tier0: Consul's snapshot without Patroni's leader keys: red" TIER0 NO_PATRONI=1
+red "tier0: no database dump in the backup: red" TIER0 NO_DUMPS=1
+red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 
 # the playbook's wiring
 PY=python3
@@ -353,5 +385,14 @@ print("PI_RESTORE_PARITY={{ groups['pis'].index(inventory_hostname) % 2 }}" in e
       "STORE_ENDPOINT=http://{{ keepalived_vip }}:9000" in env)
 PY_PARITY
 )" "['pi1', 'pi2'] [0, 1] ['pi1', 'pi2'] [0, 1] True True"
+check "the playbook's settings file names every setting the script requires" "$("$PY" - "$SCRIPT" <<'PY_KEYS'
+import re, sys, yaml
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+env = next(t for t in p["tasks"] if t["name"].startswith("Its settings"))["ansible.builtin.copy"]["content"]
+keys = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", env, re.M))
+need = set(re.findall(r'"\$\{([A-Z][A-Z0-9_]*):\?\}"', open(sys.argv[1]).read()))
+print(sorted(need - keys), len(need) > 5)
+PY_KEYS
+)" "[] True"
 echo "pi-restore-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
