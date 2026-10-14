@@ -16,3 +16,4 @@
 23-cert-manager
 24-cnpg
 25-versitygw
+26-local-path
