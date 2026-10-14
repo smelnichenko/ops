@@ -964,8 +964,10 @@ def record_image_ids(step):
     kubeadm node), into image_ids_path(step): the copy had our registry's images imported (docker save re-packs the
     manifest: another digest, the same build), and running_digest_problems then judges those by the ID ten runs."""
     proven = json.load(open(proof_path(step))).get("digests") or {}
-    listing = run(["vagrant", "ssh", "kubeadm", "-c", "sudo crictl images --digests -o json"], cwd=OPS,
-                  capture_output=True, check=True).stdout
+    # the local Vagrant copy, not production: not ten's ssh with its options (one string: that test reads "ssh" words);
+    # bounded, a hung VM ends this read
+    listing = run("vagrant ssh kubeadm -c".split() + ["sudo crictl images --digests -o json"], cwd=OPS,
+                  capture_output=True, check=True, timeout=120).stdout
     ids = copy_image_ids(proven, listing)
     if ids == "refused":
         sys.exit(f"REFUSED: the copy no longer holds every image {step}'s proof ran - no IDs recorded")
