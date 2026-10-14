@@ -253,14 +253,17 @@
           set -uo pipefail
           systemctl daemon-reload
           systemctl reset-failed pi-restore-check.service 2> /dev/null || true
+          since=$(date +%s)
           systemctl start pi-restore-check.service || true
           # three runs of a minute or two each, 5 s apart: until systemd gives up on it
           for i in $(seq 120); do
             [ "$(systemctl show -p ActiveState --value pi-restore-check.service)" = failed ] && break
             sleep 5
           done
+          # the runs themselves, from the journal (NRestarts also counts the restart the start limit then refused)
           echo "$(systemctl show -p ActiveState --value pi-restore-check.service)" \
-            "$(systemctl show -p NRestarts --value pi-restore-check.service)" \
+            "$(journalctl -u pi-restore-check.service --since "@$since" --no-pager -o cat | grep -c '^PI RESTORE CHECK .* FAILED: ETCD$')" \
+            "$(journalctl -u pi-restore-check.service --since "@$since" --no-pager -o cat | grep -c 'Start request repeated too quickly')" \
             "$(systemctl show -p MemoryMax --value pi-restore-check.service)"
       register: _unit
       changed_when: true
@@ -279,10 +282,10 @@
         cmd: systemctl daemon-reload && systemctl reset-failed pi-restore-check.service
       changed_when: true
 
-    - name: Failed after three tries (two restarts), its memory capped at 1 GiB
+    - name: Three runs (the first and two retries), then the start limit; its memory capped at 1 GiB
       ansible.builtin.assert:
-        that: _unit.stdout_lines[-1] == 'failed 2 1073741824'
-        fail_msg: "ActiveState NRestarts MemoryMax: {{ _unit.stdout_lines }}"
+        that: _unit.stdout_lines[-1] == 'failed 3 1 1073741824'
+        fail_msg: "ActiveState, runs, start-limit refusals, MemoryMax: {{ _unit.stdout_lines }}"
 
 - name: Both Pis - the timer on, opposite days
   hosts: pis
