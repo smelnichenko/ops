@@ -1068,7 +1068,7 @@
         kubeconfig: /etc/kubernetes/admin.conf
         name: cnpg
         chart_ref: cnpg/cloudnative-pg
-        chart_version: "0.28.0"
+        chart_version: "0.29.1"
         release_namespace: cnpg-system
         create_namespace: true
         values:
