@@ -33,12 +33,11 @@
       "18": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye"
     # the etcd production runs (its etcdutl reads the snapshot)
     pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.5-0"
-    # how old each backup may be: CNPG's base backups hourly (its ScheduledBackup "30 1 * * *" reads seconds first:
-    # :01:30 every hour) and the newest restorable one an hour or two behind (an idle database leaves the newest's end
-    # segment unarchived) - 12 h of none restorable is archiving stopped; etcd's snapshots hourly; the Pis' own daily
-    # at 02:40
-    pi_restore_check_pg_base_max_age_h: 12
-    # the base backups looked at for the newest restorable one: a day and more of hourly ones
+    # how old each backup may be: CNPG's base backup daily at 01:30 (platform schnappy-data, "0 30 1 * * *"), this
+    # check at 05:30 - an idle database can leave that day's backup's end segment unarchived, and the newest restorable
+    # one is then the day before's, ~28 h old: 30 h; etcd's snapshots hourly; the Pis' own daily at 02:40
+    pi_restore_check_pg_base_max_age_h: 30
+    # the base backups looked at for the newest restorable one: the store's 30 days of daily ones (retentionPolicy)
     pi_restore_check_pg_backups_looked_at: 30
     pi_restore_check_etcd_max_age_h: 3
     pi_restore_check_tier0_max_age_h: 30
