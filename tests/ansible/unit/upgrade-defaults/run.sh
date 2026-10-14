@@ -102,7 +102,9 @@ except ValueError as e:
     check("a record skipping a step refuses, naming the file", d.COMMITTED in str(e), True)
 first = d.applied(rec(H), with_lines[:1])
 check("applying a step adds it to the record", first[d.COMMITTED], H + with_lines[0] + "\n")
-committed = lambda p: first.get(p) or tree(p)
+# the other files as the baseline has them - the tree has the committed steps' new lines (25-versitygw's commit turned
+# CI red on 2026-10-14: its old line read from the tree, where its own commit had replaced it)
+committed = lambda p: first.get(p) or base(p)
 check("after the first step's commit: the rest still apply, the record then lists every step",
       d.applied(committed, d.pending(committed))[d.COMMITTED], H + "".join(f"{s}\n" for s in with_lines))
 try:
@@ -110,6 +112,17 @@ try:
     check("after the first step's commit: every step from the first no longer applies", "applied", "refused")
 except ValueError:
     check("after the first step's commit: every step from the first no longer applies (why the record)", True, True)
+# every state the rollout writes - none to all of the steps committed: the rest apply on it, the record then lists all
+states = {}
+for k in range(len(with_lines) + 1):
+    state = d.applied(rec(H), with_lines[:k]) if k else {d.COMMITTED: H}
+    read = lambda p, st=state: st.get(p) or base(p)
+    try:
+        states[k] = d.applied(read, d.pending(read))[d.COMMITTED] if k < len(with_lines) else read(d.COMMITTED)
+    except ValueError as e:
+        states[k] = str(e)
+check(f"each of the rollout's {len(with_lines) + 1} states: the rest of the steps apply, the record then lists all",
+      states, dict.fromkeys(range(len(with_lines) + 1), H + "".join(f"{s}\n" for s in with_lines)))
 path0, old0, _ = d.default_lines(with_lines[0])[0]
 wrong = lambda p: base(p).replace(old0, "# gone") if p == path0 else rec(H)(p)
 try:
