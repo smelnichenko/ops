@@ -50,7 +50,7 @@
     # them from 2026-04-05, until the step that moves them under Argo.
     external_secrets_by_helm: "{{ external_secrets_by_helm_override | default(not (platform_by_argo | bool)) }}"
     # the versions ten runs (2026-10-02), so a rebuild and every Vagrant test start from production
-    cert_manager_version: "v1.20.0"
+    cert_manager_version: "v1.20.4"
     external_secrets_chart_version: "2.2.0"
     metrics_server_chart_version: "3.14.0"
     prometheus_operator_crds_chart_version: "27.0.1"  # operator v0.89.0

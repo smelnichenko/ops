@@ -13,3 +13,4 @@
 15-scylla-operator-1.20.3
 18-scylla-operator-1.21
 21-scylla-operator-1.22
+23-cert-manager
