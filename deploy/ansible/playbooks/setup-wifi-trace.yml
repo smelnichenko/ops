@@ -1,0 +1,83 @@
+---
+# ten's wifi adapter (MediaTek MT7921AU, driver mt7921u) traced for its firmware hang, across boots: files/wifi-trace.sh
+# as /usr/local/sbin/wifi-trace, and a timer that every minute arms it when it is not armed (after a boot, once the
+# driver is loaded) and, once the chip's reset fired, dumps the trace into /var/log/wifi-trace and arms it again. The
+# trace reads only: it changes nothing the access point (hostapd) or the driver does. 16 MiB of ring buffer a CPU,
+# twice (the snapshot).
+#
+# Usage: task deploy:wifi-trace
+#        ssh ten 'sudo wifi-trace status'          the trace now
+#        ssh ten 'ls -la /var/log/wifi-trace'       the hangs caught
+#        ssh ten 'sudo systemctl disable --now wifi-trace.timer && sudo wifi-trace disarm'   off
+- name: ten's wifi traced for the mt7921u firmware hang
+  hosts: target
+  become: true
+  gather_facts: false
+  vars:
+    wifi_trace_dir: /var/log/wifi-trace
+  tasks:
+    - name: The trace script
+      ansible.builtin.copy:
+        src: files/wifi-trace.sh
+        dest: /usr/local/sbin/wifi-trace
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Where the hangs caught are kept
+      ansible.builtin.file:
+        path: "{{ wifi_trace_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: The minute's run - armed when not, a fired trace dumped and armed again
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/wifi-trace.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=The wifi trace (mt7921u firmware hang): armed, a fired one dumped and armed again
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/wifi-trace autodump {{ wifi_trace_dir }}
+
+    - name: Every minute, from two minutes after boot
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/wifi-trace.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=The wifi trace, every minute
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec=1min
+          AccuracySec=5s
+          [Install]
+          WantedBy=timers.target
+
+    - name: The timer on
+      ansible.builtin.systemd_service:
+        name: wifi-trace.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Its first run now (armed, or the trace already armed by hand kept)
+      ansible.builtin.command: systemctl start wifi-trace.service
+      changed_when: true
+
+    - name: The trace armed
+      ansible.builtin.command: /usr/local/sbin/wifi-trace status
+      register: _status
+      changed_when: false
+      failed_when: _status.rc != 0 or 'not armed' in _status.stdout
+
+    - name: Said
+      ansible.builtin.debug:
+        msg: "{{ _status.stdout_lines }}"

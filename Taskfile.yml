@@ -1185,6 +1185,15 @@ tasks:
     cmds:
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-pi-restore-check.yml
 
+  deploy:wifi-trace:
+    desc: "PRODUCTION (ten): the wifi adapter's firmware hang traced across boots - armed every minute when it is not, a fired trace dumped to /var/log/wifi-trace and armed again (setup-wifi-trace.yml)"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    prompt: "Install the wifi trace and its timer on PRODUCTION's ten?"
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-wifi-trace.yml
+
   deploy:pi-restore-check:
     desc: "PRODUCTION: the backups restored on the Pis, in turn every day - production's Postgres from its base backup and WAL, ten's etcd snapshot, the Pis' tier-0 backup (setup-pi-restore-check.yml; after deploy:pi-backups)"
     dir: deploy/ansible
