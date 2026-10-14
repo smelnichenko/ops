@@ -77,6 +77,7 @@
           echo "work=$(find "$PI_RESTORE_WORK" -mindepth 1 -maxdepth 1 | wc -l)"
           # (by the process's own name: a pattern on the whole command line also counts this shell, which holds it)
           echo "agents=$(ps -eo comm=,args= | awk '$1 == "consul" && /-node=restore-check/' | wc -l)"
+          echo "scratch-postgres=$(ps -eo comm=,args= | awk '$1 == "postgres" && /pi-restore-check\/run\./' | wc -l)"
           echo "success=$(rclone cat store:restore-checks/pi1/last-success)"
           echo "report=$(rclone cat store:restore-checks/pi1/last-report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')"
           echo "timelines-same=$([ "$({{ history }})" = '{{ _hist_before.stdout }}' ] && echo yes || echo no)"
@@ -94,6 +95,7 @@
           - "'containers=0' in _after.stdout_lines"
           - "'work=0' in _after.stdout_lines"
           - "'agents=0' in _after.stdout_lines"
+          - "'scratch-postgres=0' in _after.stdout_lines"
           - "'report=3' in _after.stdout_lines"
           - "'timelines-same=yes' in _after.stdout_lines"
           - (_after.stdout | regex_search('success=([0-9TZ]+)', '\\1') | first) == (_run.stdout | regex_search('PI RESTORE CHECK ([0-9TZ]+):', '\\1') | first)
@@ -212,6 +214,69 @@
           - _next.rc == 0
           - _left.stdout == '0 0'
         fail_msg: "{{ _next.stdout_lines + _next.stderr_lines + [_left.stdout] }}"
+
+- name: Pi1 - the installed unit itself, a fault injected - tried three times, its memory capped
+  hosts: pi1
+  become: true
+  gather_facts: false
+  tasks:
+    # a second settings file after the first (the later one wins): its day forced, an etcd limit no snapshot meets;
+    # the retries 5 s apart instead of 20 min
+    - name: The test's settings and retry pace
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        mode: '0600'
+        content: "{{ item.content }}"
+      loop:
+        - dest: /etc/pi-restore-check/test.env
+          content: |
+            PI_RESTORE_ANY_DAY=1
+            PI_RESTORE_ETCD_MAX_AGE_H=-1
+        - dest: /etc/systemd/system/pi-restore-check.service.d/test.conf
+          content: |
+            [Service]
+            EnvironmentFile=/etc/pi-restore-check/test.env
+            RestartSec=5s
+      loop_control:
+        label: "{{ item.dest }}"
+
+    - name: The unit started as the timer starts it - and, failing, restarted by systemd until its start limit
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -uo pipefail
+          systemctl daemon-reload
+          systemctl reset-failed pi-restore-check.service 2> /dev/null || true
+          systemctl start pi-restore-check.service || true
+          # three runs of a minute or two each, 5 s apart: until systemd gives up on it
+          for i in $(seq 120); do
+            [ "$(systemctl show -p ActiveState --value pi-restore-check.service)" = failed ] && break
+            sleep 5
+          done
+          echo "$(systemctl show -p ActiveState --value pi-restore-check.service)" \
+            "$(systemctl show -p NRestarts --value pi-restore-check.service)" \
+            "$(systemctl show -p MemoryMax --value pi-restore-check.service)"
+      register: _unit
+      changed_when: true
+
+    - name: The settings and pace taken out again
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/pi-restore-check.service.d
+        - /etc/pi-restore-check/test.env
+
+    - name: The unit as installed again
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: systemctl daemon-reload && systemctl reset-failed pi-restore-check.service
+      changed_when: true
+
+    - name: Failed after three tries (two restarts), its memory capped at 1 GiB
+      ansible.builtin.assert:
+        that: _unit.stdout_lines[-1] == 'failed 2 1073741824'
+        fail_msg: "ActiveState NRestarts MemoryMax: {{ _unit.stdout_lines }}"
 
 - name: Both Pis - the timer on, opposite days
   hosts: pis
