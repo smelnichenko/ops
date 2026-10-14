@@ -17,3 +17,4 @@
 24-cnpg
 25-versitygw
 26-local-path
+27-kube-prometheus-stack
