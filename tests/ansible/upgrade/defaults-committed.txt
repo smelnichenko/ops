@@ -19,3 +19,4 @@
 26-local-path
 27-kube-prometheus-stack
 31-argocd
+32-cilium-1.20

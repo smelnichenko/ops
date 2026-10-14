@@ -63,7 +63,7 @@
     pod_cidr: "10.42.0.0/16"
     service_cidr: "10.43.0.0/16"
     node_ip: "{{ node_ip_override | default('192.168.11.2') }}"
-    cilium_version: "1.19.8"
+    cilium_version: "1.20.2"
     # the Scylla Manager chart's values where Argo does not install it: its and its agents' image tags (production's
     # pins from the step that needs them; empty: the chart's) - tags apart, so a step's default line stays one short line
     scylla_manager_tag: "3.12.1@sha256:ba54287094e7097fb6685717187dca4bee304130b5fbdde1473e70e2bc6e998a"
