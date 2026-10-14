@@ -750,6 +750,44 @@ check("another build under the same tag: a problem naming the image and the pod"
 check("an image the step does not move: not judged", rdp(S59, pod("x/y:1", "x/y@" + P2)) if rdp else None, [])
 json.dump({"step": S59}, open(m.proof_path(S59), "w"))
 check("a proof without digests: nothing judged", rdp(S59, pod(CH, "x@" + P2)) if rdp else None, [])
+# an image the copy had imported (docker save: its manifest re-packed, another digest - the same build): judged by the
+# image ID ten runs it as, against the one the copy ran (record-image-ids); with no ID recorded, or another ID, a problem
+S22 = "22-apt-cacher-ng"
+AC = "git.pmon.dev/schnappy/apt-cacher-ng:7b46aea"
+I1, I2 = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+json.dump({"step": S22, "digests": {AC: P1}}, open(m.proof_path(S22), "w"))
+asked = []
+kept_ten = m.ten
+def ten_ids(image_id):
+    def ten(command, stdin=None, check=True):
+        asked.append(command)
+        import subprocess  # noqa: E401
+        return subprocess.CompletedProcess(command, 0, json.dumps({"status": {"id": image_id}}), "")
+    return ten
+m.ten = ten_ids(I1)
+check("an imported image, no image ID recorded: a problem (as before)",
+      len(rdp(S22, pod(AC, "git.pmon.dev/schnappy/apt-cacher-ng@" + P2))) if rdp else None, 1)
+iid = getattr(m, "image_ids_path", None)
+if iid:
+    json.dump({AC: I1}, open(iid(S22), "w"))
+check("its image ID recorded and ten running that ID under another digest: no problem",
+      rdp(S22, pod(AC, "git.pmon.dev/schnappy/apt-cacher-ng@" + P2)) if rdp else None, [])
+check("  ten asked for the running build's ID (by its digest), read only",
+      [c for c in asked if "inspecti" in c][-1:] == ["sudo -n crictl inspecti -o json git.pmon.dev/schnappy/apt-cacher-ng@" + P2]
+      if asked else False, True)
+m.ten = ten_ids(I2)
+got = rdp(S22, pod(AC, "git.pmon.dev/schnappy/apt-cacher-ng@" + P2)) if rdp else []
+check("another image ID: a problem naming both IDs", (len(got), I1[:19] in str(got), I2[:19] in str(got)), (1, True, True))
+m.ten = ten_ids(I1)
+check("the digest the same: no ID asked", (rdp(S22, pod(AC, "git.pmon.dev/schnappy/apt-cacher-ng@" + P1)), ), ([],))
+m.ten = kept_ten
+# record-image-ids: the copy's IDs for the step's moved images, from crictl's own listing (the image named by digest)
+listing = json.dumps({"images": [{"id": I1, "repoDigests": ["docker.io/library/import-2026-10-13@" + P1]},
+                                 {"id": I2, "repoDigests": ["x/y@" + P2]}]})
+ids = getattr(m, "copy_image_ids", None)
+check("the copy's ID read for the proven digest, nothing else", ids({AC: P1}, listing) if ids else None, {AC: I1})
+check("a proven digest the copy no longer holds: refused", ids({AC: "sha256:" + "9" * 64}, listing) if ids else None,
+      "refused")
 m.PROVEN = kept_proven
 saved = {k: getattr(m, k) for k in ("read_ledger", "inventory_check", "settled", "running_digest_problems", "ansible")}
 m.read_ledger, m.inventory_check = (lambda: (None, [])), (lambda *a: True)

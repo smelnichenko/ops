@@ -943,16 +943,62 @@ def step_digests(step):
     return out
 
 
+def image_ids_path(step):
+    """The image IDs the copy ran the step's moved images as (record-image-ids), beside its proof."""
+    return os.path.join(PROVEN, step + ".image-ids.json")
+
+
+def copy_image_ids(digests, listing):
+    """{image: ID} for each of `digests` ({image: digest}) from the copy's `crictl images --digests -o json` listing -
+    the image named by its digest there (an imported one under its import name) - or "refused" when one is not held."""
+    held = {}
+    for img in json.loads(listing).get("images", []):
+        for ref in img.get("repoDigests") or []:
+            held[ref.partition("@")[2]] = img["id"]
+    out = {key: held.get(digest) for key, digest in digests.items()}
+    return "refused" if None in out.values() else out
+
+
+def record_image_ids(step):
+    """The image ID behind each of the step's proven digests, as the full run's copy still holds them (its Vagrant
+    kubeadm node), into image_ids_path(step): the copy had our registry's images imported (docker save re-packs the
+    manifest: another digest, the same build), and running_digest_problems then judges those by the ID ten runs."""
+    proven = json.load(open(proof_path(step))).get("digests") or {}
+    listing = run(["vagrant", "ssh", "kubeadm", "-c", "sudo crictl images --digests -o json"], cwd=OPS,
+                  capture_output=True, check=True).stdout
+    ids = copy_image_ids(proven, listing)
+    if ids == "refused":
+        sys.exit(f"REFUSED: the copy no longer holds every image {step}'s proof ran - no IDs recorded")
+    write_json(image_ids_path(step), ids, indent=1)
+    for key, image_id in sorted(ids.items()):
+        print(f"{key} {proven[key][:19]}... = image {image_id[:19]}...")
+
+
+def running_image_id(name, digest):
+    """The image ID ten holds `name@digest` as (crictl's own reading), or "" when it holds none."""
+    out = ten(f"sudo -n crictl inspecti -o json {name}@{digest}", check=False)
+    try:
+        return json.loads(out.stdout)["status"]["id"] if out.returncode == 0 else ""
+    except (ValueError, KeyError, TypeError):
+        return ""
+
+
 def running_digest_problems(step, pods=None):
     """The step's images as production runs them - each container's imageID - against the builds the full run's copy
     ran them with (its proof's digests): another build under the same tag (rebuilt upstream, pulled by tag at a
-    rollout) is named. `pods`: kubectl's get pods -A -o json (read on ten without)."""
+    rollout) is named. An image the copy had imported (our registry's: docker save re-packs the manifest, so another
+    digest for the same build) is judged by its image ID instead, where record-image-ids recorded it. `pods`: kubectl's
+    get pods -A -o json (read on ten without)."""
     try:
         proven = json.load(open(proof_path(step))).get("digests") or {}
     except (OSError, ValueError):
         return [f"{step}'s proof not read - its images' builds not judged"]
     if not proven:
         return []
+    try:
+        proven_ids = json.load(open(image_ids_path(step)))
+    except (OSError, ValueError):
+        proven_ids = {}
     if pods is None:
         pods = json.loads(ten("kubectl get pods -A -o json --request-timeout=60s").stdout)
     out = set()
@@ -963,10 +1009,16 @@ def running_digest_problems(step, pods=None):
         for c in o["spec"].get("containers", []) + o["spec"].get("initContainers", []):
             ref = c["image"].split("@")[0]
             name, tag = image_name_tag(ref)
-            want = proven.get(f"{full_name(name)}:{tag}")
+            key = f"{full_name(name)}:{tag}"
+            want = proven.get(key)
             got = running.get(c.get("name"), "").partition("@")[2]
             if want and got and got != want:
-                out.add(f"{name}:{tag} runs {got[:19]}..., the full run ran {want[:19]}... "
+                want_id = proven_ids.get(key)
+                got_id = running_image_id(full_name(name), got) if want_id else ""
+                if want_id and got_id == want_id:
+                    continue  # the same build, its manifest re-packed by the copy's import
+                ids = f" (image {got_id[:19]}..., the full run's {want_id[:19]}...)" if want_id else ""
+                out.add(f"{name}:{tag} runs {got[:19]}..., the full run ran {want[:19]}...{ids} "
                         f"({o['metadata']['namespace']}/{o['metadata']['name']})")
     return sorted(out)
 
@@ -1905,6 +1957,7 @@ def main():
                ("begin", 1): begin, ("preview", 1): preview, ("playbooks", 1): playbooks, ("done", 1): done,
                ("defaults", 1): defaults,
                ("backup", 2): backup, ("merge", 2): merge, ("record-proof", 3): record_proof,
+               ("record-image-ids", 1): record_image_ids,
                ("prepull-images", 1): lambda step: print(",".join(prepull_images(step, proven=False))),
                ("settle-values", 0): lambda: print(f"-e restart_quiet={SETTLE_QUIET} -e stable_polls={SETTLE_STABLE} "
                                                    f"-e poll_seconds={SETTLE_POLL}")}
