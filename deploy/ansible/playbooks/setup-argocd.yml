@@ -28,7 +28,7 @@
   vars:
     argocd_namespace: "{{ argocd_ns | default('argocd') }}"
     argocd_chart: "argo/argo-cd"
-    argocd_chart_version: "{{ argocd_version | default('9.5.4') }}"
+    argocd_chart_version: "{{ argocd_version | default('9.5.11') }}"
     # Empty: the chart's own Argo CD version. An image newer than the one its chart ships is pinned per chart version
     # (chart 9.5.11 ships v3.3.9, the 3.3 line is at v3.3.15; 10.2.2 ships v3.4.6, the 3.4 line at v3.4.10): a later
     # chart never runs it, where a plain override, made the default when the upgrade reaches production, would put it
