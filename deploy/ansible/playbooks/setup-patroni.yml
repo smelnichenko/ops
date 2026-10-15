@@ -663,10 +663,11 @@
     # are wiped. Forgejo migrates the schema on first connect, but no admin
     # user is recreated automatically. Re-create it here on the primary if
     # missing so downstream tests / GUI access works.
-    - name: Forgejo's admin, where it is missing (post-Patroni) - on pi1, once
+    # on this batch's own Pi (serial: each Pi in turn; idempotent - made only where missing): pinned to pi1, the
+    # second batch failed while pi1 was down
+    - name: Forgejo's admin, where it is missing (post-Patroni)
       ansible.builtin.import_tasks: tasks/forgejo-admin.yml
       run_once: true
-      delegate_to: pi1
 
   # one Pi at a time (serial), each service answering again before the next Pi's restart
   handlers:

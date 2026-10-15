@@ -125,7 +125,7 @@ check("the Vagrant copy checks single sign-on as production does (argocd_keycloa
 # and Keycloak takes it - before anything is written: the secret this run writes given to Keycloak's token endpoint for
 # Argo CD's client (its clientID as the OIDC config names it) with no such user, and a secret it cannot take given the
 # same way: the two answers must differ, the right one about the user or the grant (invalid_grant; unauthorized_client
-# where direct grants are off - not "Invalid client"). Asked from the first Pi, its name checked to be this
+# where direct grants are off - not "Invalid client"). Asked from the Pi holding the VIP, its name checked to be this
 # inventory's VIP there (the copy's kubeadm node resolves auth.pmon.dev to production's; production's Pis and ten
 # resolve it to their VIP - read 2026-10-08): never another Keycloak asked
 names = [t.get("name") for t in tasks]
@@ -135,9 +135,12 @@ named = next((t for t in tasks if t.get("name") == "Keycloak's name there is thi
 probes = [t for t in tasks if "/protocol/openid-connect/token" in str((t.get("ansible.builtin.uri") or {}).get("url"))]
 taken = next((t for t in tasks if t.get("name") == "Keycloak takes the client secret this run writes"), None)
 cfg_client = re.search(r"clientID: ([\w-]+)", str(tasks))
-pi = "{{ groups['pis'] | first }}"
-check("its name read on the first Pi, then the two probes from it, then the judgement - all before the first write",
-      (resolve is not None and named is not None and len(probes) == 2 and taken is not None
+pi = "{{ pi_vip_holder }}"
+holder = next((t for t in tasks if str((t.get("ansible.builtin.include_tasks") or "")).endswith("tasks/pi-vip-holder.yml")), None)
+check("the VIP's Pi found, its name read there, then the two probes from it, then the judgement - all before the first "
+      "write (pinned to the first Pi, the run failed while that Pi was down)",
+      (holder is not None and resolve is not None and named is not None and len(probes) == 2 and taken is not None
+       and tasks.index(holder) < tasks.index(resolve)
        and tasks.index(resolve) < tasks.index(named) < tasks.index(probes[0]) < tasks.index(probes[1])
        < tasks.index(taken) < first_write,
        [t.get("delegate_to") for t in [resolve or {}] + probes]), (True, [pi, pi, pi]))

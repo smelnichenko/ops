@@ -55,9 +55,9 @@
     # without us copying every credential into userlist.txt.
     #
     # Both Pis must share the same password — they all log into the
-    # same Patroni role. Generate on pi1 (run_once), distribute to
-    # the rest.
-    - name: Generate pgbouncer auth_user password on pi1 (idempotent)
+    # same Patroni role. Generate once on the first Pi of the play that is up
+    # (run_once - not pi1: down, it failed the converge on both), distribute to the rest.
+    - name: Generate pgbouncer auth_user password once (idempotent)
       ansible.builtin.shell: |
         set -eo pipefail
         if [ ! -f {{ auth_secret_dir }}/auth_user.password ]; then
@@ -66,15 +66,13 @@
           chown postgres:postgres {{ auth_secret_dir }}/auth_user.password
         fi
       run_once: true
-      delegate_to: pi1
       changed_when: false
 
-    - name: Read auth_user password from pi1
+    - name: Read auth_user password from where it was generated
       ansible.builtin.slurp:
         src: "{{ auth_secret_dir }}/auth_user.password"
       register: _auth_user_pw_raw
       run_once: true
-      delegate_to: pi1
       no_log: true
 
     - name: Set auth_user password fact (shared across all Pis)
@@ -133,7 +131,6 @@
           GRANT EXECUTE ON FUNCTION public.user_lookup(text) TO pgbouncer;
           SQL
       run_once: true
-      delegate_to: pi1
       no_log: true
       changed_when: true   # idempotent SQL but report change for visibility
 

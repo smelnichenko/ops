@@ -275,5 +275,6 @@
   delay: 5
   changed_when: false
   no_log: true
+  # once, on the first Pi of the play that is up - the buckets are on the shared volume: pinned to the first Pi, the
+  # store's converge failed on both while that Pi was down
   run_once: true
-  delegate_to: "{{ groups['pis'] | first }}"

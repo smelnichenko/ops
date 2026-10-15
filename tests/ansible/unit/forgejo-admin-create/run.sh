@@ -72,10 +72,11 @@ def check(name, got, want):
     print(("PASS " if got == want else "FAIL ") + name + ("" if got == want else f": got {got}, want {want}"))
 # one with a quote (it broke out of the script's quoting), one without (root's shell ran its $( ) and ` at once)
 PWS = ("p$(touch " + W + "/ran)`touch " + W + "/ran2`'\"\\x", "p$(touch " + W + "/ran)`touch " + W + "/ran2`")
-# one script for both playbooks: a task file each imports - setup-patroni's on pi1, once (its database rebuilt, the
+# one script for both playbooks: a task file each imports - setup-patroni's once a batch (its database rebuilt, the
 # admin made again); neither holds a copy of its own (two copies drifted apart once each fix had to land twice)
 TASKS = "deploy/ansible/playbooks/tasks/forgejo-admin.yml"
-for book, keywords in (("setup-pi-services", {}), ("setup-patroni", {"run_once": True, "delegate_to": "pi1"})):
+# setup-patroni's once a batch on that batch's own Pi (serial) - never pinned to pi1: down, its batch failed
+for book, keywords in (("setup-pi-services", {}), ("setup-patroni", {"run_once": True, "delegate_to": None})):
     doc = load(f"deploy/ansible/playbooks/{book}.yml")
     imports = [t for t in tasks(doc) if str(t.get("ansible.builtin.import_tasks", "")).endswith("tasks/forgejo-admin.yml")]
     check(f"{book}: the admin's tasks imported once, as its play needs them; no copy of its own",

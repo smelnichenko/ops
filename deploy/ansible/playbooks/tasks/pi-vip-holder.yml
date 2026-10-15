@@ -26,11 +26,11 @@
     quiet: true
   vars:
     _pi_vip_holders: >-
-      {{ _pi_vip.results | rejectattr('unreachable', 'defined') | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
+      {{ _pi_vip.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
          | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | list }}
 
 - name: The Pi holding the VIP, for what follows
   ansible.builtin.set_fact:
     pi_vip_holder: >-
-      {{ _pi_vip.results | rejectattr('unreachable', 'defined') | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
+      {{ _pi_vip.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
          | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | first }}

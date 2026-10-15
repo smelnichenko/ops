@@ -141,12 +141,17 @@
     # endpoint for Argo CD's client with a user that is none, and a secret it cannot take given the same way. Keycloak's
     # answer to a wrong client secret is measured, not assumed: the right one's must differ from it, and be about the
     # user or the grant (invalid_grant; unauthorized_client where direct grants are off, "not allowed") - never
-    # "Invalid client". Asked from the first Pi, Keycloak's name there checked first to be this inventory's VIP: the
+    # "Invalid client". Asked from the Pi holding the VIP, Keycloak's name there checked first to be this inventory's VIP: the
     # copy's kubeadm node resolves auth.pmon.dev to production's (only the copy's Pis and pods map it to the copy);
     # production's Pis and ten resolve it to their VIP (read 2026-10-08). Never another Keycloak asked
+    # asked from the Pi holding the VIP: pinned to the first Pi, the run failed while that Pi was down
+    - name: The Pi that asks Keycloak
+      ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+      when: keycloak_enabled | bool
+
     - name: Keycloak's name on the Pi that asks it
       ansible.builtin.command: getent ahostsv4 {{ keycloak_host }}
-      delegate_to: "{{ groups['pis'] | first }}"
+      delegate_to: "{{ pi_vip_holder }}"
       register: _argocd_kc_name
       check_mode: false  # a read: a preview judges it too
       changed_when: false
@@ -158,7 +163,7 @@
         that:
           - (_argocd_kc_name.stdout_lines | default([]) | first | default('')).split() | first | default('') == keepalived_vip
         fail_msg: >-
-          REFUSED: {{ keycloak_host }} resolves on {{ groups['pis'] | first }} to
+          REFUSED: {{ keycloak_host }} resolves on {{ pi_vip_holder }} to
           '{{ (_argocd_kc_name.stdout_lines | default([]) | first | default('none')).split() | first | default('none') }}',
           not this inventory's VIP {{ keepalived_vip }} - Keycloak not asked (it would be another's)
         quiet: true
@@ -178,7 +183,7 @@
           password: none
         status_code: [400, 401]
         validate_certs: "{{ validate_certs }}"
-      delegate_to: "{{ groups['pis'] | first }}"
+      delegate_to: "{{ pi_vip_holder }}"
       register: _argocd_sso_wrong
       # a Keycloak or a Caddy still starting (a 502) waited for, two minutes
       retries: 12
@@ -202,7 +207,7 @@
           password: none
         status_code: [400, 401]
         validate_certs: "{{ validate_certs }}"
-      delegate_to: "{{ groups['pis'] | first }}"
+      delegate_to: "{{ pi_vip_holder }}"
       register: _argocd_sso_right
       retries: 12
       delay: 10

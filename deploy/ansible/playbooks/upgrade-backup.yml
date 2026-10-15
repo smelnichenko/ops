@@ -42,8 +42,6 @@
     upgrade_backup_endpoint: "{{ upgrade_backup_endpoint_override | default('http://' ~ keepalived_vip ~ ':9000') }}"
     upgrade_backup_bucket: upgrade-backups
     local_dir: /var/backups/upgrade
-    # a Pi of the backup store: its free space read before each copy (tasks/upgrade-backup-space.yml)
-    upgrade_backup_store_host: "{{ groups['pis'] | first }}"
     # the store's credentials for curl, only root reads it: never on a command line or in the environment
     store_curl: "{{ local_dir }}/.store-credentials.curl"
     stores: [postgres, clickhouse, grafana, kafka, gateway, scylla, etcd]
@@ -55,6 +53,15 @@
       ansible.builtin.assert:
         that: store | default('') in stores
         fail_msg: "-e store=<one of {{ stores | join(', ') }}>"
+
+    # the store's free space read before each copy (tasks/upgrade-backup-space.yml) on the Pi serving it - the one
+    # holding the VIP the copy goes to; pinned to the first Pi, every backup was refused while that Pi was down
+    - name: The Pi serving the backup store
+      ansible.builtin.include_tasks: tasks/pi-vip-holder.yml
+
+    - name: The store's free space read there
+      ansible.builtin.set_fact:
+        upgrade_backup_store_host: "{{ pi_vip_holder }}"
 
     - name: This backup's time (the keys' prefix)
       ansible.builtin.set_fact:
