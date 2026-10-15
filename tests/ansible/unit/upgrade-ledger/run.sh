@@ -405,6 +405,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     # `leftovers`: what each call answers in turn (a list of lists), the last again - or one answer for every call
     seq = [list(x) for x in leftovers] if leftovers and isinstance(leftovers[0], list) else [list(leftovers)]
     m.finished_pod_problems = lambda: seq.pop(0) if len(seq) > 1 else list(seq[0])
+    m.backup_window_problems = lambda: []
     m.merged_live_problems = lambda *a: list(live)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
@@ -1251,6 +1252,7 @@ def merged_by(released_at_confirm):
                                                   "step_info", "settled", "record", "read_ledger",
                                                   "finished_pod_problems")}
     m.finished_pod_problems = lambda: []
+    m.backup_window_problems = lambda: []
     claimed = f"{S47} start merge infra host:1:aa"
     text = [claimed]
     class Out:

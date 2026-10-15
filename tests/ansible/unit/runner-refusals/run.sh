@@ -104,7 +104,7 @@ def merge_calls(step, repo, fail=(), settled_ok=True, events=None):
         calls.append("tempo-flush" if "flush" in (stdin or "") else "remote")
         return R(1 if "tempo-flush" in fail else 0)
     s = patched(ledger_for=lambda st, ph, arg=None: (names, events or [], m.step_info(st)), proof_problems=lambda *a, **k: [],
-                registry_problems=lambda *a, **k: [], finished_pod_problems=lambda: [], run=run, remote=remote,
+                registry_problems=lambda *a, **k: [], finished_pod_problems=lambda: [], backup_window_problems=lambda: [], run=run, remote=remote,
                 confirm=lambda q: True,
                 ansible=lambda *a: calls.append(a[0]) or True, prepull_images=lambda *a: [],
                 merged_base=lambda *a: None, pushed_base=lambda *a: None, read_ledger=lambda: ({"data": {"events": ""}}, []),
@@ -138,7 +138,7 @@ def begin_calls(inv_ok, settle_ok):
     calls = []
     names = m.step_names()
     s = patched(ledger_for=lambda st, ph, arg=None: (names, [], m.step_info(st)), proof_problems=lambda *a, **k: [],
-                vault_login_problems=lambda: [], finished_pod_problems=lambda: [], inventory_check=lambda *a: inv_ok,
+                vault_login_problems=lambda: [], finished_pod_problems=lambda: [], backup_window_problems=lambda: [], inventory_check=lambda *a: inv_ok,
                 settled=lambda *a, **k: (settle_ok, {}, ["app"]), record=lambda st, ev, *a, **k: calls.append(ev))
     try:
         m.begin("01-argocd-root-retry")

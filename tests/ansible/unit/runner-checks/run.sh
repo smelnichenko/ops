@@ -161,11 +161,11 @@ check("the deciding check: a critical alert - red", check_with(["VeleroDown pend
 check("the first check too: a critical alert - red (the soak never starts on one)", check_with(["X firing"], False), False)
 check("none: green", check_with([], True), True)
 # begin: production's alerts its baseline - a step does not start on one pending or firing
-keep = {k: getattr(m, k) for k in ("ledger_for", "proof_problems", "vault_login_problems", "finished_pod_problems",
+keep = {k: getattr(m, k) for k in ("ledger_for", "proof_problems", "vault_login_problems", "finished_pod_problems", "backup_window_problems",
                                    "settled_alert_problems", "inventory_check", "settled", "record")}
 m.ledger_for = lambda st, ph, arg=None: (m.step_names(), [], m.step_info(st))
 m.proof_problems = lambda *a, **k: []
-m.vault_login_problems = m.finished_pod_problems = lambda: []
+m.vault_login_problems = m.finished_pod_problems = m.backup_window_problems = lambda: []
 m.settled_alert_problems = lambda: ["ALERT-X pending"]
 m.inventory_check = lambda *a, **k: True
 m.settled = lambda *a, **k: (True, None, ["app"])

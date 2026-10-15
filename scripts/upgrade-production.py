@@ -1552,6 +1552,47 @@ def finished_pod_problems(objs=None):
     return sorted(out)
 
 
+# how near a CNPG scheduled backup may be when a phase that rolls something out starts: a phase takes minutes
+BACKUP_WINDOW_MINUTES = 15
+
+
+def backup_window_problems(objs=None, now=None):
+    """A CNPG backup running, or one scheduled to start within BACKUP_WINDOW_MINUTES: a phase that restarts the control
+    plane or Postgres meanwhile loses the Backup's status (42-kubernetes-1.35, 2026-10-15: the API server restarted
+    during the hourly backup, the Backup stayed 'running' for ever, CNPG refused every backup after it and
+    PostgresBackupFailed paged). Asked before merge and playbooks. `objs`: kubectl's get backups,scheduledbackups -A -o
+    json (read on ten without); `now`: ten's clock."""
+    if objs is None:
+        out = ten("kubectl get backups.postgresql.cnpg.io,scheduledbackups.postgresql.cnpg.io -A -o json "
+                  "--request-timeout=60s", check=False)
+        try:
+            objs = json.loads(out.stdout) if out.returncode == 0 else None
+        except ValueError:
+            objs = None
+        if objs is None:
+            return [f"production's CNPG backups not read: {(out.stderr or out.stdout).strip()[:200]}"]
+    now = now or ten_clock()
+    at = lambda t: datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    out = []
+    for o in objs.get("items", []):
+        ns, name = o["metadata"]["namespace"], o["metadata"]["name"]
+        status = o.get("status") or {}
+        if o.get("kind") == "Backup" and status.get("phase") not in ("completed", "failed"):
+            out.append(f"{ns}/{name}: a CNPG backup {status.get('phase') or 'not started'} - wait for its end (a "
+                       "restart now loses its status and blocks every backup after it)")
+        elif o.get("kind") == "ScheduledBackup" and not (o.get("spec") or {}).get("suspend") \
+                and status.get("nextScheduleTime"):
+            try:
+                due = at(status["nextScheduleTime"])
+            except ValueError:
+                out.append(f"{ns}/{name}: its next backup time unread ({status['nextScheduleTime']!r})")
+                continue
+            if now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES):
+                out.append(f"{ns}/{name}: a CNPG backup starts at {due:%H:%M:%S}Z, within {BACKUP_WINDOW_MINUTES} "
+                           "minutes - start after it has ended")
+    return sorted(out)
+
+
 def begin(step):
     names, events, _ = ledger_for(step, "begin")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), done=applied_steps(events))
@@ -1635,7 +1676,8 @@ def merge(step, repo):
         tip = run(["git", "-C", d, "rev-parse", "-q", "--verify", f"{BRANCH}{step}^{{commit}}"],
                   capture_output=True).stdout.strip() or None
         refuse(proof_problems(step, names, repo, defaulted(events), partly=partly, tip=tip,
-                              done=applied_steps(events)) + registry_problems(step) + finished_pod_problems())
+                              done=applied_steps(events)) + registry_problems(step) + finished_pod_problems()
+               + backup_window_problems())
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
         if merged_base(d, step):
@@ -1752,7 +1794,7 @@ def playbooks(step):
     names, events, info = ledger_for(step, "playbooks")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
                           done=applied_steps(events)) + merged_live_problems(step, info["branches"])
-           + finished_pod_problems())
+           + finished_pod_problems() + backup_window_problems())
     print(f"{step}'s playbook lines, against PRODUCTION (ten, the Pis):")
     for line in info["playbooks"]:
         print(f"  {line}")
