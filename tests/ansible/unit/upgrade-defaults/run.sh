@@ -92,7 +92,10 @@ try:
     check("a committed step whose new line is gone: no baseline", "reverted", "refused")
 except ValueError as e:
     check("a committed step whose new line is gone: no baseline, naming it", with_lines[0] in str(e), True)
-check("the record in the tree is a valid one", d.pending(tree)[-1], with_lines[-1])
+# every step committed (44-eso-2.12 the last with default lines): nothing pending - an index into it turned CI red
+recorded = [s for s in tree(d.COMMITTED).splitlines() if s and not s.startswith("#")]
+check("the record in the tree is a valid one: its steps, then the pending ones, are every step with default lines",
+      recorded + d.pending(tree), with_lines)
 check("nothing committed: every step with default lines pending", d.pending(rec(H)), with_lines)
 check("the first committed: the rest pending", d.pending(rec(H + with_lines[0] + "\n")), with_lines[1:])
 try:
