@@ -1,0 +1,36 @@
+---
+# The Pi holding the VIP (keepalived_vip) as pi_vip_holder: what reaches the Pis' services through the VIP (the backup
+# store, Keycloak, Forgejo) works from there, and a task pinned to the first Pi fails whenever that Pi is down while
+# the VIP serves from the other. Read from each Pi's own addresses; an unreachable Pi holds nothing. Fails closed: no
+# Pi holding it (nothing to work from) and both holding it (a split keepalived - which one serves is not known).
+# Expects: keepalived_vip, the pis group.
+- name: The VIP {{ keepalived_vip }} - on which Pi
+  ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['pis'] }}"
+  register: _pi_vip
+  changed_when: false
+  failed_when: false
+  ignore_unreachable: true
+  check_mode: false  # a read: a preview needs it too
+
+- name: The VIP held by one Pi
+  ansible.builtin.assert:
+    that: _pi_vip_holders | length == 1
+    fail_msg: >-
+      {{ 'no Pi holds the VIP ' ~ keepalived_vip if _pi_vip_holders | length == 0 else
+         'the VIP ' ~ keepalived_vip ~ ' is held by ' ~ (_pi_vip_holders | join(' and ')) ~ ' (a split keepalived)' }}
+      - Pis read: {{ _pi_vip.results | map(attribute='item') | join(', ') }}, unreachable:
+      {{ _pi_vip.results | selectattr('unreachable', 'defined') | selectattr('unreachable') | map(attribute='item')
+         | join(', ') or 'none' }}
+    quiet: true
+  vars:
+    _pi_vip_holders: >-
+      {{ _pi_vip.results | rejectattr('unreachable', 'defined') | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
+         | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | list }}
+
+- name: The Pi holding the VIP, for what follows
+  ansible.builtin.set_fact:
+    pi_vip_holder: >-
+      {{ _pi_vip.results | rejectattr('unreachable', 'defined') | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
+         | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | first }}
