@@ -19,7 +19,7 @@
 #   ansible-playbook ... -e vault_prefix=schnappy -e confirm_destroy=yes
 
 - name: Purge Vault prefix
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
 
@@ -33,6 +33,11 @@
       - argocd
 
   tasks:
+    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
     - name: Validate vault_prefix is set
       ansible.builtin.fail:
         msg: "Required variable `vault_prefix` not set (e.g. -e vault_prefix=schnappy-pr-42)"

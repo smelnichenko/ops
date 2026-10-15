@@ -14,7 +14,7 @@
 #   - ArgoCD running with ApplicationSets
 
 - name: Create schnappy environment  # env_name passed via -e
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
 
@@ -32,7 +32,7 @@
     infra_git_url: "{{ infra_git_url_override | default('') }}"
     # Prelude for every `vault` shell task. It runs on the target as root and reads the
     # root token where it already lives (setup-vault-pi.yml writes it there, on the
-    # Vagrant pi1 too), so the token never crosses the controller: not in argv, not in
+    # Vagrant Pis too, on both - setup-vault-pi), so the token never crosses the controller: not in argv, not in
     # a fact, not in the `-vvv` EXEC line that prints a task's `environment:`.
     vault_cli_env: |
       export VAULT_ADDR="{{ vault_addr }}" VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem
@@ -41,6 +41,11 @@
       export VAULT_TOKEN
 
   pre_tasks:
+    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
     - name: Validate env_name
       ansible.builtin.assert:
         that:

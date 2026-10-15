@@ -12,12 +12,17 @@
 # Read-only on the Pi (just a fetch); safe to run any time. Re-run only after a
 # Vault re-initialisation, since the keys change nowhere else.
 - name: Back up Vault recovery material off the Pis
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
   vars:
     vault_recovery_dir: "{{ playbook_dir }}/../vars/vault-recovery"
   tasks:
+    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
     - name: Pull unseal keys + root token to the controller (off the Pis)
       ansible.builtin.fetch:
         src: "{{ item }}"

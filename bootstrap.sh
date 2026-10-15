@@ -26,7 +26,16 @@ err()  { echo -e "${RED}[bootstrap]${NC} $*" >&2; }
 setup_vault_eso() {
   log "Configuring ESO → Pi Vault connection..."
 
-  local VAULT_PI="${VAULT_PI:-192.168.11.4}"
+  # the first Pi that answers (VAULT_PIS, both by default): Vault and its root token are on both (setup-vault-pi) -
+  # pinned to pi1, this step (DR step 5 too) failed while pi1 was down and pi2 served. VAULT_PI names one
+  local VAULT_PI="${VAULT_PI:-}" pi
+  if [[ -z $VAULT_PI ]]; then
+    for pi in ${VAULT_PIS:-192.168.11.4 192.168.11.6}; do
+      if ssh -o ConnectTimeout=5 -o BatchMode=yes "sm@${pi}" true 2> /dev/null; then VAULT_PI=$pi; break; fi
+    done
+    [[ -n $VAULT_PI ]] || { err "No Pi answers (${VAULT_PIS:-192.168.11.4 192.168.11.6}): Vault not reached"; return 1; }
+    log "Vault through ${VAULT_PI} (the first Pi that answers)"
+  fi
   # the cluster that Vault serves (K8S_EXPECTED: another pairing): a kube context left on another wrote that one into
   # production's Vault, and the applies below landed there
   local K8S_EXPECTED="${K8S_EXPECTED:-https://192.168.11.2:6443}"

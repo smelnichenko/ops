@@ -10,7 +10,7 @@
 # Namespace deletion is manual (safety).
 
 - name: Destroy schnappy environment  # env_name passed via -e
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
 
@@ -33,6 +33,11 @@
       export VAULT_TOKEN
 
   pre_tasks:
+    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
     - name: Validate env_name
       ansible.builtin.assert:
         that:

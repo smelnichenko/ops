@@ -83,6 +83,8 @@ cat > "$W/bin/ssh" <<STUB
 #!/bin/bash
 echo "ssh \$*" >> "$W/ssh-argv"
 case "\${@: -1}" in
+  # a Pi asked whether it answers: one named down.* does not (ssh's own exit for that)
+  true) case "\$*" in *sm@down.*) exit 255 ;; *) exit 0 ;; esac ;;
   "sudo cat /etc/vault.d/tls/ca-cert.pem") cat "$W/pi/etc/vault.d/tls/ca-cert.pem" ;;
   "sudo bash -s") sed "s|/etc/vault|$W/pi/etc/vault|g" | bash -s ;;
   *) echo "unexpected: \$*" >&2; exit 9 ;;
@@ -123,7 +125,7 @@ run() {  # run <env...>: bootstrap.sh vault-eso, its exit in $rc; its temp files
   rm -rf "$W"/{kubectl-calls,applied,applies,argocd-ns,annotated,annotated-again,annotated-es,es-reads,rolled-back,ssh-argv} \
     "$W"/{vault-argv,vault-env,vault-files,vault-json,tmp} "$W"/pwned-*
   mkdir "$W/tmp"
-  out=$(env "$@" PATH="$W/bin:$PATH" INFRA_DIR="$W/infra" VAULT_PI=pi.test TMPDIR="$W/tmp" ESO_PROOF_SECONDS=1 ESO_SETTLE_SECONDS=0 \
+  out=$(env "$@" PATH="$W/bin:$PATH" INFRA_DIR="$W/infra" VAULT_PI="${RUN_VAULT_PI-pi.test}" TMPDIR="$W/tmp" ESO_PROOF_SECONDS=1 ESO_SETTLE_SECONDS=0 \
     bash bootstrap.sh vault-eso 2>&1); rc=$?
 }
 # first, and without running it otherwise: a step that keeps anything in /tmp would write the real one here
@@ -357,5 +359,11 @@ cmds = [str(c) for c in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgr
 iso = next(i for i, c in enumerate(cmds) if "isolate-cluster.yml" in c)
 argo = next(i for i, c in enumerate(cmds) if "setup-argocd.yml" in c)
 print(ns is not None and ca is not None and ns < ca, iso < argo)')" "True True"
+# no Pi named: the first that answers - pi1 down, pi2 (pinned to pi1, the step failed while pi2 served); none: refused
+RUN_VAULT_PI= run VAULT_PIS="down.pi1 up.pi2"
+check "no Pi named, the first down: the next that answers used, its Vault configured" \
+  "$rc $(grep -c 'sm@up.pi2 sudo bash -s' "$W/ssh-argv") $(grep -c 'sm@down.pi1 sudo' "$W/ssh-argv")" "0 1 0"
+RUN_VAULT_PI= run VAULT_PIS="down.pi1 down.pi2"
+check "  none answering: refused, nothing sent" "$rc $(grep -c 'sudo' "$W/ssh-argv") $(grep -c 'No Pi answers' <<< "$out")" "1 0 1"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

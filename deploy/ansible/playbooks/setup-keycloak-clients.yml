@@ -9,14 +9,14 @@
 #    roles it found and silently dropped the rest — "VIEW" was never a realm role and the
 #    smoke test 403'd for weeks.
 #
-# Runs ON pi1: the Vault root token is read there, under the same prelude the environment
+# Runs ON the Pi holding the VIP: the Vault root token is read there (on both Pis), under the same prelude the environment
 # playbooks use, and never crosses the controller.
 #
 # Usage:
 #   task deploy:keycloak-clients
 
 - name: Configure Keycloak realm roles and client service accounts
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
 
@@ -48,7 +48,12 @@
         roles: [PLAY, CHAT, EMAIL, METRICS, JOBS]
 
   tasks:
-    - name: Read the Keycloak admin password from Vault on pi1
+    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
+    - name: Read the Keycloak admin password from Vault on this Pi
       ansible.builtin.shell: |
         set -eo pipefail
         {{ vault_cli_env }}

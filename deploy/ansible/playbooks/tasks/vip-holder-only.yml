@@ -1,0 +1,10 @@
+---
+# The play goes on on the Pi holding the VIP alone (tasks/pi-vip-holder.yml): a play run once, against the Pis'
+# shared services (Vault - a standby forwards to the active one; Keycloak, Forgejo), from whichever Pi serves now -
+# pinned to pi1, it failed while pi1 was down. Every other Pi ends here. Expects the play on the pis group.
+- name: The Pi holding the VIP
+  ansible.builtin.include_tasks: pi-vip-holder.yml
+
+- name: The other Pis end here
+  ansible.builtin.meta: end_host
+  when: inventory_hostname != pi_vip_holder

@@ -20,7 +20,7 @@
 #   task deploy:setup-vault-cleanup-policy
 
 - name: Provision Vault cleanup token for PR-env GC
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
 
@@ -29,6 +29,11 @@
     policy_name: "argocd-pr-env-cleanup"
 
   tasks:
+    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
     - name: Ensure python3-hvac is installed
       ansible.builtin.apt:
         name: python3-hvac

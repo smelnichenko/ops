@@ -61,6 +61,37 @@ case_ "no Pi holds it: refused, saying so" 1 "no Pi holds the VIP 192.168.11.5" 
 case_ "  pi1 down and pi2 without it: refused, pi1 named unreachable" 1 "unreachable: pi1" "" "" pi1
 case_ "both hold it (a split keepalived): refused, both named" 1 "held by pi1 and pi2" 192.168.11.5/24 192.168.11.5/24
 case_ "an address the VIP is the start of (.50) is not the VIP" 1 "no Pi holds the VIP" 192.168.11.50/24 ""
+# tasks/vip-holder-only.yml: a play on the Pis goes on on the VIP's Pi alone - the other ends there
+cat > "$W/only.yml" <<PLAY
+- hosts: pis
+  gather_facts: false
+  vars:
+    keepalived_vip: 192.168.11.5
+  tasks:
+    - ansible.builtin.import_tasks: $ROOT/deploy/ansible/playbooks/tasks/vip-holder-only.yml
+    - ansible.builtin.debug:
+        msg: "WENT ON {{ inventory_hostname }}"
+PLAY
+only() {  # name, pi1's address, pi2's address, want (the hosts that went on)
+  inv > "$W/inv.yml"
+  out=$(env PATH="$W:$PATH" ADDR_pi1="$2" ADDR_pi2="$3" ANSIBLE_NOCOLOR=1 "$AP" -i "$W/inv.yml" "$W/only.yml" 2>&1)
+  got=$(grep -o 'WENT ON pi[12]' <<< "$out" | sort | tr '\n' ' ')
+  if [ "$got" = "$4" ]; then echo "PASS $1"; else echo "FAIL $1 (went on: '$got', want '$4')"; fails=$((fails + 1)); fi
+}
+only "vip-holder-only: pi1 holds it - pi1 alone goes on" 192.168.11.5/24 "" "WENT ON pi1 "
+only "  pi2 holds it - pi2 alone goes on" "" 192.168.11.5/24 "WENT ON pi2 "
+# the Vault-admin plays (the root token on both Pis): on the Pis, the VIP's Pi alone going on, first thing
+for book in seed-vault-secrets create-environment delete-environment destroy-environment setup-keycloak-clients \
+    setup-vault-cleanup-policy backup-vault-keys; do
+  r=$(python3 - "$ROOT/deploy/ansible/playbooks/$book.yml" <<'PYCHK'
+import sys, yaml
+p = yaml.safe_load(open(sys.argv[1]))[0]
+first = ((p.get("pre_tasks") or p.get("tasks") or [{}])[0]).get("ansible.builtin.import_tasks", "")
+print(p.get("hosts") == "pis" and first == "tasks/vip-holder-only.yml")
+PYCHK
+)
+  if [ "$r" = True ]; then echo "PASS $book: on the Pis, the VIP's Pi alone"; else echo "FAIL $book: not on the VIP's Pi alone"; fails=$((fails + 1)); fi
+done
 # and nothing pins the first Pi any more: groups['pis'] | first (or [0]) failed whatever ran there while that Pi was
 # down - the VIP's Pi (this task), or run_once on the play's Pis, instead
 pinned=$(grep -rnE "groups\[.pis.\] *\| *first|groups\[.pis.\]\[0\]" "$ROOT/deploy/ansible" --include='*.yml' \
