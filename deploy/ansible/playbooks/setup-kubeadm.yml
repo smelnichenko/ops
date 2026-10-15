@@ -21,13 +21,13 @@
   gather_facts: true
 
   vars:
-    k8s_version: "1.35"
+    k8s_version: "1.36"
     # the exact package version: an unpinned install takes the repo's newest patch, not what ten runs
-    k8s_package_version: "1.35.9-1.1"
+    k8s_package_version: "1.36.5-1.1"
     # the minor's CNI plugins and crictl, as upgrade-kubeadm.yml's minor_packages pins them: unpinned, a rebuild took
     # the repository's newest, which no run tested
-    k8s_cni_version: "1.8.0-1.1"
-    k8s_cri_tools_version: "1.35.0-1.1"
+    k8s_cni_version: "1.9.1-1.1"
+    k8s_cri_tools_version: "1.36.0-1.1"
     # nerdctl-full (CLI + buildkit) only where images are built on the node (Vagrant tests); ten has none.
     # Play vars outrank inventory vars, so an inventory sets the *_override names (as with node_ip).
     install_nerdctl: "{{ install_nerdctl_override | default(false) }}"
