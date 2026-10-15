@@ -767,7 +767,7 @@
             state: absent
 
 # ─── Distribute keys + unseal pi2 ───────────────────────────────────────────
-- name: Distribute unseal keys to pi2
+- name: Distribute unseal keys and the root token to pi2
   hosts: pi2
   become: true
   gather_facts: false
@@ -883,6 +883,59 @@
         group: root
         mode: '0400'
       when: _pi2_keys_sum.rc == 0 or not ansible_check_mode
+
+    # the root token on pi2 too, as the shares are (read on pi1 into memory, on stdin, only when pi2's differs, root's
+    # alone): the Vault-admin plays run on the Pi holding the VIP and read the token where they run - on pi1 alone,
+    # every one of them failed while pi1 was down. Root's own token, none if setup purged it on pi1 (then none sent)
+    - name: The root token, read on pi1
+      ansible.builtin.slurp:
+        src: /etc/vault-unseal/root-token
+      delegate_to: pi1
+      register: _pi1_token
+      failed_when: false
+      no_log: true
+
+    - name: Hash of the root token pi2 holds
+      ansible.builtin.command: sha256sum /etc/vault-unseal/root-token
+      register: _pi2_token_sum
+      changed_when: false
+      failed_when: _pi2_token_sum.rc != 0 and 'No such file' not in _pi2_token_sum.stderr
+      check_mode: false
+      no_log: true
+
+    - name: The root token on pi2 - on stdin, never in a file on the controller
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          umask 077
+          part=$(mktemp /etc/vault-unseal/root-token.XXXXXX)
+          trap 'rm -f "$part"' EXIT
+          cat > "$part"
+          [ -s "$part" ] || { echo "the root token read on pi1 is empty" >&2; exit 1; }
+          if cmp -s "$part" /etc/vault-unseal/root-token; then exit 0; fi
+          chmod 0400 "$part"
+          mv "$part" /etc/vault-unseal/root-token
+          echo written
+      args:
+        stdin: "{{ _pi1_token.content | default('') | b64decode }}"
+        stdin_add_newline: false
+      register: _pi2_token
+      changed_when: "'written' in _pi2_token.stdout"
+      when:
+        - _pi1_token.content is defined
+        - >-
+          (_pi2_token_sum.stdout.split() | first | default(''))
+          != (_pi1_token.content | b64decode | hash('sha256'))
+      no_log: true
+
+    - name: Pi2's root token root's alone, read-only
+      ansible.builtin.file:
+        path: /etc/vault-unseal/root-token
+        owner: root
+        group: root
+        mode: '0400'
+      when: _pi2_token_sum.rc == 0 or (_pi1_token.content is defined and not ansible_check_mode)
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh

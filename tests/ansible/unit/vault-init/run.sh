@@ -267,6 +267,40 @@ names = [t["name"] for t in block]
 removal = names.index("The first init done - its keys file removed (the shares are in unseal-keys and root-token)")
 check("the shares synced to disk before the keys file goes", "ansible.builtin.command" in block[removal - 1]
       and block[removal - 1]["ansible.builtin.command"].startswith("sync "))
+# the root token on pi2 too (the Vault-admin plays run on the VIP's Pi and read it there - on pi1 alone they failed while
+# pi1 was down): read on pi1 in pi2's play, out of the log, on stdin, written root-only only when it differs; none read
+# (purged on pi1) - none sent
+tok = next((t for t in pi2_play.get("tasks") or [] if t.get("name", "").startswith("The root token on pi2")), None)
+tread = next((t for t in pi2_play.get("tasks") or [] if "ansible.builtin.slurp" in t
+              and t["ansible.builtin.slurp"].get("src") == "/etc/vault-unseal/root-token"), None)
+tsum = next((t for t in pi2_play.get("tasks") or [] if t.get("name", "").startswith("Hash of the root token")), None)
+check("pi2's root token read on pi1 itself, out of the log, given on stdin",
+      tok is not None and tread is not None and tsum is not None and tread.get("delegate_to") == "pi1"
+      and tread.get("no_log") is True and tok.get("no_log") is True and tsum.get("no_log") is True
+      and tread.get("register") in str((tok.get("args") or {}).get("stdin", ""))
+      and pi2_play["tasks"].index(tread) < pi2_play["tasks"].index(tok))
+if tok and tread and tsum:
+    sh = tok["ansible.builtin.shell"]
+    run = lambda given: subprocess.run(["bash", "-c", sh["cmd"].replace("/etc/vault-unseal", os.path.join(W, "vu"))],
+                                       input=given, env=env, capture_output=True, text=True)
+    f = os.path.join(W, "vu", "root-token")
+    if os.path.exists(f):  # an earlier case's, left behind
+        os.chmod(f, 0o600); os.remove(f)
+    r1 = run("hvs.root")
+    r2 = run("hvs.root")
+    check("pi2's root token as pi1's, 0400, said written; the same again: nothing written",
+          (r1.returncode, "written" in r1.stdout, open(f).read(), stat.S_IMODE(os.stat(f).st_mode),
+           r2.returncode, "written" in r2.stdout) == (0, True, "hvs.root", 0o400, 0, False))
+    r3 = run("")
+    check("an empty one refused, pi2's left as it was", r3.returncode != 0 and open(f).read() == "hvs.root")
+    os.remove(f)
+    import hashlib, base64
+    b64 = base64.b64encode(b"hvs.root").decode()
+    sent = lambda pi1, pi2_sum: condition(tok["when"], **{tread["register"]: pi1, tsum["register"]: {"stdout": pi2_sum}})
+    check("sent when pi2 has none or another; not when the same; not when pi1 has none (purged)",
+          [sent({"content": b64}, ""), sent({"content": b64}, "0" * 64 + "  x"),
+           sent({"content": b64}, hashlib.sha256(b"hvs.root").hexdigest() + "  /etc/vault-unseal/root-token"),
+           sent({"failed": True}, "")] == [True, True, False, False])
 print("vault-init: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
