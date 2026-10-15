@@ -182,9 +182,10 @@ store() {  # a store as production's, made relative to now
     # NO_INFO: the 2 h one without its backup.info (barman writes it last)
     if [ "$h" = 2 ] && [ -n "${NO_INFO:-}" ]; then rm "$pg/schnappy-production-postgres/base/$b/backup.info"; fi
   done
+  # BASE_OLD=<h>: the only complete base backup <h> hours old
   if [ -n "${BASE_OLD:-}" ]; then
     rm -rf "$pg/schnappy-production-postgres/base/"*
-    b=$(utc "-30 hours" +%Y%m%dT%H0130); mkdir -p "$pg/schnappy-production-postgres/base/$b"
+    b=$(utc "-$BASE_OLD hours" +%Y%m%dT%H0130); mkdir -p "$pg/schnappy-production-postgres/base/$b"
     printf 'version=170004\nstatus=DONE\nend_wal=000000030000001D00000025\n' > "$pg/schnappy-production-postgres/base/$b/backup.info"
   fi
   mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001D"
@@ -206,6 +207,8 @@ store() {  # a store as production's, made relative to now
   mkdir -p "$S/restore-checks/pi1" "$W/pgroot/9.6/bin" "$W/pgroot/15/bin" "$W/pgroot/17/bin"
   echo 20200101T000000Z > "$S/restore-checks/pi1/last-success"
 }
+# production's base backup age limit, as the playbook sets it (the cases below are judged against it)
+BASE_MAX=$(sed -n 's/^    pi_restore_check_pg_base_max_age_h: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
 run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTORE_LOCKED), the exit
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
   env -i PATH="$W/bin:/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
@@ -213,7 +216,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
     PI_RESTORE_TIMESYNC_MARKER="$W/no-timesync-marker" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
-    PI_RESTORE_PG_BASE_MAX_AGE_H=26 PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
+    PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 "$@" bash "$SCRIPT" > "$W/out" 2>&1
   echo "rc=$?"
 }
@@ -334,10 +337,18 @@ check "the clock never synchronized: no restore check, nothing read" \
   "$(run PI_RESTORE_LOCKED= NTP=no) $(grep -c 'not synchronized' "$W/out") $(cat "$W/calls" 2> /dev/null | grep -c '^rclone') $(wc -l < "$W/sleeps")" \
   "rc=1 1 0 59"
 store
+touch "$W/timesync-marker"
+check "  timesyncd synchronized (its marker; timedatectl says no): the run goes on" \
+  "$(run PI_RESTORE_LOCKED= NTP=no PI_RESTORE_TIMESYNC_MARKER="$W/timesync-marker") $(report | grep -cE ' OK')" "rc=0 3"
+rm "$W/timesync-marker"
+store
 check "  chrony synchronized (timedatectl says no): the run goes on" "$(run PI_RESTORE_LOCKED= NTP=no CHRONY_NORMAL=1) $(report | grep -cE ' OK')" "rc=0 3"
 
 red "postgres: a major with no image: red" POSTGRES PG_VERSION=190002
-red "postgres: the newest complete base backup 30 h old: red" POSTGRES BASE_OLD=1
+red "postgres: the newest complete base backup just past the playbook's limit: red" POSTGRES BASE_OLD=$((BASE_MAX + 1))
+# CNPG's backup daily at 01:30, this check at 05:30: an idle database's newest restorable one is the day before's
+(export BASE_OLD=28; store)
+check "  the day before's (28 h old): green" "$(run BASE_OLD=28)" "rc=0"
 red "postgres: no backup restorable - every end WAL unarchived (archiving stopped): red" POSTGRES NONE_RESTORABLE=1
 red "postgres: the restore fails: red" POSTGRES PG_RESTORE_FAIL=1
 red "postgres: Postgres stops during the recovery: red" POSTGRES PG_RUNNING=false
