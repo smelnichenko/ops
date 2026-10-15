@@ -887,14 +887,21 @@
     # the root token on pi2 too, as the shares are (read on pi1 into memory, on stdin, only when pi2's differs, root's
     # alone): the Vault-admin plays run on the Pi holding the VIP and read the token where they run - on pi1 alone,
     # every one of them failed while pi1 was down. Root's own token, none if setup purged it on pi1 (then none sent)
+    # none on pi1 (purged there) is an answer - pi2's goes too, below; any failure to look or to read fails the play
+    # (skipped, a later Vault-admin play on pi2 would fail with a 403 or a stale token)
+    - name: Whether pi1 holds the root token
+      ansible.builtin.stat:
+        path: /etc/vault-unseal/root-token
+        get_checksum: false
+      delegate_to: pi1
+      register: _pi1_token_file
+
     - name: The root token, read on pi1
       ansible.builtin.slurp:
         src: /etc/vault-unseal/root-token
       delegate_to: pi1
       register: _pi1_token
-      # none on pi1 (purged there) is an answer - pi2's goes too, below; any other failure to read it fails the play
-      # (skipped, a later Vault-admin play on pi2 would fail with a 403 or a stale token)
-      failed_when: "'content' not in _pi1_token and 'not found' not in (_pi1_token.msg | default(''))"
+      when: _pi1_token_file.stat.exists
       no_log: true
 
     - name: Hash of the root token pi2 holds

@@ -46,6 +46,9 @@ inv() {  # the Pis down given as arguments: reached over ssh (refused), the othe
   done
 }
 fails=0
+check() {  # check <name> <got> <want>
+  if [ "$2" = "$3" ]; then echo "PASS $1"; else echo "FAIL $1: got '$2', want '$3'"; fails=$((fails + 1)); fi
+}
 case_() {  # name, want (0 passes / 1 fails), output must contain, pi1's address, pi2's address, [the Pis down]
   local name=$1 want=$2 grep=$3 a1=$4 a2=$5; shift 5
   inv "$@" > "$W/inv.yml"
@@ -55,7 +58,9 @@ case_() {  # name, want (0 passes / 1 fails), output must contain, pi1's address
   else echo "FAIL $name (rc $rc, want $want)"; printf '%s\n' "$out" | grep -E 'HOLDER|msg|FAILED|fatal' | tail -4 | sed 's/^/    /'
     fails=$((fails + 1)); fi
 }
+: > "$W/arping-calls"
 case_ "pi1 holds the VIP: pi1" 0 "HOLDER=pi1" 192.168.11.5/24 ""
+check "  both Pis read: no duplicate probe" "$(wc -l < "$W/arping-calls")" 0
 case_ "pi2 holds the VIP: pi2" 0 "HOLDER=pi2" "" 192.168.11.5/24
 case_ "pi1 down, pi2 holds the VIP: pi2 (the first Pi pinned failed here)" 0 "HOLDER=pi2" "" 192.168.11.5/24 pi1
 case_ "  a /32 VIP the same" 0 "HOLDER=pi2" "" 192.168.11.5/32 pi1
@@ -68,12 +73,9 @@ IPFAIL=pi2 case_ "a Pi's read failing: refused, not read as free of the VIP" 1 "
 # a Pi unread (down): the holder asks the network - another host answering for the VIP refuses, none goes on
 : > "$W/arping-calls"
 case_ "pi1 down: the holder's duplicate probe run, no answer - on" 0 "HOLDER=pi2" "" 192.168.11.5/24 pi1
-if grep -q 'arping -D .*-I eth0 192.168.11.5 on pi2' "$W/arping-calls"; then echo "PASS   the probe on the holder, on the VIP's interface"
-else echo "FAIL   the probe on the holder, on the VIP's interface: $(cat "$W/arping-calls")"; fails=$((fails + 1)); fi
+check "  the probe on the holder, on the VIP's interface" \
+  "$(grep -c 'arping -D .*-I eth0 192.168.11.5 on pi2' "$W/arping-calls")" 1
 DUP=1 case_ "  another host answering for the VIP (pi1 unread, still holding it): refused" 1 "arping" "" 192.168.11.5/24 pi1
-: > "$W/arping-calls"
-case_ "  both Pis read: no probe" 0 "HOLDER=pi1" 192.168.11.5/24 ""
-if [ ! -s "$W/arping-calls" ]; then echo "PASS     (no probe call)"; else echo "FAIL     (a probe call)"; fails=$((fails + 1)); fi
 # tasks/vip-holder-only.yml: a play on the Pis goes on on the VIP's Pi alone - the other ends there
 cat > "$W/only.yml" <<PLAY
 - hosts: pis
@@ -95,15 +97,15 @@ only() {  # name, pi1's address, pi2's address, want (the hosts that went on), [
 only "vip-holder-only: pi1 holds it - pi1 alone goes on" 192.168.11.5/24 "" "WENT ON pi1 "
 # one reading for the whole play (each host reading the VIP itself, a move between the reads let two Pis each see a
 # different holder): each Pi asked once, not once for every host of the play
-if [ "$(sort "$W/ip-calls" | uniq -c | awk '{print $1}' | paste -sd,)" = "1,1" ]; then echo "PASS   one reading: each Pi asked once"
-else echo "FAIL   one reading: each Pi asked once: $(sort "$W/ip-calls" | uniq -c | paste -sd,)"; fails=$((fails + 1)); fi
+check "  one reading: each Pi asked once" "$(sort "$W/ip-calls" | uniq -c | awk '{print $1}' | paste -sd,)" "1,1"
 only "  pi2 holds it - pi2 alone goes on" "" 192.168.11.5/24 "WENT ON pi2 "
 only "  pi1 down, pi2 holds it - pi2 goes on (the case the change is for)" "" 192.168.11.5/24 "WENT ON pi2 " pi1
 # a --limit leaving the holder out: refused, not a green run that did nothing
 inv > "$W/inv.yml"
 out=$(env PATH="$W:$PATH" ADDR_pi1=192.168.11.5/24 ADDR_pi2= ANSIBLE_NOCOLOR=1 "$AP" -i "$W/inv.yml" --limit pi2 "$W/only.yml" 2>&1); rc=$?
-if [ "$rc" != 0 ] && grep -q "outside this run" <<< "$out" && ! grep -q 'WENT ON' <<< "$out"; then echo "PASS   --limit without the holder: refused, nothing run"
-else echo "FAIL   --limit without the holder: rc $rc"; fails=$((fails + 1)); fi
+check "  --limit without the holder: refused, nothing run" \
+  "$([ "$rc" != 0 ] && echo refused) $(grep -q "outside this run" <<< "$out" && echo said) $(grep -c 'WENT ON' <<< "$out")" \
+  "refused said 0"
 # the Vault-admin plays (the root token on both Pis): on the Pis, the VIP's Pi alone going on before anything but
 # its input's checks
 for book in seed-vault-secrets create-environment delete-environment destroy-environment setup-keycloak-clients \
@@ -117,13 +119,12 @@ at = next((i for i, t in enumerate(ts) if t.get("ansible.builtin.import_tasks") 
 print(p.get("hosts") == "pis" and at is not None and all("ansible.builtin.assert" in t for t in ts[:at]))
 PYCHK
 )
-  if [ "$r" = True ]; then echo "PASS $book: on the Pis, the VIP's Pi alone"; else echo "FAIL $book: not on the VIP's Pi alone"; fails=$((fails + 1)); fi
+  check "$book: on the Pis, the VIP's Pi alone" "$r" True
 done
 # and nothing pins the first Pi any more: groups['pis'] | first (or [0]) failed whatever ran there while that Pi was
 # down - the VIP's Pi (this task), or run_once on the play's Pis, instead
 pinned=$(grep -rnE "groups\[.pis.\] *\| *first|groups\[.pis.\]\[0\]" "$ROOT/deploy/ansible" --include='*.yml' \
   | grep -v '/venv/')
-if [ -z "$pinned" ]; then echo "PASS no playbook pins the first Pi"
-else echo "FAIL a playbook pins the first Pi:"; printf '%s\n' "$pinned" | sed 's/^/    /'; fails=$((fails + 1)); fi
+check "no playbook pins the first Pi" "$pinned" ""
 echo "pi-vip-holder: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

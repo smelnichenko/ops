@@ -8,7 +8,7 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY_BW'
-import datetime, importlib.machinery, importlib.util, json, subprocess
+import datetime, importlib.machinery, importlib.util, json, re, subprocess
 L = importlib.machinery.SourceFileLoader("up", "scripts/upgrade-production.py")
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("up", L))
 L.exec_module(m)
@@ -23,15 +23,18 @@ def check(name, got, want):
 
 NOW = datetime.datetime(2026, 10, 15, 9, 0, 0, tzinfo=datetime.timezone.utc)
 iso = lambda minutes: (NOW + datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
-backup = lambda name, phase, started=None, made=None: {
+backup = lambda name, phase, started=None, made=None, cluster="pg": {
     "kind": "Backup", "metadata": {"namespace": "p", "name": name, **({"creationTimestamp": iso(made)} if made is not None
                                                                      else {})},
+    "spec": {"cluster": {"name": cluster}},
     "status": ({"phase": phase} if phase else {}) | ({"startedAt": iso(started)} if started is not None else {})}
 sched = lambda name, minutes, suspend=False: {"kind": "ScheduledBackup", "metadata": {"namespace": "p", "name": name},
-                                              "spec": {"suspend": suspend}, "status": {"nextScheduleTime": iso(minutes)}}
+                                              "spec": {"suspend": suspend, "cluster": {"name": "pg"}},
+                                              "status": {"nextScheduleTime": iso(minutes)}}
 got = lambda *items: m.backup_window_problems({"items": list(items)}, now=NOW)
 W, LATE, STUCK = m.BACKUP_WINDOW_MINUTES, m.BACKUP_LATE_MINUTES, m.BACKUP_STUCK_HOURS * 60
-check("the limits: a 90-minute window, 10 minutes late, 6 hours stuck", (W, LATE, STUCK), (90, 10, 360))
+check("the limits: a 90-minute window, 10 minutes late, 3 hours stuck (platform's PostgresBackupStuck)",
+      (W, LATE, STUCK), (90, 10, 180))
 check("ended backups and a schedule past the window: nothing",
       got(backup("a", "completed"), backup("b", "failed"), backup("c", "walArchivingFailing"),
           backup("d", "invalid backup definition: no cluster"), sched("daily", W + 1)), [])
@@ -51,6 +54,8 @@ check("  due just past the window: nothing", got(sched("daily", W + 1)), [])
 check("  due a minute ago, no Backup made: refused, said late",
       ["was due" in p and "not made yet" in p for p in got(sched("daily", -1))], [True])
 check("  due a minute ago, its Backup made: nothing", got(sched("daily", -1), backup("x", "completed", made=-1)), [])
+check("  due a minute ago, only another cluster's Backup made since: refused",
+      len(got(sched("daily", -1), backup("x", "completed", made=-1, cluster="other"))), 1)
 check("  due a minute ago, only an older Backup: refused",
       len(got(sched("daily", -1), backup("x", "completed", made=-60))), 1)
 check("  due past the late limit: nothing (CNPG moved on or never will)", got(sched("daily", -(LATE + 1))), [])
@@ -65,6 +70,15 @@ check("kubectl failing: a problem, its error said", [p.startswith("production's 
                                                      m.backup_window_problems()], [True])
 m.ten = lambda *a, **k: subprocess.CompletedProcess(a, 0, "not json", "")
 check("  an answer not JSON: a problem", len(m.backup_window_problems()), 1)
+# the base-backup playbook's "still running" and its include's wait end on the same phases as the runner
+pb = open("deploy/ansible/playbooks/postgres-base-backup.yml").read()
+tk = open("deploy/ansible/playbooks/tasks/cnpg-backup.yml").read()
+# the quoted names in the "in (...)" / "in [...]" that lists "completed"
+ended = lambda text: next(tuple(re.findall(r"\w+", g)) for g in re.findall(r"in [(\[]([^)\]]*)[)\]]", text)
+                          if "completed" in g)
+check("the playbook's and its include's ended phases are the runner's, an invalid definition ended in each",
+      (ended(pb), ended(tk), "startswith(\"invalid\")" in pb, "startswith('invalid')" in tk),
+      (m.BACKUP_ENDED_PHASES, m.BACKUP_ENDED_PHASES, True, True))
 # merge and playbooks ask it before they change anything
 src = open("scripts/upgrade-production.py").read()
 body = lambda fn: src[src.index(f"\ndef {fn}("):src.index("\ndef ", src.index(f"\ndef {fn}(") + 1)]

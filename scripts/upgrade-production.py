@@ -117,8 +117,6 @@ BEFORE_LEDGER = "02-istio-chart-repo"
 # the run's record, and the refusal a declined question gives
 RUN_JSON = "run.json"  # under PROVEN, joined where used (a test moves PROVEN)
 NOT_CONFIRMED = "not confirmed"
-# an inventory line naming an image (scripts/upgrade-expected-inventory.py): "image <name> <tag>"
-IMAGE_LINE = "image "
 
 
 def _load(name, path):
@@ -129,6 +127,7 @@ def _load(name, path):
 
 
 inv = _load("upgrade_expected_inventory", INVENTORY)
+IMAGE_LINE = inv.IMAGE_LINE
 dflt = _load("upgrade_defaults", os.path.join(OPS, "scripts", "upgrade-defaults.py"))
 # what judges a step proven and green - the proof's paths, the settle, the check, the environments left out, what may
 # land on main unproven: proven itself (scripts/upgrade-rules.py), not this controller's to change unproven
@@ -1560,8 +1559,9 @@ def finished_pod_problems(objs=None):
 BACKUP_WINDOW_MINUTES = 90
 # a schedule just past whose Backup is not made yet (CNPG's controller slow or restarting) is as near as one ahead
 BACKUP_LATE_MINUTES = 10
-# a Backup running longer than this has stopped (its status lost - 42-kubernetes-1.35): said with its delete
-BACKUP_STUCK_HOURS = 6
+# a Backup running longer than this has stopped (its status lost - 42-kubernetes-1.35): said with its delete - as
+# platform's PostgresBackupStuck says it (production's backup takes minutes)
+BACKUP_STUCK_HOURS = 3
 # CNPG's Backup phases that are ended (api/v1/backup_types.go): what is not one of these is running
 BACKUP_ENDED_PHASES = ("completed", "failed", "walArchivingFailing")
 
@@ -1586,11 +1586,16 @@ def backup_window_problems(objs=None, now=None):
     now = now or ten_clock()
 
     def at(t):
-        return datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        return datetime.datetime.strptime(t, TIME_FORMAT).replace(tzinfo=datetime.timezone.utc)
 
     items = objs.get("items", [])
-    made = [at(o["metadata"]["creationTimestamp"]) for o in items
-            if o.get("kind") == "Backup" and (o.get("metadata") or {}).get("creationTimestamp")]
+    # each cluster's newest Backup made: a schedule's made one is its own cluster's
+    made = {}
+    for o in items:
+        meta = o.get("metadata") or {}
+        if o.get("kind") == "Backup" and meta.get("creationTimestamp"):
+            key = (meta.get("namespace"), ((o.get("spec") or {}).get("cluster") or {}).get("name"))
+            made[key] = max(made.get(key, at(meta["creationTimestamp"])), at(meta["creationTimestamp"]))
     out = []
     for o in items:
         ns, name = o["metadata"]["namespace"], o["metadata"]["name"]
@@ -1602,13 +1607,10 @@ def backup_window_problems(objs=None, now=None):
                 stuck = started and now - at(started) > datetime.timedelta(hours=BACKUP_STUCK_HOURS)
             except ValueError:
                 stuck = False
-            if stuck:
-                out.append(f"{ns}/{name}: a CNPG backup {phase or 'not started'} since {started} - stuck (its status "
-                           f"lost?); CNPG refuses every backup after it: kubectl -n {ns} delete backup {name}, after "
-                           "checking it ended in the store")
-            else:
-                out.append(f"{ns}/{name}: a CNPG backup {phase or 'not started'} - wait for its end (a restart now "
-                           "loses its status and blocks every backup after it)")
+            head = f"{ns}/{name}: a CNPG backup {phase or 'not started'}"
+            out.append(f"{head} since {started} - stuck (its status lost?); CNPG refuses every backup after it: "
+                       f"kubectl -n {ns} delete backup {name}, after checking it ended in the store" if stuck else
+                       f"{head} - wait for its end (a restart now loses its status and blocks every backup after it)")
         elif o.get("kind") == "ScheduledBackup" and not (o.get("spec") or {}).get("suspend") \
                 and status.get("nextScheduleTime"):
             try:
@@ -1616,12 +1618,15 @@ def backup_window_problems(objs=None, now=None):
             except ValueError:
                 out.append(f"{ns}/{name}: its next backup time unread ({status['nextScheduleTime']!r})")
                 continue
+            last = made.get((ns, ((o.get("spec") or {}).get("cluster") or {}).get("name")))
             late = now - datetime.timedelta(minutes=BACKUP_LATE_MINUTES) <= due < now \
-                and not any(m >= due - datetime.timedelta(minutes=1) for m in made)
-            if now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES) or late:
-                out.append(f"{ns}/{name}: a CNPG backup {'was due' if late else 'starts'} at {due:%H:%M:%S}Z "
-                           f"({'not made yet' if late else f'within {BACKUP_WINDOW_MINUTES} minutes'}) - start after "
-                           "it has ended")
+                and not (last and last >= due - datetime.timedelta(minutes=1))
+            if late:
+                out.append(f"{ns}/{name}: a CNPG backup was due at {due:%H:%M:%S}Z (not made yet) - start after it "
+                           "has ended")
+            elif now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES):
+                out.append(f"{ns}/{name}: a CNPG backup starts at {due:%H:%M:%S}Z (within {BACKUP_WINDOW_MINUTES} "
+                           "minutes) - start after it has ended")
     return sorted(out)
 
 

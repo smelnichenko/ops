@@ -29,9 +29,9 @@ setup_vault_eso() {
   # the first Pi whose Vault serves - unsealed (VAULT_PIS, both by default): Vault and its root token are on both
   # (setup-vault-pi) - pinned to pi1, this step (DR step 5 too) failed while pi1 was down and pi2 served; a Pi that
   # answers with its Vault sealed (a reboot before its unseal) is passed over too. VAULT_PI names one
-  local VAULT_PI="${VAULT_PI:-}" pi
+  local VAULT_PI="${VAULT_PI:-}" pis="${VAULT_PIS:-192.168.11.4 192.168.11.6}" pi
   if [[ -z $VAULT_PI ]]; then
-    for pi in ${VAULT_PIS:-192.168.11.4 192.168.11.6}; do
+    for pi in $pis; do
       # vault status: 0 unsealed, 2 sealed, 1 not reached (its CA root's alone - read under sudo)
       if ssh -o ConnectTimeout=5 -o BatchMode=yes "sm@${pi}" \
           "sudo VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem vault status" > /dev/null 2>&1; then
@@ -40,7 +40,7 @@ setup_vault_eso() {
       fi
     done
     [[ -n $VAULT_PI ]] \
-      || { err "No Pi's Vault serves (${VAULT_PIS:-192.168.11.4 192.168.11.6}: down, or sealed): Vault not reached"; return 1; }
+      || { err "No Pi's Vault serves ($pis: down, or sealed): Vault not reached"; return 1; }
     log "Vault through ${VAULT_PI} (the first Pi whose Vault serves)"
   fi
   # the cluster that Vault serves (K8S_EXPECTED: another pairing): a kube context left on another wrote that one into

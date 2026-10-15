@@ -304,16 +304,16 @@ if tok and tread and tsum:
 # the root token's read on pi1: none there (purged) is an answer, any other failure fails the play; pi2's copy goes
 # when pi1 has none - never left to outlive the purge
 if tread:
-    rf = lambda res: condition(tread["failed_when"], **{tread["register"]: res})
-    check("pi1's token read: found - on; none (file not found) - on; another failure - refused",
-          [rf({"content": "eA=="}), rf({"failed": True, "msg": "file not found: /etc/vault-unseal/root-token"}),
-           rf({"failed": True, "msg": "Permission denied"}), rf({"unreachable": True, "msg": "ssh: timed out"})]
-          == [False, False, True, True])
+    look = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.stat") or {}).get("path")
+                 == "/etc/vault-unseal/root-token"), None)
+    check("pi1's token looked for on pi1 (its failure fails the play), read only where it is (its failure too)",
+          look is not None and look.get("delegate_to") == "pi1" and "failed_when" not in look
+          and "failed_when" not in tread and tread.get("when") == look["register"] + ".stat.exists")
     gone = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.file") or {}).get("path")
                  == "/etc/vault-unseal/root-token" and (t.get("ansible.builtin.file") or {}).get("state") == "absent"), None)
     check("pi2's token removed when pi1 has none; kept when pi1 has one",
           gone is not None and [condition(gone["when"], **{tread["register"]: r}) for r in
-                                ({"failed": True, "msg": "file not found"}, {"content": "eA=="})] == [True, False])
+                                ({"skipped": True}, {"content": "eA=="})] == [True, False])
 # the verify play: a sealed or unanswering Vault on either Pi fails it (2 sealed, 1 an error), not a "ready" summary
 ver = next((p for p in book if p.get("name") == "Verify Vault cluster"), {})
 st = next((t for t in ver.get("tasks") or [] if t.get("ansible.builtin.command") == "vault status"), None)

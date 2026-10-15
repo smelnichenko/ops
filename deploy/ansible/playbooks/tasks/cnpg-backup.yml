@@ -21,5 +21,9 @@
   changed_when: false
   retries: 60
   delay: 10
-  until: _cnpg_backup_phase.stdout in ['completed', 'failed']
+  # CNPG's ended phases (as the runner's BACKUP_ENDED_PHASES): a Backup failing on its WAL or its definition ends the
+  # wait at once, not after it
+  until: >-
+    _cnpg_backup_phase.stdout in ['completed', 'failed', 'walArchivingFailing']
+    or _cnpg_backup_phase.stdout.startswith('invalid')
   failed_when: _cnpg_backup_phase.stdout != 'completed'

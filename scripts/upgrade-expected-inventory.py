@@ -111,6 +111,8 @@ import sys
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
 STEPS = os.path.join(UPGRADE, "steps")
+# an inventory line naming an image: "image <name> <tag>"
+IMAGE_LINE = "image "
 
 
 WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla", "etcd")
@@ -193,7 +195,7 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
     starts = {before for before, _, _ in changes if before}
     for image, where in undos:
         name, tag = image.split("@")[0].rsplit(":", 1)
-        if f"image {name} {tag}" not in starts:
+        if f"{IMAGE_LINE}{name} {tag}" not in starts:
             sys.exit(f"{where}: restore-undo image {name}:{tag} is not the image the step starts from "
                      f"(no 'image {name} {tag} =>' line)")
     return changes
