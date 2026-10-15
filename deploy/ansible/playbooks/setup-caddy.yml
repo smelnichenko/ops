@@ -478,6 +478,14 @@
         caddy_status:
           stdout: "{{ ansible_facts.services['caddy.service'].state | default('unknown') }}"
 
+    # this Pi's own Caddy running: git.pmon.dev below reaches the VIP's Pi only - the other Pi's Caddy is first used
+    # when the VIP moves to it
+    - name: This Pi's Caddy running
+      ansible.builtin.assert:
+        that: caddy_status.stdout == 'running'
+        fail_msg: "{{ inventory_hostname }}'s Caddy is {{ caddy_status.stdout }} - the VIP moving here would serve nothing"
+        quiet: true
+
     - name: Test HTTPS Forgejo
       ansible.builtin.uri:
         url: https://git.pmon.dev/api/v1/version
