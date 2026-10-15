@@ -892,7 +892,9 @@
         src: /etc/vault-unseal/root-token
       delegate_to: pi1
       register: _pi1_token
-      failed_when: false
+      # none on pi1 (purged there) is an answer - pi2's goes too, below; any other failure to read it fails the play
+      # (skipped, a later Vault-admin play on pi2 would fail with a 403 or a stale token)
+      failed_when: "'content' not in _pi1_token and 'not found' not in (_pi1_token.msg | default(''))"
       no_log: true
 
     - name: Hash of the root token pi2 holds
@@ -936,6 +938,13 @@
         group: root
         mode: '0400'
       when: _pi2_token_sum.rc == 0 or (_pi1_token.content is defined and not ansible_check_mode)
+
+    # purged on pi1, purged on pi2: a copy left there would outlive the purge (or be a revoked one the plays then use)
+    - name: Pi2's root token gone where pi1 has none
+      ansible.builtin.file:
+        path: /etc/vault-unseal/root-token
+        state: absent
+      when: _pi1_token.content is not defined
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh
@@ -1036,11 +1045,13 @@
     VAULT_CACERT: /etc/vault.d/tls/ca-cert.pem
 
   tasks:
+    # each Pi's own Vault unsealed and answering (0; 2 sealed, 1 an error): failed_when false let a sealed pi2 pass as
+    # "ready" - and the VIP's plays run there now
     - name: Vault status
       ansible.builtin.command: vault status
       register: _status
       changed_when: false
-      failed_when: false
+      failed_when: _status.rc != 0
       check_mode: false  # a read: a preview (--check) shows it
 
     - name: Consul KV has vault/ keys

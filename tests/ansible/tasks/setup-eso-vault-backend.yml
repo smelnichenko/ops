@@ -11,14 +11,14 @@
 #
 # Publishes: ClusterSecretStore `vault-backend` pointing at Pi Vault.
 
-# Vault through the VIP, its certificate read on the Pi holding it (the certificate names the VIP): pinned to pi1, ESO
-# stayed down whenever pi1 was
+# Vault through the VIP, trusted by the CA that signs both Pis' certificates (read on the Pi holding the VIP - every Pi
+# has the same): a Pi's own certificate trusted as the CA failed ESO the moment the VIP moved to the other Pi
 - name: The Pi holding the VIP
   ansible.builtin.include_tasks: ../../../deploy/ansible/playbooks/tasks/pi-vip-holder.yml
 
 - name: Slurp Pi Vault CA cert (from the VIP's Pi)
   ansible.builtin.slurp:
-    src: /etc/vault.d/tls/vault-cert.pem
+    src: /etc/vault.d/tls/ca-cert.pem
   register: _pi_vault_ca
   delegate_to: "{{ pi_vip_holder }}"
   no_log: true

@@ -83,8 +83,10 @@ cat > "$W/bin/ssh" <<STUB
 #!/bin/bash
 echo "ssh \$*" >> "$W/ssh-argv"
 case "\${@: -1}" in
-  # a Pi asked whether it answers: one named down.* does not (ssh's own exit for that)
-  true) case "\$*" in *sm@down.*) exit 255 ;; *) exit 0 ;; esac ;;
+  # a Pi asked whether its Vault serves: one named down.* does not answer (ssh's own exit), one named sealed.* answers
+  # with its Vault sealed (vault status's 2)
+  "sudo VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem vault status")
+    case "\$*" in *sm@down.*) exit 255 ;; *sm@sealed.*) exit 2 ;; *) exit 0 ;; esac ;;
   "sudo cat /etc/vault.d/tls/ca-cert.pem") cat "$W/pi/etc/vault.d/tls/ca-cert.pem" ;;
   "sudo bash -s") sed "s|/etc/vault|$W/pi/etc/vault|g" | bash -s ;;
   *) echo "unexpected: \$*" >&2; exit 9 ;;
@@ -359,11 +361,19 @@ cmds = [str(c) for c in yaml.safe_load(open("Taskfile.yml"))["tasks"]["test:upgr
 iso = next(i for i, c in enumerate(cmds) if "isolate-cluster.yml" in c)
 argo = next(i for i, c in enumerate(cmds) if "setup-argocd.yml" in c)
 print(ns is not None and ca is not None and ns < ca, iso < argo)')" "True True"
-# no Pi named: the first that answers - pi1 down, pi2 (pinned to pi1, the step failed while pi2 served); none: refused
+# no Pi named: the first whose Vault serves - pi1 down, pi2 (pinned to pi1, the step failed while pi2 served); pi1 up
+# with its Vault sealed, pi2 too; none: refused
+RUN_VAULT_PI= run VAULT_PIS="up.pi1 up.pi2"
+check "no Pi named, both serving: the first used, the second never asked" \
+  "$rc $(grep -c 'sm@up.pi1 sudo bash -s' "$W/ssh-argv") $(grep -c 'sm@up.pi2' "$W/ssh-argv")" "0 1 0"
 RUN_VAULT_PI= run VAULT_PIS="down.pi1 up.pi2"
-check "no Pi named, the first down: the next that answers used, its Vault configured" \
-  "$rc $(grep -c 'sm@up.pi2 sudo bash -s' "$W/ssh-argv") $(grep -c 'sm@down.pi1 sudo' "$W/ssh-argv")" "0 1 0"
-RUN_VAULT_PI= run VAULT_PIS="down.pi1 down.pi2"
-check "  none answering: refused, nothing sent" "$rc $(grep -c 'sudo' "$W/ssh-argv") $(grep -c 'No Pi answers' <<< "$out")" "1 0 1"
+check "  the first down: the next whose Vault serves used, its Vault configured" \
+  "$rc $(grep -c 'sm@up.pi2 sudo bash -s' "$W/ssh-argv") $(grep -c 'sm@down.pi1 sudo bash\|sm@down.pi1 sudo cat' "$W/ssh-argv")" "0 1 0"
+RUN_VAULT_PI= run VAULT_PIS="sealed.pi1 up.pi2"
+check "  the first answering, its Vault sealed: passed over, the next used" \
+  "$rc $(grep -c 'sm@up.pi2 sudo bash -s' "$W/ssh-argv") $(grep -c 'sm@sealed.pi1 sudo bash\|sm@sealed.pi1 sudo cat' "$W/ssh-argv")" "0 1 0"
+RUN_VAULT_PI= run VAULT_PIS="down.pi1 sealed.pi2"
+check "  none serving: refused, nothing sent" \
+  "$rc $(grep -c 'sudo bash\|sudo cat' "$W/ssh-argv") $(grep -c "No Pi's Vault serves" <<< "$out")" "1 0 1"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
