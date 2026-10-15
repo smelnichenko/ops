@@ -16,10 +16,12 @@ PY=$(command -v python3)
 for pi in pi1 pi2; do
   mkdir -p "$W/$pi"
   # `ip -o -4 addr show to <vip>/32` as iproute2 prints it: the line when this Pi has the address ($ADDR_<pi>), nothing else
-  printf '#!/bin/sh\na=$(eval echo "\\${ADDR_%s:-}")\n[ -n "$a" ] && printf "2: eth0    inet %%s scope global secondary proto 0x12 eth0\\\\       valid_lft forever preferred_lft forever\\n" "$a"\nexit 0\n' \
-    "$pi" > "$W/$pi/ip"
+  printf '#!/bin/sh\necho %s >> "%s/ip-calls"\ncase " $IPFAIL " in *" %s "*) echo "RTNETLINK answers: Operation not permitted" >&2; exit 2 ;; esac\na=$(eval echo "\\${ADDR_%s:-}")\n[ -n "$a" ] && printf "2: eth0    inet %%s scope global secondary proto 0x12 eth0\\\\       valid_lft forever preferred_lft forever\\n" "$a"\nexit 0\n' \
+    "$pi" "$W" "$pi" "$pi" > "$W/$pi/ip"
   printf '#!/bin/sh\nPATH="%s:$PATH" exec "%s" "$@"\n' "$W/$pi" "$PY" > "$W/py-$pi"
-  chmod +x "$W/$pi/ip" "$W/py-$pi"
+  # arping -D (iputils): exit 1 when another host answers for the address ($DUP), 0 when none does; its call recorded
+  printf '#!/bin/sh\necho "arping $* on %s" >> "%s/arping-calls"\n[ -z "$DUP" ]\n' "$pi" "$W" > "$W/$pi/arping"
+  chmod +x "$W/$pi/ip" "$W/py-$pi" "$W/$pi/arping"
 done
 # a Pi that is down: its ssh refused as ssh says it (exit 255) - this harness's own, before the unit runner's fence
 printf '#!/bin/sh\necho "ssh: connect to host 192.0.2.1 port 22: Connection timed out" >&2\nexit 255\n' > "$W/ssh"
@@ -61,6 +63,17 @@ case_ "no Pi holds it: refused, saying so" 1 "no Pi holds the VIP 192.168.11.5" 
 case_ "  pi1 down and pi2 without it: refused, pi1 named unreachable" 1 "unreachable: pi1" "" "" pi1
 case_ "both hold it (a split keepalived): refused, both named" 1 "held by pi1 and pi2" 192.168.11.5/24 192.168.11.5/24
 case_ "an address the VIP is the start of (.50) is not the VIP" 1 "no Pi holds the VIP" 192.168.11.50/24 ""
+# a Pi's read failing is no "holds nothing": refused (the play fails), never read as free
+IPFAIL=pi2 case_ "a Pi's read failing: refused, not read as free of the VIP" 1 "Operation not permitted" 192.168.11.5/24 ""
+# a Pi unread (down): the holder asks the network - another host answering for the VIP refuses, none goes on
+: > "$W/arping-calls"
+case_ "pi1 down: the holder's duplicate probe run, no answer - on" 0 "HOLDER=pi2" "" 192.168.11.5/24 pi1
+if grep -q 'arping -D .*-I eth0 192.168.11.5 on pi2' "$W/arping-calls"; then echo "PASS   the probe on the holder, on the VIP's interface"
+else echo "FAIL   the probe on the holder, on the VIP's interface: $(cat "$W/arping-calls")"; fails=$((fails + 1)); fi
+DUP=1 case_ "  another host answering for the VIP (pi1 unread, still holding it): refused" 1 "arping" "" 192.168.11.5/24 pi1
+: > "$W/arping-calls"
+case_ "  both Pis read: no probe" 0 "HOLDER=pi1" 192.168.11.5/24 ""
+if [ ! -s "$W/arping-calls" ]; then echo "PASS     (no probe call)"; else echo "FAIL     (a probe call)"; fails=$((fails + 1)); fi
 # tasks/vip-holder-only.yml: a play on the Pis goes on on the VIP's Pi alone - the other ends there
 cat > "$W/only.yml" <<PLAY
 - hosts: pis
@@ -72,14 +85,25 @@ cat > "$W/only.yml" <<PLAY
     - ansible.builtin.debug:
         msg: "WENT ON {{ inventory_hostname }}"
 PLAY
-only() {  # name, pi1's address, pi2's address, want (the hosts that went on)
-  inv > "$W/inv.yml"
+only() {  # name, pi1's address, pi2's address, want (the hosts that went on), [the Pis down]
+  inv "${@:5}" > "$W/inv.yml"
   out=$(env PATH="$W:$PATH" ADDR_pi1="$2" ADDR_pi2="$3" ANSIBLE_NOCOLOR=1 "$AP" -i "$W/inv.yml" "$W/only.yml" 2>&1)
   got=$(grep -o 'WENT ON pi[12]' <<< "$out" | sort | tr '\n' ' ')
   if [ "$got" = "$4" ]; then echo "PASS $1"; else echo "FAIL $1 (went on: '$got', want '$4')"; fails=$((fails + 1)); fi
 }
+: > "$W/ip-calls"
 only "vip-holder-only: pi1 holds it - pi1 alone goes on" 192.168.11.5/24 "" "WENT ON pi1 "
+# one reading for the whole play (each host reading the VIP itself, a move between the reads let two Pis each see a
+# different holder): each Pi asked once, not once for every host of the play
+if [ "$(sort "$W/ip-calls" | uniq -c | awk '{print $1}' | paste -sd,)" = "1,1" ]; then echo "PASS   one reading: each Pi asked once"
+else echo "FAIL   one reading: each Pi asked once: $(sort "$W/ip-calls" | uniq -c | paste -sd,)"; fails=$((fails + 1)); fi
 only "  pi2 holds it - pi2 alone goes on" "" 192.168.11.5/24 "WENT ON pi2 "
+only "  pi1 down, pi2 holds it - pi2 goes on (the case the change is for)" "" 192.168.11.5/24 "WENT ON pi2 " pi1
+# a --limit leaving the holder out: refused, not a green run that did nothing
+inv > "$W/inv.yml"
+out=$(env PATH="$W:$PATH" ADDR_pi1=192.168.11.5/24 ADDR_pi2= ANSIBLE_NOCOLOR=1 "$AP" -i "$W/inv.yml" --limit pi2 "$W/only.yml" 2>&1); rc=$?
+if [ "$rc" != 0 ] && grep -q "outside this run" <<< "$out" && ! grep -q 'WENT ON' <<< "$out"; then echo "PASS   --limit without the holder: refused, nothing run"
+else echo "FAIL   --limit without the holder: rc $rc"; fails=$((fails + 1)); fi
 # the Vault-admin plays (the root token on both Pis): on the Pis, the VIP's Pi alone going on before anything but
 # its input's checks
 for book in seed-vault-secrets create-environment delete-environment destroy-environment setup-keycloak-clients \

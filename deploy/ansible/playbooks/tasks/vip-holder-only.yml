@@ -5,6 +5,15 @@
 - name: The Pi holding the VIP
   ansible.builtin.include_tasks: pi-vip-holder.yml
 
+# a --limit leaving the holder out ended every Pi it named: the run was green and did nothing
+- name: The Pi holding the VIP is in this run
+  ansible.builtin.assert:
+    that: pi_vip_holder in ansible_play_hosts_all
+    fail_msg: >-
+      the VIP's Pi {{ pi_vip_holder }} is outside this run ({{ ansible_play_hosts_all | join(', ') }} - its --limit)
+      - nothing would run
+    quiet: true
+
 - name: The other Pis end here
   ansible.builtin.meta: end_host
   when: inventory_hostname != pi_vip_holder

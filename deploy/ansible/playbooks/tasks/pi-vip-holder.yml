@@ -1,18 +1,48 @@
 ---
 # The Pi holding the VIP (keepalived_vip) as pi_vip_holder: what reaches the Pis' services through the VIP (the backup
 # store, Keycloak, Forgejo) works from there, and a task pinned to the first Pi fails whenever that Pi is down while
-# the VIP serves from the other. Read from each Pi's own addresses; an unreachable Pi holds nothing. Fails closed: no
-# Pi holding it (nothing to work from) and both holding it (a split keepalived - which one serves is not known).
+# the VIP serves from the other. Read once for the whole play, by its first host, every host deciding on that one
+# reading (read by each, a VIP moving between the reads let two Pis each see one holder, a different one; run_once
+# cannot: with a Pi unreachable it ends the play for every host). Fails closed: no Pi
+# holding it (nothing to work from), both holding it (a split keepalived), a Pi's read failing (not "holds nothing"),
+# and - a Pi unreachable, so unread - another host answering for the VIP beside the holder (the holder's duplicate
+# address probe: a Pi this run cannot reach may still hold it).
 # Expects: keepalived_vip, the pis group.
 - name: Which Pi holds the VIP {{ keepalived_vip }}
   ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
   delegate_to: "{{ item }}"
   loop: "{{ groups['pis'] }}"
   register: _pi_vip
+  when: inventory_hostname == ansible_play_hosts | first
   changed_when: false
+  # an unreachable Pi must not end the play (ignore_unreachable alone does not cover a delegated loop's item); a read
+  # that failed on a Pi reached is refused below - never "holds nothing"
   failed_when: false
   ignore_unreachable: true
   check_mode: false  # a read: a preview needs it too
+
+- name: The one reading, the first host's
+  ansible.builtin.set_fact:
+    _pi_vip_read: "{{ hostvars[ansible_play_hosts | first]._pi_vip }}"
+
+- name: The Pis holding it, and the ones unread
+  ansible.builtin.set_fact:
+    _pi_vip_holders: >-
+      {{ _pi_vip_read.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
+         | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | list }}
+    _pi_vip_unread: >-
+      {{ _pi_vip_read.results | selectattr('unreachable', 'defined') | selectattr('unreachable') | map(attribute='item')
+         | list }}
+
+- name: Every Pi reached read
+  ansible.builtin.assert:
+    that: _pi_vip_failed | length == 0
+    fail_msg: >-
+      the VIP not read on {{ _pi_vip_failed | map(attribute='item') | join(', ') }}:
+      {{ _pi_vip_failed | map(attribute='stderr') | join('; ') }}
+    quiet: true
+  vars:
+    _pi_vip_failed: "{{ _pi_vip_read.results | selectattr('rc', 'defined') | rejectattr('rc', 'equalto', 0) | list }}"
 
 - name: The VIP held by one Pi
   ansible.builtin.assert:
@@ -20,17 +50,25 @@
     fail_msg: >-
       {{ 'no Pi holds the VIP ' ~ keepalived_vip if _pi_vip_holders | length == 0 else
          'the VIP ' ~ keepalived_vip ~ ' is held by ' ~ (_pi_vip_holders | join(' and ')) ~ ' (a split keepalived)' }}
-      - Pis read: {{ _pi_vip.results | map(attribute='item') | join(', ') }}, unreachable:
-      {{ _pi_vip.results | selectattr('unreachable', 'defined') | selectattr('unreachable') | map(attribute='item')
-         | join(', ') or 'none' }}
+      - Pis read: {{ _pi_vip_read.results | map(attribute='item') | join(', ') }}, unreachable:
+      {{ _pi_vip_unread | join(', ') or 'none' }}
     quiet: true
-  vars:
-    _pi_vip_holders: >-
-      {{ _pi_vip.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
-         | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | list }}
 
 - name: The Pi holding the VIP, for what follows
   ansible.builtin.set_fact:
-    pi_vip_holder: >-
-      {{ _pi_vip.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0)
-         | selectattr('stdout', 'search', ' inet ' ~ (keepalived_vip | regex_escape) ~ '/') | map(attribute='item') | first }}
+    pi_vip_holder: "{{ _pi_vip_holders | first }}"
+
+# a Pi this run cannot reach is unread, not free of the VIP: the holder asks the network whether another host answers
+# for its address (iputils arping -D: exit 1 on a reply) - on the interface the VIP is on
+- name: No other host answering for the VIP while a Pi is unread
+  ansible.builtin.command: >-
+    arping -D -c 2 -w 3
+    -I {{ (_pi_vip_read.results | selectattr('item', 'equalto', pi_vip_holder) | first).stdout.split()[1] }}
+    {{ keepalived_vip }}
+  delegate_to: "{{ pi_vip_holder }}"
+  run_once: true
+  register: _pi_vip_dup
+  changed_when: false
+  failed_when: _pi_vip_dup.rc != 0
+  check_mode: false  # a read
+  when: _pi_vip_unread | length > 0
