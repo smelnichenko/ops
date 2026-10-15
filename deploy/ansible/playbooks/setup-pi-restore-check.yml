@@ -27,12 +27,13 @@
     pi_restore_check_on_calendar: "*-*-* 05:30:00 UTC"
     # production's CNPG databases (infra's schnappy-production-data values, postgres.databases)
     pi_restore_check_databases: [monitor, admin, chat, chess, masi]
-    # production's Postgres image per major: the 17 its chart runs, the 18 its step 47 moves to
+    # production's Postgres image per major: the 17 its chart ran (by its tag alone, never a digest), the 18 its step 47
+    # moved to, by the digest platform's schnappy-data runs
     pi_restore_check_pg_images:
       "17": "ghcr.io/cloudnative-pg/postgresql:17"
-      "18": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye"
-    # the etcd production runs (its etcdutl reads the snapshot)
-    pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.5-0"
+      "18": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye@sha256:899d3ed526b659d77935dde0e6bf2d69dbbf17d3d8c6486ca8cfd04bd3c18533"
+    # the etcd production runs after the upgrade (its etcdutl reads the snapshot), by the digest ten's kubelet pulled
+    pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.8-0@sha256:397189418d1a00e500c0605ad18d1baf3b541a1004d768448c367e48071622e5"
     # how old each backup may be: CNPG's base backup daily at 01:30 (platform schnappy-data, "0 30 1 * * *"), this
     # check at 05:30 - an idle database can leave that day's backup's end segment unarchived, and the newest restorable
     # one is then the day before's, ~28 h old: 30 h; etcd's snapshots hourly; the Pis' own daily at 02:40
@@ -133,11 +134,15 @@
             Description=The backups restored on this Pi (every other day; the other Pi takes the rest)
             After=network-online.target consul.service versitygw.service
             # a failed run tried twice more, 20 minutes apart: a blip (the VIP moving, a registry, a Consul election)
-            # is no failed turn - and a failed turn is two days of KubeJobFailed until this Pi's next one
-            StartLimitIntervalSec=6h
+            # is no failed turn - and a failed turn is two days of KubeJobFailed until this Pi's next one. Three starts
+            # in a day: a run that hangs to its 3 h timeout starts again 3 h 20 min later - a 6 h window never held
+            # three of them, and it restarted for ever (review of 2026-10-16)
+            StartLimitIntervalSec=24h
             StartLimitBurst=3
             [Service]
             Type=oneshot
+            # its files root's alone (the script sets it too): production's backups and the restored servers' sockets
+            UMask=0077
             EnvironmentFile=/etc/pi-restore-check/env
             ExecStart=/usr/local/sbin/pi-restore-check.sh
             # the Pi's own services come first

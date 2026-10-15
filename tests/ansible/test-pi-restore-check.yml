@@ -264,7 +264,8 @@
           echo "$(systemctl show -p ActiveState --value pi-restore-check.service)" \
             "$(journalctl -u pi-restore-check.service --since "@$since" --no-pager -o cat | grep -c '^PI RESTORE CHECK .* FAILED: ETCD$')" \
             "$(journalctl -u pi-restore-check.service --since "@$since" --no-pager -o cat | grep -c 'Start request repeated too quickly')" \
-            "$(systemctl show -p MemoryMax --value pi-restore-check.service)"
+            "$(systemctl show -p MemoryMax --value pi-restore-check.service)" \
+            "$(systemctl show -p UMask --value pi-restore-check.service)"
       register: _unit
       changed_when: true
 
@@ -282,10 +283,10 @@
         cmd: systemctl daemon-reload && systemctl reset-failed pi-restore-check.service
       changed_when: true
 
-    - name: Three runs (the first and two retries), then the start limit; its memory capped at 1 GiB
+    - name: Three runs (the first and two retries), then the start limit; its memory capped at 1 GiB, its umask 0077
       ansible.builtin.assert:
-        that: _unit.stdout_lines[-1] == 'failed 3 1 1073741824'
-        fail_msg: "ActiveState, runs, start-limit refusals, MemoryMax: {{ _unit.stdout_lines }}"
+        that: _unit.stdout_lines[-1] == 'failed 3 1 1073741824 0077'
+        fail_msg: "ActiveState, runs, start-limit refusals, MemoryMax, UMask: {{ _unit.stdout_lines }}"
 
 - name: Both Pis - the timer on, opposite days
   hosts: pis

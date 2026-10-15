@@ -141,6 +141,8 @@ cat > "$W/bin/runuser" <<'STUB_RUNUSER'
 shift 3
 echo "runuser $*" >> "$W/calls"
 tool=${1##*/}; shift
+# initdb -D <run>/tier0/pg: the umask inherited, the run's and tier0's directories' modes, as the scratch Postgres sees them
+[ "$tool" != initdb ] || echo "umask $(umask) run $(stat -c %a "${2%/tier0/pg}") tier0 $(stat -c %a "${2%/pg}")" > "$W/modes"
 case "$tool" in
   initdb|pg_ctl|createdb) exit 0 ;;
   pg_restore) [ -z "${PGRESTORE_FAIL:-}" ] || { echo "pg_restore: error: could not execute query" >&2; exit 1; } ;;
@@ -153,7 +155,7 @@ case "$tool" in
     esac ;;
 esac
 STUB_RUNUSER
-printf '#!/bin/bash\n' > "$W/bin/chown"
+printf '#!/bin/bash\necho "chown $*" >> "$W/calls"\n' > "$W/bin/chown"
 printf '#!/bin/bash\n[ "$1" != show ] || echo "${NTP:-yes}"\n' > "$W/bin/timedatectl"
 printf '#!/bin/bash\n[ -z "${CHRONY_NORMAL:-}" ] || echo "Leap status     : Normal"\n' > "$W/bin/chronyc"
 printf '#!/bin/bash\necho "sleep $*" >> "$W/sleeps"\n' > "$W/bin/sleep"
@@ -161,7 +163,7 @@ chmod +x "$W/bin"/*
 
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
-  rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
+  rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/modes" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
     "$W/leftover-containers"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
@@ -209,15 +211,18 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
   env -i PATH="$W/bin:/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
     AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=s PI_RESTORE_NAME=pi1 PI_RESTORE_PARITY=0 PI_RESTORE_ANY_DAY=1 \
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
+    PI_RESTORE_TIMESYNC_MARKER="$W/no-timesync-marker" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H=26 PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 "$@" bash "$SCRIPT" > "$W/out" 2>&1
   echo "rc=$?"
 }
-agents() {  # the throwaway Consul agents (the stub's sleep 120) still running
+agents() {  # this test's throwaway Consul agents (the stub's sleep 120, W in its environment) still running - another
+  # run's (a test beside this one) not counted
   local f n=0
   for f in /proc/[0-9]*/cmdline; do
-    [ "$(tr '\0' ' ' < "$f" 2> /dev/null)" != "sleep 120 " ] || n=$((n + 1))
+    [ "$(tr '\0' ' ' < "$f" 2> /dev/null)" = "sleep 120 " ] || continue
+    tr '\0' '\n' < "${f%cmdline}environ" 2> /dev/null | grep -qxF "W=$W" && n=$((n + 1))
   done
   echo $n
 }
@@ -259,6 +264,12 @@ check "  production's image for its major" "$(report | grep -oE '\(PostgreSQL 17
   "(PostgreSQL 17, ghcr.io/cloudnative-pg/postgresql:17)"
 check "  the restored Postgres: archives nothing, listens nowhere, no TLS, the store's WAL its restore_command" \
   "$(tr ' ' '\n' < "$W/postgres-args" | grep -cxE 'archive_mode=off|listen_addresses=|ssl=off|restore_command=barman-cloud-wal-restore')" 4
+# root's alone: a directory any local user passes through, and a socket any may open, let any service account log in to
+# a restored Postgres as its superuser (trust) or read production's dumps
+check "  its files root's alone: the umask 077, the run's directory passable only, tier0's too, the dumps the scratch Postgres's" \
+  "$(cat "$W/modes") $(grep -cE '^chown -R postgres: .*/tier0/b$' "$W/calls")" "umask 0077 run 711 tier0 711 1"
+check "  both restored Postgres' sockets their user's alone" \
+  "$(tr ' ' '\n' < "$W/postgres-args" | grep -cx 'unix_socket_permissions=0700') $(grep -cE '^runuser .*/pg_ctl .*unix_socket_permissions=0700 .* start$' "$W/calls")" "1 1"
 check "  recovery to the end, then promoted: recovery.signal in the data when Postgres starts, the backup's standby.signal gone" \
   "$(grep -xE 'recovery.signal|standby.signal' "$W/pgdata-at-start" | paste -sd,)" "recovery.signal"
 check "  etcd without a network" "$(grep -c -- '--network none' "$W/calls" | awk '{print ($1 >= 3)}')" 1
@@ -362,18 +373,22 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 # the playbook's wiring
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-check "the playbook names production's images (prod-inventory's Postgres 17 and etcd, step 47's Postgres 18)" "$("$PY" - <<'PY_WIRING'
-import re, yaml
+check "the playbook names production's images (Postgres 17 as it ran; after every step: its Postgres 18 and etcd, digested)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
+import importlib.machinery, importlib.util, os, re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]
-inv = open("tests/ansible/upgrade/prod-inventory.txt").read().splitlines()
-img = lambda name: [l.split()[2] for l in inv if l.startswith("image " + name + " ")]
-s47 = open("tests/ansible/upgrade/steps/47-postgres-18.txt").read()
-to18 = re.search(r"=> image ghcr\.io/cloudnative-pg/postgresql (\S+)", s47).group(1)
-print(v["pi_restore_check_pg_images"] == {"17": "ghcr.io/cloudnative-pg/postgresql:" + img("ghcr.io/cloudnative-pg/postgresql")[0],
-                                          "18": "ghcr.io/cloudnative-pg/postgresql:" + to18},
-      v["pi_restore_check_etcd_image"] == "registry.k8s.io/etcd:" + img("registry.k8s.io/etcd")[0])
+L = importlib.machinery.SourceFileLoader("e", "scripts/upgrade-expected-inventory.py")
+e = importlib.util.module_from_spec(importlib.util.spec_from_loader("e", L))
+L.exec_module(e)
+before = open("tests/ansible/upgrade/prod-inventory.txt").read().splitlines()
+after = e.expected(sorted(f[:-4] for f in os.listdir(e.STEPS) if f.endswith(".txt")))
+img = lambda inv, name: [l.split()[2] for l in inv if l.startswith("image " + name + " ")]
+pg, etcd = "ghcr.io/cloudnative-pg/postgresql", "registry.k8s.io/etcd"
+digested = lambda ref, name, tags: [re.fullmatch(re.escape(name) + r":(\S+)@sha256:[0-9a-f]{64}", ref)[1]] == tags
+print(v["pi_restore_check_pg_images"]["17"] == pg + ":" + img(before, pg)[0],
+      digested(v["pi_restore_check_pg_images"]["18"], pg, img(after, pg)),
+      digested(v["pi_restore_check_etcd_image"], etcd, img(after, etcd)), sorted(v["pi_restore_check_pg_images"]))
 PY_WIRING
-)" "True True"
+)" "True True True ['17', '18']"
 check "the two Pis on opposite days (pi1 even, pi2 odd), the store through the VIP" "$("$PY" - <<'PY_PARITY'
 import yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
@@ -394,5 +409,19 @@ need = set(re.findall(r'"\$\{([A-Z][A-Z0-9_]*):\?\}"', open(sys.argv[1]).read())
 print(sorted(need - keys), len(need) > 5)
 PY_KEYS
 )" "[] True"
+# the start limit holds the first run and its two retries even when each hangs to its timeout - a 6 h window never held
+# three 3 h runs 20 min apart, and the unit restarted for ever; its files root's alone (UMask, as the script's umask)
+check "the unit: three starts, each to its timeout, within the start limit's window; its umask 0077" "$("$PY" - <<'PY_UNIT'
+import re, yaml
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+unit = next(i["content"] for t in p["tasks"] for i in (t.get("loop") or []) if isinstance(i, dict)
+            and i.get("name") == "pi-restore-check.service")
+kv = dict(re.findall(r"^(\w+)=(.*)$", unit, re.M))
+secs = lambda v: sum(int(n) * {"h": 3600, "min": 60, "s": 1}[u] for n, u in re.findall(r"(\d+)(h|min|s)", v))
+burst = int(kv["StartLimitBurst"])
+print(burst, burst * (secs(kv["TimeoutStartSec"]) + secs(kv["RestartSec"])) <= secs(kv["StartLimitIntervalSec"]),
+      kv["UMask"])
+PY_UNIT
+)" "3 True 0077"
 echo "pi-restore-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

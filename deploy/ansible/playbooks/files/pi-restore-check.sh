@@ -12,6 +12,10 @@
 # off) and listens on no address; etcd runs without a network. A day with every part green writes last-success,
 # which infra's restore-check-age reads.
 set -euo pipefail
+# what it writes is root's alone - production's backups (etcd's every Secret, the Pis' dumps) and the restored servers'
+# sockets: a directory any local user could pass through let any service account read them or log in to a restored
+# Postgres as its superuser (trust - review of 2026-10-16). Each part gives its directory to the user that needs it
+umask 077
 
 store_age_h() {  # store_age_h <yyyymmddThhmmss UTC>: hours since then
   local t=$1
@@ -83,6 +87,7 @@ part_postgres() {
     -e AWS_SECRET_ACCESS_KEY -v "$w:/w" \
     --entrypoint postgres "$image" -D /w/pgdata -c listen_addresses= -c unix_socket_directories=/w -c port=5432 \
     -c ssl=off -c archive_mode=off -c logging_collector=off -c log_destination=stderr -c hba_file=/w/hba.conf \
+    -c unix_socket_permissions=0700 \
     -c shared_buffers=256MB \
     -c "restore_command=barman-cloud-wal-restore --cloud-provider aws-s3 --endpoint-url $STORE_ENDPOINT s3://postgres-backups $server %f %p" \
     > /dev/null
@@ -191,6 +196,9 @@ part_tier0() {
   age=$(store_age_h "${d%Z}")
   [ "$age" -le "$PI_RESTORE_TIER0_MAX_AGE_H" ] || { echo "the Pis' newest backup $d is $age h old (limit $PI_RESTORE_TIER0_MAX_AGE_H h)"; return 1; }
   rclone copy "store:pi-backups/$d" "$w/b"
+  # the dumps read by the scratch Postgres's own user, through this part's directory (passable, not readable)
+  chmod 0711 "$w"
+  chown -R postgres: "$w/b"
   [ ! -e "$w/b/KEYCLOAK-EXPORT-FAILED" ] || { echo "$d: its Keycloak export failed"; return 1; }
   # Consul's snapshot into a throwaway dev agent on other ports (as test-pi-backups.yml restores it)
   consul agent -dev -node=restore-check -data-dir="$w/consul" -bind=127.0.0.1 -client=127.0.0.1 \
@@ -215,7 +223,8 @@ part_tier0() {
   chown postgres: "$w/pg" "$w/sock"
   runuser -u postgres -- "$bin/initdb" -D "$w/pg" -U postgres --auth=trust > /dev/null
   runuser -u postgres -- "$bin/pg_ctl" -D "$w/pg" -l "$w/pg/log" -w \
-    -o "-c listen_addresses='' -c unix_socket_directories=$w/sock -c port=55432" start > /dev/null
+    -o "-c listen_addresses='' -c unix_socket_directories=$w/sock -c unix_socket_permissions=0700 -c port=55432" \
+    start > /dev/null
   echo "$w/pg" > "$1/scratch-pg"
   local P=(-h "$w/sock" -p 55432 -U postgres)
   # the roles first (the dumps' owners); postgres itself exists already - its CREATE fails, nothing else may
@@ -273,7 +282,7 @@ if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   # the clock synchronized first (as pi-tier0-backup's): the day's parity and every age below read it
   for i in $(seq 60); do
     [ "$(timedatectl show -p NTPSynchronized --value 2> /dev/null)" = yes ] && break
-    if [ -e /run/systemd/timesync/synchronized ] \
+    if [ -e "${PI_RESTORE_TIMESYNC_MARKER:-/run/systemd/timesync/synchronized}" ] \
         || chronyc -n tracking 2> /dev/null | grep -q '^Leap status *: Normal$'; then
       break
     fi
@@ -308,7 +317,8 @@ free_gb=$(( $(df --output=avail -k "$PI_RESTORE_WORK" | tail -1) / 1024 / 1024 )
 [ "$free_gb" -ge "$PI_RESTORE_MIN_FREE_GB" ] \
   || { echo "PI RESTORE CHECK: $free_gb GiB free under $PI_RESTORE_WORK, under $PI_RESTORE_MIN_FREE_GB GiB - no restore"; exit 1; }
 work=$(mktemp -d "$PI_RESTORE_WORK/run.XXXXXX")
-chmod 0755 "$work"
+# passable, not readable: each part's own directory is its user's alone
+chmod 0711 "$work"
 trap 'cleanup "$work"' EXIT
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 for part in postgres etcd tier0; do
