@@ -1,7 +1,7 @@
 ---
 # Test Woodpecker CI deployment in Vagrant
 #
-# Uses Pi Forgejo (forgejo_admin@192.168.56.20:3000) — matches production
+# Uses Pi Forgejo (forgejo_admin@<keepalived_vip>:3000, both Pis behind the VIP) — matches production
 # topology where Woodpecker watches Pi Forgejo. Deploys Woodpecker
 # in-cluster via the Istio gateway at ci.vagrant.test:30080 (HTTPRoute).
 #
@@ -30,7 +30,7 @@
     # Pi Forgejo helper sets forgejo_host + forgejo_admin_user
     # forgejo_internal_url is the same as forgejo_host since Pi Forgejo
     # is reachable directly from the kubeadm node (no ClusterIP needed).
-    forgejo_internal_url: "http://192.168.56.20:3000"
+    forgejo_internal_url: "http://{{ keepalived_vip }}:3000"
 
   tasks:
     # Istio gateway + Gateway resource — publishes node_ip +
@@ -526,15 +526,15 @@
       changed_when: false
 
     - name: Patch Forgejo webhook to reach Woodpecker via kubeadm NodeIP
-      # Pi Forgejo runs on pi1 (192.168.56.20), Woodpecker runs in the
+      # Pi Forgejo runs on both Pis (behind the VIP), Woodpecker runs in the
       # kubeadm cluster reachable at 192.168.56.10 via Istio gateway
       # NodePort. Forgejo can't resolve `ci.vagrant.test` (no DNS) and
       # certainly can't resolve `woodpecker-server.woodpecker.svc`
       # (cluster-internal DNS only). Rewrite the webhook URL to use
       # the kubeadm node IP + Istio gateway NodePort which Pi can reach
-      # directly over the private network.
+      # directly over the private network. pipefail: a failed read is a failure, not an empty answer
       ansible.builtin.shell: |
-        set -e
+        set -eo pipefail
         HOOK_ID=$(curl -sf -H "Authorization: token {{ forgejo_token }}" \
           "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}/hooks" \
           | python3 -c "import sys,json; hooks=json.load(sys.stdin); print(hooks[0]['id'])" 2>/dev/null)
@@ -552,6 +552,8 @@
           -H "Content-Type: application/json" \
           "http://{{ forgejo_host }}/api/v1/repos/{{ forgejo_admin_user }}/{{ test_repo_name }}/hooks/$HOOK_ID" \
           -d "{\"config\":{\"url\":\"$NEW_URL\",\"content_type\":\"json\"}}"
+      args:
+        executable: /bin/bash
       changed_when: false
 
     - name: Wait for webhook to settle
@@ -773,9 +775,11 @@
                       matchLabels: { app.kubernetes.io/name: agent }
                 ports: [{ protocol: TCP, port: 9000 }]
             egress:
-              # Pi Forgejo (private network static IP)
+              # Pi Forgejo: the VIP and both Pis (any Pi may hold the VIP), as setup-argocd's argocd_forgejo_cidrs
               - to:
-                  - ipBlock: { cidr: 192.168.56.20/32 }
+                  - ipBlock: { cidr: "{{ keepalived_vip }}/32" }
+                  - ipBlock: { cidr: "{{ hostvars['pi1']['ansible_host'] }}/32" }
+                  - ipBlock: { cidr: "{{ hostvars['pi2']['ansible_host'] }}/32" }
                 ports: [{ protocol: TCP, port: 3000 }]
               - ports:
                   - { protocol: TCP, port: 443 }
@@ -840,9 +844,11 @@
               - to:
                   - ipBlock: { cidr: 10.43.0.1/32 }
                 ports: [{ protocol: TCP, port: 443 }]
-              # Pi Forgejo
+              # Pi Forgejo: the VIP and both Pis (any Pi may hold the VIP)
               - to:
-                  - ipBlock: { cidr: 192.168.56.20/32 }
+                  - ipBlock: { cidr: "{{ keepalived_vip }}/32" }
+                  - ipBlock: { cidr: "{{ hostvars['pi1']['ansible_host'] }}/32" }
+                  - ipBlock: { cidr: "{{ hostvars['pi2']['ansible_host'] }}/32" }
                 ports: [{ protocol: TCP, port: 3000 }]
               - to:
                   - ipBlock:

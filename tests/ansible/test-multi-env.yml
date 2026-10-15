@@ -91,8 +91,8 @@
 
     - name: Set Forgejo facts
       ansible.builtin.set_fact:
-        forgejo_url: "http://{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}:3000"
-        forgejo_host: "{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}"
+        forgejo_url: "http://{{ keepalived_vip }}:3000"
+        forgejo_host: "{{ keepalived_vip }}"
 
     - name: Create schnappy org in Forgejo
       ansible.builtin.uri:
@@ -149,12 +149,13 @@
     - name: Patch infra repo for Vagrant (replace production IPs, remove conflicting apps)
       ansible.builtin.shell: |
         cd /tmp/infra-repo
-        # Replace production Forgejo/Pi IP with Vagrant Pi IP in all ArgoCD app files
+        # production's addresses to the copy's, each to its own (as scripts/vagrant-gitops-mirror.py's ADDRESS_MAP): the
+        # VIP to the VIP, each Pi to that Pi - all three to pi1 made the copy's apps depend on pi1 alone
         find clusters/production/argocd/apps -name '*.yaml' -exec \
-          sed -i 's|192.168.11.5:3000|{{ forgejo_host }}:3000|g; s|192.168.11.4|{{ forgejo_host }}|g; s|192.168.11.5|{{ forgejo_host }}|g; s|192.168.11.6|{{ forgejo_host }}|g; s|git.pmon.dev|{{ forgejo_host }}:3000|g' {} +
+          sed -i 's|192.168.11.5|{{ keepalived_vip }}|g; s|192.168.11.4|{{ hostvars['pi1']['ansible_host'] }}|g; s|192.168.11.6|{{ hostvars['pi2']['ansible_host'] }}|g; s|git.pmon.dev|{{ forgejo_host }}:3000|g' {} +
         # Also patch cluster-config (NPs reference Pi IPs)
         find clusters/production/cluster-config -name '*.yaml' -exec \
-          sed -i 's|192.168.11.5|{{ forgejo_host }}|g; s|192.168.11.4|{{ forgejo_host }}|g' {} +
+          sed -i 's|192.168.11.5|{{ keepalived_vip }}|g; s|192.168.11.4|{{ hostvars['pi1']['ansible_host'] }}|g; s|192.168.11.6|{{ hostvars['pi2']['ansible_host'] }}|g' {} +
         # Remove old static apps replaced by ApplicationSets
         rm -f clusters/production/argocd/apps/schnappy-data.yaml
         rm -f clusters/production/argocd/apps/schnappy.yaml

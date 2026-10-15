@@ -957,7 +957,7 @@ tasks:
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
-      - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
+      - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.50:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
@@ -1511,7 +1511,7 @@ tasks:
       - cmd: vagrant up
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
-      - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.20:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
+      - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.50:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml'

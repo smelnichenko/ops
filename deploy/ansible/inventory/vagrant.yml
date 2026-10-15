@@ -67,18 +67,19 @@ all:
     forgejo_internal_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYmYiOjE3OTEyMDYzNzZ9.za8fkb-2uen_bmUOJBN_Dq1V2LS93TQctL-k-CTA8hQ"
     forgejo_jwt_secret: "TXXLXLM6p0RFNp0xcFVQiEbsQd7tcz8Dq5carUDyhQY"
     forgejo_secret_key: "sDzwBlVnu-9Vofiq4-v8vbkGPa5JUvxbrdjGuHyIfpB"
-    # Vagrant: Forgejo binds to a Pi static IP, no DNS / TLS in front.
+    # Vagrant: Forgejo through the VIP (keepalived_vip - both Pis run it), no DNS / TLS in front.
     # Override the hardcoded prod URLs from setup-pi-services.yml so the
-    # registry's WWW-Authenticate redirect points back at the same host.
-    forgejo_domain: "192.168.56.20"
+    # registry's WWW-Authenticate redirect points back at the same host. pi1's own address made pi1 the copy's one way
+    # in: down, Forgejo (Argo, Woodpecker, the registry) was gone while pi2 served the VIP
+    forgejo_domain: "192.168.56.50"
     # setup-argocd: the Vagrant Forgejo (its port, plain http), no certificate check, no ingress - the Vagrant copy's
     # own, never a step's argument (production's run would carry them to ten). Single sign-on configured and checked as
     # production's (argocd_keycloak_enabled: its default) - steps 31 and 33 rehearsed with production's checks
-    argocd_forgejo_host: "192.168.56.20:3000"
+    argocd_forgejo_host: "192.168.56.50:3000"
     forgejo_scheme: http
     argocd_validate_certs: false
     argocd_ingress_enabled: false
-    forgejo_root_url: "http://192.168.56.20:3000/"
+    forgejo_root_url: "http://192.168.56.50:3000/"
     # Wave 0 files go to the Pi store in parts this small here, so the rehearsal puts them together from several
     # (production's default: 4 GiB)
     upgrade_backup_part_bytes: 4194304

@@ -1,5 +1,5 @@
 ---
-# Verify Pi Forgejo (the production Forgejo running on pi1) is reachable
+# Verify Pi Forgejo (the production Forgejo, on both Pis, through the VIP) is reachable
 # from the kubeadm node, and that the admin user auth still works.
 #
 # Used by tests that previously stood up a throwaway in-cluster Forgejo
@@ -7,7 +7,7 @@
 # matches the production CI flow.
 #
 # Sets these facts:
-#   forgejo_host        — "192.168.56.20:3000" (Pi1 IP + Forgejo HTTP port)
+#   forgejo_host        — "<keepalived_vip>:3000" (the Pis' VIP + Forgejo HTTP port)
 #   forgejo_admin_user  — "forgejo_admin" (the inventory admin)
 #
 # Required inventory vars (already in vagrant.yml all.vars):
@@ -18,7 +18,7 @@
 
 - name: Set Pi Forgejo facts
   ansible.builtin.set_fact:
-    forgejo_host: "192.168.56.20:3000"
+    forgejo_host: "{{ keepalived_vip }}:3000"
     forgejo_admin_user: forgejo_admin
 
 - name: Verify Pi Forgejo API reachable

@@ -4,7 +4,7 @@
 # the VIP serves from the other. Read from each Pi's own addresses; an unreachable Pi holds nothing. Fails closed: no
 # Pi holding it (nothing to work from) and both holding it (a split keepalived - which one serves is not known).
 # Expects: keepalived_vip, the pis group.
-- name: The VIP {{ keepalived_vip }} - on which Pi
+- name: Which Pi holds the VIP {{ keepalived_vip }}
   ansible.builtin.command: ip -o -4 addr show to {{ keepalived_vip }}/32
   delegate_to: "{{ item }}"
   loop: "{{ groups['pis'] }}"

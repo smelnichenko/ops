@@ -25,7 +25,7 @@
   vars:
     env_name: ephemeral
     ns: "schnappy-{{ env_name }}"
-    forgejo_host: "{{ hostvars['pi1']['ansible_host'] | default('192.168.56.20') }}"
+    forgejo_host: "{{ keepalived_vip }}"
     forgejo_admin_user: forgejo_admin
     # forgejo_admin_password from inventory (vagrant.yml test fixture)
     forgejo_url: "http://{{ forgejo_host }}:3000"

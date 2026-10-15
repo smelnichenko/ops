@@ -27,7 +27,7 @@ to the Vagrant Forgejo (pi1 VM) under the `schnappy` org:
 An upgrade step is a branch of infra and/or platform changing the same files production's change would; mirrored
 with --infra-ref/--platform-ref, Argo in Vagrant syncs it exactly as Argo on ten would sync it once merged.
 
-Usage: scripts/vagrant-gitops-mirror.py [--infra ../infra] [--platform ../platform] [--forgejo 192.168.56.20:3000]
+Usage: scripts/vagrant-gitops-mirror.py [--infra ../infra] [--platform ../platform] [--forgejo 192.168.56.50:3000]
                                         [--infra-ref main] [--platform-ref main]
 Env:   VAGRANT_FORGEJO_ADMIN_USER / VAGRANT_FORGEJO_ADMIN_PASSWORD (default: the Vagrant inventory's). Deliberately
        not FORGEJO_ADMIN_*: the Taskfile loads ops/.env, whose FORGEJO_ADMIN_* are PRODUCTION's credentials.
@@ -247,7 +247,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--infra", default=os.path.join(OPS, "..", "infra"))
     ap.add_argument("--platform", default=os.path.join(OPS, "..", "platform"))
-    ap.add_argument("--forgejo", default="192.168.56.20:3000")
+    ap.add_argument("--forgejo", default="192.168.56.50:3000")  # the Pis' VIP: pi1 down, pi2 serves it
     ap.add_argument("--infra-ref", default="main", help="infra branch to mirror (an upgrade step's)")
     ap.add_argument("--platform-ref", default="main", help="platform branch to mirror (an upgrade step's)")
     a = ap.parse_args()
