@@ -56,13 +56,19 @@
         _server_version.rc != 0
         or (pg_major | default('') | length > 0 and (_server_version.stdout | int) // 10000 != (pg_major | int))
 
-    - name: A WAL file switched on it now
+    # a record written first and its WAL file named, then the switch: on an idle server pg_switch_wal() closes nothing and
+    # names the file still open - never archived, waited on in vain (25-versitygw, 2026-10-14); and an archive_timeout
+    # switch between a record and the switch leaves an empty file open. The file holding the record is closed either
+    # way - by this switch or the timeout's - and is the one waited for
+    - name: A WAL record written on it, its file switched - the one waited for
       ansible.builtin.command: >-
         {{ kubectl }} exec {{ _primary.stdout }} -c postgres --
-        psql -U postgres -Atc "select pg_walfile_name(pg_switch_wal())"
+        psql -U postgres -At -v ON_ERROR_STOP=1
+        -c "select pg_walfile_name(pg_logical_emit_message(false, 'base-backup', 'x'))"
+        -c "select pg_switch_wal()"
       register: _switched
       changed_when: true
-      failed_when: _switched.rc != 0 or _switched.stdout | length != 24
+      failed_when: _switched.rc != 0 or (_switched.stdout_lines | first | default('')) | length != 24
 
     - name: That WAL file archived to the store (pg_stat_archiver)
       ansible.builtin.command: >-
@@ -72,7 +78,7 @@
       changed_when: false
       retries: 30
       delay: 10
-      until: _archived.rc == 0 and _archived.stdout >= _switched.stdout
+      until: _archived.rc == 0 and _archived.stdout >= (_switched.stdout_lines | first)
 
     # a backup of this cluster still running (a run that timed out waiting left its Backup going): another beside it
     # would stack two base backups on the store - refused until it ends

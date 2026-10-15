@@ -65,7 +65,7 @@ except SystemExit:
 check("CNPG's own step (no major of its own): done's base backup takes any", [c for c in calls if "postgres-base-backup" in c[0]],
       [["playbooks/postgres-base-backup.yml", "-e", "pg_namespace=schnappy-production", "-e",
         "cluster=schnappy-production-postgres", "-e", "pg_major="]])
-check("each base backup after the WAL written on the primary", [("pg_switch_wal" in c) for c in wal], [True, True])
+check("nothing written on ten by the runner before the playbook (the playbook writes its WAL record)", wal, [])
 # the step's major from its step file - CNPG's own image line alone (another registry's postgresql is no cluster of
 # ours); the CLI the Taskfile reads it with
 import os, subprocess, tempfile

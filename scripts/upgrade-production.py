@@ -1775,20 +1775,10 @@ def cluster_runs(image):
 
 
 def take_base_backup(step):
-    """postgres-base-backup.yml on production's cluster - whether it passed. Its pg_switch_wal() on an idle server
-    closes nothing: it names the WAL file still open, never archived, and the playbook waits on it in vain
-    (25-versitygw, 2026-10-14). So first, on the primary: a message, a switch (archive_timeout's 5 minutes start
-    again - it cannot close the file before the playbook does), a message (the playbook's switch has a file to close)."""
-    emit = "select pg_logical_emit_message(false, 'upgrade-wal-switch', 'x')"
-    out = ten(f"kubectl -n {PG_NAMESPACE} exec $(kubectl -n {PG_NAMESPACE} get clusters.postgresql.cnpg.io {PG_CLUSTER} "
-              f"-o jsonpath={{.status.currentPrimary}}) -c postgres -- psql -U postgres -At -v ON_ERROR_STOP=1 "
-              f'-c "{emit}" -c "select pg_switch_wal()" -c "{emit}"', check=False)
-    if out.returncode:
-        print(f"no WAL written on the primary: rc {out.returncode}: {out.stderr.strip()}")
-        return False
+    """postgres-base-backup.yml on production's cluster - whether it passed. The playbook writes a WAL record and waits
+    for the file holding it (an idle server's switch alone closes nothing: 25-versitygw, 2026-10-14)."""
     return ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_namespace={PG_NAMESPACE}", "-e",
                    f"cluster={PG_CLUSTER}", "-e", f"pg_major={inv.pg_major(step)}")
-
 
 def playbooks(step):
     names, events, info = ledger_for(step, "playbooks")

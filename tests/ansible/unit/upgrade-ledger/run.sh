@@ -231,12 +231,12 @@ check("between 47's merges: postgresql:17 not judged, 18 not yet, the rest as be
 
 # the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
 # a no - or no terminal - runs nothing and records nothing
-def done_calls(step, answer, events=(), wal_rc=0):
+def done_calls(step, answer, events=(), playbook_ok=True):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record",
                                                    "proof_problems", "ten_now", "merged_live_problems", "ten")}
-    # the WAL written before a base backup (`wal_rc` its exit) - any other call on ten a stray one
-    m.ten = lambda command, **k: calls.append("wal" if "pg_switch_wal" in command else "ten: " + command) or type(
-        "R", (), {"returncode": wal_rc, "stdout": "", "stderr": "wal write failed"})()
+    # any call on ten a stray one (the base backup's WAL record is the playbook's own)
+    m.ten = lambda command, **k: calls.append("ten: " + command) or type(
+        "R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
     m.ten_now = lambda: "2026-10-07T10:00:00Z"
     # the merge live on origin/main: read in the step's repos beside ops (CI's checkout has none) - not this test's
     m.merged_live_problems = lambda *a: []
@@ -244,7 +244,7 @@ def done_calls(step, answer, events=(), wal_rc=0):
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: (None, 0)
     m.confirm = lambda q: calls.append("asked") or answer
-    m.ansible = lambda *a: calls.append(a[0]) or True
+    m.ansible = lambda *a: calls.append(a[0]) or (playbook_ok or a[0] != "playbooks/postgres-base-backup.yml")
     m.check = lambda *a, **k: True
     m.record = lambda st, ev, *a, **k: calls.append(ev)
     try:
@@ -260,9 +260,9 @@ check("done 23 (cert-renew), no", done_calls(S23, False), ["asked", "refused"])
 check("done 23 (cert-renew), yes - the ACME check recorded (a red check after it does not issue again)",
       done_calls(S23, True), ["asked", "playbooks/acme-check.yml", "acme-check", "checked"])
 check("done 24 (barman-check), yes: the backup taken and recorded (a red check later does not take it again)",
-      done_calls("24-cnpg", True), ["asked", "wal", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
-check("done 24 (barman-check), yes, the WAL not written: no backup, none recorded, refused",
-      done_calls("24-cnpg", True, wal_rc=1), ["asked", "wal", "refused"])
+      done_calls("24-cnpg", True), ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
+check("done 24 (barman-check), yes, the playbook failing: no backup recorded, refused",
+      done_calls("24-cnpg", True, playbook_ok=False), ["asked", "playbooks/postgres-base-backup.yml", "refused"])
 check("done 24 after a check-failed, its backup recorded: not taken again",
       done_calls("24-cnpg", False, ev("24-cnpg base-backup", "24-cnpg checked", "24-cnpg check-failed")), ["checked"])
 check("done 24 (barman-check), no", done_calls("24-cnpg", False), ["asked", "refused"])
@@ -271,32 +271,23 @@ check("done 47 with its base backup taken after the merges: none again, nothing 
       done_calls(S47, False, ev(f"{S47} base-backup")), ["checked"])
 # the merge's promise when its base backup was declined or failed: done takes it, asked first
 check("done 47 with no base backup at its merges (declined): done takes it", done_calls(S47, True),
-      ["asked", "wal", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
+      ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
 
-# an idle server's pg_switch_wal() closes nothing: it names the WAL file still open, never archived, and the playbook
-# waits on it in vain (25-versitygw, 2026-10-14). Before the playbook, on the cluster's primary: a message, a switch
-# (archive_timeout's 5 minutes start again - it cannot close the file before the playbook does), a message (the
-# playbook's switch has a file to close); the playbook given the same namespace and cluster
-def base_backup_calls(rc=0):
+# the base backup: the playbook alone, given the cluster's namespace, name and the step's major - it writes the WAL record
+# it waits for itself (postgres-base-backup.yml; base-backup-archiving), nothing written on ten before it
+def base_backup_calls(ok=True):
     got, saved = [], (m.ten, m.ansible)
-    m.ten = lambda command, **k: got.append(command) or type("R", (), {"returncode": rc, "stdout": "",
-                                                                       "stderr": "x"})()
-    m.ansible = lambda *a: got.append(list(a)) or True
+    m.ten = lambda command, **k: got.append(command) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    m.ansible = lambda *a: got.append(list(a)) or ok
     try:
         got.append(m.take_base_backup(S47))
     finally:
         m.ten, m.ansible = saved
     return got
-got = base_backup_calls()
-EMIT = "select pg_logical_emit_message(false, 'upgrade-wal-switch', 'x')"
-check("base backup: a message, a switch, a message - in one psql, on the cluster's primary",
-      (re.findall(r'-c "([^"]*)"', got[0]), "kubectl -n schnappy-production exec $(kubectl -n schnappy-production get "
-       "clusters.postgresql.cnpg.io schnappy-production-postgres -o jsonpath={.status.currentPrimary}) -c postgres -- "
-       "psql -U postgres -At -v ON_ERROR_STOP=1 " in got[0]), ([EMIT, "select pg_switch_wal()", EMIT], True))
-check("base backup: then the playbook, given that namespace, cluster and the step's major; its result returned",
-      got[1:], [["playbooks/postgres-base-backup.yml", "-e", "pg_namespace=schnappy-production", "-e",
-                 "cluster=schnappy-production-postgres", "-e", "pg_major=18"], True])
-check("base backup: the WAL not written - no playbook, failed", base_backup_calls(1)[1:], [False])
+check("base backup: the playbook alone, given that namespace, cluster and the step's major; its result returned",
+      (base_backup_calls(), base_backup_calls(False)[-1]),
+      ([["playbooks/postgres-base-backup.yml", "-e", "pg_namespace=schnappy-production", "-e",
+         "cluster=schnappy-production-postgres", "-e", "pg_major=18"], True], False))
 
 
 # done's soak and its deciding check: the time of the first green check passed on, a red one not recorded done; the
@@ -570,12 +561,12 @@ check("merge 57, not confirmed: refused after the change was shown - nothing mer
 # 18 has none until then - its point-in-time recovery starts there), not hours later at done; only 47 has one (25's is
 # about the Pi store its playbook upgrades: after that)
 check("barman-after-merge: 47 only", [n for n in names if info[n].get("base_backup_after_merge")], [S47])
-BB = [("asked",), ("wal",), ("ansible", "playbooks/postgres-base-backup.yml"), ("record", "base-backup")]
-bb = lambda got: [("wal",) if c[0] == "ten" else c for c in got
-                  if c[0] in ("ansible", "asked", "record") or c[0] == "ten" and "pg_switch_wal" in c[1]]
+# the playbook writes the WAL record it waits for itself: nothing written on ten for it before
+BB = [("asked",), ("ansible", "playbooks/postgres-base-backup.yml"), ("record", "base-backup")]
+bb = lambda got: [c for c in got if c[0] in ("ansible", "asked", "record") or c[0] == "ten" and "pg_switch_wal" in c[1]]
 got = phase_calls(m.merge, S47, "platform", events=ev(f"{S47} apps app", f"{S47} merged infra a", f"{S47} settled infra a"))
 check("merge 47 platform (its last): settled, then the base backup, asked first",
-      bb(got)[-5:], [("record", "settled")] + BB)
+      bb(got)[-4:], [("record", "settled")] + BB)
 got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"))
 check("merge 47 infra, the cluster not on 18 yet: no base backup",
       [c for c in got if c == ("ansible", "playbooks/postgres-base-backup.yml")], [])
@@ -586,7 +577,7 @@ PG18 = "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye@sha256:" + "9" * 
 ANSIBLE_ARGS.clear()
 got = phase_calls(m.merge, S47, "infra", events=ev(f"{S47} apps app"), ten_out=PG18)
 check("merge 47 infra, the cluster running 18 once it settled: the base backup then, asked first",
-      bb(got)[-5:], [("record", "settled")] + BB)
+      bb(got)[-4:], [("record", "settled")] + BB)
 # the step's major passed: the playbook fails unless the primary runs it (a backup of 17 cannot replay into 18)
 check("merge 47's base backup on 18, its major asked",
       [a for a in ANSIBLE_ARGS if a[0] == "playbooks/postgres-base-backup.yml"],

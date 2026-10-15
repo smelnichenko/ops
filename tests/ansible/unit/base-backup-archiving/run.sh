@@ -55,6 +55,11 @@ case_() {  # case_ <name> <archived WAL> <want rc 0|1> <backup taken: 1|0> [<swi
   fails=$((fails + 1))
 }
 case_ "the switched WAL archived: the backup taken" 000000010000000000000005 0 1
+# an idle server's switch alone names the file still open (25-versitygw, 2026-10-14): a record written first, in the
+# same psql, and the file holding it named - the one waited for
+rec=$(grep -c 'pg_walfile_name(pg_logical_emit_message' "$W/calls"); sw=$(grep -c 'pg_switch_wal()' "$W/calls")
+if [ "$rec $sw" = "1 1" ] && grep -q 'emit_message.*pg_switch_wal' "$W/calls"; then echo "PASS the record written, its file named, then the switch - one psql"
+else echo "FAIL the record written, its file named, then the switch - one psql: got '$rec $sw'"; fails=$((fails + 1)); fi
 case_ "archived past it: the backup taken" 000000010000000000000007 0 1
 case_ "the archiver behind it, the condition True: refused, no backup" 000000010000000000000003 1 0
 case_ "nothing archived yet: refused" "" 1 0
