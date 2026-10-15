@@ -26,3 +26,4 @@
 38-strimzi-1.2
 42-kubernetes-1.35
 43-kubernetes-1.36
+44-eso-2.12
