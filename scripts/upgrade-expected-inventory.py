@@ -163,7 +163,7 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
                 settle.append(int(line.split()[1]))
         elif line.startswith("default "):
             pass  # scripts/upgrade-defaults.py
-        elif re.fullmatch(r"test-image [A-Za-z0-9/_.:-]+ [A-Za-z0-9_.-]+", line):
+        elif re.fullmatch(r"test-image [\w/.:-]+ [\w.-]+", line, re.ASCII):
             if test_images is not None:
                 test_images.append(line[len("test-image "):])
         elif re.fullmatch(r"scrape-pool-gone [A-Za-z0-9/_.:-]+", line):

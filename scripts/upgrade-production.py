@@ -117,7 +117,8 @@ BEFORE_LEDGER = "02-istio-chart-repo"
 # the run's record, and the refusal a declined question gives
 RUN_JSON = "run.json"  # under PROVEN, joined where used (a test moves PROVEN)
 NOT_CONFIRMED = "not confirmed"
-
+# an inventory line naming an image (scripts/upgrade-expected-inventory.py): "image <name> <tag>"
+IMAGE_LINE = "image "
 
 
 def _load(name, path):
@@ -390,7 +391,7 @@ def image_name_tag(ref):
 
 
 # a BaseException on purpose: a phase's own `except Exception` must not swallow it
-class Interrupted(BaseException):  # NOSONAR (python:S5709)
+class Interrupted(BaseException):  # NOSONAR(S5709)
     """A signal while the phase's work ran on ten or the Pis (host_work): that work may still run there - Ansible's
     tasks go over pipelined ssh, which signals no remote command, and a detached copy runs on by design. main() leaves
     the phase's start open: the next phase refuses until nothing runs there and the start is released."""
@@ -471,6 +472,7 @@ def velero_backup_check(wait_s=1800, poll=15, sleep=time.sleep, clock=time.monot
     runs: the ttl, 1 h, removes it). Labelled upgrade-test=backup-check."""
     k = "kubectl -n velero"
     read = lambda c: ten(f"{k} {c} --request-timeout=30s", check=False)
+
     def as_json(out):
         try:
             return json.loads(out.stdout) if out.returncode == 0 else None
@@ -549,7 +551,7 @@ def finished_job_hints(extra, jobs=None, excluded=None):
     in the namespaces it leaves out (`excluded`, excluded_namespaces() without), not Woodpecker's pipelines, not
     Velero's repository maintenance Jobs (version-inventory.sh's skips). `jobs`: kubectl's get jobs -A -o json (read on
     ten without)."""
-    want = {l for l in extra if l.startswith("image ")}
+    want = {l for l in extra if l.startswith(IMAGE_LINE)}
     if not want:
         return []
     if jobs is None:
@@ -577,7 +579,7 @@ def finished_job_hints(extra, jobs=None, excluded=None):
         for c in spec.get("containers", []) + spec.get("initContainers", []):
             ref = c["image"].split("@")[0]
             name, tag = image_name_tag(ref)
-            if f"image {name} {tag}" in want:
+            if f"{IMAGE_LINE}{name} {tag}" in want:
                 logs = (f"kubectl logs -n {meta['namespace']} job/{meta['name']} (its logs go with it), then "
                         if done[0] == "Failed" else "")
                 hints.append(f"{meta['namespace']}/{meta['name']} ({done[0]}) still carries image {name} {tag} - "
@@ -611,8 +613,8 @@ def inventory_check(applied, test_images=()):
             f.write(lines.replace("\r", ""))
         apart = ten(f"INVENTORY_ONLY_NAMESPACES={shlex.quote(TEST_NAMESPACES)} bash -s", stdin=script).stdout
         print(f"the test environment ({TEST_NAMESPACES}) - listed, not compared:")
-        print("\n".join("  " + l for l in apart.splitlines() if l.startswith(("image ", "helm ", "kafka-metadata "))))
-        missing = [t for t in test_images if f"image {t}" not in apart.splitlines()]
+        print("\n".join("  " + l for l in apart.splitlines() if l.startswith((IMAGE_LINE, "helm ", "kafka-metadata "))))
+        missing = [t for t in test_images if IMAGE_LINE + t not in apart.splitlines()]
         for t in missing:
             print(f"TEST ENVIRONMENT: not running {t} (the step's test-image line)")
         same = run([os.path.join(OPS, "scripts", "inventory-diff.sh"), expected, now,
@@ -822,7 +824,7 @@ def pin_problems(step, platform_sha, ops_sha, path=None, floating=None):
     two images, its result in .upgrade/clickhouse-pin.json - the full run starts it beside the build. `floating` (the
     run's floating digests): a floating tag's build the pin ran is the one the run ran."""
     lines = [l.split() for l in open(os.path.join(inv.STEPS, step + ".txt"))
-             if l.startswith("image clickhouse/clickhouse-server ")]
+             if l.startswith(IMAGE_LINE + "clickhouse/clickhouse-server ")]
     if not lines:
         return []
     want = {"platform": platform_sha, "images": [lines[0][2], lines[0][6]], "ops": ops_sha}
@@ -1061,7 +1063,7 @@ def full_name(name):
 def floating_problems(proven, inventory):
     """Floating-tag images still in use (in `inventory`) whose tag on ten now names another build than the full run
     ran. One no step uses any more may be gone (the kubelet collects unused images)."""
-    in_use = {full_name(l.split()[1]) + ":" + l.split()[2] for l in inventory if l.startswith("image ")}
+    in_use = {full_name(l.split()[1]) + ":" + l.split()[2] for l in inventory if l.startswith(IMAGE_LINE)}
     listing = ten("sudo -n ctr -n k8s.io images ls").stdout.splitlines()[1:]
     now = {l.split()[0]: l.split()[2] for l in listing if len(l.split()) > 2}
     return [f"{img}: ten's tag is {now.get(img, 'gone')}, the full run ran {digest}"
@@ -1552,16 +1554,26 @@ def finished_pod_problems(objs=None):
     return sorted(out)
 
 
-# how near a CNPG scheduled backup may be when a phase that rolls something out starts: a phase takes minutes
-BACKUP_WINDOW_MINUTES = 15
+# how near a CNPG scheduled backup may be when a phase that rolls something out starts: the phase's own length - a
+# merge's settle waits up to 60 minutes (57-sonarqube), a playbooks phase restarts Postgres or the control plane in
+# minutes - and a backup's; the check is made once, at the start
+BACKUP_WINDOW_MINUTES = 90
+# a schedule just past whose Backup is not made yet (CNPG's controller slow or restarting) is as near as one ahead
+BACKUP_LATE_MINUTES = 10
+# a Backup running longer than this has stopped (its status lost - 42-kubernetes-1.35): said with its delete
+BACKUP_STUCK_HOURS = 6
+# CNPG's Backup phases that are ended (api/v1/backup_types.go): what is not one of these is running
+BACKUP_ENDED_PHASES = ("completed", "failed", "walArchivingFailing")
 
 
 def backup_window_problems(objs=None, now=None):
-    """A CNPG backup running, or one scheduled to start within BACKUP_WINDOW_MINUTES: a phase that restarts the control
-    plane or Postgres meanwhile loses the Backup's status (42-kubernetes-1.35, 2026-10-15: the API server restarted
-    during the hourly backup, the Backup stayed 'running' for ever, CNPG refused every backup after it and
-    PostgresBackupFailed paged). Asked before merge and playbooks. `objs`: kubectl's get backups,scheduledbackups -A -o
-    json (read on ten without); `now`: ten's clock."""
+    """A CNPG backup running, or one scheduled to start within BACKUP_WINDOW_MINUTES (or due within the last
+    BACKUP_LATE_MINUTES and not made yet): a phase that restarts the control plane or Postgres meanwhile loses the
+    Backup's status (42-kubernetes-1.35, 2026-10-15: the API server restarted during the hourly backup, the Backup
+    stayed 'running' for ever, CNPG refused every backup after it and PostgresBackupFailed paged). One running past
+    BACKUP_STUCK_HOURS is said stuck, its delete named - waiting for its end would wait for ever. Asked before merge
+    and playbooks. `objs`: kubectl's get backups,scheduledbackups -A -o json (read on ten without); `now`: ten's
+    clock."""
     if objs is None:
         out = ten("kubectl get backups.postgresql.cnpg.io,scheduledbackups.postgresql.cnpg.io -A -o json "
                   "--request-timeout=60s", check=False)
@@ -1572,14 +1584,31 @@ def backup_window_problems(objs=None, now=None):
         if objs is None:
             return [f"production's CNPG backups not read: {(out.stderr or out.stdout).strip()[:200]}"]
     now = now or ten_clock()
-    at = lambda t: datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+    def at(t):
+        return datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+
+    items = objs.get("items", [])
+    made = [at(o["metadata"]["creationTimestamp"]) for o in items
+            if o.get("kind") == "Backup" and (o.get("metadata") or {}).get("creationTimestamp")]
     out = []
-    for o in objs.get("items", []):
+    for o in items:
         ns, name = o["metadata"]["namespace"], o["metadata"]["name"]
         status = o.get("status") or {}
-        if o.get("kind") == "Backup" and status.get("phase") not in ("completed", "failed"):
-            out.append(f"{ns}/{name}: a CNPG backup {status.get('phase') or 'not started'} - wait for its end (a "
-                       "restart now loses its status and blocks every backup after it)")
+        phase = status.get("phase") or ""
+        if o.get("kind") == "Backup" and phase not in BACKUP_ENDED_PHASES and not phase.startswith("invalid"):
+            started = status.get("startedAt") or o["metadata"].get("creationTimestamp")
+            try:
+                stuck = started and now - at(started) > datetime.timedelta(hours=BACKUP_STUCK_HOURS)
+            except ValueError:
+                stuck = False
+            if stuck:
+                out.append(f"{ns}/{name}: a CNPG backup {phase or 'not started'} since {started} - stuck (its status "
+                           f"lost?); CNPG refuses every backup after it: kubectl -n {ns} delete backup {name}, after "
+                           "checking it ended in the store")
+            else:
+                out.append(f"{ns}/{name}: a CNPG backup {phase or 'not started'} - wait for its end (a restart now "
+                           "loses its status and blocks every backup after it)")
         elif o.get("kind") == "ScheduledBackup" and not (o.get("spec") or {}).get("suspend") \
                 and status.get("nextScheduleTime"):
             try:
@@ -1587,9 +1616,12 @@ def backup_window_problems(objs=None, now=None):
             except ValueError:
                 out.append(f"{ns}/{name}: its next backup time unread ({status['nextScheduleTime']!r})")
                 continue
-            if now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES):
-                out.append(f"{ns}/{name}: a CNPG backup starts at {due:%H:%M:%S}Z, within {BACKUP_WINDOW_MINUTES} "
-                           "minutes - start after it has ended")
+            late = now - datetime.timedelta(minutes=BACKUP_LATE_MINUTES) <= due < now \
+                and not any(m >= due - datetime.timedelta(minutes=1) for m in made)
+            if now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES) or late:
+                out.append(f"{ns}/{name}: a CNPG backup {'was due' if late else 'starts'} at {due:%H:%M:%S}Z "
+                           f"({'not made yet' if late else f'within {BACKUP_WINDOW_MINUTES} minutes'}) - start after "
+                           "it has ended")
     return sorted(out)
 
 
@@ -1625,6 +1657,7 @@ def playbook_helm_repos(playbooks=None):
     base = os.path.join(OPS, "deploy", "ansible", "playbooks")
     paths = [os.path.join(base, n) for n in playbooks] if playbooks is not None else \
         [os.path.join(r, f) for r, _, fs in os.walk(base) for f in fs if f.endswith(".yml")]
+
     def walk(node):
         if isinstance(node, dict):
             repo = node.get("kubernetes.core.helm_repository")
@@ -1780,6 +1813,7 @@ def take_base_backup(step):
     return ansible("playbooks/postgres-base-backup.yml", "-e", f"pg_namespace={PG_NAMESPACE}", "-e",
                    f"cluster={PG_CLUSTER}", "-e", f"pg_major={inv.pg_major(step)}")
 
+
 def playbooks(step):
     names, events, info = ledger_for(step, "playbooks")
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True,
@@ -1799,8 +1833,6 @@ def playbooks(step):
     script = os.path.join(OPS, "scripts", "upgrade-step-playbooks.sh")
     refuse([] if host_work([script, "--production", step]).returncode == 0 else ["the playbook lines failed (above)"])
     record(step, "playbooks")
-
-
 
 
 def defaults(step):

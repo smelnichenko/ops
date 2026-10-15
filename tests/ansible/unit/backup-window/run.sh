@@ -1,8 +1,10 @@
 #!/bin/bash
 # scripts/upgrade-production.py backup_window_problems: a CNPG backup running, or one scheduled within the window -
 # merge and playbooks refuse then: 42-kubernetes-1.35's API server restarted during the hourly backup (2026-10-15), the
-# Backup stayed running for ever, CNPG refused every backup after it and PostgresBackupFailed paged. Ended backups, a
-# suspended schedule, one due after the window or past already: no problem; kubectl's answer unread: a problem.
+# Backup stayed running for ever, CNPG refused every backup after it and PostgresBackupFailed paged. Ended backups
+# (CNPG's terminal phases, an invalid definition), a suspended schedule, one due after the window, or past and made
+# already: no problem. One due within the last minutes and not made: a problem. A Backup running past the stuck limit:
+# said stuck, its delete named. kubectl's answer unread: a problem.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY_BW'
@@ -21,20 +23,37 @@ def check(name, got, want):
 
 NOW = datetime.datetime(2026, 10, 15, 9, 0, 0, tzinfo=datetime.timezone.utc)
 iso = lambda minutes: (NOW + datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
-backup = lambda name, phase: {"kind": "Backup", "metadata": {"namespace": "p", "name": name},
-                              "status": ({"phase": phase} if phase else {})}
+backup = lambda name, phase, started=None, made=None: {
+    "kind": "Backup", "metadata": {"namespace": "p", "name": name, **({"creationTimestamp": iso(made)} if made is not None
+                                                                     else {})},
+    "status": ({"phase": phase} if phase else {}) | ({"startedAt": iso(started)} if started is not None else {})}
 sched = lambda name, minutes, suspend=False: {"kind": "ScheduledBackup", "metadata": {"namespace": "p", "name": name},
                                               "spec": {"suspend": suspend}, "status": {"nextScheduleTime": iso(minutes)}}
 got = lambda *items: m.backup_window_problems({"items": list(items)}, now=NOW)
-check("ended backups and a schedule an hour off: nothing", got(backup("a", "completed"), backup("b", "failed"),
-                                                              sched("daily", 60)), [])
+W, LATE, STUCK = m.BACKUP_WINDOW_MINUTES, m.BACKUP_LATE_MINUTES, m.BACKUP_STUCK_HOURS * 60
+check("the limits: a 90-minute window, 10 minutes late, 6 hours stuck", (W, LATE, STUCK), (90, 10, 360))
+check("ended backups and a schedule past the window: nothing",
+      got(backup("a", "completed"), backup("b", "failed"), backup("c", "walArchivingFailing"),
+          backup("d", "invalid backup definition: no cluster"), sched("daily", W + 1)), [])
 check("a backup running: refused, named", [p.split(":")[0] for p in got(backup("r", "running"))], ["p/r"])
 check("  one not started yet (no phase): refused too", len(got(backup("n", None))), 1)
+check("  running for less than the stuck limit: wait for it, no delete named",
+      ["wait for its end" in p and "delete" not in p for p in got(backup("r", "running", started=-(STUCK - 1)))], [True])
+check("  running past the stuck limit: stuck, its delete named",
+      ["stuck" in p and "kubectl -n p delete backup r" in p for p in got(backup("r", "running", started=-(STUCK + 1)))],
+      [True])
+check("  not started, made past the stuck limit: stuck too",
+      ["stuck" in p for p in got(backup("n", None, made=-(STUCK + 1)))], [True])
 check("a scheduled backup due in 5 minutes: refused, its time said",
       ["09:05:00Z" in p for p in got(sched("daily", 5))], [True])
-check("  due just past the window (16 minutes): nothing", got(sched("daily", 16)), [])
-check("  due at the window's edge (15 minutes): refused", len(got(sched("daily", 15))), 1)
-check("  its time past already (CNPG has not moved it yet): nothing", got(sched("daily", -1)), [])
+check("  due at the window's edge: refused", len(got(sched("daily", W))), 1)
+check("  due just past the window: nothing", got(sched("daily", W + 1)), [])
+check("  due a minute ago, no Backup made: refused, said late",
+      ["was due" in p and "not made yet" in p for p in got(sched("daily", -1))], [True])
+check("  due a minute ago, its Backup made: nothing", got(sched("daily", -1), backup("x", "completed", made=-1)), [])
+check("  due a minute ago, only an older Backup: refused",
+      len(got(sched("daily", -1), backup("x", "completed", made=-60))), 1)
+check("  due past the late limit: nothing (CNPG moved on or never will)", got(sched("daily", -(LATE + 1))), [])
 check("  suspended: nothing", got(sched("daily", 5, suspend=True)), [])
 check("  a time unread: refused, saying so", ["unread" in p for p in
       m.backup_window_problems({"items": [{"kind": "ScheduledBackup", "metadata": {"namespace": "p", "name": "x"},
