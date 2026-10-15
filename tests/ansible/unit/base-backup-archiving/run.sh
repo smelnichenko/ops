@@ -22,7 +22,8 @@ case "$*" in
     [ -n "${BACKUPS:-}" ] && echo "$BACKUPS" || echo '{"items": []}'
     exit "${BACKUPS_RC:-0}" ;;
   *currentPrimary*) echo -n pg-1 ;;
-  *pg_switch_wal*) echo "${SWITCHED-000000010000000000000005}" ;;
+  # psql -At with two -c: the record's file name, then the switch's LSN - a line each
+  *pg_switch_wal*) printf '%s\n0/5000078\n' "${SWITCHED-000000010000000000000005}" ;;
   *pg_stat_archiver*) echo "$ARCHIVED" ;;
 esac
 STUB
@@ -74,6 +75,10 @@ BACKUPS=$(backup schnappy-production-postgres running) \
   case_ "a backup of the cluster still running: refused, none stacked" 000000010000000000000005 1 0
 BACKUPS=$(backup schnappy-production-postgres completed) \
   case_ "the cluster's earlier backup completed: taken" 000000010000000000000005 0 1
+BACKUPS=$(backup schnappy-production-postgres walArchivingFailing) \
+  case_ "  one ended failing on its WAL (CNPG's ended phase): taken" 000000010000000000000005 0 1
+BACKUPS=$(backup schnappy-production-postgres "invalid backup definition: x") \
+  case_ "  one with an invalid definition (ended): taken" 000000010000000000000005 0 1
 BACKUPS=$(backup other running) case_ "another cluster's running: taken" 000000010000000000000005 0 1
 BACKUPS_RC=1 case_ "the Backup list's read failing (its output a list all the same): refused" \
   000000010000000000000005 1 0
