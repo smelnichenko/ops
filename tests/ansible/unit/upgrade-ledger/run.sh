@@ -380,12 +380,12 @@ ANSIBLE_ARGS = []  # every playbook a phase ran (phase_calls), with its argument
 
 
 def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), answer=True, ansible_ok=True,
-                pushed=None, revs=None, ten_out="abc1234", vault=(), live=(), leftovers=()):
+                pushed=None, revs=None, ten_out="abc1234", vault=(), live=(), leftovers=(), window=()):
     calls, keep = [], ("ledger_for", "proof_problems", "registry_problems", "run", "host_work", "ansible", "record",
                        "settled",
                        "inventory_check", "confirm", "check", "soak_state", "merged_base", "pushed_base", "step_info",
                        "ten", "image_pins", "read_ledger", "vault_login_problems", "merged_live_problems",
-                       "finished_pod_problems")
+                       "finished_pod_problems", "backup_window_problems")
     saved = {k: getattr(m, k) for k in keep}
     m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
     m.read_ledger = lambda: ({"data": {"events": ""}}, [])  # the claim's re-read before a push (none claimed here)
@@ -396,7 +396,7 @@ def phase_calls(fn, *args, proof=(), registry=(), step_info=None, events=(), ans
     # `leftovers`: what each call answers in turn (a list of lists), the last again - or one answer for every call
     seq = [list(x) for x in leftovers] if leftovers and isinstance(leftovers[0], list) else [list(leftovers)]
     m.finished_pod_problems = lambda: seq.pop(0) if len(seq) > 1 else list(seq[0])
-    m.backup_window_problems = lambda: []
+    m.backup_window_problems = lambda: list(window)
     m.merged_live_problems = lambda *a: list(live)
     def fake_run(cmd, **k):  # `revs`: what rev-parse answers per ref (abc1234 for any other)
         flush = "Tempo's live spans flushed" in str(k.get("input") or "")  # the script, on a remote python's stdin
@@ -499,6 +499,14 @@ for name_, fn_, args_ in (("begin", m.begin, (S47,)), ("merge", m.merge, (S47, "
     # merge reads its branch's tip (git rev-parse) before its checks - read only; nothing else before the refusal
     check(f"{name_}: refused while a finished pod is left under a Deployment, nothing done",
           ([c for c in got[:-1] if c != ("run", "git")], got[-1][0], "LEFTOVER-X" in got[-1][1]), ([], "refused", True))
+# a CNPG backup running or due (backup-window): merge and playbooks refuse, naming it, before anything is done - a
+# restart during it lost its status (42-kubernetes-1.35); begin restarts nothing and goes on
+for name_, fn_, args_ in (("merge", m.merge, (S47, "infra")), ("playbooks", m.playbooks, (S47,))):
+    got = phase_calls(fn_, *args_, window=["BACKUP-DUE"])
+    check(f"{name_}: refused while a CNPG backup runs or is due, nothing done",
+          ([c for c in got[:-1] if c != ("run", "git")], got[-1][0], "BACKUP-DUE" in got[-1][1]), ([], "refused", True))
+check("begin: a CNPG backup due is no refusal (it restarts nothing)",
+      phase_calls(m.begin, S47, window=["BACKUP-DUE"])[-1][0] != "refused", True)
 def vault_login(rc, out, err=""):
     saved = m.ten
     sent = []
