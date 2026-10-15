@@ -61,5 +61,11 @@ case_ "no Pi holds it: refused, saying so" 1 "no Pi holds the VIP 192.168.11.5" 
 case_ "  pi1 down and pi2 without it: refused, pi1 named unreachable" 1 "unreachable: pi1" "" "" pi1
 case_ "both hold it (a split keepalived): refused, both named" 1 "held by pi1 and pi2" 192.168.11.5/24 192.168.11.5/24
 case_ "an address the VIP is the start of (.50) is not the VIP" 1 "no Pi holds the VIP" 192.168.11.50/24 ""
+# and nothing pins the first Pi any more: groups['pis'] | first (or [0]) failed whatever ran there while that Pi was
+# down - the VIP's Pi (this task), or run_once on the play's Pis, instead
+pinned=$(grep -rnE "groups\[.pis.\] *\| *first|groups\[.pis.\]\[0\]" "$ROOT/deploy/ansible" --include='*.yml' \
+  | grep -v '/venv/')
+if [ -z "$pinned" ]; then echo "PASS no playbook pins the first Pi"
+else echo "FAIL a playbook pins the first Pi:"; printf '%s\n' "$pinned" | sed 's/^/    /'; fails=$((fails + 1)); fi
 echo "pi-vip-holder: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

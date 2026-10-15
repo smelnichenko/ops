@@ -708,7 +708,8 @@
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
 - name: Verify Patroni cluster
-  hosts: pi1
+  # each Pi checked (pinned to pi1, the check was skipped without a word while pi1 was down)
+  hosts: pis
   become: true
   gather_facts: false
 

@@ -596,7 +596,8 @@
           {{ inventory_hostname }}: {{ keepalived_status.stdout }}
 
 - name: Verify VIP reachable
-  hosts: pi1
+  # each Pi checked (pinned to pi1, the check was skipped without a word while pi1 was down)
+  hosts: pis
   become: true
   gather_facts: false
 

@@ -455,7 +455,8 @@
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify GlusterFS
-  hosts: pi1
+  # each Pi checked (pinned to pi1, the check was skipped without a word while pi1 was down)
+  hosts: pis
   become: true
   gather_facts: false
 
@@ -474,17 +475,13 @@
       register: heal_info
       changed_when: false
 
-    - name: Check mount on both nodes
+    - name: Check the mount on this Pi
       check_mode: false
       ansible.builtin.shell: |
         set -o pipefail
         mount | grep forgejo-repos
       register: mount_check
       changed_when: false
-      delegate_to: "{{ item }}"
-      loop:
-        - pi1
-        - pi2
 
     - name: Print results
       ansible.builtin.debug:
