@@ -41,11 +41,6 @@
       export VAULT_TOKEN
 
   pre_tasks:
-    # on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
-    # token is on both Pis - setup-vault-pi)
-    - name: Only the Pi holding the VIP goes on
-      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
-
     - name: Validate env_name
       ansible.builtin.assert:
         that:
@@ -57,6 +52,11 @@
 
     # before the infra checkout is read or written: on main, nothing uncommitted or untracked (pushed with this
     # environment's change otherwise), up to date - the check below reads it, the tasks after write it
+    # its input judged first; then on the Pi holding the VIP, whichever serves now (pinned to pi1, the play failed while pi1 was down; the root
+    # token is on both Pis - setup-vault-pi)
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+
     - name: The infra checkout ready
       ansible.builtin.script:
         cmd: "{{ playbook_dir }}/scripts/git-commit-push.sh ready '{{ infra_dir }}' '{{ infra_git_url }}'"

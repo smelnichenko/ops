@@ -4,7 +4,7 @@
 The Vagrant upgrade test runs Argo CD against copies of infra and platform, so every upgrade step is the same git
 change production gets. This script takes a committed ref of each repo (`main`, or an upgrade step's branch; never
 the working tree), adds ONE overlay commit on top, and force-pushes it as `main` (the branch every Argo app tracks)
-to the Vagrant Forgejo (pi1 VM) under the `schnappy` org:
+to the Vagrant Forgejo (through the Pis' VIP) under the `schnappy` org:
 
   both repos
     - every production LAN address (192.168.11.x) rewritten to its Vagrant counterpart, and the push refused if any

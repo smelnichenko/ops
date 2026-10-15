@@ -80,14 +80,17 @@ only() {  # name, pi1's address, pi2's address, want (the hosts that went on)
 }
 only "vip-holder-only: pi1 holds it - pi1 alone goes on" 192.168.11.5/24 "" "WENT ON pi1 "
 only "  pi2 holds it - pi2 alone goes on" "" 192.168.11.5/24 "WENT ON pi2 "
-# the Vault-admin plays (the root token on both Pis): on the Pis, the VIP's Pi alone going on, first thing
+# the Vault-admin plays (the root token on both Pis): on the Pis, the VIP's Pi alone going on before anything but
+# its input's checks
 for book in seed-vault-secrets create-environment delete-environment destroy-environment setup-keycloak-clients \
     setup-vault-cleanup-policy backup-vault-keys; do
   r=$(python3 - "$ROOT/deploy/ansible/playbooks/$book.yml" <<'PYCHK'
 import sys, yaml
 p = yaml.safe_load(open(sys.argv[1]))[0]
-first = ((p.get("pre_tasks") or p.get("tasks") or [{}])[0]).get("ansible.builtin.import_tasks", "")
-print(p.get("hosts") == "pis" and first == "tasks/vip-holder-only.yml")
+ts = (p.get("pre_tasks") or []) + (p.get("tasks") or [])
+at = next((i for i, t in enumerate(ts) if t.get("ansible.builtin.import_tasks") == "tasks/vip-holder-only.yml"), None)
+# first, or after nothing but its input's checks (asserts reach no Pi service)
+print(p.get("hosts") == "pis" and at is not None and all("ansible.builtin.assert" in t for t in ts[:at]))
 PYCHK
 )
   if [ "$r" = True ]; then echo "PASS $book: on the Pis, the VIP's Pi alone"; else echo "FAIL $book: not on the VIP's Pi alone"; fails=$((fails + 1)); fi
