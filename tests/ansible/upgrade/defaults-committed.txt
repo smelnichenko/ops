@@ -24,3 +24,4 @@
 34-argocd-3.5
 35-cert-manager-1.21
 38-strimzi-1.2
+42-kubernetes-1.35
