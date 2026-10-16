@@ -571,8 +571,9 @@
         or (_consul_health is defined and _consul_health is not skipped and _consul_health is succeeded)
 
 # ─── Verify cluster ──────────────────────────────────────────────────────────
+# each Pi's view of the membership (on pi1 alone, the play was skipped without a word while pi1 was down)
 - name: Verify Consul cluster
-  hosts: pi1
+  hosts: pis
   become: true
   gather_facts: false
 

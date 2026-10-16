@@ -121,10 +121,28 @@ PYCHK
 )
   check "$book: on the Pis, the VIP's Pi alone" "$r" True
 done
-# and nothing pins the first Pi any more: groups['pis'] | first (or [0]) failed whatever ran there while that Pi was
-# down - the VIP's Pi (this task), or run_once on the play's Pis, instead
-pinned=$(grep -rnE "groups\[.pis.\] *\| *first|groups\[.pis.\]\[0\]" "$ROOT/deploy/ansible" --include='*.yml' \
-  | grep -v '/venv/')
-check "no playbook pins the first Pi" "$pinned" ""
+# and nothing pins the first Pi any more: groups['pis'] | first (or [0], or groups.pis), a play or a delegation to pi1
+# by name - each failed whatever ran there while that Pi was down; the VIP's Pi (this task), or run_once on the play's
+# Pis, instead. Pinned by design, and only these: setup-vault-pi (Vault initialised on pi1, its shares and token copied
+# from there), setup-nexus (the one-time bootstrap, its sentinel on the shared volume - a re-run skips it), setup-gluster
+# (a backup volume created from one peer, its bricks on both - none made with a Pi down), setup-patroni and its
+# Keycloak restore (a first install's dump, written on pi1's own disk by the Postgres it replaces)
+pinned=$(grep -rnE "groups(\[.pis.\]|\.pis) *(\| *first|\[0\])|^ *(hosts|delegate_to): *[\"']?pi1[\"']? *$" \
+  "$ROOT/deploy/ansible" --include='*.yml' | grep -v '/venv/' \
+  | grep -vE "/playbooks/(setup-vault-pi|setup-nexus|setup-gluster|setup-patroni|tasks/patroni-keycloak-restore)\.yml:")
+check "no playbook pins the first Pi (but Vault's init, Nexus's bootstrap, Gluster's volumes, Patroni's first install)" \
+  "$pinned" ""
+# every verify play checks each Pi (on pi1 alone it was skipped without a word while pi1 was down) - Gluster's backup
+# volumes' aside (their creation's, above)
+unverified=$(python3 - "$ROOT/deploy/ansible/playbooks" <<'PYVER'
+import glob, sys, yaml
+for f in sorted(glob.glob(sys.argv[1] + "/*.yml")):
+    for p in yaml.safe_load(open(f)) or []:
+        if isinstance(p, dict) and str(p.get("name", "")).startswith("Verify") and p.get("hosts") not in ("pis", "pi1,pi2", "target") \
+                and (f.split("/")[-1], p["name"]) != ("setup-gluster.yml", "Verify backup volumes"):
+            print(f.split("/")[-1], p["name"], p.get("hosts"))
+PYVER
+)
+check "every verify play on each Pi" "$unverified" ""
 echo "pi-vip-holder: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

@@ -86,7 +86,7 @@ case "\${@: -1}" in
   # a Pi asked whether its Vault serves: one named down.* does not answer (ssh's own exit), one named sealed.* answers
   # with its Vault sealed (vault status's 2)
   "sudo VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/etc/vault.d/tls/ca-cert.pem vault status")
-    case "\$*" in *sm@down.*) exit 255 ;; *sm@sealed.*) exit 2 ;; *) exit 0 ;; esac ;;
+    case "\$*" in *sm@down.*|*"sm@\${PROBE_DOWN:-none} "*) exit 255 ;; *sm@sealed.*) exit 2 ;; *) exit 0 ;; esac ;;
   "sudo cat /etc/vault.d/tls/ca-cert.pem") cat "$W/pi/etc/vault.d/tls/ca-cert.pem" ;;
   "sudo bash -s") sed "s|/etc/vault|$W/pi/etc/vault|g" | bash -s ;;
   *) echo "unexpected: \$*" >&2; exit 9 ;;
@@ -375,5 +375,14 @@ check "  the first answering, its Vault sealed: passed over, the next used" \
 RUN_VAULT_PI= run VAULT_PIS="down.pi1 sealed.pi2"
 check "  none serving: refused, nothing sent" \
   "$rc $(grep -c 'sudo bash\|sudo cat' "$W/ssh-argv") $(grep -c "No Pi's Vault serves" <<< "$out")" "1 0 1"
+# no list given: production's two Pis, pi1 then pi2 (cut to one, pi2 down took the step with it)
+unset VAULT_PIS
+RUN_VAULT_PI= run
+check "  no list given: production's Pis, pi1 first, its Vault configured" \
+  "$rc $(grep -o 'sm@192\.168\.11\.[0-9]* sudo VAULT_ADDR' "$W/ssh-argv" | cut -d' ' -f1 | paste -sd,) $(grep -c 'sm@192.168.11.4 sudo bash -s' "$W/ssh-argv")" \
+  "0 sm@192.168.11.4 1"
+RUN_VAULT_PI= run PROBE_DOWN=192.168.11.4
+check "  no list given, pi1 down: pi2 next, its Vault configured" \
+  "$rc $(grep -c 'sm@192.168.11.6 sudo bash -s' "$W/ssh-argv")" "0 1"
 echo "bootstrap-vault-eso: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
