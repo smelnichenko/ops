@@ -35,9 +35,12 @@ got = lambda *items: m.backup_window_problems({"items": list(items)}, now=NOW)
 W, LATE, STUCK = m.BACKUP_WINDOW_MINUTES, m.BACKUP_LATE_MINUTES, m.BACKUP_STUCK_HOURS * 60
 check("the limits: a 90-minute window, 10 minutes late, 3 hours stuck (platform's PostgresBackupStuck)",
       (W, LATE, STUCK), (90, 10, 180))
-check("ended backups and a schedule past the window: nothing",
-      got(backup("a", "completed"), backup("b", "failed"), backup("c", "walArchivingFailing"),
-          backup("d", "invalid backup definition: no cluster"), sched("daily", W + 1)), [])
+check("ended backups (CNPG's IsDone: completed, failed) and a schedule past the window: nothing",
+      got(backup("a", "completed"), backup("b", "failed"), sched("daily", W + 1)), [])
+check("one failing on its WAL or its definition (retried, never ended): refused at once, its delete named",
+      ["retried by CNPG" in p and "delete backup" in p for p in
+       got(backup("c", "walArchivingFailing", started=-1), backup("d", "invalid backup definition", started=-1))],
+      [True, True])
 check("a backup running: refused, named", [p.split(":")[0] for p in got(backup("r", "running"))], ["p/r"])
 check("  one not started yet (no phase): refused too", len(got(backup("n", None))), 1)
 check("  running for less than the stuck limit: wait for it, no delete named",
@@ -76,9 +79,9 @@ tk = open("deploy/ansible/playbooks/tasks/cnpg-backup.yml").read()
 # the quoted names in the "in (...)" / "in [...]" that lists "completed"
 ended = lambda text: next(tuple(re.findall(r"\w+", g)) for g in re.findall(r"in [(\[]([^)\]]*)[)\]]", text)
                           if "completed" in g)
-check("the playbook's and its include's ended phases are the runner's, an invalid definition ended in each",
-      (ended(pb), ended(tk), "startswith(\"invalid\")" in pb, "startswith('invalid')" in tk),
-      (m.BACKUP_ENDED_PHASES, m.BACKUP_ENDED_PHASES, True, True))
+check("the playbook's still-running ends on the runner's ended phases; its include's wait on those and the retried",
+      (ended(pb), ended(tk), "startswith('invalid')" in tk),
+      (m.BACKUP_ENDED_PHASES, m.BACKUP_ENDED_PHASES + ("walArchivingFailing",), True))
 # merge and playbooks ask it before they change anything
 src = open("scripts/upgrade-production.py").read()
 body = lambda fn: src[src.index(f"\ndef {fn}("):src.index("\ndef ", src.index(f"\ndef {fn}(") + 1)]

@@ -81,8 +81,8 @@
       until: _archived.rc == 0 and _archived.stdout >= (_switched.stdout_lines | first)
 
     # a backup of this cluster still running (a run that timed out waiting left its Backup going): another beside it
-    # would stack two base backups on the store - refused until it ends (CNPG's ended phases, as the runner's
-    # BACKUP_ENDED_PHASES: an invalid definition is ended too)
+    # would stack two base backups on the store - refused until it ends (CNPG's ended phases, its IsDone(), as the
+    # runner's BACKUP_ENDED_PHASES: one failing on its WAL or its definition is retried, never ended)
     - name: No backup of the cluster running already
       ansible.builtin.shell:
         executable: /bin/bash
@@ -91,8 +91,7 @@
           {{ kubectl }} get backups.postgresql.cnpg.io -o json | python3 -c 'import json, sys;
           print(" ".join(b["metadata"]["name"] for b in json.load(sys.stdin)["items"]
           if b["spec"]["cluster"]["name"] == sys.argv[1]
-          and (b.get("status") or {}).get("phase") not in ("completed", "failed", "walArchivingFailing")
-          and not ((b.get("status") or {}).get("phase") or "").startswith("invalid")))' {{ cluster }}
+          and (b.get("status") or {}).get("phase") not in ("completed", "failed")))' {{ cluster }}
       register: _backups_running
       changed_when: false
       failed_when: _backups_running.rc != 0 or _backups_running.stdout | length > 0

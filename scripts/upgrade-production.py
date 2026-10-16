@@ -1562,8 +1562,12 @@ BACKUP_LATE_MINUTES = 10
 # a Backup running longer than this has stopped (its status lost - 42-kubernetes-1.35): said with its delete - as
 # platform's PostgresBackupStuck says it (production's backup takes minutes)
 BACKUP_STUCK_HOURS = 3
-# CNPG's Backup phases that are ended (api/v1/backup_types.go): what is not one of these is running
-BACKUP_ENDED_PHASES = ("completed", "failed", "walArchivingFailing")
+# CNPG's Backup phases that are ended - its IsDone() (api/v1/backup_funcs.go): every other is retried by its controller
+# and holds the schedule ("already taking a backup")
+BACKUP_ENDED_PHASES = ("completed", "failed")
+# the ones retried until something changes (archiving back, the definition fixed): no end to wait for - said with
+# their delete at once
+BACKUP_RETRIED_PHASES = ("walArchivingFailing", "invalid backup definition")
 
 
 def backup_window_problems(objs=None, now=None):
@@ -1601,16 +1605,19 @@ def backup_window_problems(objs=None, now=None):
         ns, name = o["metadata"]["namespace"], o["metadata"]["name"]
         status = o.get("status") or {}
         phase = status.get("phase") or ""
-        if o.get("kind") == "Backup" and phase not in BACKUP_ENDED_PHASES and not phase.startswith("invalid"):
+        if o.get("kind") == "Backup" and phase not in BACKUP_ENDED_PHASES:
             started = status.get("startedAt") or o["metadata"].get("creationTimestamp")
             try:
                 stuck = started and now - at(started) > datetime.timedelta(hours=BACKUP_STUCK_HOURS)
             except ValueError:
                 stuck = False
             head = f"{ns}/{name}: a CNPG backup {phase or 'not started'}"
-            out.append(f"{head} since {started} - stuck (its status lost?); CNPG refuses every backup after it: "
-                       f"kubectl -n {ns} delete backup {name}, after checking it ended in the store" if stuck else
-                       f"{head} - wait for its end (a restart now loses its status and blocks every backup after it)")
+            if stuck or phase in BACKUP_RETRIED_PHASES:
+                why = "retried by CNPG, never ended" if phase in BACKUP_RETRIED_PHASES else "stuck (its status lost?)"
+                out.append(f"{head} since {started} - {why}; CNPG refuses every backup after it: "
+                           f"kubectl -n {ns} delete backup {name}, after checking what it left in the store")
+            else:
+                out.append(f"{head} - wait for its end (a restart now loses its status and blocks every backup after it)")
         elif o.get("kind") == "ScheduledBackup" and not (o.get("spec") or {}).get("suspend") \
                 and status.get("nextScheduleTime"):
             try:

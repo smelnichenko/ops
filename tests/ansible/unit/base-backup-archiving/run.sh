@@ -75,10 +75,11 @@ BACKUPS=$(backup schnappy-production-postgres running) \
   case_ "a backup of the cluster still running: refused, none stacked" 000000010000000000000005 1 0
 BACKUPS=$(backup schnappy-production-postgres completed) \
   case_ "the cluster's earlier backup completed: taken" 000000010000000000000005 0 1
+# CNPG retries these (its IsDone is completed or failed alone): not ended - none stacked beside them
 BACKUPS=$(backup schnappy-production-postgres walArchivingFailing) \
-  case_ "  one ended failing on its WAL (CNPG's ended phase): taken" 000000010000000000000005 0 1
-BACKUPS=$(backup schnappy-production-postgres "invalid backup definition: x") \
-  case_ "  one with an invalid definition (ended): taken" 000000010000000000000005 0 1
+  case_ "  one failing on its WAL (retried by CNPG): refused, none stacked" 000000010000000000000005 1 0
+BACKUPS=$(backup schnappy-production-postgres "invalid backup definition") \
+  case_ "  one with an invalid definition (retried): refused, none stacked" 000000010000000000000005 1 0
 BACKUPS=$(backup other running) case_ "another cluster's running: taken" 000000010000000000000005 0 1
 BACKUPS_RC=1 case_ "the Backup list's read failing (its output a list all the same): refused" \
   000000010000000000000005 1 0
