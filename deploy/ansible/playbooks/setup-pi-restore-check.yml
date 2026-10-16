@@ -30,9 +30,12 @@
     pi_cmdline_path: /boot/firmware/cmdline.txt
     pi_cgroup_controllers: /sys/fs/cgroup/cgroup.controllers
     pi_booted_cmdline: /proc/cmdline
-    # a command line written only when still one line naming its root (%s: the file the edit would write)
+    # the flags that turn it on, each added where missing
+    pi_cmdline_memory_flags: [cgroup_enable=memory, cgroup_memory=1]
+    # a command line written only when still one line naming its root - root= a word of its own, not nfsroot='s tail
+    # (%s: the file the edit would write)
     pi_cmdline_valid: >-
-      sh -c 'test "$(grep -c "" "$0")" -eq 1 && grep -q "root=" "$0"' %s
+      sh -c 'test "$(grep -c "" "$0")" -eq 1 && grep -Eq "(^|[[:space:]])root=[^[:space:]]" "$0"' %s
     # production's CNPG databases (infra's schnappy-production-data values, postgres.databases)
     pi_restore_check_databases: [monitor, admin, chat, chess, masi]
     # production's Postgres image per major: the 17 its chart ran (by its tag alone, never a digest), the 18 its step 47
@@ -190,27 +193,52 @@
         path: "{{ pi_cmdline_path }}"
       register: _cmdline
 
-    - name: The Pi's command line now
+    # the firmware reads the command line named there unless its config.txt points elsewhere (cmdline=, os_prefix=):
+    # an edit there would never boot, and every run would say "reboot it"
+    - name: The firmware's settings beside it
       ansible.builtin.slurp:
-        src: "{{ pi_cmdline_path }}"
-      register: _cmdline_text
+        src: "{{ pi_cmdline_path | dirname }}/config.txt"
+      register: _firmware_config
+      failed_when: false  # none: the firmware's defaults
       when: _cmdline.stat.exists
 
-    # kept as it was before this play first changed it, for a hand's undo (the firmware reads cmdline.txt alone): a
-    # name of its own, never overwritten - the boot partition is FAT, where Ansible's own backup names (a time with
-    # ':') cannot be written (pi2, 2026-10-16: the edit refused before it wrote anything). Only where a change is due
+    - name: The firmware reads this command line
+      ansible.builtin.assert:
+        that: not ((_firmware_config.content | default('') | b64decode) is regex('(?m)^[ \t]*(cmdline|os_prefix)[ \t]*='))
+        fail_msg: >-
+          {{ inventory_hostname }}'s {{ pi_cmdline_path | dirname }}/config.txt sets cmdline= or os_prefix=: its
+          firmware reads another command line than {{ pi_cmdline_path }} - set pi_cmdline_path to it
+        quiet: true
+      when: _cmdline.stat.exists
+
+    - name: The Pi's command line now, and the one kept
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop: ["{{ pi_cmdline_path }}", "{{ pi_cmdline_path }}.before-memory-cgroup"]
+      register: _cmdline_text
+      failed_when: _cmdline_text.content is not defined and item == pi_cmdline_path
+      when: _cmdline.stat.exists
+
+    # kept as it was before this play changed it, for a hand's undo (the firmware reads cmdline.txt alone; FAT writes a
+    # cp over it in place - copy it to cmdline.txt.new, sync, then mv it over): a name of its own - the boot partition
+    # is FAT, where Ansible's own backup names (a time with ':') cannot be written (pi2, 2026-10-16: the edit refused
+    # before it wrote anything). Only where a change is due; one kept from a run cut short (its line the same but for
+    # these flags) stays, one older than the line now (a new root=, a clone) is replaced - an undo to it would not boot
     - name: The Pi's command line kept as it was (before the memory cgroup's flags)
       ansible.builtin.copy:
         src: "{{ pi_cmdline_path }}"
         dest: "{{ pi_cmdline_path }}.before-memory-cgroup"
         remote_src: true
-        force: false
+        force: "{{ _kept | reject('in', _ours) | list != _words | reject('in', _ours) | list }}"
         mode: preserve  # FAT's mode is its mount's: the original's kept, none set
       vars:
-        _words: "{{ (_cmdline_text.content | b64decode).split() }}"
+        _ours: "{{ pi_cmdline_memory_flags + ['cgroup_disable=memory'] }}"
+        _words: "{{ (_cmdline_text.results[0].content | b64decode).split() }}"
+        _kept: "{{ (_cmdline_text.results[1].content | default('') | b64decode).split() }}"
+      register: _cmdline_kept
       when:
         - _cmdline.stat.exists
-        - "'cgroup_enable=memory' not in _words or 'cgroup_memory=1' not in _words or 'cgroup_disable=memory' in _words"
+        - pi_cmdline_memory_flags | difference(_words) | length > 0 or 'cgroup_disable=memory' in _words
 
     # an explicit cgroup_disable=memory on the line itself taken off (a later one would win over the flags below); each
     # edit checked before it is written: still one line, still naming root= - a broken line leaves a Pi 5 unbootable
@@ -232,9 +260,17 @@
         regexp: '^(?!.*(?<!\S){{ item | regex_escape }}(?!\S))([ \t]*\S.*?)[ \t\r]*$'
         replace: '\1 {{ item }}'
         validate: "{{ pi_cmdline_valid }}"
-      loop: [cgroup_enable=memory, cgroup_memory=1]
+      loop: "{{ pi_cmdline_memory_flags }}"
       register: _cmdline_set
       when: _cmdline.stat.exists
+
+    # on the card before the play goes on: FAT keeps no journal, and an edit still in the page cache when the power goes
+    # can leave the line's entry without its data - a Pi 5 that does not boot until its disk is pulled (a clean reboot
+    # syncs first; a cut does not)
+    - name: The Pi's command line on the card
+      ansible.builtin.command: sync -f {{ pi_cmdline_path }}
+      changed_when: false
+      when: _cmdline_kept is changed or _cmdline_cleared is changed or _cmdline_set is changed
 
     - name: The kernel's cgroup controllers now, and the command line it booted with
       ansible.builtin.command: "cat {{ item }}"

@@ -503,7 +503,8 @@ def sub(task, text, **v):  # as the replace module applies it: re.MULTILINE, its
     return re.compile(render(r["regexp"], **v), re.MULTILINE).sub(render(r["replace"], **v), text)
 def apply(text):
     text = sub(clear, text)
-    for item in add["loop"]:
+    assert add["loop"] == "{{ pi_cmdline_memory_flags }}"
+    for item in p["vars"]["pi_cmdline_memory_flags"]:
         text = sub(add, text, item=item)
     return text
 flags = lambda t: [w for w in t.split() if w in ("cgroup_enable=memory", "cgroup_memory=1", "cgroup_disable=memory")]
@@ -526,7 +527,8 @@ val = p["vars"]["pi_cmdline_valid"]
 def valid(text):
     f = os.path.join(W, "cmdline-candidate.txt"); open(f, "w").write(text)
     return subprocess.run(val.replace("%s", f), shell=True).returncode == 0
-print([valid(out["pi2"]), valid(out["pi2"] + "second line\n"), valid("console=tty1 rootwait\n")])
+print([valid(out["pi2"]), valid(out["pi2"] + "second line\n"), valid("console=tty1 rootwait\n"),
+       valid("console=tty1 nfsroot=192.168.11.5:/srv rootwait\n"), valid(out["pi2"].rstrip("\n"))])
 live = lambda c: condition(a["ansible.builtin.assert"]["that"], _cgroups={"results": [{"stdout": c}, {"stdout": ""}]})
 def why(exists=True, changed=False, check=False, booted=""):
     v = dict(inventory_hostname="pi2", pi_cmdline_path="/boot/firmware/cmdline.txt", ansible_check_mode=check,
@@ -543,7 +545,7 @@ print([live("cpuset cpu io memory pids"), live("cpuset cpu io pids"), live("")],
        all("reboot it" not in m for m in msgs[:3])])
 PY_CMDLINE
 )" "True True [True, True, True, True, True, True]
-[True, False, False]
+[True, False, False, False, True]
 [True, False, False] [True, True, True, True, True, True]"
 # the same tasks through Ansible itself (the replace module, its validate, the when on a missing file, the reads in a
 # preview, the message rendered), on fixture files: pi2's line turned on and said "reboot it"; the second run changes
@@ -558,33 +560,60 @@ p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[
 names = [t["name"] for t in p["tasks"]]
 first = names.index("The Pi's kernel command line")
 tasks = p["tasks"][first:]
-yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": tasks,
-                 "vars": {"pi_cmdline_path": f"{cl}/cmdline.txt", "pi_cgroup_controllers": f"{cl}/controllers",
-                          "pi_booted_cmdline": f"{cl}/proc-cmdline", "pi_cmdline_valid": p["vars"]["pi_cmdline_valid"]}}],
+v = dict(p["vars"], pi_cmdline_path=f"{cl}/cmdline.txt", pi_cgroup_controllers=f"{cl}/controllers",
+         pi_booted_cmdline=f"{cl}/proc-cmdline")
+yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": tasks, "vars": v}],
                open(f"{cl}/play.yml", "w"), sort_keys=False)
 PY_PLAY
+# sync as the Pi's would be called, each call logged (the edits' flush to the card)
+mkdir -p "$CL/bin"; printf '#!/bin/sh\necho "$*" >> %s/syncs\n' "$CL" > "$CL/bin/sync"; chmod +x "$CL/bin/sync"
 cl_run() {  # cl_run <ansible args...>: rc and the message's cause
   local out rc
-  out=$(ANSIBLE_NOCOLOR=1 "$AP" -i localhost, "$CL/play.yml" "$@" 2>&1); rc=$?
+  out=$(ANSIBLE_NOCOLOR=1 PATH="$CL/bin:$PATH" "$AP" -i localhost, "$CL/play.yml" "$@" 2>&1); rc=$?
   [ "$rc" = 0 ] && echo "rc=0" && return
-  echo "rc=$rc $(grep -oE 'turns it on now: reboot it|turns it on: reboot it|not --check|cannot be turned on here|will not help' <<< "$out" | head -1)"
+  echo "rc=$rc $(grep -oE 'turns it on now: reboot it|turns it on: reboot it|not --check|cannot be turned on here|will not help|reads another command line' <<< "$out" | head -1)"
 }
+syncs() { touch "$CL/syncs"; grep -cxF -- "-f $CL/cmdline.txt" "$CL/syncs"; }
 PI2_LINE='console=tty1 console=serial0,115200 root=PARTUUID=771933d1-02 rootfstype=ext4 fsck.repair=yes rootwait ds=nocloud'
 printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE" > "$CL/proc-cmdline"
-check "Ansible itself: pi2's line turned on, said to reboot; written as wanted, the original kept once" \
-  "$(cl_run) $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(wc -l < "$CL/cmdline.txt") $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept)" \
-  "rc=2 turns it on now: reboot it 1 1 kept"
-check "  run again: nothing changed, the kept original untouched, still said to reboot" \
-  "$(cl_run) $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept) $(ls "$CL" | grep -c '^cmdline.txt')" \
-  "rc=2 turns it on: reboot it kept 2"
+check "Ansible itself: pi2's line turned on, said to reboot; written as wanted, the original kept once, synced" \
+  "$(cl_run) $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(wc -l < "$CL/cmdline.txt") $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept) $(syncs)" \
+  "rc=2 turns it on now: reboot it 1 1 kept 1"
+check "  run again: nothing changed, the kept original untouched, nothing synced, still said to reboot" \
+  "$(cl_run) $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept) $(ls "$CL" | grep -c '^cmdline.txt') $(syncs)" \
+  "rc=2 turns it on: reboot it kept 2 1"
+# pi2's file as it is (169 bytes, no newline at its end, 2026-10-16): still one line, both flags at its end
+rm "$CL/cmdline.txt.before-memory-cgroup" "$CL/syncs"; printf '%s' "$PI2_LINE" > "$CL/cmdline.txt"
+check "  pi2's line with no newline at its end: one line, both flags at its end, the original kept byte for byte" \
+  "$(cl_run) $(grep -c '' "$CL/cmdline.txt") $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(cmp -s <(printf '%s' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept) $(syncs)" \
+  "rc=2 turns it on now: reboot it 1 1 kept 1"
+# a run cut short (one flag on, the kept copy the original): the kept copy stays the original, the line finished
+printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt.before-memory-cgroup"; printf '%s\n' "$PI2_LINE cgroup_enable=memory" > "$CL/cmdline.txt"
+check "  a run cut short: the line finished, the kept original untouched" \
+  "$(cl_run) $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept)" \
+  "rc=2 turns it on now: reboot it 1 kept"
+# a kept copy older than the line now (the Pi cloned, a new root=; the flags off again): replaced by the line now - an
+# undo to the old one would not boot
+printf '%s\n' "console=tty1 root=PARTUUID=00000000-02 rootwait" > "$CL/cmdline.txt.before-memory-cgroup"; printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"
+check "  a kept copy older than the line: replaced by the line as it was before this run" \
+  "$(cl_run) $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept)" \
+  "rc=2 turns it on now: reboot it kept"
+# config.txt pointing the firmware at another command line: the edit not made, the cause said
+printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; cp "$CL/cmdline.txt" "$CL/before"; printf '[all]\n os_prefix=next/\n' > "$CL/config.txt"
+check "  config.txt points the firmware elsewhere (os_prefix=): red, said so, the line untouched" \
+  "$(cl_run) $(cmp -s "$CL/before" "$CL/cmdline.txt" && echo untouched)" "rc=2 reads another command line untouched"
+printf '[all]\n# os_prefix=next/\narm_64bit=1\n' > "$CL/config.txt"
+check "  config.txt with it commented out: the edit made" "$(cl_run)" "rc=2 turns it on now: reboot it"
+rm "$CL/config.txt"
 printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; cp "$CL/cmdline.txt" "$CL/before"
 check "  a preview (--check): nothing written, said so" "$(cl_run --check) $(cmp -s "$CL/before" "$CL/cmdline.txt" && echo untouched)" \
   "rc=2 not --check untouched"
 rm "$CL/cmdline.txt"
 check "  no command line file (a VM): the edit skipped, the cause said" "$(cl_run)" "rc=2 cannot be turned on here"
-rm -f "$CL/cmdline.txt.before-memory-cgroup"; echo "console=tty1 root=X rootwait cgroup_enable=memory cgroup_memory=1" > "$CL/cmdline.txt"
-echo "cpuset cpu io memory pids" > "$CL/controllers"
-check "  the controller live: green; a line already right - no copy kept" "$(cl_run) $(ls "$CL" | grep -c '^cmdline.txt\.')" "rc=0 0"
+rm -f "$CL/cmdline.txt.before-memory-cgroup" "$CL/syncs"; echo "console=tty1 root=X rootwait cgroup_enable=memory cgroup_memory=1" > "$CL/cmdline.txt"
+cp "$CL/cmdline.txt" "$CL/before"; echo "cpuset cpu io memory pids" > "$CL/controllers"
+check "  the controller live: green; a line already right - not written, no copy kept, nothing synced" \
+  "$(cl_run) $(cmp -s "$CL/before" "$CL/cmdline.txt" && echo untouched) $(ls "$CL" | grep -c '^cmdline.txt\.') $(syncs)" "rc=0 untouched 0 0"
 check "  the controller live, a preview (--check): green - the reads run in a preview too" "$(cl_run --check)" "rc=0"
 echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE cgroup_enable=memory cgroup_memory=1" > "$CL/proc-cmdline"
 check "  booted with the flags, still no controller: a reboot will not help" "$(cl_run)" "rc=2 will not help"
@@ -593,9 +622,8 @@ check "  booted with the flags, still no controller: a reboot will not help" "$(
 check "the boot partition FAT: no Ansible backup on the command line's edits, every name written there FAT-safe" "$("$PY" - <<'PY_FAT'
 import re, yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
-ts = [t for t in p["tasks"] if "pi_cmdline_path" in str(t)]
-mods = [m for t in ts for m in ("ansible.builtin.replace", "ansible.builtin.copy", "ansible.builtin.lineinfile") if m in t]
-backups = [t["name"] for t in ts for m in mods if (t.get(m) or {}).get("backup")]
+ts = [t for t in p["tasks"] if "pi_cmdline_path" in str(t) or "/boot/firmware" in str(t)]
+backups = [t["name"] for t in ts if any(isinstance(a, dict) and a.get("backup") for a in t.values())]
 dests = [t["ansible.builtin.copy"]["dest"].replace("{{ pi_cmdline_path }}", "cmdline.txt") for t in ts if "ansible.builtin.copy" in t]
 print(backups, dests, all(re.fullmatch(r"[A-Za-z0-9._-]+", d) for d in dests))
 PY_FAT
