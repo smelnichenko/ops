@@ -39,12 +39,14 @@ part_postgres() {
     if [ -n "$b" ] && [[ "$b" > "$newest" ]]; then newest=$b; server=$s; fi
   done
   [ -n "$server" ] || { echo "no base backup in postgres-backups"; return 1; }
-  # every WAL segment archived (the timeline aside, as a recovery reads them), and the newest of them: the restore
-  # must reach it
+  # every WAL segment archived (the timeline aside, as a recovery reads them), and the furthest of them by its position
+  # (its log and segment, the timeline aside - as the replay's is judged below): the restore must reach it. By its name
+  # the newest was a higher timeline's: production's archive holds one stray segment of a timeline 3 (2026-10-15)
+  # behind timeline 1's end, and the check would have passed a replay stopped anywhere after it
   local wals wal
   wals=$(rclone lsf -R --files-only "store:postgres-backups/$server/wals" \
     | awk '{ n = $0; sub(/.*\//, "", n); if (n ~ /^[0-9A-F]{24}(\.[a-z0-9]+)?$/) print substr(n, 1, 24) }' | sort -u)
-  wal=$(tail -1 <<< "$wals")
+  wal=$(awk '{ print substr($0, 9, 16), $0 }' <<< "$wals" | sort | tail -1 | cut -d' ' -f2)
   [ -n "$wal" ] || { echo "$server: no WAL archived"; return 1; }
   # its newest restorable backup: complete (one still being written has no status=DONE) and its end WAL archived - an
   # idle database leaves the newest backup's end segment unfinished, so unarchived, for as long as nothing writes. A

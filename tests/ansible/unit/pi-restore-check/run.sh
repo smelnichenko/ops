@@ -191,6 +191,11 @@ store() {  # a store as production's, made relative to now
   mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001D"
   for s in 25 26 27; do touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D000000$s.gz"; done
   touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D00000027.00000060.backup.gz"
+  # STRAY: a segment of a higher timeline behind the real end (production's archive held one, 2026-10-15)
+  if [ -n "${STRAY:-}" ]; then
+    mkdir -p "$pg/schnappy-production-postgres/wals/000000090000001D"
+    touch "$pg/schnappy-production-postgres/wals/000000090000001D/000000090000001D00000010.gz"
+  fi
   # a promotion just archived: the new timeline's history, its first segment not yet - a name that sorts after every WAL
   touch "$pg/schnappy-production-postgres/wals/00000004.history.gz"
   mkdir -p "$S/etcd-backups"
@@ -357,6 +362,12 @@ red "postgres: no backup restorable - every end WAL unarchived (archiving stoppe
 red "postgres: the restore fails: red" POSTGRES PG_RESTORE_FAIL=1
 red "postgres: Postgres stops during the recovery: red" POSTGRES PG_RUNNING=false
 red "postgres: replayed short of the newest WAL archived: red" POSTGRES SEG=000000040000001D00000026
+red "  a stray higher timeline's segment behind the end in the archive: the bar not lowered - short still red" POSTGRES \
+  SEG=000000040000001D00000026 STRAY=1
+(export STRAY=1; store)
+run STRAY=1 > /dev/null
+check "  the furthest archived by position, not a higher timeline's by name" \
+  "$(report | grep -oE 'newest archived at the start: [0-9A-F]+' | sed 's/.* //')" 000000030000001D00000027
 red "postgres: still recovering after its polls: red" POSTGRES RECOVERING=1
 red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin chat masi"
 red "postgres: no table in any database: red" POSTGRES TABLES=0
