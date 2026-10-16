@@ -185,7 +185,7 @@ store() {  # a store as production's, made relative to now
   # BASE_OLD=<h>: the only complete base backup <h> hours old
   if [ -n "${BASE_OLD:-}" ]; then
     rm -rf "$pg/schnappy-production-postgres/base/"*
-    b=$(utc "-$BASE_OLD hours" +%Y%m%dT%H0130); mkdir -p "$pg/schnappy-production-postgres/base/$b"
+    b=$(utc "-$BASE_OLD hours" +%Y%m%dT%H%M%S); mkdir -p "$pg/schnappy-production-postgres/base/$b"
     printf 'version=170004\nstatus=DONE\nend_wal=000000030000001D00000025\n' > "$pg/schnappy-production-postgres/base/$b/backup.info"
   fi
   mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001D"
@@ -211,10 +211,10 @@ store() {  # a store as production's, made relative to now
   # a promotion just archived: the new timeline's history, its first segment not yet - a name that sorts after every WAL
   touch "$pg/schnappy-production-postgres/wals/00000004.history.gz"
   mkdir -p "$S/etcd-backups"
-  touch "$S/etcd-backups/etcd-$(utc "-${ETCD_AGE_H:-1} hours" +%Y%m%d-%H0003).db" "$S/etcd-backups/etcd-$(utc "-5 hours" +%Y%m%d-%H0003).db"
+  touch "$S/etcd-backups/etcd-$(utc "-${ETCD_AGE_H:-1} hours" +%Y%m%d-%H%M%S).db" "$S/etcd-backups/etcd-$(utc "-5 hours" +%Y%m%d-%H%M%S).db"
   if [ -z "${NO_TIER0:-}" ]; then
     local t
-    t=$S/pi-backups/$(utc "-${TIER0_AGE_H:-3} hours" +%Y%m%dT%H4000Z)
+    t=$S/pi-backups/$(utc "-${TIER0_AGE_H:-3} hours" +%Y%m%dT%H%M%SZ)
     mkdir -p "$t"
     touch "$t/consul.snap" "$t/pg-globals.sql"
     [ -n "${NO_DUMPS:-}" ] || touch "$t/pg-forgejo.dump" "$t/pg-keycloak.dump"
