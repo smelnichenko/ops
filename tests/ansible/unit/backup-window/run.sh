@@ -61,6 +61,13 @@ check("  due a minute ago, only another cluster's Backup made since: refused",
       len(got(sched("daily", -1), backup("x", "completed", made=-1, cluster="other"))), 1)
 check("  due a minute ago, only an older Backup: refused",
       len(got(sched("daily", -1), backup("x", "completed", made=-60))), 1)
+check("  due a minute ago, an old Backup and one just made for the cluster: nothing (its newest counts)",
+      got(sched("daily", -1), backup("x", "completed", made=-1500), backup("y", "completed", made=-1)), [])
+check("  made within a minute before due (CNPG's own start): counts; two minutes before: not this schedule's",
+      [len(got(sched("daily", -1), backup("x", "completed", made=-1.5))),
+       len(got(sched("daily", -1), backup("x", "completed", made=-3)))], [0, 1])
+check("  a Backup's age from its start, not its making: made long ago, started a minute ago - running, not stuck",
+      ["wait for its end" in p for p in got(backup("r", "running", started=-1, made=-(STUCK + 60)))], [True])
 check("  due past the late limit: nothing (CNPG moved on or never will)", got(sched("daily", -(LATE + 1))), [])
 check("  suspended: nothing", got(sched("daily", 5, suspend=True)), [])
 check("  a time unread: refused, saying so", ["unread" in p for p in
@@ -82,6 +89,16 @@ ended = lambda text: next(tuple(re.findall(r"\w+", g)) for g in re.findall(r"in 
 check("the playbook's still-running ends on the runner's ended phases; its include's wait on those and the retried",
       (ended(pb), ended(tk), "startswith('invalid')" in tk),
       (m.BACKUP_ENDED_PHASES, m.BACKUP_ENDED_PHASES + ("walArchivingFailing",), True))
+# the include's wait ends on an ended or a retried phase - at once - and goes on while one runs
+import sys
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition
+import yaml
+wait = next(t for t in yaml.safe_load(open("deploy/ansible/playbooks/tasks/cnpg-backup.yml")) if "until" in t)
+ends = lambda phase: condition(wait["until"], **{wait["register"]: {"stdout": phase}})
+check("the include's wait ends on completed, failed, walArchivingFailing and an invalid definition; not on running",
+      [ends(p) for p in ("completed", "failed", "walArchivingFailing", "invalid backup definition", "running", "")],
+      [True, True, True, True, False, False])
 # merge and playbooks ask it before they change anything
 src = open("scripts/upgrade-production.py").read()
 body = lambda fn: src[src.index(f"\ndef {fn}("):src.index("\ndef ", src.index(f"\ndef {fn}(") + 1)]

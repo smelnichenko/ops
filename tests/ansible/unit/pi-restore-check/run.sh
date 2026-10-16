@@ -209,6 +209,10 @@ store() {  # a store as production's, made relative to now
 }
 # production's base backup age limit, as the playbook sets it (the cases below are judged against it)
 BASE_MAX=$(sed -n 's/^    pi_restore_check_pg_base_max_age_h: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
+# no looser than CNPG's daily 01:30 backup allows at this 05:30 check: the day before's is ~28 h old - past 30 h, a
+# backup not made for a day would pass
+check "the base backup's limit between the day before's (28 h) and a day missed (over 30 h)" \
+  "$([ "$BASE_MAX" -ge 28 ] && [ "$BASE_MAX" -le 30 ] && echo within)" within
 run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTORE_LOCKED), the exit
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
   env -i PATH="$W/bin:/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \

@@ -20,7 +20,8 @@ for pi in pi1 pi2; do
     "$pi" "$W" "$pi" "$pi" > "$W/$pi/ip"
   printf '#!/bin/sh\nPATH="%s:$PATH" exec "%s" "$@"\n' "$W/$pi" "$PY" > "$W/py-$pi"
   # arping -D (iputils): exit 1 when another host answers for the address ($DUP), 0 when none does; its call recorded
-  printf '#!/bin/sh\necho "arping $* on %s" >> "%s/arping-calls"\n[ -z "$DUP" ]\n' "$pi" "$W" > "$W/$pi/arping"
+  # ARPING_RC: arping failing itself (2: not run, no rights) - not "no reply"
+  printf '#!/bin/sh\necho "arping $* on %s" >> "%s/arping-calls"\n[ -z "$ARPING_RC" ] || { echo "arping: socket: Operation not permitted" >&2; exit "$ARPING_RC"; }\n[ -z "$DUP" ]\n' "$pi" "$W" > "$W/$pi/arping"
   chmod +x "$W/$pi/ip" "$W/py-$pi" "$W/$pi/arping"
 done
 # a Pi that is down: its ssh refused as ssh says it (exit 255) - this harness's own, before the unit runner's fence
@@ -93,6 +94,7 @@ case_ "pi1 down: the holder's duplicate probe run, no answer - on" 0 "HOLDER=pi2
 check "  the probe on the holder, on the VIP's interface" \
   "$(grep -c 'arping -D .*-I eth0 192.168.11.5 on pi2' "$W/arping-calls")" 1
 DUP=1 case_ "  another host answering for the VIP (pi1 unread, still holding it): refused" 1 "arping" "" 192.168.11.5/24 pi1
+ARPING_RC=2 case_ "  the probe itself failing (not 'no reply'): refused, its error said" 1 "Operation not permitted" "" 192.168.11.5/24 pi1
 # tasks/vip-holder-only.yml: a play on the Pis goes on on the VIP's Pi alone - the other ends there
 cat > "$W/only.yml" <<PLAY
 - hosts: pis
