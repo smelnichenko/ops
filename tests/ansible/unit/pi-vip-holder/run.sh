@@ -177,6 +177,25 @@ for f in sorted(glob.glob(sys.argv[1] + "/*.yml")):
 PYVER
 )
 check "every verify play on each Pi" "$unverified" ""
+# Gluster's status and heal take the volume's cluster-wide lock: a play running them on both Pis at once had one refused
+# (pi2 left setup-gluster, its backup volumes never mounted - the full run of 2026-10-16): such a play one Pi at a time,
+# and each such read asked again while the lock is held
+locked=$(cd "$ROOT" && python3 - <<'PYGL'
+import glob, re, yaml
+for f in sorted(glob.glob("deploy/ansible/playbooks/*.yml")):
+    for p in yaml.safe_load(open(f)) or []:
+        if not isinstance(p, dict) or "tasks" not in p:
+            continue
+        hosts = str(p.get("hosts", ""))
+        many = hosts in ("pis", "all") or "," in hosts or ":" in hosts
+        for t in p["tasks"] or []:
+            cmd = str(t.get("ansible.builtin.shell") or t.get("ansible.builtin.command") or "")
+            if many and re.search(r"gluster volume (status|heal)", cmd) and not t.get("run_once"):
+                if p.get("serial") != 1 or not t.get("until"):
+                    print(f.split("/")[-1], p.get("name"), t.get("name"))
+PYGL
+)
+check "every Gluster status/heal on several Pis one Pi at a time, asked again while locked" "$locked" ""
 # Caddy's verify wants each Pi's own Caddy running (the VIP moving to a Pi without one serves nothing) - judged in a run,
 # shown in a preview (a first install's has none yet)
 check "Caddy's verify: running passes, stopped or absent fails - in a run; a preview never fails" "$(cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_CADDY'

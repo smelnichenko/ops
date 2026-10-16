@@ -455,18 +455,25 @@
 
 # ─── Verify ─────────────────────────────────────────────────────────────────
 - name: Verify GlusterFS
-  # each Pi checked (pinned to pi1, the check was skipped without a word while pi1 was down)
+  # each Pi checked (pinned to pi1, the check was skipped without a word while pi1 was down) - one at a time: status and
+  # heal take the volume's cluster-wide lock, and the two Pis' at once refused one ("Unable to acquire lock for
+  # forgejo-repos": pi2 left the playbook, its backup volumes never mounted - the full run of 2026-10-16)
   hosts: pis
+  serial: 1
   become: true
   gather_facts: false
 
   tasks:
+    # the lock held a moment by another (a backup's heal, the other Pi's run of this): asked again, not failed
     - name: Check volume status
       check_mode: false
       ansible.builtin.shell: |
         gluster volume status forgejo-repos
       register: vol_status
       changed_when: false
+      retries: 6
+      delay: 5
+      until: vol_status.rc == 0
 
     - name: Check replication
       check_mode: false
@@ -474,6 +481,9 @@
         gluster volume heal forgejo-repos info
       register: heal_info
       changed_when: false
+      retries: 6
+      delay: 5
+      until: heal_info.rc == 0
 
     - name: Check the mount on this Pi
       check_mode: false
