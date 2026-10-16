@@ -301,6 +301,18 @@ if tok and tread and tsum:
           [sent({"content": b64}, ""), sent({"content": b64}, "0" * 64 + "  x"),
            sent({"content": b64}, hashlib.sha256(b"hvs.root").hexdigest() + "  /etc/vault-unseal/root-token"),
            sent({"failed": True}, "")] == [True, True, False, False])
+if tok and tsum:
+    # the token's bytes as pi1 holds them (Ansible's stdin adds a newline unless told not to: pi2's then never hashed
+    # equal to pi1's), and pi2's file root's alone, read-only - when pi2 holds one or one was just written
+    mode = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.file") or {}).get("path")
+                 == "/etc/vault-unseal/root-token" and (t.get("ansible.builtin.file") or {}).get("mode")), None)
+    held = lambda rc, pi1, check_mode=False: condition(mode["when"], ansible_check_mode=check_mode,
+                                                         **{tsum["register"]: {"rc": rc}, tread["register"]: pi1})
+    check("pi2's token as pi1's bytes (no newline added); its file root's 0400 when held or written, not when none",
+          (tok["args"].get("stdin_add_newline"), mode is not None and mode["ansible.builtin.file"]["mode"] == "0400"
+           and mode["ansible.builtin.file"]["owner"] == "root",
+           mode and [held(0, {"skipped": True}), held(1, {"content": "eA=="}), held(1, {"skipped": True}),
+                     held(1, {"content": "eA=="}, True)]) == (False, True, [True, True, False, False]))
 # the root token's read on pi1: none there (purged) is an answer, any other failure fails the play; pi2's copy goes
 # when pi1 has none - never left to outlive the purge
 if tread:
