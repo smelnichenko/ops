@@ -76,9 +76,15 @@ for img in "${images[@]}"; do
     # gone from the registry - a rebuilt ten could not pull it either). Copy ten's exact image: a read-only export
     # streamed over ssh, nothing written on ten.
     echo "WARNING: $img is not in the registry - copying it from ten's image cache"
+    # through a file, never a pipe into vagrant ssh: ssh's output read late lost its tail (2026-10-16, a busybox archive
+    # 2560 bytes short); each step's failure said
+    mkdir -p "$ops/.upgrade"; tar=$(mktemp "$ops/.upgrade/preload.XXXXXX.tar")
     # shellcheck disable=SC2029  # $img is meant to expand here, into the remote command
-    ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images export --platform linux/amd64 - '$img'" \
-      | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null | grep -v '^$' | tail -1
+    ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images export --platform linux/amd64 - '$img'" > "$tar" \
+      || { rm -f "$tar"; echo "$img: ten's export failed"; exit 1; }
+    vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' < "$tar" 2>/dev/null | grep -v '^$' | tail -1
+    [ "${PIPESTATUS[0]}" -eq 0 ] || { rm -f "$tar"; echo "$img: the copy's import failed"; exit 1; }
+    rm -f "$tar"
     continue
   fi
   docker save "$img" | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --digests -' 2>/dev/null \

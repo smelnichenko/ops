@@ -30,6 +30,11 @@ for line in sys.stdin:
 [ "${#images[@]}" -gt 0 ] || { echo "no floating images in the inventory"; exit 1; }
 mkdir -p .upgrade
 digests=.upgrade/floating-digests.txt
+# each export through a file, never a pipe into vagrant ssh: ssh's output read late (vagrant ssh starting up) lost its
+# tail - busybox's archive arrived 2560 bytes short, its index cut ("ctr: unrecognized image format"), and the run ended
+# with nothing said (the full runs of 2026-10-16)
+tar=$(mktemp "$ops/.upgrade/floating.XXXXXX.tar")
+trap 'rm -f "$tar"' EXIT
 : > "$digests.new"
 missing=0
 for img in "${images[@]}"; do
@@ -43,8 +48,10 @@ for img in "${images[@]}"; do
     | awk -v i="$img" '$1 == i {print $3}')
   if [ -n "$ten" ]; then
     # shellcheck disable=SC2029
-    ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images export --platform linux/amd64 - '$img'" \
-      | vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --platform linux/amd64 --digests -' > /dev/null 2>&1
+    ssh "${TEN_SSH:-sm@192.168.11.2}" "sudo -n ctr -n k8s.io images export --platform linux/amd64 - '$img'" > "$tar" \
+      || { echo "$img: ten's export failed"; exit 1; }
+    vagrant ssh kubeadm -c 'sudo ctr -n k8s.io images import --platform linux/amd64 --digests -' < "$tar" > /dev/null 2>&1 \
+      || { echo "$img: the copy's import failed ($(wc -c < "$tar") bytes from ten)"; exit 1; }
     # the copy now holds ten's image under the tag: the same digest, or this fails
     copy=$(vagrant ssh kubeadm -c "sudo ctr -n k8s.io images ls name=='$img'" 2>/dev/null | tr -d '\r' \
       | awk -v i="$img" '$1 == i {print $3}')
