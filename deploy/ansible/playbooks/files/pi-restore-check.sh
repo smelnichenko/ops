@@ -30,7 +30,7 @@ pg_bin() {  # this Pi's newest Postgres (the major Patroni runs here)
 # the kernel's memory cgroup controller: without it no container's --memory can be set (crun: "opening file
 # `memory.max`") - Raspberry Pi OS boots with it off unless its command line turns it on (setup-pi-restore-check.yml)
 memory_bounded() {
-  grep -qw memory "${PI_RESTORE_CGROUP_CONTROLLERS:-/sys/fs/cgroup/cgroup.controllers}" \
+  grep -qw memory "$PI_RESTORE_CGROUP_CONTROLLERS" \
     || { echo "this Pi's kernel has no memory cgroup controller (cgroup_enable=memory cgroup_memory=1 on its command line, then a reboot): its containers cannot be bounded"; return 1; }
 }
 
@@ -47,15 +47,13 @@ part_postgres() {
     if [ -n "$b" ] && [[ "$b" > "$newest" ]]; then newest=$b; server=$s; fi
   done
   [ -n "$server" ] || { echo "no base backup in postgres-backups"; return 1; }
-  # every WAL segment archived (the timeline aside, as a recovery reads them), and the furthest of them by its position
-  # (its log and segment, the timeline aside - as the replay's is judged below): the restore must reach it. By its name
-  # the newest was a higher timeline's: production's archive holds one stray segment of a timeline 3 (2026-10-15)
-  # behind timeline 1's end, and the check would have passed a replay stopped anywhere after it
-  local wals wal
-  wals=$(rclone lsf -R --files-only "store:postgres-backups/$server/wals" \
-    | awk '{ n = $0; sub(/.*\//, "", n); if (n ~ /^[0-9A-F]{24}(\.[a-z0-9]+)?$/) print substr(n, 1, 24) }' | sort -u)
-  wal=$(awk '{ print substr($0, 9, 16), $0 }' <<< "$wals" | sort | tail -1 | cut -d' ' -f2)
-  [ -n "$wal" ] || { echo "$server: no WAL archived"; return 1; }
+  # every WAL segment archived (the timeline aside, as a recovery reads them), and the timelines a promotion's history
+  # file names
+  local listing wals histories wal
+  listing=$(rclone lsf -R --files-only "store:postgres-backups/$server/wals" | sed 's#.*/##')
+  wals=$(awk '/^[0-9A-F]{24}(\.[a-z0-9]+)?$/ { print substr($0, 1, 24) }' <<< "$listing" | sort -u)
+  histories=$(awk '/^[0-9A-F]{8}\.history(\.[a-z0-9]+)?$/ { print substr($0, 1, 8) }' <<< "$listing" | sort -u)
+  [ -n "$wals" ] || { echo "$server: no WAL archived"; return 1; }
   # its newest restorable backup: complete (one still being written has no status=DONE) and its end WAL archived - an
   # idle database leaves the newest backup's end segment unfinished, so unarchived, for as long as nothing writes. A
   # day of hourly backups looked at: archiving stopped leaves none restorable, and the age below says so
@@ -69,6 +67,18 @@ part_postgres() {
     if [ -n "$end_wal" ] && grep -qx "$end_wal" <<< "$wals"; then id=${b%/}; break; fi
   done
   [ -n "$id" ] || { echo "$server: none of its $PI_RESTORE_PG_BACKUPS_LOOKED_AT newest base backups is restorable (complete, its end WAL archived)"; return 1; }
+  # the bar the replay must reach: the furthest segment archived on the timeline the recovery ends on - the newest a
+  # history file names from the backup's on (a promotion's), else the backup's own; one with nothing archived yet (a
+  # promotion just made) gives way to the one before. By position across all timelines a segment the old primary
+  # archived past a fork could never be reached; by name a timeline with no history - a stray, as production's archive
+  # holds one of a timeline 3 (2026-10-15) - lowered the bar. Neither is followed by a recovery, neither counts
+  local tli candidates
+  candidates=$( { echo "${end_wal:0:8}"; awk -v b="${end_wal:0:8}" '$0 > b' <<< "$histories"; } | sort -ru)
+  for tli in $candidates; do
+    # (awk, not grep: none on a timeline is an answer here, not a failure under pipefail)
+    wal=$(awk -v t="$tli" 'substr($0, 1, 8) == t { print substr($0, 9, 16), $0 }' <<< "$wals" | sort | tail -1 | cut -d' ' -f2)
+    [ -z "$wal" ] || break
+  done
   local version major image
   version=$(sed -n 's/^version=//p' <<< "$info")
   major=$(( version / 10000 ))
@@ -123,7 +133,7 @@ part_postgres() {
   local seg
   seg=$(q 'select pg_walfile_name(pg_current_wal_lsn())')
   [[ ! "${seg:8:16}" < "${wal:8:16}" ]] \
-    || { echo "$server/$id: replayed to $seg, short of $wal - the newest archived when the run began"; return 1; }
+    || { echo "$server/$id: replayed to $seg, short of $wal - the furthest archived on timeline $tli (the one the recovery follows) when the run began"; return 1; }
   local have db missing=() tables total=0 counts=()
   have=" $(q "select string_agg(datname, ' ') from pg_database where not datistemplate") "
   for db in $PI_RESTORE_PG_DATABASES; do
@@ -200,6 +210,8 @@ part_etcd() {
 
 part_tier0() {
   local w=$1/tier0 d age
+  # its scratch Postgres and Consul agent run in the unit's cgroup: its MemoryMax is no bound without the controller
+  memory_bounded || return 1
   mkdir -p "$w"
   d=$(rclone lsf --dirs-only store:pi-backups | grep -E '^[0-9]{8}T[0-9]{6}Z/$' | sort | tail -1)
   d=${d%/}
@@ -287,7 +299,7 @@ fi
 : "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
 : "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
 : "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}" "${PI_RESTORE_MIN_FREE_GB:?}"
-: "${PI_RESTORE_CONTAINER_MEMORY:?}" "${PI_RESTORE_ETCD_WAIT_POLLS:?}"
+: "${PI_RESTORE_CONTAINER_MEMORY:?}" "${PI_RESTORE_ETCD_WAIT_POLLS:?}" "${PI_RESTORE_CGROUP_CONTROLLERS:?}"
 
 if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   # the clock synchronized first (as pi-tier0-backup's): the day's parity and every age below read it

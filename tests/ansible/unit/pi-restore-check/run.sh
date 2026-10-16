@@ -190,12 +190,24 @@ store() {  # a store as production's, made relative to now
   fi
   mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001D"
   for s in 25 26 27; do touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D000000$s.gz"; done
+  # the log before (1C) to its last segment: by the segment alone (FF) it would read furthest
+  mkdir -p "$pg/schnappy-production-postgres/wals/000000030000001C"
+  touch "$pg/schnappy-production-postgres/wals/000000030000001C/000000030000001C000000FF.gz"
   touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D00000027.00000060.backup.gz"
   # STRAY: a segment of a higher timeline behind the real end (production's archive held one, 2026-10-15)
   if [ -n "${STRAY:-}" ]; then
     mkdir -p "$pg/schnappy-production-postgres/wals/000000090000001D"
     touch "$pg/schnappy-production-postgres/wals/000000090000001D/000000090000001D00000010.gz"
   fi
+  # PROMOTED: a failover after the backup - timeline 5's history and its segments ahead (1D/2F, 1D/30); LATE: the old
+  # primary archived a segment of its timeline past the fork (1D/40) - no recovery follows it
+  if [ -n "${PROMOTED:-}" ]; then
+    touch "$pg/schnappy-production-postgres/wals/00000005.history.gz"
+    mkdir -p "$pg/schnappy-production-postgres/wals/000000050000001D"
+    touch "$pg/schnappy-production-postgres/wals/000000050000001D/000000050000001D0000002F.gz" \
+      "$pg/schnappy-production-postgres/wals/000000050000001D/000000050000001D00000030.gz"
+  fi
+  [ -z "${LATE:-}" ] || touch "$pg/schnappy-production-postgres/wals/000000030000001D/000000030000001D00000040.gz"
   # a promotion just archived: the new timeline's history, its first segment not yet - a name that sorts after every WAL
   touch "$pg/schnappy-production-postgres/wals/00000004.history.gz"
   mkdir -p "$S/etcd-backups"
@@ -359,9 +371,9 @@ check "  chrony synchronized (timedatectl says no): the run goes on" "$(run PI_R
 # tier0 (no container) restored
 echo "cpuset cpu io pids" > "$W/cgroup-controllers"
 store
-check "no memory cgroup controller: Postgres and etcd red, saying so, no container run; tier0 OK" \
-  "$(run) $(report | grep -c 'no memory cgroup controller') $(grep -c '^podman run' "$W/calls") $(report | grep -c '^TIER0 OK')" \
-  "rc=1 2 0 1"
+check "no memory cgroup controller: every part red, saying so, no container run, no scratch Postgres" \
+  "$(run) $(report | grep -c 'no memory cgroup controller') $(grep -c '^podman run' "$W/calls") $(grep -c 'initdb' "$W/calls")" \
+  "rc=1 3 0 0"
 echo "cpuset cpu io memory pids" > "$W/cgroup-controllers"
 red "postgres: a major with no image: red" POSTGRES PG_VERSION=190002
 red "postgres: the newest complete base backup just past the playbook's limit: red" POSTGRES BASE_OLD=$((BASE_MAX + 1))
@@ -372,12 +384,21 @@ red "postgres: no backup restorable - every end WAL unarchived (archiving stoppe
 red "postgres: the restore fails: red" POSTGRES PG_RESTORE_FAIL=1
 red "postgres: Postgres stops during the recovery: red" POSTGRES PG_RUNNING=false
 red "postgres: replayed short of the newest WAL archived: red" POSTGRES SEG=000000040000001D00000026
+red "  short by its log, past by its segment (1C/30 against 1D/27): red" POSTGRES SEG=000000040000001C00000030
 red "  a stray higher timeline's segment behind the end in the archive: the bar not lowered - short still red" POSTGRES \
   SEG=000000040000001D00000026 STRAY=1
 (export STRAY=1; store)
 run STRAY=1 > /dev/null
 check "  the furthest archived by position, not a higher timeline's by name" \
   "$(report | grep -oE 'newest archived at the start: [0-9A-F]+' | sed 's/.* //')" 000000030000001D00000027
+# a failover after the backup: the recovery follows the promoted timeline (its history archived) - its furthest segment
+# the bar, not the old primary's segment archived past the fork, which no recovery reaches
+(export PROMOTED=1 LATE=1; store)
+run PROMOTED=1 LATE=1 SEG=000000060000001D00000030 > /dev/null
+check "  promoted after the backup: the bar the promoted timeline's furthest (1D/30), not the old primary's late 1D/40" \
+  "$(report | grep -oE 'newest archived at the start: [0-9A-F]+' | sed 's/.* //') $(report | grep -c '^POSTGRES OK')" \
+  "000000050000001D00000030 1"
+red "  promoted, the replay short of the promoted timeline's end: red" POSTGRES PROMOTED=1 SEG=000000060000001D0000002F
 red "postgres: still recovering after its polls: red" POSTGRES RECOVERING=1
 red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin chat masi"
 red "postgres: no table in any database: red" POSTGRES TABLES=0
@@ -463,30 +484,117 @@ print(burst, burst * (secs(kv["TimeoutStartSec"]) + secs(kv["RestartSec"])) <= w
       daily and window + int(tv["RandomizedDelaySec"]) < 24 * 3600, kv["UMask"])
 PY_UNIT
 )" "3 True True 0077"
-# the playbook turns the memory cgroup on at boot: each flag appended where missing - pi2's line (2026-10-16) gets both,
-# pi1's (both twice already) none, the line kept one line and the same on a second run; the assert wants the controller
-check "the command line's memory cgroup flags: pi2's line gets both, pi1's none, once; the controller wanted live" "$("$PY" - <<'PY_CMDLINE'
-import re, sys, yaml
+# the playbook turns the memory cgroup on at boot: an explicit cgroup_disable=memory taken off, each flag appended where
+# missing - pi2's line (2026-10-16) gets both, pi1's (both twice already) none; leading blanks, a CRLF, look-alikes; the
+# line kept one line, the same on a second run; each edit validated (one line, root=) before it is written; the
+# controller wanted live, and the message saying the cause - no file, a preview, booted with the flags, or a reboot
+check "the command line's memory cgroup: each line shape, a second run, the validator, the assert and its four causes" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - "$W" <<'PY_CMDLINE'
+import os, re, subprocess, sys, yaml
 sys.path.insert(0, "tests/ansible/unit")
 from templar import render, condition
+W = sys.argv[1]
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
-t = next(t for t in p["tasks"] if "ansible.builtin.replace" in t)
+reps = [t for t in p["tasks"] if "ansible.builtin.replace" in t]
+clear = next(t for t in reps if "cgroup_disable" in t["ansible.builtin.replace"]["regexp"])
+add = next(t for t in reps if t.get("loop"))
 a = next(t for t in p["tasks"] if "_cgroups" in str(t.get("ansible.builtin.assert", "")))
+def sub(task, text, **v):  # as the replace module applies it: re.MULTILINE, its replacement's groups
+    r = task["ansible.builtin.replace"]
+    return re.compile(render(r["regexp"], **v), re.MULTILINE).sub(render(r["replace"], **v), text)
 def apply(text):
-    for item in t["loop"]:
-        rx = render(t["ansible.builtin.replace"]["regexp"], item=item)
-        rp = render(t["ansible.builtin.replace"]["replace"], item=item)
-        text = re.compile(rx, re.MULTILINE).sub(rp, text)  # as the replace module applies it
+    text = sub(clear, text)
+    for item in add["loop"]:
+        text = sub(add, text, item=item)
     return text
-pi2 = "console=tty1 console=serial0,115200 root=PARTUUID=771933d1-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=EE ds=nocloud;i=rpi-imager-1775291628561\n"
-pi1 = "console=tty1 root=PARTUUID=6a821266-02 rootfstype=ext4 fsck.repair=yes rootwait cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory\n"
-half = "console=tty1 rootwait cgroup_memory=1\n"
-near = "console=tty1 rootwait cgroup_memory=10 xcgroup_enable=memory\n"  # look-alikes, not the flags
-out2 = apply(pi2)
-live = lambda c: condition(a["ansible.builtin.assert"]["that"], _cgroups={"stdout": c})
-print(out2.split()[-2:], out2.count("\n"), apply(out2) == out2, apply(pi1) == pi1, apply(half).split()[-2:],
-      [live("cpuset cpu io memory pids"), live("cpuset cpu io pids")], p["vars"]["pi_cmdline_path"], apply(near).split()[-2:])
+flags = lambda t: [w for w in t.split() if w in ("cgroup_enable=memory", "cgroup_memory=1", "cgroup_disable=memory")]
+lines = {
+    "pi2": "console=tty1 console=serial0,115200 root=PARTUUID=771933d1-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=EE ds=nocloud;i=rpi-imager-1775291628561\n",
+    "pi1": "console=tty1 root=PARTUUID=6a821266-02 rootfstype=ext4 fsck.repair=yes rootwait cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory\n",
+    "half": "console=tty1 root=X rootwait cgroup_memory=1\n",
+    "near": "console=tty1 root=X rootwait cgroup_memory=10 xcgroup_enable=memory\n",
+    "blanks": "  console=tty1 root=X rootwait\n",
+    "crlf": "console=tty1 root=X rootwait\r\n",
+    "disabled": "console=tty1 root=X cgroup_disable=memory rootwait\n",
+}
+out = {k: apply(v) for k, v in lines.items()}
+ok = all(o.count("\n") == 1 and "\r" not in o and apply(o) == o and "root=" in o for o in out.values())
+want = ["cgroup_enable=memory", "cgroup_memory=1"]
+print(ok, out["pi1"] == lines["pi1"], [sorted(flags(out[k])) == sorted(want) for k in ("pi2", "half", "near", "blanks", "crlf", "disabled")])
+# the validator as Ansible runs it (%s the file it would write)
+assert add["ansible.builtin.replace"]["validate"] == clear["ansible.builtin.replace"]["validate"] == "{{ pi_cmdline_valid }}"
+val = p["vars"]["pi_cmdline_valid"]
+def valid(text):
+    f = os.path.join(W, "cmdline-candidate.txt"); open(f, "w").write(text)
+    return subprocess.run(val.replace("%s", f), shell=True).returncode == 0
+print([valid(out["pi2"]), valid(out["pi2"] + "second line\n"), valid("console=tty1 rootwait\n")])
+live = lambda c: condition(a["ansible.builtin.assert"]["that"], _cgroups={"results": [{"stdout": c}, {"stdout": ""}]})
+def why(exists=True, changed=False, check=False, booted=""):
+    v = dict(inventory_hostname="pi2", pi_cmdline_path="/boot/firmware/cmdline.txt", ansible_check_mode=check,
+             _cmdline={"stat": {"exists": exists}},
+             _cmdline_set={"changed": changed} if exists else {"skipped": True, "changed": False},
+             _cmdline_cleared={"changed": False} if exists else {"skipped": True, "changed": False},
+             _cgroups={"results": [{"stdout": "cpuset cpu io pids"}, {"stdout": booted}]})
+    return render(a["ansible.builtin.assert"]["fail_msg"], **v)
+msgs = [why(exists=False), why(changed=True, check=True), why(booted="console=tty1 cgroup_enable=memory cgroup_memory=1"),
+        why(changed=True), why()]
+print([live("cpuset cpu io memory pids"), live("cpuset cpu io pids"), live("")],
+      ["not here" in msgs[0] or "cannot be turned on here" in msgs[0], "not --check" in msgs[1], "will not help" in msgs[2],
+       "turns it on now: reboot it" in msgs[3], "turns it on: reboot it" in msgs[4],
+       all("reboot it" not in m for m in msgs[:3])])
 PY_CMDLINE
-)" "['cgroup_enable=memory', 'cgroup_memory=1'] 1 True True ['cgroup_memory=1', 'cgroup_enable=memory'] [True, False] /boot/firmware/cmdline.txt ['cgroup_enable=memory', 'cgroup_memory=1']"
+)" "True True [True, True, True, True, True, True]
+[True, False, False]
+[True, False, False] [True, True, True, True, True, True]"
+# the same tasks through Ansible itself (the replace module, its validate, the when on a missing file, the reads in a
+# preview, the message rendered), on fixture files: pi2's line turned on and said "reboot it"; the second run changes
+# nothing and still says reboot; a preview writes nothing and says so; no command line file (the Vagrant VMs') - the
+# edit skipped, the cause said; the controller live - green; booted with the flags and still none - "will not help"
+AP=$(command -v ansible-playbook || echo deploy/ansible/venv/bin/ansible-playbook)
+CL=$W/cl; mkdir -p "$CL"
+PYTHONDONTWRITEBYTECODE=1 "$PY" - "$CL" <<'PY_PLAY'
+import sys, yaml
+cl = sys.argv[1]
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+names = [t["name"] for t in p["tasks"]]
+first = names.index("The Pi's kernel command line")
+tasks = p["tasks"][first:]
+yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": tasks,
+                 "vars": {"pi_cmdline_path": f"{cl}/cmdline.txt", "pi_cgroup_controllers": f"{cl}/controllers",
+                          "pi_booted_cmdline": f"{cl}/proc-cmdline", "inventory_hostname_short": "pi2"}}],
+               open(f"{cl}/play.yml", "w"), sort_keys=False)
+PY_PLAY
+cl_run() {  # cl_run <ansible args...>: rc and the message's cause
+  local out rc
+  out=$(ANSIBLE_NOCOLOR=1 "$AP" -i localhost, "$CL/play.yml" "$@" 2>&1); rc=$?
+  [ "$rc" = 0 ] && echo "rc=0" && return
+  echo "rc=$rc $(grep -oE 'turns it on now: reboot it|turns it on: reboot it|not --check|cannot be turned on here|will not help' <<< "$out" | head -1)"
+}
+PI2_LINE='console=tty1 console=serial0,115200 root=PARTUUID=771933d1-02 rootfstype=ext4 fsck.repair=yes rootwait ds=nocloud'
+printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE" > "$CL/proc-cmdline"
+check "Ansible itself: pi2's line turned on, said to reboot; written as wanted, each edit's backup kept" \
+  "$(cl_run) $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(wc -l < "$CL/cmdline.txt") $(ls "$CL" | grep -c '^cmdline.txt\..*~$')" \
+  "rc=2 turns it on now: reboot it 1 1 2"
+check "  run again: nothing changed (no new backup), still said to reboot" "$(cl_run) $(ls "$CL" | grep -c '^cmdline.txt\..*~$')" \
+  "rc=2 turns it on: reboot it 2"
+printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; cp "$CL/cmdline.txt" "$CL/before"
+check "  a preview (--check): nothing written, said so" "$(cl_run --check) $(cmp -s "$CL/before" "$CL/cmdline.txt" && echo untouched)" \
+  "rc=2 not --check untouched"
+rm "$CL/cmdline.txt"
+check "  no command line file (a VM): the edit skipped, the cause said" "$(cl_run)" "rc=2 cannot be turned on here"
+printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; echo "cpuset cpu io memory pids" > "$CL/controllers"
+check "  the controller live: green" "$(cl_run)" "rc=0"
+check "  the controller live, a preview (--check): green - the reads run in a preview too" "$(cl_run --check)" "rc=0"
+echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE cgroup_enable=memory cgroup_memory=1" > "$CL/proc-cmdline"
+check "  booted with the flags, still no controller: a reboot will not help" "$(cl_run)" "rc=2 will not help"
+# the script reads the same path the playbook writes into its settings, and needs it
+check "the controllers' path: the playbook's one variable, in the settings the script requires" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - "$SCRIPT" <<'PY_PATH'
+import re, sys, yaml
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+env = next(t for t in p["tasks"] if t["name"].startswith("Its settings"))["ansible.builtin.copy"]["content"]
+script = open(sys.argv[1]).read()
+print("PI_RESTORE_CGROUP_CONTROLLERS={{ pi_cgroup_controllers }}" in env, p["vars"]["pi_cgroup_controllers"],
+      '"${PI_RESTORE_CGROUP_CONTROLLERS:?}"' in script, 'grep -qw memory "$PI_RESTORE_CGROUP_CONTROLLERS"' in script)
+PY_PATH
+)" "True /sys/fs/cgroup/cgroup.controllers True True"
 echo "pi-restore-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
