@@ -617,17 +617,42 @@ check "  the controller live: green; a line already right - not written, no copy
 check "  the controller live, a preview (--check): green - the reads run in a preview too" "$(cl_run --check)" "rc=0"
 echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE cgroup_enable=memory cgroup_memory=1" > "$CL/proc-cmdline"
 check "  booted with the flags, still no controller: a reboot will not help" "$(cl_run)" "rc=2 will not help"
+# each line shape through Ansible: the original kept exactly when the line is changed - one flag only, the other only,
+# cgroup_disable=memory beside both flags, neither, already right
+echo "$PI2_LINE" > "$CL/proc-cmdline"; shapes=""
+for l in "console=tty1 root=X rootwait cgroup_memory=1" "console=tty1 root=X rootwait cgroup_enable=memory" \
+  "console=tty1 root=X cgroup_disable=memory rootwait cgroup_enable=memory cgroup_memory=1" "console=tty1 root=X rootwait" \
+  "console=tty1 root=X rootwait cgroup_enable=memory cgroup_memory=1"; do
+  rm -f "$CL/cmdline.txt.before-memory-cgroup"; printf '%s\n' "$l" > "$CL/cmdline.txt"; cl_run > /dev/null
+  if cmp -s <(printf '%s\n' "$l") "$CL/cmdline.txt"; then c=same; else c=changed; fi
+  if [ ! -e "$CL/cmdline.txt.before-memory-cgroup" ]; then k=none
+  elif cmp -s <(printf '%s\n' "$l") "$CL/cmdline.txt.before-memory-cgroup"; then k=kept; else k=WRONG; fi
+  shapes="$shapes $c:$k"
+done
+check "  each line shape: the original kept exactly when the line is changed" "${shapes# }" \
+  "changed:kept changed:kept changed:kept changed:kept same:none"
 # the boot partition is FAT: no name with ':' (Ansible's backup names carry a time - pi2's edit refused, 2026-10-16) - no
-# edit of the command line keeps an Ansible backup, and every name written beside it is FAT-safe
+# edit of the command line keeps an Ansible backup, every name written beside it is FAT-safe, and its copy reads the Pi's
+# own file (remote_src: the controller's would be another's) - the same check fed tasks breaking each, as a control
 check "the boot partition FAT: no Ansible backup on the command line's edits, every name written there FAT-safe" "$("$PY" - <<'PY_FAT'
 import re, yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
-ts = [t for t in p["tasks"] if "pi_cmdline_path" in str(t) or "/boot/firmware" in str(t)]
-backups = [t["name"] for t in ts if any(isinstance(a, dict) and a.get("backup") for a in t.values())]
-dests = [t["ansible.builtin.copy"]["dest"].replace("{{ pi_cmdline_path }}", "cmdline.txt") for t in ts if "ansible.builtin.copy" in t]
-print(backups, dests, all(re.fullmatch(r"[A-Za-z0-9._-]+", d) for d in dests))
+def violations(tasks):
+    ts = [t for t in tasks if "pi_cmdline_path" in str(t) or "/boot/firmware" in str(t)]
+    backups = [t["name"] for t in ts if any(isinstance(a, dict) and a.get("backup") for a in t.values())]
+    copies = [t for t in ts if "ansible.builtin.copy" in t]
+    dests = [c["ansible.builtin.copy"]["dest"].replace("{{ pi_cmdline_path }}", "cmdline.txt") for c in copies]
+    unsafe = [d for d in dests if not re.fullmatch(r"[A-Za-z0-9._-]+", d)]
+    local = [c["name"] for c in copies if "pi_cmdline_path" in str(c["ansible.builtin.copy"].get("src"))
+             and c["ansible.builtin.copy"].get("remote_src") is not True]
+    return backups, dests, unsafe, local
+print(violations(p["tasks"]))
+print(violations([{"name": "b", "ansible.builtin.replace": {"path": "{{ pi_cmdline_path }}", "backup": True}},
+                  {"name": "c", "ansible.builtin.copy": {"src": "{{ pi_cmdline_path }}", "dest": "{{ pi_cmdline_path }}.a:b"}},
+                  {"name": "d", "ansible.builtin.lineinfile": {"path": "/boot/firmware/config.txt", "backup": "yes"}}]))
 PY_FAT
-)" "[] ['cmdline.txt.before-memory-cgroup'] True"
+)" "([], ['cmdline.txt.before-memory-cgroup'], [], [])
+(['b', 'd'], ['cmdline.txt.a:b'], ['cmdline.txt.a:b'], ['c'])"
 # the script reads the same path the playbook writes into its settings, and needs it
 check "the controllers' path: the playbook's one variable, in the settings the script requires" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - "$SCRIPT" <<'PY_PATH'
 import re, sys, yaml
