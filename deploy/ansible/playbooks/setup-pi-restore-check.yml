@@ -205,6 +205,7 @@
         dest: "{{ pi_cmdline_path }}.before-memory-cgroup"
         remote_src: true
         force: false
+        mode: preserve  # FAT's mode is its mount's: the original's kept, none set
       vars:
         _words: "{{ (_cmdline_text.content | b64decode).split() }}"
       when:
