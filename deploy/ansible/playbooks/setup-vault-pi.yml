@@ -895,6 +895,7 @@
         get_checksum: false
       delegate_to: pi1
       register: _pi1_token_file
+      no_log: true
 
     - name: The root token, read on pi1
       ansible.builtin.slurp:
