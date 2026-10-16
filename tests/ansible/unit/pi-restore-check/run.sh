@@ -213,6 +213,8 @@ store() {  # a store as production's, made relative to now
   echo 20200101T000000Z > "$S/restore-checks/pi1/last-success"
 }
 # production's base backup age limit, as the playbook sets it (the cases below are judged against it)
+# the kernel's cgroup controllers as a Pi with its memory controller on lists them (MEMLESS: as pi2's did, 2026-10-16)
+echo "cpuset cpu io memory pids" > "$W/cgroup-controllers"
 BASE_MAX=$(sed -n 's/^    pi_restore_check_pg_base_max_age_h: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
 # no looser than CNPG's daily 01:30 backup allows at this 05:30 check: the day before's is ~28 h old - past 30 h, a
 # backup not made for a day would pass
@@ -223,7 +225,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
   env -i PATH="$W/bin:/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
     AWS_ACCESS_KEY_ID=a AWS_SECRET_ACCESS_KEY=s PI_RESTORE_NAME=pi1 PI_RESTORE_PARITY=0 PI_RESTORE_ANY_DAY=1 \
     PI_RESTORE_LOCKED=1 PI_RESTORE_PG_DATABASES="monitor admin chat chess masi" \
-    PI_RESTORE_TIMESYNC_MARKER="$W/no-timesync-marker" \
+    PI_RESTORE_TIMESYNC_MARKER="$W/no-timesync-marker" PI_RESTORE_CGROUP_CONTROLLERS="$W/cgroup-controllers" \
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 "$@" bash "$SCRIPT" > "$W/out" 2>&1
@@ -353,6 +355,14 @@ rm "$W/timesync-marker"
 store
 check "  chrony synchronized (timedatectl says no): the run goes on" "$(run PI_RESTORE_LOCKED= NTP=no CHRONY_NORMAL=1) $(report | grep -cE ' OK')" "rc=0 3"
 
+# no memory cgroup controller (pi2's command line, 2026-10-16): Postgres and etcd red, saying why - no container started -
+# tier0 (no container) restored
+echo "cpuset cpu io pids" > "$W/cgroup-controllers"
+store
+check "no memory cgroup controller: Postgres and etcd red, saying so, no container run; tier0 OK" \
+  "$(run) $(report | grep -c 'no memory cgroup controller') $(grep -c '^podman run' "$W/calls") $(report | grep -c '^TIER0 OK')" \
+  "rc=1 2 0 1"
+echo "cpuset cpu io memory pids" > "$W/cgroup-controllers"
 red "postgres: a major with no image: red" POSTGRES PG_VERSION=190002
 red "postgres: the newest complete base backup just past the playbook's limit: red" POSTGRES BASE_OLD=$((BASE_MAX + 1))
 # CNPG's backup daily at 01:30, this check at 05:30: an idle database's newest restorable one is the day before's
@@ -453,5 +463,30 @@ print(burst, burst * (secs(kv["TimeoutStartSec"]) + secs(kv["RestartSec"])) <= w
       daily and window + int(tv["RandomizedDelaySec"]) < 24 * 3600, kv["UMask"])
 PY_UNIT
 )" "3 True True 0077"
+# the playbook turns the memory cgroup on at boot: each flag appended where missing - pi2's line (2026-10-16) gets both,
+# pi1's (both twice already) none, the line kept one line and the same on a second run; the assert wants the controller
+check "the command line's memory cgroup flags: pi2's line gets both, pi1's none, once; the controller wanted live" "$("$PY" - <<'PY_CMDLINE'
+import re, sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render, condition
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+t = next(t for t in p["tasks"] if "ansible.builtin.replace" in t)
+a = next(t for t in p["tasks"] if "_cgroups" in str(t.get("ansible.builtin.assert", "")))
+def apply(text):
+    for item in t["loop"]:
+        rx = render(t["ansible.builtin.replace"]["regexp"], item=item)
+        rp = render(t["ansible.builtin.replace"]["replace"], item=item)
+        text = re.compile(rx, re.MULTILINE).sub(rp, text)  # as the replace module applies it
+    return text
+pi2 = "console=tty1 console=serial0,115200 root=PARTUUID=771933d1-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=EE ds=nocloud;i=rpi-imager-1775291628561\n"
+pi1 = "console=tty1 root=PARTUUID=6a821266-02 rootfstype=ext4 fsck.repair=yes rootwait cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory cgroup_enable=cpuset cgroup_memory=1 cgroup_enable=memory\n"
+half = "console=tty1 rootwait cgroup_memory=1\n"
+near = "console=tty1 rootwait cgroup_memory=10 xcgroup_enable=memory\n"  # look-alikes, not the flags
+out2 = apply(pi2)
+live = lambda c: condition(a["ansible.builtin.assert"]["that"], _cgroups={"stdout": c})
+print(out2.split()[-2:], out2.count("\n"), apply(out2) == out2, apply(pi1) == pi1, apply(half).split()[-2:],
+      [live("cpuset cpu io memory pids"), live("cpuset cpu io pids")], p["vars"]["pi_cmdline_path"], apply(near).split()[-2:])
+PY_CMDLINE
+)" "['cgroup_enable=memory', 'cgroup_memory=1'] 1 True True ['cgroup_memory=1', 'cgroup_enable=memory'] [True, False] /boot/firmware/cmdline.txt ['cgroup_enable=memory', 'cgroup_memory=1']"
 echo "pi-restore-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

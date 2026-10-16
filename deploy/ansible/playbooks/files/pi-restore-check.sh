@@ -27,8 +27,16 @@ pg_bin() {  # this Pi's newest Postgres (the major Patroni runs here)
   echo "$root/$(find "$root" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -1)/bin"
 }
 
+# the kernel's memory cgroup controller: without it no container's --memory can be set (crun: "opening file
+# `memory.max`") - Raspberry Pi OS boots with it off unless its command line turns it on (setup-pi-restore-check.yml)
+memory_bounded() {
+  grep -qw memory "${PI_RESTORE_CGROUP_CONTROLLERS:-/sys/fs/cgroup/cgroup.controllers}" \
+    || { echo "this Pi's kernel has no memory cgroup controller (cgroup_enable=memory cgroup_memory=1 on its command line, then a reboot): its containers cannot be bounded"; return 1; }
+}
+
 part_postgres() {
   local w=$1/pg name="pi-restore-pg-$$" server="" id="" newest="" s b
+  memory_bounded || return 1
   mkdir -p "$w"
   # the server written last: production's (an old one - before a rename, before a major upgrade - stops getting
   # backups)
@@ -139,6 +147,7 @@ part_postgres() {
 
 part_etcd() {
   local w=$1/etcd name="pi-restore-etcd-$$" snap age
+  memory_bounded || return 1
   mkdir -p "$w"
   snap=$(rclone lsf --files-only store:etcd-backups | grep -E '^etcd-[0-9]{8}-[0-9]{6}\.db$' | sort | tail -1)
   [ -n "$snap" ] || { echo "no snapshot in etcd-backups"; return 1; }

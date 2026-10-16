@@ -25,6 +25,8 @@
     # after every backup window - CNPG's base backups, Velero (02:00, Sunday 03:00), the Pis' (02:40), Scylla's
     # (03:00, its repair Sunday 04:00) - all UTC
     pi_restore_check_on_calendar: "*-*-* 05:30:00 UTC"
+    # the Pi's kernel command line (Raspberry Pi OS's): where the memory cgroup is turned on
+    pi_cmdline_path: /boot/firmware/cmdline.txt
     # production's CNPG databases (infra's schnappy-production-data values, postgres.databases)
     pi_restore_check_databases: [monitor, admin, chat, chess, masi]
     # production's Postgres image per major: the 17 its chart ran (by its tag alone, never a digest), the 18 its step 47
@@ -171,3 +173,38 @@
         enabled: true
         state: started
         daemon_reload: true
+
+    # the containers' memory bound (podman --memory) and the unit's MemoryMax need the kernel's memory cgroup controller:
+    # Raspberry Pi OS boots with it off (cgroup_disable=memory) - pi1's cmdline turned it on by hand (2026-03), pi2 was
+    # reimaged without it (2026-04) and its restore containers did not start ("crun: opening file `memory.max`",
+    # 2026-10-16). Turned on at boot where the Pi's cmdline is (a VM has none), the file kept one line
+    - name: The Pi's kernel command line
+      ansible.builtin.stat:
+        path: "{{ pi_cmdline_path }}"
+      register: _cmdline
+
+    # each flag added where missing (the line's end, its one line kept), none twice
+    - name: The memory cgroup on at boot (the Pi's command line)
+      ansible.builtin.replace:
+        path: "{{ pi_cmdline_path }}"
+        regexp: '^(?!.*(?<!\S){{ item | regex_escape }}(?!\S))(\S.*?)[ \t]*$'
+        replace: '\1 {{ item }}'
+      loop: [cgroup_enable=memory, cgroup_memory=1]
+      register: _cmdline_set
+      when: _cmdline.stat.exists
+
+    - name: The kernel's cgroup controllers now
+      ansible.builtin.command: cat /sys/fs/cgroup/cgroup.controllers
+      register: _cgroups
+      changed_when: false
+      check_mode: false  # a read
+
+    # a command line changed takes effect at the next boot: until then the check's containers cannot start here
+    - name: The memory controller live
+      ansible.builtin.assert:
+        that: "'memory' in _cgroups.stdout.split()"
+        fail_msg: >-
+          {{ inventory_hostname }} has no memory cgroup controller - {{ 'its command line turns it on now: reboot it'
+          if _cmdline_set is changed else 'its command line turns it on: it has not been rebooted since' }}; the
+          restore check's containers cannot start until then
+        quiet: true
