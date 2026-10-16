@@ -116,6 +116,26 @@ for name in sorted(f[:-4] for f in os.listdir(inv.STEPS) if f.endswith(".txt")):
         ok = str(e)
     check(f"step {name} parses", ok, True)
 
+
+
+def test_images_of(line):
+    path = os.path.join(work, "96-t.txt")
+    open(path, "w", encoding="utf-8").write(line + "\n")
+    found = []
+    try:
+        inv.parse(path, test_images=found)
+    except SystemExit as e:
+        return "refused: " + str(e)[:40]
+    return found
+
+
+# a test-image line: an image name and tag in ASCII alone (\w is Unicode's otherwise - a look-alike letter would name
+# an image no registry holds)
+check("test-image: a name with a registry path and a tag", test_images_of("test-image git.pmon.dev/schnappy/site 1.2_3-a"),
+      ["git.pmon.dev/schnappy/site 1.2_3-a"])
+check("test-image: a non-ASCII letter in the name or the tag - not a test-image line",
+      [str(test_images_of(l))[:8] for l in ("test-image git.pmon.dev/schnappy/sité 1", "test-image site 1é")],
+      ["refused:", "refused:"])
 print("step-lines: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
