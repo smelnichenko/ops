@@ -485,6 +485,8 @@
         that: caddy_status.stdout == 'running'
         fail_msg: "{{ inventory_hostname }}'s Caddy is {{ caddy_status.stdout }} - the VIP moving here would serve nothing"
         quiet: true
+      # a preview (--check) of a first install has no Caddy yet: it shows the state, a run judges it
+      when: not ansible_check_mode
 
     - name: Test HTTPS Forgejo
       ansible.builtin.uri:

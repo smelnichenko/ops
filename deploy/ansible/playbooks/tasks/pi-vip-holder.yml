@@ -33,14 +33,17 @@
     _pi_vip_unread: >-
       {{ _pi_vip_read.results | selectattr('unreachable', 'defined') | selectattr('unreachable') | map(attribute='item')
          | list }}
-    _pi_vip_failed: "{{ _pi_vip_read.results | selectattr('rc', 'defined') | rejectattr('rc', 'equalto', 0) | list }}"
+    # every Pi reached whose read did not answer 0 - one failing without an rc too (sudo's prompt timing out)
+    _pi_vip_failed: >-
+      {{ (_pi_vip_read.results | rejectattr('unreachable', 'defined') | rejectattr('rc', 'defined') | list)
+         + (_pi_vip_read.results | selectattr('rc', 'defined') | rejectattr('rc', 'equalto', 0) | list) }}
 
 - name: Every Pi reached read
   ansible.builtin.assert:
     that: _pi_vip_failed | length == 0
     fail_msg: >-
       the VIP not read on {{ _pi_vip_failed | map(attribute='item') | join(', ') }}:
-      {{ _pi_vip_failed | map(attribute='stderr') | join('; ') }}
+      {% for r in _pi_vip_failed %}{{ r.stderr | default(r.msg | default('no answer')) }}{{ '; ' if not loop.last }}{% endfor %}
     quiet: true
 
 - name: The VIP held by one Pi

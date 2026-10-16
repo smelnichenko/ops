@@ -70,6 +70,23 @@ case_ "both hold it (a split keepalived): refused, both named" 1 "held by pi1 an
 case_ "an address the VIP is the start of (.50) is not the VIP" 1 "no Pi holds the VIP" 192.168.11.50/24 ""
 # a Pi's read failing is no "holds nothing": refused (the play fails), never read as free
 IPFAIL=pi2 case_ "a Pi's read failing: refused, not read as free of the VIP" 1 "Operation not permitted" 192.168.11.5/24 ""
+# a Pi reached whose read failed with no rc (sudo's prompt timing out: failed, msg, nothing else) is failed too - read as
+# "holds nothing", a split keepalived on it would pass as one holder; the message says why, with no stderr to read
+check "a read failing with no rc: refused as failed, its message said" "$(cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_NORC'
+import sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render, condition
+tasks = yaml.safe_load(open("deploy/ansible/playbooks/tasks/pi-vip-holder.yml"))
+facts = next(t for t in tasks if "_pi_vip_failed" in str(t.get("ansible.builtin.set_fact", "")))["ansible.builtin.set_fact"]
+check = next(t for t in tasks if t.get("name") == "Every Pi reached read")["ansible.builtin.assert"]
+read = {"results": [{"item": "pi1", "rc": 0, "stdout": "2: eth0    inet 192.168.11.5/24 scope global eth0"},
+                    {"item": "pi2", "failed": True, "msg": "Timeout (12s) waiting for privilege escalation prompt"},
+                    {"item": "pi3", "unreachable": True, "msg": "ssh: timed out"}]}
+failed = render(facts["_pi_vip_failed"], _pi_vip_read=read)
+print([r["item"] for r in failed], condition(check["that"], _pi_vip_failed=failed),
+      "privilege escalation" in render(check["fail_msg"], _pi_vip_failed=failed))
+PY_NORC
+)" "['pi2'] False True"
 # a Pi unread (down): the holder asks the network - another host answering for the VIP refuses, none goes on
 : > "$W/arping-calls"
 case_ "pi1 down: the holder's duplicate probe run, no answer - on" 0 "HOLDER=pi2" "" 192.168.11.5/24 pi1
@@ -106,6 +123,20 @@ out=$(env PATH="$W:$PATH" ADDR_pi1=192.168.11.5/24 ADDR_pi2= ANSIBLE_NOCOLOR=1 "
 check "  --limit without the holder: refused, nothing run" \
   "$([ "$rc" != 0 ] && echo refused) $(grep -q "outside this run" <<< "$out" && echo said) $(grep -c 'WENT ON' <<< "$out")" \
   "refused said 0"
+# the probe's arping installed where the VIP is kept (keepalived's play), and iputils' (Habets' reads -D otherwise)
+check "the duplicate probe's arping installed with keepalived, iputils' asserted" "$(cd "$ROOT" && "$PY" - <<'PY_ARP'
+import sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import condition
+play = yaml.safe_load(open("deploy/ansible/playbooks/setup-keepalived.yml"))[0]
+ts = play["tasks"]
+inst = next((t for t in ts if "iputils-arping" in str((t.get("ansible.builtin.apt") or {}).get("name"))), None)
+ver = next((t for t in ts if t.get("ansible.builtin.command") == "arping -V"), None)
+ok = lambda out, rc=0: not condition(ver["failed_when"], **{ver["register"]: {"rc": rc, "stdout": out, "stderr": ""}})
+print(play["hosts"], inst is not None, ver is not None and ts.index(inst) < ts.index(ver)
+      and [ok("arping from iputils 20240905"), ok("ARPing 2.25, by Thomas Habets"), ok("", 127)] == [True, False, False])
+PY_ARP
+)" "pi1,pi2 True True"
 # the Vault-admin plays (the root token on both Pis): on the Pis, the VIP's Pi alone going on before anything but
 # its input's checks
 for book in seed-vault-secrets create-environment delete-environment destroy-environment setup-keycloak-clients \
@@ -144,5 +175,18 @@ for f in sorted(glob.glob(sys.argv[1] + "/*.yml")):
 PYVER
 )
 check "every verify play on each Pi" "$unverified" ""
+# Caddy's verify wants each Pi's own Caddy running (the VIP moving to a Pi without one serves nothing) - judged in a run,
+# shown in a preview (a first install's has none yet)
+check "Caddy's verify: running passes, stopped or absent fails - in a run; a preview never fails" "$(cd "$ROOT" && PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_CADDY'
+import sys, yaml
+sys.path.insert(0, "tests/ansible/unit")
+from templar import render, condition
+ver = next(p for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-caddy.yml")) if p.get("name") == "Verify Caddy")
+a = next(t for t in ver["tasks"] if "caddy_status" in str(t.get("ansible.builtin.assert", "")))
+fails = lambda state, cm=False: condition(a.get("when", True), ansible_check_mode=cm) and not condition(
+    a["ansible.builtin.assert"]["that"], caddy_status={"stdout": state})
+print(ver["hosts"], [fails("running"), fails("stopped"), fails("unknown"), fails("unknown", True)])
+PY_CADDY
+)" "pis [False, True, True, False]"
 echo "pi-vip-holder: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 exit $((fails > 0))

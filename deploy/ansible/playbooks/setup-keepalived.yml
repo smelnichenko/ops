@@ -57,10 +57,20 @@
         that: vrrp_interface | length > 0
         fail_msg: "Could not find an interface with IP {{ ansible_host }}"
 
-    - name: Install Keepalived
+    # iputils-arping beside it: tasks/pi-vip-holder.yml probes for another host answering for the VIP with its -D (exit 1
+    # on a reply) whenever a Pi is unreachable - missing, every VIP-holder play failed exactly then
+    - name: Install Keepalived and iputils' arping
       ansible.builtin.apt:
-        name: keepalived
+        name: [keepalived, iputils-arping]
         state: present
+
+    # Habets' arping (the "arping" package) reads -D otherwise and inverts its exits: the one on the PATH must be iputils'
+    - name: The arping on the PATH is iputils'
+      ansible.builtin.command: arping -V
+      register: _arping_version
+      changed_when: false
+      check_mode: false  # a read
+      failed_when: _arping_version.rc != 0 or 'iputils' not in (_arping_version.stdout ~ _arping_version.stderr)
 
     - name: Allow VRRP through UFW
       community.general.ufw:
