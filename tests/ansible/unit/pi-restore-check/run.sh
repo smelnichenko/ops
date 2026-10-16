@@ -560,7 +560,7 @@ first = names.index("The Pi's kernel command line")
 tasks = p["tasks"][first:]
 yaml.safe_dump([{"hosts": "localhost", "connection": "local", "gather_facts": False, "tasks": tasks,
                  "vars": {"pi_cmdline_path": f"{cl}/cmdline.txt", "pi_cgroup_controllers": f"{cl}/controllers",
-                          "pi_booted_cmdline": f"{cl}/proc-cmdline", "inventory_hostname_short": "pi2"}}],
+                          "pi_booted_cmdline": f"{cl}/proc-cmdline", "pi_cmdline_valid": p["vars"]["pi_cmdline_valid"]}}],
                open(f"{cl}/play.yml", "w"), sort_keys=False)
 PY_PLAY
 cl_run() {  # cl_run <ansible args...>: rc and the message's cause
