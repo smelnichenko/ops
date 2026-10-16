@@ -49,7 +49,7 @@ all:
     # unknown to kubeadm's Corefile migration, which refuses a CoreDNS bump over them; ten's Corefile has none
     k8s_upgrade_ignore_preflight_errors_override: CoreDNSUnsupportedPlugins
     # Argo CD's egress to Forgejo (setup-argocd.yml): the Pi VMs and their VIP
-    forgejo_cidrs: ["192.168.56.20/32", "192.168.56.21/32", "192.168.56.50/32"]
+    forgejo_cidrs: ["192.168.56.20/32", "192.168.56.21/32", "{{ keepalived_vip }}/32"]
     # The pmon.dev names production resolves to the Pi VIP (from ten and the Pis, 2026-10-02; every other one is ten's
     # gateway). The Vagrant copy answers them with its own VIP: the Pis in /etc/hosts (tests/ansible/isolate-pis.yml),
     # the cluster in CoreDNS (tests/ansible/upgrade/isolate-cluster.yml).
@@ -71,15 +71,15 @@ all:
     # Override the hardcoded prod URLs from setup-pi-services.yml so the
     # registry's WWW-Authenticate redirect points back at the same host. pi1's own address made pi1 the copy's one way
     # in: down, Forgejo (Argo, Woodpecker, the registry) was gone while pi2 served the VIP
-    forgejo_domain: "192.168.56.50"
+    forgejo_domain: "{{ keepalived_vip }}"
     # setup-argocd: the Vagrant Forgejo (its port, plain http), no certificate check, no ingress - the Vagrant copy's
     # own, never a step's argument (production's run would carry them to ten). Single sign-on configured and checked as
     # production's (argocd_keycloak_enabled: its default) - steps 31 and 33 rehearsed with production's checks
-    argocd_forgejo_host: "192.168.56.50:3000"
+    argocd_forgejo_host: "{{ keepalived_vip }}:3000"
     forgejo_scheme: http
     argocd_validate_certs: false
     argocd_ingress_enabled: false
-    forgejo_root_url: "http://192.168.56.50:3000/"
+    forgejo_root_url: "http://{{ keepalived_vip }}:3000/"
     # Wave 0 files go to the Pi store in parts this small here, so the rehearsal puts them together from several
     # (production's default: 4 GiB)
     upgrade_backup_part_bytes: 4194304
