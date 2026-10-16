@@ -168,7 +168,7 @@ def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, com
         elif re.fullmatch(r"test-image [\w/.:-]+ [\w.-]+", line, re.ASCII):
             if test_images is not None:
                 test_images.append(line[len("test-image "):])
-        elif re.fullmatch(r"scrape-pool-gone [A-Za-z0-9/_.:-]+", line):
+        elif re.fullmatch(r"scrape-pool-gone [\w/.:-]+", line, re.ASCII):
             if pools_gone is not None:
                 pools_gone.append(line.split()[1])
         elif re.fullmatch(r"base( -e [A-Za-z_][A-Za-z0-9_]*=\S+)+", line):

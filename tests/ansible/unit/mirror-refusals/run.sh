@@ -36,6 +36,19 @@ check("a production Forgejo (pi1 on the LAN): refused, no API call", (main_with(
       ("REFUSED", 0))
 check("a name, not an address: refused, no API call", (main_with("git.pmon.dev:443"), len(calls)), ("REFUSED", 0))
 check("control: the Vagrant Forgejo goes on to the API", (main_with("192.168.56.20:3000"), len(calls)), ("api", 1))
+# no --forgejo: the copy's VIP and Forgejo admin as its inventory names them (read, not restated in the script)
+import yaml  # noqa: E402
+inv = yaml.safe_load(open(os.path.join(ops, "deploy", "ansible", "inventory", "vagrant.yml")))["all"]["vars"]
+seen = []
+m.api = lambda host, user, password, *a, **k: seen.append((host, user, password)) or (_ for _ in ()).throw(Stop())
+sys.argv = ["mirror"]
+try:
+    m.main()
+except Stop:
+    pass
+m.api = api
+check("no --forgejo: the inventory's VIP and admin used", seen[:1],
+      [(f"{inv['keepalived_vip']}:3000", inv["forgejo_admin_user"], inv["forgejo_admin_password"])])
 def rewrite(gap):
     t = tempfile.mkdtemp()
     g = lambda *a: subprocess.run(["git", "-C", t, *a], check=True, capture_output=True)

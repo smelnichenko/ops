@@ -45,6 +45,8 @@ import tempfile
 import urllib.error
 import urllib.request
 
+import yaml
+
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORK = os.path.join(OPS, ".upgrade")
 OVERLAY = os.path.join(OPS, "tests", "ansible", "upgrade", "vagrant-overlay")
@@ -243,11 +245,19 @@ def copy_overlay(name, repo):
         shutil.copytree(src, repo, dirs_exist_ok=True)
 
 
+def copy_vars():
+    """The Vagrant copy's inventory vars (deploy/ansible/inventory/vagrant.yml): its VIP and Forgejo admin - read, not
+    restated here."""
+    return yaml.safe_load(open(os.path.join(OPS, "deploy", "ansible", "inventory", "vagrant.yml")))["all"]["vars"]
+
+
 def main():
+    copy = copy_vars()
     ap = argparse.ArgumentParser()
     ap.add_argument("--infra", default=os.path.join(OPS, "..", "infra"))
     ap.add_argument("--platform", default=os.path.join(OPS, "..", "platform"))
-    ap.add_argument("--forgejo", default="192.168.56.50:3000")  # the Pis' VIP: pi1 down, pi2 serves it
+    # the Pis' VIP: pi1 down, pi2 serves it
+    ap.add_argument("--forgejo", default=f"{copy['keepalived_vip']}:3000")
     ap.add_argument("--infra-ref", default="main", help="infra branch to mirror (an upgrade step's)")
     ap.add_argument("--platform-ref", default="main", help="platform branch to mirror (an upgrade step's)")
     a = ap.parse_args()
@@ -259,8 +269,8 @@ def main():
         vagrant = False
     if not vagrant:
         sys.exit(f"REFUSED: --forgejo {a.forgejo} is not a Vagrant address (192.168.56.0/24)")
-    user = os.environ.get("VAGRANT_FORGEJO_ADMIN_USER", "forgejo_admin")
-    password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", "vagrant-forgejo-pw")
+    user = os.environ.get("VAGRANT_FORGEJO_ADMIN_USER", copy["forgejo_admin_user"])
+    password = os.environ.get("VAGRANT_FORGEJO_ADMIN_PASSWORD", copy["forgejo_admin_password"])
 
     api(a.forgejo, user, password, "POST", "/orgs", {"username": "schnappy", "visibility": "public"}, ok=(201, 422))
     os.makedirs(WORK, exist_ok=True)
