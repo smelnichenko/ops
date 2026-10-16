@@ -134,10 +134,10 @@
             Description=The backups restored on this Pi (every other day; the other Pi takes the rest)
             After=network-online.target consul.service versitygw.service
             # a failed run tried twice more, 20 minutes apart: a blip (the VIP moving, a registry, a Consul election)
-            # is no failed turn - and a failed turn is two days of KubeJobFailed until this Pi's next one. Three starts
-            # in a day: a run that hangs to its 3 h timeout starts again 3 h 20 min later - a 6 h window never held
-            # three of them, and it restarted for ever (review of 2026-10-16)
-            StartLimitIntervalSec=24h
+            # is no failed turn - and a failed turn is two days of KubeJobFailed until this Pi's next one. The window
+            # holds three runs hung to their 3 h timeout, 20 min apart (a 6 h one never did, and the unit restarted for
+            # ever), and ends before the timer's next day (24 h held yesterday's start and cost today a retry)
+            StartLimitIntervalSec=12h
             StartLimitBurst=3
             [Service]
             Type=oneshot

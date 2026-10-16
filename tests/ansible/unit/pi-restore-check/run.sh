@@ -422,17 +422,21 @@ PY_KEYS
 )" "[] True"
 # the start limit holds the first run and its two retries even when each hangs to its timeout - a 6 h window never held
 # three 3 h runs 20 min apart, and the unit restarted for ever; its files root's alone (UMask, as the script's umask)
-check "the unit: three starts, each to its timeout, within the start limit's window; its umask 0077" "$("$PY" - <<'PY_UNIT'
+check "the unit: three starts, each to its timeout, within the start limit's window, the window ended before the timer's next day; its umask 0077" "$("$PY" - <<'PY_UNIT'
 import re, yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
-unit = next(i["content"] for t in p["tasks"] for i in (t.get("loop") or []) if isinstance(i, dict)
-            and i.get("name") == "pi-restore-check.service")
+items = [i for t in p["tasks"] for i in (t.get("loop") or []) if isinstance(i, dict)]
+unit = next(i["content"] for i in items if i.get("name") == "pi-restore-check.service")
+timer = next(i["content"] for i in items if i.get("name") == "pi-restore-check.timer")
 kv = dict(re.findall(r"^(\w+)=(.*)$", unit, re.M))
+tv = dict(re.findall(r"^(\w+)=(.*)$", timer, re.M))
 secs = lambda v: sum(int(n) * {"h": 3600, "min": 60, "s": 1}[u] for n, u in re.findall(r"(\d+)(h|min|s)", v))
-burst = int(kv["StartLimitBurst"])
-print(burst, burst * (secs(kv["TimeoutStartSec"]) + secs(kv["RestartSec"])) <= secs(kv["StartLimitIntervalSec"]),
-      kv["UMask"])
+burst, window = int(kv["StartLimitBurst"]), secs(kv["StartLimitIntervalSec"])
+daily = bool(re.fullmatch(r"\{\{ pi_restore_check_on_calendar \}\}", tv["OnCalendar"])) \
+    and p["vars"]["pi_restore_check_on_calendar"].startswith("*-*-* ")
+print(burst, burst * (secs(kv["TimeoutStartSec"]) + secs(kv["RestartSec"])) <= window,
+      daily and window + int(tv["RandomizedDelaySec"]) < 24 * 3600, kv["UMask"])
 PY_UNIT
-)" "3 True 0077"
+)" "3 True True 0077"
 echo "pi-restore-check: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
