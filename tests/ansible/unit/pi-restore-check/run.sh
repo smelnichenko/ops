@@ -571,21 +571,35 @@ cl_run() {  # cl_run <ansible args...>: rc and the message's cause
 }
 PI2_LINE='console=tty1 console=serial0,115200 root=PARTUUID=771933d1-02 rootfstype=ext4 fsck.repair=yes rootwait ds=nocloud'
 printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE" > "$CL/proc-cmdline"
-check "Ansible itself: pi2's line turned on, said to reboot; written as wanted, each edit's backup kept" \
-  "$(cl_run) $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(wc -l < "$CL/cmdline.txt") $(ls "$CL" | grep -c '^cmdline.txt\..*~$')" \
-  "rc=2 turns it on now: reboot it 1 1 2"
-check "  run again: nothing changed (no new backup), still said to reboot" "$(cl_run) $(ls "$CL" | grep -c '^cmdline.txt\..*~$')" \
-  "rc=2 turns it on: reboot it 2"
+check "Ansible itself: pi2's line turned on, said to reboot; written as wanted, the original kept once" \
+  "$(cl_run) $(grep -c ' ds=nocloud cgroup_enable=memory cgroup_memory=1$' "$CL/cmdline.txt") $(wc -l < "$CL/cmdline.txt") $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept)" \
+  "rc=2 turns it on now: reboot it 1 1 kept"
+check "  run again: nothing changed, the kept original untouched, still said to reboot" \
+  "$(cl_run) $(cmp -s <(printf '%s\n' "$PI2_LINE") "$CL/cmdline.txt.before-memory-cgroup" && echo kept) $(ls "$CL" | grep -c '^cmdline.txt')" \
+  "rc=2 turns it on: reboot it kept 2"
 printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; cp "$CL/cmdline.txt" "$CL/before"
 check "  a preview (--check): nothing written, said so" "$(cl_run --check) $(cmp -s "$CL/before" "$CL/cmdline.txt" && echo untouched)" \
   "rc=2 not --check untouched"
 rm "$CL/cmdline.txt"
 check "  no command line file (a VM): the edit skipped, the cause said" "$(cl_run)" "rc=2 cannot be turned on here"
-printf '%s\n' "$PI2_LINE" > "$CL/cmdline.txt"; echo "cpuset cpu io memory pids" > "$CL/controllers"
-check "  the controller live: green" "$(cl_run)" "rc=0"
+rm -f "$CL/cmdline.txt.before-memory-cgroup"; echo "console=tty1 root=X rootwait cgroup_enable=memory cgroup_memory=1" > "$CL/cmdline.txt"
+echo "cpuset cpu io memory pids" > "$CL/controllers"
+check "  the controller live: green; a line already right - no copy kept" "$(cl_run) $(ls "$CL" | grep -c '^cmdline.txt\.')" "rc=0 0"
 check "  the controller live, a preview (--check): green - the reads run in a preview too" "$(cl_run --check)" "rc=0"
 echo "cpuset cpu io pids" > "$CL/controllers"; echo "$PI2_LINE cgroup_enable=memory cgroup_memory=1" > "$CL/proc-cmdline"
 check "  booted with the flags, still no controller: a reboot will not help" "$(cl_run)" "rc=2 will not help"
+# the boot partition is FAT: no name with ':' (Ansible's backup names carry a time - pi2's edit refused, 2026-10-16) - no
+# edit of the command line keeps an Ansible backup, and every name written beside it is FAT-safe
+check "the boot partition FAT: no Ansible backup on the command line's edits, every name written there FAT-safe" "$("$PY" - <<'PY_FAT'
+import re, yaml
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+ts = [t for t in p["tasks"] if "pi_cmdline_path" in str(t)]
+mods = [m for t in ts for m in ("ansible.builtin.replace", "ansible.builtin.copy", "ansible.builtin.lineinfile") if m in t]
+backups = [t["name"] for t in ts for m in mods if (t.get(m) or {}).get("backup")]
+dests = [t["ansible.builtin.copy"]["dest"].replace("{{ pi_cmdline_path }}", "cmdline.txt") for t in ts if "ansible.builtin.copy" in t]
+print(backups, dests, all(re.fullmatch(r"[A-Za-z0-9._-]+", d) for d in dests))
+PY_FAT
+)" "[] ['cmdline.txt.before-memory-cgroup'] True"
 # the script reads the same path the playbook writes into its settings, and needs it
 check "the controllers' path: the playbook's one variable, in the settings the script requires" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - "$SCRIPT" <<'PY_PATH'
 import re, sys, yaml

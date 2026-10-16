@@ -190,15 +190,35 @@
         path: "{{ pi_cmdline_path }}"
       register: _cmdline
 
-    # an explicit cgroup_disable=memory on the line itself taken off (a later one would win over the flags below); the
-    # file kept for a hand's undo (cmdline.txt.<time>, the firmware reads cmdline.txt alone) and checked before it is
-    # written: still one line, still naming root= - a broken line leaves a Pi 5 unbootable until its disk is pulled
+    - name: The Pi's command line now
+      ansible.builtin.slurp:
+        src: "{{ pi_cmdline_path }}"
+      register: _cmdline_text
+      when: _cmdline.stat.exists
+
+    # kept as it was before this play first changed it, for a hand's undo (the firmware reads cmdline.txt alone): a
+    # name of its own, never overwritten - the boot partition is FAT, where Ansible's own backup names (a time with
+    # ':') cannot be written (pi2, 2026-10-16: the edit refused before it wrote anything). Only where a change is due
+    - name: The Pi's command line kept as it was (before the memory cgroup's flags)
+      ansible.builtin.copy:
+        src: "{{ pi_cmdline_path }}"
+        dest: "{{ pi_cmdline_path }}.before-memory-cgroup"
+        remote_src: true
+        force: false
+      vars:
+        _words: "{{ (_cmdline_text.content | b64decode).split() }}"
+      when:
+        - _cmdline.stat.exists
+        - "'cgroup_enable=memory' not in _words or 'cgroup_memory=1' not in _words or 'cgroup_disable=memory' in _words"
+
+    # an explicit cgroup_disable=memory on the line itself taken off (a later one would win over the flags below); each
+    # edit checked before it is written: still one line, still naming root= - a broken line leaves a Pi 5 unbootable
+    # until its disk is pulled
     - name: No cgroup_disable=memory on the Pi's command line
       ansible.builtin.replace:
         path: "{{ pi_cmdline_path }}"
         regexp: '[ \t]*(?<!\S)cgroup_disable=memory(?!\S)'
         replace: ''
-        backup: true
         validate: "{{ pi_cmdline_valid }}"
       register: _cmdline_cleared
       when: _cmdline.stat.exists
@@ -210,7 +230,6 @@
         path: "{{ pi_cmdline_path }}"
         regexp: '^(?!.*(?<!\S){{ item | regex_escape }}(?!\S))([ \t]*\S.*?)[ \t\r]*$'
         replace: '\1 {{ item }}'
-        backup: true
         validate: "{{ pi_cmdline_valid }}"
       loop: [cgroup_enable=memory, cgroup_memory=1]
       register: _cmdline_set
