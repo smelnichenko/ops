@@ -3,8 +3,8 @@
 # by Ansible's templar, vault and consul stubs answering as Vault 1.21 and Consul 1.20 do: no restart while the Pis'
 # tier-0 backup holds its Consul lock (a restart ends its session, and the backup) - read right before the restart; the
 # active Vault on the Pi being restarted steps down first - only to a standby the other Pi has, unsealed - and the restart
-# waits until the other's is active: run from the Pi holding the root token (setup-vault-pi's init play writes it there
-# only), against both Pis' addresses, for pi2 as for pi1; a Vault running there whose status is not read is refused,
+# waits until the other's is active: run on the Pi being restarted (up until then; setup-vault-pi keeps the root token
+# on both Pis - pinned to pi1, it failed while pi1 was down), against both Pis' addresses, for pi2 as for pi1; a Vault running there whose status is not read is refused,
 # never taken for a standby; each read bounded (no retries), each wait by the clock, not by its count of tries.
 # Consul's raft leader on it hands leadership to another server first. Each refuses when the handover does not take.
 # Patroni is paused after Vault's handover (it takes nothing of Consul's), before Consul's. All before the restart.
@@ -132,15 +132,17 @@ check("Vault's only on the Pis (none on the third server), and only where it run
 unit = next((t for t in every[:at(vault)] if (t.get("ansible.builtin.systemd") or {}).get("name") == "vault"
              and t.get("register") == "_vault_unit"), None)
 check("the Vault unit read before it", unit is not None, True)
-# the root token: written by setup-vault-pi's init play, on its hosts only
-holders = [p["hosts"] for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml")) if "root_token" in str(p)]
-check("one play writes the root token (setup-vault-pi's init)", len(holders), 1)
+# the root token: written on both Pis by setup-vault-pi (its init play on pi1, pi2's play its copy)
+holders = sorted(p["hosts"] for p in yaml.safe_load(open("deploy/ansible/playbooks/setup-vault-pi.yml"))
+                 if "/etc/vault-unseal/root-token" in str(p.get("tasks")) and any(
+                     "root_token" in str(t) or "_pi1_token" in str(t) for t in p.get("tasks") or []))
+check("the root token written on both Pis (setup-vault-pi: the init play, pi2's copy)", holders, ["pi1", "pi2"])
 HOSTS = {"pi1": "10.0.0.4", "pi2": "10.0.0.6"}
 v = {**(play.get("vars") or {}), "inventory_hostname": "pi1", "_other_pi": "pi2", "groups": {"pis": ["pi1", "pi2"]},
      "hostvars": {n: {"ansible_host": ip} for n, ip in HOSTS.items()}, "consul_handover_seconds": 2}
 for me, other_pi in (("pi1", "pi2"), ("pi2", "pi1")):
-    check(f"restarting {me}: run where the root token is", render(str(vault.get("delegate_to")),
-          **{**v, "inventory_hostname": me, "_other_pi": other_pi}), holders[0] if holders else None)
+    check(f"restarting {me}: run on {me} itself (its root token there), no other Pi needed",
+          (vault.get("delegate_to"), me in holders), (None, True))
 def run(task, here=None, other=None, leader_is="pi1", me="pi1", seconds=2, **env):
     v["inventory_hostname"], v["_other_pi"] = me, "pi2" if me == "pi1" else "pi1"
     v["consul_handover_seconds"] = seconds

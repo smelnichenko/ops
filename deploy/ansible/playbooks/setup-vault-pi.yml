@@ -947,12 +947,23 @@
         mode: '0400'
       when: _pi2_token_sum.rc == 0 or (_pi1_token.content is defined and not ansible_check_mode)
 
-    # purged on pi1, purged on pi2: a copy left there would outlive the purge (or be a revoked one the plays then use)
-    - name: Pi2's root token gone where pi1 has none
+    # pi1 without a token and pi2 with one: a purge on pi1 (pi2's copy would outlive it) or pi1 rebuilt without its token
+    # (pi2's the last copy) - the run cannot tell which, so it removes nothing unless told (-e vault_root_token_purged=true)
+    - name: Pi2's root token kept while pi1 has none, unless its purge is said
+      ansible.builtin.assert:
+        that: _pi2_token_sum.rc != 0 or (vault_root_token_purged | default(false) | bool)
+        fail_msg: >-
+          pi1 holds no root token, pi2 does: pi1 rebuilt without it - copy pi2's back to pi1
+          (/etc/vault-unseal/root-token, root 0400) and run again; or it was purged on purpose - run again with
+          -e vault_root_token_purged=true to remove pi2's copy too
+        quiet: true
+      when: _pi1_token.content is not defined
+
+    - name: Pi2's root token gone with pi1's, its purge said
       ansible.builtin.file:
         path: /etc/vault-unseal/root-token
         state: absent
-      when: _pi1_token.content is not defined
+      when: _pi1_token.content is not defined and (vault_root_token_purged | default(false) | bool)
 
     - name: Unseal pi2 if sealed (its own script - the key shares never on a command line)
       ansible.builtin.command: /etc/vault-unseal/unseal.sh
@@ -1059,7 +1070,8 @@
       ansible.builtin.command: vault status
       register: _status
       changed_when: false
-      failed_when: _status.rc != 0
+      # a preview (--check) of a first install has no Vault answering yet: it shows the status, a run judges it
+      failed_when: _status.rc != 0 and not ansible_check_mode
       check_mode: false  # a read: a preview (--check) shows it
 
     - name: Consul KV has vault/ keys

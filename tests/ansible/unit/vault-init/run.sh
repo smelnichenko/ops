@@ -323,15 +323,27 @@ if tread:
           and "failed_when" not in tread and tread.get("when") == look["register"] + ".stat.exists")
     gone = next((t for t in pi2_play.get("tasks") or [] if (t.get("ansible.builtin.file") or {}).get("path")
                  == "/etc/vault-unseal/root-token" and (t.get("ansible.builtin.file") or {}).get("state") == "absent"), None)
-    check("pi2's token removed when pi1 has none; kept when pi1 has one",
-          gone is not None and [condition(gone["when"], **{tread["register"]: r}) for r in
-                                ({"skipped": True}, {"content": "eA=="})] == [True, False])
+    keep = next((t for t in pi2_play.get("tasks") or [] if "vault_root_token_purged" in str(t.get("ansible.builtin.assert", ""))), None)
+    # pi1 without a token: pi2's kept and the run refused unless the purge is said (pi1 rebuilt without it left pi2's the
+    # last copy); said - removed. pi1 with one: neither
+    def outcome(pi1, pi2_rc, purged=None):
+        v = {tread["register"]: pi1, tsum["register"]: {"rc": pi2_rc}}
+        if purged is not None:
+            v["vault_root_token_purged"] = purged
+        refused = condition(keep["when"], **v) and not condition(keep["ansible.builtin.assert"]["that"], **v)
+        return ("refused" if refused else "on", condition(gone["when"], **v))
+    check("pi1 without a token: pi2's kept, refused unless its purge is said; said: removed; pi1 with one: neither",
+          gone is not None and keep is not None
+          and [outcome({"skipped": True}, 0), outcome({"skipped": True}, 0, "true"), outcome({"skipped": True}, 1),
+               outcome({"content": "eA=="}, 0, "true")]
+          == [("refused", False), ("on", True), ("on", False), ("on", False)])
 # the verify play: a sealed or unanswering Vault on either Pi fails it (2 sealed, 1 an error), not a "ready" summary
 ver = next((p for p in book if p.get("name") == "Verify Vault cluster"), {})
 st = next((t for t in ver.get("tasks") or [] if t.get("ansible.builtin.command") == "vault status"), None)
-check("Vault's verify on each Pi: unsealed passes; sealed (2) and an error (1) fail",
+check("Vault's verify on each Pi: unsealed passes; sealed (2) and an error (1) fail - a run; a preview shows, never fails",
       st is not None and ver.get("hosts") == "pis"
-      and [condition(st["failed_when"], **{st["register"]: {"rc": rc}}) for rc in (0, 2, 1)] == [False, True, True])
+      and [condition(st["failed_when"], ansible_check_mode=cm, **{st["register"]: {"rc": rc}})
+           for cm in (False, True) for rc in (0, 2, 1)] == [False, True, True, False, False, False])
 print("vault-init: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

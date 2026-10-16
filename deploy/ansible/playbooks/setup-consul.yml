@@ -316,8 +316,6 @@
     _other_pi: "{{ 'pi2' if inventory_hostname == 'pi1' else 'pi1' }}"
     # how long a handover (Vault's step-down, Consul's leadership) may take before the restart is refused
     consul_handover_seconds: 30
-    # the Pi Vault was initialised on: its root token is there only (setup-vault-pi's init play)
-    _vault_init_pi: pi1
   tasks:
     - name: A restart here, and Patroni running to pause around it
       when:
@@ -377,8 +375,8 @@
 
             # Vault's storage is this Pi's Consul agent: its active node, here, would lose its lock with the restart and
             # Vault be without one until the other Pi's took over - handed over first, to a standby there, unsealed. Run
-            # where the root token is (setup-vault-pi's init play writes it on that Pi only), against both Pis'
-            # addresses. A Vault running here whose status is not read is refused, never taken for a standby; each read
+            # on this Pi (up until its restart; setup-vault-pi keeps the root token on both - pinned to pi1, it failed while
+            # pi1 was down), against both Pis' addresses. A Vault running here whose status is not read is refused, never taken for a standby; each read
             # bounded - the CLI's own are a 60 s timeout, retried twice - and the wait by the clock
             - name: Vault stepped down here first - the other Pi's active
               ansible.builtin.shell:
@@ -408,7 +406,7 @@
                     exit 1
                   fi
                   if ! VAULT_TOKEN=$(cat /etc/vault-unseal/root-token 2> /dev/null) || [ -z "$VAULT_TOKEN" ]; then
-                    echo "REFUSED: no root token on {{ _vault_init_pi }} (/etc/vault-unseal/root-token) to step Vault" \
+                    echo "REFUSED: no root token on {{ inventory_hostname }} (/etc/vault-unseal/root-token) to step Vault" \
                       "down with - step it down by hand (VAULT_ADDR=$here vault operator step-down), then run again"
                     exit 1
                   fi
@@ -432,7 +430,6 @@
                   exit 1
               register: _vault_handover
               changed_when: "'STEPPED DOWN' in _vault_handover.stdout"
-              delegate_to: "{{ _vault_init_pi }}"
               when:
                 - inventory_hostname in groups['pis']
                 - _vault_unit.status.ActiveState | default('') == 'active'
