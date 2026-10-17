@@ -64,9 +64,11 @@
     # the recovery's wait, 5 s a poll: an hour; etcd's on the restored snapshot, 2 s a poll: 3 minutes
     pi_restore_check_pg_wait_polls: 720
     pi_restore_check_etcd_wait_polls: 90
-    # Scylla's start, 3 s a poll: 5 minutes (8 s on aqua, 2026-10-17; a Pi is slower)
+    # Scylla's start: polls 3 s apart, each one's cqlsh try a few seconds more on a Pi - 5 to 10 minutes (it served in
+    # 8 s on aqua, 2026-10-17)
     pi_restore_check_scylla_wait_polls: 100
     # room a run needs before it starts: production's Postgres volume (20Gi) and the etcd and tier-0 copies, with margin
+    # (each part's data is removed when it ends; Scylla's part wants its snapshot's size twice free on top of this)
     pi_restore_check_min_free_gb: 30
     # each container's memory (podman runs them outside the unit's cgroup) and the unit's own (the throwaway Consul,
     # the scratch Postgres): the Pi's 8 GB serves Vault, Consul and Patroni first
@@ -171,6 +173,9 @@
             UMask=0077
             EnvironmentFile=/etc/pi-restore-check/env
             ExecStart=/usr/local/sbin/pi-restore-check.sh
+            # a killed run's containers (outside this cgroup: SIGKILL leaves them, 1.5G and a core) gone now, not at
+            # this Pi's next turn - '-': a run by hand holding the lock owns its own, and a skipped sweep fails nothing
+            ExecStopPost=-/usr/local/sbin/pi-restore-check.sh --sweep
             # the Pi's own services come first
             Nice=10
             MemoryMax={{ pi_restore_check_unit_memory }}

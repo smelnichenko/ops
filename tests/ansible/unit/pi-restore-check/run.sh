@@ -49,7 +49,7 @@ case "${args[0]}" in
     mkdir -p "${args[2]}"
     if [ -n "$ffr" ]; then  # the listed paths only, relative to the source
       while read -r f; do
-        mkdir -p "${args[2]}/$(dirname "$f")"; cp "$(p "${args[1]}")/$f" "${args[2]}/$f"; echo "$f" >> "$W/fetched"
+        mkdir -p "${args[2]}/$(dirname "$f")"; cp "$(p "${args[1]}")/$f" "${args[2]}/$f" 2> /dev/null && echo "$f" >> "$W/fetched"
       done < "$ffr"
     else
       cp -r "$(p "${args[1]}")/." "${args[2]}/"
@@ -89,14 +89,16 @@ case "$cmd" in
     while [ $# -gt 0 ]; do
       case "$1" in
         -v) vol=${2%%:*}; shift ;; --entrypoint) ep=$2; shift ;; -d) detach=1 ;;
-        --name|--network|--user|-e) shift ;; --rm) ;;
+        --name|--network|--user|-e|--cpus) shift ;; --rm) ;;
         --memory) echo "memory $2" >> "$W/memory"; shift ;;
         *) break ;;
       esac
       shift
     done
     image=$1; shift
-    case "$image" in *scylla*) echo "$image $*" > "$W/scylla-args"; echo "$vol" > "$W/scylla-vol" ;; esac
+    case "$image" in
+      *scylla*) echo "$image $*" > "$W/scylla-args"; echo "$vol" > "$W/scylla-vol"; ls "$(dirname "$vol")" > "$W/scylla-saw" ;;
+    esac
     [ -n "$ep" ] && set -- "$ep" "$@"
     case "$1" in
       barman-cloud-restore) [ -z "${PG_RESTORE_FAIL:-}" ] || exit 1; mkdir -p "$vol/pgdata"; touch "$vol/pgdata/standby.signal" ;;
@@ -213,7 +215,7 @@ utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
   rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/modes" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
     "$W/leftover-containers" "$W/scylla-args" "$W/scylla-vol" "$W/scylla-schema" "$W/scylla-loaded" "$W/mktemps" "$W/fetched" \
-    "$W/scylla-schema-files"
+    "$W/scylla-schema-files" "$W/scylla-saw"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
@@ -274,12 +276,15 @@ store() {  # a store as production's, made relative to now
   # Scylla Manager's backups: an old cluster (a re-create ago) and production's - its newest snapshot (SCYLLA_AGE_H old)
   # and the day before's, each a node's manifest, the schema saved with each; the store keeps every snapshot's
   # SSTables side by side (the day before's own file must not be loaded). NO_SCYLLA: none at all; NO_SCYLLA_SCHEMA: the
-  # newest without its schema; SCYLLA_ONLY=system: only system tables with data, =audit: only the scratch Scylla's own
+  # newest without its schema; SCYLLA_ONLY=system: only system tables with data, =audit: only the scratch Scylla's own;
+  # SCYLLA_TWO_NODES: the newest a second node's too; SCYLLA_HUGE: chat's table larger than any disk; SST_MISSING: a
+  # listed file gone
   [ -n "${NO_SCYLLA:-}" ] || PYTHONDONTWRITEBYTECODE=1 python3 - "$S/scylla-backups/backup" \
     "$(utc "-${SCYLLA_AGE_H:-3} hours" +sm_%Y%m%d%H%M%SUTC)" "$(utc "-$(( ${SCYLLA_AGE_H:-3} + 24 )) hours" +sm_%Y%m%d%H%M%SUTC)" \
-    "$(utc '-120 hours' +sm_%Y%m%d%H%M%SUTC)" "${NO_SCYLLA_SCHEMA:-}" "${SCYLLA_ONLY:-}" <<'PY_SCYLLA_STORE'
+    "$(utc '-120 hours' +sm_%Y%m%d%H%M%SUTC)" "${NO_SCYLLA_SCHEMA:-}" "${SCYLLA_ONLY:-}" "${SCYLLA_TWO_NODES:-}" \
+    "${SCYLLA_HUGE:-}" "${SST_MISSING:-}" <<'PY_SCYLLA_STORE'
 import gzip, json, os, sys
-b, newest, before, old, no_schema, only = sys.argv[1:7]
+b, newest, before, old, no_schema, only, two_nodes, huge, missing = sys.argv[1:10]
 system_only, audit_only = only == "system", only == "audit"
 def put(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -290,9 +295,13 @@ def snapshot(cluster, tag, files, schema=True):
     index = [{"keyspace": "system_schema", "table": "tables", "version": "s1", "files": ["s-Data.db"]},
              {"keyspace": "audit", "table": "audit_log", "version": "u1", "files": [] if system_only else ["u-Data.db"]},
              {"keyspace": "chat", "table": "message_edits", "version": "e1", "files": []},
-             {"keyspace": "chat", "table": "messages_by_channel", "version": "c1",
+             {"keyspace": "chat", "table": "messages_by_channel", "version": "c1", "size": 10 ** 18 if huge else 300,
               "files": [] if system_only or audit_only else files}]
+    for t in index:
+        t.setdefault("size", 100)
     put(f"{node}/task_T_tag_{tag}_manifest.json.gz", {"cluster_id": cluster, "snapshot_tag": tag, "index": index})
+    if two_nodes and tag == newest:
+        put(node.replace("node-a", "node-b") + f"/task_T_tag_{tag}_manifest.json.gz", {"index": index})
     if schema:
         put(f"{b}/schema/cluster/{cluster}/task_T_tag_{tag}_schema_with_internals.json.gz", [
             {"keyspace": "chat", "type": "keyspace", "name": "chat", "cql_stmt": "CREATE KEYSPACE chat WITH replication = {} "},
@@ -314,6 +323,8 @@ def snapshot(cluster, tag, files, schema=True):
 snapshot("0f2f-old", old, ["o-Data.db", "o-TOC.txt"])
 snapshot("98b5-prod", before, ["a-Data.db", "a-TOC.txt"])
 snapshot("98b5-prod", newest, ["a-Data.db", "b-Data.db", "b-TOC.txt"], schema=not no_schema)
+if missing:  # a listed file gone from the store
+    os.remove(f"{b}/sst/cluster/98b5-prod/dc/datacenter1/node/node-a/keyspace/chat/table/messages_by_channel/c1/b-TOC.txt")
 PY_SCYLLA_STORE
   # the Pi's Postgres majors: text order and version order disagree
   mkdir -p "$S/restore-checks/pi1" "$W/pgroot/9.6/bin" "$W/pgroot/15/bin" "$W/pgroot/17/bin"
@@ -533,9 +544,13 @@ check "  a schema file for each named keyspace of its own (none for the cluster'
   "$(paste -sd, "$W/scylla-schema-files")" "audit.cql,chat.cql"
 check "  the newest snapshot's files only (not the day before's own), no system table's" "$(cat "$W/scylla-loaded")" \
   "chat.messages_by_channel:a-Data.db+b-Data.db+b-TOC.txt"
-check "  Scylla without a network, in the image named, its memory the container's bar 512M, the snapshot read-only" \
-  "$(grep -cE '^podman run -d --name pi-restore-scylla-[0-9]+ --network none --memory 1536m -v [^ ]+/scylla:/w:ro docker.io/scylladb/scylla:2026.1.14 ' "$W/calls") $(grep -oE -- '--memory [0-9]+M --reserve-memory 256M' "$W/scylla-args")" \
+check "  Scylla without a network, one core, in the image named, its memory the container's bar 512M, the snapshot read-only" \
+  "$(grep -cE '^podman run -d --name pi-restore-scylla-[0-9]+ --network none --memory 1536m --cpus 1 -v [^ ]+/scylla:/w:ro docker.io/scylladb/scylla:2026.1.14 ' "$W/calls") $(grep -oE -- '--memory [0-9]+M --reserve-memory 256M' "$W/scylla-args")" \
   "1 --memory 1024M --reserve-memory 256M"
+check "  each table counted under the server's own time-out" \
+  "$(grep -cE '^podman exec pi-restore-scylla-[0-9]+ cqlsh --request-timeout=660 -e SELECT count\(\*\) FROM chat.messages_by_channel USING TIMEOUT 600s$' "$W/calls")" 1
+check "  the parts before it gone from the disk when it starts (Postgres's, etcd's restored data)" \
+  "$(grep -cxE 'pg|etcd' "$W/scylla-saw") $(grep -cx scylla "$W/scylla-saw")" "0 1"
 check "  the files made Scylla's own (as root, in the container), then loaded" \
   "$(grep -cE "^podman exec -u root pi-restore-scylla-[0-9]+ sh -c cp /w/sst/\*/keyspace/chat/table/messages_by_channel/\*/\* '[^']+/upload/' && chown -R scylla:scylla" "$W/calls") $(grep -cE '^podman exec pi-restore-scylla-[0-9]+ nodetool refresh chat messages_by_channel$' "$W/calls")" \
   "1 1"
@@ -557,6 +572,13 @@ red "scylla: Scylla stops before it serves: red" SCYLLA SCYLLA_RUNNING=false
 red "scylla: no CQL within its polls: red" SCYLLA SCYLLA_SILENT=1
 red "scylla: its schema does not apply: red" SCYLLA SCHEMA_FAIL=1
 red "scylla: a table its schema did not create: red" SCYLLA NO_TABLE_DIR=1
+check "  said so" "$(report | grep -c 'chat.messages_by_channel not created by its schema')" 1
+red "scylla: the newest snapshot two nodes': red - one node's restored only" SCYLLA SCYLLA_TWO_NODES=1
+check "  said so" "$(report | grep -c "2 nodes' manifests - this check restores one node's")" 1
+red "scylla: room for the snapshot twice not free: red, nothing fetched" SCYLLA SCYLLA_HUGE=1
+check "  said so, nothing fetched" "$(report | grep -c 'bytes to restore, twice') $(cat "$W/fetched" 2> /dev/null | wc -l)" "1 0"
+red "scylla: a file the manifest lists not in the store: red" SCYLLA SST_MISSING=1
+check "  said so" "$(report | grep -c '2 of the 3 files listed fetched')" 1
 red "scylla: the SSTables do not load: red" SCYLLA REFRESH_FAIL=1
 red "scylla: no row in any table: red" SCYLLA SCYLLA_ROWS=0
 check "  said so" "$(report | grep -c 'restored with no row in any table (chat.messages_by_channel:0)')" 1
@@ -564,7 +586,10 @@ red "scylla: a table's count answered with no number: red" SCYLLA SCYLLA_COUNT_U
 check "  said so" "$(report | grep -c 'chat.messages_by_channel not read back')" 1
 red "scylla: the scratch Scylla's keyspaces not read: red" SCYLLA SCYLLA_KEYSPACES_UNREAD=1
 check "  said so" "$(report | grep -c "the scratch Scylla's keyspaces not read")" 1
-red "scylla: a container's memory Scylla cannot start in (1024m): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=1024m
+red "scylla: a container's memory Scylla cannot start in (512m): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=512m
+store
+check "scylla: the smallest container it served in (768m, measured): green, Scylla's memory 256M" \
+  "$(run PI_RESTORE_CONTAINER_MEMORY=768m) $(grep -oE -- '--memory [0-9]+M --reserve' "$W/scylla-args")" "rc=0 --memory 256M --reserve"
 red "scylla: a container's memory not in MiB (2g): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=2g
 red "etcd: the newest snapshot named for a date no calendar has: red" ETCD ETCD_BAD_DATE=1
 # an expansion error in a part's own shell (arithmetic on a word not a number): bash abandons the command and reads on -
@@ -576,6 +601,19 @@ SCRIPT_ARGS=(--part boom "$W/boom-work") SCRIPT_RUN=$W/boom.sh
 check "a part's own expansion error: the part red, the check not run inside it" \
   "$(run) $(grep -c 'PI RESTORE CHECK' "$W/out") $(cat "$W/mktemps" 2> /dev/null | wc -l)" "rc=1 0 0"
 SCRIPT_ARGS=() SCRIPT_RUN=$SCRIPT
+# the unit's ExecStopPost (--sweep): a killed run's containers removed under the lock, nothing else; the lock held by
+# another run (a check by hand) - nothing removed, said by its exit
+store
+printf 'pi-restore-pg-4242\npi-restore-scylla-4242\nsomething-else\n' > "$W/leftover-containers"
+SCRIPT_ARGS=(--sweep)
+check "--sweep: a killed run's containers removed, nothing else, nothing restored" \
+  "$(run PI_RESTORE_LOCKED=) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|scylla)-4242$' "$W/calls") $(grep -c 'something-else' "$W/calls") $(grep -c '^rclone' "$W/calls")" \
+  "rc=0 2 0 0"
+store
+printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
+check "--sweep, the lock held by another run: nothing removed" \
+  "$(run PI_RESTORE_LOCKED= LOCK_HELD=1) $(grep -c '^podman rm' "$W/calls")" "rc=1 0"
+SCRIPT_ARGS=()
 # a setting the parts count with, not a number: refused before any part (a number below zero is one - the copy's
 # rehearsal forces a part red with -1)
 store
@@ -638,7 +676,7 @@ PY_KEYS
 )" "[] True"
 # the start limit holds the first run and its two retries even when each hangs to its timeout - a 6 h window never held
 # three 3 h runs 20 min apart, and the unit restarted for ever; its files root's alone (UMask, as the script's umask)
-check "the unit: three starts, each to its timeout, within the start limit's window, the window ended before the timer's next day; its umask 0077" "$("$PY" - <<'PY_UNIT'
+check "the unit: three starts, each to its timeout, within the start limit's window, the window ended before the timer's next day; its umask 0077; a killed run's containers swept when it stops" "$("$PY" - <<'PY_UNIT'
 import re, yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
 items = [i for t in p["tasks"] for i in (t.get("loop") or []) if isinstance(i, dict)]
@@ -651,9 +689,9 @@ burst, window = int(kv["StartLimitBurst"]), secs(kv["StartLimitIntervalSec"])
 daily = bool(re.fullmatch(r"\{\{ pi_restore_check_on_calendar \}\}", tv["OnCalendar"])) \
     and p["vars"]["pi_restore_check_on_calendar"].startswith("*-*-* ")
 print(burst, burst * (secs(kv["TimeoutStartSec"]) + secs(kv["RestartSec"])) <= window,
-      daily and window + int(tv["RandomizedDelaySec"]) < 24 * 3600, kv["UMask"])
+      daily and window + int(tv["RandomizedDelaySec"]) < 24 * 3600, kv["UMask"], kv["ExecStopPost"])
 PY_UNIT
-)" "3 True True 0077"
+)" "3 True True 0077 -/usr/local/sbin/pi-restore-check.sh --sweep"
 # the playbook turns the memory cgroup on at boot: an explicit cgroup_disable=memory taken off, each flag appended where
 # missing - pi2's line (2026-10-16) gets both, pi1's (both twice already) none; leading blanks, a CRLF, look-alikes; the
 # line kept one line, the same on a second run; each edit validated (one line, root=) before it is written; the

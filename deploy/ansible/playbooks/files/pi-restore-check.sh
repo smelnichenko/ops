@@ -235,6 +235,8 @@ part_scylla() {
     rclone cat "$b/meta/cluster/$cluster/$m" | gzip -dc > "$w/manifest.$n.json"
     echo "$m" >> "$w/manifest-paths"
   done < "$w/manifests"
+  # one node's (production's Scylla is one): every node's files into one upload directory would overwrite same names
+  [ "$n" = 1 ] || { echo "$cluster/$tag: $n nodes' manifests - this check restores one node's"; return 1; }
   schema=$(rclone lsf --files-only "$b/schema/cluster/$cluster" | { grep "_tag_${tag}_schema_with_internals\.json\.gz$" || true; } \
     | head -1)
   [ -n "$schema" ] || { echo "$cluster/$tag: no schema saved with it"; return 1; }
@@ -260,6 +262,7 @@ for i, path in enumerate(paths, 1):
         for t in json.load(open(f"{w}/manifest.{i}.json"))["index"]:
             if own(t["keyspace"]) and t["files"]:
                 tables.add(f'{t["keyspace"]}.{t["table"]}')
+                open(f"{w}/table-bytes", "a").write(f'{t["keyspace"]}.{t["table"]} {t["size"]}\n')
                 for f in t["files"]:
                     out.write(f'keyspace/{t["keyspace"]}/table/{t["table"]}/{t["version"]}/{f}\n')
 open(f"{w}/tables", "w").write("".join(f"{t}\n" for t in sorted(tables)))
@@ -267,29 +270,31 @@ PY_SCYLLA
   [ -s "$w/tables" ] || { echo "$cluster/$tag: no table of its own with data in the snapshot"; return 1; }
   podman pull -q "$PI_RESTORE_SCYLLA_IMAGE" > /dev/null || podman image exists "$PI_RESTORE_SCYLLA_IMAGE"
   # Seastar keeps memory back for the system: a reserve of its own (256M), the rest of the container bar 256M its own
-  # (1G in 1536m - with its default reserve it refused: "insufficient physical memory", seen 2026-10-17)
+  # (with its default reserve it refused 1G in 1536m: "insufficient physical memory"; with these it served in 768m and
+  # 1024m too - measured on aqua, 2026-10-17)
   local mem=${PI_RESTORE_CONTAINER_MEMORY%[mM]}
-  [[ "$mem" =~ ^[0-9]+$ ]] && [ "$mem" -ge 1536 ] \
-    || { echo "PI_RESTORE_CONTAINER_MEMORY=$PI_RESTORE_CONTAINER_MEMORY: Scylla wants at least 1536m"; return 1; }
+  [[ "$mem" =~ ^[0-9]+$ ]] && [ "$mem" -ge 768 ] \
+    || { echo "PI_RESTORE_CONTAINER_MEMORY=$PI_RESTORE_CONTAINER_MEMORY: Scylla wants at least 768m (its 256M, the reserves)"; return 1; }
   # its data in the container (a bind mount is the host's, not Scylla's user's); the snapshot's files read-only beside it
-  podman run -d --name "$name" --network none --memory "$PI_RESTORE_CONTAINER_MEMORY" -v "$w:/w:ro" \
+  # one core of the Pi's four (its shard is one): Vault, Consul and Patroni keep the rest
+  podman run -d --name "$name" --network none --memory "$PI_RESTORE_CONTAINER_MEMORY" --cpus 1 -v "$w:/w:ro" \
     "$PI_RESTORE_SCYLLA_IMAGE" --smp 1 --memory "$(( mem - 512 ))M" --reserve-memory 256M --overprovisioned 1 \
     --developer-mode 1 --listen-address 127.0.0.1 --rpc-address 127.0.0.1 --seeds 127.0.0.1 > /dev/null
   echo "$name" >> "$1/containers"
   # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
   trap "podman rm -f -t 0 $name > /dev/null 2>&1 || true" EXIT
-  local i up=""
+  local i up="" poll_s=3
   for i in $(seq "$PI_RESTORE_SCYLLA_WAIT_POLLS"); do
     if [ "$(podman inspect -f '{{.State.Running}}' "$name")" != true ]; then
       podman logs --tail 30 "$name" 2>&1 || true
       echo "$cluster/$tag: Scylla stopped before it served"; return 1
     fi
     podman exec "$name" cqlsh -e "SELECT now() FROM system.local" > /dev/null 2>&1 && { up=1; break; }
-    sleep 3
+    sleep "$poll_s"
   done
   if [ -z "$up" ]; then
     podman logs --tail 30 "$name" 2>&1 || true
-    echo "$cluster/$tag: Scylla served no CQL within $(( PI_RESTORE_SCYLLA_WAIT_POLLS * 3 )) s"; return 1
+    echo "$cluster/$tag: Scylla served no CQL in $PI_RESTORE_SCYLLA_WAIT_POLLS polls ${poll_s} s apart"; return 1
   fi
   # the keyspaces this Scylla has already (its system ones, audit - Scylla 2026's own): its own, not the snapshot's -
   # their statements fail ("AlreadyExists", the copy 2026-10-17), and their data is not production's: left out
@@ -309,20 +314,32 @@ PY_SCYLLA
            echo "$cluster/$tag: keyspace $ks's schema did not apply"; return 1; }
   done
   [ -s "$w/tables" ] || { echo "$cluster/$tag: no table with data but in keyspaces the scratch Scylla has of its own"; return 1; }
+  # room for the snapshot twice - fetched here, then copied into the container (podman's storage: the same filesystem
+  # on the Pis, /var/lib) - and the run's floor beside it: a full disk stops Vault, Consul and Patroni
+  local bytes avail
+  bytes=$(awk 'NR == FNR { want[$1] = 1; next } want[$1] { s += $2 } END { print s + 0 }' "$w/tables" "$w/table-bytes")
+  avail=$(df --output=avail -B1 "$w" | tail -1)
+  [ "$avail" -ge $(( 2 * bytes + PI_RESTORE_MIN_FREE_GB * 1024 * 1024 * 1024 )) ] \
+    || { echo "$cluster/$tag: $bytes bytes to restore, twice, and ${PI_RESTORE_MIN_FREE_GB} GiB spare - $avail bytes free"; return 1; }
   for f in "$w"/files.*; do
     node=${f##*/files.}
-    rclone copy --files-from-raw "$f" "$b/sst/cluster/$cluster/$(cat "$w/prefix.$node")" "$w/sst/$node"
+    # judged by what arrived: a file missing from the store fails the copy, and the count below says which part came
+    rclone copy --files-from-raw "$f" "$b/sst/cluster/$cluster/$(cat "$w/prefix.$node")" "$w/sst/$node" || true
+    # every file the manifest lists, here: one missed is a table restored short, its rows fewer and still counted
+    [ "$(find "$w/sst/$node" -type f | wc -l)" = "$(wc -l < "$f")" ] \
+      || { echo "$cluster/$tag: $(find "$w/sst/$node" -type f | wc -l) of the $(wc -l < "$f") files listed fetched"; return 1; }
   done
   # each table's files into its upload directory, Scylla's own, then loaded; read back whole
   local ks tb dir rows counts=() total=0
   while IFS=. read -r ks tb; do
-    dir=$(podman exec "$name" sh -c "ls -d /var/lib/scylla/data/$ks/$tb-*" 2> /dev/null | head -1)
+    dir=$( { podman exec "$name" sh -c "ls -d /var/lib/scylla/data/$ks/$tb-*" 2> /dev/null || true; } | head -1)
     [ -n "$dir" ] || { echo "$cluster/$tag: $ks.$tb not created by its schema"; return 1; }
     podman exec -u root "$name" sh -c \
       "cp /w/sst/*/keyspace/$ks/table/$tb/*/* '$dir/upload/' && chown -R scylla:scylla '$dir/upload'"
     podman exec "$name" nodetool refresh "$ks" "$tb" > "$w/refresh.log" 2>&1 \
       || { tail -5 "$w/refresh.log"; echo "$cluster/$tag: $ks.$tb's SSTables did not load"; return 1; }
-    rows=$(podman exec "$name" cqlsh --request-timeout=300 -e "SELECT count(*) FROM $ks.$tb" \
+    # the server's own time-out too (its range reads' 10 s), not only cqlsh's
+    rows=$(podman exec "$name" cqlsh --request-timeout=660 -e "SELECT count(*) FROM $ks.$tb USING TIMEOUT 600s" \
       | sed -n 's/^ *\([0-9][0-9]*\) *$/\1/p' | head -1)
     [ -n "$rows" ] || { echo "$cluster/$tag: $ks.$tb not read back"; return 1; }
     counts+=("$ks.$tb:$rows"); total=$(( total + rows ))
@@ -413,6 +430,25 @@ cleanup() {  # cleanup <work>: what the parts started, then the work directory
   podman image prune -f > /dev/null 2>&1 || true
 }
 
+# a killed run's containers (they run outside the unit's cgroup: SIGKILL leaves them). A container whose run was killed
+# lost its conmon with it: the first removal fails ("conmon exited prematurely") and records it exited, the second
+# removes it (seen on the Vagrant copy). One refusing both is said - it takes memory, not a run's names
+sweep_leftovers() {
+  local c
+  for c in $(podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd|scylla)-[0-9]+$' || true; }); do
+    podman rm -f -t 0 "$c" > /dev/null 2>&1 || podman rm -f -t 0 "$c" > /dev/null \
+      || echo "PI RESTORE CHECK: a killed run's container $c not removed now" >&2
+  done
+}
+
+# the unit's ExecStopPost: a killed run's containers gone now, not at this Pi's next turn two days on - under the lock,
+# briefly: a run holding it (a check by hand) owns its containers, and sweeps a killed one's when it starts
+if [ "${1:-}" = --sweep ]; then
+  [ -n "${PI_RESTORE_LOCKED:-}" ] || PI_RESTORE_LOCKED=1 exec consul lock -child-exit-code -timeout=10s pi-restore-check "$0" --sweep
+  sweep_leftovers
+  exit 0
+fi
+
 # a part: its own process, so set -e holds in it
 if [ "${1:-}" = --part ]; then
   "part_$2" "$3"
@@ -461,13 +497,7 @@ trap 'echo "PI RESTORE CHECK: failed at line $LINENO" >&2' ERR
 mkdir -p "$PI_RESTORE_WORK"
 # what a killed run left (SIGKILL past the unit's timeout, a reboot - its EXIT trap never ran): its containers and its
 # directory, before this run takes the room. Under the lock, so never a running one's
-# A container whose run was killed lost its conmon with it: the first removal fails ("conmon exited prematurely") and
-# records it exited, the second removes it (seen on the Vagrant copy). One refusing both is said, and the run goes on -
-# it takes memory, not this run's names
-for c in $(podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd|scylla)-[0-9]+$' || true; }); do
-  podman rm -f -t 0 "$c" > /dev/null 2>&1 || podman rm -f -t 0 "$c" > /dev/null \
-    || echo "PI RESTORE CHECK: a killed run's container $c not removed now" >&2
-done
+sweep_leftovers
 rm -rf "$PI_RESTORE_WORK"/run.*
 # room for a restore: a full disk on a Pi stops Vault, Consul and Patroni with it
 free_gb=$(( $(df --output=avail -k "$PI_RESTORE_WORK" | tail -1) / 1024 / 1024 ))
@@ -485,6 +515,9 @@ for part in postgres etcd scylla tier0; do
     echo "${part^^} FAILED:"
     tail -20 "$work/$part.log" | sed 's/^/  /'
   fi
+  # a part's restored data gone with it (its container went at its end): the next part's room, not the run's end. Not
+  # tier0's - its scratch Postgres runs until the cleanup stops it
+  case $part in postgres) rm -rf "$work/pg" ;; etcd | scylla) rm -rf "${work:?}/$part" ;; esac
 done 2>&1 | tee "$work/report"
 # the parts that failed, from the report (the loop ran in the pipeline's subshell)
 mapfile -t failed < <(sed -n 's/^\([A-Z0-9]*\) FAILED:$/\1/p' "$work/report")
