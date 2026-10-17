@@ -91,7 +91,7 @@ check("A03 the same build: none", m.floating_problems({"docker.io/library/postgr
 restore(s)
 
 # A04-A06: merge's refusals on a failed merge-order check, a failed Tempo flush, Argo not settled
-def merge_calls(step, repo, fail=(), settled_ok=True, events=None):
+def merge_calls(step, repo, fail=(), settled_ok=True, events=None, claim=lambda *a: []):
     calls = []
     names = m.step_names()
     def run(cmd, **k):
@@ -110,7 +110,7 @@ def merge_calls(step, repo, fail=(), settled_ok=True, events=None):
                 merged_base=lambda *a: None, pushed_base=lambda *a: None, read_ledger=lambda: ({"data": {"events": ""}}, []),
                 record=lambda st, ev, *a, **k: calls.append("record " + ev), step_apps=lambda *a: ["app"],
                 settled=lambda *a, **k: (settled_ok, dict.fromkeys(m.URLS.values(), "r"), ["app"]),
-                cluster_runs=lambda *a: False, claim_problems=lambda *a: [], merged_live_problems=lambda *a: [],
+                cluster_runs=lambda *a: False, claim_problems=claim, merged_live_problems=lambda *a: [],
                 host_work=lambda cmd, **k: calls.append(os.path.basename(cmd[0])) or R(0))
     try:
         m.merge(step, repo)
@@ -133,6 +133,14 @@ check("A05 Tempo's flush failing: refused, nothing pushed", ("upgrade-merge-step
 got = merge_calls("57-sonarqube-26.9", "infra", settled_ok=False)
 check("A06 Argo not settled after the merge: refused, no settled recorded",
       ("record settled" in got, got[-1]), (False, "refused"))
+# A12: the claim read again after the pre-pull and Tempo's flush, right before the push - released by hand while they
+# ran (the run looked dead), a claim read before them let the change go live under no claim
+released = []
+s12 = patched(ready_ten_for_merge=lambda st, repo: released.append(st))
+got = merge_calls("57-sonarqube-26.9", "infra", claim=lambda *a: ["57's claim released"] if released else [])
+restore(s12)
+check("A12 the claim released during the pre-pull: refused, nothing pushed",
+      (released, "upgrade-merge-step.sh" in got, got[-1]), (["57-sonarqube-26.9"], False, "refused"))
 # A07: begin with production not as the done steps leave it
 def begin_calls(inv_ok, settle_ok):
     calls = []
@@ -212,6 +220,16 @@ check("S6 a preview 7 h old: the playbooks refused, named",
       len(fresh(m.problems(m.step_names(), st, "playbooks", ev(1, 7, True), info43))), 1)
 check("S6 a backup 7 h old: the playbooks refused too (the kubeadm upgrade is the one-way change)",
       len(fresh(m.problems(m.step_names(), st, "playbooks", ev(7, 1, True), info43))), 1)
+# S6b: each wave0 store aged by its own backup - two stores (no step has two yet; the rule is per store): a fresh
+# backup of one hid the other's stale one, and only the first store's age was judged
+two = dict(info43, wave0=["etcd", "postgres"])
+ev2 = lambda etcd_h, pg_h: [(ago(30), st, "begun", []), (ago(etcd_h), st, "backup", ["etcd"]),
+                            (ago(pg_h), st, "backup", ["postgres"])]
+check("S6b control: both stores backed up an hour ago - the merge may run",
+      fresh(m.problems(m.step_names(), st, "merge", ev2(1, 1), two, "infra")), [])
+check("S6b the second store's backup 7 h old, the first's fresh: refused, that store named",
+      [p.split(" taken")[0] for p in fresh(m.problems(m.step_names(), st, "merge", ev2(1, 7), two, "infra"))],
+      ["the postgres backup"])
 # S8: a test environment step's done sees its change running there (its test-image line)
 want_test = {"16-scylladb-2025.1-test": ["docker.io/scylladb/scylla 2025.1.16"],
              "19-scylladb-2026.1-test": ["docker.io/scylladb/scylla 2026.1.14"],

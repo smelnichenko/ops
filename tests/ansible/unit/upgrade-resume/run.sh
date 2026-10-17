@@ -79,6 +79,14 @@ check("resume-from: a step done out of order counts only from the first not done
       resume(done("01-a", "03-c")) if resume else None, "02-b")
 check("resume-from: every step done - refused, nothing to run",
       "every step" in (exits(resume, done("01-a", "02-b", "03-c")) or "") if resume else None, True)
+# resume-from <step> (a rehearsal, or a run proving its start again): that step said back, read-only - not taken for
+# an unknown command (the full run's start passes {{.FROM}})
+said = io.StringIO()
+with contextlib.redirect_stdout(said):
+    taken = m.read_only(["resume-from", "02-b"])
+check("resume-from 02-b: taken read-only, 02-b said", (taken, said.getvalue()), (True, "02-b\n"))
+check("resume-from a step that is none: refused, named", exits(m.read_only, ["resume-from", "09-z"]), "no step 09-z")
+check("resume-from with two steps: not read-only (the usage)", m.read_only(["resume-from", "01-a", "02-b"]), False)
 
 # proof-start from a step: the tree's committed defaults exactly the earlier steps' that have default lines
 git = lambda *a: subprocess.run(["git", "-C", o, *a], capture_output=True, text=True, check=True).stdout

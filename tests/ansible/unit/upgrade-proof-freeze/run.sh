@@ -280,6 +280,16 @@ I("commit", "-q", "--allow-empty", "-m", "never pushed")
 I("tag", "-a", "-m", f"base {tip}", "upgrade-merged/01-a", "HEAD")
 check("merged already, the tag not in origin/main", proof_problems("01-a", ["01-a"], repo="infra"),
       ["infra upgrade-merged/01-a is not in origin/main"])
+# pushed by a run cut short before its tag, the main it went onto unknown (local main moved on past it): refused,
+# said so - never compared against an empty base (git refuses it; any base guessed hashes another change)
+I("tag", "-d", "upgrade-merged/01-a")
+I("branch", "-f", "upgrade/01-a", "origin/main")
+try:
+    got = proof_problems("01-a", ["01-a"], repo="infra")
+except subprocess.CalledProcessError as e:
+    got = f"git failed: {e.cmd}"
+check("pushed with no tag, its main before unknown: refused, saying so", got,
+      ["infra upgrade/01-a is in origin's main with no upgrade-merged/01-a, and its main before is unknown"])
 print("upgrade-proof-freeze: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY

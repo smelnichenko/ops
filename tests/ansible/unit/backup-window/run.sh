@@ -53,6 +53,9 @@ check("  not started, made past the stuck limit: stuck too",
 check("a scheduled backup due in 5 minutes: refused, its time said",
       ["09:05:00Z" in p for p in got(sched("daily", 5))], [True])
 check("  due at the window's edge: refused", len(got(sched("daily", W))), 1)
+# its near edge too: due this very second is neither late nor past - it starts now
+check("  due now (the window's near edge): refused, its time said", ["09:00:00Z" in p for p in got(sched("daily", 0))],
+      [True])
 check("  due just past the window: nothing", got(sched("daily", W + 1)), [])
 check("  due a minute ago, no Backup made: refused, said late",
       ["was due" in p and "not made yet" in p for p in got(sched("daily", -1))], [True])
@@ -80,6 +83,14 @@ check("kubectl failing: a problem, its error said", [p.startswith("production's 
                                                      m.backup_window_problems()], [True])
 m.ten = lambda *a, **k: subprocess.CompletedProcess(a, 0, "not json", "")
 check("  an answer not JSON: a problem", len(m.backup_window_problems()), 1)
+# kubectl failing with JSON on stdout (a partial or stale answer) is failing all the same - never "no backup"
+m.ten = lambda *a, **k: subprocess.CompletedProcess(a, 1, '{"items": []}', "error: a partial answer")
+check("  kubectl failing, JSON on its stdout: a problem, not an empty list read as no backup",
+      [p.startswith("production's CNPG backups not read") for p in m.backup_window_problems()], [True])
+# its error on stdout only (stderr empty): said all the same - a bare "not read:" left nothing to go on
+m.ten = lambda *a, **k: subprocess.CompletedProcess(a, 1, "error: You must be logged in to the server", "")
+check("  kubectl failing, its error on stdout only: that error said", ["logged in" in p for p in m.backup_window_problems()],
+      [True])
 # the base-backup playbook's "still running" and its include's wait end on the same phases as the runner
 pb = open("deploy/ansible/playbooks/postgres-base-backup.yml").read()
 tk = open("deploy/ansible/playbooks/tasks/cnpg-backup.yml").read()

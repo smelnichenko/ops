@@ -230,7 +230,7 @@ check("the loaded blob is this file's git blob id", m.LOADED_BLOB,
 
 # --- a backup-check step's Velero backup: on the full run's terms
 def velero(phase="Completed", errors=0, pvbs=("Completed", "Completed"), volumes=2, bsl=("Available",),
-           dbr="Processed", phases=None):
+           dbr="Processed", phases=None, pods_rc=0):
     sent, bsl, phases = [], list(bsl), list(phases or [phase])
     now = [0.0]
     def ten(command, stdin=None, check=True):
@@ -242,6 +242,8 @@ def velero(phase="Completed", errors=0, pvbs=("Completed", "Completed"), volumes
             return R(0, json.dumps({"spec": {"template": {"includedNamespaces": ["schnappy-production"],
                                                           "defaultVolumesToFsBackup": True}}}))
         if "get pods -l app.kubernetes.io/component=valkey" in command:
+            if pods_rc:
+                return R(pods_rc, "", "Unable to connect to the server")
             return R(0, json.dumps({"items": [{"spec": {"volumes": [{"name": f"v{i}", "emptyDir": {}}
                                                                      for i in range(volumes)] + [{"name": "cm",
                                                                      "configMap": {}}]}}]}))
@@ -297,6 +299,9 @@ check("the storage location validated late (after a restart): asked again, then 
 check("the storage location never Available: refused, nothing created",
       (len(velero(bsl=("Unavailable",))[0]), velero(bsl=("Unavailable",))[1]), (1, []))
 check("no Valkey volume to back up: refused, nothing created", (len(velero(volumes=0)[0]), velero(volumes=0)[1]), (1, []))
+# Valkey's pods unread is said so - not "no Valkey volume" (none running is another fault, and its fix another)
+check("Valkey's pods not read: refused as unread, the namespace named, nothing created",
+      velero(pods_rc=1)[:2], (["Valkey's pods in schnappy-production not read"], []))
 check("its delete refused (the backup still running): said, the ttl named", "not deleted" in velero(dbr="InProgress")[3],
       True)
 check("the backup-check flag read: steps 10, 25, 43",

@@ -231,7 +231,7 @@ check("between 47's merges: postgresql:17 not judged, 18 not yet, the rest as be
 
 # the done phase's first call of a step that changes production (a throwaway certificate, a base backup) asks first:
 # a no - or no terminal - runs nothing and records nothing
-def done_calls(step, answer, events=(), playbook_ok=True):
+def done_calls(step, answer, events=(), playbook_ok=True, step_info=None, questions=None):
     calls, saved = [], {k: getattr(m, k) for k in ("ledger_for", "soak_state", "confirm", "ansible", "check", "record",
                                                    "proof_problems", "ten_now", "merged_live_problems", "ten")}
     # any call on ten a stray one (the base backup's WAL record is the playbook's own)
@@ -240,10 +240,10 @@ def done_calls(step, answer, events=(), playbook_ok=True):
     m.ten_now = lambda: "2026-10-07T10:00:00Z"
     # the merge live on origin/main: read in the step's repos beside ops (CI's checkout has none) - not this test's
     m.merged_live_problems = lambda *a: []
-    m.ledger_for = lambda st, ph, arg=None: (names, list(events), info[st])
+    m.ledger_for = lambda st, ph, arg=None: (names, list(events), step_info or info[st])
     m.proof_problems = lambda *a, **k: []
     m.soak_state = lambda *a: (None, 0)
-    m.confirm = lambda q: calls.append("asked") or answer
+    m.confirm = lambda q: calls.append("asked") or (questions is not None and questions.append(q)) or answer
     m.ansible = lambda *a: calls.append(a[0]) or (playbook_ok or a[0] != "playbooks/postgres-base-backup.yml")
     m.check = lambda *a, **k: True
     m.record = lambda st, ev, *a, **k: calls.append(ev)
@@ -272,6 +272,18 @@ check("done 47 with its base backup taken after the merges: none again, nothing 
 # the merge's promise when its base backup was declined or failed: done takes it, asked first
 check("done 47 with no base backup at its merges (declined): done takes it", done_calls(S47, True),
       ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
+# only the step's own record counts: another step's base backup (47's, at its merge) is not 24's - 24 takes its own
+check("done 24 with only another step's base backup recorded: its own taken",
+      done_calls("24-cnpg", True, ev(f"{S47} base-backup")),
+      ["asked", "playbooks/postgres-base-backup.yml", "base-backup", "checked"])
+# a step with both (no step file has yet; the flags are per step): the question lists them in the order they run -
+# the ACME issuance first, then the base backup - so the yes is to what then happens, in that order
+asked_q = []
+got = done_calls(S23, True, step_info=dict(info[S23], base_backup=True), questions=asked_q)
+check("done of a step with ACME and a base backup: asked naming ACME then the base backup, run in that order",
+      ([q.index("ACME") < q.index("base backup") for q in asked_q], got),
+      ([True], ["asked", "playbooks/acme-check.yml", "acme-check", "playbooks/postgres-base-backup.yml", "base-backup",
+                "checked"]))
 
 # the base backup: the playbook alone, given the cluster's namespace, name and the step's major - it writes the WAL record
 # it waits for itself (postgres-base-backup.yml; base-backup-archiving), nothing written on ten before it
@@ -980,6 +992,11 @@ mid13 = done_upto("12-kubelet-shutdown-grace") + [f"{S13} apps app", f"{S13} beg
 check("status after 13's playbooks: its defaults next", status_of(mid13), [f"next: {S13} defaults"])
 check("status after 13's defaults (the event carries the commit): done next",
       [l.split(" - ")[0] for l in status_of(mid13 + [f"{S13} defaults deadbeef"])], [f"next: {S13} done"])
+# a settled line marks its own repo's merge only: 47's infra settled, its platform merge next - not infra again
+mid47 = done_upto("46-postgres-18-test") + [f"{S47} apps app", f"{S47} begun", f"{S47} backup postgres",
+                                            f"{S47} merged infra abc", f"{S47} settled infra abc"]
+check("status after 47's infra merge settled: its platform merge next",
+      [l.split(" - ")[0] for l in status_of(mid47)], [f"next: {S47} merge platform"])
 # the soak's time left as status shows it, by ten's clock (the first green check's): this machine's, a day later here,
 # showed it over
 soaking = mid13 + [f"{S13} defaults deadbeef", f"{S13} checked"]
@@ -1153,6 +1170,10 @@ check("a phase that passes: its end recorded passed, with its claim's token", ma
       ([(S47, "end", "begin", "passed", "host:1:aa")], True))
 check("a phase that fails: its end recorded failed", main_ends("REFUSED: x"),
       ([(S47, "end", "begin", "failed", "host:1:aa")], False))
+# a phase that ends by sys.exit(0) or sys.exit() passed - a success exit is no refusal: its end recorded passed, not
+# failed
+check("a phase ending by sys.exit(0) or sys.exit(): its end recorded passed",
+      [main_ends(SystemExit(c)) for c in (0, None)], [([(S47, "end", "begin", "passed", "host:1:aa")], True)] * 2)
 check("a phase that passes, its end not written: the run fails", main_ends(0, write_fails=True), ([], False))
 # a write that may have been made (its connection gone) is not written twice (a Conflict's retry: main_conflicts)
 check("a write that may have been made: not written again", (main_ends(0, write_fails=True)[1], len(MAIN_OUT["tries"])),
