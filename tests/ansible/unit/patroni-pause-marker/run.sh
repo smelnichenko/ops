@@ -242,6 +242,12 @@ for book in ("setup-consul", "setup-patroni", "upgrade-patroni"):
     check(f"{book}: a marker there already: refused before any pause, the marker left as it was",
           r.returncode != 0 and "REFUSED" in r.stdout + r.stderr and "patronictl pause" not in acts(calls)
           and kv == "setup-consul 2026-10-08T01:00:00Z ab12cd34", (r.returncode, r.stdout, r.stderr, calls, kv))
+    # the refusal is the put's own: said with Consul's answer, and nothing read back after it (a refused put taken for
+    # one that went through reads someone else's marker back - refused too, but for the wrong reason, with no word of
+    # the marker there)
+    check(f"{book}: ... the put's refusal said (Consul's answer), no read-back after it",
+          "a Patroni pause marker is there already" in r.stdout and "key already exists" in r.stdout
+          and not [c for c in calls if c.startswith("consul kv get -detailed")], (r.returncode, r.stdout, calls))
     # someone paused it between the check and this pause: patronictl refuses (exit 1) - theirs, not undone
     r, calls, kv = run(p, paused=True)
     check(f"{book}: paused meanwhile by someone else: fails, its own marker deleted, their pause left",
