@@ -110,6 +110,10 @@ case_("infra second with a raw manifest: unsafe", ["platform", "infra"],
 case_("the first merge alone renders neither state: unsafe", ["infra", "platform"],
       {"values/demo.yaml": "x: 2\n"}, {"charts/demo/templates/cm.yaml": "x: {{ .Values.x }}\nz: 1\n"}, False,
       ["UNSAFE", "demo: NEITHER"])
+# said as what it is, above the applications so rendered
+case_("a first merge rendering neither state: said so", ["infra", "platform"],
+      {"values/demo.yaml": "x: 2\n"}, {"charts/demo/templates/cm.yaml": "x: {{ .Values.x }}\nz: 1\n"}, False,
+      ["with infra alone these applications render neither as before nor as after:", "demo: NEITHER"])
 case_("no application reads a platform chart: refused", ["infra", "platform"],
       {"values/demo.yaml": "x: 2\n"}, {"charts/demo/templates/cm.yaml": "x: {{ .Values.x }}\nz: 1\n"}, False,
       ["REFUSED", "nothing proven"], url="https://git.pmon.dev/schnappy/platform")
@@ -163,6 +167,8 @@ def sets_case(name, files, want_names, want_parts, refused=None):
         detail = got
     except SystemExit as e:
         ok, detail = refused is not None and refused in str(e), str(e)
+    except Exception as e:  # noqa: BLE001 - a crash is the case's failure, said
+        ok, detail = False, f"crashed: {type(e).__name__}: {e}"
     fails += not ok
     print(f"{'PASS' if ok else 'FAIL'} {name}" + ("" if ok else f"\n  {detail}"))
 os.makedirs(os.path.join(W, "sets-work"), exist_ok=True)
@@ -193,6 +199,48 @@ sets_case("a value file from outside infra: refused",
           {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
               "helm: {valueFiles: [$values/values/demo.yaml]}", "helm: {valueFiles: [values/demo.yaml]}")},
           [], [], refused="is not from infra")
+# an empty document in an apps file ('', [], none at all) is no application - skipped, the others read
+sets_case("empty documents beside an Application: skipped",
+          {"clusters/production/argocd/apps/demo.yaml": "--- ''\n--- []\n---\n---\n" + APP % mo.PLATFORM_URL,
+           "values/demo.yaml": "x: 1\n"}, ["demo"], [("demo", "x: 1")])
+# two platform chart sources in one application: refused (only the first was rendered)
+sets_case("two platform chart sources: refused",
+          {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
+              "    - {repoURL: https://git.pmon.dev/schnappy/infra.git, ref: values}\n",
+              "    - {repoURL: %s, path: charts/demo}\n    - {repoURL: https://git.pmon.dev/schnappy/infra.git, ref: values}\n"
+              % mo.PLATFORM_URL), "values/demo.yaml": "x: 1\n"},
+          [], [], refused="expected one platform chart source")
+# a git generator's directory glob as Argo CD matches it: the whole name (*-svc is not a-svc-old), * within one level
+sets_case("a git-directories glob: the whole name matched, * within one directory",
+          {"clusters/production/argocd/apps/envs.yaml": SET_GIT.replace("envs/*}", "envs/*-svc}"),
+           "clusters/production/envs/a-svc/values.yaml": "x: 1\n",
+           "clusters/production/envs/a-svc-old/values.yaml": "x: 2\n",
+           "clusters/production/envs/x/y-svc/values.yaml": "x: 3\n"},
+          ["demo-a-svc"], [("demo-a-svc", "x: 1")])
+# Argo CD's precedence: the value files, then the inline values over them
+sets_case("inline values over the value files",
+          {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
+              "helm: {valueFiles: [$values/values/demo.yaml]}",
+              'helm: {valueFiles: [$values/values/demo.yaml], values: "x: 2"}'), "values/demo.yaml": "x: 1\n"},
+          ["demo"], [("demo", "x: 2")])
+# a templated releaseName evaluated per application, as its name is - never passed to helm as written
+n0 = len(open(os.environ["HELM_ARGS"]).read().splitlines())
+sets_case("a templated releaseName: rendered per application",
+          {"clusters/production/argocd/apps/envs.yaml": SET_GIT.replace(
+              'helm: {valueFiles:', 'helm: {releaseName: "rel-{{ .path.basenameNormalized }}", valueFiles:'),
+           "clusters/production/envs/a/values.yaml": "x: 1\n", "clusters/production/envs/b/values.yaml": "x: 2\n"},
+          ["demo-a", "demo-b"], [])
+releases = sorted(c.split()[1] for c in open(os.environ["HELM_ARGS"]).read().splitlines()[n0:])
+fails += not (lambda ok: (print(f"{'PASS' if ok else 'FAIL'} ... each helm template with its release evaluated"
+                                + ("" if ok else f": {releases}")), ok)[1])(releases == ["rel-a", "rel-b"])
+# the refs before the first step are main (nothing merged before it), before any other the step before it's
+saved_refs = mo.refs
+mo.refs = lambda step: {"infra": "i-" + step, "platform": "p-" + step}
+got = [mo.refs_before(s, ["01-before", "02-step"]) for s in ("01-before", "02-step")]
+mo.refs = saved_refs
+fails += not (lambda ok: (print(f"{'PASS' if ok else 'FAIL'} the refs before the first step: main; before the second: "
+                                f"the first's" + ("" if ok else f": {got}")), ok)[1])(
+    got == [{"infra": "main", "platform": "main"}, {"infra": "i-01-before", "platform": "p-01-before"}])
 # as Argo CD renders: the cluster's Kubernetes version and API versions passed to every helm template
 calls = open(os.environ["HELM_ARGS"]).read().splitlines()
 check_ = lambda name, ok: (print(f"{'PASS' if ok else 'FAIL'} {name}"), ok)[1]
