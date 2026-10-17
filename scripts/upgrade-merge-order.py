@@ -227,9 +227,8 @@ def outside(repo, before_ref, after_ref, read):
     return [f for f in git("infra", "diff", "--name-only", before_ref, after_ref).split() if f not in read]
 
 
-def refs_before(step):
-    """The refs before the step: the step before it's, or main for the first."""
-    names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
+def refs_before(step, names):
+    """The refs before the step: the step before it's (names: every step, in order), or main for the first."""
     return refs(names[names.index(step) - 1]) if names.index(step) else {"infra": "main", "platform": "main"}
 
 
@@ -238,8 +237,9 @@ def check(step):
     if len(order) < 2:
         print(f"{step}: one repo - no state between merges")
         return True
+    names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     after = refs(step)
-    before = refs_before(step)
+    before = refs_before(step, names)
     first, second = order
     between = dict(before, **{first: after[first]})
     CAPABILITIES[:] = capabilities(step)
