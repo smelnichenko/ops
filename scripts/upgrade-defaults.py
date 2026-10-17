@@ -31,7 +31,9 @@ OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STEPS = os.path.join(OPS, "tests", "ansible", "upgrade", "steps")
 BRANCH = "upgrade/defaults-at-targets"
 COMMITTED = "tests/ansible/upgrade/defaults-committed.txt"
-LINE = re.compile(r"default (\S+?): (.+?) => (.+)")
+# <line before> ends at the first " => " after its first character - written out, not as a lazy .+? before " => ":
+# that backtracks, quadratic on a long line
+LINE = re.compile(r"default (\S+?): (.(?:(?! => ).)*) => (.+)")
 
 
 def step_names():

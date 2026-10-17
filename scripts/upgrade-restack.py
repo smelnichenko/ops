@@ -38,6 +38,85 @@ def git(repo, *args, check=True):
     return out.stdout.strip()
 
 
+def bare(name):
+    """The step name without its number."""
+    return name.split("-", 1)[1]
+
+
+def new_names(names, order):
+    """{step name: its name in the new order, numbered by position} - after a check that the order names every step
+    once."""
+    by_bare = {bare(n): n for n in names}
+    if sorted(map(bare, order)) != sorted(by_bare):
+        sys.exit(f"the order must name every step once: missing {sorted(set(by_bare) - set(map(bare, order)))}, "
+                 f"unknown {sorted(set(map(bare, order)) - set(by_bare))}")
+    width = 2
+    return {by_bare[bare(o)]: f"{i:0{width}d}-{bare(o)}" for i, o in enumerate(order, 1)}
+
+
+def check_repo(repo, repo_name):
+    if git(repo, "status", "--porcelain"):
+        sys.exit(f"{repo_name}: uncommitted changes")
+    if git(repo, "rev-parse", "--abbrev-ref", "HEAD") != "main":
+        sys.exit(f"{repo_name}: not on main")
+
+
+def own_commits(repo):
+    """({NN-name: branch}, {NN-name: [commit]}) of the repo's step branches, the commits each adds, oldest first."""
+    heads = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/").split()
+    old = {b[len("upgrade/"):]: b for b in heads if re.fullmatch(r"upgrade/\d\d-.+", b)}
+    # each step's own commits: its branch minus the previous step branch (old order) in this repo - over every
+    # branch, a dropped step's too, or its commits would land in the next step's
+    own, prev = {}, "main"
+    for name in sorted(old):
+        own[name] = git(repo, "rev-list", "--reverse", f"{prev}..{old[name]}").split()
+        prev = old[name]
+    return old, own
+
+
+def restack_plan(order, renamed, own):
+    """[(name, new name, base, commits)] of the repo's steps in the new order, each on the one before it."""
+    by_bare = {bare(n): n for n in renamed}
+    plan, base = [], "main"
+    for o in order:
+        name = by_bare[bare(o)]
+        if name in own:
+            plan.append((name, renamed[name], base, own[name]))
+            base = f"upgrade/{renamed[name]}"
+    return plan
+
+
+def cherry_pick(repo, repo_name, step):
+    """The step's branch made anew on its base, its commits cherry-picked - exits at the first that does not apply."""
+    name, new, base, commits = step
+    git(repo, "checkout", "-q", "-b", f"upgrade/{new}", base)
+    for c in commits:
+        r = subprocess.run(["git", "-C", repo, "cherry-pick", "-x", c], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"{repo_name}: {name} -> upgrade/{new}: {c[:10]} does not apply on {base}:\n"
+                     f"{r.stdout.strip()}\n{r.stderr.strip()}\n(resolve, or `git cherry-pick --abort` and"
+                     " reorder; the old branches are upgrade-old/*)")
+
+
+def restack(repo, names, order, renamed, dry_run):
+    repo_name = os.path.basename(os.path.normpath(repo))
+    check_repo(repo, repo_name)
+    old, own = own_commits(repo)
+    dropped = sorted(n for n in own if n not in names)
+    print(f"== {repo_name}: {len(own)} step branches"
+          + (f"; dropped (no step file - kept as upgrade-old/ only): {', '.join(dropped)}" if dropped else ""))
+    plan = restack_plan(order, renamed, own)
+    for name, new, base, commits in plan:
+        print(f"   {name} -> upgrade/{new} on {base}: {len(commits)} commit(s)")
+    if dry_run:
+        return
+    for name in own:
+        git(repo, "branch", "-m", old[name], f"upgrade-old/{name}")
+    for step in plan:
+        cherry_pick(repo, repo_name, step)
+    git(repo, "checkout", "-q", "main")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--order", required=True)
@@ -48,56 +127,14 @@ def main():
 
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     order = [l.strip() for l in open(a.order) if l.strip() and not l.startswith("#")]
-    bare = lambda n: n.split("-", 1)[1]
-    by_bare = {bare(n): n for n in names}
-    if sorted(map(bare, order)) != sorted(by_bare):
-        sys.exit(f"the order must name every step once: missing {sorted(set(by_bare) - set(map(bare, order)))}, "
-                 f"unknown {sorted(set(map(bare, order)) - set(by_bare))}")
-    width = 2
-    new_names = {by_bare[bare(o)]: f"{i:0{width}d}-{bare(o)}" for i, o in enumerate(order, 1)}
+    renamed = new_names(names, order)
 
     for repo in a.repos:
-        repo_name = os.path.basename(os.path.normpath(repo))
-        if git(repo, "status", "--porcelain"):
-            sys.exit(f"{repo_name}: uncommitted changes")
-        if git(repo, "rev-parse", "--abbrev-ref", "HEAD") != "main":
-            sys.exit(f"{repo_name}: not on main")
-        heads = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/").split()
-        old = {b[len("upgrade/"):]: b for b in heads if re.fullmatch(r"upgrade/\d\d-.+", b)}
-        # each step's own commits: its branch minus the previous step branch (old order) in this repo - over every
-        # branch, a dropped step's too, or its commits would land in the next step's
-        own, prev = {}, "main"
-        for name in sorted(old):
-            own[name] = git(repo, "rev-list", "--reverse", f"{prev}..{old[name]}").split()
-            prev = old[name]
-        dropped = sorted(n for n in own if n not in names)
-        print(f"== {repo_name}: {len(own)} step branches"
-              + (f"; dropped (no step file - kept as upgrade-old/ only): {', '.join(dropped)}" if dropped else ""))
-        plan, base = [], "main"
-        for o in order:
-            name = by_bare[bare(o)]
-            if name in own:
-                plan.append((name, new_names[name], base, own[name]))
-                base = f"upgrade/{new_names[name]}"
-        for name, new, base, commits in plan:
-            print(f"   {name} -> upgrade/{new} on {base}: {len(commits)} commit(s)")
-        if a.dry_run:
-            continue
-        for name in own:
-            git(repo, "branch", "-m", old[name], f"upgrade-old/{name}")
-        for name, new, base, commits in plan:
-            git(repo, "checkout", "-q", "-b", f"upgrade/{new}", base)
-            for c in commits:
-                r = subprocess.run(["git", "-C", repo, "cherry-pick", "-x", c], capture_output=True, text=True)
-                if r.returncode != 0:
-                    sys.exit(f"{repo_name}: {name} -> upgrade/{new}: {c[:10]} does not apply on {base}:\n"
-                             f"{r.stdout.strip()}\n{r.stderr.strip()}\n(resolve, or `git cherry-pick --abort` and"
-                             " reorder; the old branches are upgrade-old/*)")
-        git(repo, "checkout", "-q", "main")
+        restack(repo, names, order, renamed, a.dry_run)
     print("== step files")
     for name in names:
-        if new_names[name] != name:
-            print(f"git mv tests/ansible/upgrade/steps/{name}.txt tests/ansible/upgrade/steps/{new_names[name]}.txt")
+        if renamed[name] != name:
+            print(f"git mv tests/ansible/upgrade/steps/{name}.txt tests/ansible/upgrade/steps/{renamed[name]}.txt")
 
 
 if __name__ == "__main__":

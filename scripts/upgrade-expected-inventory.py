@@ -107,6 +107,8 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass, field
+from typing import Optional
 
 OPS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPGRADE = os.path.join(OPS, "tests", "ansible", "upgrade")
@@ -116,89 +118,176 @@ IMAGE_LINE = "image "
 
 
 WAVE0_STORES = ("postgres", "clickhouse", "grafana", "kafka", "gateway", "scylla", "etcd")
+# the checks the runner makes after a step, a line each - --backup-check and the like print "yes" or "no" for them
+FLAG_LINES = ("backup-check", "scylla-backup-check", "barman-check", "barman-after-merge", "restore-check",
+              "sweeper-check", "cert-renew", "restarts-control-plane")
+# the collectors that are sets - the rest are lists, in the file's order
+SET_COLLECTORS = ("flags", "branches")
 
 
-def parse(path, playbooks=None, out_of_sync=None, flags=None, branches=None, compat=None, undo=None, users=None,
-          wave0=None, soak=None, settle=None, tempo_flush=None, base=None, pools_gone=None, test_images=None):
-    changes, seen, undos = [], set(), []
-    for n, raw in enumerate(open(path), 1):
-        line = raw.strip()
-        where = f"{os.path.basename(path)}:{n}"
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("playbook "):
-            if playbooks is not None:
-                playbooks.append(line[len("playbook "):].strip())
-        elif line in ("backup-check", "scylla-backup-check", "barman-check", "barman-after-merge", "restore-check",
-                      "sweeper-check", "cert-renew", "restarts-control-plane"):
-            seen.add(line)
-            if flags is not None:
-                flags.add(line)
-        elif re.fullmatch(r"restore-undo [a-z0-9-]+ \S+", line):
-            image = line.split()[2]
-            # CNPG reads the major from the tag and refuses an image without one ("Can't use just the image sha as we
-            # can't detect upgrades"): a pinned digest goes after the tag
-            if ":" not in image.split("@")[0].rsplit("/", 1)[-1]:
-                sys.exit(f"{where}: restore-undo image {image} has no tag - CNPG refuses it; name:tag@sha256:<digest>")
-            undos.append((image, where))
-            if undo is not None:
-                undo.append(line[len("restore-undo "):])
-        elif re.fullmatch(r"clickhouse-users [a-z0-9_]+(,[a-z0-9_]+)*", line):
-            if users is not None:
-                users.append(line.split()[1])
-        elif re.fullmatch(r"clickhouse-compat \d+\.\d+", line):
-            if compat is not None:
-                compat.append(line.split()[1])
-        elif line in ("branch infra", "branch platform"):
-            if branches is not None:
-                branches.add(line[len("branch "):])
-        elif re.fullmatch(r"wave0 (" + "|".join(WAVE0_STORES) + ")", line):
-            if wave0 is not None:
-                wave0.append(line.split()[1])
-        elif re.fullmatch(r"soak [1-9]\d*", line):
-            if soak is not None:
-                soak.append(int(line.split()[1]))
-        elif re.fullmatch(r"helm-diff \d+\.\d+\.\d+ \d+\.\d+\.\d+", line):
-            pass  # scripts/argo-helm-diff.py
-        elif re.fullmatch(r"settle [1-9]\d*", line):
-            if settle is not None:
-                settle.append(int(line.split()[1]))
-        elif line.startswith("default "):
-            pass  # scripts/upgrade-defaults.py
-        elif re.fullmatch(r"test-image [\w/.:-]+ [\w.-]+", line, re.ASCII):
-            if test_images is not None:
-                test_images.append(line[len("test-image "):])
-        elif re.fullmatch(r"scrape-pool-gone [\w/.:-]+", line, re.ASCII):
-            if pools_gone is not None:
-                pools_gone.append(line.split()[1])
-        elif re.fullmatch(r"base( -e [A-Za-z_][A-Za-z0-9_]*=\S+)+", line):
-            if base is not None:
-                base.append(line[len("base "):])
-        elif re.fullmatch(r"tempo-flush (infra|platform)", line):
-            if tempo_flush is not None:
-                tempo_flush.append(line.split()[1])
-        elif line.startswith("argo-out-of-sync "):
-            if out_of_sync is not None:
-                out_of_sync.append(line[len("argo-out-of-sync "):].strip())
-        elif " => " in line:
-            before, after = (x.strip() for x in line.split(" => "))
-            changes.append((before, after, where))
-        elif line.startswith("+ "):
-            changes.append((None, line[2:].strip(), where))
-        elif line.startswith("- "):
-            changes.append((line[2:].strip(), None, where))
+@dataclass
+class Collectors:
+    """What parse() collects from a step file's lines besides its inventory changes - each only when given."""
+    playbooks: Optional[list] = None
+    out_of_sync: Optional[list] = None
+    flags: Optional[set] = None
+    branches: Optional[set] = None
+    compat: Optional[list] = None
+    undo: Optional[list] = None
+    users: Optional[list] = None
+    wave0: Optional[list] = None
+    soak: Optional[list] = None
+    settle: Optional[list] = None
+    tempo_flush: Optional[list] = None
+    base: Optional[list] = None
+    pools_gone: Optional[list] = None
+    test_images: Optional[list] = None
+
+    def add(self, kind, value):
+        into = getattr(self, kind)
+        if into is None:
+            return
+        if kind in SET_COLLECTORS:
+            into.add(value)
         else:
-            sys.exit(f"{where}: not a step line: {line}")
-    if "barman-after-merge" in seen and "barman-check" not in seen:
+            into.append(value)
+
+
+@dataclass
+class _StepFile:
+    """A step file as parse() reads it: the line at hand (`where`), the inventory changes, the check lines and the
+    restore-undo images seen so far."""
+    collect: Collectors
+    where: str = ""
+    changes: list = field(default_factory=list)
+    seen: set = field(default_factory=set)
+    undos: list = field(default_factory=list)
+
+
+def _flag(step, line):
+    step.seen.add(line)
+    step.collect.add("flags", line)
+
+
+def _restore_undo(step, line):
+    image = line.split()[2]
+    # CNPG reads the major from the tag and refuses an image without one ("Can't use just the image sha as we
+    # can't detect upgrades"): a pinned digest goes after the tag
+    if ":" not in image.split("@")[0].rsplit("/", 1)[-1]:
+        sys.exit(f"{step.where}: restore-undo image {image} has no tag - CNPG refuses it; name:tag@sha256:<digest>")
+    step.undos.append((image, step.where))
+    step.collect.add("undo", line[len("restore-undo "):])
+
+
+def _moved(step, line):
+    before, after = (x.strip() for x in line.split(" => "))
+    step.changes.append((before, after, step.where))
+
+
+def _added(step, line):
+    step.changes.append((None, line[2:].strip(), step.where))
+
+
+def _removed(step, line):
+    step.changes.append((line[2:].strip(), None, step.where))
+
+
+def _collect(kind, value):
+    """A line that only feeds the `kind` collector, with value(line)."""
+    return lambda step, line: step.collect.add(kind, value(line))
+
+
+def _second(line):
+    return line.split()[1]
+
+
+def _rest(prefix, strip=False):
+    """The line after `prefix` (stripped)."""
+    return lambda line: line[len(prefix):].strip() if strip else line[len(prefix):]
+
+
+def _fullmatch(pattern, flags=0):
+    return lambda line: re.fullmatch(pattern, line, flags) is not None
+
+
+def _starts(prefix):
+    return lambda line: line.startswith(prefix)
+
+
+# a step file's lines by kind, in the order a line is tried - the first kind it matches takes it; None: a line another
+# script reads
+STEP_LINES = (
+    (_starts("playbook "), _collect("playbooks", _rest("playbook ", strip=True))),
+    (lambda line: line in FLAG_LINES, _flag),
+    (_fullmatch(r"restore-undo [a-z0-9-]+ \S+"), _restore_undo),
+    (_fullmatch(r"clickhouse-users [a-z0-9_]+(,[a-z0-9_]+)*"), _collect("users", _second)),
+    (_fullmatch(r"clickhouse-compat \d+\.\d+"), _collect("compat", _second)),
+    (lambda line: line in ("branch infra", "branch platform"), _collect("branches", _rest("branch "))),
+    (_fullmatch(r"wave0 (" + "|".join(WAVE0_STORES) + ")"), _collect("wave0", _second)),
+    (_fullmatch(r"soak [1-9]\d*"), _collect("soak", lambda line: int(_second(line)))),
+    (_fullmatch(r"helm-diff \d+\.\d+\.\d+ \d+\.\d+\.\d+"), None),  # scripts/argo-helm-diff.py
+    (_fullmatch(r"settle [1-9]\d*"), _collect("settle", lambda line: int(_second(line)))),
+    (_starts("default "), None),  # scripts/upgrade-defaults.py
+    (_fullmatch(r"test-image [\w/.:-]+ [\w.-]+", re.ASCII), _collect("test_images", _rest("test-image "))),
+    (_fullmatch(r"scrape-pool-gone [\w/.:-]+", re.ASCII), _collect("pools_gone", _second)),
+    # (?a:\w) is [A-Za-z0-9_] - ASCII for the name alone, \S stays Unicode
+    (_fullmatch(r"base( -e [A-Za-z_](?a:\w)*=\S+)+"), _collect("base", _rest("base "))),
+    (_fullmatch(r"tempo-flush (infra|platform)"), _collect("tempo_flush", _second)),
+    (_starts("argo-out-of-sync "), _collect("out_of_sync", _rest("argo-out-of-sync ", strip=True))),
+    (lambda line: " => " in line, _moved),
+    (_starts("+ "), _added),
+    (_starts("- "), _removed),
+)
+
+
+def _read_line(step, line):
+    for matches, take in STEP_LINES:
+        if matches(line):
+            if take:
+                take(step, line)
+            return
+    sys.exit(f"{step.where}: not a step line: {line}")
+
+
+def _check_step(path, step):
+    if "barman-after-merge" in step.seen and "barman-check" not in step.seen:
         sys.exit(f"{os.path.basename(path)}: barman-after-merge without barman-check")
     # the undo recovers the old major with the image the step starts from - not the one it moves to, nor another
-    starts = {before for before, _, _ in changes if before}
-    for image, where in undos:
+    starts = {before for before, _, _ in step.changes if before}
+    for image, where in step.undos:
         name, tag = image.split("@")[0].rsplit(":", 1)
         if f"{IMAGE_LINE}{name} {tag}" not in starts:
             sys.exit(f"{where}: restore-undo image {name}:{tag} is not the image the step starts from "
                      f"(no 'image {name} {tag} =>' line)")
-    return changes
+
+
+def parse(path, collect=None, **collectors):
+    """The step file's inventory changes, [(before, after, where)] (None: a line added or removed); its other lines
+    into `collect` - a Collectors, or its fields by keyword."""
+    if collect is None:
+        collect = Collectors(**collectors)
+    elif collectors:
+        raise TypeError("parse(): a Collectors or its fields by keyword, not both")
+    step = _StepFile(collect)
+    for n, raw in enumerate(open(path), 1):
+        line = raw.strip()
+        step.where = f"{os.path.basename(path)}:{n}"
+        if line and not line.startswith("#"):
+            _read_line(step, line)
+    _check_step(path, step)
+    return step.changes
+
+
+def step_file(name):
+    return os.path.join(STEPS, name + ".txt")
+
+
+def collected(kind, names):
+    """The `kind` collector (Collectors' field) filled from these steps' files, in order."""
+    collect = Collectors(**{kind: set() if kind in SET_COLLECTORS else []})
+    for name in names:
+        parse(step_file(name), collect)
+    return getattr(collect, kind)
 
 
 def merged(repo, branch):
@@ -212,30 +301,50 @@ def merged(repo, branch):
     return True
 
 
-def ref(repo, step_no, names):
-    """The repo's highest upgrade/NN-* branch with NN <= step_no, checked to stack on the one before; else main. The
-    branches up to the step must be exactly those the step files declare, by step name. Steps production merged already
-    (scripts/upgrade-merge-step.sh tagged them) are in main: they come first, and the rest stack on main; a merged
-    step's branch deleted after its merge counts by its tag."""
+def _step_branches(repo):
+    """[(NN, branch)] of the repo's upgrade/NN-* branches, by number - a merged step's branch deleted after its merge
+    counted by its tag."""
     out = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/heads/upgrade/"],
                          capture_output=True, text=True, check=True).stdout.split()
     # a merged step whose branch was deleted after its merge is still there by its tag (merged() reads the tag)
     tags = subprocess.run(["git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/tags/upgrade-merged/"],
                           capture_output=True, text=True, check=True).stdout.split()
     out += [b for t in tags if (b := "upgrade/" + t.split("/", 1)[1]) not in out]
-    branches = sorted((int(m.group(1)), b) for b in out if (m := re.fullmatch(r"upgrade/(\d\d)-.+", b)))
-    repo_name = os.path.basename(os.path.normpath(repo))
+    return sorted((int(m.group(1)), b) for b in out if (m := re.fullmatch(r"upgrade/(\d\d)-.+", b)))
+
+
+def _check_declared(repo_name, step_no, names, branches):
+    """The branches up to the step are exactly those the step files declare for the repo, by step name."""
     declared = set()
     for name in names:
         if int(name[:2]) <= step_no:
             repos = set()
-            parse(os.path.join(STEPS, name + ".txt"), branches=repos)
+            parse(step_file(name), branches=repos)
             if repo_name in repos:
                 declared.add("upgrade/" + name)
     present = {b for n, b in branches if n <= step_no}
     if declared != present:
         sys.exit(f"{repo_name}: step branches up to {step_no:02d} differ from the step files' branch lines - missing: "
                  f"{sorted(declared - present) or '-'}, undeclared: {sorted(present - declared) or '-'}")
+
+
+def _stacked(repo, prev, b):
+    """`b` stacks on `prev` and changes something on it - else exits."""
+    if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", prev, b]).returncode != 0:
+        sys.exit(f"{repo}: {b} does not contain {prev} - rebase it on the previous step's branch")
+    # a branch pointing at its predecessor's commit stacks too, and carries no change: its step would go green
+    # without it
+    if not subprocess.run(["git", "-C", repo, "diff", "--quiet", prev, b]).returncode:
+        sys.exit(f"{repo}: {b} changes nothing on {prev} - the step's change is missing")
+
+
+def ref(repo, step_no, names):
+    """The repo's highest upgrade/NN-* branch with NN <= step_no, checked to stack on the one before; else main. The
+    branches up to the step must be exactly those the step files declare, by step name. Steps production merged already
+    (scripts/upgrade-merge-step.sh tagged them) are in main: they come first, and the rest stack on main; a merged
+    step's branch deleted after its merge counts by its tag."""
+    branches = _step_branches(repo)
+    _check_declared(os.path.basename(os.path.normpath(repo)), step_no, names, branches)
     numbers = [n for n, _ in branches]
     if len(numbers) != len(set(numbers)):
         sys.exit(f"{repo}: two upgrade branches share a number: {[b for _, b in branches]}")
@@ -247,12 +356,7 @@ def ref(repo, step_no, names):
             if prev != "main":
                 sys.exit(f"{repo}: {b} is merged, but {prev} before it is not - merged out of order")
             continue
-        if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", prev, b]).returncode != 0:
-            sys.exit(f"{repo}: {b} does not contain {prev} - rebase it on the previous step's branch")
-        # a branch pointing at its predecessor's commit stacks too, and carries no change: its step would go green
-        # without it
-        if not subprocess.run(["git", "-C", repo, "diff", "--quiet", prev, b]).returncode:
-            sys.exit(f"{repo}: {b} changes nothing on {prev} - the step's change is missing")
+        _stacked(repo, prev, b)
         prev = b
     return prev
 
@@ -276,16 +380,57 @@ def pg_major(step):
     return major[0] if major else ""
 
 
+def _up_to(step, names):
+    return names[:names.index(step) + 1]
+
+
+def _playbooks(step):
+    playbooks = collected("playbooks", [step])
+    return "\n".join(playbooks) if playbooks else None
+
+
+def _flag_mode(flag):
+    return lambda step, names: "yes" if flag in collected("flags", [step]) else "no"
+
+
+def _first(kind):
+    """The step's first `kind` line, "" for none."""
+    return lambda step, names: next(iter(collected(kind, [step])), "")
+
+
+def _before(step, names):
+    i = names.index(step)
+    return names[i - 1] if i else ""
+
+
+def _refs(step, names):
+    step_no = int(step[:2])
+    return (f"{ref(os.path.join(OPS, '..', 'infra'), step_no, names)} "
+            f"{ref(os.path.join(OPS, '..', 'platform'), step_no, names)}")
+
+
+# each mode's output for the step (None: nothing printed)
+MODES = {
+    "--refs": _refs,
+    "--playbooks": lambda step, names: _playbooks(step),
+    "--out-of-sync": lambda step, names: ",".join(collected("out_of_sync", [step])),
+    **{f"--{flag}": _flag_mode(flag) for flag in FLAG_LINES},
+    "--tempo-flush": _first("tempo_flush"),
+    "--clickhouse-compat": lambda step, names: next(reversed(collected("compat", _up_to(step, names))), ""),
+    "--restore-undo": _first("undo"),
+    "--clickhouse-users": lambda step, names: next(reversed(collected("users", _up_to(step, names))),
+                                                   "default,schnappy"),
+    "--wave0": lambda step, names: " ".join(collected("wave0", [step])),
+    "--pg-major": lambda step, names: pg_major(step),
+    "--base-args": lambda step, names: " ".join(collected("base", _up_to(step, names))),
+    "--before": _before,
+    "--scrape-pools-gone": lambda step, names: ",".join(collected("pools_gone", _up_to(step, names))),
+}
+
+
 def main():
     args = sys.argv[1:]
-    mode = args[0] if args[:1] in (["--refs"], ["--playbooks"], ["--out-of-sync"], ["--backup-check"],
-                                   ["--scylla-backup-check"],
-                                   ["--barman-check"], ["--barman-after-merge"], ["--restore-check"],
-                                   ["--sweeper-check"], ["--cert-renew"],
-                                   ["--restarts-control-plane"], ["--tempo-flush"],
-                                   ["--clickhouse-compat"], ["--restore-undo"], ["--clickhouse-users"],
-                                   ["--wave0"], ["--pg-major"], ["--base-args"], ["--before"],
-                                   ["--scrape-pools-gone"]) else None
+    mode = args[0] if args and args[0] in MODES else None
     if mode:
         args = args[1:]
     if len(args) != 1:
@@ -293,75 +438,22 @@ def main():
     names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     if args[0] not in names:
         sys.exit(f"no step {args[0]} (steps: {', '.join(names)})")
-    if mode == "--pg-major":
-        print(pg_major(args[0]))
+    if not mode:
+        print("\n".join(sorted(expected(_up_to(args[0], names)))))
         return
-    if mode == "--playbooks":
-        playbooks = []
-        parse(os.path.join(STEPS, args[0] + ".txt"), playbooks)
-        if playbooks:
-            print("\n".join(playbooks))
-        return
-    if mode in ("--backup-check", "--scylla-backup-check", "--barman-check", "--barman-after-merge",
-                "--restore-check", "--sweeper-check", "--cert-renew", "--restarts-control-plane"):
-        flags = set()
-        parse(os.path.join(STEPS, args[0] + ".txt"), flags=flags)
-        print("yes" if mode[2:] in flags else "no")
-        return
-    if mode == "--tempo-flush":
-        before = []
-        parse(os.path.join(STEPS, args[0] + ".txt"), tempo_flush=before)
-        print(before[0] if before else "")
-        return
-    if mode == "--restore-undo":
-        undo = []
-        parse(os.path.join(STEPS, args[0] + ".txt"), undo=undo)
-        print(undo[0] if undo else "")
-        return
-    if mode == "--clickhouse-users":
-        users = []
-        for name in names[:names.index(args[0]) + 1]:
-            parse(os.path.join(STEPS, name + ".txt"), users=users)
-        print(users[-1] if users else "default,schnappy")
-        return
-    if mode == "--clickhouse-compat":
-        compat = []
-        for name in names[:names.index(args[0]) + 1]:
-            parse(os.path.join(STEPS, name + ".txt"), compat=compat)
-        print(compat[-1] if compat else "")
-        return
-    if mode == "--scrape-pools-gone":
-        gone = []
-        for name in names[:names.index(args[0]) + 1]:
-            parse(os.path.join(STEPS, name + ".txt"), pools_gone=gone)
-        print(",".join(gone))
-        return
-    if mode == "--before":
-        i = names.index(args[0])
-        print(names[i - 1] if i else "")
-        return
-    if mode == "--base-args":
-        base = []
-        for name in names[:names.index(args[0]) + 1]:
-            parse(os.path.join(STEPS, name + ".txt"), base=base)
-        print(" ".join(base))
-        return
-    if mode == "--wave0":
-        wave0 = []
-        parse(os.path.join(STEPS, args[0] + ".txt"), wave0=wave0)
-        print(" ".join(wave0))
-        return
-    if mode == "--out-of-sync":
-        apps = []
-        parse(os.path.join(STEPS, args[0] + ".txt"), out_of_sync=apps)
-        print(",".join(apps))
-        return
-    if mode == "--refs":
-        step_no = int(args[0][:2])
-        print(ref(os.path.join(OPS, "..", "infra"), step_no, names),
-              ref(os.path.join(OPS, "..", "platform"), step_no, names))
-        return
-    print("\n".join(sorted(expected(names[:names.index(args[0]) + 1]))))
+    out = MODES[mode](args[0], names)
+    if out is not None:
+        print(out)
+
+
+def _apply(inventory, before, after, where):
+    """One change on the inventory - its "before" line must be there."""
+    if before is not None:
+        if before not in inventory:
+            sys.exit(f"{where}: '{before}' is not in the inventory at this step - the step file is stale")
+        inventory.discard(before)
+    if after is not None:
+        inventory.add(after)
 
 
 def expected(applied):
@@ -369,12 +461,7 @@ def expected(applied):
     inventory = {l.rstrip("\n") for l in open(os.path.join(UPGRADE, "prod-inventory.txt")) if l.strip()}
     for name in sorted(applied):
         for before, after, where in parse(os.path.join(STEPS, name + ".txt")):
-            if before is not None:
-                if before not in inventory:
-                    sys.exit(f"{where}: '{before}' is not in the inventory at this step - the step file is stale")
-                inventory.discard(before)
-            if after is not None:
-                inventory.add(after)
+            _apply(inventory, before, after, where)
     return inventory
 
 
