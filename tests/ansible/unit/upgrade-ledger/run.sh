@@ -914,13 +914,25 @@ check("settled: the preview environments' namespaces left out, production's and 
       [bool(ignored and re.search(ignored, ns)) for ns in ("schnappy-pr-7", "schnappy-production", "schnappy-test",
                                                            "schnappy-infra")], [True, False, False, False])
 
-# each phase that runs Ansible (ansible(...) in its function, or the step's playbook lines) has its Taskfile task depend
-# on deploy:install - the venv and the collections; merge's pre-pull and base backup lacked it
+# each phase that runs Ansible (ansible(...) in its function or in any function it calls, or the step's playbook lines)
+# has its Taskfile task depend on deploy:install - the venv and the collections; merge's pre-pull and base backup lacked
+# it. Through the calls: a phase reaching Ansible through a helper of its own runs it all the same
 import ast, yaml as _yaml
 src = open("scripts/upgrade-production.py").read()
-funcs = {n.name: ast.get_source_segment(src, n) for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)}
+fns_ = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)]
+funcs = {n.name: ast.get_source_segment(src, n) for n in fns_}
+calls_ = {n.name: {c.func.id for c in ast.walk(n) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+          for n in fns_}
 runs_ansible = {f for f, body in funcs.items() if "ansible(" in body or "upgrade-step-playbooks.sh" in body} - {"ansible"}
+while True:
+    more_ = runs_ansible | {f for f, cs in calls_.items() if cs & runs_ansible} - {"ansible"}
+    if more_ == runs_ansible:
+        break
+    runs_ansible = more_
 tasks_ = _yaml.safe_load(open("Taskfile.yml"))["tasks"]
+phases_ = sorted(set(re.findall(r"upgrade-production\.py (\w[\w-]*) ", open("Taskfile.yml").read())))
+check("the phases that run Ansible, through their helpers too", [ph for ph in phases_ if ph in runs_ansible],
+      ["backup", "check", "done", "merge", "playbooks", "preview"])
 lacking = sorted(name for name, t in tasks_.items() if name.startswith("deploy:upgrade:")
                  and any(f"upgrade-production.py {ph} " in str(t.get("cmds")) for ph in runs_ansible)
                  and "deploy:install" not in (t.get("deps") or []))
