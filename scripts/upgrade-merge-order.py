@@ -81,91 +81,133 @@ def evaluate(template, ctx, where):
     return re.sub(r"\{\{(.*?)\}\}", one, template)
 
 
+def applications(infra_ref, kinds):
+    """(file, document) of each of `kinds` in infra's apps directory at `infra_ref`, in file order."""
+    files = [f for f in git("infra", "ls-tree", "--name-only", f"{infra_ref}:{APPS}").split() if f.endswith(".yaml")]
+    for f in files:
+        for doc in yaml.safe_load_all(git("infra", "show", f"{infra_ref}:{APPS}/{f}")):
+            if doc and doc.get("kind") in kinds:
+                yield f, doc
+
+
+def platform_source(doc, where):
+    """(spec, source) of the application's one platform chart; None: it reads none."""
+    spec = doc["spec"]["template"]["spec"] if doc["kind"] == "ApplicationSet" else doc["spec"]
+    sources = spec.get("sources") or [spec["source"]]
+    charts_here = [s for s in sources if s.get("repoURL") == PLATFORM_URL]
+    if not charts_here:
+        return None
+    if len(charts_here) != 1 or "path" not in charts_here[0]:
+        sys.exit(f"{where}: expected one platform chart source")
+    return spec, charts_here[0]
+
+
+def git_directories(generator, infra_ref):
+    """The infra directories a git generator's directory patterns match at `infra_ref`."""
+    dirs = []
+    for d in generator["directories"]:
+        pattern = d["path"]
+        parent, glob = pattern.rsplit("/", 1)
+        rx = re.compile("^" + re.escape(glob).replace(r"\*", "[^/]*") + "$")
+        listing = git("infra", "ls-tree", "-d", "--name-only", f"{infra_ref}:{parent}").split()
+        dirs += [f"{parent}/{x}" for x in listing if rx.match(x)]
+    return dirs
+
+
+def pull_request_contexts(matrix, where):
+    """A list x pullRequest matrix's contexts: one pull request per listed source repo, number 1."""
+    inner = matrix["generators"]
+    lists = [g for g in inner if "list" in g]
+    if len(inner) != 2 or len(lists) != 1 or not any("pullRequest" in g for g in inner):
+        sys.exit(f"{where}: expected a list x pullRequest matrix")
+    return [{".repo": e["repo"], ".number": "1", ".head_short_sha": "0000000"} for e in lists[0]["list"]["elements"]]
+
+
+def contexts(doc, infra_ref, where):
+    """(template contexts, name template) of an application: an Application's one, an ApplicationSet's per what its
+    generator yields - one it cannot evaluate refuses."""
+    if doc["kind"] == "Application":
+        return [{}], doc["metadata"]["name"]
+    gens = doc["spec"]["generators"]
+    if len(gens) == 1 and "git" in gens[0]:
+        out = [{".path.path": p, ".path.basenameNormalized": os.path.basename(p)}
+               for p in git_directories(gens[0]["git"], infra_ref)]
+    elif len(gens) == 1 and "matrix" in gens[0]:
+        out = pull_request_contexts(gens[0]["matrix"], where)
+    else:
+        sys.exit(f"{where}: an ApplicationSet generator this check cannot evaluate")
+    return out, doc["spec"]["template"]["metadata"]["name"]
+
+
+def render_inputs(spec, helm, name_tpl, ctx, where):
+    """(name, release, namespace, infra value files, inline values) of one application in context `ctx`."""
+    name = evaluate(name_tpl, ctx, where)
+    release = evaluate(helm.get("releaseName", name), ctx, where)
+    namespace = evaluate(spec["destination"]["namespace"], ctx, where)
+    value_files = []
+    for v in helm.get("valueFiles", []):
+        v = evaluate(v, ctx, where)
+        if not v.startswith("$values/"):
+            sys.exit(f"{where}: value file {v} is not from infra ($values)")
+        value_files.append(v[len("$values/"):])
+    inline = evaluate(helm["values"], ctx, where) if "values" in helm else None
+    if "valuesObject" in helm or "parameters" in helm:
+        sys.exit(f"{where}: helm valuesObject/parameters - not evaluated by this check")
+    return name, release, namespace, value_files, inline
+
+
+def chart_dir(charts, chart, work, platform_ref):
+    """The chart's directory: platform's tree at `platform_ref` extracted under `work` the first time it is asked."""
+    if chart not in charts:
+        dest = os.path.join(work, f"{platform_ref.replace('/', '_')}")
+        os.makedirs(dest, exist_ok=True)
+        archive = subprocess.run(["git", "-C", REPOS["platform"], "archive", platform_ref, chart],
+                                 capture_output=True, check=True).stdout
+        subprocess.run(["tar", "-x", "-C", dest], input=archive, check=True)
+        charts[chart] = os.path.join(dest, chart)
+    return charts[chart]
+
+
+def values_args(work, n, infra_ref, value_files, inline, read):
+    """helm template's -f of the n-th render: each infra value file (added to `read`), then its inline values."""
+    args = []
+    for i, path in enumerate(value_files):
+        f = os.path.join(work, f"values-{n}-{i}.yaml")
+        with open(f, "w") as fh:
+            fh.write(git("infra", "show", f"{infra_ref}:{path}"))
+        args += ["-f", f]
+        if read is not None:
+            read.add(path)
+    if inline is not None:
+        f = os.path.join(work, f"inline-{n}.yaml")
+        with open(f, "w") as fh:
+            fh.write(inline)
+        args += ["-f", f]
+    return args
+
+
 def renders(infra_ref, platform_ref, work, read=None):
     """{application name: rendered manifests} for every application that reads a platform chart; the infra value
     files they read added to `read`."""
     out = {}
     charts = {}
-
-    def render(name, chart, release, namespace, value_files, inline):
-        if chart not in charts:
-            dest = os.path.join(work, f"{platform_ref.replace('/', '_')}")
-            os.makedirs(dest, exist_ok=True)
-            archive = subprocess.run(["git", "-C", REPOS["platform"], "archive", platform_ref, chart],
-                                     capture_output=True, check=True).stdout
-            subprocess.run(["tar", "-x", "-C", dest], input=archive, check=True)
-            charts[chart] = os.path.join(dest, chart)
-        args = [HELM, "template", release, charts[chart], "-n", namespace, *CAPABILITIES]
-        for i, path in enumerate(value_files):
-            f = os.path.join(work, f"values-{len(out)}-{i}.yaml")
-            with open(f, "w") as fh:
-                fh.write(git("infra", "show", f"{infra_ref}:{path}"))
-            args += ["-f", f]
-            if read is not None:
-                read.add(path)
-        if inline is not None:
-            f = os.path.join(work, f"inline-{len(out)}.yaml")
-            with open(f, "w") as fh:
-                fh.write(inline)
-            args += ["-f", f]
-        r = subprocess.run(args, capture_output=True, text=True)
-        if r.returncode:
-            sys.exit(f"{name}: helm template failed at infra {infra_ref}, platform {platform_ref}:\n{r.stderr}")
-        out[name] = r.stdout
-
-    files = [f for f in git("infra", "ls-tree", "--name-only", f"{infra_ref}:{APPS}").split() if f.endswith(".yaml")]
-    for f in files:
-        for doc in yaml.safe_load_all(git("infra", "show", f"{infra_ref}:{APPS}/{f}")):
-            if not doc or doc.get("kind") not in ("Application", "ApplicationSet"):
-                continue
-            where = f"{APPS}/{f}"
-            spec = doc["spec"]["template"]["spec"] if doc["kind"] == "ApplicationSet" else doc["spec"]
-            sources = spec.get("sources") or [spec["source"]]
-            charts_here = [s for s in sources if s.get("repoURL") == PLATFORM_URL]
-            if not charts_here:
-                continue
-            if len(charts_here) != 1 or "path" not in charts_here[0]:
-                sys.exit(f"{where}: expected one platform chart source")
-            src = charts_here[0]
-            helm = src.get("helm", {})
-            if doc["kind"] == "Application":
-                contexts = [{}]
-                name_tpl = doc["metadata"]["name"]
-            else:
-                gens = doc["spec"]["generators"]
-                if len(gens) == 1 and "git" in gens[0]:
-                    dirs = []
-                    for d in gens[0]["git"]["directories"]:
-                        pattern = d["path"]
-                        parent, glob = pattern.rsplit("/", 1)
-                        rx = re.compile("^" + re.escape(glob).replace(r"\*", "[^/]*") + "$")
-                        listing = git("infra", "ls-tree", "-d", "--name-only", f"{infra_ref}:{parent}").split()
-                        dirs += [f"{parent}/{x}" for x in listing if rx.match(x)]
-                    contexts = [{".path.path": p, ".path.basenameNormalized": os.path.basename(p)} for p in dirs]
-                elif len(gens) == 1 and "matrix" in gens[0]:
-                    inner = gens[0]["matrix"]["generators"]
-                    lists = [g for g in inner if "list" in g]
-                    if len(inner) != 2 or len(lists) != 1 or not any("pullRequest" in g for g in inner):
-                        sys.exit(f"{where}: expected a list x pullRequest matrix")
-                    contexts = [{".repo": e["repo"], ".number": "1", ".head_short_sha": "0000000"}
-                                for e in lists[0]["list"]["elements"]]
-                else:
-                    sys.exit(f"{where}: an ApplicationSet generator this check cannot evaluate")
-                name_tpl = doc["spec"]["template"]["metadata"]["name"]
-            for ctx in contexts:
-                name = evaluate(name_tpl, ctx, where)
-                release = evaluate(helm.get("releaseName", name), ctx, where)
-                namespace = evaluate(spec["destination"]["namespace"], ctx, where)
-                value_files = []
-                for v in helm.get("valueFiles", []):
-                    v = evaluate(v, ctx, where)
-                    if not v.startswith("$values/"):
-                        sys.exit(f"{where}: value file {v} is not from infra ($values)")
-                    value_files.append(v[len("$values/"):])
-                inline = evaluate(helm["values"], ctx, where) if "values" in helm else None
-                if "valuesObject" in helm or "parameters" in helm:
-                    sys.exit(f"{where}: helm valuesObject/parameters - not evaluated by this check")
-                render(name, src["path"], release, namespace, value_files, inline)
+    for f, doc in applications(infra_ref, ("Application", "ApplicationSet")):
+        where = f"{APPS}/{f}"
+        found = platform_source(doc, where)
+        if not found:
+            continue
+        spec, src = found
+        helm = src.get("helm", {})
+        ctxs, name_tpl = contexts(doc, infra_ref, where)
+        for ctx in ctxs:
+            name, release, namespace, value_files, inline = render_inputs(spec, helm, name_tpl, ctx, where)
+            args = [HELM, "template", release, chart_dir(charts, src["path"], work, platform_ref), "-n", namespace,
+                    *CAPABILITIES]
+            args += values_args(work, len(out), infra_ref, value_files, inline, read)
+            r = subprocess.run(args, capture_output=True, text=True)
+            if r.returncode:
+                sys.exit(f"{name}: helm template failed at infra {infra_ref}, platform {platform_ref}:\n{r.stderr}")
+            out[name] = r.stdout
     return out
 
 
@@ -185,14 +227,19 @@ def outside(repo, before_ref, after_ref, read):
     return [f for f in git("infra", "diff", "--name-only", before_ref, after_ref).split() if f not in read]
 
 
+def refs_before(step):
+    """The refs before the step: the step before it's, or main for the first."""
+    names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
+    return refs(names[names.index(step) - 1]) if names.index(step) else {"infra": "main", "platform": "main"}
+
+
 def check(step):
     order = inv.branch_order(step)
     if len(order) < 2:
         print(f"{step}: one repo - no state between merges")
         return True
-    names = sorted(f[:-4] for f in os.listdir(STEPS) if f.endswith(".txt"))
     after = refs(step)
-    before = refs(names[names.index(step) - 1]) if names.index(step) else {"infra": "main", "platform": "main"}
+    before = refs_before(step)
     first, second = order
     between = dict(before, **{first: after[first]})
     CAPABILITIES[:] = capabilities(step)
@@ -214,6 +261,14 @@ def check(step):
     if m == b and not second_rest:
         print(f"{step}: safe - {first} makes the whole step; {second} renders nothing new")
         return True
+    print_unsafe(step, order, (first_rest, second_rest), (a, m, b))
+    return False
+
+
+def print_unsafe(step, order, rests, states):
+    """Why the order is unsafe: each merge's changes past the renders, and each application rendered neither as before
+    nor as after with the first merge alone."""
+    (first, second), (first_rest, second_rest), (a, m, b) = order, rests, states
     print(f"{step}: UNSAFE in this order ({first} then {second}):")
     if first_rest:
         print(f"  {first} alone renders the applications as before, but its merge also changes "
@@ -221,12 +276,12 @@ def check(step):
     if second_rest:
         print(f"  {second} renders nothing new, but its merge also changes {', '.join(second_rest)} - not live "
               f"while {first} is already the step")
-    if m != a and m != b:
+    neither = m != a and m != b
+    if neither:
         print(f"  with {first} alone these applications render neither as before nor as after:")
     for app in sorted(set(a) | set(m) | set(b)):
-        if m != a and m != b and not (m.get(app) == a.get(app) and m.get(app) == b.get(app)):
+        if neither and not (m.get(app) == a.get(app) and m.get(app) == b.get(app)):
             print(f"    {app}: {between_state(app, a, m, b)}")
-    return False
 
 
 def main():

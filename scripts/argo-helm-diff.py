@@ -119,44 +119,54 @@ def template(args, cwd):
 def upstream(helm, infra_ref, work):
     """{application name: rendered manifests} for every application that takes a chart from an upstream repository."""
     out = {}
-    files = [f for f in mo.git("infra", "ls-tree", "--name-only", f"{infra_ref}:{mo.APPS}").split()
-             if f.endswith(".yaml")]
-    for f in files:
-        for doc in yaml.safe_load_all(mo.git("infra", "show", f"{infra_ref}:{mo.APPS}/{f}")):
-            if not doc or doc.get("kind") != "Application":
-                continue
-            spec, name = doc["spec"], doc["metadata"]["name"]
-            for src in spec.get("sources") or [spec["source"]]:
-                if not src.get("chart"):
-                    continue
-                h = src.get("helm", {})
-                repo = src["repoURL"].rstrip("/")
-                if repo.startswith(("http://", "https://")):  # a chart repository
-                    chart = [src["chart"], "--repo", repo]
-                else:  # an OCI registry (Argo CD takes it without the scheme)
-                    chart = [f"oci://{repo.removeprefix('oci://')}/{src['chart']}"]
-                args = [helm, "template", h.get("releaseName", name), *chart, "--version", str(src["targetRevision"]),
-                        "-n", spec["destination"]["namespace"], "--include-crds", *mo.CAPABILITIES]
-                for i, v in enumerate(h.get("valueFiles", [])):
-                    if not v.startswith("$values/"):
-                        sys.exit(f"{name}: value file {v} is not from infra ($values)")
-                    path = os.path.join(work, f"{name}-values-{i}.yaml")
-                    with open(path, "w") as fh:
-                        fh.write(mo.git("infra", "show", f"{infra_ref}:{v[len('$values/'):]}"))
-                    args += ["-f", path]
-                for key, value in (("values", h.get("values")), ("valuesObject", h.get("valuesObject"))):
-                    if value is not None:
-                        path = os.path.join(work, f"{name}-{key}.yaml")
-                        with open(path, "w") as fh:
-                            fh.write(value if isinstance(value, str) else yaml.safe_dump(value))
-                        args += ["-f", path]
-                for p in h.get("parameters", []):
-                    args += ["--set-string" if p.get("forceString") else "--set", f"{p['name']}={p['value']}"]
-                r = template(args, work)
-                if r.returncode:
-                    sys.exit(f"{name}: {os.path.basename(os.path.dirname(helm))}'s helm template failed:\n{r.stderr}")
-                out[name] = r.stdout
+    for _, doc in mo.applications(infra_ref, ("Application",)):
+        spec, name = doc["spec"], doc["metadata"]["name"]
+        for src in spec.get("sources") or [spec["source"]]:
+            if src.get("chart"):
+                out[name] = upstream_render(helm, infra_ref, work, spec, name, src)
     return out
+
+
+def chart_args(src):
+    """helm template's chart of an upstream source: a chart repository's, or an OCI registry's."""
+    repo = src["repoURL"].rstrip("/")
+    if repo.startswith(("http://", "https://")):  # a chart repository
+        return [src["chart"], "--repo", repo]
+    # an OCI registry (Argo CD takes it without the scheme)
+    return [f"oci://{repo.removeprefix('oci://')}/{src['chart']}"]
+
+
+def upstream_values(h, name, infra_ref, work):
+    """helm template's values of an application's source: its value files from infra, inline values, parameters."""
+    args = []
+    for i, v in enumerate(h.get("valueFiles", [])):
+        if not v.startswith("$values/"):
+            sys.exit(f"{name}: value file {v} is not from infra ($values)")
+        path = os.path.join(work, f"{name}-values-{i}.yaml")
+        with open(path, "w") as fh:
+            fh.write(mo.git("infra", "show", f"{infra_ref}:{v[len('$values/'):]}"))
+        args += ["-f", path]
+    for key, value in (("values", h.get("values")), ("valuesObject", h.get("valuesObject"))):
+        if value is not None:
+            path = os.path.join(work, f"{name}-{key}.yaml")
+            with open(path, "w") as fh:
+                fh.write(value if isinstance(value, str) else yaml.safe_dump(value))
+            args += ["-f", path]
+    for p in h.get("parameters", []):
+        args += ["--set-string" if p.get("forceString") else "--set", f"{p['name']}={p['value']}"]
+    return args
+
+
+def upstream_render(helm, infra_ref, work, spec, name, src):
+    """One upstream chart source of application `name` rendered: helm template's output."""
+    h = src.get("helm", {})
+    args = [helm, "template", h.get("releaseName", name), *chart_args(src), "--version", str(src["targetRevision"]),
+            "-n", spec["destination"]["namespace"], "--include-crds", *mo.CAPABILITIES]
+    args += upstream_values(h, name, infra_ref, work)
+    r = template(args, work)
+    if r.returncode:
+        sys.exit(f"{name}: {os.path.basename(os.path.dirname(helm))}'s helm template failed:\n{r.stderr}")
+    return r.stdout
 
 
 class _Loader(yaml.SafeLoader):
