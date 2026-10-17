@@ -129,7 +129,9 @@ case "$cmd" in
         cat "$(cat "$W/scylla-vol")/schema/$f" >> "$W/scylla-schema"
         [ -z "${SCHEMA_FAIL:-}" ] || { echo "SyntaxException: line 1:7 no viable alternative"; exit 2; } ;;
       *"ls -d /var/lib/scylla/data/"*)
-        [ -n "${NO_TABLE_DIR:-}" ] || { a="$*"; t=${a##*/data/}; echo "/var/lib/scylla/data/${t%-\*}-0123abcd"; } ;;
+        # NO_TABLE_DIR: none - ls fails, as it does
+        [ -z "${NO_TABLE_DIR:-}" ] || { echo "ls: cannot access '/var/lib/scylla/data/x': No such file or directory" >&2; exit 2; }
+        a="$*"; t=${a##*/data/}; echo "/var/lib/scylla/data/${t%-\*}-0123abcd" ;;
       *"cp /w/sst/"*)
         [[ "$*" =~ keyspace/([^/]+)/table/([^/]+)/ ]]
         v=$(cat "$W/scylla-vol")
@@ -203,6 +205,13 @@ printf '#!/bin/bash\n[ -z "${CHRONY_NORMAL:-}" ] || echo "Leap status     : Norm
 printf '#!/bin/bash\necho "sleep $*" >> "$W/sleeps"\n' > "$W/bin/sleep"
 # mktemp: a run's work directory, one a run - counted; past 20 refused, so a run repeating itself inside a part (an
 # expansion error past the dispatch) ends, and no test hangs on it
+# df: the room a run sees - DF_AVAIL_B bytes free when set (-B1 in bytes, -k in KiB), the real one otherwise
+cat > "$W/bin/df" <<'STUB_DF'
+#!/bin/bash
+[ -n "${DF_AVAIL_B:-}" ] || exec /usr/bin/df "$@"
+echo Avail
+case "$*" in *-B1*) echo "$DF_AVAIL_B" ;; *) echo $(( DF_AVAIL_B / 1024 )) ;; esac
+STUB_DF
 cat > "$W/bin/mktemp" <<'STUB_MKTEMP'
 #!/bin/bash
 echo x >> "$W/mktemps"
@@ -577,6 +586,10 @@ red "scylla: the newest snapshot two nodes': red - one node's restored only" SCY
 check "  said so" "$(report | grep -c "2 nodes' manifests - this check restores one node's")" 1
 red "scylla: room for the snapshot twice not free: red, nothing fetched" SCYLLA SCYLLA_HUGE=1
 check "  said so, nothing fetched" "$(report | grep -c 'bytes to restore, twice') $(cat "$W/fetched" 2> /dev/null | wc -l)" "1 0"
+# chat's table 300 bytes (audit's 100, the scratch Scylla's own, not counted): room for it twice, to the byte
+red "scylla: room for the restored tables once, not twice (599 bytes free): red" SCYLLA DF_AVAIL_B=599
+store
+check "scylla: room for them twice exactly (600 bytes free): green" "$(run DF_AVAIL_B=600)" "rc=0"
 red "scylla: a file the manifest lists not in the store: red" SCYLLA SST_MISSING=1
 check "  said so" "$(report | grep -c '2 of the 3 files listed fetched')" 1
 red "scylla: the SSTables do not load: red" SCYLLA REFRESH_FAIL=1
