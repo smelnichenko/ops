@@ -100,7 +100,6 @@ def cherry_pick(repo, repo_name, step):
 
 def restack(repo, names, order, renamed, dry_run):
     repo_name = os.path.basename(os.path.normpath(repo))
-    check_repo(repo, repo_name)
     old, own = own_commits(repo)
     dropped = sorted(n for n in own if n not in names)
     print(f"== {repo_name}: {len(own)} step branches"
@@ -129,6 +128,9 @@ def main():
     order = [l.strip() for l in open(a.order) if l.strip() and not l.startswith("#")]
     renamed = new_names(names, order)
 
+    # every repo checked before any is touched: a dirty second repo left the first restacked, the run half done
+    for repo in a.repos:
+        check_repo(repo, os.path.basename(os.path.normpath(repo)))
     for repo in a.repos:
         restack(repo, names, order, renamed, a.dry_run)
     print("== step files")

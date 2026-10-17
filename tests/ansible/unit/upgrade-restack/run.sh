@@ -2,7 +2,7 @@
 # scripts/upgrade-restack.py on scratch repositories: the step branches put in a new order - each step's own commits
 # on the step before it in the new order, numbered by position, the old branches kept as upgrade-old/, the step files'
 # git mv lines; a repo with fewer steps; a dropped step (its file gone) renamed and not re-created; --dry-run changes
-# nothing; refused - a dirty tree, a repo off main, an order not naming every step once; a commit that does not apply
+# nothing; refused before any repo is touched - a dirty tree, a repo off main, an order not naming every step once; a commit that does not apply
 # stops the run naming the step and the commit. The script as the repo holds it, in a scratch ops tree of three steps
 # (the order names the steps as their files do, by their old numbers).
 set -u
@@ -63,8 +63,9 @@ check "--dry-run: the plan said, no branch touched" "$(run --dry-run) $(heads "$
   "rc=0 main upgrade/01-a upgrade/02-b upgrade/03-c upgrade/04-d 4"
 
 setup; echo dirt > "$W/platform/dirt"
-check "a dirty tree: refused, nothing renamed in it" "$(run) $(grep -c 'platform: uncommitted changes' "$W/out") $(heads "$W/platform")" \
-  "rc=1 1 main upgrade/02-b"
+check "a dirty tree (the second repo's): refused before any repo is touched - infra's branches as they were" \
+  "$(run) $(grep -c 'platform: uncommitted changes' "$W/out") $(heads "$W/platform") | $(heads "$W/infra")" \
+  "rc=1 1 main upgrade/02-b | main upgrade/01-a upgrade/02-b upgrade/03-c upgrade/04-d"
 setup; g "$W/infra" checkout -q upgrade/01-a
 check "a repo off main: refused before any rename" "$(run) $(grep -c 'infra: not on main' "$W/out") $(heads "$W/infra")" \
   "rc=1 1 main upgrade/01-a upgrade/02-b upgrade/03-c upgrade/04-d"
