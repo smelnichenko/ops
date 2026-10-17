@@ -1,15 +1,17 @@
 #!/bin/bash
 # The backups restored on a Pi, every other day - setup-pi-restore-check.yml (ops) explains it. Settings and
-# credentials from the unit's EnvironmentFile. Three parts, each run whatever the others did, each its own process
+# credentials from the unit's EnvironmentFile. Four parts, each run whatever the others did, each its own process
 # (a function run as an `if` condition runs with set -e off):
 #   postgres  production's CNPG cluster from the store: the newest restorable base backup, every WAL archived after it,
 #             in production's own Postgres image - replayed to the end, the newest WAL archived when the run began
 #             reached, every database there and read back whole (pg_dump)
 #   etcd      ten's newest hourly snapshot: restored (its hash checked), an etcd started on it, kube-system there
+#   scylla    production's newest Scylla Manager snapshot: its schema into a scratch Scylla in production's image, every
+#             table's SSTables of the snapshot loaded (nodetool refresh), each table read back
 #   tier0     the Pis' own newest backup: Consul's snapshot into a throwaway agent (Vault's and Patroni's keys there),
 #             every Patroni database dump into a scratch Postgres
 # Nothing is written to the store but restore-checks/<this Pi>/: the restored Postgres archives nothing (archive_mode
-# off) and listens on no address; etcd runs without a network. A day with every part green writes last-success,
+# off) and listens on no address; etcd and Scylla run without a network. A day with every part green writes last-success,
 # which infra's restore-check-age reads.
 set -euo pipefail
 # what it writes is root's alone - production's backups (etcd's every Secret, the Pis' dumps) and the restored servers'
@@ -208,6 +210,110 @@ part_etcd() {
   echo "ETCD OK: $snap ($age h old; $status) restored, $ns namespaces in it, kube-system among them"
 }
 
+# production's Scylla from Scylla Manager's backups (backup/{meta,schema,sst}/cluster/<id>/ in scylla-backups): the newest
+# snapshot of the cluster backed up last, its schema (the CQL Scylla Manager saved with it) into a scratch Scylla in
+# production's image, every table's SSTables of that snapshot loaded, each table read back
+part_scylla() {
+  local w=$1/scylla name="pi-restore-scylla-$$" b=store:scylla-backups/backup cluster="" tag="" c t age
+  memory_bounded || return 1
+  mkdir -p "$w/sst"
+  # the cluster snapshotted last: production's (an old one - before a re-create - stops getting snapshots)
+  for c in $(rclone lsf --dirs-only "$b/meta/cluster" | sed 's#/$##'); do
+    t=$(rclone lsf -R --files-only "$b/meta/cluster/$c" \
+      | sed -n 's/.*_tag_\(sm_[0-9]\{14\}UTC\)_manifest\.json\.gz$/\1/p' | sort | tail -1)
+    if [ -n "$t" ] && [[ "$t" > "$tag" ]]; then tag=$t; cluster=$c; fi
+  done
+  [ -n "$cluster" ] || { echo "no snapshot in scylla-backups"; return 1; }
+  age=$(store_age_h "${tag:3:8}T${tag:11:6}")
+  [ "$age" -le "$PI_RESTORE_SCYLLA_MAX_AGE_H" ] \
+    || { echo "the newest Scylla snapshot $cluster/$tag is $age h old (limit $PI_RESTORE_SCYLLA_MAX_AGE_H h)"; return 1; }
+  # its manifests (one a node) and the schema saved with it
+  local m schema n=0
+  rclone lsf -R --files-only "$b/meta/cluster/$cluster" | { grep "_tag_${tag}_manifest\.json\.gz$" || true; } > "$w/manifests"
+  while read -r m; do
+    n=$(( n + 1 ))
+    rclone cat "$b/meta/cluster/$cluster/$m" | gzip -dc > "$w/manifest.$n.json"
+    echo "$m" >> "$w/manifest-paths"
+  done < "$w/manifests"
+  schema=$(rclone lsf --files-only "$b/schema/cluster/$cluster" | { grep "_tag_${tag}_schema_with_internals\.json\.gz$" || true; } \
+    | head -1)
+  [ -n "$schema" ] || { echo "$cluster/$tag: no schema saved with it"; return 1; }
+  rclone cat "$b/schema/cluster/$cluster/$schema" | gzip -dc > "$w/schema.json"
+  # the keyspaces of its own (system ones are the scratch Scylla's): their CQL, and each table's files of the snapshot -
+  # one list a node, the paths under that node's sst/ directory (the store keeps every snapshot's files side by side)
+  python3 - "$w" <<'PY_SCYLLA'
+import json, sys
+w = sys.argv[1]
+own = lambda ks: not ks.startswith("system")
+with open(f"{w}/schema.cql", "w") as out:
+    for r in json.load(open(f"{w}/schema.json")):
+        if own(r["keyspace"]):
+            out.write(r["cql_stmt"].rstrip().rstrip(";") + ";\n")
+paths = open(f"{w}/manifest-paths").read().split()
+tables = set()
+for i, path in enumerate(paths, 1):
+    node = path.split("/")[3]  # dc/<dc>/node/<node>/task_...
+    with open(f"{w}/files.{node}", "w") as out:
+        open(f"{w}/prefix.{node}", "w").write(path.rsplit("/", 1)[0] + "\n")
+        for t in json.load(open(f"{w}/manifest.{i}.json"))["index"]:
+            if own(t["keyspace"]) and t["files"]:
+                tables.add(f'{t["keyspace"]}.{t["table"]}')
+                for f in t["files"]:
+                    out.write(f'keyspace/{t["keyspace"]}/table/{t["table"]}/{t["version"]}/{f}\n')
+open(f"{w}/tables", "w").write("".join(f"{t}\n" for t in sorted(tables)))
+PY_SCYLLA
+  [ -s "$w/tables" ] || { echo "$cluster/$tag: no table of its own with data in the snapshot"; return 1; }
+  local f node
+  for f in "$w"/files.*; do
+    node=${f##*/files.}
+    rclone copy --files-from-raw "$f" "$b/sst/cluster/$cluster/$(cat "$w/prefix.$node")" "$w/sst/$node"
+  done
+  podman pull -q "$PI_RESTORE_SCYLLA_IMAGE" > /dev/null || podman image exists "$PI_RESTORE_SCYLLA_IMAGE"
+  # Seastar keeps memory back for the system: a reserve of its own (256M), the rest of the container bar 256M its own
+  # (1G in 1536m - with its default reserve it refused: "insufficient physical memory", seen 2026-10-17)
+  local mem=${PI_RESTORE_CONTAINER_MEMORY%[mM]}
+  [[ "$mem" =~ ^[0-9]+$ ]] && [ "$mem" -ge 1536 ] \
+    || { echo "PI_RESTORE_CONTAINER_MEMORY=$PI_RESTORE_CONTAINER_MEMORY: Scylla wants at least 1536m"; return 1; }
+  # its data in the container (a bind mount is the host's, not Scylla's user's); the snapshot's files read-only beside it
+  podman run -d --name "$name" --network none --memory "$PI_RESTORE_CONTAINER_MEMORY" -v "$w:/w:ro" \
+    "$PI_RESTORE_SCYLLA_IMAGE" --smp 1 --memory "$(( mem - 512 ))M" --reserve-memory 256M --overprovisioned 1 \
+    --developer-mode 1 --listen-address 127.0.0.1 --rpc-address 127.0.0.1 --seeds 127.0.0.1 > /dev/null
+  echo "$name" >> "$1/containers"
+  # shellcheck disable=SC2064  # the name now: the function's locals are gone when the part's process exits
+  trap "podman rm -f -t 0 $name > /dev/null 2>&1 || true" EXIT
+  local i up=""
+  for i in $(seq "$PI_RESTORE_SCYLLA_WAIT_POLLS"); do
+    if [ "$(podman inspect -f '{{.State.Running}}' "$name")" != true ]; then
+      podman logs --tail 30 "$name" 2>&1 || true
+      echo "$cluster/$tag: Scylla stopped before it served"; return 1
+    fi
+    podman exec "$name" cqlsh -e "SELECT now() FROM system.local" > /dev/null 2>&1 && { up=1; break; }
+    sleep 3
+  done
+  if [ -z "$up" ]; then
+    podman logs --tail 30 "$name" 2>&1 || true
+    echo "$cluster/$tag: Scylla served no CQL within $(( PI_RESTORE_SCYLLA_WAIT_POLLS * 3 )) s"; return 1
+  fi
+  podman exec "$name" cqlsh -f /w/schema.cql > "$w/schema.log" 2>&1 \
+    || { tail -10 "$w/schema.log"; echo "$cluster/$tag: its schema did not apply"; return 1; }
+  # each table's files into its upload directory, Scylla's own, then loaded; read back whole
+  local ks tb dir rows counts=() total=0
+  while IFS=. read -r ks tb; do
+    dir=$(podman exec "$name" sh -c "ls -d /var/lib/scylla/data/$ks/$tb-*" 2> /dev/null | head -1)
+    [ -n "$dir" ] || { echo "$cluster/$tag: $ks.$tb not created by its schema"; return 1; }
+    podman exec -u root "$name" sh -c \
+      "cp /w/sst/*/keyspace/$ks/table/$tb/*/* '$dir/upload/' && chown -R scylla:scylla '$dir/upload'"
+    podman exec "$name" nodetool refresh "$ks" "$tb" > "$w/refresh.log" 2>&1 \
+      || { tail -5 "$w/refresh.log"; echo "$cluster/$tag: $ks.$tb's SSTables did not load"; return 1; }
+    rows=$(podman exec "$name" cqlsh --request-timeout=300 -e "SELECT count(*) FROM $ks.$tb" \
+      | sed -n 's/^ *\([0-9][0-9]*\) *$/\1/p' | head -1)
+    [ -n "$rows" ] || { echo "$cluster/$tag: $ks.$tb not read back"; return 1; }
+    counts+=("$ks.$tb:$rows"); total=$(( total + rows ))
+  done < "$w/tables"
+  [ "$total" -gt 0 ] || { echo "$cluster/$tag: restored with no row in any table (${counts[*]})"; return 1; }
+  echo "SCYLLA OK: $cluster/$tag ($age h old, $PI_RESTORE_SCYLLA_IMAGE) restored; tables (rows) ${counts[*]}, each read back"
+}
+
 part_tier0() {
   local w=$1/tier0 d age
   # its scratch Postgres and Consul agent run in the unit's cgroup: its MemoryMax is no bound without the controller
@@ -300,6 +406,7 @@ fi
 : "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
 : "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}" "${PI_RESTORE_MIN_FREE_GB:?}"
 : "${PI_RESTORE_CONTAINER_MEMORY:?}" "${PI_RESTORE_ETCD_WAIT_POLLS:?}" "${PI_RESTORE_CGROUP_CONTROLLERS:?}"
+: "${PI_RESTORE_SCYLLA_IMAGE:?}" "${PI_RESTORE_SCYLLA_MAX_AGE_H:?}" "${PI_RESTORE_SCYLLA_WAIT_POLLS:?}"
 
 if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   # the clock synchronized first (as pi-tier0-backup's): the day's parity and every age below read it
@@ -330,7 +437,7 @@ mkdir -p "$PI_RESTORE_WORK"
 # A container whose run was killed lost its conmon with it: the first removal fails ("conmon exited prematurely") and
 # records it exited, the second removes it (seen on the Vagrant copy). One refusing both is said, and the run goes on -
 # it takes memory, not this run's names
-for c in $(podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd)-[0-9]+$' || true; }); do
+for c in $(podman ps -a --format '{{.Names}}' | { grep -E '^pi-restore-(pg|etcd|scylla)-[0-9]+$' || true; }); do
   podman rm -f -t 0 "$c" > /dev/null 2>&1 || podman rm -f -t 0 "$c" > /dev/null \
     || echo "PI RESTORE CHECK: a killed run's container $c not removed now" >&2
 done
@@ -344,7 +451,7 @@ work=$(mktemp -d "$PI_RESTORE_WORK/run.XXXXXX")
 chmod 0711 "$work"
 trap 'cleanup "$work"' EXIT
 ts=$(date -u +%Y%m%dT%H%M%SZ)
-for part in postgres etcd tier0; do
+for part in postgres etcd scylla tier0; do
   if "$0" --part "$part" "$work" > "$work/$part.log" 2>&1; then
     tail -1 "$work/$part.log"
   else
