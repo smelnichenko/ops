@@ -40,6 +40,14 @@ except ValueError as e:
     check("a missing old line refuses, naming it", "no line 'cilium_version: \"1.20.0\"'" in str(e), True)
 check("a default line parses into its file, old line and new",
       d.LINE.fullmatch('default f.yml: a: "1" => a: "2"').groups(), ("f.yml", 'a: "1"', 'a: "2"'))
+# the old line ends at the FIRST " => " (a new line may hold one), is never empty (an empty old line would match nothing
+# useful), and may hold "=>" without its leading space (only " => " separates)
+groups = lambda line: (lambda m: m and m.groups())(d.LINE.fullmatch(line))
+check("a default line: the old line ends at the first ' => '",
+      groups("default f: a => b => c"), ("f", "a", "b => c"))
+check("a default line with an empty old line: no match", groups("default f:  => x"), None)
+check("a default line: '=>' without its leading space stays in the old line",
+      groups("default f: a=> b => c"), ("f", "a=> b", "c"))
 tree = lambda p: open(p).read()
 K8S, KUBEADM = ("13-kubernetes-1.34.12", "42-kubernetes-1.35", "43-kubernetes-1.36"), \
     "deploy/ansible/playbooks/setup-kubeadm.yml"
