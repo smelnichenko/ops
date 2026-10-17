@@ -429,6 +429,10 @@ check "  the store written under restore-checks/pi1/ only (and the bucket made),
   "mkdir store:restore-checks,rcat store:restore-checks/pi1/last-report,rcat store:restore-checks/pi1/last-success"
 check "  the work directory gone, the containers removed, the throwaway Consul stopped" \
   "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f -t 0 pi-restore-(pg|etcd|scylla)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 3 0"
+# each container removed twice: by its part when it ends, and by the run's cleanup from the list a part writes - the list
+# a killed part leaves for it (the part's own trap never runs on a kill)
+check "  each container removed by its part and again by the run's cleanup, from the part's list" \
+  "$(for c in pg etcd scylla; do grep -cE "^podman rm -f -t 0 pi-restore-$c-[0-9]+$" "$W/calls"; done | paste -sd' ')" "2 2 2"
 check "  each part's container gone when the part ends - Postgres's before etcd's first container, Scylla's before tier0's agent" \
   "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls") $(awk '/^podman rm -f -t 0 pi-restore-scylla-/ && !r { r = NR } /^consul agent/ && !c { c = NR } END { print (r && c && r < c) }' "$W/calls")" "1 1"
 
