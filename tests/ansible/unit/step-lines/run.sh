@@ -169,10 +169,11 @@ except TypeError as e:
 check("parse(): a Collectors and keyword collectors - refused", got, "TypeError: parse(): ")
 
 # the modes over a fixture of steps: ClickHouse's users and compatibility are the latest line up to the step (an
-# earlier step's carries on), default,schnappy and nothing before the first; restore-undo the step's first line
+# earlier step's carries on), default,schnappy and nothing before the first; restore-undo the step's first line;
+# tempo-flush the step's own repo, nothing for a step without the line (the Taskfile runs the flush on its output)
 fixture = os.path.join(work, "steps")
 os.makedirs(fixture)
-for name, lines in (("01-a", ["clickhouse-compat 24.8"]), ("02-b", ["clickhouse-users schnappy", "clickhouse-compat 25.8"]),
+for name, lines in (("01-a", ["clickhouse-compat 24.8", "tempo-flush platform"]), ("02-b", ["clickhouse-users schnappy", "clickhouse-compat 25.8"]),
                     ("03-c", ["image pg 17 => image pg 18", "restore-undo one pg:17", "restore-undo two pg:17"]),
                     ("00-z", [])):
     open(os.path.join(fixture, name + ".txt"), "w").write("".join(l + "\n" for l in lines))
@@ -185,6 +186,8 @@ try:
     check("--clickhouse-compat: nothing before the first line, then the latest up to the step",
           [inv.MODES["--clickhouse-compat"](s, names) for s in names], ["", "24.8", "25.8", "25.8"])
     check("--restore-undo: the step's first line", inv.MODES["--restore-undo"]("03-c", names), "one pg:17")
+    check("--tempo-flush: the step's own repo, nothing for the others",
+          [inv.MODES["--tempo-flush"](s, names) for s in names], ["", "platform", "", ""])
 finally:
     inv.STEPS = saved
 print("step-lines: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
