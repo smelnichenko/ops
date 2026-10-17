@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup-pi-restore-check.yml's files/pi-restore-check.sh, run for real against stubs: rclone serves a store made here
-# (its times relative to now), podman plays production's Postgres image, etcd's and Scylla's, consul a throwaway agent, runuser
+# (its times relative to now), podman plays production's Postgres image and etcd's, consul a throwaway agent, runuser
 # the Pi's scratch Postgres. Green when every part restores; each part red on its own faults - the other parts still
 # run, last-report says which, last-success stays where it was. The store is written under restore-checks/<this Pi>/
 # only, never deleted from; the restored Postgres archives nothing and listens nowhere; etcd runs without a network.
@@ -21,11 +21,11 @@ cat > "$W/bin/rclone" <<'STUB_RCLONE'
 #!/bin/bash
 echo "rclone $*" >> "$W/calls"
 S=$W/store
-args=(); fmt=""; sep=";"; rec=""; dirs=""; files=""; ffr=""
+args=(); fmt=""; sep=";"; rec=""; dirs=""; files=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -R) rec=1 ;; --dirs-only) dirs=1 ;; --files-only) files=1 ;; -q) ;;
-    --format) fmt=$2; shift ;; --separator) sep=$2; shift ;; --files-from-raw) ffr=$2; shift ;;
+    --format) fmt=$2; shift ;; --separator) sep=$2; shift ;;
     *) args+=("$1") ;;
   esac
   shift
@@ -45,22 +45,13 @@ case "${args[0]}" in
     fi ;;
   cat) cat "$(p "${args[1]}")" ;;
   copyto) cp "$(p "${args[1]}")" "${args[2]}" ;;
-  copy)
-    mkdir -p "${args[2]}"
-    if [ -n "$ffr" ]; then  # the listed paths only, relative to the source
-      while read -r f; do
-        mkdir -p "${args[2]}/$(dirname "$f")"; cp "$(p "${args[1]}")/$f" "${args[2]}/$f" 2> /dev/null && echo "$f" >> "$W/fetched"
-      done < "$ffr"
-    else
-      cp -r "$(p "${args[1]}")/." "${args[2]}/"
-    fi ;;
+  copy) mkdir -p "${args[2]}"; cp -r "$(p "${args[1]}")/." "${args[2]}/" ;;
   mkdir) echo "WRITE mkdir ${args[1]}" >> "$W/writes"; mkdir -p "$(p "${args[1]}")" ;;
   rcat) echo "WRITE rcat ${args[1]}" >> "$W/writes"; f=$(p "${args[1]}"); mkdir -p "$(dirname "$f")"; cat > "$f" ;;
   *) echo "WRITE ${args[*]}" >> "$W/writes"; echo "rclone stub: ${args[0]} not served" >&2; exit 9 ;;
 esac
 STUB_RCLONE
-# --- podman: production's Postgres image (barman-cloud-restore, postgres, psql, pg_dump), etcd's and Scylla's (cqlsh,
-# nodetool - its data in the container, the snapshot's files under /w, the bind mount)
+# --- podman: production's Postgres image (barman-cloud-restore, postgres, psql, pg_dump) and etcd's
 cat > "$W/bin/podman" <<'STUB_PODMAN'
 #!/bin/bash
 echo "podman $*" >> "$W/calls"
@@ -81,7 +72,7 @@ case "$cmd" in
     exit 0 ;;
   inspect)
     case "$*" in
-      *pi-restore-etcd-*) echo "${ETCD_RUNNING:-true}" ;; *pi-restore-scylla-*) echo "${SCYLLA_RUNNING:-true}" ;;
+      *pi-restore-etcd-*) echo "${ETCD_RUNNING:-true}" ;;
       *) echo "${PG_RUNNING:-true}" ;;
     esac; exit 0 ;;
   run)
@@ -97,7 +88,7 @@ case "$cmd" in
     done
     image=$1; shift
     case "$image" in
-      *scylla*) echo "$image $*" > "$W/scylla-args"; echo "$vol" > "$W/scylla-vol"; ls "$(dirname "$vol")" > "$W/scylla-saw" ;;
+      *etcd*) ls "$(dirname "$vol")" > "$W/etcd-saw" ;;
     esac
     [ -n "$ep" ] && set -- "$ep" "$@"
     case "$1" in
@@ -113,35 +104,9 @@ case "$cmd" in
     [ -z "$detach" ] || echo container-id
     exit 0 ;;
   exec)
-    asroot=""; [ "$1" != -u ] || { asroot=$2; shift 2; }
+    [ "$1" != -u ] || shift 2
     shift  # the container
     case "$*" in
-      *"SELECT now() FROM system.local"*) [ -z "${SCYLLA_SILENT:-}" ] || exit 1 ;;
-      # the keyspaces a fresh Scylla 2026 has: its system ones and audit (SCYLLA_KEYSPACES_UNREAD: no answer)
-      *"SELECT keyspace_name FROM system_schema.keyspaces"*)
-        [ -z "${SCYLLA_KEYSPACES_UNREAD:-}" ] || { echo "OperationTimedOut"; exit 0; }
-        printf '\n keyspace_name\n---------------\n          audit\n         system\n  system_schema\n\n(3 rows)\n' ;;
-      *"-f /w/schema/"*)
-        # the run's files are root's alone (umask 077): Scylla's own user cannot read them (the copy, 2026-10-17)
-        a="$*"; f=${a##*-f /w/schema/}
-        ls -A "$(cat "$W/scylla-vol")/schema" > "$W/scylla-schema-files"
-        [ "$asroot" = root ] || { echo "Can't open '/w/schema/$f': [Errno 13] Permission denied"; exit 2; }
-        cat "$(cat "$W/scylla-vol")/schema/$f" >> "$W/scylla-schema"
-        [ -z "${SCHEMA_FAIL:-}" ] || { echo "SyntaxException: line 1:7 no viable alternative"; exit 2; } ;;
-      *"ls -d /var/lib/scylla/data/"*)
-        # NO_TABLE_DIR: none - ls fails, as it does
-        [ -z "${NO_TABLE_DIR:-}" ] || { echo "ls: cannot access '/var/lib/scylla/data/x': No such file or directory" >&2; exit 2; }
-        a="$*"; t=${a##*/data/}; echo "/var/lib/scylla/data/${t%-\*}-0123abcd" ;;
-      *"cp /w/sst/"*)
-        [[ "$*" =~ keyspace/([^/]+)/table/([^/]+)/ ]]
-        v=$(cat "$W/scylla-vol")
-        echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}:$(ls "$v"/sst/*/keyspace/"${BASH_REMATCH[1]}"/table/"${BASH_REMATCH[2]}"/*/* | xargs -n1 basename | sort | paste -sd+)" \
-          >> "$W/scylla-loaded" ;;
-      *"nodetool refresh"*) [ -z "${REFRESH_FAIL:-}" ] || { echo "Failed to load new sstables: File not owned"; exit 1; } ;;
-      *"SELECT count(*) FROM"*)
-        # SCYLLA_COUNT_UNREAD: the count answered with no number (a timeout's message)
-        if [ -n "${SCYLLA_COUNT_UNREAD:-}" ]; then echo "ReadTimeout: Error from server: code=1200"; exit 0; fi
-        printf '\n count\n-------\n %s\n\n(1 rows)\n' "${SCYLLA_ROWS:-5}" ;;
       *pg_is_in_recovery*) [ -n "${RECOVERING:-}" ] && echo t || echo f ;;
       *pg_walfile_name*) echo "${SEG:-000000040000001D00000028}" ;;
       *string_agg*) echo "${DBS:-postgres monitor admin chat chess masi}" ;;
@@ -205,13 +170,6 @@ printf '#!/bin/bash\n[ -z "${CHRONY_NORMAL:-}" ] || echo "Leap status     : Norm
 printf '#!/bin/bash\necho "sleep $*" >> "$W/sleeps"\n' > "$W/bin/sleep"
 # mktemp: a run's work directory, one a run - counted; past 20 refused, so a run repeating itself inside a part (an
 # expansion error past the dispatch) ends, and no test hangs on it
-# df: the room a run sees - DF_AVAIL_B bytes free when set (-B1 in bytes, -k in KiB), the real one otherwise
-cat > "$W/bin/df" <<'STUB_DF'
-#!/bin/bash
-[ -n "${DF_AVAIL_B:-}" ] || exec /usr/bin/df "$@"
-echo Avail
-case "$*" in *-B1*) echo "$DF_AVAIL_B" ;; *) echo $(( DF_AVAIL_B / 1024 )) ;; esac
-STUB_DF
 cat > "$W/bin/mktemp" <<'STUB_MKTEMP'
 #!/bin/bash
 echo x >> "$W/mktemps"
@@ -223,8 +181,7 @@ chmod +x "$W/bin"/*
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
   rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/modes" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
-    "$W/leftover-containers" "$W/scylla-args" "$W/scylla-vol" "$W/scylla-schema" "$W/scylla-loaded" "$W/mktemps" "$W/fetched" \
-    "$W/scylla-schema-files" "$W/scylla-saw"
+    "$W/leftover-containers" "$W/mktemps" "$W/etcd-saw"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
@@ -282,60 +239,6 @@ store() {  # a store as production's, made relative to now
     [ -n "${NO_DUMPS:-}" ] || touch "$t/pg-forgejo.dump" "$t/pg-keycloak.dump"
     [ -z "${KC_FAILED:-}" ] || touch "$t/KEYCLOAK-EXPORT-FAILED"
   fi
-  # Scylla Manager's backups: an old cluster (a re-create ago) and production's - its newest snapshot (SCYLLA_AGE_H old)
-  # and the day before's, each a node's manifest, the schema saved with each; the store keeps every snapshot's
-  # SSTables side by side (the day before's own file must not be loaded). NO_SCYLLA: none at all; NO_SCYLLA_SCHEMA: the
-  # newest without its schema; SCYLLA_ONLY=system: only system tables with data, =audit: only the scratch Scylla's own;
-  # SCYLLA_TWO_NODES: the newest a second node's too; SCYLLA_HUGE: chat's table larger than any disk; SST_MISSING: a
-  # listed file gone
-  [ -n "${NO_SCYLLA:-}" ] || PYTHONDONTWRITEBYTECODE=1 python3 - "$S/scylla-backups/backup" \
-    "$(utc "-${SCYLLA_AGE_H:-3} hours" +sm_%Y%m%d%H%M%SUTC)" "$(utc "-$(( ${SCYLLA_AGE_H:-3} + 24 )) hours" +sm_%Y%m%d%H%M%SUTC)" \
-    "$(utc '-120 hours' +sm_%Y%m%d%H%M%SUTC)" "${NO_SCYLLA_SCHEMA:-}" "${SCYLLA_ONLY:-}" "${SCYLLA_TWO_NODES:-}" \
-    "${SCYLLA_HUGE:-}" "${SST_MISSING:-}" <<'PY_SCYLLA_STORE'
-import gzip, json, os, sys
-b, newest, before, old, no_schema, only, two_nodes, huge, missing = sys.argv[1:10]
-system_only, audit_only = only == "system", only == "audit"
-def put(path, obj):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with gzip.open(path, "wt") as f:
-        json.dump(obj, f)
-def snapshot(cluster, tag, files, schema=True, task="T"):
-    node = f"{b}/meta/cluster/{cluster}/dc/datacenter1/node/node-a"
-    index = [{"keyspace": "system_schema", "table": "tables", "version": "s1", "files": ["s-Data.db"]},
-             {"keyspace": "audit", "table": "audit_log", "version": "u1", "files": [] if system_only else ["u-Data.db"]},
-             {"keyspace": "chat", "table": "message_edits", "version": "e1", "files": []},
-             {"keyspace": "chat", "table": "messages_by_channel", "version": "c1", "size": 10 ** 18 if huge else 300,
-              "files": [] if system_only or audit_only else files}]
-    for t in index:
-        t.setdefault("size", 100)
-    put(f"{node}/task_{task}_tag_{tag}_manifest.json.gz", {"cluster_id": cluster, "snapshot_tag": tag, "index": index})
-    if two_nodes and tag == newest:
-        put(node.replace("node-a", "node-b") + f"/task_T_tag_{tag}_manifest.json.gz", {"index": index})
-    if schema:
-        put(f"{b}/schema/cluster/{cluster}/task_{task}_tag_{tag}_schema_with_internals.json.gz", [
-            {"keyspace": "chat", "type": "keyspace", "name": "chat", "cql_stmt": "CREATE KEYSPACE chat WITH replication = {} "},
-            {"keyspace": "chat", "type": "table", "name": "messages_by_channel",
-             "cql_stmt": "CREATE TABLE chat.messages_by_channel (\n    id int PRIMARY KEY\n) WITH ID = c1;"},
-            {"keyspace": "system_schema", "type": "table", "name": "tables", "cql_stmt": "CREATE TABLE system_schema.tables (x int)"},
-            # Scylla 2026's own keyspace (a fresh Scylla has it: "AlreadyExists" - the copy, 2026-10-17): not applied, not loaded
-            {"keyspace": "audit", "type": "keyspace", "name": "audit", "cql_stmt": "CREATE KEYSPACE audit WITH replication = {};"},
-            {"keyspace": "audit", "type": "table", "name": "audit_log", "cql_stmt": "CREATE TABLE audit.audit_log (x int);"},
-            # the cluster's own (no keyspace - the copy's schema held them, 2026-10-17): not data, not restored
-            {"keyspace": "", "type": "role", "name": "cassandra", "cql_stmt": "CREATE ROLE IF NOT EXISTS cassandra WITH LOGIN = true;"},
-            {"keyspace": "", "type": "service_level", "name": "driver", "cql_stmt": "CREATE SERVICE LEVEL IF NOT EXISTS driver;"}])
-    for ks, t, v, fs in (("system_schema", "tables", "s1", ["s-Data.db"]), ("audit", "audit_log", "u1", ["u-Data.db"]),
-                         ("chat", "messages_by_channel", "c1", files)):
-        for f in fs:
-            p = f"{b}/sst/cluster/{cluster}/dc/datacenter1/node/node-a/keyspace/{ks}/table/{t}/{v}/{f}"
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            open(p, "w").write(f)
-snapshot("0f2f-old", old, ["o-Data.db", "o-TOC.txt"])
-# the day before's under another task (a re-created schedule): its names sort after the newest's - only the tag tells
-snapshot("98b5-prod", before, ["a-Data.db", "a-TOC.txt"], task="Z")
-snapshot("98b5-prod", newest, ["a-Data.db", "b-Data.db", "b-TOC.txt"], schema=not no_schema)
-if missing:  # a listed file gone from the store
-    os.remove(f"{b}/sst/cluster/98b5-prod/dc/datacenter1/node/node-a/keyspace/chat/table/messages_by_channel/c1/b-TOC.txt")
-PY_SCYLLA_STORE
   # the Pi's Postgres majors: text order and version order disagree
   mkdir -p "$S/restore-checks/pi1" "$W/pgroot/9.6/bin" "$W/pgroot/15/bin" "$W/pgroot/17/bin"
   echo 20200101T000000Z > "$S/restore-checks/pi1/last-success"
@@ -348,12 +251,6 @@ BASE_MAX=$(sed -n 's/^    pi_restore_check_pg_base_max_age_h: *//p' deploy/ansib
 # backup not made for a day would pass
 check "the base backup's limit between the day before's (28 h) and a day missed (over 30 h)" \
   "$([ "$BASE_MAX" -ge 28 ] && [ "$BASE_MAX" -le 30 ] && echo within)" within
-# Scylla's snapshot age limit and its start's polls, as the playbook sets them: the limit between a day missed (the day
-# before's, 26.5 h at this check) and two (50 h); the polls at least a minute's worth
-SC_MAX=$(sed -n 's/^    pi_restore_check_scylla_max_age_h: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
-SC_POLLS=$(sed -n 's/^    pi_restore_check_scylla_wait_polls: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
-check "Scylla's snapshot limit between a day missed (27 h) and two (over 48 h), its polls a minute's worth at least" \
-  "$([ "$SC_MAX" -ge 27 ] && [ "$SC_MAX" -le 48 ] && echo within) $([ "$SC_POLLS" -ge 20 ] && echo enough)" "within enough"
 run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTORE_LOCKED), the exit
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
   env -i PATH="$W/bin:$(dirname "$(command -v python3)"):/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
@@ -363,7 +260,6 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 \
-    PI_RESTORE_SCYLLA_IMAGE=docker.io/scylladb/scylla:2026.1.14 PI_RESTORE_SCYLLA_MAX_AGE_H="$SC_MAX" PI_RESTORE_SCYLLA_WAIT_POLLS=2 \
     "$@" bash "$SCRIPT_RUN" "${SCRIPT_ARGS[@]}" > "$W/out" 2>&1
   echo "rc=$?"
 }
@@ -390,7 +286,7 @@ red() {  # red <name> <PART> <env...>
 store
 check "every part restores: green" "$(run)" "rc=0"
 check "  last-success this run's" "$(success | grep -cE '^[0-9]{8}T[0-9]{6}Z$') $(success | grep -c 2020)" "1 0"
-check "  last-report: the four parts OK" "$(report | grep -cE '^(POSTGRES|ETCD|SCYLLA|TIER0) OK')" 4
+check "  last-report: the three parts OK" "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')" 3
 check "  production's server (not the old one), its newest RESTORABLE backup (not the one still written)" \
   "$(report | grep -oE 'schnappy-production-postgres/[0-9T]+' | sed 's#.*/##')" "$(utc '-2 hours' +%Y%m%dT%H0130)"
 (export END_MISSING=1; store)
@@ -405,7 +301,7 @@ store
 check "the registry down, the images here already: green" "$(run PULL_FAIL=1)" "rc=0"
 store
 check "the registry down and an image not here: red" \
-  "$(run PULL_FAIL=1 IMAGE_MISSING=1) $(report | grep -cE '^(POSTGRES|ETCD|SCYLLA) FAILED:')" "rc=1 3"
+  "$(run PULL_FAIL=1 IMAGE_MISSING=1) $(report | grep -cE '^(POSTGRES|ETCD) FAILED:')" "rc=1 2"
 store
 run > /dev/null
 check "  the newest WAL archived (not the .backup label) is what the replay had to reach" \
@@ -428,13 +324,14 @@ check "  the store written under restore-checks/pi1/ only (and the bucket made),
   "$(sed 's/^WRITE //' "$W/writes" | sort -u | paste -sd,)" \
   "mkdir store:restore-checks,rcat store:restore-checks/pi1/last-report,rcat store:restore-checks/pi1/last-success"
 check "  the work directory gone, the containers removed, the throwaway Consul stopped" \
-  "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f -t 0 pi-restore-(pg|etcd|scylla)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 3 0"
+  "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f -t 0 pi-restore-(pg|etcd)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 2 0"
 # each container removed twice: by its part when it ends, and by the run's cleanup from the list a part writes - the list
 # a killed part leaves for it (the part's own trap never runs on a kill)
 check "  each container removed by its part and again by the run's cleanup, from the part's list" \
-  "$(for c in pg etcd scylla; do grep -cE "^podman rm -f -t 0 pi-restore-$c-[0-9]+$" "$W/calls"; done | paste -sd' ')" "2 2 2"
-check "  each part's container gone when the part ends - Postgres's before etcd's first container, Scylla's before tier0's agent" \
-  "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls") $(awk '/^podman rm -f -t 0 pi-restore-scylla-/ && !r { r = NR } /^consul agent/ && !c { c = NR } END { print (r && c && r < c) }' "$W/calls")" "1 1"
+  "$(for c in pg etcd; do grep -cE "^podman rm -f -t 0 pi-restore-$c-[0-9]+$" "$W/calls"; done | paste -sd' ')" "2 2"
+check "  each part's container gone when the part ends - Postgres's before etcd's first container" \
+  "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls")" 1
+check "  Postgres's restored data gone from the disk when etcd's part starts" "$(grep -cx pg "$W/etcd-saw")" 0
 
 check "  the scratch Postgres stopped" "$(grep -cE '^runuser .*/pg_ctl -D .*/tier0/pg -m immediate stop' "$W/calls")" 1
 check "  the Pi's newest Postgres (17 - text order would take 9.6)" \
@@ -445,10 +342,10 @@ check "  every container memory-bounded (podman runs them outside the unit's cgr
 # a run killed (SIGKILL, a reboot) left its directory and containers: the next run clears them first
 store
 mkdir -p "$W/work/run.KILLED/pg/pgdata"
-printf 'pi-restore-pg-4242\npi-restore-etcd-4242\npi-restore-scylla-4242\nsomething-else\n' > "$W/leftover-containers"
+printf 'pi-restore-pg-4242\npi-restore-etcd-4242\nsomething-else\n' > "$W/leftover-containers"
 check "a killed run's leftovers: its directory and its containers removed before the run, nothing else" \
-  "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|etcd|scylla)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
-  "rc=0 0 3 0"
+  "$(run) $(ls "$W/work" | wc -l) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|etcd)-4242' "$W/calls") $(grep -c 'rm -f something-else' "$W/calls")" \
+  "rc=0 0 2 0"
 store
 printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
 rm -f "$W/rm-refused"
@@ -478,7 +375,7 @@ check "its day: the lock taken (consul lock), then the run" \
   "$(run PI_RESTORE_ANY_DAY= PI_RESTORE_LOCKED= PI_RESTORE_PARITY=$(( $(date -u +%s) / 86400 % 2 ))) $(grep -c '^consul lock -child-exit-code -timeout=30m pi-restore-check' "$W/calls")" \
   "rc=0 1"
 check "  the run under the lock: every part, last-success this run's, the lock not taken twice" \
-  "$(report | grep -cE '^(POSTGRES|ETCD|SCYLLA|TIER0) OK') $(success | grep -c 2020) $(grep -c 'NESTED LOCK' "$W/calls")" "4 0 0"
+  "$(report | grep -cE '^(POSTGRES|ETCD|TIER0) OK') $(success | grep -c 2020) $(grep -c 'NESTED LOCK' "$W/calls")" "3 0 0"
 store
 printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
 check "another run holds the lock: its containers untouched, nothing restored" \
@@ -490,10 +387,10 @@ check "the clock never synchronized: no restore check, nothing read" \
 store
 touch "$W/timesync-marker"
 check "  timesyncd synchronized (its marker; timedatectl says no): the run goes on" \
-  "$(run PI_RESTORE_LOCKED= NTP=no PI_RESTORE_TIMESYNC_MARKER="$W/timesync-marker") $(report | grep -cE ' OK')" "rc=0 4"
+  "$(run PI_RESTORE_LOCKED= NTP=no PI_RESTORE_TIMESYNC_MARKER="$W/timesync-marker") $(report | grep -cE ' OK')" "rc=0 3"
 rm "$W/timesync-marker"
 store
-check "  chrony synchronized (timedatectl says no): the run goes on" "$(run PI_RESTORE_LOCKED= NTP=no CHRONY_NORMAL=1) $(report | grep -cE ' OK')" "rc=0 4"
+check "  chrony synchronized (timedatectl says no): the run goes on" "$(run PI_RESTORE_LOCKED= NTP=no CHRONY_NORMAL=1) $(report | grep -cE ' OK')" "rc=0 3"
 
 # no memory cgroup controller (pi2's command line, 2026-10-16): Postgres and etcd red, saying why - no container started -
 # tier0 (no container) restored
@@ -501,7 +398,7 @@ echo "cpuset cpu io pids" > "$W/cgroup-controllers"
 store
 check "no memory cgroup controller: every part red, saying so, no container run, no scratch Postgres" \
   "$(run) $(report | grep -c 'no memory cgroup controller') $(grep -c '^podman run' "$W/calls") $(grep -c 'initdb' "$W/calls")" \
-  "rc=1 4 0 0"
+  "rc=1 3 0 0"
 echo "cpuset cpu io memory pids" > "$W/cgroup-controllers"
 red "postgres: a major with no image: red" POSTGRES PG_VERSION=190002
 red "postgres: the newest complete base backup just past the playbook's limit: red" POSTGRES BASE_OLD=$((BASE_MAX + 1))
@@ -536,7 +433,7 @@ check "postgres: one database empty (an app not deployed - masi in production), 
 red "postgres: a database not read back whole: red" POSTGRES DUMP_FAIL=1
 store
 run PG_RESTORE_FAIL=1 > /dev/null
-check "  one part red, the others still run and are reported" "$(report | grep -cE '^(ETCD|SCYLLA|TIER0) OK')" 3
+check "  one part red, the others still run and are reported" "$(report | grep -cE '^(ETCD|TIER0) OK')" 2
 check "  the run's exit says it" "$(grep -c 'PI RESTORE CHECK .* FAILED: POSTGRES' "$W/out")" 1
 red "etcd: the newest snapshot 5 h old: red" ETCD ETCD_AGE_H=5
 red "etcd: the snapshot does not restore (hash): red" ETCD ETCD_RESTORE_FAIL=1
@@ -544,77 +441,6 @@ red "etcd: no kube-system in it: red" ETCD NO_KUBE_SYSTEM=1
 red "etcd: stopped on the restored data: red" ETCD ETCD_RUNNING=false
 red "etcd: serves no namespace within its wait: red" ETCD ETCD_SILENT=1
 check "  said so, with etcd's own log" "$(grep -c 'served no namespace within 4 s' "$W/out") $(grep -c 'LOG: ' "$W/out")" "1 1"
-# scylla: production's cluster (snapshotted last, not the old one), its newest snapshot (not the day before's), the
-# schema of its own keyspaces only (system ones are the scratch Scylla's), that snapshot's files only (the store keeps
-# every snapshot's side by side), loaded as Scylla's own user, each table read back
-store
-run > /dev/null
-newest=$(ls "$W/store/scylla-backups/backup/meta/cluster/98b5-prod/dc/datacenter1/node/node-a" \
-  | sed 's/.*_tag_\(sm_[0-9]*UTC\)_manifest.*/\1/' | sort | tail -1)
-check "scylla: production's cluster, its newest snapshot, its table's rows read back" \
-  "$(report | grep -oE '^SCYLLA OK: [^ ]+' | sed 's/SCYLLA OK: //') $(report | grep -oE 'tables \(rows\) [^,]+')" \
-  "98b5-prod/$newest tables (rows) chat.messages_by_channel:5"
-check "  the schema of its own keyspaces only (no system one, no role or service level, none the scratch Scylla has), one statement each" \
-  "$(grep -c system_schema "$W/scylla-schema") $(grep -cE 'ROLE|SERVICE LEVEL' "$W/scylla-schema") $(grep -c audit "$W/scylla-schema") $(grep -c ';$' "$W/scylla-schema") $(grep -c ';;' "$W/scylla-schema")" \
-  "0 0 0 2 0"
-check "  a keyspace the scratch Scylla has (audit): its files neither fetched nor loaded; the newest snapshot's own fetched" \
-  "$(grep -c audit "$W/fetched") $(grep -c audit "$W/scylla-loaded") $(sort "$W/fetched" | paste -sd,)" \
-  "0 0 keyspace/chat/table/messages_by_channel/c1/a-Data.db,keyspace/chat/table/messages_by_channel/c1/b-Data.db,keyspace/chat/table/messages_by_channel/c1/b-TOC.txt"
-check "  a schema file for each named keyspace of its own (none for the cluster's roles and service levels)" \
-  "$(paste -sd, "$W/scylla-schema-files")" "audit.cql,chat.cql"
-check "  the newest snapshot's files only (not the day before's own), no system table's" "$(cat "$W/scylla-loaded")" \
-  "chat.messages_by_channel:a-Data.db+b-Data.db+b-TOC.txt"
-check "  Scylla without a network, one core, in the image named, its memory the container's bar 512M, the snapshot read-only" \
-  "$(grep -cE '^podman run -d --name pi-restore-scylla-[0-9]+ --network none --memory 1536m --cpus 1 -v [^ ]+/scylla:/w:ro docker.io/scylladb/scylla:2026.1.14 ' "$W/calls") $(grep -oE -- '--memory [0-9]+M --reserve-memory 256M' "$W/scylla-args")" \
-  "1 --memory 1024M --reserve-memory 256M"
-check "  each table counted under the server's own time-out" \
-  "$(grep -cE '^podman exec pi-restore-scylla-[0-9]+ cqlsh --request-timeout=660 -e SELECT count\(\*\) FROM chat.messages_by_channel USING TIMEOUT 600s$' "$W/calls")" 1
-check "  the parts before it gone from the disk when it starts (Postgres's, etcd's restored data)" \
-  "$(grep -cxE 'pg|etcd' "$W/scylla-saw") $(grep -cx scylla "$W/scylla-saw")" "0 1"
-check "  the files made Scylla's own (as root, in the container), then loaded" \
-  "$(grep -cE "^podman exec -u root pi-restore-scylla-[0-9]+ sh -c cp /w/sst/\*/keyspace/chat/table/messages_by_channel/\*/\* '[^']+/upload/' && chown -R scylla:scylla" "$W/calls") $(grep -cE '^podman exec pi-restore-scylla-[0-9]+ nodetool refresh chat messages_by_channel$' "$W/calls")" \
-  "1 1"
-red "scylla: no snapshot at all: red" SCYLLA NO_SCYLLA=1
-red "scylla: the newest snapshot just past the playbook's limit: red" SCYLLA SCYLLA_AGE_H=$(( SC_MAX + 1 ))
-check "  said so" "$(report | grep -cE "is $(( SC_MAX + 1 )) h old \(limit $SC_MAX h\)")" 1
-(export SCYLLA_AGE_H=26; store)
-check "scylla: a day missed (the day before's, 26 h): green" "$(run SCYLLA_AGE_H=26)" "rc=0"
-check "scylla: the newest exactly at the playbook's limit ($SC_MAX h): green" "$(export SCYLLA_AGE_H=$SC_MAX; store; run SCYLLA_AGE_H=$SC_MAX)" "rc=0"
-red "scylla: the newest snapshot without its schema: red" SCYLLA NO_SCYLLA_SCHEMA=1
-red "scylla: only system tables with data: red" SCYLLA SCYLLA_ONLY=system
-check "  said so, before any Scylla started" \
-  "$(report | grep -c 'no table of its own with data in the snapshot') $(grep -c 'run -d --name pi-restore-scylla-' "$W/calls")" "1 0"
-red "scylla: data only in a keyspace the scratch Scylla has of its own (audit): red" SCYLLA SCYLLA_ONLY=audit
-check "  said so, nothing fetched" \
-  "$(report | grep -c 'no table with data but in keyspaces the scratch Scylla has of its own') $(grep -c '^rclone copy --files-from-raw' "$W/calls")" "1 0"
-red "scylla: Scylla stops before it serves: red" SCYLLA SCYLLA_RUNNING=false
-red "scylla: no CQL within its polls: red" SCYLLA SCYLLA_SILENT=1
-red "scylla: its schema does not apply: red" SCYLLA SCHEMA_FAIL=1
-red "scylla: a table its schema did not create: red" SCYLLA NO_TABLE_DIR=1
-check "  said so" "$(report | grep -c 'chat.messages_by_channel not created by its schema')" 1
-red "scylla: the newest snapshot two nodes': red - one node's restored only" SCYLLA SCYLLA_TWO_NODES=1
-check "  said so" "$(report | grep -c "2 nodes' manifests - this check restores one node's")" 1
-red "scylla: room for the snapshot twice not free: red, nothing fetched" SCYLLA SCYLLA_HUGE=1
-check "  said so, nothing fetched" "$(report | grep -c 'bytes to restore, twice') $(cat "$W/fetched" 2> /dev/null | wc -l)" "1 0"
-# chat's table 300 bytes (audit's 100, the scratch Scylla's own, not counted): room for it twice, to the byte
-red "scylla: room for the restored tables once, not twice (599 bytes free): red" SCYLLA DF_AVAIL_B=599
-store
-check "scylla: room for them twice exactly (600 bytes free): green" "$(run DF_AVAIL_B=600)" "rc=0"
-red "scylla: a file the manifest lists not in the store: red" SCYLLA SST_MISSING=1
-check "  said so" "$(report | grep -c '2 of the 3 files listed fetched')" 1
-red "scylla: the SSTables do not load: red" SCYLLA REFRESH_FAIL=1
-red "scylla: no row in any table: red" SCYLLA SCYLLA_ROWS=0
-check "  said so" "$(report | grep -c 'restored with no row in any table (chat.messages_by_channel:0)')" 1
-red "scylla: a table's count answered with no number: red" SCYLLA SCYLLA_COUNT_UNREAD=1
-check "  said so" "$(report | grep -c 'chat.messages_by_channel not read back')" 1
-red "scylla: the scratch Scylla's keyspaces not read: red" SCYLLA SCYLLA_KEYSPACES_UNREAD=1
-check "  said so" "$(report | grep -c "the scratch Scylla's keyspaces not read")" 1
-red "scylla: a container's memory Scylla cannot start in (512m): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=512m
-store
-check "scylla: the smallest container it served in (768m, measured): green, Scylla's memory 256M" \
-  "$(run PI_RESTORE_CONTAINER_MEMORY=768m) $(grep -oE -- '--memory [0-9]+M --reserve' "$W/scylla-args")" "rc=0 --memory 256M --reserve"
-red "scylla: a container's memory not in MiB (2g): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=2g
-check "  said so (the guard, not the arithmetic after it)" "$(report | grep -c 'PI_RESTORE_CONTAINER_MEMORY=2g: Scylla wants at least 768m')" 1
 red "etcd: the newest snapshot named for a date no calendar has: red" ETCD ETCD_BAD_DATE=1
 # an expansion error in a part's own shell (arithmetic on a word not a number): bash abandons the command and reads on -
 # past the part's dispatch, into the whole check again, inside the part (seen 2026-10-17: a chain of runs, each inside
@@ -628,10 +454,10 @@ SCRIPT_ARGS=() SCRIPT_RUN=$SCRIPT
 # the unit's ExecStopPost (--sweep): a killed run's containers removed under the lock, nothing else; the lock held by
 # another run (a check by hand) - nothing removed, said by its exit
 store
-printf 'pi-restore-pg-4242\npi-restore-scylla-4242\nsomething-else\n' > "$W/leftover-containers"
+printf 'pi-restore-pg-4242\npi-restore-etcd-4242\nsomething-else\n' > "$W/leftover-containers"
 SCRIPT_ARGS=(--sweep)
 check "--sweep: a killed run's containers removed, nothing else, nothing restored" \
-  "$(run PI_RESTORE_LOCKED=) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|scylla)-4242$' "$W/calls") $(grep -c 'something-else' "$W/calls") $(grep -c '^rclone' "$W/calls")" \
+  "$(run PI_RESTORE_LOCKED=) $(grep -cE '^podman rm -f -t 0 pi-restore-(pg|etcd)-4242$' "$W/calls") $(grep -c 'something-else' "$W/calls") $(grep -c '^rclone' "$W/calls")" \
   "rc=0 2 0 0"
 store
 printf 'pi-restore-pg-4242\n' > "$W/leftover-containers"
@@ -641,8 +467,8 @@ SCRIPT_ARGS=()
 # a setting the parts count with, not a number: refused before any part (a number below zero is one - the copy's
 # rehearsal forces a part red with -1)
 store
-check "a setting not a number (PI_RESTORE_SCYLLA_WAIT_POLLS=2x): refused, named, no part run" \
-  "$(run PI_RESTORE_SCYLLA_WAIT_POLLS=2x) $(grep -c 'PI_RESTORE_SCYLLA_WAIT_POLLS=2x: not a number' "$W/out") $(cat "$W/mktemps" 2> /dev/null | wc -l)" \
+check "a setting not a number (PI_RESTORE_ETCD_WAIT_POLLS=2x): refused, named, no part run" \
+  "$(run PI_RESTORE_ETCD_WAIT_POLLS=2x) $(grep -c 'PI_RESTORE_ETCD_WAIT_POLLS=2x: not a number' "$W/out") $(cat "$W/mktemps" 2> /dev/null | wc -l)" \
   "rc=1 1 0"
 store
 check "  a number below zero is one: the run goes on (the part red on it)" \
@@ -661,7 +487,7 @@ red "tier0: psql could not run pg-globals.sql: red" TIER0 PSQL_FAIL=1
 # the playbook's wiring
 PY=python3
 "$PY" -c 'import yaml' 2> /dev/null || PY=deploy/ansible/venv/bin/python3
-check "the playbook names production's images (Postgres 17 as it ran; after every step: its Postgres 18, etcd and Scylla, digested)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
+check "the playbook names production's images (Postgres 17 as it ran; after every step: its Postgres 18 and etcd, digested)" "$(PYTHONDONTWRITEBYTECODE=1 "$PY" - <<'PY_WIRING'
 import importlib.machinery, importlib.util, os, re, yaml
 v = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]["vars"]
 L = importlib.machinery.SourceFileLoader("e", "scripts/upgrade-expected-inventory.py")
@@ -670,14 +496,13 @@ L.exec_module(e)
 before = open("tests/ansible/upgrade/prod-inventory.txt").read().splitlines()
 after = e.expected(sorted(f[:-4] for f in os.listdir(e.STEPS) if f.endswith(".txt")))
 img = lambda inv, name: [l.split()[2] for l in inv if l.startswith("image " + name + " ")]
-pg, etcd, sc = "ghcr.io/cloudnative-pg/postgresql", "registry.k8s.io/etcd", "docker.io/scylladb/scylla"
+pg, etcd = "ghcr.io/cloudnative-pg/postgresql", "registry.k8s.io/etcd"
 digested = lambda ref, name, tags: [re.fullmatch(re.escape(name) + r":(\S+)@sha256:[0-9a-f]{64}", ref)[1]] == tags
 print(v["pi_restore_check_pg_images"]["17"] == pg + ":" + img(before, pg)[0],
       digested(v["pi_restore_check_pg_images"]["18"], pg, img(after, pg)),
-      digested(v["pi_restore_check_etcd_image"], etcd, img(after, etcd)),
-      digested(v["pi_restore_check_scylla_image"], sc, img(after, sc)), sorted(v["pi_restore_check_pg_images"]))
+      digested(v["pi_restore_check_etcd_image"], etcd, img(after, etcd)), sorted(v["pi_restore_check_pg_images"]))
 PY_WIRING
-)" "True True True True ['17', '18']"
+)" "True True True ['17', '18']"
 check "the two Pis on opposite days (pi1 even, pi2 odd), the store through the VIP" "$("$PY" - <<'PY_PARITY'
 import yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
@@ -699,16 +524,16 @@ print(sorted(need - keys), len(need) > 5)
 PY_KEYS
 )" "[] True"
 # each setting the unit's file names from the playbook's own variable of its name (a copy-paste naming another's - the
-# age limit set to the polls - passed every case), the Scylla ones among them
-check "the settings file: each PI_RESTORE_<X> from pi_restore_check_<x>, Scylla's three among them" "$("$PY" - <<'PY_ENVVARS'
+# age limit set to the polls - passed every case)
+check "the settings file: each PI_RESTORE_<X> from pi_restore_check_<x>" "$("$PY" - <<'PY_ENVVARS'
 import re, yaml
 p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
 env = next(t for t in p["tasks"] if t["name"].startswith("Its settings"))["ansible.builtin.copy"]["content"]
 pairs = re.findall(r"^PI_RESTORE_([A-Z0-9_]+)=\{\{ (pi_restore_check_[a-z0-9_]+) \}\}$", env, re.M)
 print([(k, v) for k, v in pairs if v != "pi_restore_check_" + k.lower()],
-      sorted(k for k, _ in pairs if k.startswith("SCYLLA_")), all(v in p["vars"] for _, v in pairs))
+      len(pairs) > 5, all(v in p["vars"] for _, v in pairs))
 PY_ENVVARS
-)" "[] ['SCYLLA_IMAGE', 'SCYLLA_MAX_AGE_H', 'SCYLLA_WAIT_POLLS'] True"
+)" "[] True True"
 # the start limit holds the first run and its two retries even when each hangs to its timeout - a 6 h window never held
 # three 3 h runs 20 min apart, and the unit restarted for ever; its files root's alone (UMask, as the script's umask)
 check "the unit: three starts, each to its timeout, within the start limit's window, the window ended before the timer's next day; its umask 0077; a killed run's containers swept when it stops" "$("$PY" - <<'PY_UNIT'

@@ -5,8 +5,6 @@
 #             production's own Postgres image (podman) - replayed to the end, the newest WAL archived when the run began
 #             reached, every database of pi_restore_check_databases there and read back whole
 #   etcd      ten's newest hourly snapshot: restored (its hash checked), an etcd started on it, kube-system there
-#   scylla    production's newest Scylla Manager snapshot: its schema into a scratch Scylla in production's image (podman,
-#             no network), every table's SSTables of the snapshot loaded, each table read back
 #   tier0     the Pis' own newest backup (setup-pi-backups.yml): Consul's snapshot into a throwaway agent, every
 #             Patroni database dump into a scratch Postgres
 # Everything is read through the VIP (the store both Pis serve); the run writes only restore-checks/<this Pi>/ -
@@ -47,9 +45,6 @@
       "18": "ghcr.io/cloudnative-pg/postgresql:18.6-system-bullseye@sha256:899d3ed526b659d77935dde0e6bf2d69dbbf17d3d8c6486ca8cfd04bd3c18533"
     # the etcd production runs after the upgrade (its etcdutl reads the snapshot), by the digest ten's kubelet pulled
     pi_restore_check_etcd_image: "registry.k8s.io/etcd:3.6.8-0@sha256:397189418d1a00e500c0605ad18d1baf3b541a1004d768448c367e48071622e5"
-    # production's Scylla (infra's schnappy-production-data scyllaOperator.version), by the digest its pod runs - the
-    # multi-arch index, so the Pis pull its arm64 build
-    pi_restore_check_scylla_image: "docker.io/scylladb/scylla:2026.1.14@sha256:333b9ab3a3214c7f98af100711c51df7f58964e8227e6d26050e889ebb216df1"
     # how old each backup may be: CNPG's base backup daily at 01:30 (platform schnappy-data, "0 30 1 * * *"), this
     # check at 05:30 - an idle database can leave that day's backup's end segment unarchived, and the newest restorable
     # one is then the day before's, ~28 h old: 30 h; etcd's snapshots hourly; the Pis' own daily at 02:40
@@ -57,18 +52,12 @@
     # the base backups looked at for the newest restorable one: the store's 30 days of daily ones (retentionPolicy)
     pi_restore_check_pg_backups_looked_at: 30
     pi_restore_check_etcd_max_age_h: 3
-    # Scylla Manager's snapshot daily at 03:00 (platform schnappy-data scyllaManager.backup.cron): 2.5 h old at this
-    # check, 26.5 h with one day missed - two missed are red
-    pi_restore_check_scylla_max_age_h: 30
     pi_restore_check_tier0_max_age_h: 30
     # the recovery's wait, 5 s a poll: an hour; etcd's on the restored snapshot, 2 s a poll: 3 minutes
     pi_restore_check_pg_wait_polls: 720
     pi_restore_check_etcd_wait_polls: 90
-    # Scylla's start: polls 3 s apart, each one's cqlsh try a few seconds more on a Pi - 5 to 10 minutes (it served in
-    # 8 s on aqua, 2026-10-17)
-    pi_restore_check_scylla_wait_polls: 100
     # room a run needs before it starts: production's Postgres volume (20Gi) and the etcd and tier-0 copies, with margin
-    # (each part's data is removed when it ends; Scylla's part wants its snapshot's size twice free on top of this)
+    # (each part's data is removed when it ends)
     pi_restore_check_min_free_gb: 30
     # each container's memory (podman runs them outside the unit's cgroup) and the unit's own (the throwaway Consul,
     # the scratch Postgres): the Pi's 8 GB serves Vault, Consul and Patroni first
@@ -78,10 +67,9 @@
   tasks:
     # podman for production's own images (host network or none: it never adds a network or a firewall rule); rclone
     # for the store
-    # python3: the Scylla part reads Scylla Manager's manifests and schema (JSON)
-    - name: Podman, rclone and Python, Debian's
+    - name: Podman and rclone, Debian's
       ansible.builtin.apt:
-        name: [podman, rclone, python3]
+        name: [podman, rclone]
         state: present
 
     - name: The check's settings directory, root only
@@ -129,9 +117,6 @@
           PI_RESTORE_PG_IMAGE_{{ major }}={{ image }}
           {% endfor %}
           PI_RESTORE_ETCD_IMAGE={{ pi_restore_check_etcd_image }}
-          PI_RESTORE_SCYLLA_IMAGE={{ pi_restore_check_scylla_image }}
-          PI_RESTORE_SCYLLA_MAX_AGE_H={{ pi_restore_check_scylla_max_age_h }}
-          PI_RESTORE_SCYLLA_WAIT_POLLS={{ pi_restore_check_scylla_wait_polls }}
           PI_RESTORE_PG_BASE_MAX_AGE_H={{ pi_restore_check_pg_base_max_age_h }}
           PI_RESTORE_PG_BACKUPS_LOOKED_AT={{ pi_restore_check_pg_backups_looked_at }}
           PI_RESTORE_ETCD_MAX_AGE_H={{ pi_restore_check_etcd_max_age_h }}
@@ -173,8 +158,8 @@
             UMask=0077
             EnvironmentFile=/etc/pi-restore-check/env
             ExecStart=/usr/local/sbin/pi-restore-check.sh
-            # a killed run's containers (outside this cgroup: SIGKILL leaves them, 1.5G and a core) gone now, not at
-            # this Pi's next turn - '-': a run by hand holding the lock owns its own, and a skipped sweep fails nothing
+            # a killed run's containers (outside this cgroup: SIGKILL leaves them, memory held) gone now, not at this
+            # Pi's next turn - '-': a run by hand holding the lock owns its own, and a skipped sweep fails nothing
             ExecStopPost=-/usr/local/sbin/pi-restore-check.sh --sweep
             # the Pi's own services come first
             Nice=10
