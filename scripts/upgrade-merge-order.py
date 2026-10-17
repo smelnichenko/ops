@@ -109,7 +109,8 @@ def git_directories(generator, infra_ref):
         pattern = d["path"]
         parent, glob = pattern.rsplit("/", 1)
         rx = re.compile("^" + re.escape(glob).replace(r"\*", "[^/]*") + "$")
-        listing = git("infra", "ls-tree", "-d", "--name-only", f"{infra_ref}:{parent}").split()
+        # NUL-separated: names as they are - split on blanks, "a b-svc" was two names and "ä-svc" git's quoted octal
+        listing = git("infra", "ls-tree", "-d", "-z", "--name-only", f"{infra_ref}:{parent}").split("\0")[:-1]
         dirs += [f"{parent}/{x}" for x in listing if rx.match(x)]
     return dirs
 

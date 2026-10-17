@@ -217,6 +217,13 @@ sets_case("a git-directories glob: the whole name matched, * within one director
            "clusters/production/envs/a-svc-old/values.yaml": "x: 2\n",
            "clusters/production/envs/x/y-svc/values.yaml": "x: 3\n"},
           ["demo-a-svc"], [("demo-a-svc", "x: 1")])
+# a directory name git quotes or holds a blank in (a space, a non-ASCII letter): one directory, its name as it is - git's
+# listing split on blanks made "a b-svc" two names and left "ä-svc" in git's quoted octal
+sets_case("a git-directories name with a space or a non-ASCII letter: one directory, its name as it is",
+          {"clusters/production/argocd/apps/envs.yaml": SET_GIT.replace("envs/*}", "envs/*-svc}"),
+           "clusters/production/envs/a b-svc/values.yaml": "x: 1\n",
+           "clusters/production/envs/\u00e4-svc/values.yaml": "x: 2\n"},
+          ["demo-a b-svc", "demo-\u00e4-svc"], [("demo-a b-svc", "x: 1"), ("demo-\u00e4-svc", "x: 2")])
 # Argo CD's precedence: the value files, then the inline values over them
 sets_case("inline values over the value files",
           {"clusters/production/argocd/apps/demo.yaml": (APP % mo.PLATFORM_URL).replace(
