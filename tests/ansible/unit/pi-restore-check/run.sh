@@ -48,7 +48,9 @@ case "${args[0]}" in
   copy)
     mkdir -p "${args[2]}"
     if [ -n "$ffr" ]; then  # the listed paths only, relative to the source
-      while read -r f; do mkdir -p "${args[2]}/$(dirname "$f")"; cp "$(p "${args[1]}")/$f" "${args[2]}/$f"; done < "$ffr"
+      while read -r f; do
+        mkdir -p "${args[2]}/$(dirname "$f")"; cp "$(p "${args[1]}")/$f" "${args[2]}/$f"; echo "$f" >> "$W/fetched"
+      done < "$ffr"
     else
       cp -r "$(p "${args[1]}")/." "${args[2]}/"
     fi ;;
@@ -120,6 +122,7 @@ case "$cmd" in
       *"-f /w/schema/"*)
         # the run's files are root's alone (umask 077): Scylla's own user cannot read them (the copy, 2026-10-17)
         a="$*"; f=${a##*-f /w/schema/}
+        ls -A "$(cat "$W/scylla-vol")/schema" > "$W/scylla-schema-files"
         [ "$asroot" = root ] || { echo "Can't open '/w/schema/$f': [Errno 13] Permission denied"; exit 2; }
         cat "$(cat "$W/scylla-vol")/schema/$f" >> "$W/scylla-schema"
         [ -z "${SCHEMA_FAIL:-}" ] || { echo "SyntaxException: line 1:7 no viable alternative"; exit 2; } ;;
@@ -209,7 +212,8 @@ chmod +x "$W/bin"/*
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
   rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/modes" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
-    "$W/leftover-containers" "$W/scylla-args" "$W/scylla-vol" "$W/scylla-schema" "$W/scylla-loaded" "$W/mktemps"
+    "$W/leftover-containers" "$W/scylla-args" "$W/scylla-vol" "$W/scylla-schema" "$W/scylla-loaded" "$W/mktemps" "$W/fetched" \
+    "$W/scylla-schema-files"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
@@ -522,8 +526,11 @@ check "scylla: production's cluster, its newest snapshot, its table's rows read 
 check "  the schema of its own keyspaces only (no system one, no role or service level, none the scratch Scylla has), one statement each" \
   "$(grep -c system_schema "$W/scylla-schema") $(grep -cE 'ROLE|SERVICE LEVEL' "$W/scylla-schema") $(grep -c audit "$W/scylla-schema") $(grep -c ';$' "$W/scylla-schema") $(grep -c ';;' "$W/scylla-schema")" \
   "0 0 0 2 0"
-check "  a keyspace the scratch Scylla has (audit): its files neither fetched nor loaded" \
-  "$(find "$W/work" -name u-Data.db 2> /dev/null | wc -l) $(grep -c '^rclone copy --files-from-raw' "$W/calls") $(grep -c audit "$W/scylla-loaded")" "0 1 0"
+check "  a keyspace the scratch Scylla has (audit): its files neither fetched nor loaded; the newest snapshot's own fetched" \
+  "$(grep -c audit "$W/fetched") $(grep -c audit "$W/scylla-loaded") $(sort "$W/fetched" | paste -sd,)" \
+  "0 0 keyspace/chat/table/messages_by_channel/c1/a-Data.db,keyspace/chat/table/messages_by_channel/c1/b-Data.db,keyspace/chat/table/messages_by_channel/c1/b-TOC.txt"
+check "  a schema file for each named keyspace of its own (none for the cluster's roles and service levels)" \
+  "$(paste -sd, "$W/scylla-schema-files")" "audit.cql,chat.cql"
 check "  the newest snapshot's files only (not the day before's own), no system table's" "$(cat "$W/scylla-loaded")" \
   "chat.messages_by_channel:a-Data.db+b-Data.db+b-TOC.txt"
 check "  Scylla without a network, in the image named, its memory the container's bar 512M, the snapshot read-only" \
