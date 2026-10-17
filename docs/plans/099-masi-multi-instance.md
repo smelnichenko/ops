@@ -164,6 +164,12 @@ while the paced run goes on. Tests: TwoInstancesTest (6 cases, a second full app
 checks (53 red, 2 equivalent), a test-quality audit that found 13 uncovered mechanisms before they were covered.
 Next: PR 2 (the lanes) — paused while the masi test run is brought under 3 minutes (operator, 2026-09-30).
 
+2026-10-18: 2a and 2b built and reviewed (four passes on 2a, all findings fixed), revert checks all red (2a 47, 2b 8);
+2a's tests as built: TwoInstancesTest - one posting analysed once across two pods with A's claim renewed meanwhile, a
+pause set and lifted across pods; the other two-pod cases (an expired claim taken over, a word score after an AI match,
+the dashboard) as single-pod tests that play the other pod through the claim columns. PRs wait their turn behind
+monitor #18 and the site's (one open PR at a time).
+
 2026-10-17: the test-time arc closed (forks, contexts, clock waits, CI browser headroom - masi #88-#106); PR 2 resumes,
 split in three, each a PR of its own on the PR 1 claim pieces (`claim/ClaimOwner`, `ClaimRenewer`, `Fence`,
 `ClaimProperties` ttl 60 s / renew 20 s; SQL on `clock_timestamp()`):
@@ -175,8 +181,9 @@ split in three, each a PR of its own on the PR 1 claim pieces (`claim/ClaimOwner
   (analysis_claimed_until is null or analysis_claimed_until < clock_timestamp())` - holds it renewed while the AI call
   runs, writes as today (`storeRequirements`, already first-writer-wins) and frees the claim. A caller that does not
   win re-reads: the requirements are there - used; another pod is analysing - the analysis lane skips the job, the tuner
-  (which needs the result) waits parked for the requirements or the claim's expiry (then claims itself), never past its
-  own call budget. Neither path pays twice for one posting, on one pod or two.
+  (which needs the result) polls for the requirements or the claim's expiry (then claims itself), at most the holder's
+  call deadline and two claim times (then goes on without the analysis). Neither path pays twice for one posting, on
+  one pod or two.
 - `AnalysisScheduler` / `MatchingLane`: each backlog job claimed on its row (the job for analysis, the `job_match` row
   for the AI match) before its attempt is counted; a job another pod holds is skipped, a stale backlog page is safe.
   `storeAiMatch` writes only under its claim (`and claimed_by=?`) and frees it.
@@ -190,9 +197,11 @@ split in three, each a PR of its own on the PR 1 claim pieces (`claim/ClaimOwner
   overwritten by B's word score; a pause set on A seen by B's lanes and dashboard. The single-pod tests that pinned the
   stripe lock (`MatchServiceTest.theTunerAndTheLaneNeverBothPayForOnePosting`) re-pinned on the claim.
 
-**PR 2b — tuning.** `TuningScheduler`'s lane semaphore and queued/running sets go: every pod ticks, each package claimed
-by the existing atomic NEW->PREPARING plus `application_package.claimed_by/claimed_until` renewed while preparing; an
-expired PREPARING package recovered by any pod. Per-pod concurrency stays a pod resource bound.
+**PR 2b — tuning.** Every pod ticks; each package is claimed by the existing atomic NEW->PREPARING (its writes stay
+fenced by the preparing_since stamp) plus `application_package.claimed_by/claimed_until` (changeset 061) renewed while
+preparing; a PREPARING package whose claim ran out is recovered by any pod's sweeper (one with no claim by the old
+preparing limit); the per-pod `live()` set the sweeper excluded goes. The lane's semaphore and queue stay: a pod's own
+concurrency bound. Package creation needs nothing: (job, cv_version) is unique and a duplicate is caught.
 
 **PR 2c — the rest of the single-pod state.** Enrichment's company claim, `llm_call` claims (renewed in flight, LOST on
 expiry), the `master_translation` row, the partner rate row, idempotent startup repairs (`DomainKeyRepair`,
