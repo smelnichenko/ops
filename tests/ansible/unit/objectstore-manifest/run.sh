@@ -116,6 +116,30 @@ expect pass "a bucket made while tar ran" "4 objects in 2 buckets" python3 "$M" 
 mkdir r4; tar "${X[@]}" -C r4 -xzf good.tgz
 python3 -c 'import os; os.setxattr("r4/buckets/b2/multi", "user.etag", b"\"zzz-2\"")'
 expect fail "a restored object's ETag changed" "b2/multi: ETag zzz-2" python3 "$M" verify-tree r4/buckets out.json
+# an object deleted while the manifest walks (listed by the walk, gone before its ETag is read): left out - not listed
+# as having no ETag, which verify-tar would take for a store whose objects it cannot check; the control: an object
+# there without an ETag is listed apart
+python3 - <<'PY'
+import hashlib, os
+os.makedirs("vanish/buckets/b1"); os.setxattr("vanish/buckets/b1", "user.acl", b'{"Owner":"x"}')
+for n in ("keep", "gone"):
+    p = f"vanish/buckets/b1/{n}"
+    open(p, "w").write(f"{n}\n")
+    os.setxattr(p, "user.etag", ('"%s"' % hashlib.md5(open(p, "rb").read(), usedforsecurity=False).hexdigest()).encode())
+open("vanish/buckets/b1/bare", "w").write("no etag\n")
+PY
+expect pass "an object deleted mid-walk: left out, not listed as without an ETag" \
+  "objects \['b1/keep'\] noetag \['b1/bare'\] bad \[\]" python3 -c '
+import importlib.util, os, sys
+s = importlib.util.spec_from_file_location("om", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+real = os.getxattr
+def getxattr(p, name, *a, **k):  # the walk listed it; it is deleted before its ETag is read
+    if p.endswith("/gone") and os.path.exists(p):
+        os.remove(p)
+    return real(p, name, *a, **k)
+os.getxattr = getxattr
+got, bad = m.manifest("vanish/buckets")
+print("objects", sorted(got["objects"]), "noetag", got["noetag"], "bad", bad)' "$M"
 # a store with no bucket at all gives no manifest
 mkdir -p none/buckets
 expect fail "a store with no bucket" "no bucket" python3 "$M" manifest none/buckets
