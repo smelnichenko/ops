@@ -113,13 +113,18 @@ case "$cmd" in
     shift  # the container
     case "$*" in
       *"SELECT now() FROM system.local"*) [ -z "${SCYLLA_SILENT:-}" ] || exit 1 ;;
-      *"-f /w/schema.cql"*)
+      # the keyspaces a fresh Scylla 2026 has: its system ones and audit (SCYLLA_KEYSPACES_UNREAD: no answer)
+      *"SELECT keyspace_name FROM system_schema.keyspaces"*)
+        [ -z "${SCYLLA_KEYSPACES_UNREAD:-}" ] || { echo "OperationTimedOut"; exit 0; }
+        printf '\n keyspace_name\n---------------\n          audit\n         system\n  system_schema\n\n(3 rows)\n' ;;
+      *"-f /w/schema/"*)
         # the run's files are root's alone (umask 077): Scylla's own user cannot read them (the copy, 2026-10-17)
-        [ "$asroot" = root ] || { echo "Can't open '/w/schema.cql': [Errno 13] Permission denied: '/w/schema.cql'"; exit 2; }
-        cp "$(cat "$W/scylla-vol")/schema.cql" "$W/scylla-schema"
+        a="$*"; f=${a##*-f /w/schema/}
+        [ "$asroot" = root ] || { echo "Can't open '/w/schema/$f': [Errno 13] Permission denied"; exit 2; }
+        cat "$(cat "$W/scylla-vol")/schema/$f" >> "$W/scylla-schema"
         [ -z "${SCHEMA_FAIL:-}" ] || { echo "SyntaxException: line 1:7 no viable alternative"; exit 2; } ;;
       *"ls -d /var/lib/scylla/data/"*)
-        [ -n "${NO_TABLE_DIR:-}" ] || { t=${*##*/data/}; echo "/var/lib/scylla/data/${t%-\*}-0123abcd"; } ;;
+        [ -n "${NO_TABLE_DIR:-}" ] || { a="$*"; t=${a##*/data/}; echo "/var/lib/scylla/data/${t%-\*}-0123abcd"; } ;;
       *"cp /w/sst/"*)
         [[ "$*" =~ keyspace/([^/]+)/table/([^/]+)/ ]]
         v=$(cat "$W/scylla-vol")
@@ -265,12 +270,13 @@ store() {  # a store as production's, made relative to now
   # Scylla Manager's backups: an old cluster (a re-create ago) and production's - its newest snapshot (SCYLLA_AGE_H old)
   # and the day before's, each a node's manifest, the schema saved with each; the store keeps every snapshot's
   # SSTables side by side (the day before's own file must not be loaded). NO_SCYLLA: none at all; NO_SCYLLA_SCHEMA: the
-  # newest without its schema; SCYLLA_SYSTEM_ONLY: only system tables with data
+  # newest without its schema; SCYLLA_ONLY=system: only system tables with data, =audit: only the scratch Scylla's own
   [ -n "${NO_SCYLLA:-}" ] || PYTHONDONTWRITEBYTECODE=1 python3 - "$S/scylla-backups/backup" \
     "$(utc "-${SCYLLA_AGE_H:-3} hours" +sm_%Y%m%d%H%M%SUTC)" "$(utc "-$(( ${SCYLLA_AGE_H:-3} + 24 )) hours" +sm_%Y%m%d%H%M%SUTC)" \
-    "$(utc '-120 hours' +sm_%Y%m%d%H%M%SUTC)" "${NO_SCYLLA_SCHEMA:-}" "${SCYLLA_SYSTEM_ONLY:-}" <<'PY_SCYLLA_STORE'
+    "$(utc '-120 hours' +sm_%Y%m%d%H%M%SUTC)" "${NO_SCYLLA_SCHEMA:-}" "${SCYLLA_ONLY:-}" <<'PY_SCYLLA_STORE'
 import gzip, json, os, sys
-b, newest, before, old, no_schema, system_only = sys.argv[1:7]
+b, newest, before, old, no_schema, only = sys.argv[1:7]
+system_only, audit_only = only == "system", only == "audit"
 def put(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with gzip.open(path, "wt") as f:
@@ -278,8 +284,10 @@ def put(path, obj):
 def snapshot(cluster, tag, files, schema=True):
     node = f"{b}/meta/cluster/{cluster}/dc/datacenter1/node/node-a"
     index = [{"keyspace": "system_schema", "table": "tables", "version": "s1", "files": ["s-Data.db"]},
+             {"keyspace": "audit", "table": "audit_log", "version": "u1", "files": [] if system_only else ["u-Data.db"]},
              {"keyspace": "chat", "table": "message_edits", "version": "e1", "files": []},
-             {"keyspace": "chat", "table": "messages_by_channel", "version": "c1", "files": [] if system_only else files}]
+             {"keyspace": "chat", "table": "messages_by_channel", "version": "c1",
+              "files": [] if system_only or audit_only else files}]
     put(f"{node}/task_T_tag_{tag}_manifest.json.gz", {"cluster_id": cluster, "snapshot_tag": tag, "index": index})
     if schema:
         put(f"{b}/schema/cluster/{cluster}/task_T_tag_{tag}_schema_with_internals.json.gz", [
@@ -287,10 +295,14 @@ def snapshot(cluster, tag, files, schema=True):
             {"keyspace": "chat", "type": "table", "name": "messages_by_channel",
              "cql_stmt": "CREATE TABLE chat.messages_by_channel (\n    id int PRIMARY KEY\n) WITH ID = c1;"},
             {"keyspace": "system_schema", "type": "table", "name": "tables", "cql_stmt": "CREATE TABLE system_schema.tables (x int)"},
+            # Scylla 2026's own keyspace (a fresh Scylla has it: "AlreadyExists" - the copy, 2026-10-17): not applied, not loaded
+            {"keyspace": "audit", "type": "keyspace", "name": "audit", "cql_stmt": "CREATE KEYSPACE audit WITH replication = {};"},
+            {"keyspace": "audit", "type": "table", "name": "audit_log", "cql_stmt": "CREATE TABLE audit.audit_log (x int);"},
             # the cluster's own (no keyspace - the copy's schema held them, 2026-10-17): not data, not restored
             {"keyspace": "", "type": "role", "name": "cassandra", "cql_stmt": "CREATE ROLE IF NOT EXISTS cassandra WITH LOGIN = true;"},
             {"keyspace": "", "type": "service_level", "name": "driver", "cql_stmt": "CREATE SERVICE LEVEL IF NOT EXISTS driver;"}])
-    for ks, t, v, fs in (("system_schema", "tables", "s1", ["s-Data.db"]), ("chat", "messages_by_channel", "c1", files)):
+    for ks, t, v, fs in (("system_schema", "tables", "s1", ["s-Data.db"]), ("audit", "audit_log", "u1", ["u-Data.db"]),
+                         ("chat", "messages_by_channel", "c1", files)):
         for f in fs:
             p = f"{b}/sst/cluster/{cluster}/dc/datacenter1/node/node-a/keyspace/{ks}/table/{t}/{v}/{f}"
             os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -507,8 +519,11 @@ newest=$(ls "$W/store/scylla-backups/backup/meta/cluster/98b5-prod/dc/datacenter
 check "scylla: production's cluster, its newest snapshot, its table's rows read back" \
   "$(report | grep -oE '^SCYLLA OK: [^ ]+' | sed 's/SCYLLA OK: //') $(report | grep -oE 'tables \(rows\) [^,]+')" \
   "98b5-prod/$newest tables (rows) chat.messages_by_channel:5"
-check "  the schema of its own keyspaces only (no system one, no role or service level), one statement each" \
-  "$(grep -c system_schema "$W/scylla-schema") $(grep -cE 'ROLE|SERVICE LEVEL' "$W/scylla-schema") $(grep -c ';$' "$W/scylla-schema") $(grep -c ';;' "$W/scylla-schema")" "0 0 2 0"
+check "  the schema of its own keyspaces only (no system one, no role or service level, none the scratch Scylla has), one statement each" \
+  "$(grep -c system_schema "$W/scylla-schema") $(grep -cE 'ROLE|SERVICE LEVEL' "$W/scylla-schema") $(grep -c audit "$W/scylla-schema") $(grep -c ';$' "$W/scylla-schema") $(grep -c ';;' "$W/scylla-schema")" \
+  "0 0 0 2 0"
+check "  a keyspace the scratch Scylla has (audit): its files neither fetched nor loaded" \
+  "$(find "$W/work" -name u-Data.db 2> /dev/null | wc -l) $(grep -c '^rclone copy --files-from-raw' "$W/calls") $(grep -c audit "$W/scylla-loaded")" "0 1 0"
 check "  the newest snapshot's files only (not the day before's own), no system table's" "$(cat "$W/scylla-loaded")" \
   "chat.messages_by_channel:a-Data.db+b-Data.db+b-TOC.txt"
 check "  Scylla without a network, in the image named, its memory the container's bar 512M, the snapshot read-only" \
@@ -525,9 +540,12 @@ check "scylla: a day missed (the day before's, 26 h): green" "$(run SCYLLA_AGE_H
 (export SCYLLA_AGE_H=30; store)
 check "scylla: the newest exactly at the limit (30 h): green" "$(run SCYLLA_AGE_H=30)" "rc=0"
 red "scylla: the newest snapshot without its schema: red" SCYLLA NO_SCYLLA_SCHEMA=1
-red "scylla: only system tables with data: red" SCYLLA SCYLLA_SYSTEM_ONLY=1
+red "scylla: only system tables with data: red" SCYLLA SCYLLA_ONLY=system
 check "  said so, before any Scylla started" \
   "$(report | grep -c 'no table of its own with data in the snapshot') $(grep -c 'run -d --name pi-restore-scylla-' "$W/calls")" "1 0"
+red "scylla: data only in a keyspace the scratch Scylla has of its own (audit): red" SCYLLA SCYLLA_ONLY=audit
+check "  said so, nothing fetched" \
+  "$(report | grep -c 'no table with data but in keyspaces the scratch Scylla has of its own') $(grep -c '^rclone copy --files-from-raw' "$W/calls")" "1 0"
 red "scylla: Scylla stops before it serves: red" SCYLLA SCYLLA_RUNNING=false
 red "scylla: no CQL within its polls: red" SCYLLA SCYLLA_SILENT=1
 red "scylla: its schema does not apply: red" SCYLLA SCHEMA_FAIL=1
@@ -537,6 +555,8 @@ red "scylla: no row in any table: red" SCYLLA SCYLLA_ROWS=0
 check "  said so" "$(report | grep -c 'restored with no row in any table (chat.messages_by_channel:0)')" 1
 red "scylla: a table's count answered with no number: red" SCYLLA SCYLLA_COUNT_UNREAD=1
 check "  said so" "$(report | grep -c 'chat.messages_by_channel not read back')" 1
+red "scylla: the scratch Scylla's keyspaces not read: red" SCYLLA SCYLLA_KEYSPACES_UNREAD=1
+check "  said so" "$(report | grep -c "the scratch Scylla's keyspaces not read")" 1
 red "scylla: a container's memory Scylla cannot start in (1024m): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=1024m
 red "scylla: a container's memory not in MiB (2g): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=2g
 red "etcd: the newest snapshot named for a date no calendar has: red" ETCD ETCD_BAD_DATE=1

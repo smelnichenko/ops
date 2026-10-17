@@ -239,15 +239,17 @@ part_scylla() {
     | head -1)
   [ -n "$schema" ] || { echo "$cluster/$tag: no schema saved with it"; return 1; }
   rclone cat "$b/schema/cluster/$cluster/$schema" | gzip -dc > "$w/schema.json"
-  # the keyspaces of its own (system ones are the scratch Scylla's): their CQL, and each table's files of the snapshot -
-  # one list a node, the paths under that node's sst/ directory (the store keeps every snapshot's files side by side)
+  # the keyspaces of its own (system ones are the scratch Scylla's): each one's CQL, and each table's files of the
+  # snapshot - one list a node, the paths under that node's sst/ directory (the store keeps every snapshot's files side
+  # by side)
+  mkdir -p "$w/schema"
   python3 - "$w" <<'PY_SCYLLA'
 import json, sys
 w = sys.argv[1]
 own = lambda ks: ks and not ks.startswith("system")  # a role, a service level: no keyspace - the cluster's own, not data
-with open(f"{w}/schema.cql", "w") as out:
-    for r in json.load(open(f"{w}/schema.json")):
-        if own(r["keyspace"]):
+for r in json.load(open(f"{w}/schema.json")):
+    if own(r["keyspace"]):
+        with open(f'{w}/schema/{r["keyspace"]}.cql', "a") as out:
             out.write(r["cql_stmt"].rstrip().rstrip(";") + ";\n")
 paths = open(f"{w}/manifest-paths").read().split()
 tables = set()
@@ -263,11 +265,6 @@ for i, path in enumerate(paths, 1):
 open(f"{w}/tables", "w").write("".join(f"{t}\n" for t in sorted(tables)))
 PY_SCYLLA
   [ -s "$w/tables" ] || { echo "$cluster/$tag: no table of its own with data in the snapshot"; return 1; }
-  local f node
-  for f in "$w"/files.*; do
-    node=${f##*/files.}
-    rclone copy --files-from-raw "$f" "$b/sst/cluster/$cluster/$(cat "$w/prefix.$node")" "$w/sst/$node"
-  done
   podman pull -q "$PI_RESTORE_SCYLLA_IMAGE" > /dev/null || podman image exists "$PI_RESTORE_SCYLLA_IMAGE"
   # Seastar keeps memory back for the system: a reserve of its own (256M), the rest of the container bar 256M its own
   # (1G in 1536m - with its default reserve it refused: "insufficient physical memory", seen 2026-10-17)
@@ -294,9 +291,28 @@ PY_SCYLLA
     podman logs --tail 30 "$name" 2>&1 || true
     echo "$cluster/$tag: Scylla served no CQL within $(( PI_RESTORE_SCYLLA_WAIT_POLLS * 3 )) s"; return 1
   fi
-  # as root: the run's files are root's alone (umask 077) - Scylla's own user cannot read the schema (the copy, 2026-10-17)
-  podman exec -u root "$name" cqlsh -f /w/schema.cql > "$w/schema.log" 2>&1 \
-    || { tail -10 "$w/schema.log"; echo "$cluster/$tag: its schema did not apply"; return 1; }
+  # the keyspaces this Scylla has already (its system ones, audit - Scylla 2026's own): its own, not the snapshot's -
+  # their statements fail ("AlreadyExists", the copy 2026-10-17), and their data is not production's: left out
+  local have ks f node
+  have=$(podman exec "$name" cqlsh -e "SELECT keyspace_name FROM system_schema.keyspaces" \
+    | sed -n 's/^ *\([A-Za-z0-9_][A-Za-z0-9_]*\) *$/\1/p')
+  grep -qx system_schema <<< "$have" || { echo "$cluster/$tag: the scratch Scylla's keyspaces not read"; return 1; }
+  for f in "$w"/schema/*.cql; do
+    ks=$(basename "$f" .cql)
+    if grep -qx "$ks" <<< "$have"; then
+      sed -i "/^$ks\./d" "$w/tables"; sed -i "\#^keyspace/$ks/#d" "$w"/files.*
+      continue
+    fi
+    # as root: the run's files are root's alone (umask 077) - Scylla's own user cannot read them (the copy, 2026-10-17)
+    podman exec -u root "$name" cqlsh -f "/w/schema/$ks.cql" > "$w/schema.log" 2>&1 \
+      || { grep -vE '^Warnings :|not recommended|^ *$' "$w/schema.log" | tail -10
+           echo "$cluster/$tag: keyspace $ks's schema did not apply"; return 1; }
+  done
+  [ -s "$w/tables" ] || { echo "$cluster/$tag: no table with data but in keyspaces the scratch Scylla has of its own"; return 1; }
+  for f in "$w"/files.*; do
+    node=${f##*/files.}
+    rclone copy --files-from-raw "$f" "$b/sst/cluster/$cluster/$(cat "$w/prefix.$node")" "$w/sst/$node"
+  done
   # each table's files into its upload directory, Scylla's own, then loaded; read back whole
   local ks tb dir rows counts=() total=0
   while IFS=. read -r ks tb; do
