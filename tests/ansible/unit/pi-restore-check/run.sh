@@ -8,6 +8,7 @@
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 SCRIPT=$PWD/deploy/ansible/playbooks/files/pi-restore-check.sh
+SCRIPT_RUN=$SCRIPT SCRIPT_ARGS=()  # run()'s script and its arguments (a copy run as one part, below)
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 fails=0
@@ -185,12 +186,20 @@ printf '#!/bin/bash\necho "chown $*" >> "$W/calls"\n' > "$W/bin/chown"
 printf '#!/bin/bash\n[ "$1" != show ] || echo "${NTP:-yes}"\n' > "$W/bin/timedatectl"
 printf '#!/bin/bash\n[ -z "${CHRONY_NORMAL:-}" ] || echo "Leap status     : Normal"\n' > "$W/bin/chronyc"
 printf '#!/bin/bash\necho "sleep $*" >> "$W/sleeps"\n' > "$W/bin/sleep"
+# mktemp: a run's work directory, one a run - counted; past 20 refused, so a run repeating itself inside a part (an
+# expansion error past the dispatch) ends, and no test hangs on it
+cat > "$W/bin/mktemp" <<'STUB_MKTEMP'
+#!/bin/bash
+echo x >> "$W/mktemps"
+[ "$(wc -l < "$W/mktemps")" -le 20 ] || { echo "mktemp stub: past 20 - a run repeating itself" >&2; exit 1; }
+exec /usr/bin/mktemp "$@"
+STUB_MKTEMP
 chmod +x "$W/bin"/*
 
 utc() { date -u -d "$1" "$2"; }
 store() {  # a store as production's, made relative to now
   rm -rf "$W/locked" "$W/sleeps" "$W/rm-refused" "$W/store" "$W/calls" "$W/writes" "$W/postgres-args" "$W/modes" "$W/etcd-args" "$W/pgdata-at-start" "$W/memory" \
-    "$W/leftover-containers" "$W/scylla-args" "$W/scylla-vol" "$W/scylla-schema" "$W/scylla-loaded"
+    "$W/leftover-containers" "$W/scylla-args" "$W/scylla-vol" "$W/scylla-schema" "$W/scylla-loaded" "$W/mktemps"
   local S=$W/store pg=$W/store/postgres-backups
   # an old server (a rename ago) and production's: three base backups - 3 h ago ending in segment 25, 2 h ago in 26
   # (END_MISSING: in 99, never archived - an idle database's unfinished segment), the newest still being written;
@@ -238,6 +247,8 @@ store() {  # a store as production's, made relative to now
   touch "$pg/schnappy-production-postgres/wals/00000004.history.gz"
   mkdir -p "$S/etcd-backups"
   touch "$S/etcd-backups/etcd-$(utc "-${ETCD_AGE_H:-1} hours" +%Y%m%d-%H%M%S).db" "$S/etcd-backups/etcd-$(utc "-5 hours" +%Y%m%d-%H%M%S).db"
+  # ETCD_BAD_DATE: the newest snapshot's name a date no calendar has (the name's pattern takes it)
+  [ -z "${ETCD_BAD_DATE:-}" ] || touch "$S/etcd-backups/etcd-29991399-250000.db"
   if [ -z "${NO_TIER0:-}" ]; then
     local t
     t=$S/pi-backups/$(utc "-${TIER0_AGE_H:-3} hours" +%Y%m%dT%H%M%SZ)
@@ -302,7 +313,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 \
     PI_RESTORE_SCYLLA_IMAGE=docker.io/scylladb/scylla:2026.1.14 PI_RESTORE_SCYLLA_MAX_AGE_H=30 PI_RESTORE_SCYLLA_WAIT_POLLS=2 \
-    "$@" bash "$SCRIPT" > "$W/out" 2>&1
+    "$@" bash "$SCRIPT_RUN" "${SCRIPT_ARGS[@]}" > "$W/out" 2>&1
   echo "rc=$?"
 }
 agents() {  # this test's throwaway Consul agents (the stub's sleep 120, W in its environment) still running - another
@@ -503,8 +514,12 @@ red "scylla: the newest snapshot just past the limit (two days missed): red" SCY
 check "  said so" "$(report | grep -cE 'is 31 h old \(limit 30 h\)')" 1
 (export SCYLLA_AGE_H=26; store)
 check "scylla: a day missed (the day before's, 26 h): green" "$(run SCYLLA_AGE_H=26)" "rc=0"
+(export SCYLLA_AGE_H=30; store)
+check "scylla: the newest exactly at the limit (30 h): green" "$(run SCYLLA_AGE_H=30)" "rc=0"
 red "scylla: the newest snapshot without its schema: red" SCYLLA NO_SCYLLA_SCHEMA=1
 red "scylla: only system tables with data: red" SCYLLA SCYLLA_SYSTEM_ONLY=1
+check "  said so, before any Scylla started" \
+  "$(report | grep -c 'no table of its own with data in the snapshot') $(grep -c 'run -d --name pi-restore-scylla-' "$W/calls")" "1 0"
 red "scylla: Scylla stops before it serves: red" SCYLLA SCYLLA_RUNNING=false
 red "scylla: no CQL within its polls: red" SCYLLA SCYLLA_SILENT=1
 red "scylla: its schema does not apply: red" SCYLLA SCHEMA_FAIL=1
@@ -514,6 +529,25 @@ red "scylla: no row in any table: red" SCYLLA SCYLLA_ROWS=0
 check "  said so" "$(report | grep -c 'restored with no row in any table (chat.messages_by_channel:0)')" 1
 red "scylla: a container's memory Scylla cannot start in (1024m): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=1024m
 red "scylla: a container's memory not in MiB (2g): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=2g
+red "etcd: the newest snapshot named for a date no calendar has: red" ETCD ETCD_BAD_DATE=1
+# an expansion error in a part's own shell (arithmetic on a word not a number): bash abandons the command and reads on -
+# past the part's dispatch, into the whole check again, inside the part (seen 2026-10-17: a chain of runs, each inside
+# the last). A part ends at its dispatch whatever happens: a copy of the script with a part failing so, run as a part
+sed 's/^part_tier0() {/part_boom() { local n=1x; echo "$(( n * 3 ))"; }\npart_tier0() {/' "$SCRIPT" > "$W/boom.sh"
+store
+SCRIPT_ARGS=(--part boom "$W/boom-work") SCRIPT_RUN=$W/boom.sh
+check "a part's own expansion error: the part red, the check not run inside it" \
+  "$(run) $(grep -c 'PI RESTORE CHECK' "$W/out") $(cat "$W/mktemps" 2> /dev/null | wc -l)" "rc=1 0 0"
+SCRIPT_ARGS=() SCRIPT_RUN=$SCRIPT
+# a setting the parts count with, not a number: refused before any part (a number below zero is one - the copy's
+# rehearsal forces a part red with -1)
+store
+check "a setting not a number (PI_RESTORE_SCYLLA_WAIT_POLLS=2x): refused, named, no part run" \
+  "$(run PI_RESTORE_SCYLLA_WAIT_POLLS=2x) $(grep -c 'PI_RESTORE_SCYLLA_WAIT_POLLS=2x: not a number' "$W/out") $(cat "$W/mktemps" 2> /dev/null | wc -l)" \
+  "rc=1 1 0"
+store
+check "  a number below zero is one: the run goes on (the part red on it)" \
+  "$(run PI_RESTORE_ETCD_MAX_AGE_H=-1) $(report | grep -c '^ETCD FAILED:')" "rc=1 1"
 red "tier0: no Pi backup at all: red" TIER0 NO_TIER0=1
 red "tier0: the newest 40 h old: red" TIER0 TIER0_AGE_H=40
 red "tier0: its Keycloak export failed: red" TIER0 KC_FAILED=1

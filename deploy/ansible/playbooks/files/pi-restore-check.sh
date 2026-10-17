@@ -401,12 +401,22 @@ if [ "${1:-}" = --part ]; then
   "part_$2" "$3"
   exit
 fi
+# never past here as a part: an expansion error (arithmetic on a word not a number) abandons the command and bash reads
+# on - from here into the whole check again, inside the part, and again in that one (seen 2026-10-17)
+[ "${1:-}" != --part ] || exit 1
 
 : "${PI_RESTORE_NAME:?}" "${PI_RESTORE_PARITY:?}" "${PI_RESTORE_PG_DATABASES:?}" "${PI_RESTORE_ETCD_IMAGE:?}"
 : "${STORE_ENDPOINT:?}" "${PI_RESTORE_PG_BASE_MAX_AGE_H:?}" "${PI_RESTORE_PG_BACKUPS_LOOKED_AT:?}" "${PI_RESTORE_PG_WAIT_POLLS:?}"
 : "${PI_RESTORE_ETCD_MAX_AGE_H:?}" "${PI_RESTORE_TIER0_MAX_AGE_H:?}" "${PI_RESTORE_WORK:?}" "${PI_RESTORE_MIN_FREE_GB:?}"
 : "${PI_RESTORE_CONTAINER_MEMORY:?}" "${PI_RESTORE_ETCD_WAIT_POLLS:?}" "${PI_RESTORE_CGROUP_CONTROLLERS:?}"
 : "${PI_RESTORE_SCYLLA_IMAGE:?}" "${PI_RESTORE_SCYLLA_MAX_AGE_H:?}" "${PI_RESTORE_SCYLLA_WAIT_POLLS:?}"
+# the settings the parts count with, numbers (below zero too - the copy's rehearsal forces a part red with -1): a word
+# would fail a part's arithmetic, not the check
+for v in PI_RESTORE_PARITY PI_RESTORE_PG_BASE_MAX_AGE_H PI_RESTORE_PG_BACKUPS_LOOKED_AT PI_RESTORE_PG_WAIT_POLLS \
+    PI_RESTORE_ETCD_MAX_AGE_H PI_RESTORE_ETCD_WAIT_POLLS PI_RESTORE_SCYLLA_MAX_AGE_H PI_RESTORE_SCYLLA_WAIT_POLLS \
+    PI_RESTORE_TIER0_MAX_AGE_H PI_RESTORE_MIN_FREE_GB; do
+  [[ "${!v}" =~ ^-?[0-9]+$ ]] || { echo "PI RESTORE CHECK: $v=${!v}: not a number - no restore" >&2; exit 1; }
+done
 
 if [ -z "${PI_RESTORE_LOCKED:-}" ]; then
   # the clock synchronized first (as pi-tier0-backup's): the day's parity and every age below read it
