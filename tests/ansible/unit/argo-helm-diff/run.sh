@@ -138,6 +138,48 @@ fails += not check_("upstream: parameters - forceString as --set-string",
                     and args[args.index("--set") + 1] == "b=2", args)
 fails += not check_("upstream: an OCI chart by oci://", calls["oci"][0][2] == "oci://registry.example.com/charts/other",
                     calls["oci"][0])
+# upstream charts are the Applications' only: an ApplicationSet beside them (production's per-environment ones, whose
+# spec is generators and a template) is left out - read as an Application, its spec has no source and the run crashed
+infra2 = os.path.join(up, "infra2")
+subprocess.run(["git", "init", "-q", "-b", "main", infra2], check=True)
+os.makedirs(os.path.join(infra2, "clusters/production/argocd/apps"))
+open(os.path.join(infra2, "clusters/production/argocd/apps/up.yaml"), "w").write("""apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: up}
+spec:
+  destination: {namespace: upns}
+  source: {repoURL: https://charts.example.com/, chart: thing, targetRevision: 1.2.3}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata: {name: envs}
+spec:
+  generators:
+    - git: {repoURL: https://git.pmon.dev/schnappy/infra.git, directories: [{path: clusters/production/envs/*}]}
+  template:
+    metadata: {name: "x-{{ .path.basenameNormalized }}"}
+    spec:
+      destination: {namespace: x}
+      source: {repoURL: https://charts.example.com/, chart: thing, targetRevision: 1.2.3}
+""")
+subprocess.run(["git", "-C", infra2, "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], check=True)
+subprocess.run(["git", "-C", infra2, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"], check=True)
+hd.mo.REPOS = {"infra": infra2}
+try:
+    got = sorted(hd.upstream(helm, "main", work_up))
+except Exception as e:  # noqa: BLE001 - any crash is this case's failure, said
+    got = f"crashed: {type(e).__name__}: {e}"
+hd.mo.REPOS = {"infra": infra}
+fails += not check_("upstream: an ApplicationSet beside the Applications left out", got == ["up"], got)
+# a value file not from infra ($values/...) refused, said - never read from a path cut at its first 8 characters
+try:
+    hd.upstream_values({"valueFiles": ["values/up.yaml"]}, "up", "main", work_up)
+    got = "accepted"
+except SystemExit as e:
+    got = "is not from infra" in str(e)
+except Exception as e:  # noqa: BLE001
+    got = f"crashed: {type(e).__name__}"
+fails += not check_("upstream: a value file not under $values/ refused", got is True, got)
 # renders(): the platform charts' applications and the upstream ones, together (check() compares them all) - from a
 # fresh copy of the module, the one above has its renders stubbed for check()
 loader2 = importlib.machinery.SourceFileLoader("hd2", "scripts/argo-helm-diff.py")
