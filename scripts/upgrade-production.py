@@ -210,51 +210,97 @@ def problems(names, step, phase, events, info, arg=None, now=None):
         return [f"{step}: {' '.join(started[1])} started at {started[0]:%Y-%m-%d %H:%M} UTC and has not ended - if "
                 f"nothing runs it any more: task deploy:upgrade:release STEP={step}"]
     if phase == "begin":
-        missing = [n for n in names[:names.index(step)] if (n, "done") not in {(s, e) for _, s, e, _ in events}]
-        return ([f"earlier steps not done: {', '.join(missing)}"] if missing else []) \
-            + ([f"{step} has begun already"] if "begun" in kinds else [])
+        return begin_problems(names, step, events, kinds)
     if "begun" not in kinds:
         return [f"{step} has not begun (deploy:upgrade:begin)"]
     if phase == "abort":
         return []
-    backed = {a[0] for _, e, a in mine if e == "backup"}
+    return begun_problems(step, phase, mine, kinds, info, arg, now)
+
+
+def begin_problems(names, step, events, kinds):
+    """What stands between `step` and its begin: every earlier step done, not begun already."""
+    missing = [n for n in names[:names.index(step)] if (n, "done") not in {(s, e) for _, s, e, _ in events}]
+    return ([f"earlier steps not done: {', '.join(missing)}"] if missing else []) \
+        + ([f"{step} has begun already"] if "begun" in kinds else [])
+
+
+def last_at(mine, kind, a0=None):
+    """The step's last `kind` event's time (with `a0` its first argument), None for none."""
+    return max((at for at, e, a in mine if e == kind and (a0 is None or a[:1] == [a0])), default=None)
+
+
+def stale_problems(now, at, what):
+    """`what`, taken at `at`, as too old for the change it stands for - [] when fresh or not taken."""
+    if at and now - at > datetime.timedelta(hours=FRESH_HOURS):
+        return [f"{what} taken {(now - at).total_seconds() / 3600:.1f} h ago - more than {FRESH_HOURS} h "
+                "before the change: take it again"]
+    return []
+
+
+def begun_problems(step, phase, mine, kinds, info, arg, now):
+    """problems() for a begun step's phases after its begin (abort aside)."""
     settled = {a[0] for _, e, a in mine if e == "settled"}
     now = now or datetime.datetime.now(datetime.timezone.utc)
-    last = lambda kind, a0=None: max((at for at, e, a in mine if e == kind and (a0 is None or a[:1] == [a0])), default=None)
-    stale = lambda at, what: [f"{what} taken {(now - at).total_seconds() / 3600:.1f} h ago - more than {FRESH_HOURS} h "
-                              "before the change: take it again"] if at and now - at > datetime.timedelta(hours=FRESH_HOURS) else []
-    stale_backups = [p for s_ in info["wave0"] for p in stale(last("backup", s_), f"the {s_} backup")]
+    stale_backups = [p for s_ in info["wave0"]
+                     for p in stale_problems(now, last_at(mine, "backup", s_), f"the {s_} backup")]
     if phase == "backup":
         return [] if arg in info["wave0"] else \
             [f"{step} backs up no {arg} (its wave0 stores: {', '.join(info['wave0']) or 'none'})"]
-    out = [f"not backed up yet: {', '.join(s for s in info['wave0'] if s not in backed)} (deploy:upgrade:backup)"] \
-        if any(s not in backed for s in info["wave0"]) else []
+    out = not_backed_up(mine, info)
     if phase == "merge":
-        if arg not in info["branches"]:
-            return out + [f"{step} has no {arg} branch line"]
-        first = [r for r in info["branches"][:info["branches"].index(arg)] if r not in settled]
-        return out + ([f"merge {', '.join(first)} first (the step file's order)"] if first else []) \
-            + ([f"{arg} is merged and settled already"] if arg in settled else []) + stale_backups
-    unsettled = [r for r in info["branches"] if r not in settled]
-    out += [f"not merged and settled yet: {', '.join(unsettled)} (deploy:upgrade:merge)"] if unsettled else []
+        return out + merge_order_problems(step, arg, info, settled, stale_backups)
+    out += not_settled(info, settled)
     # the preview after the merges: a step's playbooks read the cluster the merge leaves (istiod at the target, ...)
     if phase == "preview":
         return out + ([] if info["playbooks"] else [f"{step} has no playbook lines"])
     if phase == "playbooks":
-        if not info["playbooks"]:
-            return out + [f"{step} has no playbook lines"]
-        return out + (["not previewed (deploy:upgrade:preview)"] if "previewed" not in kinds else []) \
-            + (["its playbook lines ran already"] if "playbooks" in kinds else []) \
-            + stale_backups + stale(last("previewed"), "the preview")
+        return out + playbooks_phase_problems(step, mine, kinds, info, now, stale_backups)
+    return out + closing_phase_problems(step, phase, kinds, info)
+
+
+def not_backed_up(mine, info):
+    """The step's wave0 stores not backed up yet, as a problem."""
+    backed = {a[0] for _, e, a in mine if e == "backup"}
+    return [f"not backed up yet: {', '.join(s for s in info['wave0'] if s not in backed)} (deploy:upgrade:backup)"] \
+        if any(s not in backed for s in info["wave0"]) else []
+
+
+def not_settled(info, settled):
+    """The step's branch lines not merged and settled yet, as a problem."""
+    unsettled = [r for r in info["branches"] if r not in settled]
+    return [f"not merged and settled yet: {', '.join(unsettled)} (deploy:upgrade:merge)"] if unsettled else []
+
+
+def merge_order_problems(step, arg, info, settled, stale_backups):
+    """A merge's own problems: a branch line of the step's, its earlier lines merged and settled, itself not yet."""
+    if arg not in info["branches"]:
+        return [f"{step} has no {arg} branch line"]
+    first = [r for r in info["branches"][:info["branches"].index(arg)] if r not in settled]
+    return ([f"merge {', '.join(first)} first (the step file's order)"] if first else []) \
+        + ([f"{arg} is merged and settled already"] if arg in settled else []) + stale_backups
+
+
+def playbooks_phase_problems(step, mine, kinds, info, now, stale_backups):
+    """The playbooks phase's own problems: playbook lines previewed, not run yet, the backups and preview fresh."""
+    if not info["playbooks"]:
+        return [f"{step} has no playbook lines"]
+    return (["not previewed (deploy:upgrade:preview)"] if "previewed" not in kinds else []) \
+        + (["its playbook lines ran already"] if "playbooks" in kinds else []) \
+        + stale_backups + stale_problems(now, last_at(mine, "previewed"), "the preview")
+
+
+def closing_phase_problems(step, phase, kinds, info):
+    """The defaults and done phases' own problems: the playbook lines run first, the defaults once."""
     played = ["its playbook lines have not run (deploy:upgrade:playbooks)"] \
         if info["playbooks"] and "playbooks" not in kinds else []
     if phase == "defaults":
         if not info["defaults"]:
-            return out + [f"{step} has no default lines"]
-        return out + played + (["its defaults are committed already"] if "defaults" in kinds else [])
+            return [f"{step} has no default lines"]
+        return played + (["its defaults are committed already"] if "defaults" in kinds else [])
     if phase == "done":
-        return out + played + (["its playbook defaults are not committed (deploy:upgrade:defaults)"]
-                               if info["defaults"] and "defaults" not in kinds else [])
+        return played + (["its playbook defaults are not committed (deploy:upgrade:defaults)"]
+                         if info["defaults"] and "defaults" not in kinds else [])
     raise ValueError(phase)
 
 
@@ -471,32 +517,17 @@ def velero_backup_check(wait_s=1800, poll=15, sleep=time.sleep, clock=time.monot
     runs: the ttl, 1 h, removes it). Labelled upgrade-test=backup-check."""
     k = "kubectl -n velero"
     read = lambda c: ten(f"{k} {c} --request-timeout=30s", check=False)
-
-    def as_json(out):
-        try:
-            return json.loads(out.stdout) if out.returncode == 0 else None
-        except ValueError:
-            return None
-    end = clock() + 300
-    while True:
-        out = read("get backupstoragelocations.velero.io default -o jsonpath={.status.phase}")
-        if out.returncode == 0 and out.stdout.strip() == "Available":
-            break
-        if clock() >= end:
-            return [f"Velero's backup storage location is not Available: {(out.stdout + out.stderr).strip() or 'none'}"]
-        sleep(poll)
-    schedule = as_json(read("get schedules.velero.io velero-schnappy-daily -o json"))
+    unavailable = velero_location_problems(read, poll, sleep, clock)
+    if unavailable:
+        return unavailable
+    schedule = json_or_none(read("get schedules.velero.io velero-schnappy-daily -o json"))
     if not schedule:
         return ["Velero's daily schedule not read"]
     template = schedule["spec"]["template"]
     selector = {"app.kubernetes.io/component": "valkey"}
-    want = 0
-    for ns in template.get("includedNamespaces") or []:
-        pods = as_json(ten(f"kubectl -n {ns} get pods -l app.kubernetes.io/component=valkey "
-                           "--field-selector=status.phase=Running -o json --request-timeout=30s", check=False))
-        if pods is None:
-            return [f"Valkey's pods in {ns} not read"]
-        want += sum(1 for pod in pods.get("items", []) for v in pod["spec"].get("volumes", []) if "emptyDir" in v)
+    want, unread = valkey_volumes(template)
+    if unread:
+        return unread
     if not want:
         return ["no Valkey pod running with a volume to back up - nothing would be proven"]
     name = f"upgrade-check-{secrets.token_hex(4)}"
@@ -508,39 +539,87 @@ def velero_backup_check(wait_s=1800, poll=15, sleep=time.sleep, clock=time.monot
         return [f"the backup {name} not created: {out.stderr.strip()}"]
     print(f"Velero backup {name}: Valkey's pods ({want} volumes) from the daily schedule's template")
     try:
-        end, status = clock() + wait_s, {}
-        while True:
-            got = as_json(read(f"get backups.velero.io {name} -o json"))
-            status = (got or {}).get("status") or {}
-            if status.get("phase") in ("Completed", "PartiallyFailed", "Failed", "FailedValidation") or clock() >= end:
-                break
-            sleep(poll)
-        phase = status.get("phase") or "New"
-        if phase not in ("Completed", "PartiallyFailed", "Failed", "FailedValidation"):
-            return [f"the backup {name} not ended within {wait_s} s (phase {phase})"]
-        if phase != "Completed" or status.get("errors"):
-            return [f"the backup {name} ended {phase} with {status.get('errors', 0)} errors"]
-        got = as_json(read(f"get podvolumebackups.velero.io -l velero.io/backup-name={name} -o json"))
-        if got is None:
-            return [f"the backup {name}'s pod volume backups not read"]
-        done = [p for p in got.get("items", []) if (p.get("status") or {}).get("phase") == "Completed"]
-        if len(done) < want:
-            return [f"the backup {name}: {len(done)} pod volume backups Completed of the {want} volumes"]
-        print(f"Velero backup {name}: Completed, {len(done)} pod volume backups Completed")
-        return []
+        return velero_backup_problems(read, name, want, wait_s, poll, sleep, clock)
     finally:
-        req = {"apiVersion": "velero.io/v1", "kind": "DeleteBackupRequest",
-               "metadata": {"name": f"{name}-delete", "namespace": "velero"}, "spec": {"backupName": name}}
-        made = ten(f"{k} create -f -", stdin=json.dumps(req), check=False).returncode == 0
-        dbr = {}
-        for _ in range(12) if made else ():
-            dbr = (as_json(read(f"get deletebackuprequests.velero.io {name}-delete -o json")) or {}).get("status") or {}
-            if dbr.get("phase") == "Processed":
-                break
-            sleep(5)
-        if not made or dbr.get("phase") != "Processed" or dbr.get("errors"):
-            print(f"the backup {name} not deleted ({dbr.get('errors') or dbr.get('phase') or 'no request'}) - its "
-                  "ttl (1 h) removes it")
+        delete_velero_backup(k, read, name, sleep)
+
+
+def json_or_none(out):
+    """A command's JSON answer - None when it failed or answered no JSON."""
+    try:
+        return json.loads(out.stdout) if out.returncode == 0 else None
+    except ValueError:
+        return None
+
+
+def velero_location_problems(read, poll, sleep, clock):
+    """Velero's storage location Available, asked again for 5 min (Velero validates it after a restart)."""
+    end = clock() + 300
+    while True:
+        out = read("get backupstoragelocations.velero.io default -o jsonpath={.status.phase}")
+        if out.returncode == 0 and out.stdout.strip() == "Available":
+            return []
+        if clock() >= end:
+            return [f"Velero's backup storage location is not Available: {(out.stdout + out.stderr).strip() or 'none'}"]
+        sleep(poll)
+
+
+def valkey_volumes(template):
+    """(the emptyDir volumes of Valkey's running pods in the template's namespaces, []) - or (0, [the problem])."""
+    want = 0
+    for ns in template.get("includedNamespaces") or []:
+        pods = json_or_none(ten(f"kubectl -n {ns} get pods -l app.kubernetes.io/component=valkey "
+                                "--field-selector=status.phase=Running -o json --request-timeout=30s", check=False))
+        if pods is None:
+            return 0, [f"Valkey's pods in {ns} not read"]
+        want += sum(1 for pod in pods.get("items", []) for v in pod["spec"].get("volumes", []) if "emptyDir" in v)
+    return want, []
+
+
+def velero_backup_status(read, name, wait_s, poll, sleep, clock):
+    """The backup's status once it ended, or as it stands after wait_s."""
+    end, status = clock() + wait_s, {}
+    while True:
+        got = json_or_none(read(f"get backups.velero.io {name} -o json"))
+        status = (got or {}).get("status") or {}
+        if status.get("phase") in ("Completed", "PartiallyFailed", "Failed", "FailedValidation") or clock() >= end:
+            return status
+        sleep(poll)
+
+
+def velero_backup_problems(read, name, want, wait_s, poll, sleep, clock):
+    """The backup ended Completed with no errors within wait_s, a Completed pod volume backup for each of `want`."""
+    status = velero_backup_status(read, name, wait_s, poll, sleep, clock)
+    phase = status.get("phase") or "New"
+    if phase not in ("Completed", "PartiallyFailed", "Failed", "FailedValidation"):
+        return [f"the backup {name} not ended within {wait_s} s (phase {phase})"]
+    if phase != "Completed" or status.get("errors"):
+        return [f"the backup {name} ended {phase} with {status.get('errors', 0)} errors"]
+    got = json_or_none(read(f"get podvolumebackups.velero.io -l velero.io/backup-name={name} -o json"))
+    if got is None:
+        return [f"the backup {name}'s pod volume backups not read"]
+    done = [p for p in got.get("items", []) if (p.get("status") or {}).get("phase") == "Completed"]
+    if len(done) < want:
+        return [f"the backup {name}: {len(done)} pod volume backups Completed of the {want} volumes"]
+    print(f"Velero backup {name}: Completed, {len(done)} pod volume backups Completed")
+    return []
+
+
+def delete_velero_backup(k, read, name, sleep):
+    """The check's backup deleted, its delete request read - not deleted (refused while the backup runs), said: its
+    ttl removes it."""
+    req = {"apiVersion": "velero.io/v1", "kind": "DeleteBackupRequest",
+           "metadata": {"name": f"{name}-delete", "namespace": "velero"}, "spec": {"backupName": name}}
+    made = ten(f"{k} create -f -", stdin=json.dumps(req), check=False).returncode == 0
+    dbr = {}
+    for _ in range(12) if made else ():
+        dbr = (json_or_none(read(f"get deletebackuprequests.velero.io {name}-delete -o json")) or {}).get("status") or {}
+        if dbr.get("phase") == "Processed":
+            break
+        sleep(5)
+    if not made or dbr.get("phase") != "Processed" or dbr.get("errors"):
+        print(f"the backup {name} not deleted ({dbr.get('errors') or dbr.get('phase') or 'no request'}) - its "
+              "ttl (1 h) removes it")
 
 
 def finished_job_hints(extra, jobs=None, excluded=None):
@@ -554,36 +633,59 @@ def finished_job_hints(extra, jobs=None, excluded=None):
     if not want:
         return []
     if jobs is None:
-        out = ten("kubectl get jobs -A -o json --request-timeout=60s", check=False)
-        if out.returncode:
-            return [f"the Jobs not read: {out.stderr.strip()}"]
-        try:
-            jobs = json.loads(out.stdout)
-        except ValueError:
-            return ["the Jobs not read: no JSON"]
+        jobs, unread = read_jobs()
+        if unread:
+            return unread
     excluded = set((excluded if excluded is not None else excluded_namespaces()).split())
     hints = []
     for o in jobs.get("items", []):
-        meta = o["metadata"]
-        if any(r.get("kind") == "CronJob" for r in meta.get("ownerReferences") or []):
-            continue
-        if meta["namespace"] in excluded or (meta["namespace"] == "woodpecker" and meta["name"].startswith("wp-")) \
-                or "velero.io/repo-name" in (meta.get("labels") or {}):
-            continue
-        done = [c["type"] for c in (o.get("status") or {}).get("conditions") or []
-                if c.get("type") in ("Complete", "Failed") and c.get("status") == "True"]
-        if not done:
-            continue
-        spec = o["spec"]["template"]["spec"]
-        for c in spec.get("containers", []) + spec.get("initContainers", []):
-            ref = c["image"].split("@")[0]
-            name, tag = image_name_tag(ref)
-            if f"{IMAGE_LINE}{name} {tag}" in want:
-                logs = (f"kubectl logs -n {meta['namespace']} job/{meta['name']} (its logs go with it), then "
-                        if done[0] == "Failed" else "")
-                hints.append(f"{meta['namespace']}/{meta['name']} ({done[0]}) still carries image {name} {tag} - "
-                             f"{logs}kubectl delete job -n {meta['namespace']} {meta['name']}")
+        hints += job_hints(o, excluded, want)
     return sorted(set(hints))
+
+
+def job_hints(o, excluded, want):
+    """finished_job_hints() for one Job: none for one the inventory leaves out, or not finished."""
+    if job_left_out(o["metadata"], excluded):
+        return []
+    done = [c["type"] for c in (o.get("status") or {}).get("conditions") or []
+            if c.get("type") in ("Complete", "Failed") and c.get("status") == "True"]
+    return job_image_hints(o, done[0], want) if done else []
+
+
+def read_jobs():
+    """(kubectl's get jobs -A -o json from ten, []) - or (None, [the problem])."""
+    out = ten("kubectl get jobs -A -o json --request-timeout=60s", check=False)
+    if out.returncode:
+        return None, [f"the Jobs not read: {out.stderr.strip()}"]
+    try:
+        return json.loads(out.stdout), []
+    except ValueError:
+        return None, ["the Jobs not read: no JSON"]
+
+
+def job_left_out(meta, excluded):
+    """Whether the inventory leaves the Job out: a CronJob's, in an `excluded` namespace, a Woodpecker pipeline's,
+    Velero's repository maintenance."""
+    if any(r.get("kind") == "CronJob" for r in meta.get("ownerReferences") or []):
+        return True
+    return meta["namespace"] in excluded or (meta["namespace"] == "woodpecker" and meta["name"].startswith("wp-")) \
+        or "velero.io/repo-name" in (meta.get("labels") or {})
+
+
+def job_image_hints(o, ended, want):
+    """The finished Job's (`ended`: Complete or Failed) images among the `want` lines, each named with its delete."""
+    meta = o["metadata"]
+    spec = o["spec"]["template"]["spec"]
+    hints = []
+    for c in spec.get("containers", []) + spec.get("initContainers", []):
+        ref = c["image"].split("@")[0]
+        name, tag = image_name_tag(ref)
+        if f"{IMAGE_LINE}{name} {tag}" in want:
+            logs = (f"kubectl logs -n {meta['namespace']} job/{meta['name']} (its logs go with it), then "
+                    if ended == "Failed" else "")
+            hints.append(f"{meta['namespace']}/{meta['name']} ({ended}) still carries image {name} {tag} - "
+                         f"{logs}kubectl delete job -n {meta['namespace']} {meta['name']}")
+    return hints
 
 
 def inventory_check(applied, test_images=()):
@@ -1022,24 +1124,39 @@ def running_digest_problems(step, pods=None):
         pods = json.loads(ten("kubectl get pods -A -o json --request-timeout=60s").stdout)
     out = set()
     for o in pods.get("items", []):
-        status = o.get("status") or {}
-        running = {s.get("name"): s.get("imageID") or "" for s in status.get("containerStatuses", [])
-                   + status.get("initContainerStatuses", [])}
-        for c in o["spec"].get("containers", []) + o["spec"].get("initContainers", []):
-            ref = c["image"].split("@")[0]
-            name, tag = image_name_tag(ref)
-            key = f"{full_name(name)}:{tag}"
-            want = proven.get(key)
-            got = running.get(c.get("name"), "").partition("@")[2]
-            if want and got and got != want:
-                want_id = proven_ids.get(key)
-                got_id = running_image_id(full_name(name), got) if want_id else ""
-                if want_id and got_id == want_id:
-                    continue  # the same build, its manifest re-packed by the copy's import
-                ids = f" (image {got_id[:19]}..., the full run's {want_id[:19]}...)" if want_id else ""
-                out.add(f"{name}:{tag} runs {got[:19]}..., the full run ran {want[:19]}...{ids} "
-                        f"({o['metadata']['namespace']}/{o['metadata']['name']})")
+        out.update(pod_digest_problems(o, proven, proven_ids))
     return sorted(out)
+
+
+def pod_digest_problems(o, proven, proven_ids):
+    """running_digest_problems() for one pod: its containers' builds against the full run's."""
+    status = o.get("status") or {}
+    running = {s.get("name"): s.get("imageID") or "" for s in status.get("containerStatuses", [])
+               + status.get("initContainerStatuses", [])}
+    out = []
+    for c in o["spec"].get("containers", []) + o["spec"].get("initContainers", []):
+        problem = container_digest_problem(o, c, running, proven, proven_ids)
+        if problem:
+            out.append(problem)
+    return out
+
+
+def container_digest_problem(o, c, running, proven, proven_ids):
+    """The container's build, when it is not the one the full run ran - else None."""
+    ref = c["image"].split("@")[0]
+    name, tag = image_name_tag(ref)
+    key = f"{full_name(name)}:{tag}"
+    want = proven.get(key)
+    got = running.get(c.get("name"), "").partition("@")[2]
+    if not (want and got and got != want):
+        return None
+    want_id = proven_ids.get(key)
+    got_id = running_image_id(full_name(name), got) if want_id else ""
+    if want_id and got_id == want_id:
+        return None  # the same build, its manifest re-packed by the copy's import
+    ids = f" (image {got_id[:19]}..., the full run's {want_id[:19]}...)" if want_id else ""
+    return (f"{name}:{tag} runs {got[:19]}..., the full run ran {want[:19]}...{ids} "
+            f"({o['metadata']['namespace']}/{o['metadata']['name']})")
 
 
 def proven_digest(step, name, tag):
@@ -1120,24 +1237,30 @@ def main_problems(proof):
         return ["the full run recorded no main it mirrored - prove again"]
     out = []
     for repo in REPOS:
-        d = os.path.join(OPS, "..", repo)
-        git = lambda *a: run(["git", "-C", d, *a], capture_output=True, check=True).stdout
-        fetch_main(d)
-        base = proof["main"].get(repo)
-        if not base or run(["git", "-C", d, "merge-base", "--is-ancestor", base, ORIGIN_MAIN]).returncode:
-            out.append(f"{repo}: origin/main does not contain the main the full run mirrored ({(base or 'none')[:10]})")
+        out += repo_main_problems(proof, repo)
+    return out
+
+
+def repo_main_problems(proof, repo):
+    """main_problems() for one repo."""
+    d = os.path.join(OPS, "..", repo)
+    git = lambda *a: run(["git", "-C", d, *a], capture_output=True, check=True).stdout
+    fetch_main(d)
+    base = proof["main"].get(repo)
+    if not base or run(["git", "-C", d, "merge-base", "--is-ancestor", base, ORIGIN_MAIN]).returncode:
+        return [f"{repo}: origin/main does not contain the main the full run mirrored ({(base or 'none')[:10]})"]
+    tags = git("for-each-ref", "--format=%(refname)", "refs/tags/" + MERGED_TAG).split()
+    stepwise = set(git("rev-list", *tags, "^" + base).split()) if tags else set()
+    out = []
+    for commit in git("rev-list", "--reverse", f"{base}..{ORIGIN_MAIN}").split():
+        if commit in stepwise:
             continue
-        tags = git("for-each-ref", "--format=%(refname)", "refs/tags/" + MERGED_TAG).split()
-        stepwise = set(git("rev-list", *tags, "^" + base).split()) if tags else set()
-        for commit in git("rev-list", "--reverse", f"{base}..{ORIGIN_MAIN}").split():
-            if commit in stepwise:
-                continue
-            files = git("diff-tree", "--no-commit-id", "--name-only", "-r", commit).split()
-            rendered = [p for p in files if not any(re.search(r, p) for r in MAIN_UNRENDERED)]
-            if rendered:
-                subject = git("log", "-1", "--format=%s", commit).strip()
-                out.append(f"{repo}: {commit[:10]} '{subject}' on origin/main since the full run changes "
-                           f"{', '.join(rendered)} - production would run what no run rendered: prove again")
+        files = git("diff-tree", "--no-commit-id", "--name-only", "-r", commit).split()
+        rendered = [p for p in files if not any(re.search(r, p) for r in MAIN_UNRENDERED)]
+        if rendered:
+            subject = git("log", "-1", "--format=%s", commit).strip()
+            out.append(f"{repo}: {commit[:10]} '{subject}' on origin/main since the full run changes "
+                       f"{', '.join(rendered)} - production would run what no run rendered: prove again")
     return out
 
 
@@ -1154,18 +1277,7 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
     if not proof.get("complete"):
         out.append(f"the full run that proved {step} ({proof.get('run')}) did not complete - every step, then the "
                    "backups restored at its end (proof-complete)")
-    start = proof.get("from", names[0])
-    for earlier in names[:names.index(step)]:
-        if start in names and names.index(earlier) < names.index(start):
-            if earlier not in done:
-                out.append(f"{earlier} is not done in production - the full run that proved {step} started at "
-                           f"{start}, built as production after the steps before it")
-                break
-            continue
-        p = proof_path(earlier)
-        if not os.path.exists(p) or json.load(open(p))["run"] != proof["run"]:
-            out.append(f"{earlier} was not proven by the same full run as {step} ({proof['run']})")
-            break
+    out += earlier_proof_problems(step, names, proof, done)
     if not proof.get("floating"):
         out.append(f"{step}'s proof records no floating-tag images")
     else:
@@ -1184,33 +1296,64 @@ def proof_problems(step, names, repo=None, defaulted_steps=(), merged=False, par
         out.append(f"changed since the full run proved {step} (ops {proof['ops'][:10]}), beyond the committed "
                    f"steps' playbook defaults: {', '.join(changed)}")
     if repo:
-        d = os.path.join(OPS, "..", repo)
-        # the commit the merge pushes (`tip`, read once by merge()), else the branch as it is now
-        branch = tip or BRANCH + step
-        fetch_main(d)
-        base = merged_base(d, step)
-        pushed = None if base else pushed_base(d, step, tip)
-        if base:
-            # merged already (an interrupted run pushed, then did not record): the change it brought, base..tag
-            if run(["git", "-C", d, "merge-base", "--is-ancestor", MERGED_TAG + step, ORIGIN_MAIN]).returncode:
-                out.append(f"{repo} upgrade-merged/{step} is not in origin/main")
-            elif own_change(d, base, MERGED_TAG + step) != proof["repos"][repo]["own"]:
-                out.append(f"{repo} upgrade-merged/{step} brought a change other than the one the full run proved")
-        elif pushed is not None:
-            # pushed by a run cut short before its tag: the change against the main it went onto (against origin's
-            # main, the branch itself now, it was empty - refused on every retry)
-            if not pushed:
-                out.append(f"{repo} upgrade/{step} is in origin's main with no {MERGED_TAG}{step}, and its main before "
-                           "is unknown")
-            elif own_change(d, pushed, branch) != proof["repos"][repo]["own"]:
-                out.append(f"{repo} {branch}, pushed with no tag, brought a change other than the one the full run "
-                           "proved")
-        elif run(["git", "-C", d, "merge-base", "--is-ancestor", ORIGIN_MAIN, branch]).returncode:
-            out.append(f"{repo} {branch} does not contain origin/main - restack it "
-                       f"(scripts/upgrade-restack-in-place.sh ../{repo})")
-        elif own_change(d, ORIGIN_MAIN, branch) != proof["repos"][repo]["own"]:
-            out.append(f"{repo} {branch} on origin/main is not the change the full run proved")
+        out += repo_proof_problems(step, repo, proof, tip)
     return out
+
+
+def earlier_proof_problems(step, names, proof, done):
+    """The steps before `step`: done in production before the run's start, proven by the same run from it."""
+    start = proof.get("from", names[0])
+    for earlier in names[:names.index(step)]:
+        if start in names and names.index(earlier) < names.index(start):
+            if earlier not in done:
+                return [f"{earlier} is not done in production - the full run that proved {step} started at "
+                        f"{start}, built as production after the steps before it"]
+            continue
+        p = proof_path(earlier)
+        if not os.path.exists(p) or json.load(open(p))["run"] != proof["run"]:
+            return [f"{earlier} was not proven by the same full run as {step} ({proof['run']})"]
+    return []
+
+
+def repo_proof_problems(step, repo, proof, tip):
+    """The change `repo`'s merge brings (or brought) against the one the full run proved."""
+    d = os.path.join(OPS, "..", repo)
+    # the commit the merge pushes (`tip`, read once by merge()), else the branch as it is now
+    branch = tip or BRANCH + step
+    fetch_main(d)
+    base = merged_base(d, step)
+    pushed = None if base else pushed_base(d, step, tip)
+    if base:
+        return merged_proof_problems(step, repo, proof, d, base)
+    if pushed is not None:
+        return pushed_proof_problems(step, repo, proof, d, pushed, branch)
+    if run(["git", "-C", d, "merge-base", "--is-ancestor", ORIGIN_MAIN, branch]).returncode:
+        return [f"{repo} {branch} does not contain origin/main - restack it "
+                f"(scripts/upgrade-restack-in-place.sh ../{repo})"]
+    if own_change(d, ORIGIN_MAIN, branch) != proof["repos"][repo]["own"]:
+        return [f"{repo} {branch} on origin/main is not the change the full run proved"]
+    return []
+
+
+def merged_proof_problems(step, repo, proof, d, base):
+    """A repo merged already (an interrupted run pushed, then did not record): the change it brought, base..tag."""
+    if run(["git", "-C", d, "merge-base", "--is-ancestor", MERGED_TAG + step, ORIGIN_MAIN]).returncode:
+        return [f"{repo} upgrade-merged/{step} is not in origin/main"]
+    if own_change(d, base, MERGED_TAG + step) != proof["repos"][repo]["own"]:
+        return [f"{repo} upgrade-merged/{step} brought a change other than the one the full run proved"]
+    return []
+
+
+def pushed_proof_problems(step, repo, proof, d, pushed, branch):
+    """A repo pushed by a run cut short before its tag: the change against the main it went onto (against origin's
+    main, the branch itself now, it was empty - refused on every retry)."""
+    if not pushed:
+        return [f"{repo} upgrade/{step} is in origin's main with no {MERGED_TAG}{step}, and its main before "
+                "is unknown"]
+    if own_change(d, pushed, branch) != proof["repos"][repo]["own"]:
+        return [f"{repo} {branch}, pushed with no tag, brought a change other than the one the full run "
+                "proved"]
+    return []
 
 
 def image_pins(step, name, tag):
@@ -1526,31 +1669,52 @@ def finished_pod_problems(objs=None):
     chart may switch it. Each named with its delete (a finished pod runs nothing). Asked before each phase that rolls
     something out. `objs`: kubectl's get deployments,replicasets,pods -A -o json (read on ten without)."""
     if objs is None:
-        out = ten("kubectl get replicasets,pods -A -o json --request-timeout=60s", check=False)
-        try:
-            objs = json.loads(out.stdout) if out.returncode == 0 else None
-        except ValueError:
-            objs = None
-        if objs is None:
-            return [f"production's Deployments not read: {(out.stderr or out.stdout).strip()[:200]}"]
+        objs, unread = read_production("kubectl get replicasets,pods -A -o json --request-timeout=60s", "Deployments")
+        if unread:
+            return unread
     items = objs.get("items", [])
-    key = lambda o: (o["metadata"]["namespace"], o["metadata"]["name"])
-    owner = lambda o, kind: next((r["name"] for r in o["metadata"].get("ownerReferences") or []
-                                  if r.get("kind") == kind and r.get("controller")), None)
-    deployment_of = {key(o): owner(o, "Deployment") for o in items if o.get("kind") == "ReplicaSet"}
+    deployment_of = {object_key(o): controller_of(o, "Deployment") for o in items if o.get("kind") == "ReplicaSet"}
     out = []
     for o in items:
-        ns, name = key(o)
-        phase = (o.get("status") or {}).get("phase")
-        if o.get("kind") != "Pod" or phase not in ("Succeeded", "Failed") or ns in LEFT_ALONE_NAMESPACES \
-                or re.match(PREVIEW_NAMESPACES, ns):
-            continue
-        d = deployment_of.get((ns, owner(o, "ReplicaSet")))
-        reason = (o.get("status") or {}).get("reason")
-        if d:
-            out.append(f"{ns}/{d}: its finished pod {name} ({phase}{', ' + reason if reason else ''}) keeps its next "
-                       f"rollout from being woken - kubectl delete pod -n {ns} {name}")
+        problem = finished_pod_problem(o, deployment_of)
+        if problem:
+            out.append(problem)
     return sorted(out)
+
+
+def read_production(command, what):
+    """(kubectl's JSON answer to `command` on ten, []) - or (None, [production's `what` not read])."""
+    out = ten(command, check=False)
+    objs = json_or_none(out)
+    if objs is None:
+        return None, [f"production's {what} not read: {(out.stderr or out.stdout).strip()[:200]}"]
+    return objs, []
+
+
+def object_key(o):
+    return o["metadata"]["namespace"], o["metadata"]["name"]
+
+
+def controller_of(o, kind):
+    """The name of the object's controlling owner of `kind`, None for none."""
+    return next((r["name"] for r in o["metadata"].get("ownerReferences") or []
+                 if r.get("kind") == kind and r.get("controller")), None)
+
+
+def finished_pod_problem(o, deployment_of):
+    """`o`, a finished pod a Deployment's ReplicaSet left (`deployment_of`: each ReplicaSet's), named with its delete -
+    else None."""
+    ns, name = object_key(o)
+    phase = (o.get("status") or {}).get("phase")
+    if o.get("kind") != "Pod" or phase not in ("Succeeded", "Failed") or ns in LEFT_ALONE_NAMESPACES \
+            or re.match(PREVIEW_NAMESPACES, ns):
+        return None
+    d = deployment_of.get((ns, controller_of(o, "ReplicaSet")))
+    reason = (o.get("status") or {}).get("reason")
+    if not d:
+        return None
+    return (f"{ns}/{d}: its finished pod {name} ({phase}{', ' + reason if reason else ''}) keeps its next "
+            f"rollout from being woken - kubectl delete pod -n {ns} {name}")
 
 
 # how near a CNPG scheduled backup may be when a phase that rolls something out starts: the phase's own length - a
@@ -1579,62 +1743,81 @@ def backup_window_problems(objs=None, now=None):
     and playbooks. `objs`: kubectl's get backups,scheduledbackups -A -o json (read on ten without); `now`: ten's
     clock."""
     if objs is None:
-        out = ten("kubectl get backups.postgresql.cnpg.io,scheduledbackups.postgresql.cnpg.io -A -o json "
-                  "--request-timeout=60s", check=False)
-        try:
-            objs = json.loads(out.stdout) if out.returncode == 0 else None
-        except ValueError:
-            objs = None
-        if objs is None:
-            return [f"production's CNPG backups not read: {(out.stderr or out.stdout).strip()[:200]}"]
+        objs, unread = read_production("kubectl get backups.postgresql.cnpg.io,scheduledbackups.postgresql.cnpg.io "
+                                       "-A -o json --request-timeout=60s", "CNPG backups")
+        if unread:
+            return unread
     now = now or ten_clock()
-
-    def at(t):
-        return datetime.datetime.strptime(t, TIME_FORMAT).replace(tzinfo=datetime.timezone.utc)
-
     items = objs.get("items", [])
-    # each cluster's newest Backup made: a schedule's made one is its own cluster's
+    made = newest_backups(items)
+    out = []
+    for o in items:
+        problem = cnpg_backup_problem(o, now, made)
+        if problem:
+            out.append(problem)
+    return sorted(out)
+
+
+def cnpg_backup_problem(o, now, made):
+    """backup_window_problems() for one Backup or ScheduledBackup - None for none."""
+    ns, name = o["metadata"]["namespace"], o["metadata"]["name"]
+    status = o.get("status") or {}
+    phase = status.get("phase") or ""
+    if o.get("kind") == "Backup" and phase not in BACKUP_ENDED_PHASES:
+        return running_backup_problem(o, ns, name, status, phase, now)
+    if o.get("kind") == "ScheduledBackup" and not (o.get("spec") or {}).get("suspend") \
+            and status.get("nextScheduleTime"):
+        return scheduled_backup_problem(o, ns, name, status, now, made)
+    return None
+
+
+def utc_time(t):
+    """A time as the ledger and Kubernetes write it, UTC."""
+    return datetime.datetime.strptime(t, TIME_FORMAT).replace(tzinfo=datetime.timezone.utc)
+
+
+def newest_backups(items):
+    """Each cluster's newest Backup made: a schedule's made one is its own cluster's."""
     made = {}
     for o in items:
         meta = o.get("metadata") or {}
         if o.get("kind") == "Backup" and meta.get("creationTimestamp"):
             key = (meta.get("namespace"), ((o.get("spec") or {}).get("cluster") or {}).get("name"))
-            made[key] = max(made.get(key, at(meta["creationTimestamp"])), at(meta["creationTimestamp"]))
-    out = []
-    for o in items:
-        ns, name = o["metadata"]["namespace"], o["metadata"]["name"]
-        status = o.get("status") or {}
-        phase = status.get("phase") or ""
-        if o.get("kind") == "Backup" and phase not in BACKUP_ENDED_PHASES:
-            started = status.get("startedAt") or o["metadata"].get("creationTimestamp")
-            try:
-                stuck = started and now - at(started) > datetime.timedelta(hours=BACKUP_STUCK_HOURS)
-            except ValueError:
-                stuck = False
-            head = f"{ns}/{name}: a CNPG backup {phase or 'not started'}"
-            if stuck or phase in BACKUP_RETRIED_PHASES:
-                why = "retried by CNPG, never ended" if phase in BACKUP_RETRIED_PHASES else "stuck (its status lost?)"
-                out.append(f"{head} since {started} - {why}; CNPG refuses every backup after it: "
-                           f"kubectl -n {ns} delete backup {name}, after checking what it left in the store")
-            else:
-                out.append(f"{head} - wait for its end (a restart now loses its status and blocks every backup after it)")
-        elif o.get("kind") == "ScheduledBackup" and not (o.get("spec") or {}).get("suspend") \
-                and status.get("nextScheduleTime"):
-            try:
-                due = at(status["nextScheduleTime"])
-            except ValueError:
-                out.append(f"{ns}/{name}: its next backup time unread ({status['nextScheduleTime']!r})")
-                continue
-            last = made.get((ns, ((o.get("spec") or {}).get("cluster") or {}).get("name")))
-            late = now - datetime.timedelta(minutes=BACKUP_LATE_MINUTES) <= due < now \
-                and not (last and last >= due - datetime.timedelta(minutes=1))
-            if late:
-                out.append(f"{ns}/{name}: a CNPG backup was due at {due:%H:%M:%S}Z (not made yet) - start after it "
-                           "has ended")
-            elif now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES):
-                out.append(f"{ns}/{name}: a CNPG backup starts at {due:%H:%M:%S}Z (within {BACKUP_WINDOW_MINUTES} "
-                           "minutes) - start after it has ended")
-    return sorted(out)
+            made[key] = max(made.get(key, utc_time(meta["creationTimestamp"])), utc_time(meta["creationTimestamp"]))
+    return made
+
+
+def running_backup_problem(o, ns, name, status, phase, now):
+    """A Backup not ended: waited for - or, stuck or retried for ever, named with its delete."""
+    started = status.get("startedAt") or o["metadata"].get("creationTimestamp")
+    try:
+        stuck = started and now - utc_time(started) > datetime.timedelta(hours=BACKUP_STUCK_HOURS)
+    except ValueError:
+        stuck = False
+    head = f"{ns}/{name}: a CNPG backup {phase or 'not started'}"
+    if stuck or phase in BACKUP_RETRIED_PHASES:
+        why = "retried by CNPG, never ended" if phase in BACKUP_RETRIED_PHASES else "stuck (its status lost?)"
+        return (f"{head} since {started} - {why}; CNPG refuses every backup after it: "
+                f"kubectl -n {ns} delete backup {name}, after checking what it left in the store")
+    return f"{head} - wait for its end (a restart now loses its status and blocks every backup after it)"
+
+
+def scheduled_backup_problem(o, ns, name, status, now, made):
+    """A schedule's next Backup due within the window, or due just past and not made yet (`made`: newest_backups()) -
+    else None."""
+    try:
+        due = utc_time(status["nextScheduleTime"])
+    except ValueError:
+        return f"{ns}/{name}: its next backup time unread ({status['nextScheduleTime']!r})"
+    last = made.get((ns, ((o.get("spec") or {}).get("cluster") or {}).get("name")))
+    late = now - datetime.timedelta(minutes=BACKUP_LATE_MINUTES) <= due < now \
+        and not (last and last >= due - datetime.timedelta(minutes=1))
+    if late:
+        return f"{ns}/{name}: a CNPG backup was due at {due:%H:%M:%S}Z (not made yet) - start after it has ended"
+    if now <= due <= now + datetime.timedelta(minutes=BACKUP_WINDOW_MINUTES):
+        return (f"{ns}/{name}: a CNPG backup starts at {due:%H:%M:%S}Z (within {BACKUP_WINDOW_MINUTES} "
+                "minutes) - start after it has ended")
+    return None
 
 
 def begin(step):
@@ -1725,59 +1908,79 @@ def merge(step, repo):
                + backup_window_problems())
     apps = step_apps(events, step)  # before any push: a step without its app set must not merge
     if not merged:
-        if merged_base(d, step):
-            # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
-            print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
-        elif pushed_base(d, step, tip):
-            # pushed by an earlier run cut short before its tag (its change checked above): tagged, recorded - nothing
-            # asked or pushed again
-            print(f"{repo}: {step} was pushed already (no {MERGED_TAG}{step} yet) - tagging it, recording it")
-            refuse([] if host_work([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up", tip])
-                   .returncode == 0 else [f"the {repo} take-up failed (above)"])
-        else:
-            # checked and shown against production's main: a local main behind origin's (CD pushed meanwhile) showed
-            # CD's commits as the step's and refused only after the yes, the pre-pull and Tempo's flush
-            local, origin = (run(["git", "-C", d, "rev-parse", r], capture_output=True, check=True).stdout.strip()
-                             for r in ("main", ORIGIN_MAIN))
-            refuse([] if local == origin else [f"{repo}'s main is not origin/main - git -C ../{repo} pull --ff-only "
-                                               "(on main), then merge again"])
-            # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
-            if not partly:
-                order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
-                refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven "
-                                                         "(above)"])
-            # what goes to production, shown before the yes: a step without playbook lines (PostgreSQL 18, a Scylla
-            # major, Kafka) has no preview, its one-way change starts when Argo syncs this push
-            print(f"{repo}: what the merge puts on production's main (upgrade/{step}):", flush=True)
-            for args in (["log", "--oneline"], ["diff", "--stat"], ["diff"]):
-                run(["git", "-C", d, "--no-pager", *args, f"{ORIGIN_MAIN}..{tip}"])
-            refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
-                   else ["not confirmed - nothing merged, nothing recorded"])
-            # the step's public images pulled on ten first, at each of its merges (the first's may be collected by the
-            # second, or be the second repo's) - a tag missing upstream stops the step with nothing more live, and its
-            # rollout does not wait on a pull while the old pod is gone (a Recreate deployment, a single replica)
-            images = prepull_images(step)
-            if images:
-                refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
-                       else ["the step's images did not pull on ten (above) - nothing merged"])
-            # a step that replaces Tempo's major: what Tempo still holds in its WAL flushed to the store first (the
-            # next major does not replay it) - proven by a marker trace found in the store; on ten, with its kubectl
-            if repo in step_info(step)["tempo_flush"]:
-                with open(os.path.join(OPS, "scripts", "tempo-flush.py")) as script:
-                    # (its own waits bounded: held 30 x 2 s, stored 60 x 10 s, each query 30 s at most)
-                    flushed = remote(TEN, "python3 -", script.read(), timeout=3600, capture=False).returncode == 0
-                refuse([] if flushed
-                       else ["Tempo's flush did not complete (above) - nothing merged"])
-            # the claim read again right before the push: released by hand during the yes, the pre-pull or the flush
-            # (the run looked dead), the change would go live under no claim - the next record refuses only after it
-            refuse([f"{p} - nothing merged" for p in claim_problems(step, read_ledger()[0])])
-            # finished pods again: the pre-pull may have evicted some (disk pressure) since the check above
-            refuse([f"{p} - nothing merged" for p in finished_pod_problems()])
-            merge_step = [os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]
-            refuse([] if host_work(merge_step).returncode == 0 else [f"the {repo} merge failed (above)"])
+        take_up_or_push(step, repo, d, tip, partly)
         sha = run(["git", "-C", d, "rev-parse", MERGED_TAG + step + "^{commit}"], capture_output=True,
                   check=True).stdout.strip()
         record(step, "merged", repo, sha)
+    settle_merge(step, repo, events, apps)
+
+
+def take_up_or_push(step, repo, d, tip, partly):
+    """The merge's push - or, an earlier run's push found (tagged, or cut short before its tag), taken up."""
+    if merged_base(d, step):
+        # pushed and tagged by an earlier run that stopped before recording it: recorded now, not merged again
+        print(f"{repo}: {step} was merged already (upgrade-merged/{step}) - recording it")
+    elif pushed_base(d, step, tip):
+        # pushed by an earlier run cut short before its tag (its change checked above): tagged, recorded - nothing
+        # asked or pushed again
+        print(f"{repo}: {step} was pushed already (no {MERGED_TAG}{step} yet) - tagging it, recording it")
+        refuse([] if host_work([os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, "take-up", tip])
+               .returncode == 0 else [f"the {repo} take-up failed (above)"])
+    else:
+        push_merge(step, repo, d, tip, partly)
+
+
+def push_merge(step, repo, d, tip, partly):
+    """The branch's commit `tip` checked, shown and confirmed, ten made ready for it, merged and pushed."""
+    # checked and shown against production's main: a local main behind origin's (CD pushed meanwhile) showed
+    # CD's commits as the step's and refused only after the yes, the pre-pull and Tempo's flush
+    local, origin = (run(["git", "-C", d, "rev-parse", r], capture_output=True, check=True).stdout.strip()
+                     for r in ("main", ORIGIN_MAIN))
+    refuse([] if local == origin else [f"{repo}'s main is not origin/main - git -C ../{repo} pull --ff-only "
+                                       "(on main), then merge again"])
+    # the state between a two-repo step's merges: checked before its first merge (the second one ends it)
+    if not partly:
+        order = run([os.path.join(OPS, "scripts", "upgrade-merge-order.py"), step])
+        refuse([] if order.returncode == 0 else ["the state between this step's merges was never proven "
+                                                 "(above)"])
+    # what goes to production, shown before the yes: a step without playbook lines (PostgreSQL 18, a Scylla
+    # major, Kafka) has no preview, its one-way change starts when Argo syncs this push
+    print(f"{repo}: what the merge puts on production's main (upgrade/{step}):", flush=True)
+    for args in (["log", "--oneline"], ["diff", "--stat"], ["diff"]):
+        run(["git", "-C", d, "--no-pager", *args, f"{ORIGIN_MAIN}..{tip}"])
+    refuse([] if confirm(f"Merge {repo} upgrade/{step} - the change above - into PRODUCTION's main?")
+           else ["not confirmed - nothing merged, nothing recorded"])
+    ready_ten_for_merge(step, repo)
+    # the claim read again right before the push: released by hand during the yes, the pre-pull or the flush
+    # (the run looked dead), the change would go live under no claim - the next record refuses only after it
+    refuse([f"{p} - nothing merged" for p in claim_problems(step, read_ledger()[0])])
+    # finished pods again: the pre-pull may have evicted some (disk pressure) since the check above
+    refuse([f"{p} - nothing merged" for p in finished_pod_problems()])
+    merge_step = [os.path.join(OPS, "scripts", "upgrade-merge-step.sh"), step, repo, tip]
+    refuse([] if host_work(merge_step).returncode == 0 else [f"the {repo} merge failed (above)"])
+
+
+def ready_ten_for_merge(step, repo):
+    """Before a merge's push: the step's images pulled on ten, Tempo's WAL flushed for a step replacing its major."""
+    # the step's public images pulled on ten first, at each of its merges (the first's may be collected by the
+    # second, or be the second repo's) - a tag missing upstream stops the step with nothing more live, and its
+    # rollout does not wait on a pull while the old pod is gone (a Recreate deployment, a single replica)
+    images = prepull_images(step)
+    if images:
+        refuse([] if ansible("playbooks/upgrade-prepull.yml", "-e", "images=" + ",".join(images))
+               else ["the step's images did not pull on ten (above) - nothing merged"])
+    # a step that replaces Tempo's major: what Tempo still holds in its WAL flushed to the store first (the
+    # next major does not replay it) - proven by a marker trace found in the store; on ten, with its kubectl
+    if repo in step_info(step)["tempo_flush"]:
+        with open(os.path.join(OPS, "scripts", "tempo-flush.py")) as script:
+            # (its own waits bounded: held 30 x 2 s, stored 60 x 10 s, each query 30 s at most)
+            flushed = remote(TEN, "python3 -", script.read(), timeout=3600, capture=False).returncode == 0
+        refuse([] if flushed
+               else ["Tempo's flush did not complete (above) - nothing merged"])
+
+
+def settle_merge(step, repo, events, apps):
+    """Argo settled on the merge, recorded; then a barman-after-merge step's base backup, asked."""
     # nothing out of sync after a merge (as the Vagrant run's first wait): a step's argo-out-of-sync apps are allowed
     # only after its playbooks
     info = step_info(step)
@@ -1860,21 +2063,7 @@ def defaults(step):
            + ([f"ops has uncommitted changes:\n{dirty}"] if dirty else []))
     last = git("log", "-1", "--format=%H %s", "--", dflt.COMMITTED).split(" ", 1)
     if len(last) == 2 and last[1] == message:
-        sha = last[0]
-        # past it with later commits: fine once it is pushed (the proof check judges what changed since); not pushed,
-        # its push would carry them unasked
-        pushed = run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode == 0
-        refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True,
-                                 done=applied_steps(events))
-               + ([] if git("rev-parse", "HEAD") == sha or pushed else [f"ops main is past the step's commit {sha[:10]}"]))
-        if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode:
-            refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
-                   else [f"the step's commit {sha[:10]} is not on origin/main's head"])
-            print(git("show", "--stat", "--format=%h %s", sha))
-            refuse([] if confirm(f"Push {step}'s defaults commit {sha[:10]} to ops main?") else [NOT_CONFIRMED])
-            run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
-        print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
-        record(step, "defaults", sha)
+        take_up_defaults(step, names, events, last[0], git)
         return
     refuse(proof_problems(step, names, defaulted_steps=defaulted(events), merged=True, done=applied_steps(events))
            + merged_live_problems(step, step_info(step)["branches"])
@@ -1890,6 +2079,25 @@ def defaults(step):
     run(["git", "-C", OPS, "commit", "-q", "-m", message, "--", *paths], check=True)
     run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
     record(step, "defaults", git("rev-parse", "HEAD"))
+
+
+def take_up_defaults(step, names, events, sha, git):
+    """An earlier run's defaults commit `sha` (cut short after its commit or its push): pushed if it is not yet,
+    recorded. `git`: defaults()' git in ops."""
+    # past it with later commits: fine once it is pushed (the proof check judges what changed since); not pushed,
+    # its push would carry them unasked
+    pushed = run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode == 0
+    refuse(proof_problems(step, names, defaulted_steps=defaulted(events) + [step], merged=True,
+                          done=applied_steps(events))
+           + ([] if git("rev-parse", "HEAD") == sha or pushed else [f"ops main is past the step's commit {sha[:10]}"]))
+    if run(["git", "-C", OPS, "merge-base", "--is-ancestor", sha, ORIGIN_MAIN]).returncode:
+        refuse([] if git("rev-parse", f"{sha}^") == git("rev-parse", ORIGIN_MAIN)
+               else [f"the step's commit {sha[:10]} is not on origin/main's head"])
+        print(git("show", "--stat", "--format=%h %s", sha))
+        refuse([] if confirm(f"Push {step}'s defaults commit {sha[:10]} to ops main?") else [NOT_CONFIRMED])
+        run(["git", "-C", OPS, "push", "-q", "origin", "main"], check=True)
+    print(f"{step}: its defaults committed already ({sha[:10]}) - recorded")
+    record(step, "defaults", sha)
 
 
 PROMETHEUS_API = "/api/v1/namespaces/schnappy-infra/services/schnappy-prometheus:9090/proxy/api/v1"
@@ -1976,53 +2184,69 @@ def done(step):
     if checked is not None and left > 0:
         refuse([f"soaking: {info['soak']} minutes from the first green check at {checked:%H:%M} UTC - "
                 f"{left / 60:.0f} left"])
-    # the first check of a cert-renew, barman-check or scylla-backup-check step changes production: the operator's yes
-    # first (a base backup its merge took already is not taken again, nor a Scylla backup the step ran already)
-    base_backup = info["base_backup"] and not any(s == step and e == "base-backup" for _, s, e, _ in events)
-    scylla_backup = info["scylla_backup"] and not any(s == step and e == "scylla-backup" for _, s, e, _ in events)
-    velero_backup = info["velero_backup"] and not any(s == step and e == "velero-backup" for _, s, e, _ in events)
-    acme = info["acme"] and not any(s == step and e == "acme-check" for _, s, e, _ in events)
-    changes = (["a throwaway certificate through production's ACME solver (acme-check.yml)"] if acme else []) \
-        + (["a Postgres base backup (postgres-base-backup.yml)"] if base_backup else []) \
-        + (["a Scylla Manager backup of each production cluster (scylla-backup-check.yml)"] if scylla_backup else []) \
-        + (["a Velero backup of Valkey's volumes from the daily schedule, deleted after"] if velero_backup else [])
-    if checked is None and changes:
-        refuse([] if confirm(f"Step {step}'s first check changes PRODUCTION: {'; '.join(changes)} - run it?")
-               else ["not confirmed - nothing run, nothing recorded"])
-    if checked is None and acme:
-        refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
-        record(step, "acme-check")
-    if checked is None and base_backup:
-        refuse([] if take_base_backup(step) else ["no fresh Postgres base backup (above)"])
-        # recorded: a red check later starts the soak again, and its next first call does not take another
-        record(step, "base-backup")
-    if checked is None and scylla_backup:
-        refuse([] if ansible("playbooks/scylla-backup-check.yml")
-               else ["Scylla Manager did not back up (above) - its abort line, or fix and run done again"])
-        record(step, "scylla-backup")
-    if checked is None and velero_backup:
-        problems_ = velero_backup_check()
-        refuse(problems_ and problems_ + ["Velero did not back up (above) - its abort line, or fix and run done again"])
-        record(step, "velero-backup")
-    # where the restarts are judged from, read before the first check by ten's clock (the restarts' times are its):
-    # this machine's, after the check, let a restart as the check ran, or within the clocks' skew, slip past the
-    # deciding check
-    started = ten_now() if checked is None else None
-    # after the soak: no container may have restarted since the first green check began
-    green = check(step, (checked_since(events, step) or checked) if checked is not None else None,
-                  deciding=checked is not None)
     if checked is None:
-        refuse([] if green else ["not green - nothing recorded (fix, or the step's abort line)"])
-        # the soak from now, ten's time after the check (it ran up to CHECK_MINUTES - timed from its start, the soak ran
-        # short by it); the restarts from its start
-        record(step, "checked", f"since={started}", at=ten_now())
-        print(f"the soak runs {info['soak']} minutes - deploy:upgrade:done again after it")
+        first_check(step, events, info)
         return
+    # after the soak: no container may have restarted since the first green check began
+    green = check(step, checked_since(events, step) or checked, deciding=True)
     if not green:
         record(step, "check-failed")
         refuse(["red after the soak began (a restart since the first green check counts) - the soak starts again "
                 "from the next green check"])
     record(step, "done")
+
+
+def not_yet(step, events, info, flag, event):
+    """Whether the step's `flag` asks for what its first check runs, and no `event` records it run already."""
+    return info[flag] and not any(s == step and e == event for _, s, e, _ in events)
+
+
+def first_check(step, events, info):
+    """done()'s first call: its changes to production (asked first), the check, recorded checked - the soak from it."""
+    # the first check of a cert-renew, barman-check or scylla-backup-check step changes production: the operator's yes
+    # first (a base backup its merge took already is not taken again, nor a Scylla backup the step ran already)
+    base_backup = not_yet(step, events, info, "base_backup", "base-backup")
+    scylla_backup = not_yet(step, events, info, "scylla_backup", "scylla-backup")
+    velero_backup = not_yet(step, events, info, "velero_backup", "velero-backup")
+    acme = not_yet(step, events, info, "acme", "acme-check")
+    changes = [what for wanted, what in (
+        (acme, "a throwaway certificate through production's ACME solver (acme-check.yml)"),
+        (base_backup, "a Postgres base backup (postgres-base-backup.yml)"),
+        (scylla_backup, "a Scylla Manager backup of each production cluster (scylla-backup-check.yml)"),
+        (velero_backup, "a Velero backup of Valkey's volumes from the daily schedule, deleted after")) if wanted]
+    if changes:
+        refuse([] if confirm(f"Step {step}'s first check changes PRODUCTION: {'; '.join(changes)} - run it?")
+               else ["not confirmed - nothing run, nothing recorded"])
+    first_check_changes(step, acme, base_backup, scylla_backup, velero_backup)
+    # where the restarts are judged from, read before the first check by ten's clock (the restarts' times are its):
+    # this machine's, after the check, let a restart as the check ran, or within the clocks' skew, slip past the
+    # deciding check
+    started = ten_now()
+    green = check(step, None, deciding=False)
+    refuse([] if green else ["not green - nothing recorded (fix, or the step's abort line)"])
+    # the soak from now, ten's time after the check (it ran up to CHECK_MINUTES - timed from its start, the soak ran
+    # short by it); the restarts from its start
+    record(step, "checked", f"since={started}", at=ten_now())
+    print(f"the soak runs {info['soak']} minutes - deploy:upgrade:done again after it")
+
+
+def first_check_changes(step, acme, base_backup, scylla_backup, velero_backup):
+    """The first check's changes to production, those asked for, in order - each recorded once made."""
+    if acme:
+        refuse([] if ansible("playbooks/acme-check.yml") else ["ACME issuance through production's solver failed"])
+        record(step, "acme-check")
+    if base_backup:
+        refuse([] if take_base_backup(step) else ["no fresh Postgres base backup (above)"])
+        # recorded: a red check later starts the soak again, and its next first call does not take another
+        record(step, "base-backup")
+    if scylla_backup:
+        refuse([] if ansible("playbooks/scylla-backup-check.yml")
+               else ["Scylla Manager did not back up (above) - its abort line, or fix and run done again"])
+        record(step, "scylla-backup")
+    if velero_backup:
+        problems_ = velero_backup_check()
+        refuse(problems_ and problems_ + ["Velero did not back up (above) - its abort line, or fix and run done again"])
+        record(step, "velero-backup")
 
 
 def phases(info):
@@ -2046,20 +2270,30 @@ def status():
         print("every step done")
         return
     info = step_info(pending)
-    have = {(e, a[0] if a and e in ("backup", "settled") else None) for _, s, e, a in events if s == pending}
+    have = marks(events, pending)
     for phase, arg, mark in phases(info):
         if mark not in have:
-            p = problems(names, pending, phase, events, info, arg)
-            print(f"next: {pending} {phase}{' ' + arg if arg else ''}" + (f" - {'; '.join(p)}" if p else ""))
-            if phase == "done":
-                checked, left = soak_state(events, pending, info["soak"], ten_clock())
-                if checked is not None:
-                    print(f"  soaking since {checked:%H:%M} UTC, {left / 60:.0f} of {info['soak']} minutes left")
+            print_next(names, pending, phase, arg, events, info)
             break
 
 
-def main():
-    a = sys.argv[1:]
+def marks(events, step):
+    """The ledger marks the step's phases left, as phases() names them."""
+    return {(e, a[0] if a and e in ("backup", "settled") else None) for _, s, e, a in events if s == step}
+
+
+def print_next(names, pending, phase, arg, events, info):
+    """status()'s next phase, what stands in its way, a done's soak."""
+    p = problems(names, pending, phase, events, info, arg)
+    print(f"next: {pending} {phase}{' ' + arg if arg else ''}" + (f" - {'; '.join(p)}" if p else ""))
+    if phase == "done":
+        checked, left = soak_state(events, pending, info["soak"], ten_clock())
+        if checked is not None:
+            print(f"  soaking since {checked:%H:%M} UTC, {left / 60:.0f} of {info['soak']} minutes left")
+
+
+def action(a):
+    """The phase or command the command line `a` names, None for none."""
     actions = {("init", 0): init, ("status", 0): status, ("proof-start", 0): proof_start,
                ("proof-start", 1): proof_start, ("proof-complete", 0): proof_complete, ("release", 1): release,
                ("abort", 1): abort,
@@ -2070,19 +2304,31 @@ def main():
                ("prepull-images", 1): lambda step: print(",".join(prepull_images(step, proven=False))),
                ("settle-values", 0): lambda: print(f"-e restart_quiet={SETTLE_QUIET} -e stable_polls={SETTLE_STABLE} "
                                                    f"-e poll_seconds={SETTLE_POLL}")}
+    return actions.get((a[0] if a else "", len(a) - 1))
+
+
+def read_only(a):
+    """check and resume-from, run - read-only, no claim. False when `a` is neither."""
     if a[:1] == ["check"] and len(a) == 2:
         sys.exit(0 if check(a[1]) else 1)
-    if a[:1] == ["resume-from"] and len(a) <= 2:
-        # the step a full run starts from: given (a rehearsal, or a run proving the start again), else production's
-        # first not done - read-only, the ledger on ten (none yet: the first step)
-        if len(a) == 2:
-            if a[1] not in step_names():
-                sys.exit(f"no step {a[1]}")
-            print(a[1])
-        else:
-            print(resume_from(read_ledger(missing_ok=True)[1]))
+    if a[:1] != ["resume-from"] or len(a) > 2:
+        return False
+    # the step a full run starts from: given (a rehearsal, or a run proving the start again), else production's
+    # first not done - read-only, the ledger on ten (none yet: the first step)
+    if len(a) == 2:
+        if a[1] not in step_names():
+            sys.exit(f"no step {a[1]}")
+        print(a[1])
+    else:
+        print(resume_from(read_ledger(missing_ok=True)[1]))
+    return True
+
+
+def main():
+    a = sys.argv[1:]
+    if read_only(a):
         return
-    fn = actions.get((a[0] if a else "", len(a) - 1))
+    fn = action(a)
     if fn is None:
         sys.exit(__doc__)
     if a[0] == "merge" and a[2] not in REPOS:
@@ -2093,16 +2339,13 @@ def main():
         result = "passed"
     except Interrupted as e:  # its work may run on there: the start stays open, said so
         left_open = True
-        steps = ", ".join(sorted({s for s, _, _ in CLAIMED})) or "the step"
-        print(f"INTERRUPTED ({e}) while the phase's work ran on ten or the Pis: that work may still run there - its "
-              f"start left open; once nothing of it runs there: task deploy:upgrade:release STEP={steps}")
+        say_interrupted(e)
         raise SystemExit(130) from None
     except LedgerConflict as e:  # a write refused: the run ends with its message, as a refusal does
         reason = str(e)
         raise SystemExit(reason) from None
     except SystemExit as e:
-        result = "passed" if e.code in (None, 0) else "failed"
-        reason = e.code if isinstance(e.code, str) else None
+        result, reason = exit_outcome(e.code)
         raise
     except BaseException:  # a defect, a Ctrl-C: its traceback kept - an end that cannot be written replaces it
         reason = traceback.format_exc().rstrip()
@@ -2111,29 +2354,48 @@ def main():
         # an end that cannot be written fails the run, whatever the phase's result (the next start then refuses on the
         # open claim); a claim released meanwhile has its end written already
         for step, phase, token in ([] if left_open else CLAIMED):
-            # a write refused on a Conflict (the ledger changed since its read - this run's own late write that
-            # committed, another phase's record) made nothing: read again, the claim checked, written again - three
-            # times at most. One that may have been made (its connection gone) is not written twice
-            for attempt in range(3):
-                try:
-                    obj = read_ledger()[0]
-                    lost = claim_problems(step, obj)
-                    if lost:
-                        print(f"{lost[0]} - its end not recorded")
-                        break
-                    record(step, "end", phase, result, token, obj=obj)
-                    break
-                except LedgerConflict as e:
-                    if attempt < 2:
-                        continue
-                    if reason:
-                        print(reason, file=sys.stderr)
-                    raise SystemExit(str(e)) from None
-                except BaseException:  # the read's or the write's failure (an exit, or an exception - a ledger's
-                    # answer not JSON) becomes the run's end: the phase's own reason first
-                    if reason:
-                        print(reason, file=sys.stderr)
-                    raise
+            record_end(step, phase, token, result, reason)
+
+
+def say_interrupted(e):
+    steps = ", ".join(sorted({s for s, _, _ in CLAIMED})) or "the step"
+    print(f"INTERRUPTED ({e}) while the phase's work ran on ten or the Pis: that work may still run there - its "
+          f"start left open; once nothing of it runs there: task deploy:upgrade:release STEP={steps}")
+
+
+def exit_outcome(code):
+    """A phase ended by sys.exit(code): (its result, its reason - a refusal's message, else None)."""
+    return "passed" if code in (None, 0) else "failed", code if isinstance(code, str) else None
+
+
+def record_end(step, phase, token, result, reason):
+    """A claim's end recorded as the run ends (`reason`: the phase's own, said first when the end fails)."""
+    # a write refused on a Conflict (the ledger changed since its read - this run's own late write that
+    # committed, another phase's record) made nothing: read again, the claim checked, written again - three
+    # times at most. One that may have been made (its connection gone) is not written twice
+    for attempt in range(3):
+        try:
+            obj = read_ledger()[0]
+            lost = claim_problems(step, obj)
+            if lost:
+                print(f"{lost[0]} - its end not recorded")
+                return
+            record(step, "end", phase, result, token, obj=obj)
+            return
+        except LedgerConflict as e:
+            if attempt < 2:
+                continue
+            say_reason(reason)
+            raise SystemExit(str(e)) from None
+        except BaseException:  # the read's or the write's failure (an exit, or an exception - a ledger's
+            # answer not JSON) becomes the run's end: the phase's own reason first
+            say_reason(reason)
+            raise
+
+
+def say_reason(reason):
+    if reason:
+        print(reason, file=sys.stderr)
 
 
 if __name__ == "__main__":
