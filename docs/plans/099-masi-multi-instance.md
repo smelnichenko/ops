@@ -163,3 +163,37 @@ tootukassa's missed 19:29 UTC slot as attempt 1 (the pod was down when it fired)
 while the paced run goes on. Tests: TwoInstancesTest (6 cases, a second full application on the same database), 55 revert
 checks (53 red, 2 equivalent), a test-quality audit that found 13 uncovered mechanisms before they were covered.
 Next: PR 2 (the lanes) — paused while the masi test run is brought under 3 minutes (operator, 2026-09-30).
+
+2026-10-17: the test-time arc closed (forks, contexts, clock waits, CI browser headroom - masi #88-#106); PR 2 resumes,
+split in three, each a PR of its own on the PR 1 claim pieces (`claim/ClaimOwner`, `ClaimRenewer`, `Fence`,
+`ClaimProperties` ttl 60 s / renew 20 s; SQL on `clock_timestamp()`):
+
+**PR 2a — analysis and matching.** Changeset 060: `job.analysis_claimed_by/analysis_claimed_until`,
+`job_match.claimed_by/claimed_until`, table `masi_lane_pause(lane primary key, paused_until, reason)`.
+- `PostingAnalysisService.requirementsOf`: the 64 stripe locks go. The caller claims the job row - `update job set
+  analysis_claimed_by=?, analysis_claimed_until=now+ttl where id=? and requirements_json is null and
+  (analysis_claimed_until is null or analysis_claimed_until < clock_timestamp())` - holds it renewed while the AI call
+  runs, writes as today (`storeRequirements`, already first-writer-wins) and frees the claim. A caller that does not
+  win re-reads: the requirements are there - used; another pod is analysing - the analysis lane skips the job, the tuner
+  (which needs the result) waits parked for the requirements or the claim's expiry (then claims itself), never past its
+  own call budget. Neither path pays twice for one posting, on one pod or two.
+- `AnalysisScheduler` / `MatchingLane`: each backlog job claimed on its row (the job for analysis, the `job_match` row
+  for the AI match) before its attempt is counted; a job another pod holds is skipped, a stale backlog page is safe.
+  `storeAiMatch` writes only under its claim (`and claimed_by=?`) and frees it.
+- `MatchService.store` (the word score): the JPA full-row save goes - an upsert on `(job_id, cv_version_id)` whose
+  update applies only `where job_match.method = 'WORDS'`: a word score never overwrites an AI match another pod wrote
+  (today's comment "the AI match is stored on the same tick thread" holds for one pod only).
+- Pause: the three in-memory `pausedUntil` (analysis, matching, tuning) become `masi_lane_pause` rows every pod reads; a
+  budget or account stop on one pod pauses the lane on all; the dashboard shows all three.
+- Tests: `TwoInstancesTest` gains - a posting analysed once across two pods (one AI request); the tuner on A, the lane
+  on B for one job - one request, both get the requirements; an expired analysis claim taken over; an AI match never
+  overwritten by B's word score; a pause set on A seen by B's lanes and dashboard. The single-pod tests that pinned the
+  stripe lock (`MatchServiceTest.theTunerAndTheLaneNeverBothPayForOnePosting`) re-pinned on the claim.
+
+**PR 2b — tuning.** `TuningScheduler`'s lane semaphore and queued/running sets go: every pod ticks, each package claimed
+by the existing atomic NEW->PREPARING plus `application_package.claimed_by/claimed_until` renewed while preparing; an
+expired PREPARING package recovered by any pod. Per-pod concurrency stays a pod resource bound.
+
+**PR 2c — the rest of the single-pod state.** Enrichment's company claim, `llm_call` claims (renewed in flight, LOST on
+expiry), the `master_translation` row, the partner rate row, idempotent startup repairs (`DomainKeyRepair`,
+`PersonBackfill`, `CollectorRegistry`).
