@@ -1,13 +1,14 @@
 ---
 # The Pis' restore check (setup-pi-restore-check.yml) on the Vagrant copy, against what its store really holds: the
-# copy's CNPG base backups and WAL, the etcd snapshots of its CronJob, and the Pis' own backup (setup-pi-backups.yml,
-# one taken here first).
+# copy's CNPG base backups and WAL, the etcd snapshots of its CronJob, its Scylla Manager snapshots, and the Pis' own
+# backup (setup-pi-backups.yml, one taken here first).
 #   pi1, its day forced    every part restored (production's Postgres image under podman, replayed to the end; etcd
-#                          started on the snapshot; Consul's snapshot and every Patroni dump), last-success this run's;
+#                          started on the snapshot; Scylla's snapshot loaded into a scratch Scylla; Consul's snapshot
+#                          and every Patroni dump), last-success this run's;
 #                          the lock taken; nothing left behind (containers, work directory, the throwaway Consul); no
 #                          WAL timeline written into the archive (the restored Postgres archives nothing)
-#   pi2, faults            the etcd snapshot too old for its limit: that part red alone; a database the backup lacks:
-#                          Postgres red alone; last-success never written
+#   pi2, faults            the etcd snapshot too old for its limit: that part red alone; Scylla's likewise; a database
+#                          the backup lacks: Postgres red alone; last-success never written
 #   both                   the timer on, pi1 the even UTC days, pi2 the odd ones
 # Vagrant only (the guard play first). Usage: task test:pi-restore-check
 - name: Vagrant VMs only
@@ -79,7 +80,7 @@
           echo "agents=$(ps -eo comm=,args= | awk '$1 == "consul" && /-node=restore-check/' | wc -l)"
           echo "scratch-postgres=$(ps -eo comm=,args= | awk '$1 == "postgres" && /pi-restore-check\/run\./' | wc -l)"
           echo "success=$(rclone cat store:restore-checks/pi1/last-success)"
-          echo "report=$(rclone cat store:restore-checks/pi1/last-report | grep -cE '^(POSTGRES|ETCD|TIER0) OK')"
+          echo "report=$(rclone cat store:restore-checks/pi1/last-report | grep -cE '^(POSTGRES|ETCD|SCYLLA|TIER0) OK')"
           echo "timelines-same=$([ "$({{ history }})" = '{{ _hist_before.stdout }}' ] && echo yes || echo no)"
       register: _after
       changed_when: false
@@ -91,12 +92,14 @@
           - "_run.stdout is search('PI RESTORE CHECK [0-9TZ]+: every part restored')"
           - "_run.stdout is search('POSTGRES OK: schnappy-production-postgres')"
           - _run.stdout is search('ETCD OK:')
+          # the copy's own cluster, its snapshot's tables read back
+          - "_run.stdout is search('SCYLLA OK: [0-9a-f-]+/sm_[0-9]{14}UTC .*tables \\(rows\\) ')"
           - _run.stdout is search('TIER0 OK:')
           - "'containers=0' in _after.stdout_lines"
           - "'work=0' in _after.stdout_lines"
           - "'agents=0' in _after.stdout_lines"
           - "'scratch-postgres=0' in _after.stdout_lines"
-          - "'report=3' in _after.stdout_lines"
+          - "'report=4' in _after.stdout_lines"
           - "'timelines-same=yes' in _after.stdout_lines"
           - (_after.stdout | regex_search('success=([0-9TZ]+)', '\\1') | first) == (_run.stdout | regex_search('PI RESTORE CHECK ([0-9TZ]+):', '\\1') | first)
         fail_msg: "{{ _run.stdout_lines + _after.stdout_lines }}"
@@ -121,12 +124,13 @@
           rclone deletefile store:restore-checks/pi2/last-success 2> /dev/null || true
       changed_when: true
 
-    - name: Each fault (the etcd snapshot older than a limit of -1 h; a database the backup lacks), run as its unit runs
+    - name: Each fault (etcd's, Scylla's snapshot past a limit of -1 h; a database the backup lacks), as its unit runs
       ansible.builtin.shell:
         executable: /bin/bash
         cmd: "{{ as_unit }} {{ item.env }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh"
       loop:
         - { name: etcd, env: "PI_RESTORE_ETCD_MAX_AGE_H=-1", red: ETCD }
+        - { name: scylla, env: "PI_RESTORE_SCYLLA_MAX_AGE_H=-1", red: SCYLLA }
         - { name: postgres, env: "PI_RESTORE_PG_DATABASES='monitor no_such_database'", red: POSTGRES }
       loop_control:
         label: "{{ item.name }}"
@@ -151,7 +155,7 @@
           # consul lock -child-exit-code: 2 when the run under it failed
           - item.rc != 0
           - item.stdout is search(item.item.red ~ ' FAILED:')
-          - (item.stdout | regex_findall('^[A-Z0-9]+ OK:', multiline=True) | length) == 2
+          - (item.stdout | regex_findall('^[A-Z0-9]+ OK:', multiline=True) | length) == 3
           - "item.stdout is search('PI RESTORE CHECK [0-9TZ]+ FAILED: ' ~ item.item.red)"
         fail_msg: "{{ item.item.name }}: {{ item.stdout_lines }}"
       loop: "{{ _faults.results }}"
