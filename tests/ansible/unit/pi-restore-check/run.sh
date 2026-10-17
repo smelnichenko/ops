@@ -109,11 +109,13 @@ case "$cmd" in
     [ -z "$detach" ] || echo container-id
     exit 0 ;;
   exec)
-    [ "$1" != -u ] || shift 2
+    asroot=""; [ "$1" != -u ] || { asroot=$2; shift 2; }
     shift  # the container
     case "$*" in
       *"SELECT now() FROM system.local"*) [ -z "${SCYLLA_SILENT:-}" ] || exit 1 ;;
       *"-f /w/schema.cql"*)
+        # the run's files are root's alone (umask 077): Scylla's own user cannot read them (the copy, 2026-10-17)
+        [ "$asroot" = root ] || { echo "Can't open '/w/schema.cql': [Errno 13] Permission denied: '/w/schema.cql'"; exit 2; }
         cp "$(cat "$W/scylla-vol")/schema.cql" "$W/scylla-schema"
         [ -z "${SCHEMA_FAIL:-}" ] || { echo "SyntaxException: line 1:7 no viable alternative"; exit 2; } ;;
       *"ls -d /var/lib/scylla/data/"*)

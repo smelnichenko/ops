@@ -294,7 +294,8 @@ PY_SCYLLA
     podman logs --tail 30 "$name" 2>&1 || true
     echo "$cluster/$tag: Scylla served no CQL within $(( PI_RESTORE_SCYLLA_WAIT_POLLS * 3 )) s"; return 1
   fi
-  podman exec "$name" cqlsh -f /w/schema.cql > "$w/schema.log" 2>&1 \
+  # as root: the run's files are root's alone (umask 077) - Scylla's own user cannot read the schema (the copy, 2026-10-17)
+  podman exec -u root "$name" cqlsh -f /w/schema.cql > "$w/schema.log" 2>&1 \
     || { tail -10 "$w/schema.log"; echo "$cluster/$tag: its schema did not apply"; return 1; }
   # each table's files into its upload directory, Scylla's own, then loaded; read back whole
   local ks tb dir rows counts=() total=0
