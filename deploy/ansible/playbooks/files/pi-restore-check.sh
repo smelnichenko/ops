@@ -244,7 +244,7 @@ part_scylla() {
   python3 - "$w" <<'PY_SCYLLA'
 import json, sys
 w = sys.argv[1]
-own = lambda ks: not ks.startswith("system")
+own = lambda ks: ks and not ks.startswith("system")  # a role, a service level: no keyspace - the cluster's own, not data
 with open(f"{w}/schema.cql", "w") as out:
     for r in json.load(open(f"{w}/schema.json")):
         if own(r["keyspace"]):

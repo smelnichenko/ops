@@ -126,7 +126,10 @@ case "$cmd" in
         echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}:$(ls "$v"/sst/*/keyspace/"${BASH_REMATCH[1]}"/table/"${BASH_REMATCH[2]}"/*/* | xargs -n1 basename | sort | paste -sd+)" \
           >> "$W/scylla-loaded" ;;
       *"nodetool refresh"*) [ -z "${REFRESH_FAIL:-}" ] || { echo "Failed to load new sstables: File not owned"; exit 1; } ;;
-      *"SELECT count(*) FROM"*) printf '\n count\n-------\n %s\n\n(1 rows)\n' "${SCYLLA_ROWS:-5}" ;;
+      *"SELECT count(*) FROM"*)
+        # SCYLLA_COUNT_UNREAD: the count answered with no number (a timeout's message)
+        if [ -n "${SCYLLA_COUNT_UNREAD:-}" ]; then echo "ReadTimeout: Error from server: code=1200"; exit 0; fi
+        printf '\n count\n-------\n %s\n\n(1 rows)\n' "${SCYLLA_ROWS:-5}" ;;
       *pg_is_in_recovery*) [ -n "${RECOVERING:-}" ] && echo t || echo f ;;
       *pg_walfile_name*) echo "${SEG:-000000040000001D00000028}" ;;
       *string_agg*) echo "${DBS:-postgres monitor admin chat chess masi}" ;;
@@ -283,7 +286,10 @@ def snapshot(cluster, tag, files, schema=True):
             {"keyspace": "chat", "type": "keyspace", "name": "chat", "cql_stmt": "CREATE KEYSPACE chat WITH replication = {} "},
             {"keyspace": "chat", "type": "table", "name": "messages_by_channel",
              "cql_stmt": "CREATE TABLE chat.messages_by_channel (\n    id int PRIMARY KEY\n) WITH ID = c1;"},
-            {"keyspace": "system_schema", "type": "table", "name": "tables", "cql_stmt": "CREATE TABLE system_schema.tables (x int)"}])
+            {"keyspace": "system_schema", "type": "table", "name": "tables", "cql_stmt": "CREATE TABLE system_schema.tables (x int)"},
+            # the cluster's own (no keyspace - the copy's schema held them, 2026-10-17): not data, not restored
+            {"keyspace": "", "type": "role", "name": "cassandra", "cql_stmt": "CREATE ROLE IF NOT EXISTS cassandra WITH LOGIN = true;"},
+            {"keyspace": "", "type": "service_level", "name": "driver", "cql_stmt": "CREATE SERVICE LEVEL IF NOT EXISTS driver;"}])
     for ks, t, v, fs in (("system_schema", "tables", "s1", ["s-Data.db"]), ("chat", "messages_by_channel", "c1", files)):
         for f in fs:
             p = f"{b}/sst/cluster/{cluster}/dc/datacenter1/node/node-a/keyspace/{ks}/table/{t}/{v}/{f}"
@@ -501,8 +507,8 @@ newest=$(ls "$W/store/scylla-backups/backup/meta/cluster/98b5-prod/dc/datacenter
 check "scylla: production's cluster, its newest snapshot, its table's rows read back" \
   "$(report | grep -oE '^SCYLLA OK: [^ ]+' | sed 's/SCYLLA OK: //') $(report | grep -oE 'tables \(rows\) [^,]+')" \
   "98b5-prod/$newest tables (rows) chat.messages_by_channel:5"
-check "  the schema of its own keyspaces only, one statement each" \
-  "$(grep -c system_schema "$W/scylla-schema") $(grep -c ';$' "$W/scylla-schema") $(grep -c ';;' "$W/scylla-schema")" "0 2 0"
+check "  the schema of its own keyspaces only (no system one, no role or service level), one statement each" \
+  "$(grep -c system_schema "$W/scylla-schema") $(grep -cE 'ROLE|SERVICE LEVEL' "$W/scylla-schema") $(grep -c ';$' "$W/scylla-schema") $(grep -c ';;' "$W/scylla-schema")" "0 0 2 0"
 check "  the newest snapshot's files only (not the day before's own), no system table's" "$(cat "$W/scylla-loaded")" \
   "chat.messages_by_channel:a-Data.db+b-Data.db+b-TOC.txt"
 check "  Scylla without a network, in the image named, its memory the container's bar 512M, the snapshot read-only" \
@@ -529,6 +535,8 @@ red "scylla: a table its schema did not create: red" SCYLLA NO_TABLE_DIR=1
 red "scylla: the SSTables do not load: red" SCYLLA REFRESH_FAIL=1
 red "scylla: no row in any table: red" SCYLLA SCYLLA_ROWS=0
 check "  said so" "$(report | grep -c 'restored with no row in any table (chat.messages_by_channel:0)')" 1
+red "scylla: a table's count answered with no number: red" SCYLLA SCYLLA_COUNT_UNREAD=1
+check "  said so" "$(report | grep -c 'chat.messages_by_channel not read back')" 1
 red "scylla: a container's memory Scylla cannot start in (1024m): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=1024m
 red "scylla: a container's memory not in MiB (2g): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=2g
 red "etcd: the newest snapshot named for a date no calendar has: red" ETCD ETCD_BAD_DATE=1
