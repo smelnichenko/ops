@@ -1,7 +1,8 @@
 #!/bin/bash
 # scripts/upgrade-expected-inventory.py's step lines: a restore-undo image CNPG can take - name:tag, or
 # name:tag@sha256:<digest> - and a bare digest refused (CNPG's webhook refuses it: it reads the major from the tag);
-# a restore-undo image is the one the step starts from; barman-after-merge only with barman-check; every step file parses with the rules.
+# a restore-undo image is the one the step starts from; barman-after-merge only with barman-check; every step file parses with the rules;
+# a line two kinds match read as the first; the base -e name rule; the ClickHouse users/compat and restore-undo modes.
 set -u
 cd "$(dirname "$0")/../../../.." || exit 1
 python3 - <<'PY'
@@ -136,6 +137,56 @@ check("test-image: a name with a registry path and a tag", test_images_of("test-
 check("test-image: a non-ASCII letter in the name or the tag - not a test-image line",
       [str(test_images_of(l))[:8] for l in ("test-image git.pmon.dev/schnappy/sité 1", "test-image site 1é")],
       ["refused:", "refused:"])
+
+
+def parsed(*lines, **collectors):
+    """parse() of a step of `lines`: its changes (where dropped) and the collectors, or the refusal."""
+    path = os.path.join(work, "95-p.txt")
+    open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    try:
+        return [c[:2] for c in inv.parse(path, **collectors)], collectors
+    except SystemExit as e:
+        return "refused: " + str(e)[:40]
+
+
+# a line two kinds match is the kind tried first: an argo-out-of-sync line with " => " in it names an app, no change;
+# a "- " line with " => " in it is a change from "- <line>" - the table's order, not the line's look, decides
+check("argo-out-of-sync before ' => ': an app, no change", parsed("argo-out-of-sync a => b", out_of_sync=[]),
+      ([], {"out_of_sync": ["a => b"]}))
+check("' => ' before '- ': a change, not a removal", parsed("- image a 1 => image a 2"), ([("- image a 1", "image a 2")], {}))
+# a base -e name is a shell variable's: [A-Za-z_] then ASCII word characters - one character will do; a leading digit
+# or a non-ASCII letter (\w is Unicode's otherwise) is no base line
+check("base -e: a one-character name", parsed("base -e A=1", base=[]), ([], {"base": ["-e A=1"]}))
+check("base -e: a leading digit or a non-ASCII letter - not a base line",
+      [str(parsed(l, base=[]))[:8] for l in ("base -e 1A=1", "base -e aé=1")], ["refused:", "refused:"])
+# a Collectors or its fields by keyword - given both, the keyword one would silently collect nothing
+open(os.path.join(work, "94-e.txt"), "w").write("base -e A=1\n")
+try:
+    inv.parse(os.path.join(work, "94-e.txt"), inv.Collectors(), base=[])
+    got = "parsed"
+except TypeError as e:
+    got = "TypeError: " + str(e)[:9]
+check("parse(): a Collectors and keyword collectors - refused", got, "TypeError: parse(): ")
+
+# the modes over a fixture of steps: ClickHouse's users and compatibility are the latest line up to the step (an
+# earlier step's carries on), default,schnappy and nothing before the first; restore-undo the step's first line
+fixture = os.path.join(work, "steps")
+os.makedirs(fixture)
+for name, lines in (("01-a", ["clickhouse-compat 24.8"]), ("02-b", ["clickhouse-users schnappy", "clickhouse-compat 25.8"]),
+                    ("03-c", ["image pg 17 => image pg 18", "restore-undo one pg:17", "restore-undo two pg:17"]),
+                    ("00-z", [])):
+    open(os.path.join(fixture, name + ".txt"), "w").write("".join(l + "\n" for l in lines))
+saved, inv.STEPS = inv.STEPS, fixture
+names = sorted(f[:-4] for f in os.listdir(fixture))
+try:
+    check("--clickhouse-users: default,schnappy before the first line, then the latest up to the step",
+          [inv.MODES["--clickhouse-users"](s, names) for s in names], ["default,schnappy", "default,schnappy",
+                                                                       "schnappy", "schnappy"])
+    check("--clickhouse-compat: nothing before the first line, then the latest up to the step",
+          [inv.MODES["--clickhouse-compat"](s, names) for s in names], ["", "24.8", "25.8", "25.8"])
+    check("--restore-undo: the step's first line", inv.MODES["--restore-undo"]("03-c", names), "one pg:17")
+finally:
+    inv.STEPS = saved
 print("step-lines: " + ("ALL-PASS" if not fails else f"{fails} FAILED"))
 sys.exit(1 if fails else 0)
 PY
