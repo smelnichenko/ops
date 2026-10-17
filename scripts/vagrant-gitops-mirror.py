@@ -167,21 +167,46 @@ def add_vagrant_value_files(text):
 def overlay_infra(repo, forgejo):
     drop(repo, "infra", INFRA_DROP)
     for rel, wave in INFRA_SYNC_WAVES.items():
-        p = os.path.join(repo, rel)
-        text = open(p).read()
-        # infra carries these from the fresh-install step on: nothing to do where git has the wave already
-        if f'argocd.argoproj.io/sync-wave: "{wave}"' in text:
-            continue
-        if "argocd.argoproj.io/sync-wave" in text:
-            new = re.sub(r'(argocd\.argoproj\.io/sync-wave: )"[-0-9]+"', rf'\g<1>"{wave}"', text, count=1)
-        else:
-            new = re.sub(r"^(metadata:\n(?: {2}.*\n)*? {2}name: [^\n]+\n)",
-                         lambda m, wave=wave:
-                         m.group(1) + f'  annotations:\n    argocd.argoproj.io/sync-wave: "{wave}"\n',
-                         text, count=1, flags=re.M)
-        if new == text:
-            sys.exit(f"infra overlay: could not add the sync wave to {rel}")
-        open(p, "w").write(new)
+        set_sync_wave(repo, rel, wave)
+    point_apps_at_copy(repo, forgejo)
+
+
+def set_sync_wave(repo, rel, wave):
+    p = os.path.join(repo, rel)
+    text = open(p).read()
+    # infra carries these from the fresh-install step on: nothing to do where git has the wave already
+    if f'argocd.argoproj.io/sync-wave: "{wave}"' in text:
+        return
+    if "argocd.argoproj.io/sync-wave" in text:
+        new = re.sub(r'(argocd\.argoproj\.io/sync-wave: )"[-0-9]+"', rf'\g<1>"{wave}"', text, count=1)
+    else:
+        end = metadata_name_end(text)
+        new = text if end is None else (
+            text[:end] + f'  annotations:\n    argocd.argoproj.io/sync-wave: "{wave}"\n' + text[end:])
+    if new == text:
+        sys.exit(f"infra overlay: could not add the sync wave to {rel}")
+    open(p, "w").write(new)
+
+
+def metadata_name_end(text):
+    """Where the first `metadata:` block's own `  name: <value>` line ends (past its newline), None when no block has
+    one before a line outside it. A walk over the lines, not a regex: a lazy repeat of lines before the name
+    backtracks super-linearly on a long block without one. Lines are split on "\n" alone, a line without one ends
+    nothing (a CRLF file has no `metadata:` line), and a block is the lines starting with two spaces."""
+    end, block = 0, False
+    for line in text.split("\n")[:-1]:
+        end += len(line) + 1
+        if block and line.startswith("  name: ") and len(line) > len("  name: "):
+            return end
+        if line == "metadata:":
+            block = True
+        elif not line.startswith("  "):
+            block = False
+    return None
+
+
+def point_apps_at_copy(repo, forgejo):
+    """Every Argo app's repo URL the copy's Forgejo, its value files followed by the Vagrant ones."""
     apps = os.path.join(repo, "clusters/production/argocd")
     changed = 0
     for root, _, files in os.walk(apps):
@@ -215,17 +240,27 @@ def isolate_from_production(repo):
     """Rewrite every production LAN address to its Vagrant counterpart; abort if one is left."""
     files = subprocess.run(["git", "-C", repo, "ls-files"], capture_output=True, text=True, check=True).stdout.split()
     for rel in files:
-        p = os.path.join(repo, rel)
-        try:
-            text = open(p, encoding="utf-8").read()
-        except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
-            continue  # binary, or dropped by the overlay
-        new = text
-        for prod, vagrant in ADDRESS_MAP:
-            new = re.sub(re.escape(prod) + r"(?![0-9])", vagrant, new)
-        new = new.replace(*PROD_LAN_PREFIX)
-        if new != text:
-            open(p, "w", encoding="utf-8").write(new)
+        rewrite_addresses(os.path.join(repo, rel))
+    left = addresses_left(repo, files)
+    if left:
+        sys.exit("production addresses left after the rewrite (not pushed):\n" + "\n".join(left[:20]))
+
+
+def rewrite_addresses(p):
+    try:
+        text = open(p, encoding="utf-8").read()
+    except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
+        return  # binary, or dropped by the overlay
+    new = text
+    for prod, vagrant in ADDRESS_MAP:
+        new = re.sub(re.escape(prod) + r"(?![0-9])", vagrant, new)
+    new = new.replace(*PROD_LAN_PREFIX)
+    if new != text:
+        open(p, "w", encoding="utf-8").write(new)
+
+
+def addresses_left(repo, files):
+    """Every line still holding a production address (those read before a file turns out binary included)."""
     left = []
     for rel in files:
         p = os.path.join(repo, rel)
@@ -235,8 +270,7 @@ def isolate_from_production(repo):
                     left.append(f"{rel}:{i}: {line.strip()[:120]}")
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
-    if left:
-        sys.exit("production addresses left after the rewrite (not pushed):\n" + "\n".join(left[:20]))
+    return left
 
 
 def copy_overlay(name, repo):

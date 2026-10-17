@@ -153,28 +153,43 @@ def check(pre):
     return 1
 
 
-def pause(pre, who):
+def read_back(value):
+    """The marker this run put read back: (value, index) - None, said, after three reads failed."""
+    for attempt in range(3):
+        try:
+            return read_marker()
+        except Unread as e:
+            if attempt == 2:
+                print(f"REFUSED: the pause marker this run put ({value!r}) not read back ({e}) - nothing paused; once"
+                      f" Consul answers, delete it if it still names this run: consul kv delete {KEY}")
+                return None
+            time.sleep(POLL)
+
+
+def claim(who):
+    """This run's marker put, check-and-set, and read back: its index - None, said, when it is not this run's."""
     value = marker(who)
     put = run("consul", "kv", "put", "-cas", "-modify-index=0", KEY, value)
     if put.returncode:
         print(f"REFUSED: a Patroni pause marker is there already, or none could be put ({put.stderr.strip()}) - another"
               f" run pausing, or one cut short: {CLEAN_UP}")
-        return 1
+        return None
     # read back: its index, and that it is this run's (the nonce) - nothing can have changed it unseen in between. A read
     # failing (Consul's leader moving) is read again; one never read leaves the marker, named, nothing paused
-    for attempt in range(3):
-        try:
-            got, idx = read_marker()
-            break
-        except Unread as e:
-            if attempt == 2:
-                print(f"REFUSED: the pause marker this run put ({value!r}) not read back ({e}) - nothing paused; once"
-                      f" Consul answers, delete it if it still names this run: consul kv delete {KEY}")
-                return 1
-            time.sleep(POLL)
+    back = read_back(value)
+    if back is None:
+        return None
+    got, idx = back
     if got != value or not (idx or "").isdigit():
         print(f"REFUSED: the pause marker read back is not the one this run put ({got!r}, index {idx!r}) - nothing"
               f" paused: {CLEAN_UP}")
+        return None
+    return idx
+
+
+def pause(pre, who):
+    idx = claim(who)
+    if idx is None:
         return 1
     out = ctl("pause", "--wait")
     text = (out.stdout + out.stderr).strip()
@@ -189,6 +204,12 @@ def pause(pre, who):
         print(f"MARKER {idx}")
         return 0
     print(f"PAUSE FAILED: patronictl said {text!r}" + (f" - the DCS shows {shown}" if shown else ""))
+    return undo(pre, idx, out, text)
+
+
+def undo(pre, idx, out, text):
+    """A pause not proven: someone else's left as it is, this run's resumed - its marker deleted once nothing of it is
+    left. Always 1."""
     if out.returncode and "already paused" in text:
         # paused by someone between the check and this pause: theirs - left as it is, this run's marker gone
         problem = delete_marker(idx)

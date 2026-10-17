@@ -52,17 +52,23 @@ def manifest(root):
     for b in buckets:
         if "user.acl" not in os.listxattr(os.path.join(root, b)):
             bad.append(f"bucket {b}: no ACL")
-        for dp, dns, fns in os.walk(os.path.join(root, b)):
-            dns[:] = [d for d in dns if d != SKIP]
-            for fn in fns:
-                p = os.path.join(dp, fn)
-                try:
-                    objects[os.path.relpath(p, root)] = bare(etag_of(os.getxattr(p, "user.etag")))
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    noetag.append(os.path.relpath(p, root))
+        walk_bucket(root, b, objects, noetag)
     return {"buckets": buckets, "objects": objects, "noetag": sorted(noetag)}, bad
+
+
+def walk_bucket(root, b, objects, noetag):
+    """One bucket's objects into `objects` (key -> ETag), those without an ETag into `noetag`; uploads in flight
+    skipped."""
+    for dp, dns, fns in os.walk(os.path.join(root, b)):
+        dns[:] = [d for d in dns if d != SKIP]
+        for fn in fns:
+            p = os.path.join(dp, fn)
+            try:
+                objects[os.path.relpath(p, root)] = bare(etag_of(os.getxattr(p, "user.etag")))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                noetag.append(os.path.relpath(p, root))
 
 
 def check_content(key, etag, stream, bad):
@@ -79,18 +85,28 @@ def archive_entries(archive, want, bad):
     seen, acl = set(), set()
     with tarfile.open(archive, "r|gz") as t:
         for m in t:
-            name = m.name[2:] if m.name.startswith("./") else m.name
-            rel = name[len("buckets/"):] if name.startswith("buckets/") else ""
+            rel = bucket_rel(m.name)
             if m.isdir() and rel and "/" not in rel and "SCHILY.xattr.user.acl" in m.pax_headers:
                 acl.add(rel)
             elif m.isfile() and rel in want:
-                etag = bare(m.pax_headers.get("SCHILY.xattr.user.etag", ""))
-                if etag != want[rel]:
-                    bad.append(f"{rel}: ETag in the archive {etag or 'none'}, in the store {want[rel]}")
-                else:
-                    check_content(rel, etag, t.extractfile(m), bad)
+                check_entry(t, m, rel, want[rel], bad)
                 seen.add(rel)
     return seen, acl
+
+
+def bucket_rel(name):
+    """An entry's path under ./buckets/ - "" for one outside it."""
+    name = name[2:] if name.startswith("./") else name
+    return name[len("buckets/"):] if name.startswith("buckets/") else ""
+
+
+def check_entry(t, m, rel, want, bad):
+    """A wanted object's entry: its ETag the store's, a single-part one's content its md5."""
+    etag = bare(m.pax_headers.get("SCHILY.xattr.user.etag", ""))
+    if etag != want:
+        bad.append(f"{rel}: ETag in the archive {etag or 'none'}, in the store {want}")
+    else:
+        check_content(rel, etag, t.extractfile(m), bad)
 
 
 def verify_tar(archive, before_path, after_path, out_path):
