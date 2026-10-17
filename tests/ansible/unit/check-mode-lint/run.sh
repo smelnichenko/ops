@@ -118,6 +118,24 @@ check("... a loop zipping its results with another list: the item's part from th
       + play(LOOPED + ZIP.replace("_p.results | zip(['a', 'b'])", "['a', 'b'] | zip(_p.results)")
              .replace("{{ item[0].stdout }} {{ item[1] }}", "{{ item[0] }} {{ item[1].stdout }}")),
       ["item[0].stdout", "item.0.rc", "item[1].stdout"])
+# zip_parts finds what `\{\{(.*?)\|\s*zip\((.*)\)` (re.S) found: the zip's arguments up to the LAST ) - a call among
+# them (lookup('x', 'y')) neither ends them nor hides the part after it; no ) after zip(, a zip( before the {{, or no {{
+# at all: no match, no part named
+ZIP3 = """    - name: zipped
+      ansible.builtin.debug:
+        msg: "{{ %s.stdout }}"
+      loop: "%s"
+"""
+check("... zipped third after a call (zip(lookup('x', 'y'), _p.results)): item[2] named",
+      play(LOOPED + ZIP3 % ("item[2]", "{{ ['a', 'b'] | zip(lookup('x', 'y'), _p.results) | list }}")),
+      ["item[2].stdout"])
+check("... no ) after zip(, a zip( before the {{, no {{ at all: no part of it named",
+      play(LOOPED + ZIP3 % ("item[0]", "{{ (_p.results) | zip(['a'] }}"))
+      + play(LOOPED + ZIP3 % ("item[1]", "x | zip(_p.results) {{ [1] }}"))
+      + play(LOOPED + ZIP3 % ("item[1]", "[1] | zip(_p.results)")), [])
+# the first part is what lies between the {{ and the zip, the {{ left out (as the regex's group 1)
+check("zip_parts: the parts of {{ a | zip(b, c) }}, the first without its {{", c.zip_parts("{{ a | zip(b, c) }}"),
+      [" a ", "b", " c"])
 # a loop is rendered before the task's when is judged (ansible-core's TaskExecutor: its items first) - one whose when,
 # or a block's, says it never runs in a preview still renders its loop there: a from_json of a skipped result's empty
 # stdout failed the preview. Named - an include's, and a task's in such a block
@@ -224,6 +242,10 @@ check("an import_tasks tagged b: its tasks inherit it, named",
 check("an include_tasks with apply tags b: its tasks run, named",
       play("    - ansible.builtin.include_tasks:\n        file: inc.yml\n        apply: {tags: [b]}\n      tags: [b]\n",
            {"b"}, extra=INC), ["_p.stdout"])
+# an include --tags leaves out runs none of its tasks, whatever its apply: tags give them
+check("an include_tasks tagged a with apply tags b, under --tags b: not run, not named",
+      play("    - ansible.builtin.include_tasks:\n        file: inc.yml\n        apply: {tags: [b]}\n      tags: [a]\n",
+           {"b"}, extra=INC), [])
 # a file the lint cannot follow is named, never skipped unseen
 open(os.path.join(work, "p3.yml"), "w").write("- hosts: x\n  tasks:\n    - ansible.builtin.import_tasks: missing.yml\n")
 got = c.lint(os.path.join(work, "p3.yml"), None)
@@ -250,6 +272,12 @@ check("an include under not ansible_check_mode reading a skipped probe in its va
       play(PROBE + NOPREV, extra={"inc3.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"})
       + play(PROBE + NOPREV.replace("      when: not ansible_check_mode\n", ""),
              extra={"inc3.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"}), ["_p.stdout"])
+# an include's own when is judged where it stands, under its parents' conditions alone: a read before its `not
+# ansible_check_mode` is made in a preview - named (its own when, taken as its parents', hid it)
+check("an include whose when reads a skipped probe before not ansible_check_mode: named",
+      play(PROBE + "    - name: inc\n      ansible.builtin.include_tasks: inc3.yml\n      when:\n"
+                   "        - _p.stdout == 'x'\n        - not ansible_check_mode\n",
+           extra={"inc3.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"}), ["_p.stdout"])
 check("an include's own loop reads a skipped probe: named",
       play(PROBE + "    - name: inc\n      ansible.builtin.include_tasks: inc2.yml\n      loop: '{{ _p.stdout_lines }}'\n",
            extra={"inc2.yml": "- name: x\n  ansible.builtin.debug:\n    msg: hi\n"}), ["_p.stdout_lines"])
