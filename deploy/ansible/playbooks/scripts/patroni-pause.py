@@ -204,25 +204,25 @@ def pause(pre, who):
         print(f"MARKER {idx}")
         return 0
     print(f"PAUSE FAILED: patronictl said {text!r}" + (f" - the DCS shows {shown}" if shown else ""))
-    return undo(pre, idx, out, text)
+    undo(pre, idx, out, text)
+    return 1
 
 
 def undo(pre, idx, out, text):
     """A pause not proven: someone else's left as it is, this run's resumed - its marker deleted once nothing of it is
-    left. Always 1."""
+    left. The pause failed whichever way it ends."""
     if out.returncode and "already paused" in text:
         # paused by someone between the check and this pause: theirs - left as it is, this run's marker gone
         problem = delete_marker(idx)
         print("the cluster was paused by someone else meanwhile - left as it is" + (f"; {problem}" if problem else ""))
-        return 1
+        return
     # this run's request may have landed (in part): undone before its marker goes - kept, naming this run, otherwise
     ok, shown = unpaused(pre)
     if not ok:
         print(f"STILL PAUSED after this run's resume ({shown}) - its marker kept: {CLEAN_UP}")
-        return 1
+        return
     problem = delete_marker(idx)
     print(f"undone: {shown}" + (f"; {problem}" if problem else ""))
-    return 1
 
 
 def resume(pre, idx):
