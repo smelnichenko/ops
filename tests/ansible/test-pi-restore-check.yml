@@ -129,9 +129,10 @@
         executable: /bin/bash
         cmd: "{{ as_unit }} {{ item.env }} PI_RESTORE_ANY_DAY=1 /usr/local/sbin/pi-restore-check.sh"
       loop:
-        - { name: etcd, env: "PI_RESTORE_ETCD_MAX_AGE_H=-1", red: ETCD }
-        - { name: scylla, env: "PI_RESTORE_SCYLLA_MAX_AGE_H=-1", red: SCYLLA }
-        - { name: postgres, env: "PI_RESTORE_PG_DATABASES='monitor no_such_database'", red: POSTGRES }
+        - { name: etcd, env: "PI_RESTORE_ETCD_MAX_AGE_H=-1", red: ETCD, cause: 'h old \(limit -1 h\)' }
+        - { name: scylla, env: "PI_RESTORE_SCYLLA_MAX_AGE_H=-1", red: SCYLLA, cause: 'h old \(limit -1 h\)' }
+        - { name: postgres, env: "PI_RESTORE_PG_DATABASES='monitor no_such_database'", red: POSTGRES,
+            cause: 'databases missing: no_such_database' }
       loop_control:
         label: "{{ item.name }}"
       register: _faults
@@ -155,6 +156,8 @@
           # consul lock -child-exit-code: 2 when the run under it failed
           - item.rc != 0
           - item.stdout is search(item.item.red ~ ' FAILED:')
+          # red for the fault injected, not anything else: its own message
+          - item.stdout is search(item.item.cause)
           - (item.stdout | regex_findall('^[A-Z0-9]+ OK:', multiline=True) | length) == 3
           - "item.stdout is search('PI RESTORE CHECK [0-9TZ]+ FAILED: ' ~ item.item.red)"
         fail_msg: "{{ item.item.name }}: {{ item.stdout_lines }}"

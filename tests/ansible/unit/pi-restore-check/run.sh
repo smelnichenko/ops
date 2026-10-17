@@ -299,7 +299,7 @@ def put(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with gzip.open(path, "wt") as f:
         json.dump(obj, f)
-def snapshot(cluster, tag, files, schema=True):
+def snapshot(cluster, tag, files, schema=True, task="T"):
     node = f"{b}/meta/cluster/{cluster}/dc/datacenter1/node/node-a"
     index = [{"keyspace": "system_schema", "table": "tables", "version": "s1", "files": ["s-Data.db"]},
              {"keyspace": "audit", "table": "audit_log", "version": "u1", "files": [] if system_only else ["u-Data.db"]},
@@ -308,11 +308,11 @@ def snapshot(cluster, tag, files, schema=True):
               "files": [] if system_only or audit_only else files}]
     for t in index:
         t.setdefault("size", 100)
-    put(f"{node}/task_T_tag_{tag}_manifest.json.gz", {"cluster_id": cluster, "snapshot_tag": tag, "index": index})
+    put(f"{node}/task_{task}_tag_{tag}_manifest.json.gz", {"cluster_id": cluster, "snapshot_tag": tag, "index": index})
     if two_nodes and tag == newest:
         put(node.replace("node-a", "node-b") + f"/task_T_tag_{tag}_manifest.json.gz", {"index": index})
     if schema:
-        put(f"{b}/schema/cluster/{cluster}/task_T_tag_{tag}_schema_with_internals.json.gz", [
+        put(f"{b}/schema/cluster/{cluster}/task_{task}_tag_{tag}_schema_with_internals.json.gz", [
             {"keyspace": "chat", "type": "keyspace", "name": "chat", "cql_stmt": "CREATE KEYSPACE chat WITH replication = {} "},
             {"keyspace": "chat", "type": "table", "name": "messages_by_channel",
              "cql_stmt": "CREATE TABLE chat.messages_by_channel (\n    id int PRIMARY KEY\n) WITH ID = c1;"},
@@ -330,7 +330,8 @@ def snapshot(cluster, tag, files, schema=True):
             os.makedirs(os.path.dirname(p), exist_ok=True)
             open(p, "w").write(f)
 snapshot("0f2f-old", old, ["o-Data.db", "o-TOC.txt"])
-snapshot("98b5-prod", before, ["a-Data.db", "a-TOC.txt"])
+# the day before's under another task (a re-created schedule): its names sort after the newest's - only the tag tells
+snapshot("98b5-prod", before, ["a-Data.db", "a-TOC.txt"], task="Z")
 snapshot("98b5-prod", newest, ["a-Data.db", "b-Data.db", "b-TOC.txt"], schema=not no_schema)
 if missing:  # a listed file gone from the store
     os.remove(f"{b}/sst/cluster/98b5-prod/dc/datacenter1/node/node-a/keyspace/chat/table/messages_by_channel/c1/b-TOC.txt")
@@ -347,6 +348,12 @@ BASE_MAX=$(sed -n 's/^    pi_restore_check_pg_base_max_age_h: *//p' deploy/ansib
 # backup not made for a day would pass
 check "the base backup's limit between the day before's (28 h) and a day missed (over 30 h)" \
   "$([ "$BASE_MAX" -ge 28 ] && [ "$BASE_MAX" -le 30 ] && echo within)" within
+# Scylla's snapshot age limit and its start's polls, as the playbook sets them: the limit between a day missed (the day
+# before's, 26.5 h at this check) and two (50 h); the polls at least a minute's worth
+SC_MAX=$(sed -n 's/^    pi_restore_check_scylla_max_age_h: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
+SC_POLLS=$(sed -n 's/^    pi_restore_check_scylla_wait_polls: *//p' deploy/ansible/playbooks/setup-pi-restore-check.yml)
+check "Scylla's snapshot limit between a day missed (27 h) and two (over 48 h), its polls a minute's worth at least" \
+  "$([ "$SC_MAX" -ge 27 ] && [ "$SC_MAX" -le 48 ] && echo within) $([ "$SC_POLLS" -ge 20 ] && echo enough)" "within enough"
 run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTORE_LOCKED), the exit
   env "$@" > /dev/null  # (a bad env word fails here, not as a red check)
   env -i PATH="$W/bin:$(dirname "$(command -v python3)"):/usr/bin:/bin" W="$W" HOME="$W" TZ=Europe/Tallinn PI_RESTORE_PG_ROOT="$W/pgroot" STORE_ENDPOINT=http://192.168.11.5:9000 \
@@ -356,7 +363,7 @@ run() {  # run <env...>: the script as the unit runs it (its lock held: PI_RESTO
     PI_RESTORE_PG_IMAGE_17=ghcr.io/cloudnative-pg/postgresql:17 PI_RESTORE_ETCD_IMAGE=registry.k8s.io/etcd:3.6.5-0 \
     PI_RESTORE_PG_BASE_MAX_AGE_H="$BASE_MAX" PI_RESTORE_PG_BACKUPS_LOOKED_AT=30 PI_RESTORE_PG_WAIT_POLLS=3 PI_RESTORE_ETCD_MAX_AGE_H=3 \
     PI_RESTORE_TIER0_MAX_AGE_H=30 PI_RESTORE_WORK="$W/work" PI_RESTORE_MIN_FREE_GB=0 PI_RESTORE_CONTAINER_MEMORY=1536m PI_RESTORE_ETCD_WAIT_POLLS=2 \
-    PI_RESTORE_SCYLLA_IMAGE=docker.io/scylladb/scylla:2026.1.14 PI_RESTORE_SCYLLA_MAX_AGE_H=30 PI_RESTORE_SCYLLA_WAIT_POLLS=2 \
+    PI_RESTORE_SCYLLA_IMAGE=docker.io/scylladb/scylla:2026.1.14 PI_RESTORE_SCYLLA_MAX_AGE_H="$SC_MAX" PI_RESTORE_SCYLLA_WAIT_POLLS=2 \
     "$@" bash "$SCRIPT_RUN" "${SCRIPT_ARGS[@]}" > "$W/out" 2>&1
   echo "rc=$?"
 }
@@ -422,8 +429,8 @@ check "  the store written under restore-checks/pi1/ only (and the bucket made),
   "mkdir store:restore-checks,rcat store:restore-checks/pi1/last-report,rcat store:restore-checks/pi1/last-success"
 check "  the work directory gone, the containers removed, the throwaway Consul stopped" \
   "$(ls "$W/work" | wc -l) $(grep -oE '^podman rm -f -t 0 pi-restore-(pg|etcd|scylla)-[0-9]+' "$W/calls" | sort -u | wc -l) $(agents)" "0 3 0"
-check "  each part's container gone when the part ends - Postgres's before etcd's first container" \
-  "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls")" 1
+check "  each part's container gone when the part ends - Postgres's before etcd's first container, Scylla's before tier0's agent" \
+  "$(awk '/^podman rm -f -t 0 pi-restore-pg-/ && !r { r = NR } /^podman run .*etcd/ && !e { e = NR } END { print (r && e && r < e) }' "$W/calls") $(awk '/^podman rm -f -t 0 pi-restore-scylla-/ && !r { r = NR } /^consul agent/ && !c { c = NR } END { print (r && c && r < c) }' "$W/calls")" "1 1"
 
 check "  the scratch Postgres stopped" "$(grep -cE '^runuser .*/pg_ctl -D .*/tier0/pg -m immediate stop' "$W/calls")" 1
 check "  the Pi's newest Postgres (17 - text order would take 9.6)" \
@@ -538,8 +545,8 @@ check "  said so, with etcd's own log" "$(grep -c 'served no namespace within 4 
 # every snapshot's side by side), loaded as Scylla's own user, each table read back
 store
 run > /dev/null
-newest=$(ls "$W/store/scylla-backups/backup/meta/cluster/98b5-prod/dc/datacenter1/node/node-a" | sort | tail -1 \
-  | sed 's/.*_tag_\(sm_[0-9]*UTC\)_manifest.*/\1/')
+newest=$(ls "$W/store/scylla-backups/backup/meta/cluster/98b5-prod/dc/datacenter1/node/node-a" \
+  | sed 's/.*_tag_\(sm_[0-9]*UTC\)_manifest.*/\1/' | sort | tail -1)
 check "scylla: production's cluster, its newest snapshot, its table's rows read back" \
   "$(report | grep -oE '^SCYLLA OK: [^ ]+' | sed 's/SCYLLA OK: //') $(report | grep -oE 'tables \(rows\) [^,]+')" \
   "98b5-prod/$newest tables (rows) chat.messages_by_channel:5"
@@ -564,12 +571,11 @@ check "  the files made Scylla's own (as root, in the container), then loaded" \
   "$(grep -cE "^podman exec -u root pi-restore-scylla-[0-9]+ sh -c cp /w/sst/\*/keyspace/chat/table/messages_by_channel/\*/\* '[^']+/upload/' && chown -R scylla:scylla" "$W/calls") $(grep -cE '^podman exec pi-restore-scylla-[0-9]+ nodetool refresh chat messages_by_channel$' "$W/calls")" \
   "1 1"
 red "scylla: no snapshot at all: red" SCYLLA NO_SCYLLA=1
-red "scylla: the newest snapshot just past the limit (two days missed): red" SCYLLA SCYLLA_AGE_H=31
-check "  said so" "$(report | grep -cE 'is 31 h old \(limit 30 h\)')" 1
+red "scylla: the newest snapshot just past the playbook's limit: red" SCYLLA SCYLLA_AGE_H=$(( SC_MAX + 1 ))
+check "  said so" "$(report | grep -cE "is $(( SC_MAX + 1 )) h old \(limit $SC_MAX h\)")" 1
 (export SCYLLA_AGE_H=26; store)
 check "scylla: a day missed (the day before's, 26 h): green" "$(run SCYLLA_AGE_H=26)" "rc=0"
-(export SCYLLA_AGE_H=30; store)
-check "scylla: the newest exactly at the limit (30 h): green" "$(run SCYLLA_AGE_H=30)" "rc=0"
+check "scylla: the newest exactly at the playbook's limit ($SC_MAX h): green" "$(export SCYLLA_AGE_H=$SC_MAX; store; run SCYLLA_AGE_H=$SC_MAX)" "rc=0"
 red "scylla: the newest snapshot without its schema: red" SCYLLA NO_SCYLLA_SCHEMA=1
 red "scylla: only system tables with data: red" SCYLLA SCYLLA_ONLY=system
 check "  said so, before any Scylla started" \
@@ -604,6 +610,7 @@ store
 check "scylla: the smallest container it served in (768m, measured): green, Scylla's memory 256M" \
   "$(run PI_RESTORE_CONTAINER_MEMORY=768m) $(grep -oE -- '--memory [0-9]+M --reserve' "$W/scylla-args")" "rc=0 --memory 256M --reserve"
 red "scylla: a container's memory not in MiB (2g): red" SCYLLA PI_RESTORE_CONTAINER_MEMORY=2g
+check "  said so (the guard, not the arithmetic after it)" "$(report | grep -c 'PI_RESTORE_CONTAINER_MEMORY=2g: Scylla wants at least 768m')" 1
 red "etcd: the newest snapshot named for a date no calendar has: red" ETCD ETCD_BAD_DATE=1
 # an expansion error in a part's own shell (arithmetic on a word not a number): bash abandons the command and reads on -
 # past the part's dispatch, into the whole check again, inside the part (seen 2026-10-17: a chain of runs, each inside
@@ -687,6 +694,17 @@ need = set(re.findall(r'"\$\{([A-Z][A-Z0-9_]*):\?\}"', open(sys.argv[1]).read())
 print(sorted(need - keys), len(need) > 5)
 PY_KEYS
 )" "[] True"
+# each setting the unit's file names from the playbook's own variable of its name (a copy-paste naming another's - the
+# age limit set to the polls - passed every case), the Scylla ones among them
+check "the settings file: each PI_RESTORE_<X> from pi_restore_check_<x>, Scylla's three among them" "$("$PY" - <<'PY_ENVVARS'
+import re, yaml
+p = yaml.safe_load(open("deploy/ansible/playbooks/setup-pi-restore-check.yml"))[0]
+env = next(t for t in p["tasks"] if t["name"].startswith("Its settings"))["ansible.builtin.copy"]["content"]
+pairs = re.findall(r"^PI_RESTORE_([A-Z0-9_]+)=\{\{ (pi_restore_check_[a-z0-9_]+) \}\}$", env, re.M)
+print([(k, v) for k, v in pairs if v != "pi_restore_check_" + k.lower()],
+      sorted(k for k, _ in pairs if k.startswith("SCYLLA_")), all(v in p["vars"] for _, v in pairs))
+PY_ENVVARS
+)" "[] ['SCYLLA_IMAGE', 'SCYLLA_MAX_AGE_H', 'SCYLLA_WAIT_POLLS'] True"
 # the start limit holds the first run and its two retries even when each hangs to its timeout - a 6 h window never held
 # three 3 h runs 20 min apart, and the unit restarted for ever; its files root's alone (UMask, as the script's umask)
 check "the unit: three starts, each to its timeout, within the start limit's window, the window ended before the timer's next day; its umask 0077; a killed run's containers swept when it stops" "$("$PY" - <<'PY_UNIT'
