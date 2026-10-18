@@ -170,6 +170,16 @@ pause set and lifted across pods; the other two-pod cases (an expired claim take
 the dashboard) as single-pod tests that play the other pod through the claim columns. PRs wait their turn behind
 monitor #18 and the site's (one open PR at a time).
 
+2026-10-18 09:10: **enrichment's company claim merged** - masi #112 -> c87ed98. Changeset 065
+`company.enrich_claimed_by/enrich_claimed_until`, with a precondition that halts unless `company_enrichment`'s id
+sequence hands out one value at a time. A company is claimed only while no visit row of it has an id above the newest
+its due page saw (`seen` = max id - row times come from each pod's clock, ids do not); the due list leaves out a company
+whose claim is live; the retention leaves such a company all its rows (review found another pod's marker counted as a
+"later visit", deleting the kept row a cut visit could not replace). **Not fenced**, by decision: a visit whose claim
+lapses (its pod stalled past the ttl) finishes - its writes only fill empty fields, so the cost is at most a second
+visit. 20 revert checks red; architecture, concurrency and test-quality reviews all fixed. Left: PR 3 (the startup
+repairs `DomainKeyRepair`, `PersonBackfill`).
+
 2026-10-18 (morning): **PR 2 merged, on schnappy-test; production untouched (operator).** One PR at a time:
 - **2a** masi #108 -> 4c3b426 (changeset 060 ran in 228 ms on test). The PR's Sonar gate (project `schnappy-masi-pr`)
   found 10 issues, all fixed before merge. The one that changed the design: a claim's SQL is no longer put together at
@@ -183,7 +193,7 @@ monitor #18 and the site's (one open PR at a time).
 - **2c part 2** masi #111 -> 5390124: the `master_translation` row (064), one RUNNING per user across pods.
 Test env: no backlog to analyse or match, so the claims have not yet run there on real work; no warning or error in
 the pods' logs. A start takes ~4 min on the test pod's 1-CPU limit (sizing, not the claims).
-Left: **enrichment's company claim** (its own PR - the highest-risk piece), the startup repairs (`DomainKeyRepair`,
+Left then: enrichment's company claim (merged 09:10, above), the startup repairs (`DomainKeyRepair`,
 `PersonBackfill`) in PR 3.
 
 2026-10-17: the test-time arc closed (forks, contexts, clock waits, CI browser headroom - masi #88-#106); PR 2 resumes,
