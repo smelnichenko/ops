@@ -53,3 +53,10 @@ and red -> Sonar pre-check + clean check -> PR -> CI -> merge -> deploy to test 
   against both active CVs and tuned from the Estonian one; a CV activated later picks up the skipped backlog.
 - Live on test: the operator's own CV (test env v2) active in English, its Estonian translation approved and active;
   an Estonian posting's package written from it.
+
+## Status
+
+- 2026-10-18: PR 1 (masi #113, 989261a - `cv_version.language`, one active version per language, an approved
+  translation activatable) merged; live in test and production (masi 4c502bc, changeset 066). PR 2 (scores per
+  language) in progress on `feat/scores-per-language`; PR 3 (packages) and the site's per-language CV page (site
+  `feat/cv-active-per-language`) after it.

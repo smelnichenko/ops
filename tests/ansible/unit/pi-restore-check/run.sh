@@ -427,9 +427,10 @@ red "  promoted, the replay short of the promoted timeline's end: red" POSTGRES 
 red "postgres: still recovering after its polls: red" POSTGRES RECOVERING=1
 red "postgres: a database missing: red" POSTGRES DBS="postgres monitor admin chat masi"
 red "postgres: no table in any database: red" POSTGRES TABLES=0
-store
-check "postgres: one database empty (an app not deployed - masi in production), the rest with tables: green, the counts said" \
-  "$(run EMPTY_DB=masi) $(report | grep -oE 'databases \(tables\) [^,]+' )" "rc=0 databases (tables) monitor:7 admin:7 chat:7 chess:7 masi:0"
+# one database restored empty, the rest with tables: red, naming it (masi's was let be empty until it ran in production)
+red "postgres: one database restored with no table (masi), the rest with tables: red" POSTGRES EMPTY_DB=masi
+check "  the empty one named, every count said" "$(report | grep -oE 'no table in [a-z]+ \([^)]*\)')" \
+  "no table in masi (monitor:7 admin:7 chat:7 chess:7 masi:0)"
 red "postgres: a database not read back whole: red" POSTGRES DUMP_FAIL=1
 store
 run PG_RESTORE_FAIL=1 > /dev/null

@@ -134,23 +134,24 @@ part_postgres() {
   seg=$(q 'select pg_walfile_name(pg_current_wal_lsn())')
   [[ ! "${seg:8:16}" < "${wal:8:16}" ]] \
     || { echo "$server/$id: replayed to $seg, short of $wal - the furthest archived on timeline $tli (the one the recovery follows) when the run began"; return 1; }
-  local have db missing=() tables total=0 counts=()
+  local have db missing=() tables empty=() counts=()
   have=" $(q "select string_agg(datname, ' ') from pg_database where not datistemplate") "
   for db in $PI_RESTORE_PG_DATABASES; do
     [[ "$have" == *" $db "* ]] || missing+=("$db")
   done
   [ "${#missing[@]}" = 0 ] || { echo "$server/$id: databases missing: ${missing[*]} (has:$have)"; return 1; }
   for db in $PI_RESTORE_PG_DATABASES; do
-    # an app not deployed yet has its database and no table (masi in production): a database may be empty, the
-    # cluster may not
+    # every database has its app's tables: a restore that lost one app's schema is no restore of it (masi's was let be
+    # empty until it ran in production, 2026-10-18). A database for an app not deployed yet stays out of the list
+    # (pi_restore_check_databases) until its first deploy
     tables=$(q "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind = 'r' and n.nspname not in ('pg_catalog', 'information_schema')" "$db")
-    total=$(( total + tables ))
+    [ "$tables" -gt 0 ] || empty+=("$db")
     counts+=("$db:$tables")
     # every row read: a page the restore got wrong fails the dump (--no-sync: /dev/null takes no fsync)
     podman exec "$name" pg_dump -h /w -U postgres --no-sync --format=custom --file=/dev/null "$db"
   done
-  [ "$total" -gt 0 ] || { echo "$server/$id: restored with no table in any database (${counts[*]})"; return 1; }
+  [ "${#empty[@]}" = 0 ] || { echo "$server/$id: restored with no table in ${empty[*]} (${counts[*]})"; return 1; }
   echo "POSTGRES OK: $server/$id (PostgreSQL $major, $image) replayed to $seg (newest archived at the start: $wal);" \
     "databases (tables) ${counts[*]}, each read back whole"
 }

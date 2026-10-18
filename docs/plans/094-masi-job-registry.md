@@ -947,6 +947,8 @@ for Java and `npm run test` green for site.
     **Live state 2026-09-21:** AI is enabled in schnappy-test on the shared key (`MASI_ANTHROPIC_API_KEY` = `ANTHROPIC_API_KEY`
     in ops/.env, Vault `test/ai-masi` seeded), and EVERY call is refused: the account has no credit. Nothing can be analysed,
     scored or tuned until it is topped up; no redeploy is needed afterwards. Production `ai-masi` is not seeded.
+    **2026-10-18:** production enabled (operator: "Deploy masi to prod"); its `ai-masi` holds the same key as test, and
+    the seed now requires `MASI_ANTHROPIC_API_KEY`.
     **CI:** every distinct `@SpringBootTest` configuration is a cached context with a Hikari pool; at 10 connections held for
     ever the newest context could not connect to CI's one Postgres ("too many clients already"). The test profile now holds
     nothing while idle (`minimum-idle 0`, `idle-timeout 10s`, `maximum-pool-size 8`).
@@ -1195,7 +1197,7 @@ Töötukassa and Bolt are deterministic, cvkeskus.ee is held on its 10 000 €/r
 config shapes, fixture procedure, three verbatim survey reports); PR5–PR7 and PR8a (gateway,
 ledger, alerts), PR8b (tuning pipeline, masi #12) and PR9 (masi #14 + site #9/#10, the UI) done
 2026-09-18 and proven live in schnappy-test; production stays disabled until the Anthropic key
-is seeded; PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) and reposts + history (masi #32, site #19) merged and live 2026-09-22; every source enabled and verified 2026-09-22 (masi #33–#36); what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
+is seeded (enabled 2026-10-18, see below); PR10 done 2026-09-20; masi #17 (strict host allow-list, partial-read fixes, Sonar part 1) merged and live in test 2026-09-20; Sonar part 2 (masi #18) merged 2026-09-21, gate OK and enforced on pull requests; PR11a (masi #19) and PR11b (masi #20, site #14) merged and live 2026-09-21: the ladder PR0–PR11 is complete; match score (masi #21) merged and live 2026-09-21; the score in the site (masi #22, site #15) merged and live 2026-09-21; the weekly digest by mail (masi #23) merged and proven live in test 2026-09-21; MeetFrank enabled, match v3 (masi #30) and smart dedupe (masi #31, site #18) and reposts + history (masi #32, site #19) merged and live 2026-09-22; every source enabled and verified 2026-09-22 (masi #33–#36); what remains is the rest of the Later list (ENRICH, T2 collectors, Admin-API cost reconciliation, PR preview envs), production enablement (blocked on CREDIT on the Anthropic account: the key exists, every call is refused) and the ci-cache PRs (blocked on the Woodpecker Trusted flag).
 Process since 2026-09-17: platform, infra and ops changes go straight to main (no PRs); the app
 repos keep PRs with PR-only CI.
 
@@ -1224,3 +1226,10 @@ key; PR preview envs dropped: the test namespace is masi's preview). Production-
    IllegalStateException / NullPointerException / CancellationException, which left the visit and lost a cut visit's
    record), fixed. masi #86: a catch-up that finds nothing missed says so (after #84's deploy the pod logged no catch-up
    line, which read the same as one that never ran).
+
+**2026-10-18 — production.** The operator: "Deploy masi to prod" (infra 3a1a8c2, one replica until plan 099 lands;
+the same Anthropic key as test, `schnappy/ai-masi`). The partner API is off by default (`masi.partner.enabled`, masi
+#114; operator: "disabled until further notice"). Review fixes the same day: the gateway serves no actuator but health
+(platform bf8532a), the alerted counters are scraped from 0 (masi #115), masi is admitted to Postgres by name
+(platform e4a48cf), the JVM memory alerts fire under ZGC (platform 0e99a00); the Pi restore check wants masi's tables
+(ops). Production's sources start disabled; switching them on is the operator's.

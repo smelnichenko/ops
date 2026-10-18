@@ -13,7 +13,7 @@
   Where two pods touch the same data, Postgres row-level concurrency (conditional updates, row locks, unique
   constraints, idempotent upserts) decides.
 - Outcome: masi `replicas: 2` in test with `maxSurge: 1, maxUnavailable: 0` (zero-downtime deploys); production values
-  get the same shape (production stays disabled — the operator's call).
+  get the same shape (production enabled 2026-10-18 with one replica - two once this plan lands).
 - Step 0 done: the foreground-blocking memory rule is revoked and the memory index cleaned.
 
 ## The one mechanism: a claim on the item's row
@@ -102,7 +102,7 @@ aggregated (`max by (source)` for DB gauges, `sum` across pods for counters and 
    maxUnavailable: 0`; PodDisruptionBudget `minAvailable: 1` rendered when replicas > 1; a `preStop` lifecycle wait so
    endpoints stop routing before Tomcat's graceful shutdown (a Kubernetes hook, not a shell sleep of mine);
    `terminationGracePeriodSeconds` ≥ preStop + the 40 s tuning drain; `progressDeadlineSeconds` above the 600 s startup
-   budget; alert aggregation; test and production values `replicas: 2` (production still disabled); browser
+   budget; alert aggregation; test and production values `replicas: 2` (production runs one replica since 2026-10-18); browser
    `max-parallel`/`CONCURRENT` consistent.
 5. **Live proof**, then plan 099 COMPLETE.
 
@@ -200,7 +200,7 @@ Split in four PRs, each the full PR routine; the IngestLock stays taken until 3d
 - **3b - companies**: `resolve` locks its company (and `code:` / `name:` before a new one - R12, R14); a company merge
   locks both rows before any repoint (R13); register placement check-and-adopt in one transaction that never merges
   (R15); the operator's match one transaction (R16); contact capture under PersonService's identity locks (R17).
-- **3c - the partner `/changes` feed**: the one thing the lock does that no row lock does - commits in `at` order, so
+- **3c - the partner `/changes` feed** (operator 2026-10-18: option **(b)**, the API kept): the one thing the lock does that no row lock does - commits in `at` order, so
   a follower's `(at, id)` cursor never skips an event committed late by another pod. Needs the operator's choice:
   (a) exact - an `xid8` column, only rows below the snapshot's xmin served, the cursor `(xid, id)` (an API change,
   expand/contract); (b) the API kept - `at` from database time, every event-writing transaction bounded

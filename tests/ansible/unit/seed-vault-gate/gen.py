@@ -2,9 +2,9 @@
 deploy/ansible/playbooks/seed-vault-secrets.yml — one call site, the playbook
 file itself — so these harnesses cannot drift from what ships:
 
-  gate.yml     the masi-key tasks: exact `when` strings, exact `data:` map, the exact
-               play-level `masi_api_key` definition and the exact summary task. The
-               Vault write becomes a set_fact rendering the real data map.
+  gate.yml     the masi key, required: the exact required-env assert run for it, the
+               exact `data:` map, the play-level `masi_api_key` definition and the exact
+               summary task. The Vault write becomes a set_fact rendering the real data map.
   resolve.yml  the generatable-secret machinery: the exact `failed_when` of the
                existing-secret read, evaluated against the module's REAL messages,
                and the exact index + resolve tasks driven by fake read results.
@@ -50,42 +50,50 @@ def dump(name, play):
 
 
 # ---- gate.yml -----------------------------------------------------------------
+# masi's key is required (2026-10-18): the exact required-env assert, run for MASI_ANTHROPIC_API_KEY alone (the other
+# names are not set here), then - only past it - the write's stand-in rendering the real data map and the exact summary.
+KEY = "MASI_ANTHROPIC_API_KEY"
+validate = find("validate required env-sourced secrets")
 write_task = find("seed masi ai secret")
-notice = dict(find("masi ai secret not seeded"))
 summary = dict(find("secrets seeded"))
-write_when = write_task.get("when")  # None if the gate was removed
-data = write_task[KV2_WRITE]["data"]
-stand_in = {
-    "name": write_task["name"],
-    SET_FACT: {"masi_written": data},
-    "no_log": True,
-    "register": "write_result",
-}
-if write_when is not None:
-    stand_in["when"] = write_when
-notice["register"] = "notice_result"
+pre = []
+if KEY not in (validate.get("loop") or []):
+    pre.append({"name": "Verdict: required", FAIL: {"msg": f"{KEY} is not in the required-env list"}})
+if write_task.get("when") is not None:
+    pre.append({"name": "Verdict: always written", FAIL: {"msg": f"the masi write is still gated: when {write_task['when']!r}"}})
+if any("not seeded" in (t.get("name") or "").lower() for t in tasks):
+    pre.append({"name": "Verdict: no skip notice", FAIL: {"msg": "a 'not seeded' notice task remains: the key cannot be skipped"}})
+check_one = {"name": validate["name"], ASSERT: dict(validate[ASSERT]), "loop": [KEY]}
+stand_in = {"name": write_task["name"], SET_FACT: {"masi_written": write_task[KV2_WRITE]["data"]}, "no_log": True}
 summary["register"] = "summary_result"
 src_vars = play_src.get("vars", {})
 carried = {k: src_vars[k] for k in ("vault_prefix", "masi_api_key") if k in src_vars}
 dump("gate.yml", {
-    "name": "gate harness for seed-vault-secrets masi tasks",
+    "name": "gate harness for seed-vault-secrets masi key",
     "hosts": "localhost", "connection": "local", "gather_facts": False,
     "vars": carried,
-    "tasks": [
-        stand_in, notice, summary,
+    "tasks": pre + [
+        {"name": "The required-env assert, for the masi key", "block": [
+            check_one,
+            {"name": "Past the assert", SET_FACT: {"assert_passed": True}},
+            stand_in, summary,
+        ], "rescue": [
+            {"name": "Stopped by the assert", SET_FACT: {"assert_passed": False,
+                                                         "assert_said": "{{ ansible_failed_result | to_json }}"}},
+        ]},
         {"name": "Verdict", ASSERT: {
             "that": [
-                "(write_result is not skipped) == (expect_write | bool)",
-                "(notice_result is skipped) == (expect_write | bool)",
-                "('ai-masi seeded' in summary_result.msg) == (expect_write | bool)",
+                "assert_passed == (expect_write | bool)",
                 "not (expect_write | bool) or (masi_written.api_key == expect_key)",
+                "not (expect_write | bool) or ('ai-masi' in summary_result.msg and 'SKIPPED' not in summary_result.msg)",
+                "(expect_write | bool) or ('" + KEY + "' in assert_said)",
             ],
-            "fail_msg": "write ran={{ write_result is not skipped }} notice ran={{ notice_result is not skipped }} summary={{ summary_result.msg | regex_replace('.*(ai-masi[^.]*).*', '\\\\1') }} written={{ (masi_written | default({})).api_key | default('') }} expected write={{ expect_write }} key={{ expect_key | default('') }}",
-            "success_msg": "write ran={{ write_result is not skipped }} notice ran={{ notice_result is not skipped }} summary agrees (expected write={{ expect_write }})",
+            "fail_msg": "passed the assert={{ assert_passed }} written={{ (masi_written | default({})).api_key | default('') }} expected write={{ expect_write }} key={{ expect_key | default('') }}",
+            "success_msg": "passed the assert={{ assert_passed }} (expected write={{ expect_write }})",
         }},
     ],
 })
-print("gate:    when(write) =", json.dumps(write_when), "| when(notice) =", json.dumps(notice.get("when")))
+print("gate:    required =", KEY in (validate.get("loop") or []), "| when(write) =", json.dumps(write_task.get("when")))
 
 # ---- resolve.yml ---------------------------------------------------------------
 read_task = find("read existing generatable secrets")

@@ -157,7 +157,8 @@ every JOBS user — today one), `TuningService.review` (APPLIED / REJECTED), `Tu
    their person and the company's log; an unknown sender makes a person without a tie; a replayed webhook
    writes one row.
    **Operator, 2026-09-24:** build masi's side only for now — the webhook, verified and tested offline on
-   recorded signed payloads; the Resend endpoint (and its `whsec_` secret) waits until masi runs in production. The
+   recorded signed payloads; the Resend endpoint (and its `whsec_` secret) waits until masi runs in production (it does since 2026-10-18; the
+   endpoint, secret and MX still wait for the operator's go-live). The
    address is on a **dedicated subdomain** (its own MX to Resend: a Porkbun DNS change at go-live), so masi takes
    the mail sent to its configured addresses and ignores the rest of what Resend delivers.
    **Operator, 2026-09-24: "be careful not to send anything anywhere".** The inbox only receives: it never
@@ -759,4 +760,4 @@ counts and day number reaching into the next day's cell on a phone; claims/lint 
 select), fixed there; its audit found eight ways the checks could be fooled, all closed. **PR4 (masi #55, the inbox, receive-only)**
 merged 2026-09-25 (masi 2ad4370, changeset 041) and deployed to test with the inbox OFF: masi's side is built and
 proven offline (31 tests, 35 revert checks); the Resend endpoint, secret, MX and env wait for production (the go-live
-checklist under PR4). Next: enrichment and analysis batching (094 Later).
+checklist under PR4; masi runs in production since 2026-10-18, the inbox go-live is still the operator's). Next: enrichment and analysis batching (094 Later).

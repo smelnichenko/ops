@@ -1,7 +1,7 @@
 #!/bin/bash
 # Localhost harnesses for seed-vault-secrets.yml (no Vault, a few seconds):
-#   gate.yml    UNSET / EMPTY / WHITESPACE -> masi write skipped, notice runs, summary says SKIPPED;
-#               SET / PADDED -> write runs with the trimmed key, notice skipped, summary says seeded
+#   gate.yml    the masi key is required: UNSET / EMPTY / WHITESPACE -> the required-env assert stops the run,
+#               naming it, nothing written; SET / PADDED -> past it, written trimmed, the summary says so
 #   resolve.yml the read tolerance evaluated against the module's real messages; the index + resolve
 #               steps reuse existing fields and generate distinct fresh ones
 #   rescue.yml  the read and write abort messages list every failed item and survive a missing msg
