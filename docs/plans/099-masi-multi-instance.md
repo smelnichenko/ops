@@ -184,20 +184,26 @@ already a per-row CAS; it only drops the lock). Facts it stands on:
 - Hibernate does not refresh a managed entity when a lock is taken on it: locks are explicit SQL returning fresh rows.
 
 Lock order, every writing transaction: the run's `source_run` row (Fence) -> company identity advisory locks (`code:`
-then `name:`) -> company rows ascending -> job identity advisory locks (`title:` then `fp:`) -> job rows `FOR NO KEY
-UPDATE` ascending -> the listing row `FOR UPDATE` (or a `listing:` advisory lock for a new one) -> PersonService's
-identity locks. Namespace 0x6d617369 (PersonService's), distinct prefixes. `lock_timeout` (the `ingest-wait` property,
-re-meant) bounds request and sweep transactions; a timeout is the 503 / BUSY / sweep skip the lock's tryLocked gave.
+then `name:`) -> company rows ascending -> job identity advisory locks (`title:<titleKey>` - the title key alone, since
+two agreeing employer rows match one job - then `fp:`) -> job rows `FOR NO KEY UPDATE` ascending -> PersonService's
+identity locks. A listing has no lock of its own: every writer of a listing holds its JOB's lock and re-reads the
+listing under it (as built in 3a; `@DynamicUpdate` on JobListing). Namespace 0x6d617369 (PersonService's), distinct
+prefixes. `lock_timeout` bounds every writer's lock waits: as built, a new property `masi.scheduler.lock-wait` (5 s) -
+`ingest-wait` still bounds the IngestLock until 3d, where the two merge; a timeout is a retryable conflict for the
+ingest, a 503 BUSY for a partner request, a skipped job for the sweep.
 
 Split in four PRs, each the full PR routine; the IngestLock stays taken until 3d, so each lands on a serialised ingest:
-- **3a - jobs and listings**: ingest locks its job then its listing and judges on the locked rows (R1 close vs open,
+- **3a - jobs and listings** (masi #119, 2026-10-18; as built: no listing lock - the job's lock covers its listings;
+  `title:` keyed by the title key alone; a run's misses in one transaction; unique keys retried on SQLState 23505;
+  46 mutants red): ingest locks its job then its listing and judges on the locked rows (R1 close vs open,
   R2 a listing moved off a job, R3 a stale listing save, R6 two reposts); `fp:` / `title:` / `listing:` advisory locks
   (R4, R5, R18); the merge sweep locks survivor then loser and re-checks the pair (R7, R8); the expiry sweep and the
   miss count one transaction per job, ascending, conditional statements (R9, R10); a withdrawal follows the survivor
   under its lock (R11); `ingestOne` retried on deadlock / lock / duplicate-key conflicts; `@DynamicUpdate` on
   JobListing. The fail-closed `requireHeld()` becomes `JobLocks` - the job ids locked in this transaction, asserted
   by every job close, merge, reopen and move - plus ArchitectureTest rules on who may call the closing statements.
-- **3b - companies**: `resolve` locks its company (and `code:` / `name:` before a new one - R12, R14); a company merge
+- **3b - companies** (found in 3a's review: the register import's company merge locks job rows - `repointCompany` -
+  before it touches company rows, the reverse of the ingest's order; 3b must lock the company rows first): `resolve` locks its company (and `code:` / `name:` before a new one - R12, R14); a company merge
   locks both rows before any repoint (R13); register placement check-and-adopt in one transaction that never merges
   (R15); the operator's match one transaction (R16); contact capture under PersonService's identity locks (R17).
 - **3c - the partner `/changes` feed** (operator 2026-10-18: option **(b)**, the API kept): the one thing the lock does that no row lock does - commits in `at` order, so
