@@ -56,7 +56,7 @@ and red -> Sonar pre-check + clean check -> PR -> CI -> merge -> deploy to test 
 
 ## Status
 
-- 2026-10-18: **done in code**, live in production except the views (masi #118, site #39).
+- 2026-10-18: **done** - live in production (masi 0d627e3, site 84331b4, 2026-10-18 ~20:20).
   - PR 1 (masi #113): `cv_version.language`, one active version per language, an approved translation activatable;
     primary = the newest active version the operator wrote; a second written language refused for now; only
     MasterTranslationService activates (parity re-checked). Rollback order: changeset 066 before the image.
@@ -68,4 +68,3 @@ and red -> Sonar pre-check + clean check -> PR -> CI -> merge -> deploy to test 
     that CV's package; auto-tuning waits for a posting's analysis.
   - Views (masi #118 + site #39): the dashboard lists every active CV, the job page each CV's score; the job list
     keeps sorting by the primary.
-  - Live in production: masi 2cfe94e, site 15b63c0 (2026-10-18 19:20).
