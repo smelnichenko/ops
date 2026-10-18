@@ -170,6 +170,22 @@ pause set and lifted across pods; the other two-pod cases (an expired claim take
 the dashboard) as single-pod tests that play the other pod through the claim columns. PRs wait their turn behind
 monitor #18 and the site's (one open PR at a time).
 
+2026-10-18 (morning): **PR 2 merged, on schnappy-test; production untouched (operator).** One PR at a time:
+- **2a** masi #108 -> 4c3b426 (changeset 060 ran in 228 ms on test). The PR's Sonar gate (project `schnappy-masi-pr`)
+  found 10 issues, all fixed before merge. The one that changed the design: a claim's SQL is no longer put together at
+  query time - `RowClaims.claimWhere(condition)` builds each condition's statement once, at its subclass's construction
+  (a `Claim` only RowClaims makes), and `claim(Claim, id, args...)` binds it. `JobMatchRepository.storeAiMatch` takes
+  the row it read and keys on its id, job and master by SpEL (a mutant dropping that guard turned
+  `aVerdictIsNotStoredOnARowAMergeMovedDuringTheCall` red).
+- **2b** masi #109 -> adf812b (changeset 061, 89 ms).
+- **2c part 1** masi #110 -> 000bac4: the partner rate row (062), per-identity advisory locks for persons, the collector
+  cross-check's conditional writes, `llm_call` claims (063).
+- **2c part 2** masi #111 -> 5390124: the `master_translation` row (064), one RUNNING per user across pods.
+Test env: no backlog to analyse or match, so the claims have not yet run there on real work; no warning or error in
+the pods' logs. A start takes ~4 min on the test pod's 1-CPU limit (sizing, not the claims).
+Left: **enrichment's company claim** (its own PR - the highest-risk piece), the startup repairs (`DomainKeyRepair`,
+`PersonBackfill`) in PR 3.
+
 2026-10-17: the test-time arc closed (forks, contexts, clock waits, CI browser headroom - masi #88-#106); PR 2 resumes,
 split in three, each a PR of its own on the PR 1 claim pieces (`claim/ClaimOwner`, `ClaimRenewer`, `Fence`,
 `ClaimProperties` ttl 60 s / renew 20 s; SQL on `clock_timestamp()`):
