@@ -56,7 +56,16 @@ and red -> Sonar pre-check + clean check -> PR -> CI -> merge -> deploy to test 
 
 ## Status
 
-- 2026-10-18: PR 1 (masi #113, 989261a - `cv_version.language`, one active version per language, an approved
-  translation activatable) merged; live in test and production (masi 4c502bc, changeset 066). PR 2 (scores per
-  language) in progress on `feat/scores-per-language`; PR 3 (packages) and the site's per-language CV page (site
-  `feat/cv-active-per-language`) after it.
+- 2026-10-18: **done in code**, live in production except the views (masi #118, site #39).
+  - PR 1 (masi #113): `cv_version.language`, one active version per language, an approved translation activatable;
+    primary = the newest active version the operator wrote; a second written language refused for now; only
+    MasterTranslationService activates (parity re-checked). Rollback order: changeset 066 before the image.
+  - PR 2 (masi #116): every active CV scores the postings in its user's languages, plus mixed and unknown; a posting in
+    a language with no active CV is skipped until one is activated.
+  - PR 3 (masi #117 + site #38): a package is made from the active CV in the language asked, else the posting's
+    (mixed, unknown or not analysed: the primary) and tuned from that version - the translation borrowing at tune
+    time is gone; none in that language: refused (409) / no auto package; regenerating in another language hands over to
+    that CV's package; auto-tuning waits for a posting's analysis.
+  - Views (masi #118 + site #39): the dashboard lists every active CV, the job page each CV's score; the job list
+    keeps sorting by the primary.
+  - Live in production: masi 2cfe94e, site 15b63c0 (2026-10-18 19:20).
