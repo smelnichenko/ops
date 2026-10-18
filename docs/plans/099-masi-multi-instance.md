@@ -170,6 +170,49 @@ pause set and lifted across pods; the other two-pod cases (an expired claim take
 the dashboard) as single-pod tests that play the other pod through the claim columns. PRs wait their turn behind
 monitor #18 and the site's (one open PR at a time).
 
+2026-10-18 09:45: **PR 3 designed** (a read-only map of every write the IngestLock serialises - W1-W14 below). PR 2's
+status said "PR 3: the startup repairs": PR 3 is the IngestLock's removal, the repairs riding along (DomainKeyRepair is
+already a per-row CAS; it only drops the lock). Facts it stands on:
+- `closeIfNoListingIsOpen` is one `UPDATE ... WHERE NOT EXISTS (open listing)`: under READ COMMITTED its subquery
+  never sees a listing another transaction is opening, and a lock wait re-checks only the job row - so a closer must
+  **lock the job row in its own statement, then check in a new one** (fresh snapshot). Nothing heals "CLOSED job with
+  an open listing" (the repair loop heals only the reverse).
+- `JobListing` and `Company` save their whole row (no `@DynamicUpdate`, no `@Version`): a stale save writes
+  `closed_at = NULL` over a committed close, or a registry code back over a placement taken back.
+- a unique-key race fails one listing, and a run with any failed listing counts no misses (`RegistryService` :90): every
+  transient conflict must be retried, or miss counting goes quiet.
+- Hibernate does not refresh a managed entity when a lock is taken on it: locks are explicit SQL returning fresh rows.
+
+Lock order, every writing transaction: the run's `source_run` row (Fence) -> company identity advisory locks (`code:`
+then `name:`) -> company rows ascending -> job identity advisory locks (`title:` then `fp:`) -> job rows `FOR NO KEY
+UPDATE` ascending -> the listing row `FOR UPDATE` (or a `listing:` advisory lock for a new one) -> PersonService's
+identity locks. Namespace 0x6d617369 (PersonService's), distinct prefixes. `lock_timeout` (the `ingest-wait` property,
+re-meant) bounds request and sweep transactions; a timeout is the 503 / BUSY / sweep skip the lock's tryLocked gave.
+
+Split in four PRs, each the full PR routine; the IngestLock stays taken until 3d, so each lands on a serialised ingest:
+- **3a - jobs and listings**: ingest locks its job then its listing and judges on the locked rows (R1 close vs open,
+  R2 a listing moved off a job, R3 a stale listing save, R6 two reposts); `fp:` / `title:` / `listing:` advisory locks
+  (R4, R5, R18); the merge sweep locks survivor then loser and re-checks the pair (R7, R8); the expiry sweep and the
+  miss count one transaction per job, ascending, conditional statements (R9, R10); a withdrawal follows the survivor
+  under its lock (R11); `ingestOne` retried on deadlock / lock / duplicate-key conflicts; `@DynamicUpdate` on
+  JobListing. The fail-closed `requireHeld()` becomes `JobLocks` - the job ids locked in this transaction, asserted
+  by every job close, merge, reopen and move - plus ArchitectureTest rules on who may call the closing statements.
+- **3b - companies**: `resolve` locks its company (and `code:` / `name:` before a new one - R12, R14); a company merge
+  locks both rows before any repoint (R13); register placement check-and-adopt in one transaction that never merges
+  (R15); the operator's match one transaction (R16); contact capture under PersonService's identity locks (R17).
+- **3c - the partner `/changes` feed**: the one thing the lock does that no row lock does - commits in `at` order, so
+  a follower's `(at, id)` cursor never skips an event committed late by another pod. Needs the operator's choice:
+  (a) exact - an `xid8` column, only rows below the snapshot's xmin served, the cursor `(xid, id)` (an API change,
+  expand/contract); (b) the API kept - `at` from database time, every event-writing transaction bounded
+  (`transaction_timeout`), only `at < now - lag` served (fresher never than the bound).
+- **3d - the IngestLock removed**: the class and every `locked` / `tryLocked` gone, the `ingest_busy` sweep reason
+  renamed (its platform alert changes in PR 4), the tests that pinned the lock re-pinned on row locks, stale comments.
+Tests: every race forced, not timed - one writer parks after its first write, the second starts, the test waits until
+`pg_stat_activity` shows it waiting on a lock, then lets the first commit; one revert check per lock and re-check. Two
+pods in TwoInstancesTest for the plan's rows (one job from both pods, sweeps and merges on both, one pasted URL on both,
+a placement beside an ingest, DomainKeyRepair on both, the feed). A gauge of "CLOSED jobs with an open listing" for
+the live check.
+
 2026-10-18 09:10: **enrichment's company claim merged** - masi #112 -> c87ed98. Changeset 065
 `company.enrich_claimed_by/enrich_claimed_until`, with a precondition that halts unless `company_enrichment`'s id
 sequence hands out one value at a time. A company is claimed only while no visit row of it has an id above the newest
@@ -177,8 +220,7 @@ its due page saw (`seen` = max id - row times come from each pod's clock, ids do
 whose claim is live; the retention leaves such a company all its rows (review found another pod's marker counted as a
 "later visit", deleting the kept row a cut visit could not replace). **Not fenced**, by decision: a visit whose claim
 lapses (its pod stalled past the ttl) finishes - its writes only fill empty fields, so the cost is at most a second
-visit. 20 revert checks red; architecture, concurrency and test-quality reviews all fixed. Left: PR 3 (the startup
-repairs `DomainKeyRepair`, `PersonBackfill`).
+visit. 20 revert checks red; architecture, concurrency and test-quality reviews all fixed. Left: PR 3 (below).
 
 2026-10-18 (morning): **PR 2 merged, on schnappy-test; production untouched (operator).** One PR at a time:
 - **2a** masi #108 -> 4c3b426 (changeset 060 ran in 228 ms on test). The PR's Sonar gate (project `schnappy-masi-pr`)
