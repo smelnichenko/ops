@@ -453,6 +453,7 @@
         force_basic_auth: true
         status_code: 200
       register: _ci_bot_tokens_before
+      no_log: true  # names, ids and each token's last eight characters
 
     - name: Every token of the bot read (one page, not full)
       ansible.builtin.assert:
@@ -605,11 +606,10 @@
       ansible.builtin.debug:
         msg: >-
           {{ ci_bot_user }} (no admin) in {{ _ci_teams | map(attribute='name') | map('regex_replace', '^', ci_bot_org ~ '/')
-          | join(', ') }}; tokens ci-*-{{ _ci_stamp }} ({{ ci_bot_tokens | map(attribute='property') | join(', ') }})
-          and registry_user in Vault {{ vault_prefix }}/woodpecker-ci. The cluster's woodpecker-ci-secrets takes them at
-          External Secrets' next refresh (1 h) - at once: kubectl annotate externalsecret woodpecker-ci-secrets-es -n
-          woodpecker force-sync=$(date +%s) --overwrite. registry_user/registry_token come from there only where
-          infra's ExternalSecret maps them from woodpecker-ci.
+          | join(', ') }}; its tokens ci-*-{{ _ci_stamp }} and registry_user in Vault {{ vault_prefix }}/woodpecker-ci.
+          The cluster's woodpecker-ci-secrets takes them at External Secrets' next refresh (1 h) - at once: kubectl
+          annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite.
+          registry_user/registry_token come from there only where infra's ExternalSecret maps them from woodpecker-ci.
 
     # ── retiring the admin's CI tokens (--tags retire) ─────────────────
     - name: The admin's CI tokens, as .env names them
@@ -677,6 +677,7 @@
         status_code: 200
       loop: "{{ range(1, 11) | list }}"
       register: _ci_admin_tokens
+      no_log: true  # names, ids and each token's last eight characters
       tags: [never, retire]
 
     - name: Every one of the admin's tokens read (the last page not full)
