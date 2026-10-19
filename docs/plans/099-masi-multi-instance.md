@@ -183,8 +183,8 @@ already a per-row CAS; it only drops the lock). Facts it stands on:
   transient conflict must be retried, or miss counting goes quiet.
 - Hibernate does not refresh a managed entity when a lock is taken on it: locks are explicit SQL returning fresh rows.
 
-Lock order, every writing transaction: the run's `source_run` row (Fence) -> company identity advisory locks (`code:`
-then `name:`) -> company rows ascending -> job identity advisory locks (`title:<titleKey>` - the title key alone, since
+Lock order, every writing transaction: the run's `source_run` row (Fence) -> company identity advisory locks (`code:`,
+then `company:` - the name; PersonService owns `name:` - then `domain:`, the web domain, as built in 3b) -> company rows ascending -> job identity advisory locks (`title:<titleKey>` - the title key alone, since
 two agreeing employer rows match one job - then `fp:`) -> job rows `FOR NO KEY UPDATE` ascending -> PersonService's
 identity locks. A listing has no lock of its own: every writer of a listing holds its JOB's lock and re-reads the
 listing under it (as built in 3a; `@DynamicUpdate` on JobListing). Namespace 0x6d617369 (PersonService's), distinct
@@ -202,7 +202,13 @@ Split in four PRs, each the full PR routine; the IngestLock stays taken until 3d
   under its lock (R11); `ingestOne` retried on deadlock / lock / duplicate-key conflicts; `@DynamicUpdate` on
   JobListing. The fail-closed `requireHeld()` becomes `JobLocks` - the job ids locked in this transaction, asserted
   by every job close, merge, reopen and move - plus ArchitectureTest rules on who may call the closing statements.
-- **3b - companies** (found in 3a's review: the register import's company merge locks job rows - `repointCompany` -
+- **3b - companies** (masi #120, 2026-10-19; as built: the identities `code:` / `company:` / `domain:` - a company's web
+  domain is an identity, held by every writer of a site, or two pods make two companies for one site; every company
+  save under CompanyService's locks (ArchUnit); edits by id on the row read under its lock; placements one transaction
+  that never merges, the operator's match one transaction (the earlier "no" withdrawn inside it, `withdrawRejection`
+  gone); `adoptRegistryCode` gone; busy answered once (503 + Retry-After, `RegistryBusyException`), request paths never
+  retry a lock-wait run-out; the register's bring-up-to-date pass in id-ordered locked chunks, dormancy skipping the
+  companies the register index still lists; 73 mutants red) (found in 3a's review: the register import's company merge locks job rows - `repointCompany` -
   before it touches company rows, the reverse of the ingest's order; 3b must lock the company rows first): `resolve` locks its company (and `code:` / `name:` before a new one - R12, R14); a company merge
   locks both rows before any repoint (R13); register placement check-and-adopt in one transaction that never merges
   (R15); the operator's match one transaction (R16); contact capture under PersonService's identity locks (R17).
