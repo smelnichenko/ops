@@ -286,3 +286,33 @@ concurrency bound. Package creation needs nothing: (job, cv_version) is unique a
 **PR 2c — the rest of the single-pod state.** Enrichment's company claim, `llm_call` claims (renewed in flight, LOST on
 expiry), the `master_translation` row, the partner rate row, idempotent startup repairs (`DomainKeyRepair`,
 `PersonBackfill`, `CollectorRegistry`).
+
+2026-10-19 16:30: **3d LIVE in production** - masi #122 merged as 88aa668, promoted (infra 3ca3144). As built:
+- the IngestLock is gone: every writer meets at the rows and identities it writes, in the order above;
+- each sweep leaves a held job to its next pass and counts it: `masi_sweep_skipped_total{reason="lock_wait"}`, once
+  per job, registered at 0;
+- a request (paste, partner push, the operator's company writes, the register match) waits one lock wait in all,
+  measured only by the time its lock statements actually waited, and its transaction has
+  `transaction_timeout` = 3 lock waits (SET LOCAL). A timeout found anywhere in the failure (55P03, 25P04, the
+  rollback failure's application exception) is answered busy (503), never retried on a request;
+- a busy partner push keeps what it stored and its run row says "k of n stored";
+- the partner `/changes` feed returns 404 unless `MASI_PARTNER_CHANGES_FEED=true` (shipped false) until 3c;
+- `MASI_MAX_CONCURRENT_INGESTS` (3 per pod) under an explicit Hikari pool (`MASI_DB_POOL_SIZE` 10, read from the
+  pool itself);
+- DomainKeyRepair: one row per transaction under `lock_timeout`, holding `domain:<new key>`, held rows skipped and
+  counted;
+- the gauge `masi_jobs_closed_with_open_listing` and its `_counted_timestamp_seconds`.
+
+Alerts, in platform before the deploy: MasiSweepStarved on `lock_wait|ingest_busy`, per pod (98595ad);
+MasiJobClosedWithOpenListing and MasiJobClosedWithOpenListingNotCounted (48b8b27).
+
+Reviews: two rounds of concurrency, architecture and test-quality review, every finding fixed. Revert checks:
+3d's list all red (K2 found not equivalent in round 2 and killed by a paste behind an uncommitted listing insert),
+3a 46/46, 3b re-run on the final code.
+
+Live check:
+- test: cvee and bolt ingested at once, both OK and complete, the skip counter and the gauge at 0, 0 errors;
+- production at 16:30: the same metrics, cvee run 250 OK and complete (199 listings), 40/40 enabled sources OK.
+
+Next: PR 4 (chart maxSurge / PDB / preStop, the browser's maxParallel) before masi gets a second replica; 3c (the
+feed) last, with the partner API off.
