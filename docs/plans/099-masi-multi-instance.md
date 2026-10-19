@@ -293,7 +293,8 @@ expiry), the `master_translation` row, the partner rate row, idempotent startup 
   per job, registered at 0;
 - a request (paste, partner push, the operator's company writes, the register match) waits one lock wait in all,
   measured only by the time its lock statements actually waited, and its transaction has
-  `transaction_timeout` = 3 lock waits (SET LOCAL). A timeout found anywhere in the failure (55P03, 25P04, the
+  `transaction_timeout` = 3 lock waits + 1 s (16 s in production; SET LOCAL); a statement counts against the one
+  wait only beyond a 50 ms uncontended floor. A timeout found anywhere in the failure (55P03, 25P04, the
   rollback failure's application exception) is answered busy (503), never retried on a request;
 - a busy partner push keeps what it stored and its run row says "k of n stored";
 - the partner `/changes` feed returns 404 unless `MASI_PARTNER_CHANGES_FEED=true` (shipped false) until 3c;
@@ -307,8 +308,8 @@ Alerts, in platform before the deploy: MasiSweepStarved on `lock_wait|ingest_bus
 MasiJobClosedWithOpenListing and MasiJobClosedWithOpenListingNotCounted (48b8b27).
 
 Reviews: two rounds of concurrency, architecture and test-quality review, every finding fixed. Revert checks:
-3d's list all red (K2 found not equivalent in round 2 and killed by a paste behind an uncommitted listing insert),
-3a 46/46, 3b re-run on the final code.
+3d 73/73 red (K2 found not equivalent in round 2 and killed by a paste behind an uncommitted listing insert), 3a
+46/46, 3b 73/73, all on the final code; `clean check` on main 88aa668: 2116 tests, 0 failed.
 
 Live check:
 - test: cvee and bolt ingested at once, both OK and complete, the skip counter and the gauge at 0, 0 errors;
