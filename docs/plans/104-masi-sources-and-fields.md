@@ -54,6 +54,18 @@ model that block searching from abroad.
 10. **Research-only sources at stated risk** (approved): Duunitori, cvbankas, JustJoin.it, The Hub, No Fluff Jobs,
     Landing.jobs, Remotive. Each records its terms and robots facts in `docs/sources.md`.
 
+11. **People: a profile link and the operator's own photo** (operator 2026-10-19, "do both", after being advised
+    against collecting faces automatically). No automatic photo collection: LinkedIn sits behind a login, a Gravatar
+    lookup by e-mail would be enrichment, and a team-page face matched to a name is guesswork. Systematically scraping
+    faces also very likely falls outside GDPR's household exemption.
+    - `person.profile_url`: http(s) only. The operator sets it on the person's page (their public team page or
+      profile). The site shows it as a link (`rel="noopener noreferrer"`); masi never fetches it.
+    - The operator's photo: uploaded on the person's page; JPEG/PNG/WebP checked by content, at most 2 MB. Re-encoded
+      on the server so EXIF and GPS are dropped, and stored with the owner's user id (a `person_photo` row). Served
+      only to the owner with `Cache-Control: private`, and never sent anywhere else (no mail, report or partner API).
+      Removed when the operator removes it, and when the person is erased (the erase already writes a suppression row).
+    - masi backend first, then the site's person page.
+
 ## Out regardless
 
 Each of these needs the operator to name it explicitly:
