@@ -285,31 +285,48 @@ for label, edit, said in (
     check(f"refused: {label} - said; no token minted, Vault not written",
           (rc != 0, said in out, len(bot_tokens(s4)), v4["writes"]), (True, True, 6, []))
 
-# ── a failure after a mint: the new tokens deleted again, Vault unchanged ────────────────────────────────────────
-for label, fault in (
-        ("Vault's version moved on between the read and the write (cas refused)",
-         ("vault", {"method": "POST", "path": "woodpecker-ci", "status": 400,
-                    "error": "check-and-set parameter did not match the current version"})),
+# ── a failure after a mint: the new tokens deleted again, Vault unchanged (or as another writer left it) ───────────
+V3 = v3["kv"]["schnappy/woodpecker-ci"]["data"]
+for label, fault, want_vault in (
+        ("someone writes Vault between the read and the write (the version read refuses this write)",
+         ("vault", {"method": "GET", "path": "woodpecker-ci", "bump": True}),
+         {"data": dict(V3, someone="else"), "version": 7}),
         ("the second token's mint fails", ("forgejo", {"method": "POST", "path": "/users/woodpecker-ci/tokens$",
-                                                        "status": 500, "nth": 2})),
-        ("the registry token's proof fails", ("forgejo", {"method": "GET", "path": "^/api/v1/packages/", "status": 404})),
+                                                        "status": 500, "nth": 2}), {"data": V3, "version": 6}),
+        ("Forgejo makes a token with more scope than asked (all)",
+         ("forgejo", {"method": "POST", "path": "/users/woodpecker-ci/tokens$", "scopes": ["all"], "nth": 3}),
+         {"data": V3, "version": 6}),
+        ("the registry token's proof fails", ("forgejo", {"method": "GET", "path": "^/api/v1/packages/", "status": 404}),
+         {"data": V3, "version": 6}),
 ):
-    reset(copy.deepcopy(s3["state"]), {"schnappy/woodpecker-ci": {"data": v3["kv"]["schnappy/woodpecker-ci"]["data"],
-                                                                   "version": 6}})
+    reset(copy.deepcopy(s3["state"]), {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
     (vault if fault[0] == "vault" else forgejo)("POST", "/_fail", fault[1])
     rc, out = run()
     s5, v5 = fstate(), kv()
-    check(f"failure: {label} - fails, said; this run's tokens deleted again (the bot's as before), Vault unchanged",
+    check(f"failure: {label} - fails, said; this run's tokens deleted again (the bot's as before), Vault "
+          + ("as the other writer left it" if "someone" in want_vault["data"] else "unchanged"),
           (rc != 0, "this run's new tokens deleted again" in out, [t["id"] for t in bot_tokens(s5)],
-           v5["kv"]["schnappy/woodpecker-ci"]),
-          (True, True, [t["id"] for t in toks3], {"data": v3["kv"]["schnappy/woodpecker-ci"]["data"], "version": 6}))
+           v5["kv"]["schnappy/woodpecker-ci"]), (True, True, [t["id"] for t in toks3], want_vault))
+
+# ── Forgejo leaving the bot an admin (its edit not applied): refused before a team or a token is touched ──────────
+st = copy.deepcopy(s3["state"])
+st["users"][BOT]["is_admin"] = True
+reset(st, {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
+forgejo("POST", "/_fail", {"method": "PATCH", "path": "/admin/users/woodpecker-ci$", "ignore": ["admin"]})
+rc, out = run()
+s8 = fstate()
+check("an admin bot Forgejo will not make a user: refused, said - no team changed, no token minted, Vault not written",
+      (rc != 0, "REFUSED: woodpecker-ci is woodpecker-ci, admin True" in " ".join(out.split()),
+       [e["method"] + " " + e["path"] for e in s8["log"] if e["method"] != "GET" and "/admin/users" not in e["path"]],
+       kv()["writes"]), (True, True, [], []))
 
 # ── Vault: a sealed one refuses, a missing path is a first install ───────────────────────────────────────────────
 reset()
 vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "error": "Vault is sealed"})
 rc, out = run()
-check("Vault sealed: fails before any token is minted, nothing written",
-      (rc != 0, bot_tokens(fstate()), kv()["writes"]), (True, [], []))
+check("Vault sealed: fails before any token is minted (none asked for), nothing written",
+      (rc != 0, [e["path"] for e in fstate()["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")],
+       kv()["writes"]), (True, [], []))
 reset(kv={})
 rc, out = run()
 s6, v6 = fstate(), kv()
@@ -349,6 +366,10 @@ rc, out = run("--tags", "retire", env=RETIRE_ENV)
 check("retire while Vault still hands CI one of the admin's tokens: refused, nothing deleted",
       (rc != 0, "still holds a token of the admin" in out, admin_names(fstate())),
       (True, True, ["argocd-readonly", "woodpecker-clone", "woodpecker-infra"]))
+reset(kv={"schnappy/woodpecker-ci": {"data": dict(VAULT_REST), "version": 1}})
+rc, out = run("--tags", "retire", env=RETIRE_ENV)
+check("retire while Vault holds none of the bot's (setup-ci-bot never ran): refused, said, nothing deleted",
+      (rc != 0, "run task deploy:ci-bot first" in " ".join(out.split()), len(admin_names(fstate()))), (True, True, 3))
 reset()
 rc, out = run("--tags", "retire")
 check("retire with no admin token named in .env: refused, nothing deleted",
@@ -414,12 +435,29 @@ check("seed: a first install without them in .env leaves them missing (for setup
 rc, after, out = seed_run({"schnappy/woodpecker-ci": {"data": dict(BOTV), "version": 2}}, SEED_ENV)
 check("seed: Vault's four kept when .env has none of them", (rc, after["kv"]["schnappy/woodpecker-ci"]["data"]),
       (0, dict(SEED_OUT, **BOTV)))
+
+
+def failed_at(out):
+    """The task the run failed at: the last TASK header before its first fatal line."""
+    lines = out.splitlines()
+    first = next((i for i, x in enumerate(lines) if x.startswith(("fatal:", "failed:"))), len(lines))
+    return next((x for x in reversed(lines[:first]) if x.startswith("TASK [")), "")
+
+
 vault("POST", "/_reset", {"schnappy/woodpecker-ci": {"data": dict(BOTV), "version": 2}})
 vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "error": "Vault is sealed"})
 r = subprocess.run([AP, "-i", "localhost,", SEED_PLAY], capture_output=True, text=True, cwd=W,
                    env=dict(ENV, **SEED_ENV, **OLD_ENV))
-check("seed: a sealed Vault read fails the seed - nothing written over the bot's tokens",
-      (r.returncode != 0, kv()["writes"], kv()["kv"]["schnappy/woodpecker-ci"]["data"]), (True, [], BOTV))
+check("seed: a sealed Vault fails the seed at its read - nothing written over the bot's tokens",
+      (r.returncode != 0, "Read the woodpecker-ci secret" in failed_at(r.stdout), kv()["writes"],
+       kv()["kv"]["schnappy/woodpecker-ci"]["data"]), (True, True, [], BOTV))
+vault("POST", "/_reset", {"schnappy/woodpecker-ci": {"data": dict(BOTV), "version": 2}})
+vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "bump": True})
+r = subprocess.run([AP, "-i", "localhost,", SEED_PLAY], capture_output=True, text=True, cwd=W,
+                   env=dict(ENV, **SEED_ENV, **OLD_ENV))
+check("seed: someone writes Vault between its read and its write - the version read refuses it, theirs kept",
+      (r.returncode != 0, kv()["kv"]["schnappy/woodpecker-ci"]), (True, {"data": dict(BOTV, someone="else"),
+                                                                        "version": 3}))
 
 # ── no secret on a command line ─────────────────────────────────────────────────────────────────────────────────
 canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])

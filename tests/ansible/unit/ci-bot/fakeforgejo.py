@@ -4,8 +4,9 @@ caller sees them (permissions from the caller's teams, as Forgejo computes them)
 basic auth only to list/mint them, as Forgejo wants). Every request is recorded (who asked, how authenticated, its
 body); every secret it knows - passwords set, tokens issued - is listed for the argv watch.
 
-Test-only routes: GET /_state, POST /_reset {state}, POST /_fail {method, path (regex), status, nth} - the nth matching
-request answered with status (a fault injected), GET /_secrets.
+Test-only routes: GET /_state, POST /_reset {state}, GET /_secrets, POST /_fail {method, path (regex), nth, and: status -
+the nth matching request answered with it; or ignore: [fields] - an edit answered 200, those fields not applied; or
+scopes: [...] - a token made with these}.
 Port: bound to a free one, written to the file named by argv[1].
 """
 import base64
@@ -113,11 +114,14 @@ class H(BaseHTTPRequestHandler):
             return self.test_route(method, path, body)
         who = self.auth()
         LOG.append({"method": method, "path": path, "auth": who[:2] if who else None, "body": body})
+        fault = {}
         for f in FAULTS:
             if f["method"] == method and re.search(f["path"], path):
                 f["seen"] = f.get("seen", 0) + 1
                 if f["seen"] == f.get("nth", 1):
-                    return self.answer(f["status"], {"message": "injected"})
+                    if "status" in f:
+                        return self.answer(f["status"], {"message": "injected"})
+                    fault = f  # Forgejo doing otherwise than asked: an edit not applied, a token's scopes its own
         if not path.startswith("/api/v1/"):
             return self.answer(404, {"message": "not found"})
         p = path[len("/api/v1"):]
@@ -167,7 +171,7 @@ class H(BaseHTTPRequestHandler):
                 return self.answer(422, {"message": "login_name and source_id required"})
             for k, f in (("password", "password"), ("admin", "is_admin"), ("must_change_password", "must_change_password"),
                          ("prohibit_login", "prohibit_login"), ("active", "active")):
-                if k in body:
+                if k in body and k not in fault.get("ignore", []):  # a field Forgejo will not change
                     u[f] = body[k]
             return self.answer(200, user_json(u))
         if p == "/user" and method == "GET":
@@ -257,7 +261,7 @@ class H(BaseHTTPRequestHandler):
                 S["seq"] += 1
                 sha1 = secrets.token_hex(20)
                 t = {"id": S["seq"], "user": owner, "name": body["name"], "sha1": sha1,
-                     "token_last_eight": sha1[-8:], "scopes": sorted(body["scopes"])}
+                     "token_last_eight": sha1[-8:], "scopes": sorted(fault.get("scopes") or body["scopes"])}
                 S["tokens"][str(t["id"])] = t
                 return self.answer(201, {k: t[k] for k in ("id", "name", "sha1", "token_last_eight", "scopes")})
             if method == "DELETE" and tid:
@@ -272,7 +276,7 @@ class H(BaseHTTPRequestHandler):
     def bad_team(body):
         if not body or not body.get("name"):
             return "name required"
-        if body.get("permission") not in ("read", "write", "admin"):
+        if body.get("permission", "read") not in ("read", "write", "admin"):
             return "permission must be read, write or admin"
         um = body.get("units_map") or {}
         if set(um) - UNITS or set(um.values()) - set(MODES[:4]):
@@ -281,13 +285,18 @@ class H(BaseHTTPRequestHandler):
 
     @staticmethod
     def set_team(t, body):
-        um = dict(body.get("units_map") or {})
-        perm = body["permission"]
-        if perm != "admin" and um:  # Forgejo: the team's level is its units' lowest
-            perm = min(um.values(), key=rank)
-        t.update(name=body["name"], description=body.get("description", ""), permission=perm, units_map=um,
-                 includes_all_repositories=bool(body.get("includes_all_repositories", False)),
-                 can_create_org_repo=bool(body.get("can_create_org_repo", False)))
+        """A create sets every field (false where left out); an edit only those it sends - the others stay as they
+        were (Forgejo's EditTeamOption: pointers, nil = unchanged)."""
+        create = "units_map" not in t
+        if create or "units_map" in body:
+            t["units_map"] = dict(body.get("units_map") or {})
+        perm = body.get("permission", t.get("permission", "read"))
+        if perm != "admin" and t["units_map"]:  # Forgejo: the team's level is its units' lowest
+            perm = min(t["units_map"].values(), key=rank)
+        t.update(name=body["name"], permission=perm)
+        for k, default in (("description", ""), ("includes_all_repositories", False), ("can_create_org_repo", False)):
+            if create or k in body:
+                t[k] = body.get(k, default)
 
     def test_route(self, method, path, body):
         global S, LOG, FAULTS

@@ -3,8 +3,8 @@ write through it: versions, check-and-set (a write whose cas is not the current 
 a missing path answered 404. Only the token in the file named by argv[2] is accepted.
 
 Test-only routes: GET /_state, POST /_reset {path: {"data": {...}, "version": n}}, POST /_fail {method, path (regex),
-status, nth} - the nth matching request answered with status; POST /_bump {path} - a write by someone else (the version
-moves on, the data stays).
+nth, and status - the nth matching request answered with it - or bump: someone else writes the path (someone=else, the
+version on) right after that read is answered}.
 Port: bound to a free one, written to the file named by argv[1].
 """
 import json
@@ -44,16 +44,17 @@ class H(BaseHTTPRequestHandler):
         if path == "/_fail":
             FAULTS.append(body)
             return self.answer(200, {})
-        if path == "/_bump":
-            KV[body["path"]]["version"] += 1
-            return self.answer(200, {})
         if self.headers.get("X-Vault-Token") != TOKEN:
             return self.answer(403, {"errors": ["permission denied"]})
+        bump = False
         for f in FAULTS:
             if f["method"] == method and re.search(f["path"], path):
                 f["seen"] = f.get("seen", 0) + 1
                 if f["seen"] == f.get("nth", 1):
-                    return self.answer(f["status"], {"errors": [f.get("error", "injected")]})
+                    if f.get("bump"):
+                        bump = True  # someone else writes the path right after this read
+                    else:
+                        return self.answer(f["status"], {"errors": [f.get("error", "injected")]})
         if path.endswith("/auth/token/lookup-self"):
             return self.answer(200, {"data": {"policies": ["root"], "ttl": 0}})
         m = re.match(r"^/v1/secret/data/(.+)$", path)
@@ -64,9 +65,12 @@ class H(BaseHTTPRequestHandler):
             if key not in KV:
                 return self.answer(404, {"errors": []})
             e = KV[key]
-            return self.answer(200, {"data": {"data": e["data"], "metadata": {
+            self.answer(200, {"data": {"data": e["data"], "metadata": {
                 "version": e["version"], "created_time": "2026-10-20T00:00:00Z", "deletion_time": "",
                 "destroyed": False, "custom_metadata": None}}})
+            if bump:
+                KV[key] = {"data": dict(e["data"], someone="else"), "version": e["version"] + 1}
+            return None
         if method in ("POST", "PUT"):
             cas = (body.get("options") or {}).get("cas")
             current = KV.get(key, {}).get("version", 0)
