@@ -206,7 +206,8 @@ def kinds(toks):
 
 def vault_expect(toks, rest=VAULT_REST):
     by = {t["name"].split("-")[1]: t["sha1"] for t in toks}
-    return dict(rest, infra_repo_token=by["infra"], registry_token=by["registry"], clone_token=by["clone"],
+    return dict(rest, infra_repo_token=by.get("infra"), registry_token=by.get("registry"),
+                clone_token=by.get("clone"),
                 registry_user=BOT)
 
 
@@ -296,8 +297,8 @@ for label, fault, want_vault in (
         ("Forgejo makes a token with more scope than asked (all)",
          ("forgejo", {"method": "POST", "path": "/users/woodpecker-ci/tokens$", "scopes": ["all"], "nth": 3}),
          {"data": V3, "version": 6}),
-        ("the registry token's proof fails", ("forgejo", {"method": "GET", "path": "^/api/v1/packages/", "status": 404}),
-         {"data": V3, "version": 6}),
+        ("the registry token's proof fails",
+         ("forgejo", {"method": "GET", "path": "^/api/v1/packages/", "status": 404}), {"data": V3, "version": 6}),
 ):
     reset(copy.deepcopy(s3["state"]), {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
     (vault if fault[0] == "vault" else forgejo)("POST", "/_fail", fault[1])
@@ -307,6 +308,19 @@ for label, fault, want_vault in (
           + ("as the other writer left it" if "someone" in want_vault["data"] else "unchanged"),
           (rc != 0, "this run's new tokens deleted again" in out, [t["id"] for t in bot_tokens(s5)],
            v5["kv"]["schnappy/woodpecker-ci"]), (True, True, [t["id"] for t in toks3], want_vault))
+
+# ── Forgejo not applying a team's units (an edit answered 200, the units left as they were): refused on reading back ──
+st = copy.deepcopy(s3["state"])
+next(t for t in st["teams"].values() if t["name"] == "ci")["units_map"]["repo.pulls"] = "write"
+reset(st, {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
+forgejo("POST", "/_fail", {"method": "PATCH", "path": "^/api/v1/teams/[0-9]+$", "ignore": ["units_map"]})
+rc, out = run()
+s9 = fstate()
+check("a team whose units Forgejo leaves wider than asked: refused on reading it back, said - no token minted, Vault "
+      "not written",
+      (rc != 0, "REFUSED: team schnappy/ci reads back" in " ".join(out.split()),
+       [e["path"] for e in s9["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")], kv()["writes"]),
+      (True, True, [], []))
 
 # ── Forgejo leaving the bot an admin (its edit not applied): refused before a team or a token is touched ──────────
 st = copy.deepcopy(s3["state"])
@@ -410,6 +424,11 @@ OLD_ENV = {"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA, "WOODPECKER_CLONE_TOKEN":
            "WOODPECKER_REGISTRY_USER": "forgejo_admin", "WOODPECKER_REGISTRY_TOKEN": ADMIN_PW}
 
 
+
+def wci(state):
+    """Vault's woodpecker-ci data in a fake Vault state, None where the path is missing."""
+    return state["kv"].get("schnappy/woodpecker-ci", {}).get("data")
+
 def seed_run(kvs, env):
     vault("POST", "/_reset", kvs)
     r = subprocess.run([AP, "-i", "localhost,", SEED_PLAY], capture_output=True, text=True, cwd=W,
@@ -421,19 +440,19 @@ rc, after, out = seed_run({"schnappy/woodpecker-ci": {"data": dict(BOTV, custom_
                                                       "version": 7}}, dict(SEED_ENV, **OLD_ENV))
 check("seed: Vault's CI bot four kept over .env's old admin values; .env's other properties written; one it does not "
       "know kept; written with the version read (cas 7)",
-      (rc, after["kv"]["schnappy/woodpecker-ci"]["data"], [w["cas"] for w in after["writes"]]),
+      (rc, wci(after), [w["cas"] for w in after["writes"]]),
       (0, dict(SEED_OUT, custom_extra="keep-me", **BOTV), [7]))
 rc, after, out = seed_run({}, dict(SEED_ENV, **{k: "vagrant-" + k for k in OLD_ENV}))
 check("seed: a first install (the path missing) takes the four from .env where set (the Vagrant copy's placeholders)",
-      (rc, after["kv"]["schnappy/woodpecker-ci"]["data"], [w["cas"] for w in after["writes"]]),
+      (rc, wci(after), [w["cas"] for w in after["writes"]]),
       (0, dict(SEED_OUT, infra_repo_token="vagrant-WOODPECKER_INFRA_REPO_TOKEN",
                clone_token="vagrant-WOODPECKER_CLONE_TOKEN", registry_user="vagrant-WOODPECKER_REGISTRY_USER",
                registry_token="vagrant-WOODPECKER_REGISTRY_TOKEN"), [0]))
 rc, after, out = seed_run({}, SEED_ENV)
 check("seed: a first install without them in .env leaves them missing (for setup-ci-bot) - never an empty value",
-      (rc, after["kv"]["schnappy/woodpecker-ci"]["data"]), (0, SEED_OUT))
+      (rc, wci(after)), (0, SEED_OUT))
 rc, after, out = seed_run({"schnappy/woodpecker-ci": {"data": dict(BOTV), "version": 2}}, SEED_ENV)
-check("seed: Vault's four kept when .env has none of them", (rc, after["kv"]["schnappy/woodpecker-ci"]["data"]),
+check("seed: Vault's four kept when .env has none of them", (rc, wci(after)),
       (0, dict(SEED_OUT, **BOTV)))
 
 

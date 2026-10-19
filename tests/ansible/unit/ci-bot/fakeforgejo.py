@@ -202,7 +202,7 @@ class H(BaseHTTPRequestHandler):
                 err = self.bad_team(body)
                 if err:
                     return self.answer(422, {"message": err})
-                self.set_team(t, body)
+                self.set_team(t, {k: v for k, v in body.items() if k not in fault.get("ignore", [])})
                 return self.answer(200, team_json(t))
             if rest == "/members" and method == "GET":
                 return self.answer(200, pg([user_json(S["users"][x]) for x in t["members"]]))
