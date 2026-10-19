@@ -740,7 +740,7 @@ CI/CD pipeline execution via Woodpecker CI with Kubernetes backend. Pipelines tr
 - **Image builds:** Kaniko (unprivileged, no Docker daemon needed)
 - **Deploy step:** `update-infra` commits image tags to `values.yaml` in `schnappy/infra` repo; Argo CD handles actual deployment
 - **Secrets:** All via Vault + ESO (single source of truth):
-  - `woodpecker-ci-secrets` — ESO from `secret/schnappy/forgejo` (registry_user, registry_token) + `secret/schnappy/woodpecker-ci` (infra_repo_token, sonar, nexus, nvd)
+  - `woodpecker-ci-secrets` — ESO from `secret/schnappy/woodpecker-ci`. Its Forgejo credentials (infra_repo_token, registry_user, registry_token, clone_token) are the NON-admin `woodpecker-ci` account's: `task deploy:ci-bot` (`setup-ci-bot.yml`) makes the account and its teams `schnappy/ci` (code write on infra alone, packages write) and `schnappy/ci-clone` (code read on what pipelines clone), mints one token per use (write:repository / write:package / read:repository) and writes them there, every other property kept; each run rotates them. `seed-vault-secrets.yml` keeps those four as Vault has them (.env only for a first install). Sonar, nexus, nvd, renovate from .env via the seed. `task deploy:ci-bot:retire-admin-tokens` deletes the admin's tokens CI used before
   - `woodpecker-forgejo-secret` — ESO from `secret/schnappy/woodpecker-forgejo` (client_id, client_secret)
   - `woodpecker-default-agent-secret` — ESO from `secret/schnappy/woodpecker` (agent-secret)
   - ExternalSecret manifests in `clusters/production/cluster-config/` (Argo CD cluster-config Application)

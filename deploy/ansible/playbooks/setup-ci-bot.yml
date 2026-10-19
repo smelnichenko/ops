@@ -1,0 +1,712 @@
+---
+# Woodpecker CI's own Forgejo account, so no pipeline holds Forgejo's admin: Kaniko pushed images with the admin's
+# password (Vault forgejo/admin_password) and every CD pipeline pushed image tags to infra with a token of the admin's
+# (setup-woodpecker minted it: read/write on every repository Forgejo has).
+#
+#   user    woodpecker-ci - no admin; a random password, set anew each run and kept nowhere (the tokens are what CI
+#           holds). Made through Forgejo's API: the password in a request's body, never on a command line
+#   teams   schnappy/ci        code WRITE on infra alone + packages write (the container registry: every schnappy image)
+#           schnappy/ci-clone  code READ on the repositories a pipeline clones (monitor's depcheck: admin chat chess masi)
+#           each holding the bot alone - a team of that name with anyone else in it is refused, never changed; a
+#           repository the team should not have is taken off it. Then what the bot can do is read back AS the bot,
+#           over every repository of the org: push on infra alone, admin on none, read where it clones
+#   tokens  on the bot, one per use, its scope alone: infra push write:repository, the registry write:package, clone
+#           read:repository. Minted under new names each run, each proven (infra pushable, the registry read, every
+#           clone repository read), written to Vault - and only then the bot's older ones deleted, but for the ones
+#           Vault held until now: the cluster's Secret holds those until External Secrets refreshes (1 h, or forced).
+#           A mint, a proof or the Vault write failing deletes this run's new tokens again, Vault unchanged
+#   Vault   {{ vault_prefix }}/woodpecker-ci: infra_repo_token, registry_user, registry_token, clone_token - read,
+#           merged, written back with the version read (cas: a write between them fails this one): every other
+#           property of the path kept (seed-vault-secrets.yml keeps these four in turn)
+#
+# On the Pi holding the VIP: Forgejo on its loopback, Vault too (seed-vault-secrets.yml's way). No preview: a run
+# rotates the bot's password and its tokens.
+#
+# Retiring the admin's tokens CI used (once CI runs on the bot's, proven): --tags retire deletes the admin's tokens
+# whose values .env still names as WOODPECKER_INFRA_REPO_TOKEN and WOODPECKER_CLONE_TOKEN (matched by their last
+# eight characters, as Forgejo lists them) - refused while Vault's woodpecker-ci still holds any of them, or while its
+# registry_user is not the bot.
+#
+# Usage:
+#   task deploy:ci-bot                          # the bot, its teams, new tokens in Vault
+#   task deploy:ci-bot:retire-admin-tokens      # afterwards: the admin's CI tokens deleted
+- name: Woodpecker CI's Forgejo account, its teams and its tokens in Vault
+  hosts: pis
+  become: true
+  gather_facts: false
+
+  vars:
+    vault_prefix: schnappy
+    vault_addr: "https://127.0.0.1:8200"
+    vault_ca_cert: /etc/vault.d/tls/ca-cert.pem
+    vault_root_token_file: /etc/vault-unseal/root-token
+    forgejo_api: "http://localhost:3000/api/v1"
+    ci_bot_user: woodpecker-ci
+    ci_bot_email: woodpecker-ci@pmon.dev
+    ci_bot_org: schnappy
+    ci_bot_push_repo: infra
+    # what a pipeline clones besides its own repository (Woodpecker clones that one itself)
+    ci_bot_clone_repos: [admin, chat, chess, masi]
+    ci_bot_teams:
+      - name: ci
+        description: "Woodpecker CI: image tags pushed to infra, images to the registry"
+        permission: write
+        units_map: {repo.code: write, repo.packages: write}
+        repos: ["{{ ci_bot_push_repo }}"]
+      - name: ci-clone
+        description: "Woodpecker CI: the repositories a pipeline clones, read"
+        permission: read
+        units_map: {repo.code: read}
+        repos: "{{ ci_bot_clone_repos }}"
+    # kind: the token's name is ci-<kind>-<UTC time>; property: its key in Vault's woodpecker-ci
+    ci_bot_tokens:
+      - {kind: infra, property: infra_repo_token, scopes: ["write:repository"]}
+      - {kind: registry, property: registry_token, scopes: ["write:package"]}
+      - {kind: clone, property: clone_token, scopes: ["read:repository"]}
+    _ci_token_name: "^ci-({{ ci_bot_tokens | map(attribute='kind') | join('|') }})-[0-9]{8}T[0-9]{6}$"
+
+  tasks:
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+      tags: [always]
+
+    - name: No preview - a run rotates the bot's password and its tokens
+      ansible.builtin.fail:
+        msg: setup-ci-bot has no check mode
+      when: ansible_check_mode
+      tags: [always]
+
+    - name: The admin's credentials, and a bot that is not the admin
+      ansible.builtin.assert:
+        that:
+          - forgejo_admin_password | default('') | length > 0
+          - ci_bot_user != forgejo_admin_user
+          - vault_prefix | length > 0
+        fail_msg: >-
+          needs forgejo_admin_password (FORGEJO_ADMIN_PASSWORD in .env - the task loads it), a bot named otherwise than
+          the admin ({{ ci_bot_user }}) and a vault_prefix
+        quiet: true
+      tags: [always]
+
+    - name: Read Vault root token
+      ansible.builtin.slurp:
+        src: "{{ vault_root_token_file }}"
+      register: _ci_vault_token_raw
+      no_log: true  # the root token, base64 - printed at -v
+      tags: [always]
+
+    - name: Set token fact
+      ansible.builtin.set_fact:
+        _ci_vault_token: "{{ _ci_vault_token_raw.content | b64decode | trim }}"
+      no_log: true
+      tags: [always]
+
+    # ── the account ────────────────────────────────────────────────────
+    - name: The bot's account, if Forgejo has one
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ ci_bot_user }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: _ci_bot_account
+      changed_when: false
+
+    - name: A fresh random password for the bot (this run's alone)
+      ansible.builtin.set_fact:
+        _ci_bot_password: "{{ lookup('ansible.builtin.password', '/dev/null length=40 chars=ascii_letters,digits') }}"
+      no_log: true
+
+    - name: The bot made, where Forgejo has none
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/admin/users"
+        method: POST
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          username: "{{ ci_bot_user }}"
+          login_name: "{{ ci_bot_user }}"
+          source_id: 0
+          email: "{{ ci_bot_email }}"
+          password: "{{ _ci_bot_password }}"
+          must_change_password: false
+          send_notify: false
+          visibility: private
+        status_code: 201
+      when: _ci_bot_account.status == 404
+      changed_when: true
+      no_log: true  # the password in its body
+
+    # every run: the password this run knows, and never an admin (one made so by hand is made a user again)
+    - name: The bot's password set, and no admin
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/admin/users/{{ ci_bot_user }}"
+        method: PATCH
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          login_name: "{{ ci_bot_user }}"
+          source_id: 0
+          password: "{{ _ci_bot_password }}"
+          must_change_password: false
+          admin: false
+          prohibit_login: false
+          active: true
+        status_code: 200
+      changed_when: true
+      no_log: true  # the password in its body
+
+    - name: The bot, as it sees itself
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/user"
+        url_username: "{{ ci_bot_user }}"
+        url_password: "{{ _ci_bot_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _ci_bot_self
+
+    - name: The bot is no admin
+      ansible.builtin.assert:
+        that:
+          - _ci_bot_self.json.login == ci_bot_user
+          - not (_ci_bot_self.json.is_admin | bool)
+        fail_msg: >-
+          REFUSED: {{ ci_bot_user }} is {{ (_ci_bot_self.json | default({})).login | default('?') }},
+          admin {{ (_ci_bot_self.json | default({})).is_admin | default('?') }} - CI holds no admin
+        quiet: true
+
+    # ── the teams ──────────────────────────────────────────────────────
+    - name: The org's teams
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ ci_bot_org }}/teams?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _ci_org_teams
+
+    - name: Every team read (one page, not full)
+      ansible.builtin.assert:
+        that: _ci_org_teams.json | length < 50
+        fail_msg: "REFUSED: {{ ci_bot_org }} has 50 teams or more - not all read"
+        quiet: true
+
+    - name: The bot's teams made, where missing
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ ci_bot_org }}/teams"
+        method: POST
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          description: "{{ item.description }}"
+          permission: "{{ item.permission }}"
+          units_map: "{{ item.units_map }}"
+          includes_all_repositories: false
+          can_create_org_repo: false
+        status_code: 201
+      loop: "{{ ci_bot_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in (_ci_org_teams.json | map(attribute='name') | list)
+      register: _ci_teams_made
+      changed_when: true
+
+    - name: The org's teams, with the bot's
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ ci_bot_org }}/teams?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _ci_org_teams_now
+
+    - name: The bot's teams with their ids
+      ansible.builtin.set_fact:
+        _ci_teams: >-
+          {{ _ci_teams | default([]) + [item | combine({'id': (_ci_org_teams_now.json
+             | selectattr('name', 'equalto', item.name) | first).id})] }}
+      loop: "{{ ci_bot_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Who is in the bot's teams
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}/members?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ _ci_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _ci_team_members
+
+    # a team of that name someone else is in is not the bot's: its scope would be theirs too
+    - name: The bot's teams hold no one else
+      ansible.builtin.assert:
+        that: item.json | map(attribute='login') | reject('equalto', ci_bot_user) | list | length == 0
+        fail_msg: >-
+          REFUSED: team {{ ci_bot_org }}/{{ item.item.name }} holds
+          {{ item.json | default([]) | map(attribute='login') | reject('equalto', ci_bot_user) | join(', ') }} - not the
+          bot's alone; nothing changed on it
+        quiet: true
+      loop: "{{ _ci_team_members.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: The bot's teams' scope - their units, no repository but their own, no repository made
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}"
+        method: PATCH
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          description: "{{ item.description }}"
+          permission: "{{ item.permission }}"
+          units_map: "{{ item.units_map }}"
+          includes_all_repositories: false
+          can_create_org_repo: false
+        status_code: 200
+      loop: "{{ _ci_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false  # the same settings written again
+
+    - name: The repositories the bot's teams have
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}/repos?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ _ci_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _ci_team_repos
+
+    - name: Every team's repositories read (one page, not full)
+      ansible.builtin.assert:
+        that: item.json | length < 50
+        fail_msg: "REFUSED: team {{ item.item.name }} has 50 repositories or more - not all read"
+        quiet: true
+      loop: "{{ _ci_team_repos.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: A repository the team should not have, taken off it
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.0.item.id }}/repos/{{ ci_bot_org }}/{{ item.1.name }}"
+        method: DELETE
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ _ci_team_repos.results | subelements('json') }}"
+      loop_control:
+        label: "{{ item.0.item.name }}: {{ item.1.full_name }}"
+      when: item.1.full_name != ci_bot_org ~ '/' ~ item.1.name or item.1.name not in item.0.item.repos
+      changed_when: true
+
+    - name: Its repositories added to the team
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.0.id }}/repos/{{ ci_bot_org }}/{{ item.1 }}"
+        method: PUT
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ _ci_teams | subelements('repos') }}"
+      loop_control:
+        label: "{{ item.0.name }}: {{ item.1 }}"
+      when: >-
+        (ci_bot_org ~ '/' ~ item.1) not in (_ci_team_repos.results | selectattr('item.name', 'equalto', item.0.name)
+        | map(attribute='json') | first | map(attribute='full_name') | list)
+      changed_when: true
+
+    - name: The bot in its teams
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.0.id }}/members/{{ ci_bot_user }}"
+        method: PUT
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ _ci_teams | zip(_ci_team_members.results) | list }}"
+      loop_control:
+        label: "{{ item.0.name }}"
+      when: ci_bot_user not in (item.1.json | map(attribute='login') | list)
+      changed_when: true
+
+    - name: The bot's teams, as Forgejo has them now
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ _ci_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _ci_teams_read
+
+    - name: Each team's scope is its own - its units alone, no other repository, no repository made, no admin
+      ansible.builtin.assert:
+        that:
+          - (item.json.units_map | dict2items | rejectattr('value', 'equalto', 'none') | items2dict) == item.item.units_map
+          - not (item.json.includes_all_repositories | bool)
+          - not (item.json.can_create_org_repo | bool)
+          - item.json.permission not in ['admin', 'owner']
+        fail_msg: >-
+          REFUSED: team {{ ci_bot_org }}/{{ item.item.name }} reads back as
+          {{ (item.json | default({})).units_map | default('?') }}, all repositories
+          {{ (item.json | default({})).includes_all_repositories | default('?') }}, creates repositories
+          {{ (item.json | default({})).can_create_org_repo | default('?') }}, permission
+          {{ (item.json | default({})).permission | default('?') }} - wanted {{ item.item.units_map }} on its own
+          repositories alone
+        quiet: true
+      loop: "{{ _ci_teams_read.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # what the bot can do, read as the bot: every repository of the org (a team of anyone's the bot was put in, by
+    # hand, shows here too)
+    - name: The org's repositories
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ ci_bot_org }}/repos?limit=50&page={{ item }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ range(1, 11) | list }}"
+      register: _ci_org_repos
+
+    - name: Every repository of the org read (the last page not full)
+      ansible.builtin.assert:
+        that: (_ci_org_repos.results | last).json | length < 50
+        fail_msg: "REFUSED: {{ ci_bot_org }} has over 500 repositories - not all read"
+        quiet: true
+
+    - name: Each repository, as the bot sees it
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/repos/{{ item }}"
+        url_username: "{{ ci_bot_user }}"
+        url_password: "{{ _ci_bot_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      loop: "{{ _ci_org_repos.results | map(attribute='json') | flatten | map(attribute='full_name') | list }}"
+      register: _ci_bot_view
+
+    - name: What the bot can do
+      ansible.builtin.set_fact:
+        _ci_bot_seen: "{{ _ci_bot_view.results | selectattr('status', 'equalto', 200) | map(attribute='json') | list }}"
+
+    - name: The bot pushes to infra alone, administers nothing, reads what it clones
+      ansible.builtin.assert:
+        that:
+          - (_ci_bot_seen | selectattr('permissions.push') | map(attribute='full_name') | list)
+            == [ci_bot_org ~ '/' ~ ci_bot_push_repo]
+          - _ci_bot_seen | selectattr('permissions.admin') | list | length == 0
+          - ([ci_bot_push_repo] + ci_bot_clone_repos) | map('regex_replace', '^', ci_bot_org ~ '/')
+            | difference(_ci_bot_seen | selectattr('permissions.pull') | map(attribute='full_name')) | length == 0
+        fail_msg: >-
+          REFUSED: {{ ci_bot_user }} pushes to
+          {{ _ci_bot_seen | default([]) | selectattr('permissions.push') | map(attribute='full_name') | join(', ') or 'nothing' }},
+          administers
+          {{ _ci_bot_seen | default([]) | selectattr('permissions.admin') | map(attribute='full_name') | join(', ') or 'nothing' }},
+          reads {{ _ci_bot_seen | default([]) | selectattr('permissions.pull') | map(attribute='full_name') | join(', ') }}
+          - wanted: push to {{ ci_bot_org }}/{{ ci_bot_push_repo }} alone, read {{ ci_bot_clone_repos | join(', ') }}
+        quiet: true
+
+    # ── the tokens ─────────────────────────────────────────────────────
+    - name: The bot's tokens
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ ci_bot_user }}/tokens?limit=50"
+        url_username: "{{ ci_bot_user }}"
+        url_password: "{{ _ci_bot_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _ci_bot_tokens_before
+
+    - name: Every token of the bot read (one page, not full)
+      ansible.builtin.assert:
+        that: _ci_bot_tokens_before.json | length < 50
+        fail_msg: "REFUSED: {{ ci_bot_user }} has 50 tokens or more - not all read; delete the stale ones by hand"
+        quiet: true
+
+    - name: Vault's woodpecker-ci secret (a missing path alone is no failure)
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ vault_addr }}"
+        token: "{{ _ci_vault_token }}"
+        ca_cert: "{{ vault_ca_cert }}"
+        path: "{{ vault_prefix }}/woodpecker-ci"
+      register: _ci_vault_before
+      # only a missing path (a first install) is "nothing there": a sealed or refusing Vault read as empty would
+      # write the bot's four alone over every other property
+      failed_when: >-
+        (_ci_vault_before.failed | default(false))
+        and 'Invalid or missing path' not in (_ci_vault_before.msg | default(''))
+      no_log: true
+
+    - name: This run's token names
+      ansible.builtin.set_fact:
+        _ci_stamp: "{{ now(utc=true, fmt='%Y%m%dT%H%M%S') }}"
+
+    - name: New tokens - minted, proven, written to Vault (else deleted again, Vault unchanged)
+      block:
+        - name: A token per use, its scope alone
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/users/{{ ci_bot_user }}/tokens"
+            method: POST
+            url_username: "{{ ci_bot_user }}"
+            url_password: "{{ _ci_bot_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "ci-{{ item.kind }}-{{ _ci_stamp }}"
+              scopes: "{{ item.scopes }}"
+            status_code: 201
+          loop: "{{ ci_bot_tokens }}"
+          loop_control:
+            label: "{{ item.kind }}"
+          register: _ci_minted
+          changed_when: true
+          no_log: true  # its result is a token
+
+        - name: Each token has its scope alone, as Forgejo made it
+          ansible.builtin.assert:
+            that: >-
+              (_ci_minted.results | map(attribute='json.scopes') | map('sort') | list)
+              == (ci_bot_tokens | map(attribute='scopes') | map('sort') | list)
+            fail_msg: >-
+              REFUSED: the tokens came with scopes
+              {{ _ci_minted.results | default([]) | map(attribute='json.scopes', default='?') | list }},
+              wanted {{ ci_bot_tokens | map(attribute='scopes') | list }}
+            quiet: true
+
+        - name: The infra token pushes to infra
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/repos/{{ ci_bot_org }}/{{ ci_bot_push_repo }}"
+            headers:
+              Authorization: "token {{ _ci_minted.results[0].json.sha1 }}"
+            status_code: 200
+          register: _ci_infra_probe
+          failed_when: _ci_infra_probe.status != 200 or not (_ci_infra_probe.json.permissions.push | default(false))
+          no_log: true  # a token in its header
+
+        - name: The registry token reads the org's packages
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/packages/{{ ci_bot_org }}?limit=1"
+            headers:
+              Authorization: "token {{ _ci_minted.results[1].json.sha1 }}"
+            status_code: 200
+          no_log: true  # a token in its header
+
+        - name: The clone token reads every repository a pipeline clones
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/repos/{{ ci_bot_org }}/{{ item }}"
+            headers:
+              Authorization: "token {{ _ci_minted.results[2].json.sha1 }}"
+            status_code: 200
+          loop: "{{ ci_bot_clone_repos }}"
+          no_log: true  # a token in its header
+
+        - name: The tokens and the bot's name in Vault, every other property kept
+          community.hashi_vault.vault_kv2_write:
+            url: "{{ vault_addr }}"
+            token: "{{ _ci_vault_token }}"
+            ca_cert: "{{ vault_ca_cert }}"
+            path: "{{ vault_prefix }}/woodpecker-ci"
+            # the version read: a write since then fails this one, never overwritten (0: the path still missing)
+            cas: "{{ _ci_vault_before.metadata.version if _ci_vault_before.secret is defined else 0 }}"
+            data: >-
+              {{ (_ci_vault_before.secret | default({}))
+                 | combine(dict(ci_bot_tokens | map(attribute='property')
+                                | zip(_ci_minted.results | map(attribute='json.sha1'))))
+                 | combine({'registry_user': ci_bot_user}) }}
+          no_log: true
+
+      rescue:
+        - name: This run's new tokens deleted again
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/users/{{ ci_bot_user }}/tokens/{{ item }}"
+            method: DELETE
+            url_username: "{{ ci_bot_user }}"
+            url_password: "{{ _ci_bot_password }}"
+            force_basic_auth: true
+            status_code: [204, 404]  # gone already is what it wants
+          loop: >-
+            {{ (_ci_minted | default({})).results | default([]) | selectattr('status', 'defined')
+               | selectattr('status', 'equalto', 201) | map(attribute='json.id') | list }}
+
+        - name: New tokens - none in use
+          ansible.builtin.fail:
+            msg: >-
+              REFUSED at '{{ ansible_failed_task.name | default('?') }}' - this run's new tokens deleted again, Vault's
+              {{ vault_prefix }}/woodpecker-ci unchanged, CI on the tokens it had
+
+    # the ones Vault held until now stay (the cluster's Secret holds them till External Secrets refreshes): matched by
+    # their last eight characters, as Forgejo lists a token
+    - name: The tokens Vault held until now
+      ansible.builtin.set_fact:
+        _ci_keep_last_eight: >-
+          {{ (_ci_vault_before.secret | default({})).values() | map('string') | select('match', '^.{8,}$')
+             | map('regex_replace', '^.*(.{8})$', '\1') | list }}
+      no_log: true  # parts of tokens
+
+    - name: The bot's older tokens deleted (this run's in Vault; the ones Vault held until now kept)
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ ci_bot_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ ci_bot_user }}"
+        url_password: "{{ _ci_bot_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already is what it wants
+      loop: >-
+        {{ _ci_bot_tokens_before.json | selectattr('name', 'match', _ci_token_name)
+           | rejectattr('token_last_eight', 'in', _ci_keep_last_eight) | list }}
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: true
+
+    - name: Woodpecker CI's account
+      ansible.builtin.debug:
+        msg: >-
+          {{ ci_bot_user }} (no admin) in {{ _ci_teams | map(attribute='name') | map('regex_replace', '^', ci_bot_org ~ '/')
+          | join(', ') }}; tokens ci-*-{{ _ci_stamp }} ({{ ci_bot_tokens | map(attribute='property') | join(', ') }})
+          and registry_user in Vault {{ vault_prefix }}/woodpecker-ci. The cluster's woodpecker-ci-secrets takes them at
+          External Secrets' next refresh (1 h) - at once: kubectl annotate externalsecret woodpecker-ci-secrets-es -n
+          woodpecker force-sync=$(date +%s) --overwrite. registry_user/registry_token come from there only where
+          infra's ExternalSecret maps them from woodpecker-ci.
+
+    # ── retiring the admin's CI tokens (--tags retire) ─────────────────
+    - name: The admin's CI tokens, as .env names them
+      ansible.builtin.set_fact:
+        _ci_retire_last_eight: >-
+          {{ [lookup('env', 'WOODPECKER_INFRA_REPO_TOKEN'), lookup('env', 'WOODPECKER_CLONE_TOKEN')]
+             | map('trim') | select('match', '^.{8,}$') | map('regex_replace', '^.*(.{8})$', '\1') | list }}
+      no_log: true  # parts of tokens
+      tags: [never, retire]
+
+    - name: .env names the admin's CI tokens
+      ansible.builtin.assert:
+        that: _ci_retire_last_eight | length > 0
+        fail_msg: >-
+          nothing to retire: neither WOODPECKER_INFRA_REPO_TOKEN nor WOODPECKER_CLONE_TOKEN is in .env (the admin's
+          tokens CI used - deleted already, and their lines with them?)
+        quiet: true
+      tags: [never, retire]
+
+    - name: Vault's woodpecker-ci secret, as CI gets it
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ vault_addr }}"
+        token: "{{ _ci_vault_token }}"
+        ca_cert: "{{ vault_ca_cert }}"
+        path: "{{ vault_prefix }}/woodpecker-ci"
+      register: _ci_vault_now
+      no_log: true
+      tags: [never, retire]
+
+    - name: What Vault hands CI
+      ansible.builtin.set_fact:
+        _ci_vault_last_eight: >-
+          {{ _ci_vault_now.secret.values() | map('string') | select('match', '^.{8,}$')
+             | map('regex_replace', '^.*(.{8})$', '\1') | list }}
+        # registry_user the bot's, and each of its three tokens there
+        _ci_vault_bot: >-
+          {{ (_ci_vault_now.secret.registry_user | default('')) == ci_bot_user
+             and (ci_bot_tokens | map(attribute='property')
+                  | difference(_ci_vault_now.secret | dict2items | rejectattr('value', 'equalto', '')
+                               | map(attribute='key') | list) | length == 0) }}
+      no_log: true  # parts of tokens
+      tags: [never, retire]
+
+    - name: Vault hands CI the bot's tokens, none of the admin's
+      ansible.builtin.assert:
+        that:
+          - _ci_vault_bot | bool
+          - _ci_retire_last_eight | intersect(_ci_vault_last_eight) | length == 0
+        fail_msg: >-
+          REFUSED: Vault's {{ vault_prefix }}/woodpecker-ci
+          {{ 'does not hold the bot (registry_user ' ~ ci_bot_user ~ ' and its three tokens) - run task deploy:ci-bot first'
+             if not (_ci_vault_bot | default(false) | bool) else 'still holds a token of the admin .env names' }}
+          - nothing deleted
+        quiet: true
+      tags: [never, retire]
+
+    # page by page (Forgejo pages its answers, 50 at most)
+    - name: The admin's tokens, page by page
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ forgejo_admin_user }}/tokens?limit=50&page={{ item }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ range(1, 11) | list }}"
+      register: _ci_admin_tokens
+      tags: [never, retire]
+
+    - name: Every one of the admin's tokens read (the last page not full)
+      ansible.builtin.assert:
+        that: (_ci_admin_tokens.results | last).json | length < 50
+        fail_msg: "REFUSED: {{ forgejo_admin_user }} has over 500 tokens - not all read"
+        quiet: true
+      tags: [never, retire]
+
+    - name: The admin's CI tokens deleted
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ forgejo_admin_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already is what it wants
+      loop: >-
+        {{ _ci_admin_tokens.results | map(attribute='json') | flatten
+           | selectattr('token_last_eight', 'in', _ci_retire_last_eight) | list }}
+      loop_control:
+        label: "{{ item.name }}"
+      register: _ci_retired
+      changed_when: true
+      tags: [never, retire]
+
+    - name: The admin's CI tokens retired
+      ansible.builtin.debug:
+        msg: >-
+          deleted: {{ _ci_retired.results | default([]) | map(attribute='item.name') | join(', ') or 'none (gone already)' }}
+          - remove WOODPECKER_INFRA_REPO_TOKEN and WOODPECKER_CLONE_TOKEN from .env
+      tags: [never, retire]

@@ -1256,6 +1256,28 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-woodpecker.yml -e @vars/woodpecker.yml
 
+  # Woodpecker CI's own Forgejo account (woodpecker-ci, no admin): its teams (code write on infra alone, packages
+  # write; code read where pipelines clone), scoped tokens, written to Vault woodpecker-ci with every other property
+  # kept. Each run rotates its tokens; the ones Vault held stay until the next run (the cluster's Secret holds them
+  # until External Secrets refreshes). The admin's password from .env (FORGEJO_ADMIN_*).
+  deploy:ci-bot:
+    desc: "PRODUCTION: Woodpecker CI's Forgejo account (woodpecker-ci, no admin), its teams and scoped tokens, in Vault"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml {{.CLI_ARGS}}
+
+  # once CI runs on the bot's tokens (proven by a CD run): the admin's tokens .env names as
+  # WOODPECKER_INFRA_REPO_TOKEN and WOODPECKER_CLONE_TOKEN deleted - refused while Vault still hands CI one of them
+  deploy:ci-bot:retire-admin-tokens:
+    desc: "PRODUCTION: the admin's Forgejo tokens CI used (.env WOODPECKER_INFRA_REPO_TOKEN / _CLONE_TOKEN) deleted"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml --tags retire {{.CLI_ARGS}}
+
   deploy:kubeadm:
     desc: Install kubeadm cluster on ten
     dir: deploy/ansible

@@ -132,58 +132,11 @@
       when: woodpecker_oauth_client_secret | length > 0
       no_log: true
 
-    - name: Check existing Forgejo tokens for infra repo PAT
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
-        method: GET
-        user: "{{ forgejo_admin_user }}"
-        password: "{{ forgejo_admin_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
-        status_code: 200
-      register: existing_tokens
-      changed_when: false
-
-    - name: Find existing woodpecker-infra token
-      ansible.builtin.set_fact:
-        existing_infra_token: "{{ existing_tokens.json | selectattr('name', 'equalto', 'woodpecker-infra') | list | first | default(None) }}"
-
-    - name: Delete existing woodpecker-infra token (to get fresh secret)
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens/{{ existing_infra_token.id }}"
-        method: DELETE
-        user: "{{ forgejo_admin_user }}"
-        password: "{{ forgejo_admin_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
-        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
-      when: existing_infra_token is not none
-
-    - name: Create Forgejo PAT for Woodpecker infra repo push
-      no_log: true  # its result is a token
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ forgejo_admin_user }}/tokens"
-        method: POST
-        user: "{{ forgejo_admin_user }}"
-        password: "{{ forgejo_admin_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ woodpecker_validate_certs | default(true) }}"
-        body_format: json
-        body:
-          name: "woodpecker-infra"
-          scopes:
-            - "read:repository"
-            - "write:repository"
-        status_code: 201
-      register: infra_token_result
-
-    - name: Set infra repo token fact
-      ansible.builtin.set_fact:
-        woodpecker_infra_repo_token: "{{ infra_token_result.json.sha1 }}"
-      no_log: true
+    # No Forgejo token minted here, no admin password handed on: CI's Forgejo credentials (infra_repo_token,
+    # registry_user, registry_token, clone_token) are the woodpecker-ci account's - setup-ci-bot.yml makes it and
+    # writes them to Vault {{ vault_prefix }}/woodpecker-ci, External Secrets puts them in woodpecker-ci-secrets.
+    # This minted a token on the admin (read/write on every repository) and defaulted registry_token to the admin's
+    # password.
 
     - name: Fetch SonarQube token from schnappy namespace secret
       no_log: true  # its result is a token
@@ -206,7 +159,9 @@
                  else '') }}
       no_log: true
 
-    - name: Create CI pipeline secrets (SonarQube, registry credentials)
+    # legacy - External Secrets owns woodpecker-ci-secrets (infra cluster-config) and puts its keys back; never the
+    # Forgejo credentials (setup-ci-bot.yml's, from Vault)
+    - name: Create CI pipeline secrets (SonarQube, Nexus)
       kubernetes.core.k8s:
         kubeconfig: /etc/kubernetes/admin.conf
         definition:
@@ -219,11 +174,8 @@
           stringData:
             sonar_token: "{{ _resolved_sonar_token }}"
             sonar_host_url: "{{ woodpecker_sonar_host_url | default('https://sonar.pmon.dev') }}"
-            registry_user: "{{ woodpecker_registry_user | default(forgejo_admin_user) }}"
-            registry_token: "{{ woodpecker_registry_token | default(forgejo_admin_password) }}"
             nexus_url: "http://{{ nexus_host | default(keepalived_vip) }}:{{ nexus_port | default('8081') }}"
             nexus_npm_registry: "http://{{ nexus_host | default(keepalived_vip) }}:{{ nexus_port | default('8081') }}/repository/npm-public/"
-            infra_repo_token: "{{ woodpecker_infra_repo_token | default('') }}"
       no_log: true
 
     # ================================================================

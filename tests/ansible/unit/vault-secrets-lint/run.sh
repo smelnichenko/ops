@@ -37,8 +37,6 @@ DIFFED = {"ansible.builtin.copy": "content", "ansible.builtin.lineinfile": "line
           "ansible.builtin.replace": "replace"}
 # (file, task name): why what it templates is no secret
 NOT_A_SECRET_TASK = {
-    ("deploy/ansible/playbooks/setup-woodpecker.yml", "Find existing woodpecker-infra token"):
-        "Forgejo's token list holds names and ids, never a token",
     ("deploy/ansible/playbooks/setup-nexus.yml", "Enable Docker Bearer Token Realm"): "a realm's name (DockerToken)",
     ("deploy/ansible/playbooks/seed-vault-secrets.yml", "Secrets seeded"):
         "a fixed text chosen by whether the API key is empty (its length), never the key",
@@ -54,7 +52,6 @@ CAT_UNSEAL = re.compile(r"(^|[;&|\n])\s*cat\s+/etc/vault-unseal/")
 # (file, register): why its result holds no secret
 NOT_A_TOKEN = {
     ("deploy/ansible/playbooks/setup-argocd.yml", "existing_tokens"): "Forgejo lists a user's tokens by name only",
-    ("deploy/ansible/playbooks/setup-woodpecker.yml", "existing_tokens"): "Forgejo lists a user's tokens by name only",
 }
 
 
