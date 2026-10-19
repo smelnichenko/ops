@@ -106,3 +106,18 @@ The From address, Reply-To and Bcc come from configuration, not code: `masi.appl
 - From is `apply@pmon.dev` (Resend's verified domain), not the operator's gmail. A reply still reaches gmail
   through Reply-To.
 - The letter goes as the body and the CV as the attachment. There is no separate letter PDF.
+
+## Review decisions (2026-10-19, masi #123)
+
+- **No automatic re-send.** A press whose outcome is unknown can be one whose claim went stale, one whose mail server
+  failed after accepting the message, or one whose SENT record failed to write. None of these is sent again on its own.
+  The preview shows it as UNKNOWN ("the mail may have left — check your Bcc copy"), and only a press that explicitly
+  confirms the re-send, carrying that claim's token, sends again. The earlier attempt is kept.
+- **SENT is committed on its own, right after the server accepts the mail,** without the package's lock. APPLIED, the
+  activity row and the tie follow in a second, idempotent transaction. A SENT that cannot be written is reported as
+  "the mail LEFT (Message-ID …) but was not recorded".
+- **One mailbox per address.** A scraped address must parse to exactly one mailbox. A group (`HR: a@x, b@y;`) is
+  neither stored nor offered.
+- **The sink fails closed.** Send runs only where the sink is set, or where the environment says it is production
+  (`masi.apply.production`). The chart fails the render otherwise (platform 39869a7).
+- **The whole send has a hard deadline** well under the stale-claim age.
