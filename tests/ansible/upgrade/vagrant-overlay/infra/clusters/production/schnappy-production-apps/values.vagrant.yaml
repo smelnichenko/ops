@@ -30,3 +30,14 @@ chessService:
 # in ImagePullBackOff holding 550m CPU (2026-10-03).
 hyperfoil:
   enabled: false
+
+# masi's Send (plan 103) mails REAL recruiters from production. This copy restores production's database, so a package
+# production has already sent can still be REVIEWED here - one press would mail the same recruiter twice (review of
+# masi #123, 2026-10-19). The copy never sends: Send off, and any masi mail (the digest on request) to a sink that
+# cannot be delivered.
+masiService:
+  apply:
+    enabled: false
+    production: false
+  mail:
+    deliverAllTo: "nobody@vagrant.invalid"
