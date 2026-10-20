@@ -249,14 +249,24 @@ class H(BaseHTTPRequestHandler):
         if m and method == "GET":
             return self.answer(200, pg([{"name": r, "full_name": f"{S['org']}/{r}", "private": v["private"]}
                                         for r, v in sorted(S["repos"].items())]))
-        m = re.match(r"^/repos/([^/]+)/([^/]+)/(branches|pulls)$", p)
+        # a repository's branches (code), pull requests (pulls) listed or one by its number, an issue by its number
+        # (issues - a pull request read as an issue needs read:issue: a read:repository token gets 403, as live)
+        m = re.match(r"^/repos/([^/]+)/([^/]+)/(branches|pulls|pulls/(\d+)|issues/(\d+))$", p)
         if m and method == "GET":
             if m.group(1) != S["org"] or m.group(2) not in S["repos"]:
                 return self.answer(404, {"message": "no repository"})
-            unit = "repo.code" if m.group(3) == "branches" else "repo.pulls"
+            what = m.group(3).split("/")[0]
+            unit = {"branches": "repo.code", "pulls": "repo.pulls", "issues": "repo.issues"}[what]
+            if kind == "token" and what == "issues" and not scope_ok(scopes, "issue", False):
+                return self.answer(403, {"message": "token does not have at least one of required scope(s): [read:issue]"})
             if unit_mode(login, m.group(2), unit) == "none":
                 return self.answer(404 if repo_perm(login, m.group(2)) is None else 403, {"message": "no access"})
-            return self.answer(200, [])
+            prs = S.get("prs", {}).get(m.group(2), [])
+            n = m.group(4) or m.group(5)
+            if n:
+                pr = next((x for x in prs if str(x["number"]) == n), None)
+                return self.answer(200, pr) if pr else self.answer(404, {"message": "not found"})
+            return self.answer(200, prs[:limit] if what == "pulls" else [])
         m = re.match(r"^/repos/([^/]+)/([^/]+)/branch_protections$", p)
         if m and method == "GET":
             if m.group(1) != S["org"] or m.group(2) not in S["repos"]:

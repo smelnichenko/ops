@@ -1,0 +1,67 @@
+---
+# Argo CD's repo-creds Secret (forgejo-repo-creds) given Forgejo's argocd-reader and its token from Vault
+# argocd/forgejo-readonly where it has no username or password - a first install, a rebuild: the repositories are
+# private and Argo CD installs External Secrets itself, so it must clone infra before the ExternalSecret can merge them
+# in (task deploy:argocd-reader puts them in Vault before setup-argocd). Credentials there are left alone. Vault is
+# read on the Pi holding the VIP (its loopback, its root token - neither leaves the Pi but for the two values, which
+# reach kubectl on its stdin). Needs argocd_namespace, keepalived_vip, the pis group; on ten (the play's host).
+- name: Whether forgejo-repo-creds has a username and a password
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      for k in username password; do
+        v=$(kubectl --kubeconfig "$KC" -n "$NS" get secret forgejo-repo-creds -o "jsonpath={.data.$k}")
+        echo "$k=$([ -n "$v" ] && echo yes || echo no)"
+      done
+    executable: /bin/bash
+  environment:
+    KC: "{{ argocd_kubeconfig | default('/etc/kubernetes/admin.conf') }}"
+    NS: "{{ argocd_namespace }}"
+  register: _repo_creds_has
+  changed_when: false
+  check_mode: false  # a read
+  no_log: true  # a Secret's read (yes/no alone)
+
+- name: The repo-creds Secret given argocd-reader from Vault (it has no credentials)
+  when: _repo_creds_has.stdout_lines != ['username=yes', 'password=yes']
+  block:
+    - name: The Pi holding the VIP (Vault's)
+      ansible.builtin.include_tasks: pi-vip-holder.yml
+
+    - name: Vault's root token, on that Pi
+      ansible.builtin.slurp:
+        src: "{{ argocd_vault_root_token_file | default('/etc/vault-unseal/root-token') }}"
+      delegate_to: "{{ pi_vip_holder | default(groups['pis'] | first) }}"  # templated even when skipped
+      become: true
+      register: _repo_creds_vault_token
+      no_log: true  # the root token, base64
+
+    - name: Vault's argocd/forgejo-readonly, on that Pi
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ argocd_vault_addr | default('https://127.0.0.1:8200') }}"
+        token: "{{ _repo_creds_vault_token.content | b64decode | trim }}"
+        ca_cert: "{{ argocd_vault_ca_cert | default('/etc/vault.d/tls/ca-cert.pem') }}"
+        path: argocd/forgejo-readonly
+      delegate_to: "{{ pi_vip_holder | default(groups['pis'] | first) }}"  # templated even when skipped
+      register: _repo_creds_vault
+      no_log: true
+
+    - name: Vault holds argocd-reader and its token
+      ansible.builtin.assert:
+        that:
+          - (_repo_creds_vault.secret.username | default('')) == 'argocd-reader'
+          - (_repo_creds_vault.secret.token | default('')) | length >= 8
+        fail_msg: >-
+          REFUSED: Vault argocd/forgejo-readonly holds no argocd-reader token - run task deploy:argocd-reader first
+          (Argo CD cannot clone the private infra without it); forgejo-repo-creds left as it is
+        quiet: true
+
+    - name: The credentials into forgejo-repo-creds (on kubectl's stdin)
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ argocd_kubeconfig | default('/etc/kubernetes/admin.conf') }}", -n,
+               "{{ argocd_namespace }}", patch, secret, forgejo-repo-creds, --type, merge, --patch-file, /dev/stdin]
+        stdin: >-
+          {{ {'stringData': {'username': _repo_creds_vault.secret.username,
+                             'password': _repo_creds_vault.secret.token}} | to_json }}
+      changed_when: true
+      no_log: true  # the token on its stdin

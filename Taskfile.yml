@@ -455,6 +455,10 @@ tasks:
       # production's scoped Vault token for the stale-PR-env sweeper (argocd/vault-cleanup-token), as on ten
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-vault-cleanup-policy.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py --infra-ref {{.INFRA_REF}} --platform-ref {{.PLATFORM_REF}}
+      # Argo CD's Forgejo account on the copy, as production's (its token in the Vagrant Vault, from which setup-argocd
+      # gives the repo-creds their credentials and the copy's ExternalSecret merges them): after the mirror (its repos),
+      # before setup-argocd. Its infra the mirrored copy (no PR-env generator - the copy's committed list)
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml
       - cmd: scripts/vagrant-preload-images.sh ../infra ../platform {{.INFRA_REF}} {{.PLATFORM_REF}}
       # production's floating tags (postgresql:17, ...) as ten runs them, not today's builds of those tags
       - cmd: scripts/vagrant-preload-floating.sh

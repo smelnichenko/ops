@@ -43,7 +43,7 @@ ssh ten 'sudo kubectl describe application schnappy -n argocd'
 ```
 
 **Installation:** `task deploy:argocd` (Ansible playbook `setup-argocd.yml`)
-**Forgejo credentials:** Argo CD reads Forgejo as the NON-admin `argocd-reader` - `task deploy:argocd-reader` (`setup-argocd-reader.yml`) derives what Argo CD reads from infra's Applications/ApplicationSets (`scripts/argocd-repos.py`: code read on what they clone, pull requests read on what the PR generator lists), mints its read:repository token into Vault `argocd/forgejo-readonly` (token, username); infra's ExternalSecrets put it into `forgejo-readonly-token` and the repo-creds `forgejo-repo-creds`/`forgejo-pi-repo` (creationPolicy Merge - setup-argocd makes the Secret, url only). ROLLBACK: `vault kv rollback -version=<read> secret/argocd/forgejo-readonly` on the VIP Pi, then force-sync those ExternalSecrets. `task deploy:argocd-reader:retire-admin-tokens` deletes the admin's tokens Argo CD held, once ten shows the switch
+**Forgejo credentials:** Argo CD reads Forgejo as the NON-admin `argocd-reader` - `task deploy:argocd-reader` (`setup-argocd-reader.yml`) derives what Argo CD reads from infra's Applications/ApplicationSets (`scripts/argocd-repos.py`: code read on what they clone, pull requests read on what the PR generator lists), mints its read:repository token into Vault `argocd/forgejo-readonly` (token, username); infra's ExternalSecrets put it into `forgejo-readonly-token` and the repo-creds `forgejo-repo-creds` (creationPolicy Merge - setup-argocd makes the Secret and, where it has none, writes the reader's credentials from Vault). A new repository Argo CD reads goes into `deploy/ansible/vars/argocd-reader-repos.yml` (a run refuses while infra's main derives otherwise). On a rebuild, setup-argocd gives the repo-creds the reader's credentials from Vault (Argo CD installs ESO itself). ROLLBACK (only before retire - it deletes the admin's tokens): revert infra's `forgejo-repo-creds.yaml`; `kubectl delete externalsecret forgejo-repo-creds-es -n argocd` (Retain keeps the keys); patch the Secret's username/password back from stdin (`kubectl -n argocd patch secret forgejo-repo-creds --type merge --patch-file /dev/stdin`); for the PR generator `vault kv rollback -version=<read> secret/argocd/forgejo-readonly` on the VIP Pi (VAULT_TOKEN from the root-token file) and force-sync forgejo-readonly-token. `task deploy:argocd-reader:retire-admin-tokens` deletes the admin's tokens Argo CD held - only after check-argocd-repos is ALL-OK and one real infra commit synced
 **UI:** `https://cd.pmon.dev/` (Keycloak SSO, Admins = admin role, Users = readonly)
 
 ### Checking CI/CD Status
@@ -73,8 +73,11 @@ curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" https://ci.pmon.dev/api/re
 curl -sS -H "Authorization: Bearer $WOODPECKER_TOKEN" -X POST https://ci.pmon.dev/api/repos/17/pipelines/2   # restart pipeline 2
 
 # Activate a new repo / add crons: ci.pmon.dev UI → Add repository (after Forgejo repo creation), Settings → Crons
-# Commit status is mirrored to Forgejo (private repos need a token):
-curl -sS -H "Authorization: token $FORGEJO_READONLY_TOKEN" https://git.pmon.dev/api/v1/repos/schnappy/<repo>/commits/<sha>/status
+# Commit status is mirrored to Forgejo (private repos need credentials) - sm's own, from git's credential helper (the
+# admin's FORGEJO_READONLY_TOKEN is retired), to curl on its stdin config, never its command line:
+printf 'protocol=https\nhost=git.pmon.dev\n\n' | git credential fill \
+  | awk -F= '/^username=/{u=$2} /^password=/{p=$2} END{printf "user = \"%s:%s\"\n", u, p}' \
+  | curl -sS -K - https://git.pmon.dev/api/v1/repos/schnappy/<repo>/commits/<sha>/status
 ```
 
 **Pipeline step logs** (Woodpecker steps run as `wp-<id>` pods, service containers as

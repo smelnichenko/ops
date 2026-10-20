@@ -1,0 +1,7 @@
+---
+# What Argo CD reads from Forgejo, as setup-argocd-reader.yml derives it from infra's main (scripts/argocd-repos.py):
+# the repositories its Applications and ApplicationSets clone, and those the PR-env generator lists pull requests of.
+# A run refuses while infra's derivation differs: a new repository in infra is added here, in review, and the reader's
+# teams follow at the next task deploy:argocd-reader - never silently unreadable.
+argocd_reader_code: [infra, platform]
+argocd_reader_pulls: [admin, chat, chess, monitor, site]

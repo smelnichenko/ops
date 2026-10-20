@@ -1,11 +1,13 @@
 ---
 # Argo CD's own Forgejo account, so Argo CD holds no admin credential: its repository credentials (argocd's repo-creds
-# forgejo-repo-creds, forgejo-pi-repo) were forgejo_admin with a token minted on the admin (setup-argocd), and the PR
-# generator's token (Vault argocd/forgejo-readonly) was the admin's too - each read every repository Forgejo has.
+# forgejo-repo-creds) were forgejo_admin with a token minted on the admin (setup-argocd), and the PR generator's token
+# (Vault argocd/forgejo-readonly) was the admin's too - each read every repository Forgejo has.
 #
-#   repos   what Argo CD reads, derived from infra's manifests (scripts/argocd-repos.py over the infra checkout, never
-#           restated): every Application's and ApplicationSet's repoURL on the Forgejo host (cloned: code), every
-#           repository an ApplicationSet's pull-request generator lists (pulls)
+#   repos   what Argo CD reads, derived from infra's main as fetched now (an archive of FETCH_HEAD, never a working
+#           tree; the commit said and asserted) by scripts/argocd-repos.py: every Application's and ApplicationSet's
+#           repoURL on the Forgejo host (cloned: code), every repository an ApplicationSet's pull-request generator lists
+#           (pulls). It must equal the committed list (vars/argocd-reader-repos.yml): a new repository is added there in
+#           review, never silently unreadable - a run refuses while they differ
 #   user    argocd-reader - no admin; a random password, set anew each run and kept nowhere. A reader switched off
 #           (inactive, login prohibited) is refused unless -e reader_reactivate=true
 #   teams   schnappy/argocd-read   code READ on the cloned repositories alone
@@ -13,29 +15,35 @@
 #           each holding the reader alone (a team of that name with anyone else in it refused, never changed); read
 #           back AS the reader over every repository of the org: pushes to none, administers none
 #   token   argocd-reader-<UTC time>, read:repository alone - proven: each cloned repository's branches read, each PR
-#           repository's pull requests listed. Written to Vault argocd/forgejo-readonly as token, with username:
-#           read, merged, written back with the version read (cas), every other property kept, read back. The run
-#           says "argocd/forgejo-readonly v<read> -> v<written>". ROLLBACK: on the Pi holding the VIP (VAULT_TOKEN from
-#           /etc/vault-unseal/root-token, never on a command line) `vault kv rollback -version=<read>
-#           secret/argocd/forgejo-readonly`, then force External Secrets (kubectl annotate externalsecret <es> -n
-#           argocd force-sync=$(date +%s) --overwrite for forgejo-readonly-token, forgejo-repo-creds-es,
-#           forgejo-pi-repo-es)
-#   cluster ten read first (kubectl get alone): argocd's ExternalSecrets' Ready, forgejo-readonly-token's token and
-#           each repo-creds Secret's username and password - last eight characters, never a token. What they hold
-#           is kept; it is recorded in Vault (retire_last_eight) for --tags retire, so the admin tokens Argo CD held
-#           before the switch are known after it
+#           repository's pull requests listed and one read by its number (repos/<org>/<repo>/pulls/<n> - the stale-PR
+#           sweeper's call). Written to Vault argocd/forgejo-readonly as token, with username: read, merged, written
+#           back with the version read (cas), every other property kept, read back. The run says
+#           "argocd/forgejo-readonly v<read> -> v<written>"
+#   cluster ten read first (kubectl get alone): argocd's ExternalSecrets' Ready, forgejo-readonly-token's token and the
+#           repo-creds Secret's username and password - last eight characters, never a token - and the Applications'
+#           comparison errors. What they hold is kept; it is recorded in Vault (retire_last_eight) for --tags retire,
+#           so the admin tokens Argo CD held before the switch are known after it. Then kubectl's last-applied
+#           annotation is taken off forgejo-repo-creds (it held the Secret as first applied - an admin token)
 #   cleanup the reader's older tokens deleted only when Vault does not hold them, ten does not, and their time is
 #           over 3 h old; ten not read or an ExternalSecret there not Ready: none deleted, said, the run passes. A
 #           mint or a proof failing deletes this run's token again; the Vault write itself failing, or a failure
 #           after it with Vault holding the token or unreadable: none deleted, said
 #
-# Retiring the admin's tokens Argo CD used (once its repo-creds hand out the reader's, ten synced): --tags retire
-# deletes the admin's tokens named argocd or argocd-<time> (setup-argocd's), and those whose last eight characters
-# .env's FORGEJO_READONLY_TOKEN, Vault's argocd/forgejo-readonly history (token) or its retire_last_eight name.
-# Refused unless Vault holds the reader (username and token) and not the token .env names (at once - ten not read),
-# AND ten shows forgejo-readonly-token Ready with Vault's token, every repo-creds Secret's username the reader's and
-# its password Vault's token, every argocd ExternalSecret for them Ready, AND none to delete is one Vault or ten
-# still holds.
+# ROLLBACK (before --tags retire only - it deletes the admin's tokens the old state holds): revert infra's
+# forgejo-repo-creds.yaml; `kubectl delete externalsecret forgejo-repo-creds-es -n argocd` (its deletion policy
+# Retain keeps the Secret's keys); then patch the Secret's username and password back from stdin
+# (kubectl -n argocd patch secret forgejo-repo-creds --type merge --patch-file /dev/stdin, the JSON on stdin); for the
+# PR generator, on the Pi holding the VIP (VAULT_TOKEN from /etc/vault-unseal/root-token, never on a command line)
+# `vault kv rollback -version=<read> secret/argocd/forgejo-readonly`, then
+# `kubectl annotate externalsecret forgejo-readonly-token -n argocd force-sync=$(date +%s) --overwrite`.
+#
+# Retiring the admin's tokens Argo CD used: only after check-argocd-repos (every Forgejo Application reconciled after
+# the switch, none in error) and one real infra commit synced. --tags retire deletes the admin's tokens named argocd or
+# argocd-<time> (setup-argocd's), and those whose last eight characters .env's FORGEJO_READONLY_TOKEN, Vault's
+# argocd/forgejo-readonly history (token) or its retire_last_eight name. Refused unless Vault holds the reader
+# (username and token) and not the token .env names (at once), AND ten shows forgejo-readonly-token Ready with Vault's
+# token, forgejo-repo-creds's username the reader's and its password Vault's token, every argocd ExternalSecret for
+# them Ready, no Application on Forgejo with a comparison error, AND none to delete is one Vault or ten still holds.
 #
 # Usage:
 #   task deploy:argocd-reader                         # the reader, its teams, a new token in Vault
@@ -56,13 +64,16 @@
     reader_user: argocd-reader
     reader_email: argocd-reader@pmon.dev
     reader_org: schnappy
-    reader_forgejo_host: git.pmon.dev
-    # the infra checkout the repositories are derived from (beside ops, as create-environment's)
-    reader_infra_dir: "{{ playbook_dir + '/../../../../infra' }}"
+    # the Forgejo host Argo CD reads (repoURLs), and infra on it - main fetched from there (production's through the
+    # operator's own git credentials; the Vagrant copy's public)
+    reader_forgejo_host: "{{ argocd_forgejo_host | default('git.pmon.dev') }}"
+    reader_infra_remote: "{{ forgejo_scheme | default('https') }}://{{ reader_forgejo_host }}/{{ reader_org }}/infra.git"
+    # the committed list the derivation must equal (the Vagrant copy's own: no PR-env generator there)
+    reader_repos_file: "{{ playbook_dir }}/../vars/argocd-reader-repos.yml"
     reader_kubeconfig: /etc/kubernetes/admin.conf
     # argocd's repository credentials (repo-creds) and the ExternalSecrets that fill them (once infra has them)
-    reader_repo_creds: [forgejo-repo-creds, forgejo-pi-repo]
-    reader_external_secrets: [forgejo-readonly-token, forgejo-repo-creds-es, forgejo-pi-repo-es]
+    reader_repo_creds: [forgejo-repo-creds]
+    reader_external_secrets: [forgejo-readonly-token, forgejo-repo-creds-es]
     _rd_token_name: "^argocd-reader-[0-9]{8}T[0-9]{6}$"
     reader_keep_hours: 3
     reader_reactivate: false
@@ -99,8 +110,28 @@
       check_mode: false  # a read
       no_log: true  # parts of tokens
 
+    # the name of each Application reading the Forgejo host with a ComparisonError or InvalidSpecError, one a line
+    - name: The Applications reading Forgejo - their comparison errors
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig {{ reader_kubeconfig | quote }} -n argocd get applications -o json | HOST={{ reader_forgejo_host | quote }} python3 -c '
+          import json, os, sys
+          for a in json.load(sys.stdin)["items"]:
+              spec = a["spec"]
+              urls = [x.get("repoURL", "") for x in ([spec["source"]] if "source" in spec else []) + spec.get("sources", [])]
+              conds = [c["type"] for c in a.get("status", {}).get("conditions", [])]
+              if any(os.environ["HOST"] in u for u in urls) and {"ComparisonError", "InvalidSpecError"} & set(conds):
+                  print(a["metadata"]["name"])'
+        executable: /bin/bash
+      register: _rd_apps
+      changed_when: false
+      failed_when: false  # said by the next play
+      check_mode: false  # a read
+
     - name: What ten said
       ansible.builtin.set_fact:
+        _rd_cluster_app_errors: "{{ _rd_apps.stdout_lines if _rd_apps.rc == 0 else ['(not read)'] }}"
         _rd_cluster_read: >-
           {{ _rd_es.rc == 0 and _rd_secrets.rc == 0
              and (_rd_secrets.stdout_lines | map('regex_replace', '=.*$', '') | sort)
@@ -163,10 +194,28 @@
       tags: [always]
 
     # ── what Argo CD reads ─────────────────────────────────────────────
-    - name: The repositories Argo CD reads, from infra's manifests
-      ansible.builtin.command:
-        argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/../../../scripts/argocd-repos.py",
-               "{{ reader_infra_dir }}", "{{ reader_forgejo_host }}", "{{ reader_org }}"]
+    # never a working tree (a branch, an edit): main as Forgejo has it now, fetched into a scratch repository, its
+    # clusters/ archived - the commit said
+    - name: The repositories Argo CD reads, from infra's main as fetched now
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          mkdir -p "$WORK_ROOT"
+          d=$(mktemp -d "$WORK_ROOT/argocd-repos.XXXXXX")
+          trap 'rm -rf "$d"' EXIT
+          git init -q --bare "$d/git"
+          git -C "$d/git" fetch -q --depth 1 "$REMOTE" main
+          mkdir "$d/tree"
+          git -C "$d/git" archive FETCH_HEAD clusters | tar -x -C "$d/tree"
+          "$PY" "$SCRIPT" "$d/tree" "$HOST" "$ORG" "$(git -C "$d/git" rev-parse --short FETCH_HEAD)"
+        executable: /bin/bash
+      environment:
+        WORK_ROOT: "{{ playbook_dir }}/../../../.upgrade"
+        REMOTE: "{{ reader_infra_remote }}"
+        PY: "{{ ansible_playbook_python }}"
+        SCRIPT: "{{ playbook_dir }}/../../../scripts/argocd-repos.py"
+        HOST: "{{ reader_forgejo_host }}"
+        ORG: "{{ reader_org }}"
       delegate_to: localhost
       become: false
       register: _rd_repos_said
@@ -176,6 +225,10 @@
     - name: The reader's teams
       ansible.builtin.set_fact:
         _rd_repos: "{{ _rd_repos_said.stdout | from_json }}"
+        # a relative path is the playbook directory's
+        _rd_repos_committed: >-
+          {{ lookup('ansible.builtin.file', reader_repos_file if reader_repos_file is abs
+                    else playbook_dir ~ '/' ~ reader_repos_file) | from_yaml }}
         reader_teams:
           - name: argocd-read
             description: "Argo CD: the repositories its Applications clone, read"
@@ -188,10 +241,18 @@
             units_map: {repo.pulls: read}
             repos: "{{ (_rd_repos_said.stdout | from_json).pulls }}"
 
-    - name: Argo CD reads repositories at all
+    - name: Argo CD reads repositories, as the committed list says, at infra's main
       ansible.builtin.assert:
-        that: _rd_repos.code | length > 0
-        fail_msg: "REFUSED: no Application or ApplicationSet of {{ reader_infra_dir }} reads a {{ reader_org }} repository"
+        that:
+          - _rd_repos.commit is match('^[0-9a-f]{7,40}$')
+          - _rd_repos.code | length > 0
+          - _rd_repos.code == (_rd_repos_committed.argocd_reader_code | sort)
+          - _rd_repos.pulls == (_rd_repos_committed.argocd_reader_pulls | sort)
+        fail_msg: >-
+          REFUSED: infra main {{ _rd_repos.commit | default('?') }} has Argo CD read {{ _rd_repos.code | default([]) }}
+          (cloned) and {{ _rd_repos.pulls | default([]) }} (pull requests); {{ reader_repos_file | basename }} says
+          {{ _rd_repos_committed.argocd_reader_code | default('?') }} and
+          {{ _rd_repos_committed.argocd_reader_pulls | default('?') }} - update the list (in review) and rerun
         quiet: true
 
     # ── the account ────────────────────────────────────────────────────
@@ -620,12 +681,35 @@
         - name: The token lists the pull requests of each repository the PR generator reads
           ansible.builtin.uri:
             follow_redirects: none
-            url: "{{ forgejo_api }}/repos/{{ reader_org }}/{{ item }}/pulls?state=open&limit=1"
+            url: "{{ forgejo_api }}/repos/{{ reader_org }}/{{ item }}/pulls?state=all&limit=1"
             headers:
               Authorization: "token {{ _rd_minted.json.sha1 }}"
             status_code: 200
           loop: "{{ _rd_repos.pulls }}"
+          register: _rd_pulls_listed
           no_log: true  # a token in its header
+
+        # the stale-PR sweeper reads a pull request by its number (state, closed_at) - read:repository reads it as a
+        # pull request; as an issue it would need read:issue
+        - name: The token reads a pull request by its number (the sweeper's call)
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/repos/{{ reader_org }}/{{ item.item }}/pulls/{{ item.json[0].number }}"
+            headers:
+              Authorization: "token {{ _rd_minted.json.sha1 }}"
+            status_code: 200
+          loop: "{{ _rd_pulls_listed.results | selectattr('json', 'defined') | selectattr('json') | list }}"
+          register: _rd_pull_read
+          no_log: true  # a token in its header
+
+        - name: A pull request read by its number, where any repository has one
+          ansible.builtin.assert:
+            that: >-
+              (_rd_pulls_listed.results | selectattr('json', 'defined') | selectattr('json') | list | length == 0)
+              or ((_rd_pull_read.results | default([]) | selectattr('status', 'defined')
+                   | selectattr('status', 'equalto', 200) | list | length) > 0)
+            fail_msg: "REFUSED: no pull request of {{ _rd_repos.pulls | join(', ') }} read by its number"
+            quiet: true
 
         # what ten holds now (the admin's tokens before the switch) recorded, so --tags retire knows them after it
         - name: The token and the reader's name in Vault, every other property kept
@@ -784,7 +868,7 @@
           v{{ (_rd_vault_before.metadata | default({})).version | default(0) }}
           -> v{{ _rd_vault_written_read.metadata.version | default('?') }} (rollback: the playbook's header).
           forgejo-readonly-token and the repo-creds take it at External Secrets' next refresh (1 h) - at once: kubectl
-          annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es forgejo-pi-repo-es -n argocd
+          annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es -n argocd
           force-sync=$(date +%s) --overwrite.
 
     # ── retiring the admin's Argo CD tokens (--tags retire) ────────────
@@ -870,6 +954,15 @@
           {{ reader_external_secrets | reject('in', _rd_ten_ready | default({}) | dict2items
              | selectattr('value', 'equalto', 'True') | map(attribute='key') | list) | join(', ') }}) - infra's repo-creds
           ExternalSecrets missing, or not synced; nothing deleted
+        quiet: true
+      tags: [never, retire]
+
+    - name: No Application reading Forgejo in a comparison error (check-argocd-repos first)
+      ansible.builtin.assert:
+        that: (hostvars['target']._rd_cluster_app_errors | default(['(not read)'])) | length == 0
+        fail_msg: >-
+          REFUSED: Applications reading {{ reader_forgejo_host }} in a comparison error:
+          {{ hostvars['target']._rd_cluster_app_errors | default(['(not read)']) | join(', ') }} - nothing deleted
         quiet: true
       tags: [never, retire]
 
@@ -965,3 +1058,27 @@
           deleted: {{ _rd_retire | map(attribute='name') | join(', ') or 'none (gone already)' }} - remove
           FORGEJO_READONLY_TOKEN from .env
       tags: [never, retire]
+
+# kubectl's last-applied annotation on forgejo-repo-creds holds the Secret as first applied - an admin token: taken off
+# (idempotent: absent, nothing changes). Not on --tags retire. ten not reached: said, the run passes (as its cleanup).
+- name: The repo-creds Secret without kubectl's last-applied annotation
+  hosts: target
+  become: true
+  gather_facts: false
+  vars: *reader_vars
+  tasks:
+    - name: The last-applied annotation taken off forgejo-repo-creds
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ reader_kubeconfig }}", -n, argocd, annotate, secret, forgejo-repo-creds,
+               kubectl.kubernetes.io/last-applied-configuration-]
+      register: _rd_annotation
+      changed_when: "' annotated' in _rd_annotation.stdout and 'not annotated' not in _rd_annotation.stdout"
+      failed_when: false  # said next
+
+    - name: The annotation's fate
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'last-applied annotation off forgejo-repo-creds'
+             if _rd_annotation.rc == 0 or 'not found' in _rd_annotation.stderr
+             else 'last-applied annotation NOT taken off forgejo-repo-creds - ten not reached (' ~
+                  (_rd_annotation.stderr | default('') | trim)[:120] ~ '); rerun' }}

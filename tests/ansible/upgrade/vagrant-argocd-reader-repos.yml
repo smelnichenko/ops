@@ -1,0 +1,6 @@
+---
+# What Argo CD reads in the Vagrant copy (setup-argocd-reader.yml's committed list there): the copy's infra drops the
+# PR-env ApplicationSet (scripts/vagrant-gitops-mirror.py), so no pull requests - production's is
+# deploy/ansible/vars/argocd-reader-repos.yml.
+argocd_reader_code: [infra, platform]
+argocd_reader_pulls: []

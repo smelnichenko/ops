@@ -46,7 +46,7 @@ task deploy:ci-bot
 task deploy:argocd-reader   # Argo CD's Forgejo account (argocd-reader) and its token
 ssh ten 'sudo kubectl annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite'
 ssh ten 'sudo kubectl annotate externalsecret forgejo-registry-es -n woodpecker force-sync=$(date +%s) --overwrite'
-ssh ten 'sudo kubectl annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es forgejo-pi-repo-es -n argocd force-sync=$(date +%s) --overwrite'
+ssh ten 'sudo kubectl annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es -n argocd force-sync=$(date +%s) --overwrite'
 ```
 
 Wait for Forgejo to be ready, then push repos if needed:

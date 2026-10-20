@@ -7,21 +7,25 @@
          value a list generator beside it (in the same matrix) gives the template '{{ .<key> }}' it names; what the
          PR generator and the stale-PR sweeper read with the read-only token.
 
-Usage: argocd-repos.py <infra checkout> <Forgejo host> <org>   -> JSON {"code": [...], "pulls": [...], "commit": sha}
-A repoURL or generator on the host but outside the org, or one it cannot resolve, fails it (exit 1), saying which.
+Usage: argocd-repos.py <infra tree> <Forgejo host> <org> [<commit>]  -> JSON {"code": [...], "pulls": [...], "commit"}
+Fails (exit 1), saying which: a repoURL or generator on the host but outside the org, one it cannot resolve, a
+repository of the org on another host (the Pis' VIP, an address - Argo CD's credentials are for the host alone), a
+manifest file it cannot parse (never skipped: an Application in it would go unseen).
 """
 import glob
 import json
 import os
 import re
-import subprocess
 import sys
 
 import yaml
 
 infra, host, org = sys.argv[1], sys.argv[2], sys.argv[3]
+commit = sys.argv[4] if len(sys.argv) > 4 else ""
 code, pulls, bad = set(), set(), []
 URL = re.compile(rf"^(?:https?://){re.escape(host)}/([^/]+)/([^/]+?)(?:\.git)?/?$")
+# a repository of the org on any other host
+ELSEWHERE = re.compile(rf"^(?:https?://)([^/]+)/{re.escape(org)}/[^/]+?(?:\.git)?/?$")
 TEMPLATE = re.compile(r"^\{\{\s*\.(\w+)\s*\}\}$")
 
 
@@ -30,6 +34,10 @@ def sources(spec):
 
 
 def repo_of(url, where):
+    other = ELSEWHERE.match(url)
+    if other and other.group(1) != host:
+        bad.append(f"{where}: {url} - a repository of {org} on {other.group(1)}, not {host}")
+        return None
     if host not in url:
         return None
     m = URL.match(url)
@@ -60,14 +68,16 @@ def pull_generators(gens, siblings, where):
         pulls.update(names)
 
 
-files = sorted(glob.glob(os.path.join(infra, "clusters", "**", "*.yaml"), recursive=True))
+files = sorted(glob.glob(os.path.join(infra, "clusters", "**", "*.yaml"), recursive=True)
+               + glob.glob(os.path.join(infra, "clusters", "**", "*.yml"), recursive=True))
 if not files:
     sys.exit(f"argocd-repos: no manifest under {infra}/clusters - not an infra checkout")
 for f in files:
     try:
         docs = list(yaml.safe_load_all(open(f)))
-    except yaml.YAMLError:
-        continue  # a template or a values file infra's tests judge; never an Application
+    except yaml.YAMLError as e:
+        bad.append(f"{os.path.relpath(f, infra)}: not parsed ({str(e).splitlines()[0]})")
+        continue
     for d in docs:
         if not isinstance(d, dict) or d.get("apiVersion", "").split("/")[0] != "argoproj.io":
             continue
@@ -86,5 +96,4 @@ for f in files:
                 code.add(r)
 if bad:
     sys.exit("argocd-repos: " + "; ".join(bad))
-commit = subprocess.run(["git", "-C", infra, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout
-print(json.dumps({"code": sorted(code), "pulls": sorted(pulls), "commit": commit.strip()}))
+print(json.dumps({"code": sorted(code), "pulls": sorted(pulls), "commit": commit}))

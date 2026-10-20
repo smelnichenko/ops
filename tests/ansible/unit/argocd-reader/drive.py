@@ -29,7 +29,7 @@ REPOS = os.path.join(ROOT, "scripts/argocd-repos.py")
 BOT, ORG, VIP, PATH_V = "argocd-reader", "schnappy", "192.168.11.5", "argocd/forgejo-readonly"
 ADMIN_PW = "adm'\"$(touch " + W + "/ran)`touch " + W + "/ran2`\\:pw"
 VAULT_TOKEN = "hvs.TEST" + secrets.token_hex(12)
-READONLY, ADMIN_ARGO, ADMIN_PI, PUSH = (secrets.token_hex(20) for _ in range(4))
+READONLY, ADMIN_ARGO, PUSH = (secrets.token_hex(20) for _ in range(3))
 CANARY = "canary" + secrets.token_hex(8)
 fails = 0
 procs = []
@@ -127,25 +127,48 @@ def infra_fixture(root, extra=None):
                                        "repoURL": "https://git.pmon.dev/schnappy/platform.git"}}}}}]}
     docs.update(extra or {})
     for n, d in docs.items():
-        yaml.safe_dump_all(d, open(os.path.join(apps, n), "w"))
-    open(os.path.join(apps, "values.yaml"), "w").write("a: {{ not yaml\n")
+        if isinstance(d, str):
+            open(os.path.join(apps, n), "w").write(d)
+        else:
+            yaml.safe_dump_all(d, open(os.path.join(apps, n), "w"))
+    # a git repository on main: what the playbook fetches (never a working tree)
+    git = lambda *a: subprocess.run(["git", "-C", root, *a], check=True, capture_output=True)  # noqa: E731
+    if not os.path.isdir(os.path.join(root, ".git")):
+        git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "fixture")
+    return subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"], capture_output=True,
+                          text=True).stdout.strip()
 
 
-infra_fixture(INFRA)
+INFRA_COMMIT = infra_fixture(INFRA)
 VARS = os.path.join(W, "vars.yml")
+COMMITTED = os.path.join(W, "argocd-reader-repos.yml")
+
+
+def committed(code=("infra", "platform"), pulls=("chat", "monitor")):
+    yaml.safe_dump({"argocd_reader_code": list(code), "argocd_reader_pulls": list(pulls)}, open(COMMITTED, "w"))
+
+
+committed()
 
 
 def write_vars(infra=INFRA):
     yaml.safe_dump({"keepalived_vip": VIP, "forgejo_admin_user": "forgejo_admin", "forgejo_admin_password": ADMIN_PW,
                     "forgejo_api": f"http://127.0.0.1:{FP}/api/v1", "vault_addr": f"http://127.0.0.1:{VP}",
                     "vault_ca_cert": os.path.join(W, "no-ca.pem"),
-                    "vault_root_token_file": os.path.join(W, "root-token"), "reader_infra_dir": infra},
+                    "vault_root_token_file": os.path.join(W, "root-token"), "reader_infra_remote": infra,
+                    "reader_forgejo_host": "git.pmon.dev", "reader_repos_file": COMMITTED,
+                    # setup-argocd's repo-creds tasks, run alone (C1)
+                    "argocd_namespace": "argocd", "argocd_kubeconfig": "/no/kubeconfig",
+                    "argocd_vault_addr": f"http://127.0.0.1:{VP}", "argocd_vault_ca_cert": os.path.join(W, "no-ca.pem"),
+                    "argocd_vault_root_token_file": os.path.join(W, "root-token")},
                    open(VARS, "w"))
 
 
 write_vars()
 FIXED = os.path.join(W, "fixed-secrets")
-open(FIXED, "w").write("\n".join([ADMIN_PW, VAULT_TOKEN, READONLY, ADMIN_ARGO, ADMIN_PI, PUSH, CANARY]) + "\n")
+open(FIXED, "w").write("\n".join([ADMIN_PW, VAULT_TOKEN, READONLY, ADMIN_ARGO, PUSH, CANARY]) + "\n")
 WATCH_OUT = os.path.join(W, "watch.json")
 watch = subprocess.Popen([sys.executable, os.path.join(FAKES, "argvwatch.py"), str(FP), FIXED, WATCH_OUT])
 procs.append(watch)
@@ -187,24 +210,39 @@ def fixture():
                    "includes_all_repositories": True, "can_create_org_repo": True, "members": ["sm"], "repos": []}}
     tokens = dict([tok(10, "forgejo_admin", "argocd-20260405T154834", ADMIN_ARGO, ["read:repository"]),
                    tok(11, "forgejo_admin", "readonly", READONLY, ["read:repository"]),
-                   tok(12, "forgejo_admin", "pi-repo", ADMIN_PI, ["read:repository"]),
                    tok(13, "forgejo_admin", "woodpecker-push", PUSH, ["write:repository"])])
     repos = {r: {"private": True} for r in ("infra", "platform", "monitor", "chat", "admin", "masi")}
     repos["handbook"] = {"private": False}
-    return {"seq": 100, "org": ORG, "users": users, "teams": teams, "tokens": tokens, "repos": repos}
+    return {"seq": 100, "org": ORG, "users": users, "teams": teams, "tokens": tokens, "repos": repos,
+            "prs": {"monitor": [{"number": 5, "state": "closed", "closed_at": "2026-10-01T10:00:00+03:00"}],
+                    "chat": [{"number": 6, "state": "open", "closed_at": None}]}}
 
 
 VAULT_FIXTURE = {PATH_V: {"data": {"token": READONLY, "kept": "keep-me"}, "version": 2}}
 
 
-def ten(down=False, ready=None, readonly=READONLY, creds=None):
-    """ten's view: argocd's ExternalSecrets (forgejo-readonly-token Ready; the repo-creds ones only when given), the
-    readonly token, each repo-creds Secret's username and password (the admin's, before the switch)."""
-    creds = creds or {"forgejo-repo-creds": ("forgejo_admin", ADMIN_ARGO), "forgejo-pi-repo": ("forgejo_admin", ADMIN_PI)}
+def app(name, url, errors=()):
+    return {"metadata": {"name": name}, "spec": {"source": {"repoURL": url}},
+            "status": {"conditions": [{"type": e, "message": "x"} for e in errors]}}
+
+
+APPS = [app("root", "https://git.pmon.dev/schnappy/infra.git"), app("cm", "https://charts.jetstack.io",
+                                                                     ["ComparisonError"])]
+
+
+def ten(down=False, ready=None, readonly=READONLY, creds=None, apps=None, annotated=True):
+    """ten's view: argocd's ExternalSecrets (forgejo-readonly-token Ready; the repo-creds one only when given), the
+    readonly token, forgejo-repo-creds's username and password (the admin's, before the switch) and its last-applied
+    annotation, the Applications (a chart's in error - not on Forgejo)."""
+    creds = creds or {"forgejo-repo-creds": ("forgejo_admin", ADMIN_ARGO)}
     secrets_ = {"forgejo-readonly-token": {"token": readonly}}
-    secrets_.update({n: {"username": u, "password": p} for n, (u, p) in creds.items()})
+    secrets_.update({n: {"username": u, "password": p, "url": "https://git.pmon.dev", "type": "git"}
+                     for n, (u, p) in creds.items()})
     json.dump({"down": down, "ready": dict({"forgejo-readonly-token": "True", "vault-cleanup-token": "True"},
-                                           **(ready or {})), "secrets": secrets_}, open(K8S, "w"))
+                                           **(ready or {})), "secrets": secrets_,
+               "annotations": {"forgejo-repo-creds": ["kubectl.kubernetes.io/last-applied-configuration"]
+                               if annotated else []},
+               "apps": APPS if apps is None else apps}, open(K8S, "w"))
 
 
 def kubectl_calls():
@@ -260,7 +298,7 @@ def stamp(hours_ago):
 WANT_SCOPE = ({"is_admin": False, "must_change_password": False, "prohibit_login": False, "active": True},
               {"argocd-read": ("read", {"repo.code": "read"}, False, False, ["infra", "platform"], [BOT]),
                "argocd-pulls": ("read", {"repo.pulls": "read"}, False, False, ["chat", "monitor"], [BOT])})
-ADMIN_ALL = ["argocd-20260405T154834", "pi-repo", "readonly", "woodpecker-push"]
+ADMIN_ALL = ["argocd-20260405T154834", "readonly", "woodpecker-push"]
 le = lambda x: x[-8:]  # noqa: E731
 # a run that minted none reaches the checks as a failure, never as an IndexError
 MISSING = {"id": -1, "sha1": "none", "name": "none", "scopes": [], "token_last_eight": "none"}
@@ -268,7 +306,7 @@ MISSING = {"id": -1, "sha1": "none", "name": "none", "scopes": [], "token_last_e
 # ── the repositories, derived ───────────────────────────────────────────────────────────────────────────────────
 r = subprocess.run([sys.executable, REPOS, INFRA, "git.pmon.dev", ORG], capture_output=True, text=True)
 check("argocd-repos: the cloned repositories (an Application's source and sources; an ApplicationSet's template), the PR "
-      "generator's (its matrix list resolving '{{ .repo }}'); a chart repository and a file that is no manifest left out",
+      "generator's (its matrix list resolving '{{ .repo }}'); a chart repository left out",
       (r.returncode, json.loads(r.stdout)["code"] if r.returncode == 0 else r.stderr,
        json.loads(r.stdout)["pulls"] if r.returncode == 0 else None), (0, ["infra", "platform"], ["chat", "monitor"]))
 for label, extra, said in (
@@ -281,7 +319,12 @@ for label, extra, said in (
          {"u.yaml": [{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata": {"name": "u"},
                       "spec": {"generators": [{"pullRequest": {"gitea": {"owner": ORG, "repo": "{{ .nope }}",
                                                                          "api": "https://git.pmon.dev"}}}],
-                               "template": {"spec": {}}}}]}, "not resolved")):
+                               "template": {"spec": {}}}}]}, "not resolved"),
+        ("a manifest file it cannot parse (never skipped)", {"broken.yaml": "a: {{ not yaml\n"}, "not parsed"),
+        ("a repository of the org on the Pis' VIP (http://192.168.11.5:3000)",
+         {"vip.yaml": [{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": {"name": "v"},
+                        "spec": {"source": {"repoURL": "http://192.168.11.5:3000/schnappy/infra.git"}}}]},
+         "a repository of schnappy on 192.168.11.5:3000, not git.pmon.dev")):
     d = os.path.join(W, "infra-" + label[:6].replace(" ", "_"))
     infra_fixture(d, extra)
     r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
@@ -300,21 +343,28 @@ check("first run: one token on the reader, read:repository alone, named argocd-r
       ([(t["scopes"], bool(re.match(r"^argocd-reader-\d{8}T\d{6}$", t["name"]))) for t in toks],
        sorted({str(e["auth"]) for e in s["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")})),
       ([(["read:repository"], True)], [str(["basic", BOT])]))
-check("first run: proven - infra's and platform's branches read, chat's and monitor's pull requests listed, with the "
-      "token", sorted((e["path"].split("/")[-2], e["path"].split("/")[-1]) for e in s["log"]
-                      if e["auth"] and e["auth"][0] == "token" and e["path"].endswith(("/branches", "/pulls"))),
-      [("chat", "pulls"), ("infra", "branches"), ("monitor", "pulls"), ("platform", "branches")])
+check("first run: proven - infra's and platform's branches read, chat's and monitor's pull requests listed and each "
+      "one read by its number (the stale-PR sweeper's call), with the token",
+      sorted("/".join(e["path"].split("/")[5:]) for e in s["log"] if e["auth"] and e["auth"][0] == "token"
+             and re.search(r"/(branches|pulls|pulls/\d+)$", e["path"])),
+      ["chat/pulls", "chat/pulls/6", "infra/branches", "monitor/pulls", "monitor/pulls/5", "platform/branches"])
+check("first run: derived from infra's main as fetched (its commit said), equal to the committed list; the scratch "
+      "copy gone", (f"infra {INFRA_COMMIT}" in flat(out),
+                    [x for x in os.listdir(os.path.join(ROOT, ".upgrade")) if x.startswith("argocd-repos.")]
+                    if os.path.isdir(os.path.join(ROOT, ".upgrade")) else []), (True, []))
 check("first run: Vault argocd/forgejo-readonly holds the token and username (its other property kept), what ten "
       "held recorded for retire "
       "(retire_last_eight: the readonly token's, both repo-creds passwords'), one write with the version read (cas 2), "
       "the run says v2 -> v3",
       (dv(v), [w["cas"] for w in v["writes"]], "argocd/forgejo-readonly v2 -> v3" in flat(out)),
       ({"data": {"token": toks[0]["sha1"] if toks else None, "username": BOT, "kept": "keep-me",
-                 "retire_last_eight": ",".join(sorted([le(READONLY), le(ADMIN_ARGO), le(ADMIN_PI)]))},
+                 "retire_last_eight": ",".join(sorted([le(READONLY), le(ADMIN_ARGO)]))},
         "version": 3}, [2], True))
-check("first run: the admin's tokens untouched; ten read only (get alone)",
-      (admin_names(s), sorted(set(kubectl_calls()))),
-      (ADMIN_ALL, ["get externalsecret -n argocd", "get secret -n argocd"]))
+check("first run: the admin's tokens untouched; ten read (get alone), its one write the last-applied annotation taken "
+      "off forgejo-repo-creds (it held an admin token)",
+      (admin_names(s), sorted(set(kubectl_calls())), json.load(open(K8S))["annotations"]["forgejo-repo-creds"]),
+      (ADMIN_ALL, ["annotate secret -n argocd", "get applications -n argocd", "get externalsecret -n argocd",
+                   "get secret -n argocd"], []))
 first_ids = {t["name"]: t["id"] for t in s["state"]["teams"].values()}
 
 time.sleep(1.1)
@@ -340,8 +390,7 @@ st["tokens"][str(young["id"])] = young
 for label, k8s, want_left, said in (
         ("ten not holding it (one under 3 h kept)", {}, [toks2[-1]["id"], young["id"]],
          "reader tokens deleted: argocd-reader-"),
-        ("ten's forgejo-repo-creds still holding it", {"creds": {"forgejo-repo-creds": (BOT, toks[0]["sha1"]),
-                                                                 "forgejo-pi-repo": (BOT, toks[0]["sha1"])}},
+        ("ten's forgejo-repo-creds still holding it", {"creds": {"forgejo-repo-creds": (BOT, toks[0]["sha1"])}},
          [toks[0]["id"], toks2[-1]["id"], young["id"]], "reader tokens deleted: none"),
         ("ten not read", {"down": True}, [toks[0]["id"], toks2[-1]["id"], young["id"]],
          "reader tokens deleted none - ten not read"),
@@ -392,6 +441,22 @@ rc, out = run()
 check("refused: infra names a repository of another org on the host - the derivation fails the run, nothing minted",
       (rc != 0, "not a repository of schnappy" in flat(out), mints(fstate())), (True, True, []))
 write_vars()
+committed(pulls=("chat",))
+reset(copy.deepcopy(s2["state"]), {PATH_V: dv(v2)})
+rc, out = run()
+check("refused: infra's main derives a repository the committed list lacks (monitor) - said, the commit named, "
+      "nothing minted",
+      (rc != 0, f"REFUSED: infra main {INFRA_COMMIT} has Argo CD read" in flat(out), mints(fstate())), (True, True, []))
+committed()
+# a working tree edit (uncommitted: another org's repoURL) is no part of main - never read
+open(os.path.join(INFRA, "clusters", "production", "argocd", "apps", "wip.yaml"), "w").write(
+    "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata: {name: w}\n"
+    "spec: {source: {repoURL: 'https://git.pmon.dev/other/x.git'}}\n")
+reset(copy.deepcopy(s2["state"]), {PATH_V: dv(v2)})
+rc, out = run()
+os.remove(os.path.join(INFRA, "clusters", "production", "argocd", "apps", "wip.yaml"))
+check("a working-tree edit of infra (uncommitted) is never read - main is: the run passes", (rc, tail(out) if rc else ""),
+      (0, ""))
 
 # ── a failure after the mint ─────────────────────────────────────────────────────────────────────────────────────
 V2 = dv(v2)
@@ -401,6 +466,9 @@ for label, fault, gone, said in (
                                                                             "scopes": ["all"]}),
          True, "this run's new token deleted again"),
         ("a PR repository's pull requests not listed", ("forgejo", {"method": "GET", "path": "/pulls$", "status": 403}),
+         True, "this run's new token deleted again"),
+        ("a pull request not read by its number", ("forgejo", {"method": "GET", "path": "/pulls/[0-9]+$",
+                                                               "status": 403, "nth": 1}),
          True, "this run's new token deleted again"),
         ("the Vault write refused (someone wrote between the read and the write)",
          ("vault", {"method": "GET", "path": "forgejo-readonly", "bump": True}), False, "the Vault write itself failed"),
@@ -432,12 +500,12 @@ check("--check: refused, nothing changed", (rc != 0, "no check mode" in out, BOT
 
 # ── retiring the admin's Argo CD tokens ──────────────────────────────────────────────────────────────────────────
 ENVR = {"FORGEJO_READONLY_TOKEN": READONLY}
-SYNCED_ES = {"forgejo-repo-creds-es": "True", "forgejo-pi-repo-es": "True"}
+SYNCED_ES = {"forgejo-repo-creds-es": "True"}
 
 
 def synced(token):
     return {"ready": SYNCED_ES, "readonly": token,
-            "creds": {"forgejo-repo-creds": (BOT, token), "forgejo-pi-repo": (BOT, token)}}
+            "creds": {"forgejo-repo-creds": (BOT, token)}}
 
 
 reset()
@@ -450,11 +518,12 @@ reader_token = (dv(vv)["data"] or {}).get("token", "none")
 for label, k8s, said in (
         ("ten still on the admin (the repo-creds not switched)", {"ready": SYNCED_ES},
          "does not hand Argo CD the reader with Vault's token"),
-        ("infra's repo-creds ExternalSecrets missing", dict(synced(reader_token), ready={}),
-         "not all Ready (not: forgejo-repo-creds-es, forgejo-pi-repo-es)"),
-        ("forgejo-pi-repo still the admin's", dict(synced(reader_token), creds={
-            "forgejo-repo-creds": (BOT, reader_token), "forgejo-pi-repo": ("forgejo_admin", ADMIN_PI)}),
-         "does not hand Argo CD the reader with Vault's token")):
+        ("infra's repo-creds ExternalSecret missing", dict(synced(reader_token), ready={}),
+         "not all Ready (not: forgejo-repo-creds-es)"),
+        ("an Application reading Forgejo in a comparison error",
+         dict(synced(reader_token), apps=APPS + [app("site", "https://git.pmon.dev/schnappy/platform.git",
+                                                     ["ComparisonError"])]),
+         "REFUSED: Applications reading git.pmon.dev in a comparison error: site")):
     ten(**k8s)
     rc, out = run("--tags", "retire", env=ENVR)
     check(f"retire with {label}: refused, said, nothing deleted", (rc != 0, said in flat(out), admin_names(fstate())),
@@ -479,7 +548,7 @@ rc, out = run("--tags", "retire", env=ENVR)
 check("retire whose target is one Vault and ten still hold (a token of the admin's with the same last eight): "
       "refused, nothing deleted",
       (rc != 0, "REFUSED: a token of the admin's Vault or ten still holds" in flat(out), len(admin_names(fstate()))),
-      (True, True, 5))
+      (True, True, 4))
 reset(copy.deepcopy(st["state"]), {PATH_V: vv["kv"][PATH_V]})
 ten(**synced(reader_token))
 open(os.path.join(W, "kubectl.log"), "w").close()
@@ -490,11 +559,10 @@ check("retire, ten synced (.env empty): the admin's Argo CD tokens deleted - the
       "untouched; ten read only",
       (rc, admin_names(s7), [t["id"] for t in bot_tokens(s7)], kv()["writes"], sorted(set(kubectl_calls()))),
       (0, ["woodpecker-push"], [t["id"] for t in bot_tokens(st)], [],
-       ["get externalsecret -n argocd", "get secret -n argocd"]))
+       ["get applications -n argocd", "get externalsecret -n argocd", "get secret -n argocd"]))
 rc, out = run("--tags", "retire")
 check("retire again: nothing left - passes", (rc, admin_names(fstate())), (0, ["woodpecker-push"]))
-hist = {"data": {"token": reader_token, "username": BOT, "retire_last_eight": ",".join(sorted([le(ADMIN_ARGO),
-                                                                                              le(ADMIN_PI)]))},
+hist = {"data": {"token": reader_token, "username": BOT, "retire_last_eight": le(ADMIN_ARGO)},
         "version": 5, "history": {"4": {"token": READONLY}}}
 hist["history"]["5"] = hist["data"]
 reset(copy.deepcopy(st["state"]), {PATH_V: hist})
@@ -508,8 +576,7 @@ reset(st4, {PATH_V: {"data": {"token": reader_token, "username": BOT}, "version"
 ten(**synced(reader_token))
 rc, out = run("--tags", "retire")
 check("retire with nothing named anywhere (.env empty, no history, nothing recorded, no argocd* token): refused",
-      (rc != 0, "nothing to retire" in out, admin_names(fstate())), (True, True, ["pi-repo", "readonly",
-                                                                              "woodpecker-push"]))
+      (rc != 0, "nothing to retire" in out, admin_names(fstate())), (True, True, ["readonly", "woodpecker-push"]))
 
 # ── seed-vault-secrets.yml's argocd/forgejo-readonly: Vault's kept, .env only for a first install ────────────────
 seed = yaml.safe_load(open(SEED))[0]
@@ -562,6 +629,53 @@ check("setup-argocd: no token minted or listed on Forgejo, no admin credential i
       ("/tokens" in sa_text, [sorted((t.get("kubernetes.core.k8s") or {}).get("definition", {}).get("stringData", {}))
                               for t in creds]), (False, [["type", "url"]]))
 
+# ── setup-argocd: the repo-creds credentials where missing (a rebuild - Argo CD installs External Secrets itself) ──
+REPO_PLAY = os.path.join(W, "repo-creds.yml")
+yaml.safe_dump([{"name": "setup-argocd's repo-creds tasks", "hosts": "target", "gather_facts": False,
+                 "tasks": [{"name": "tasks/argocd-repo-creds.yml", "ansible.builtin.include_tasks":
+                            os.path.join(ROOT, "deploy/ansible/playbooks/tasks/argocd-repo-creds.yml")}]}],
+               open(REPO_PLAY, "w"), sort_keys=False)
+READER_TOKEN = "reader" + secrets.token_hex(17)
+reset(kv={PATH_V: {"data": {"token": READER_TOKEN, "username": BOT}, "version": 1}})
+ten(creds={"forgejo-repo-creds": ("", "")})
+rc, out = run(play=REPO_PLAY)
+sec = json.load(open(K8S))["secrets"]["forgejo-repo-creds"]
+check("setup-argocd on a rebuild (forgejo-repo-creds without credentials): argocd-reader and its token from Vault (read "
+      "on the Pi holding the VIP) patched in on kubectl's stdin; its url and type kept",
+      (rc, sec["username"], sec["password"] == READER_TOKEN, sec["url"], sec["type"],
+       "patch secret -n argocd" in kubectl_calls()), (0, BOT, True, "https://git.pmon.dev", "git", True))
+open(os.path.join(W, "kubectl.log"), "w").close()
+rc, out = run(play=REPO_PLAY)
+check("setup-argocd again (credentials there): left alone - no patch", (rc, "patch secret -n argocd" in kubectl_calls(),
+                                                                       json.load(open(K8S))["secrets"]["forgejo-repo-creds"] == sec),
+      (0, False, True))
+reset(kv={PATH_V: {"data": {"token": READONLY}, "version": 1}})
+ten(creds={"forgejo-repo-creds": ("", "")})
+rc, out = run(play=REPO_PLAY)
+check("setup-argocd on a rebuild with no argocd-reader in Vault: refused, said - the Secret left as it is",
+      (rc != 0, "run task deploy:argocd-reader first" in flat(out), "patch secret -n argocd" in kubectl_calls()),
+      (True, True, False))
+SA_TASKS = [t for p_ in SA for t in (p_.get("tasks") or [])]
+inc = [i for i, t in enumerate(SA_TASKS) if str(t.get("ansible.builtin.include_tasks", "")).endswith("argocd-repo-creds.yml")]
+url_only = [i for i, t in enumerate(SA_TASKS) if t.get("name") == "The repo-creds Secret Argo CD reads Forgejo with (its url)"]
+check("setup-argocd runs the repo-creds tasks once, right after it writes the Secret's url, never in check mode",
+      (len(inc), inc[0] - url_only[0] if inc and url_only else None,
+       SA_TASKS[inc[0]].get("when") if inc else None), (1, 1, "not ansible_check_mode"))
+
+# ── the Vagrant copy: the reader after the mirror, before setup-argocd, with the copy's committed list ─────────────
+TF = yaml.safe_load(open(os.path.join(ROOT, "Taskfile.yml")))["tasks"]["test:upgrade:argo"]["cmds"]
+tf = [c["cmd"] if isinstance(c, dict) and "cmd" in c else str(c) for c in TF]
+at = lambda pat: next((i for i, c in enumerate(tf) if pat in c), -1)  # noqa: E731
+mirror, reader, argocd = at("vagrant-gitops-mirror.py"), at("playbooks/setup-argocd-reader.yml"), at(
+    "playbooks/setup-argocd.yml")
+VAG = yaml.safe_load(open(os.path.join(ROOT, "tests/ansible/upgrade/vagrant-argocd-reader-repos.yml")))
+check("the Vagrant copy's build (test:upgrade:argo): the reader on the copy's inventory after the mirror and before "
+      "setup-argocd, judged by the copy's committed list (infra, platform - no PR-env generator there)",
+      (0 <= mirror < reader < argocd, "-i inventory/vagrant.yml" in tf[reader] if reader >= 0 else None,
+       "reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml" in tf[reader]
+       if reader >= 0 else None, VAG),
+      (True, True, True, {"argocd_reader_code": ["infra", "platform"], "argocd_reader_pulls": []}))
+
 # ── no secret on a command line; no command but ten's reads and the derivation ───────────────────────────────────
 canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])
 canary.wait()
@@ -570,13 +684,17 @@ watch.wait(timeout=30)
 w = json.load(open(WATCH_OUT))
 fence = open(os.path.join(W, "fence.log")).read().splitlines() if os.path.exists(os.path.join(W, "fence.log")) else []
 check("the watch bites: a process with a known secret on its command line is seen",
-      any(h["secret"] == 6 for h in w["hits"]), True)
+      any(h["secret"] == 5 for h in w["hits"]), True)
 check(f"no secret on any command line over every run ({w['scans']} scans of /proc); nothing fenced run; the admin "
       "password's $( ) and backticks never run",
-      ([h for h in w["hits"] if h["secret"] != 6], fence, w["scans"] > 50,
+      ([h for h in w["hits"] if h["secret"] != 5], fence, w["scans"] > 50,
        os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))), ([], [], True, False))
-ALLOWED = {"The ExternalSecrets of argocd - their Ready", "What argocd's Secrets hold - their last eight characters",
-           "The repositories Argo CD reads, from infra's manifests"}
+# task: the kubectl verbs it may run (none: it runs no kubectl)
+ALLOWED = {"The ExternalSecrets of argocd - their Ready": {"get"},
+           "What argocd's Secrets hold - their last eight characters": {"get"},
+           "The Applications reading Forgejo - their comparison errors": {"get"},
+           "The repositories Argo CD reads, from infra's main as fetched now": set(),
+           "The last-applied annotation taken off forgejo-repo-creds": {"annotate"}}
 cmds = []
 for play in yaml.safe_load(open(PB)):
     stack = list(play.get("tasks") or [])
@@ -589,7 +707,7 @@ for play in yaml.safe_load(open(PB)):
                     (val.get("cmd", "") if isinstance(val, dict) else str(val))
                 text = re.sub(r"\{\{.*?\}\}", "X", text)
                 verbs = [m[1] for m in re.findall(r"\bkubectl((?:\s+(?:--kubeconfig|-n)\s+\S+)*)\s+(\S+)", text)]
-                ok = x.get("name") in ALLOWED and set(verbs) <= {"get"} and \
+                ok = x.get("name") in ALLOWED and set(verbs) == ALLOWED[x.get("name")] and \
                     not re.search(r"(^|[\s|;(])(curl|wget|vault|forgejo|ssh)(\s|$)", text)
                 cmds.append((play.get("hosts"), x.get("name"), ok))
 check("no play runs a command of its own but ten's two reads (kubectl get alone) and the derivation",
