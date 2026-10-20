@@ -503,9 +503,12 @@ e = copy.deepcopy(vv["kv"]["schnappy/woodpecker-ci"])
 e["data"]["clone_token"] = ADMIN_CLONE
 reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": e})
 cluster()
+open(os.path.join(W, "kubectl.log"), "w").close()
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
-check("retire while Vault still hands CI one of the admin's tokens: refused, nothing deleted",
-      (rc != 0, "still holds a token of the admin" in flat(out), admin_names(fstate())), (True, True, ALL_ADMIN))
+check("retire while Vault still hands CI one of the admin's tokens .env names: refused at once (Vault's read - ten not "
+      "even read), said, nothing deleted",
+      (rc != 0, "still holds a token of the admin .env names" in flat(out), admin_names(fstate()),
+       open(os.path.join(W, "kubectl.log")).read()), (True, True, ALL_ADMIN, ""))
 reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": e})
 cluster()
 rc, out = run("--tags", "retire", env={"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA})
