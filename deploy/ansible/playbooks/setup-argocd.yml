@@ -10,7 +10,8 @@
 # Secrets it takes (production's inventory, from ops/.env - none from Vault):
 #   argocd_keycloak_client_secret (KEYCLOAK_ARGOCD_CLIENT_SECRET) - Keycloak's OIDC client secret, into the
 #     argocd-oidc-keycloak Secret the Helm values reference ($argocd-oidc-keycloak:clientSecret)
-#   forgejo_admin_password - to make Argo CD's own Forgejo token (read:repository) for its git access
+# Argo CD's Forgejo credentials are none of this: Forgejo's argocd-reader account (setup-argocd-reader.yml), its
+# token in Vault argocd/forgejo-readonly, merged into forgejo-repo-creds by infra's ExternalSecret.
 # Argo CD's admin password is its own (the chart's argocd-initial-admin-secret); none is set here.
 #
 # Usage:
@@ -41,8 +42,6 @@
     argocd_chart_repo: "https://argoproj.github.io/argo-helm"
     forgejo_host: "{{ argocd_forgejo_host | default(forgejo_domain | default('git.pmon.dev')) }}"
     argocd_root_repo: schnappy/infra
-    _forgejo_user: "{{ forgejo_admin_user | default('forgejo_admin') }}"
-    _forgejo_password: "{{ forgejo_admin_password }}"
     validate_certs: "{{ argocd_validate_certs | default(true) }}"
     target_host: "{{ ansible_host | default('192.168.11.2') }}"
     argocd_host: "{{ argocd_domain | default('cd.pmon.dev') }}"
@@ -263,79 +262,14 @@
     # Phase 2: Forgejo PAT for Git access
     # ================================================================
 
-    - name: "PHASE 2: Create Forgejo PAT for Argo CD"
+    - name: "PHASE 2: Argo CD's repository credentials"
       ansible.builtin.debug:
-        msg: "Creating personal access token for Argo CD Git access"
+        msg: "The repo-creds Secret for Forgejo - its credentials are argocd-reader's, from Vault (External Secrets)"
 
-    # The token Argo CD reads git with is kept while it works - a re-run (each Argo CD upgrade step runs this) changes
-    # nothing. A new one is made only when it does not, under a new name, written to the secret, and only then are the
-    # older ones deleted: this deleted the token first and created its replacement after, so Argo CD's credentials
-    # were revoked in between - for good if the create failed.
-    - name: The repo credentials Argo CD has now
-      kubernetes.core.k8s_info:
-        kubeconfig: /etc/kubernetes/admin.conf
-        kind: Secret
-        namespace: "{{ argocd_namespace }}"
-        name: forgejo-repo-creds
-      register: _repo_creds
-      no_log: true
-
-    # the root app's repository, read with it: the token's one scope is read:repository - /api/v1/user answers 403
-    # to it (user scope), and a token Forgejo does not know gets 401 even on a public repository
-    - name: Does its token still read the root app's repository
-      check_mode: false
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/repos/{{ argocd_root_repo }}"
-        method: GET
-        headers:
-          Authorization: "token {{ _repo_creds.resources[0].data.password | b64decode }}"
-        validate_certs: "{{ validate_certs }}"
-        status_code: [200, 401, 403]
-      register: _token_check
-      when: _repo_creds.resources | length > 0 and _repo_creds.resources[0].data.password is defined
-      no_log: true
-
-    - name: Facts - keep the token, or make a new one
-      ansible.builtin.set_fact:
-        _token_works: "{{ _token_check.status | default(0) == 200 }}"
-
-    - name: Forgejo's tokens of this user
-      check_mode: false
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
-        method: GET
-        user: "{{ _forgejo_user }}"
-        password: "{{ _forgejo_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ validate_certs }}"
-        status_code: 200
-      register: existing_tokens
-      changed_when: false
-      when: not _token_works | bool
-
-    - name: A new token for Argo CD, under a new name (the old one stays until the secret holds the new one)
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens"
-        method: POST
-        user: "{{ _forgejo_user }}"
-        password: "{{ _forgejo_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ validate_certs }}"
-        body_format: json
-        body:
-          name: "argocd-{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%S') }}"
-          scopes:
-            - "read:repository"
-        status_code: 201
-      register: argocd_token_result
-      changed_when: true
-      when: not _token_works | bool
-      no_log: true
-
-    - name: Create Forgejo repo credentials secret for Argo CD
+    # Its url and type alone: the username and password are Forgejo's argocd-reader account's (setup-argocd-reader.yml
+    # mints its read:repository token into Vault argocd/forgejo-readonly; infra's ExternalSecret merges them in). This
+    # minted a token on the admin (read on every repository) and wrote it here. A merge: credentials there are kept.
+    - name: The repo-creds Secret Argo CD reads Forgejo with (its url)
       kubernetes.core.k8s:
         kubeconfig: /etc/kubernetes/admin.conf
         definition:
@@ -350,29 +284,7 @@
           stringData:
             type: git
             url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}"
-            username: "{{ _forgejo_user }}"
-            password: "{{ argocd_token_result.json.sha1 }}"
-      when:
-        - not ansible_check_mode
-        - not _token_works | bool
-      no_log: true
-
-    - name: Delete the older Argo CD tokens (the secret holds the new one now)
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_scheme | default('https') }}://{{ forgejo_host }}/api/v1/users/{{ _forgejo_user }}/tokens/{{ item.id }}"
-        method: DELETE
-        user: "{{ _forgejo_user }}"
-        password: "{{ _forgejo_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ validate_certs }}"
-        status_code: [204, 404]  # gone already (deleted meanwhile) is what it wants
-      loop: >-
-        {{ existing_tokens.json | default([])
-           | selectattr('name', 'match', '^argocd(-[0-9T]+)?$') | list }}
-      loop_control:
-        label: "{{ item.name }}"
-      when: not _token_works | bool
+      no_log: true  # a Secret written (its url alone - the lint's rule for every Secret)
 
     # ================================================================
     # Phase 3: Deploy Argo CD via Helm

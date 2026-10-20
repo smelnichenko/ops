@@ -42,22 +42,30 @@ def team_json(t):
                               "can_create_org_repo")}
 
 
-def repo_perm(login, name):
-    """(admin, push, pull) of a user on an org repository, or None: no access (Forgejo answers 404)."""
-    r = S["repos"][name]
+def unit_mode(login, name, unit):
+    """A user's access to one unit of an org repository: the best its teams give (an owner/admin team all of them),
+    read on a public repository; a site admin owner."""
     u = S["users"].get(login)
     if u and u["is_admin"]:
-        return True, True, True
+        return "owner"
     best = "none"
     for t in S["teams"].values():
         if login in t["members"] and (t["includes_all_repositories"] or name in t["repos"]):
-            m = "owner" if t["permission"] in ("owner", "admin") else t["units_map"].get("repo.code", "none")
+            m = "owner" if t["permission"] in ("owner", "admin") else t["units_map"].get(unit, "none")
             best = max(best, m, key=rank)
-    if best == "none" and not r["private"]:
+    if best == "none" and not S["repos"][name]["private"]:
         best = "read"
-    if best == "none":
+    return best
+
+
+def repo_perm(login, name):
+    """(admin, push, pull) of a user on an org repository, or None: no access (Forgejo answers 404). push and admin
+    are the code unit's; pull any unit read (a team with pull requests alone sees the repository)."""
+    modes = [unit_mode(login, name, un) for un in UNITS]
+    code = unit_mode(login, name, "repo.code")
+    if max(modes, key=rank) == "none":
         return None
-    return rank(best) >= rank("admin"), rank(best) >= rank("write"), True
+    return rank(code) >= rank("admin"), rank(code) >= rank("write"), True
 
 
 def package_mode(login):
@@ -241,6 +249,14 @@ class H(BaseHTTPRequestHandler):
         if m and method == "GET":
             return self.answer(200, pg([{"name": r, "full_name": f"{S['org']}/{r}", "private": v["private"]}
                                         for r, v in sorted(S["repos"].items())]))
+        m = re.match(r"^/repos/([^/]+)/([^/]+)/(branches|pulls)$", p)
+        if m and method == "GET":
+            if m.group(1) != S["org"] or m.group(2) not in S["repos"]:
+                return self.answer(404, {"message": "no repository"})
+            unit = "repo.code" if m.group(3) == "branches" else "repo.pulls"
+            if unit_mode(login, m.group(2), unit) == "none":
+                return self.answer(404 if repo_perm(login, m.group(2)) is None else 403, {"message": "no access"})
+            return self.answer(200, [])
         m = re.match(r"^/repos/([^/]+)/([^/]+)/branch_protections$", p)
         if m and method == "GET":
             if m.group(1) != S["org"] or m.group(2) not in S["repos"]:

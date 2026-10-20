@@ -1281,6 +1281,29 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml --tags retire
 
+  # Argo CD's own Forgejo account (argocd-reader, no admin): teams reading what infra's Applications clone and its PR
+  # generator lists (derived from the infra checkout beside ops), a read:repository token in Vault
+  # argocd/forgejo-readonly (token, username) for forgejo-readonly-token and the repo-creds. ten read first (kubectl
+  # get alone): what Argo CD holds is kept. The admin's password from .env (FORGEJO_ADMIN_*). No preview.
+  deploy:argocd-reader:
+    desc: "PRODUCTION: Argo CD's Forgejo account (argocd-reader, no admin), its read teams and token, in Vault"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml
+
+  # once Argo CD's repo-creds and forgejo-readonly-token hand out argocd-reader's token (ten synced): the admin's tokens
+  # Argo CD held deleted - named argocd*, .env's FORGEJO_READONLY_TOKEN, Vault's history and what setup-argocd-reader
+  # recorded of ten. Refused unless ten (read only) shows them synced and none to delete is held by Vault or ten
+  deploy:argocd-reader:retire-admin-tokens:
+    desc: "PRODUCTION: the admin's Forgejo tokens Argo CD used deleted - ten checked"
+    dir: deploy/ansible
+    deps: [deploy:install]
+    dotenv: ['../../.env']
+    cmds:
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml --tags retire
+
   deploy:kubeadm:
     desc: Install kubeadm cluster on ten
     dir: deploy/ansible

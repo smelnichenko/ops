@@ -51,7 +51,6 @@ INSECURE = re.compile(r"VAULT_SKIP_VERIFY|validate_certs: (?:(?:false|no)\b|'(?:
 CAT_UNSEAL = re.compile(r"(^|[;&|\n])\s*cat\s+/etc/vault-unseal/")
 # (file, register): why its result holds no secret
 NOT_A_TOKEN = {
-    ("deploy/ansible/playbooks/setup-argocd.yml", "existing_tokens"): "Forgejo lists a user's tokens by name only",
 }
 
 

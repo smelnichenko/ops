@@ -1,0 +1,967 @@
+---
+# Argo CD's own Forgejo account, so Argo CD holds no admin credential: its repository credentials (argocd's repo-creds
+# forgejo-repo-creds, forgejo-pi-repo) were forgejo_admin with a token minted on the admin (setup-argocd), and the PR
+# generator's token (Vault argocd/forgejo-readonly) was the admin's too - each read every repository Forgejo has.
+#
+#   repos   what Argo CD reads, derived from infra's manifests (scripts/argocd-repos.py over the infra checkout, never
+#           restated): every Application's and ApplicationSet's repoURL on the Forgejo host (cloned: code), every
+#           repository an ApplicationSet's pull-request generator lists (pulls)
+#   user    argocd-reader - no admin; a random password, set anew each run and kept nowhere. A reader switched off
+#           (inactive, login prohibited) is refused unless -e reader_reactivate=true
+#   teams   schnappy/argocd-read   code READ on the cloned repositories alone
+#           schnappy/argocd-pulls  pull requests READ on the PR generator's repositories alone
+#           each holding the reader alone (a team of that name with anyone else in it refused, never changed); read
+#           back AS the reader over every repository of the org: pushes to none, administers none
+#   token   argocd-reader-<UTC time>, read:repository alone - proven: each cloned repository's branches read, each PR
+#           repository's pull requests listed. Written to Vault argocd/forgejo-readonly as token, with username:
+#           read, merged, written back with the version read (cas), every other property kept, read back. The run
+#           says "argocd/forgejo-readonly v<read> -> v<written>". ROLLBACK: on the Pi holding the VIP (VAULT_TOKEN from
+#           /etc/vault-unseal/root-token, never on a command line) `vault kv rollback -version=<read>
+#           secret/argocd/forgejo-readonly`, then force External Secrets (kubectl annotate externalsecret <es> -n
+#           argocd force-sync=$(date +%s) --overwrite for forgejo-readonly-token, forgejo-repo-creds-es,
+#           forgejo-pi-repo-es)
+#   cluster ten read first (kubectl get alone): argocd's ExternalSecrets' Ready, forgejo-readonly-token's token and
+#           each repo-creds Secret's username and password - last eight characters, never a token. What they hold
+#           is kept; it is recorded in Vault (retire_last_eight) for --tags retire, so the admin tokens Argo CD held
+#           before the switch are known after it
+#   cleanup the reader's older tokens deleted only when Vault does not hold them, ten does not, and their time is
+#           over 3 h old; ten not read or an ExternalSecret there not Ready: none deleted, said, the run passes. A
+#           mint or a proof failing deletes this run's token again; the Vault write itself failing, or a failure
+#           after it with Vault holding the token or unreadable: none deleted, said
+#
+# Retiring the admin's tokens Argo CD used (once its repo-creds hand out the reader's, ten synced): --tags retire
+# deletes the admin's tokens named argocd or argocd-<time> (setup-argocd's), and those whose last eight characters
+# .env's FORGEJO_READONLY_TOKEN, Vault's argocd/forgejo-readonly history (token) or its retire_last_eight name.
+# Refused unless Vault holds the reader (username and token) and not the token .env names (at once - ten not read),
+# AND ten shows forgejo-readonly-token Ready with Vault's token, every repo-creds Secret's username the reader's and
+# its password Vault's token, every argocd ExternalSecret for them Ready, AND none to delete is one Vault or ten
+# still holds.
+#
+# Usage:
+#   task deploy:argocd-reader                         # the reader, its teams, a new token in Vault
+#   task deploy:argocd-reader:retire-admin-tokens     # afterwards: the admin's Argo CD tokens deleted
+
+# ten first: what Argo CD holds now (kept by the cleanup, recorded for retire). Never fails the run.
+- name: What Argo CD holds, read on ten (read only)
+  hosts: target
+  become: true
+  gather_facts: false
+  tags: [always]
+  vars: &reader_vars
+    vault_addr: "https://127.0.0.1:8200"
+    vault_ca_cert: /etc/vault.d/tls/ca-cert.pem
+    vault_root_token_file: /etc/vault-unseal/root-token
+    reader_vault_path: argocd/forgejo-readonly
+    forgejo_api: "http://localhost:3000/api/v1"
+    reader_user: argocd-reader
+    reader_email: argocd-reader@pmon.dev
+    reader_org: schnappy
+    reader_forgejo_host: git.pmon.dev
+    # the infra checkout the repositories are derived from (beside ops, as create-environment's)
+    reader_infra_dir: "{{ playbook_dir + '/../../../../infra' }}"
+    reader_kubeconfig: /etc/kubernetes/admin.conf
+    # argocd's repository credentials (repo-creds) and the ExternalSecrets that fill them (once infra has them)
+    reader_repo_creds: [forgejo-repo-creds, forgejo-pi-repo]
+    reader_external_secrets: [forgejo-readonly-token, forgejo-repo-creds-es, forgejo-pi-repo-es]
+    _rd_token_name: "^argocd-reader-[0-9]{8}T[0-9]{6}$"
+    reader_keep_hours: 3
+    reader_reactivate: false
+  tasks:
+    # name=Ready lines, every ExternalSecret of argocd
+    - name: The ExternalSecrets of argocd - their Ready
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ reader_kubeconfig }}", -n, argocd, get, externalsecret,
+               -o, 'jsonpath={range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}']
+      register: _rd_es
+      changed_when: false
+      failed_when: false  # said by the next play
+      check_mode: false  # a read
+
+    # key=value lines: the last eight characters of each token - what Forgejo lists of one - and each username
+    - name: What argocd's Secrets hold - their last eight characters
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          kc={{ reader_kubeconfig | quote }}
+          v=$(kubectl --kubeconfig "$kc" -n argocd get secret forgejo-readonly-token -o 'jsonpath={.data.token}' \
+            | base64 -d | tail -c 8)
+          echo "readonly_token=$v"
+          for s in {{ reader_repo_creds | map('quote') | join(' ') }}; do
+            v=$(kubectl --kubeconfig "$kc" -n argocd get secret "$s" -o 'jsonpath={.data.password}' | base64 -d | tail -c 8)
+            echo "${s}_password=$v"
+            v=$(kubectl --kubeconfig "$kc" -n argocd get secret "$s" -o 'jsonpath={.data.username}' | base64 -d)
+            echo "${s}_username=$v"
+          done
+        executable: /bin/bash
+      register: _rd_secrets
+      changed_when: false
+      failed_when: false  # said by the next play
+      check_mode: false  # a read
+      no_log: true  # parts of tokens
+
+    - name: What ten said
+      ansible.builtin.set_fact:
+        _rd_cluster_read: >-
+          {{ _rd_es.rc == 0 and _rd_secrets.rc == 0
+             and (_rd_secrets.stdout_lines | map('regex_replace', '=.*$', '') | sort)
+                 == (['readonly_token'] + reader_repo_creds | map('regex_replace', '$', '_password') | list
+                     + reader_repo_creds | map('regex_replace', '$', '_username') | list) | sort }}
+        _rd_cluster_ready: >-
+          {{ dict(_rd_es.stdout_lines | map('regex_replace', '=.*$', '')
+                  | zip(_rd_es.stdout_lines | map('regex_replace', '^[^=]*=', '') | map('trim'))) }}
+        _rd_cluster_secret: >-
+          {{ dict(_rd_secrets.stdout_lines | default([]) | map('regex_replace', '=.*$', '')
+                  | zip(_rd_secrets.stdout_lines | default([]) | map('regex_replace', '^[^=]*=', ''))) }}
+      no_log: true  # parts of tokens
+
+- name: Argo CD's Forgejo account, its teams and its token in Vault
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars: *reader_vars
+  tasks:
+    - name: Only the Pi holding the VIP goes on
+      ansible.builtin.import_tasks: tasks/vip-holder-only.yml
+      tags: [always]
+
+    - name: No preview - a run rotates the reader's password and its token
+      ansible.builtin.fail:
+        msg: setup-argocd-reader has no check mode
+      when: ansible_check_mode
+      tags: [always]
+
+    - name: The admin's credentials, and a reader that is not the admin
+      ansible.builtin.assert:
+        that:
+          - forgejo_admin_password | default('') | length > 0
+          - reader_user != forgejo_admin_user
+        fail_msg: >-
+          needs forgejo_admin_password (FORGEJO_ADMIN_PASSWORD in .env - the task loads it) and a reader named
+          otherwise than the admin ({{ reader_user }})
+        quiet: true
+      tags: [always]
+
+    - name: Read Vault root token
+      ansible.builtin.slurp:
+        src: "{{ vault_root_token_file }}"
+      register: _rd_vault_token_raw
+      no_log: true  # the root token, base64 - printed at -v
+      tags: [always]
+
+    - name: Set token fact
+      ansible.builtin.set_fact:
+        _rd_vault_token: "{{ _rd_vault_token_raw.content | b64decode | trim }}"
+      no_log: true
+      tags: [always]
+
+    - name: What ten said, here
+      ansible.builtin.set_fact:
+        _rd_ten_read: "{{ hostvars['target']._rd_cluster_read | default(false) | bool }}"
+        _rd_ten_ready: "{{ hostvars['target']._rd_cluster_ready | default({}) }}"
+        _rd_ten_secret: "{{ hostvars['target']._rd_cluster_secret | default({}) }}"
+      no_log: true  # parts of tokens
+      tags: [always]
+
+    # ── what Argo CD reads ─────────────────────────────────────────────
+    - name: The repositories Argo CD reads, from infra's manifests
+      ansible.builtin.command:
+        argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/../../../scripts/argocd-repos.py",
+               "{{ reader_infra_dir }}", "{{ reader_forgejo_host }}", "{{ reader_org }}"]
+      delegate_to: localhost
+      become: false
+      register: _rd_repos_said
+      changed_when: false
+      check_mode: false  # a read
+
+    - name: The reader's teams
+      ansible.builtin.set_fact:
+        _rd_repos: "{{ _rd_repos_said.stdout | from_json }}"
+        reader_teams:
+          - name: argocd-read
+            description: "Argo CD: the repositories its Applications clone, read"
+            permission: read
+            units_map: {repo.code: read}
+            repos: "{{ (_rd_repos_said.stdout | from_json).code }}"
+          - name: argocd-pulls
+            description: "Argo CD: the pull requests its PR generator lists, read"
+            permission: read
+            units_map: {repo.pulls: read}
+            repos: "{{ (_rd_repos_said.stdout | from_json).pulls }}"
+
+    - name: Argo CD reads repositories at all
+      ansible.builtin.assert:
+        that: _rd_repos.code | length > 0
+        fail_msg: "REFUSED: no Application or ApplicationSet of {{ reader_infra_dir }} reads a {{ reader_org }} repository"
+        quiet: true
+
+    # ── the account ────────────────────────────────────────────────────
+    - name: The reader's account, if Forgejo has one
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ reader_user }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      register: _rd_bot_account
+      changed_when: false
+
+    # someone switched the reader off (its account inactive, its login prohibited): a run would switch it on again
+    - name: The reader is not switched off (or reader_reactivate)
+      ansible.builtin.assert:
+        that: >-
+          _rd_bot_account.status == 404 or (reader_reactivate | bool)
+          or ((_rd_bot_account.json.active | default(true) | bool)
+              and not (_rd_bot_account.json.prohibit_login | default(false) | bool))
+        fail_msg: >-
+          REFUSED: {{ reader_user }} is switched off (active {{ (_rd_bot_account.json | default({})).active | default('?') }},
+          login prohibited {{ (_rd_bot_account.json | default({})).prohibit_login | default('?') }}) - a run switches
+          it on again only with -e reader_reactivate=true; nothing changed
+        quiet: true
+
+    - name: A fresh random password for the reader (this run's alone)
+      ansible.builtin.set_fact:
+        _rd_bot_password: "{{ lookup('ansible.builtin.password', '/dev/null length=40 chars=ascii_letters,digits') }}"
+      no_log: true
+
+    - name: The reader made, where Forgejo has none
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/admin/users"
+        method: POST
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          username: "{{ reader_user }}"
+          login_name: "{{ reader_user }}"
+          source_id: 0
+          email: "{{ reader_email }}"
+          password: "{{ _rd_bot_password }}"
+          must_change_password: false
+          send_notify: false
+          visibility: private
+        status_code: 201
+      when: _rd_bot_account.status == 404
+      changed_when: true
+      no_log: true  # the password in its body
+
+    # every run: the password this run knows, and never an admin (one made so by hand is made a user again)
+    - name: The reader's password set, and no admin
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/admin/users/{{ reader_user }}"
+        method: PATCH
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          login_name: "{{ reader_user }}"
+          source_id: 0
+          password: "{{ _rd_bot_password }}"
+          must_change_password: false
+          admin: false
+          prohibit_login: false
+          active: true
+        status_code: 200
+      changed_when: true
+      no_log: true  # the password in its body
+
+    - name: The bot, as it sees itself
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/user"
+        url_username: "{{ reader_user }}"
+        url_password: "{{ _rd_bot_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _rd_bot_self
+
+    - name: The reader is no admin
+      ansible.builtin.assert:
+        that:
+          - _rd_bot_self.json.login == reader_user
+          - not (_rd_bot_self.json.is_admin | bool)
+        fail_msg: >-
+          REFUSED: {{ reader_user }} is {{ (_rd_bot_self.json | default({})).login | default('?') }},
+          admin {{ (_rd_bot_self.json | default({})).is_admin | default('?') }} - Argo CD holds no admin
+        quiet: true
+
+    # ── the teams ──────────────────────────────────────────────────────
+    - name: The org's teams
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ reader_org }}/teams?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _rd_org_teams
+
+    - name: Every team read (one page, not full)
+      ansible.builtin.assert:
+        that: _rd_org_teams.json | length < 50
+        fail_msg: "REFUSED: {{ reader_org }} has 50 teams or more - not all read"
+        quiet: true
+
+    - name: The reader's teams made, where missing
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ reader_org }}/teams"
+        method: POST
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          description: "{{ item.description }}"
+          permission: "{{ item.permission }}"
+          units_map: "{{ item.units_map }}"
+          includes_all_repositories: false
+          can_create_org_repo: false
+        status_code: 201
+      loop: "{{ reader_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.name not in (_rd_org_teams.json | map(attribute='name') | list)
+      register: _rd_teams_made
+      changed_when: true
+
+    - name: The org's teams, with the reader's
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ reader_org }}/teams?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _rd_org_teams_now
+
+    - name: The reader's teams with their ids
+      ansible.builtin.set_fact:
+        _rd_teams: >-
+          {{ _rd_teams | default([]) + [item | combine({'id': (_rd_org_teams_now.json
+             | selectattr('name', 'equalto', item.name) | first).id})] }}
+      loop: "{{ reader_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Who is in the reader's teams
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}/members?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ _rd_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rd_team_members
+
+    # a team of that name someone else is in is not the reader's: its scope would be theirs too
+    - name: The reader's teams hold no one else
+      ansible.builtin.assert:
+        that: item.json | map(attribute='login') | reject('equalto', reader_user) | list | length == 0
+        fail_msg: >-
+          REFUSED: team {{ reader_org }}/{{ item.item.name }} holds
+          {{ item.json | default([]) | map(attribute='login') | reject('equalto', reader_user) | join(', ') }} - not the
+          bot's alone; nothing changed on it
+        quiet: true
+      loop: "{{ _rd_team_members.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: The reader's teams' scope - their units, no repository but their own, no repository made
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}"
+        method: PATCH
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          description: "{{ item.description }}"
+          permission: "{{ item.permission }}"
+          units_map: "{{ item.units_map }}"
+          includes_all_repositories: false
+          can_create_org_repo: false
+        status_code: 200
+      loop: "{{ _rd_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false  # the same settings written again
+
+    - name: The repositories the reader's teams have
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}/repos?limit=50"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ _rd_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rd_team_repos
+
+    - name: Every team's repositories read (one page, not full)
+      ansible.builtin.assert:
+        that: item.json | length < 50
+        fail_msg: "REFUSED: team {{ item.item.name }} has 50 repositories or more - not all read"
+        quiet: true
+      loop: "{{ _rd_team_repos.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: A repository the team should not have, taken off it
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.0.item.id }}/repos/{{ reader_org }}/{{ item.1.name }}"
+        method: DELETE
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ _rd_team_repos.results | subelements('json') }}"
+      loop_control:
+        label: "{{ item.0.item.name }}: {{ item.1.full_name }}"
+      when: item.1.full_name != reader_org ~ '/' ~ item.1.name or item.1.name not in item.0.item.repos
+      changed_when: true
+
+    - name: Its repositories added to the team
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.0.id }}/repos/{{ reader_org }}/{{ item.1 }}"
+        method: PUT
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ _rd_teams | subelements('repos') }}"
+      loop_control:
+        label: "{{ item.0.name }}: {{ item.1 }}"
+      when: >-
+        (reader_org ~ '/' ~ item.1) not in (_rd_team_repos.results | selectattr('item.name', 'equalto', item.0.name)
+        | map(attribute='json') | first | map(attribute='full_name') | list)
+      changed_when: true
+
+    - name: The reader in its teams
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.0.id }}/members/{{ reader_user }}"
+        method: PUT
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 204
+      loop: "{{ _rd_teams | zip(_rd_team_members.results) | list }}"
+      loop_control:
+        label: "{{ item.0.name }}"
+      when: reader_user not in (item.1.json | map(attribute='login') | list)
+      changed_when: true
+
+    - name: The reader's teams, as Forgejo has them now
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/teams/{{ item.id }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ _rd_teams }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rd_teams_read
+
+    - name: Each team's scope is its own - its units alone, no other repository, no repository made, no admin
+      ansible.builtin.assert:
+        that:
+          - (item.json.units_map | dict2items | rejectattr('value', 'equalto', 'none') | items2dict) == item.item.units_map
+          - not (item.json.includes_all_repositories | bool)
+          - not (item.json.can_create_org_repo | bool)
+          - item.json.permission not in ['admin', 'owner']
+        fail_msg: >-
+          REFUSED: team {{ reader_org }}/{{ item.item.name }} reads back as
+          {{ (item.json | default({})).units_map | default('?') }}, all repositories
+          {{ (item.json | default({})).includes_all_repositories | default('?') }}, creates repositories
+          {{ (item.json | default({})).can_create_org_repo | default('?') }}, permission
+          {{ (item.json | default({})).permission | default('?') }} - wanted {{ item.item.units_map }} on its own
+          repositories alone
+        quiet: true
+      loop: "{{ _rd_teams_read.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # what the reader can do, read as the reader: every repository of the org (a team of anyone's the reader was put in, by
+    # hand, shows here too)
+    - name: The org's repositories
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/orgs/{{ reader_org }}/repos?limit=50&page={{ item }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ range(1, 11) | list }}"
+      register: _rd_org_repos
+
+    - name: Every repository of the org read (the last page not full)
+      ansible.builtin.assert:
+        that: (_rd_org_repos.results | last).json | length < 50
+        fail_msg: "REFUSED: {{ reader_org }} has over 500 repositories - not all read"
+        quiet: true
+
+    - name: Each repository, as the reader sees it
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/repos/{{ item }}"
+        url_username: "{{ reader_user }}"
+        url_password: "{{ _rd_bot_password }}"
+        force_basic_auth: true
+        status_code: [200, 404]
+      loop: "{{ _rd_org_repos.results | map(attribute='json') | flatten | map(attribute='full_name') | list }}"
+      register: _rd_bot_view
+
+    - name: What the reader can do
+      ansible.builtin.set_fact:
+        _rd_bot_seen: "{{ _rd_bot_view.results | selectattr('status', 'equalto', 200) | map(attribute='json') | list }}"
+
+    - name: The reader pushes to nothing, administers nothing, reads what Argo CD clones
+      ansible.builtin.assert:
+        that:
+          - _rd_bot_seen | selectattr('permissions.push') | list | length == 0
+          - _rd_bot_seen | selectattr('permissions.admin') | list | length == 0
+          - _rd_repos.code | map('regex_replace', '^', reader_org ~ '/')
+            | difference(_rd_bot_seen | selectattr('permissions.pull') | map(attribute='full_name')) | length == 0
+        fail_msg: >-
+          REFUSED: {{ reader_user }} pushes to
+          {{ _rd_bot_seen | default([]) | selectattr('permissions.push') | map(attribute='full_name') | join(', ') or 'nothing' }},
+          administers
+          {{ _rd_bot_seen | default([]) | selectattr('permissions.admin') | map(attribute='full_name') | join(', ') or 'nothing' }},
+          reads {{ _rd_bot_seen | default([]) | selectattr('permissions.pull') | map(attribute='full_name') | join(', ') }}
+          - wanted: no push, no admin, read {{ _rd_repos.code | join(', ') }}
+        quiet: true
+
+    # ── the token ──────────────────────────────────────────────────────
+    - name: The reader's tokens
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ reader_user }}/tokens?limit=50"
+        url_username: "{{ reader_user }}"
+        url_password: "{{ _rd_bot_password }}"
+        force_basic_auth: true
+        status_code: 200
+      register: _rd_tokens_before
+      no_log: true  # names, ids and each token's last eight characters
+
+    - name: Every token of the reader read (one page, not full)
+      ansible.builtin.assert:
+        that: _rd_tokens_before.json | length < 50
+        fail_msg: "REFUSED: {{ reader_user }} has 50 tokens or more - not all read; delete the stale ones by hand"
+        quiet: true
+
+    - name: Vault's argocd/forgejo-readonly (a missing path alone is no failure)
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ vault_addr }}"
+        token: "{{ _rd_vault_token }}"
+        ca_cert: "{{ vault_ca_cert }}"
+        path: "{{ reader_vault_path }}"
+      register: _rd_vault_before
+      failed_when: >-
+        (_rd_vault_before.failed | default(false))
+        and 'Invalid or missing path' not in (_rd_vault_before.msg | default(''))
+      no_log: true
+
+    - name: This run's token name
+      ansible.builtin.set_fact:
+        _rd_stamp: "{{ now(utc=true, fmt='%Y%m%dT%H%M%S') }}"
+
+    - name: A new token - minted, proven, written to Vault (else deleted again, Vault unchanged)
+      block:
+        - name: A token, read:repository alone
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/users/{{ reader_user }}/tokens"
+            method: POST
+            url_username: "{{ reader_user }}"
+            url_password: "{{ _rd_bot_password }}"
+            force_basic_auth: true
+            body_format: json
+            body:
+              name: "argocd-reader-{{ _rd_stamp }}"
+              scopes: [read:repository]
+            status_code: 201
+          register: _rd_minted
+          changed_when: true
+          no_log: true  # its result is a token
+
+        - name: The token has its scope alone, as Forgejo made it
+          ansible.builtin.assert:
+            that: (_rd_minted.json.scopes | sort) == ['read:repository']
+            fail_msg: "REFUSED: the token came with scopes {{ (_rd_minted.json | default({})).scopes | default('?') }}"
+            quiet: true
+
+        - name: The token reads each repository Argo CD clones (its branches)
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/repos/{{ reader_org }}/{{ item }}/branches?limit=1"
+            headers:
+              Authorization: "token {{ _rd_minted.json.sha1 }}"
+            status_code: 200
+          loop: "{{ _rd_repos.code }}"
+          no_log: true  # a token in its header
+
+        - name: The token lists the pull requests of each repository the PR generator reads
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/repos/{{ reader_org }}/{{ item }}/pulls?state=open&limit=1"
+            headers:
+              Authorization: "token {{ _rd_minted.json.sha1 }}"
+            status_code: 200
+          loop: "{{ _rd_repos.pulls }}"
+          no_log: true  # a token in its header
+
+        # what ten holds now (the admin's tokens before the switch) recorded, so --tags retire knows them after it
+        - name: The token and the reader's name in Vault, every other property kept
+          community.hashi_vault.vault_kv2_write:
+            url: "{{ vault_addr }}"
+            token: "{{ _rd_vault_token }}"
+            ca_cert: "{{ vault_ca_cert }}"
+            path: "{{ reader_vault_path }}"
+            cas: "{{ _rd_vault_before.metadata.version if _rd_vault_before.secret is defined else 0 }}"
+            data: >-
+              {{ (_rd_vault_before.secret | default({}))
+                 | combine({'token': _rd_minted.json.sha1, 'username': reader_user,
+                            'retire_last_eight': ((((_rd_vault_before.secret | default({})).retire_last_eight
+                                                    | default('')).split(',')
+                                                   + _rd_ten_secret.values() | list)
+                                                  | select('match', '^[0-9a-f]{8}$') | unique | sort | join(',')) }) }}
+          register: _rd_vault_written
+          no_log: true
+
+        - name: Vault read back - this run's token there
+          community.hashi_vault.vault_kv2_get:
+            url: "{{ vault_addr }}"
+            token: "{{ _rd_vault_token }}"
+            ca_cert: "{{ vault_ca_cert }}"
+            path: "{{ reader_vault_path }}"
+          register: _rd_vault_written_read
+          no_log: true
+
+        - name: Vault holds this run's token
+          ansible.builtin.assert:
+            that:
+              - _rd_vault_written_read.secret.token == _rd_minted.json.sha1
+              - _rd_vault_written_read.secret.username == reader_user
+            fail_msg: "REFUSED: Vault's argocd/forgejo-readonly read back does not hold this run's token"
+            quiet: true
+          no_log: true  # the token compared
+
+      rescue:
+        - name: Whether the Vault write itself failed
+          ansible.builtin.set_fact:
+            _rd_write_failed: "{{ (ansible_failed_task.action | default('')) is search('vault_kv2_write') }}"
+
+        - name: Vault read again (did the write go through?)
+          when: not (_rd_write_failed | bool)
+          community.hashi_vault.vault_kv2_get:
+            url: "{{ vault_addr }}"
+            token: "{{ _rd_vault_token }}"
+            ca_cert: "{{ vault_ca_cert }}"
+            path: "{{ reader_vault_path }}"
+          register: _rd_vault_after
+          failed_when: false
+          no_log: true
+
+        - name: This run's token, and whether Vault holds it
+          ansible.builtin.set_fact:
+            _rd_minted_ok: "{{ (_rd_minted | default({})).status | default(0) == 201 }}"
+            _rd_vault_after_read: >-
+              {{ (_rd_vault_after | default({})).secret is defined
+                 or 'Invalid or missing path' in ((_rd_vault_after | default({})).msg | default('')) }}
+            _rd_vault_holds_it: >-
+              {{ (_rd_minted | default({})).status | default(0) == 201
+                 and (((_rd_vault_after | default({})).secret | default({})).token | default('')) == _rd_minted.json.sha1 }}
+          no_log: true  # the token compared
+
+        - name: This run's token deleted again (Vault read, not holding it)
+          ansible.builtin.uri:
+            follow_redirects: none
+            url: "{{ forgejo_api }}/users/{{ reader_user }}/tokens/{{ _rd_minted.json.id }}"
+            method: DELETE
+            url_username: "{{ reader_user }}"
+            url_password: "{{ _rd_bot_password }}"
+            force_basic_auth: true
+            status_code: [204, 404]  # gone already is what it wants
+          when:
+            - _rd_minted_ok | bool
+            - not (_rd_write_failed | bool)
+            - _rd_vault_after_read | bool
+            - not (_rd_vault_holds_it | bool)
+
+        - name: The new token - not in use, or kept as Vault may hold it
+          ansible.builtin.fail:
+            msg: >-
+              REFUSED at '{{ ansible_failed_task.name | default('?') }}' -
+              {{ ("the Vault write itself failed - it may still land: this run's token not deleted (argocd-reader-"
+                  ~ _rd_stamp ~ "; a later run deletes it once Vault does not hold it and it is over "
+                  ~ reader_keep_hours ~ " h old)")
+                 if (_rd_write_failed | bool) else
+                 ("Vault not read after the write - whether it holds this run's token is not known: not deleted")
+                 if not (_rd_vault_after_read | bool) else
+                 ("Vault holds this run's token (its write went through, the answer lost): not deleted - Argo CD gets"
+                  ~ " it at External Secrets' next refresh; check " ~ reader_vault_path ~ " and rerun")
+                 if (_rd_vault_holds_it | bool)
+                 else ("this run's new token deleted again, Vault's " ~ reader_vault_path ~ " unchanged,"
+                       ~ " Argo CD on the token it had") }}
+
+    # ── the cleanup ────────────────────────────────────────────────────
+    - name: What Vault and ten hold, and the oldest token time kept
+      ansible.builtin.set_fact:
+        _rd_keep_last_eight: >-
+          {{ ((_rd_vault_before.secret | default({})).values() | map('string') | select('match', '^.{8,}$')
+              | map('regex_replace', '^.*(.{8})$', '\1') | list)
+             + (_rd_ten_secret.values() | select('match', '^.{8}$') | list) }}
+        _rd_keep_since: >-
+          {{ '%Y%m%dT%H%M%S' | strftime(second=(now().timestamp() - (reader_keep_hours | float) * 3600) | int,
+                                        utc=true) }}
+        # ten read and every ExternalSecret of Argo CD's there Ready: what Argo CD holds is known
+        _rd_ten_known: >-
+          {{ _rd_ten_read and (reader_external_secrets | select('in', _rd_ten_ready)
+                               | map('extract', _rd_ten_ready) | reject('equalto', 'True') | list | length == 0)
+             and 'forgejo-readonly-token' in _rd_ten_ready }}
+      no_log: true  # parts of tokens
+
+    - name: The reader's older tokens to delete - not in Vault, not on ten, over the keep time
+      ansible.builtin.set_fact:
+        _rd_delete: "{{ (_rd_delete | default([])) + [item] }}"
+      loop: >-
+        {{ _rd_tokens_before.json | selectattr('name', 'match', _rd_token_name)
+           | rejectattr('token_last_eight', 'in', _rd_keep_last_eight) | list }}
+      loop_control:
+        label: "{{ item.name }}"
+      when: (item.name | regex_replace('^.*-', '')) < _rd_keep_since
+      no_log: true  # each item a token's last eight characters
+
+    - name: The reader's older tokens deleted
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ reader_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ reader_user }}"
+        url_password: "{{ _rd_bot_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already is what it wants
+      loop: "{{ _rd_delete | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: _rd_ten_known | bool
+      changed_when: true
+      no_log: true  # each item a token's last eight characters
+
+    - name: The reader's tokens deleted (their names)
+      ansible.builtin.debug:
+        msg: >-
+          reader tokens deleted{{ ':' if (_rd_ten_known | bool) else ' none -' }}
+          {{ (_rd_delete | default([]) | map(attribute='name') | join(', ') or 'none') if (_rd_ten_known | bool)
+             else ('ten not read' if not _rd_ten_read else 'argocd not synced (not Ready)')
+                  ~ ' (what Argo CD holds is not known); a later run deletes '
+                  ~ ((_rd_delete | default([]) | map(attribute='name') | join(', ')) or 'them') }}
+
+    - name: Argo CD's account
+      ansible.builtin.debug:
+        msg: >-
+          {{ reader_user }} (no admin) in {{ reader_teams | map(attribute='name') | map('regex_replace', '^', reader_org ~ '/')
+          | join(', ') }} - code read on {{ _rd_repos.code | join(', ') }}, pull requests read on
+          {{ _rd_repos.pulls | join(', ') or 'none' }} (infra {{ _rd_repos.commit }}); its token argocd-reader-{{ _rd_stamp }}
+          and username in Vault: argocd/forgejo-readonly
+          v{{ (_rd_vault_before.metadata | default({})).version | default(0) }}
+          -> v{{ _rd_vault_written_read.metadata.version | default('?') }} (rollback: the playbook's header).
+          forgejo-readonly-token and the repo-creds take it at External Secrets' next refresh (1 h) - at once: kubectl
+          annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es forgejo-pi-repo-es -n argocd
+          force-sync=$(date +%s) --overwrite.
+
+    # ── retiring the admin's Argo CD tokens (--tags retire) ────────────
+    - name: Vault's argocd/forgejo-readonly, as Argo CD gets it
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ vault_addr }}"
+        token: "{{ _rd_vault_token }}"
+        ca_cert: "{{ vault_ca_cert }}"
+        path: "{{ reader_vault_path }}"
+      register: _rd_vault_now
+      no_log: true
+      tags: [never, retire]
+
+    - name: Vault's argocd/forgejo-readonly versions
+      community.hashi_vault.vault_read:
+        url: "{{ vault_addr }}"
+        token: "{{ _rd_vault_token }}"
+        ca_cert: "{{ vault_ca_cert }}"
+        path: "secret/metadata/{{ reader_vault_path }}"
+      register: _rd_vault_meta
+      tags: [never, retire]
+
+    - name: Every older version Vault still has (not deleted, not destroyed)
+      community.hashi_vault.vault_kv2_get:
+        url: "{{ vault_addr }}"
+        token: "{{ _rd_vault_token }}"
+        ca_cert: "{{ vault_ca_cert }}"
+        path: "{{ reader_vault_path }}"
+        version: "{{ item }}"
+      loop: >-
+        {{ _rd_vault_meta.data.data.versions | dict2items | rejectattr('value.destroyed')
+           | selectattr('value.deletion_time', 'equalto', '') | map(attribute='key') | map('int')
+           | reject('equalto', _rd_vault_now.metadata.version | int) | list }}
+      register: _rd_vault_history
+      no_log: true
+      tags: [never, retire]
+
+    - name: The admin's Argo CD tokens - as .env names, Vault's history holds, and retire_last_eight records them
+      ansible.builtin.set_fact:
+        _rd_vault_token_now: "{{ (_rd_vault_now.secret.token | default(''))[-8:] }}"
+        _rd_env_last_eight: >-
+          {{ [lookup('env', 'FORGEJO_READONLY_TOKEN')] | map('trim') | select('match', '^.{8,}$')
+             | map('regex_replace', '^.*(.{8})$', '\1') | list }}
+        _rd_retire_last_eight: >-
+          {{ ([lookup('env', 'FORGEJO_READONLY_TOKEN')]
+              + (_rd_vault_history.results | map(attribute='secret') | map(attribute='token', default='') | list))
+             | map('trim') | select('match', '^.{8,}$') | map('regex_replace', '^.*(.{8})$', '\1') | list
+             + ((_rd_vault_now.secret.retire_last_eight | default('')).split(',') | select('match', '^.{8}$') | list) }}
+        _rd_vault_reader: >-
+          {{ (_rd_vault_now.secret.username | default('')) == reader_user
+             and (_rd_vault_now.secret.token | default('')) | length >= 8 }}
+      no_log: true  # parts of tokens
+      tags: [never, retire]
+
+    - name: Vault hands Argo CD the reader's token, not the one .env names
+      ansible.builtin.assert:
+        that:
+          - _rd_vault_reader | bool
+          - _rd_vault_token_now not in _rd_env_last_eight
+        fail_msg: >-
+          REFUSED: Vault's {{ reader_vault_path }}
+          {{ 'does not hold the reader (username ' ~ reader_user ~ ' and its token) - run task deploy:argocd-reader first'
+             if not (_rd_vault_reader | default(false) | bool) else 'still holds the token .env names (FORGEJO_READONLY_TOKEN)' }}
+          - nothing deleted
+        quiet: true
+      tags: [never, retire]
+
+    - name: The cluster read on ten
+      ansible.builtin.assert:
+        that: _rd_ten_read | bool
+        fail_msg: "REFUSED: the cluster not read on ten - what Argo CD holds is not known; nothing deleted"
+        quiet: true
+      tags: [never, retire]
+
+    - name: Argo CD's ExternalSecrets synced (Ready)
+      ansible.builtin.assert:
+        that: >-
+          reader_external_secrets
+          | reject('in', _rd_ten_ready | dict2items | selectattr('value', 'equalto', 'True') | map(attribute='key') | list)
+          | list | length == 0
+        fail_msg: >-
+          REFUSED: argocd's ExternalSecrets not all Ready (not:
+          {{ reader_external_secrets | reject('in', _rd_ten_ready | default({}) | dict2items
+             | selectattr('value', 'equalto', 'True') | map(attribute='key') | list) | join(', ') }}) - infra's repo-creds
+          ExternalSecrets missing, or not synced; nothing deleted
+        quiet: true
+      tags: [never, retire]
+
+    - name: What ten hands Argo CD is the reader and Vault's token
+      ansible.builtin.assert:
+        that:
+          - _rd_ten_secret.readonly_token | default('') == _rd_vault_token_now
+          - reader_repo_creds | map('regex_replace', '$', '_password') | map('extract', _rd_ten_secret)
+            | reject('equalto', _rd_vault_token_now) | list | length == 0
+          - reader_repo_creds | map('regex_replace', '$', '_username') | map('extract', _rd_ten_secret)
+            | reject('equalto', reader_user) | list | length == 0
+        fail_msg: >-
+          REFUSED: ten's forgejo-readonly-token or a repo-creds Secret ({{ reader_repo_creds | join(', ') }}) does not
+          hand Argo CD the reader with Vault's token - External Secrets has not synced since; force it and rerun;
+          nothing deleted
+        quiet: true
+      tags: [never, retire]
+
+    # page by page (Forgejo pages its answers, 50 at most)
+    - name: The admin's tokens, page by page
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ forgejo_admin_user }}/tokens?limit=50&page={{ item }}"
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+      loop: "{{ range(1, 11) | list }}"
+      register: _rd_admin_tokens
+      no_log: true  # names, ids and each token's last eight characters
+      tags: [never, retire]
+
+    - name: Every one of the admin's tokens read (the last page not full)
+      ansible.builtin.assert:
+        that: (_rd_admin_tokens.results | last).json | length < 50
+        fail_msg: "REFUSED: {{ forgejo_admin_user }} has over 500 tokens - not all read"
+        quiet: true
+      tags: [never, retire]
+
+    - name: The admin's tokens Argo CD held
+      ansible.builtin.set_fact:
+        _rd_retire: >-
+          {{ _rd_admin_tokens.results | map(attribute='json') | flatten
+             | selectattr('token_last_eight', 'in', _rd_retire_last_eight) | list
+             + _rd_admin_tokens.results | map(attribute='json') | flatten
+               | rejectattr('token_last_eight', 'in', _rd_retire_last_eight)
+               | selectattr('name', 'match', '^argocd(-[0-9T]+)?$') | list }}
+      no_log: true  # each a token's last eight characters
+      tags: [never, retire]
+
+    - name: Something to retire - or nothing named at all
+      ansible.builtin.assert:
+        that: _rd_retire_last_eight | length > 0 or _rd_retire | length > 0
+        fail_msg: >-
+          nothing to retire: no admin token named argocd*, and neither .env (FORGEJO_READONLY_TOKEN) nor Vault's
+          history or retire_last_eight names one
+        quiet: true
+      tags: [never, retire]
+
+    # one Vault or ten still holds: deleting it would stop Argo CD
+    - name: None of them is one Vault or ten still holds
+      ansible.builtin.assert:
+        that: >-
+          _rd_retire | map(attribute='token_last_eight')
+          | intersect([_rd_vault_token_now] + (_rd_ten_secret.values() | list)) | length == 0
+        fail_msg: >-
+          REFUSED: a token of the admin's Vault or ten still holds
+          ({{ _rd_retire | selectattr('token_last_eight', 'in', [_rd_vault_token_now] + (_rd_ten_secret.values() | list))
+              | map(attribute='name') | join(', ') }}) - nothing deleted
+        quiet: true
+      tags: [never, retire]
+
+    - name: The admin's Argo CD tokens deleted
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ forgejo_admin_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ forgejo_admin_user }}"
+        url_password: "{{ forgejo_admin_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already is what it wants
+      loop: "{{ _rd_retire }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _rd_retired
+      changed_when: true
+      no_log: true  # each item a token's last eight characters
+      tags: [never, retire]
+
+    - name: The admin's Argo CD tokens retired
+      ansible.builtin.debug:
+        msg: >-
+          deleted: {{ _rd_retire | map(attribute='name') | join(', ') or 'none (gone already)' }} - remove
+          FORGEJO_READONLY_TOKEN from .env
+      tags: [never, retire]

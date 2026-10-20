@@ -43,6 +43,7 @@ ssh ten 'sudo kubectl describe application schnappy -n argocd'
 ```
 
 **Installation:** `task deploy:argocd` (Ansible playbook `setup-argocd.yml`)
+**Forgejo credentials:** Argo CD reads Forgejo as the NON-admin `argocd-reader` - `task deploy:argocd-reader` (`setup-argocd-reader.yml`) derives what Argo CD reads from infra's Applications/ApplicationSets (`scripts/argocd-repos.py`: code read on what they clone, pull requests read on what the PR generator lists), mints its read:repository token into Vault `argocd/forgejo-readonly` (token, username); infra's ExternalSecrets put it into `forgejo-readonly-token` and the repo-creds `forgejo-repo-creds`/`forgejo-pi-repo` (creationPolicy Merge - setup-argocd makes the Secret, url only). ROLLBACK: `vault kv rollback -version=<read> secret/argocd/forgejo-readonly` on the VIP Pi, then force-sync those ExternalSecrets. `task deploy:argocd-reader:retire-admin-tokens` deletes the admin's tokens Argo CD held, once ten shows the switch
 **UI:** `https://cd.pmon.dev/` (Keycloak SSO, Admins = admin role, Users = readonly)
 
 ### Checking CI/CD Status
