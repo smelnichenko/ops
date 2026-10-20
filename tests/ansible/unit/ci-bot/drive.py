@@ -168,7 +168,8 @@ def fixture():
                    tok(12, "argocd-readonly", READONLY, ["read:repository"])])
     repos = {r: {"private": True} for r in ("infra", "admin", "chat", "chess", "masi", "monitor", "platform", "site")}
     repos["handbook"] = {"private": False}
-    return {"seq": 100, "org": ORG, "users": users, "teams": teams, "tokens": tokens, "repos": repos}
+    return {"seq": 100, "org": ORG, "users": users, "teams": teams, "tokens": tokens, "repos": repos,
+            "images": {"masi": ["9f8e7d6", "latest"]}}
 
 
 VAULT_REST = {"renovate_token": "renovate-xyz", "sonar_token": "sonar-abc", "nexus_url": f"http://{VIP}:8081",
@@ -177,12 +178,22 @@ VAULT_FIXTURE = {"schnappy/woodpecker-ci": {"data": dict(VAULT_REST, infra_repo_
                                                          clone_token=ADMIN_CLONE), "version": 3}}
 
 
-def ten(down=False, ready=None, secret=None, pull=""):
-    """ten's view: both ExternalSecrets' Ready (True unless given), woodpecker-ci-secrets' keys, forgejo-registry's
-    password; down - kubectl refused."""
-    json.dump({"down": down, "ready": dict({"woodpecker-ci-secrets-es": "True", "forgejo-registry-es": "True"},
-                                           **(ready or {})),
-               "secret": secret or {}, "pull": {"username": BOT, "password": pull}}, open(K8S, "w"))
+PULL_NS = ["woodpecker", "schnappy-production", "schnappy-test", "schnappy-infra"]
+
+
+def ten(down=False, ready=None, secret=None, pull=None):
+    """ten's view: every ExternalSecret's Ready (True unless given, as "<ns>/<name>"), woodpecker-ci-secrets' keys,
+    each namespace's forgejo-registry password (a string: woodpecker's); down - kubectl refused."""
+    pull = {"woodpecker": pull} if isinstance(pull, str) else (pull or {})
+    json.dump({"down": down,
+               "ready": {"woodpecker/woodpecker-ci-secrets-es": "True",
+                         **{f"{ns}/forgejo-registry-es": "True" for ns in PULL_NS}, **(ready or {})},
+               "secret": secret or {}, "pull": {ns: pull.get(ns, "") for ns in PULL_NS}}, open(K8S, "w"))
+
+
+# what ten is asked (kubectl-stub.py's log: verb, kind, namespace - "*" every one): get alone
+READ_ON_TEN = {"get externalsecret -n woodpecker", "get secret -n woodpecker", "get externalsecret -n *",
+               "get secret -n *"}
 
 
 def kubectl_calls():
@@ -239,7 +250,9 @@ def bot_rights(st):
 WANT_SCOPE = ({"is_admin": False, "must_change_password": False, "prohibit_login": False, "active": True},
               {"ci": ("write", {"repo.code": "write", "repo.packages": "write"}, False, False, ["infra"], [BOT]),
                "ci-clone": ("read", {"repo.code": "read"}, False, False, ["admin", "chat", "chess", "masi"], [BOT])})
-WANT_KINDS = [("infra", ["write:repository"]), ("registry", ["write:package"]), ("clone", ["read:repository"])]
+WANT_KINDS = [("infra", ["write:repository"]), ("registry", ["write:package"]), ("clone", ["read:repository"]),
+              ("pull", ["read:package"])]
+K = len(WANT_KINDS)  # tokens a run mints
 
 
 def kinds(toks):
@@ -249,7 +262,7 @@ def kinds(toks):
 def vault_expect(toks, rest=VAULT_REST):
     by = {t["name"].split("-")[1]: t["sha1"] for t in toks}
     return dict(rest, infra_repo_token=by.get("infra"), registry_token=by.get("registry"),
-                clone_token=by.get("clone"),
+                clone_token=by.get("clone"), pull_token=by.get("pull"),
                 registry_user=BOT)
 
 
@@ -280,9 +293,9 @@ check("first run: passes", (rc, tail(out) if rc else ""), (0, ""))
 check("first run: the bot is no admin (no must-change, may log in) - its teams' scope exactly: ci code+packages write "
       "on infra alone, ci-clone code read on admin chat chess masi, no repository made, each holding the bot alone",
       scope_view(s), WANT_SCOPE)
-check("first run: three tokens on the bot, each its scope alone (infra write:repository, registry write:package, "
-      "clone read:repository), named ci-<use>-<UTC time>",
-      (kinds(toks), all(re.match(r"^ci-(infra|registry|clone)-\d{8}T\d{6}$", t["name"]) for t in toks)),
+check("first run: four tokens on the bot, each its scope alone (infra write:repository, registry write:package, "
+      "clone read:repository, pull read:package), named ci-<use>-<UTC time>",
+      (kinds(toks), all(re.match(r"^ci-(infra|registry|clone|pull)-\d{8}T\d{6}$", t["name"]) for t in toks)),
       (WANT_KINDS, True))
 check("first run: minted as the bot (basic auth), never as the admin",
       sorted({str(e["auth"]) for e in s["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")}),
@@ -296,7 +309,15 @@ check("first run: the registry token proven on the registry itself - a bearer fr
       ([(e["method"], re.sub(r"[0-9a-f]{16}$", "<uuid>", e["path"])) for e in s["log"] if e["path"].startswith("/v2/")],
        s["state"].get("uploads")),
       ([("GET", "/v2/token"), ("POST", "/v2/schnappy/masi/blobs/uploads/"),
-        ("DELETE", "/v2/schnappy/masi/blobs/uploads/<uuid>")], []))
+        ("DELETE", "/v2/schnappy/masi/blobs/uploads/<uuid>"),
+        ("GET", "/v2/token"), ("POST", "/v2/schnappy/masi/blobs/uploads/"), ("GET", "/v2/schnappy/masi/tags/list"),
+        ("GET", "/v2/schnappy/masi/manifests/9f8e7d6")], []))
+check("first run: the pull token proven pull-only - a bearer from /v2/token, its push (an upload) refused, a manifest of "
+      "schnappy/masi read",
+      [(e["method"], e["path"].split("/")[-1] or e["path"].split("/")[-2], str(e["auth"])) for e in s["log"]
+       if e["path"].startswith("/v2/") and e["auth"] and e["auth"][0] == "token"][-4:],
+      [("GET", "token", str(["token", BOT])), ("POST", "uploads", str(["token", BOT])),
+       ("GET", "list", str(["token", BOT])), ("GET", "9f8e7d6", str(["token", BOT]))])
 check("first run: the admin's tokens untouched (retired only on --tags retire)",
       sorted(t["name"] for t in s["state"]["tokens"].values() if t["user"] == "forgejo_admin"),
       ["argocd-readonly", "woodpecker-clone", "woodpecker-infra"])
@@ -312,17 +333,17 @@ toks2 = bot_tokens(s2)
 check("rerun: passes, the account and the teams as they were (same teams, not made again)",
       (rc, scope_view(s2), {t["name"]: t["id"] for t in s2["state"]["teams"].values()}), (0, WANT_SCOPE, first_ids))
 check("rerun: the run-1 tokens kept, three new ones, Vault on the new ones, every other property still kept",
-      ([t["id"] for t in toks2[:3]], kinds(toks2[3:]), dv(v2)["data"]),
-      ([t["id"] for t in toks], WANT_KINDS, vault_expect(toks2[3:])))
+      ([t["id"] for t in toks2[:K]], kinds(toks2[K:]), dv(v2)["data"]),
+      ([t["id"] for t in toks], WANT_KINDS, vault_expect(toks2[K:])))
 time.sleep(1.1)
 rc, out = run()
 s3, v3 = fstate(), kv()
 toks3 = bot_tokens(s3)
 check("a third run within 3 h: run 1's tokens kept too - Vault no longer holds them, but External Secrets may not "
       "have synced since (the cluster's Secret may still hand them to CI); account and teams unchanged",
-      (rc, [t["id"] for t in toks3[:6]], kinds(toks3[6:]), len(toks3), scope_view(s3),
-       dv(v3)["data"] == vault_expect(toks3[6:])),
-      (0, [t["id"] for t in toks2], WANT_KINDS, 9, WANT_SCOPE, True))
+      (rc, [t["id"] for t in toks3[:2 * K]], kinds(toks3[2 * K:]), len(toks3), scope_view(s3),
+       dv(v3)["data"] == vault_expect(toks3[2 * K:])),
+      (0, [t["id"] for t in toks2], WANT_KINDS, 3 * K, WANT_SCOPE, True))
 # hours later: runs 1 and 2's tokens over 3 h old and not in Vault - deleted; run 3's over 3 h old but in Vault - kept;
 # one 2 h 59 min old, not in Vault - kept
 st = copy.deepcopy(s3["state"])
@@ -340,31 +361,38 @@ s10 = fstate()
 aged = {t["id"]: t["name"] for t in st["tokens"].values() if t["user"] == BOT}
 check("a run over 3 h later: the tokens over 3 h old Vault does not hold deleted (runs 1 and 2); those Vault held "
       "kept however old (run 3), one under 3 h old kept; three new; the deleted ones named in the run's summary",
-      (rc, sorted(t["id"] for t in bot_tokens(s10))[:4], len(bot_tokens(s10)),
-       all(aged[i] in flat(out) for i in [t["id"] for t in toks3[:6]]) and "bot tokens deleted:" in flat(out)),
-      (0, sorted([t["id"] for t in toks3[6:]] + [young["id"]]), 7, True))
-check("  ... ten read for it, read only: both ExternalSecrets' Ready, the two Secrets (get alone)",
-      sorted(set(kubectl_calls())), ["get externalsecret -n woodpecker", "get secret -n woodpecker"])
+      (rc, sorted(t["id"] for t in bot_tokens(s10))[:K + 1], len(bot_tokens(s10)),
+       all(aged[i] in flat(out) for i in [t["id"] for t in toks3[:2 * K]]) and "bot tokens deleted:" in flat(out)),
+      (0, sorted([t["id"] for t in toks3[2 * K:]] + [young["id"]]), 2 * K + 1, True))
+check("  ... ten read for it, read only: the ExternalSecrets' Ready, woodpecker-ci-secrets and every namespace's "
+      "pull secret (get alone)",
+      sorted(set(kubectl_calls())), sorted(READ_ON_TEN))
 by_id = {t["id"]: t for t in toks3}
-held_infra, held_pull = toks3[0], toks3[4]  # run 1's infra token in woodpecker-ci-secrets, run 2's registry token in
-# forgejo-registry (External Secrets not synced since)
+# held still (External Secrets not synced since): run 1's infra token in woodpecker-ci-secrets, run 2's registry token
+# in woodpecker's forgejo-registry, run 1's pull token in schnappy-production's
+held_infra, held_reg, held_pull = toks3[0], toks3[K + 1], toks3[3]
 reset(copy.deepcopy(st), {"schnappy/woodpecker-ci": dv(v3)})
-ten(secret={"infra_repo_token": held_infra["sha1"]}, pull=held_pull["sha1"])
+ten(secret={"infra_repo_token": held_infra["sha1"]},
+    pull={"woodpecker": held_reg["sha1"], "schnappy-production": held_pull["sha1"]})
 rc, out = run()
-check("a run over 3 h later with the cluster still holding two old tokens (run 1's infra token in "
-      "woodpecker-ci-secrets, run 2's registry token in forgejo-registry): those two kept, the others deleted",
-      (rc, sorted(t["id"] for t in bot_tokens(fstate()))[:6], len(bot_tokens(fstate()))),
-      (0, sorted([held_infra["id"], held_pull["id"], young["id"]] + [t["id"] for t in toks3[6:]]), 9))
+check("a run over 3 h later with the cluster still holding three old tokens (run 1's infra token in "
+      "woodpecker-ci-secrets, run 2's registry token in woodpecker's forgejo-registry, run 1's pull token in "
+      "schnappy-production's): those three kept, the others deleted",
+      (rc, sorted(t["id"] for t in bot_tokens(fstate()))[:K + 4], len(bot_tokens(fstate()))),
+      (0, sorted([held_infra["id"], held_reg["id"], held_pull["id"], young["id"]] + [t["id"] for t in toks3[2 * K:]]),
+       2 * K + 4))
 for label, k8s, said in (
         ("ten not read (kubectl refused)", {"down": True}, "ten not read"),
-        ("an ExternalSecret not Ready (forgejo-registry-es)", {"ready": {"forgejo-registry-es": "False"}},
-         "forgejo-registry-es")):
+        ("an ExternalSecret not Ready (woodpecker's forgejo-registry-es)",
+         {"ready": {"woodpecker/forgejo-registry-es": "False"}}, "woodpecker/forgejo-registry-es"),
+        ("an ExternalSecret not Ready (schnappy-production's forgejo-registry-es)",
+         {"ready": {"schnappy-production/forgejo-registry-es": "False"}}, "schnappy-production/forgejo-registry-es")):
     reset(copy.deepcopy(st), {"schnappy/woodpecker-ci": dv(v3)})
     ten(**k8s)
     rc, out = run()
     check(f"a run over 3 h later with {label}: no bot token deleted, said - the run passes",
           (rc, len(bot_tokens(fstate())), "deleted none" in flat(out) and said in flat(out)),
-          (0, len(toks3) + 1 + 3, True))
+          (0, len(toks3) + 1 + K, True))
 V3 = dv(v3)["data"]
 VAULT6 = {"schnappy/woodpecker-ci": {"data": V3, "version": 6}}
 
@@ -422,6 +450,11 @@ for label, fault, want_vault in (
         ("the registry refuses the push (the upload)",
          ("forgejo", {"method": "POST", "path": "^/v2/.+/blobs/uploads/$", "status": 401}),
          {"data": V3, "version": 6}),
+        ("the pull token can push (the registry starts its upload)",
+         ("forgejo", {"method": "POST", "path": "^/v2/.+/blobs/uploads/$", "status": 202, "nth": 2}),
+         {"data": V3, "version": 6}),
+        ("the pull token reads no manifest",
+         ("forgejo", {"method": "GET", "path": "^/v2/.+/manifests/", "status": 404}), {"data": V3, "version": 6}),
 ):
     reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
     (vault if fault[0] == "vault" else forgejo)("POST", "/_fail", fault[1])
@@ -479,7 +512,7 @@ rc, out = run()
 check("the read-back failing and Vault unreadable after it: fails, saying so - none deleted (whether Vault holds "
       "them is not known)",
       (rc != 0, "Vault not read after the write" in flat(out), len(bot_tokens(fstate()))),
-      (True, True, len(toks3) + 3))
+      (True, True, len(toks3) + K))
 
 # ── Forgejo not applying a team's units (an edit answered 200, the units left as they were): refused on reading back ──
 st = copy.deepcopy(s3["state"])
@@ -536,7 +569,7 @@ def cluster(ready="True", synced=True):
     data = dv(kv())["data"] or {}
     secret = ({k: data.get(k, "") for k in ("infra_repo_token", "registry_token", "clone_token")} if synced
               else {"infra_repo_token": ADMIN_INFRA, "clone_token": ADMIN_CLONE})
-    ten(ready={"woodpecker-ci-secrets-es": ready}, secret=secret)
+    ten(ready={"woodpecker/woodpecker-ci-secrets-es": ready}, secret=secret)
 
 
 reset()
@@ -563,9 +596,8 @@ check("retire after setup, the cluster synced: the admin's two CI tokens deleted
       "the account and Vault untouched",
       (rc, admin_names(s7), [t["id"] for t in bot_tokens(s7)], kv() == vv, scope_view(s7)),
       (0, ["argocd-readonly"], [t["id"] for t in bot_tokens(st)], True, WANT_SCOPE))
-check("retire read the cluster read-only: the ExternalSecret and the Secret, get alone",
-      sorted(set(open(os.path.join(W, "kubectl.log")).read().splitlines())),
-      ["get externalsecret -n woodpecker", "get secret -n woodpecker"])
+check("retire read the cluster read-only: the ExternalSecrets and the Secrets, get alone",
+      sorted(set(open(os.path.join(W, "kubectl.log")).read().splitlines())), sorted(READ_ON_TEN))
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
 check("retire again: nothing left to delete - passes", (rc, admin_names(fstate())), (0, ["argocd-readonly"]))
 reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": vv["kv"]["schnappy/woodpecker-ci"]})
@@ -635,14 +667,15 @@ yaml.safe_dump([{"name": "seed-vault-secrets' woodpecker-ci tasks", "hosts": "lo
                           "vault_token_value": VAULT_TOKEN, "keepalived_vip": VIP},
                  "tasks": pick}], open(SEED_PLAY, "w"), sort_keys=False)
 BOTV = {"infra_repo_token": "bot-infra-0000", "clone_token": "bot-clone-0000", "registry_user": BOT,
-        "registry_token": "bot-registry-0000"}
+        "registry_token": "bot-registry-0000", "pull_token": "bot-pull-0000"}
 SEED_ENV = {"SONARQUBE_TOKEN": "sonar-new", "NVD_API_KEY": "nvd", "PROMETHEUS_AUTH_TOKEN": "prom",
             "RENOVATE_TOKEN": "renovate-new"}
 SEED_OUT = {"sonar_token": "sonar-new", "sonar_host_url": "https://sonar.pmon.dev", "nexus_url": f"http://{VIP}:8081",
             "nexus_npm_registry": f"http://{VIP}:8081/repository/npm-public/", "nvd_api_key": "nvd",
             "prometheus_auth_token": "prom", "renovate_token": "renovate-new", "renovate_github_token": ""}
 OLD_ENV = {"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA, "WOODPECKER_CLONE_TOKEN": ADMIN_CLONE,
-           "WOODPECKER_REGISTRY_USER": "forgejo_admin", "WOODPECKER_REGISTRY_TOKEN": ADMIN_PW}
+           "WOODPECKER_REGISTRY_USER": "forgejo_admin", "WOODPECKER_REGISTRY_TOKEN": ADMIN_PW,
+           "WOODPECKER_PULL_TOKEN": "an-old-pull-token"}
 
 
 
@@ -664,10 +697,12 @@ check("seed: Vault's CI bot four kept over .env's old admin values; .env's other
       (rc, wci(after), [w["cas"] for w in after["writes"]]),
       (0, dict(SEED_OUT, custom_extra="keep-me", **BOTV), [7]))
 rc, after, out = seed_run({}, dict(SEED_ENV, **{k: "vagrant-" + k for k in OLD_ENV}))
-check("seed: a first install (the path missing) takes the four from .env where set (the Vagrant copy's placeholders)",
+check("seed: a first install (the path missing) takes the CI bot's five from .env where set (the Vagrant copy's "
+      "placeholders)",
       (rc, wci(after), [w["cas"] for w in after["writes"]]),
       (0, dict(SEED_OUT, infra_repo_token="vagrant-WOODPECKER_INFRA_REPO_TOKEN",
                clone_token="vagrant-WOODPECKER_CLONE_TOKEN", registry_user="vagrant-WOODPECKER_REGISTRY_USER",
+               pull_token="vagrant-WOODPECKER_PULL_TOKEN",
                registry_token="vagrant-WOODPECKER_REGISTRY_TOKEN"), [0]))
 rc, after, out = seed_run({}, SEED_ENV)
 check("seed: a first install without them in .env leaves them missing (for setup-ci-bot) - never an empty value",
@@ -698,6 +733,19 @@ r = subprocess.run([AP, "-i", "localhost,", SEED_PLAY], capture_output=True, tex
 check("seed: someone writes Vault between its read and its write - the version read refuses it, theirs kept",
       (r.returncode != 0, dv(kv())), (True, {"data": dict(BOTV, someone="else"), "version": 3}))
 
+# ── a new environment's pull secret: the CI bot's pull-only token, never the admin ─────────────────────────────────
+CE = os.path.join(ROOT, "deploy/ansible/playbooks/create-environment.yml")
+blocks = [t["ansible.builtin.blockinfile"]["block"] for t in yaml.safe_load(open(CE))[0]["tasks"]
+          if t.get("name") == "Add forgejo-registry secret"]
+es = yaml.safe_load(blocks[0].replace("{{ env_ns }}", "schnappy-pr-1").replace("{{ '{{' }}", "{{")
+                    .replace("{{ '}}' }}", "}}")) if len(blocks) == 1 else {}
+check("create-environment: a new environment's forgejo-registry-es takes woodpecker-ci's registry_user and pull_token "
+      "(read:package), nothing of the admin's",
+      (len(blocks), [(d["secretKey"], d["remoteRef"]["key"], d["remoteRef"]["property"]) for d in es["spec"]["data"]]
+       if es else None, "admin" in (blocks[0] if blocks else "admin")),
+      (1, [("registry_user", "secret/data/schnappy/woodpecker-ci", "registry_user"),
+           ("registry_token", "secret/data/schnappy/woodpecker-ci", "pull_token")], False))
+
 # ── no secret on a command line ─────────────────────────────────────────────────────────────────────────────────
 canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])
 canary.wait()
@@ -715,7 +763,8 @@ check(f"no secret on any command line over every run ({w['scans']} scans of /pro
 pl = yaml.safe_load(open(PB))
 CMD = ("shell", "command", "raw", "script", "expect")
 # the reads on ten, by task: what each runs is kubectl, every kubectl a get
-READS_ON_TEN = {"An ExternalSecret's Ready", "The cluster's tokens - their last eight characters"}
+READS_ON_TEN = {"An ExternalSecret's Ready", "Every pull secret's ExternalSecret's Ready",
+                "The cluster's tokens - their last eight characters"}
 cmds = []
 for play in pl:
     stack = list(play.get("tasks") or []) + list(play.get("pre_tasks") or []) + list(play.get("post_tasks") or [])

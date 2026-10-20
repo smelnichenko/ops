@@ -300,9 +300,24 @@ class H(BaseHTTPRequestHandler):
             jwt = "jwt" + secrets.token_hex(16)
             S.setdefault("jwts", {})[jwt] = {"user": login, "scopes": scopes or ["all"]}
             return self.answer(200, {"token": jwt})
-        m = re.match(r"^/v2/([^/]+)/([^/]+)/blobs/uploads/(.*)$", path)
-        if not m or self.headers.get("Authorization", "").split(" ")[0] != "Bearer":
+        if self.headers.get("Authorization", "").split(" ")[0] != "Bearer":
             return self.answer(401, {"errors": [{"code": "UNAUTHORIZED"}]})
+        # reads: an image's tags, a manifest - package read (the token's read:package or write:package)
+        m = re.match(r"^/v2/([^/]+)/([^/]+)/(tags/list|manifests/([^/]+))$", path)
+        if m and method in ("GET", "HEAD"):
+            owner, image, what, ref = m.groups()
+            if owner != S["org"] or rank(package_mode(login)) < rank("read") or not scope_ok(scopes, "package", False):
+                return self.answer(401, {"errors": [{"code": "DENIED"}]})
+            tags = S.get("images", {}).get(image)
+            if tags is None or (ref and ref not in tags):
+                return self.answer(404, {"errors": [{"code": "MANIFEST_UNKNOWN"}]})
+            if what == "tags/list":
+                return self.answer(200, {"name": f"{owner}/{image}", "tags": tags})
+            return self.answer(200, {"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json"},
+                               {"Docker-Content-Digest": "sha256:" + "0" * 64})
+        m = re.match(r"^/v2/([^/]+)/([^/]+)/blobs/uploads/(.*)$", path)
+        if not m:
+            return self.answer(404, {"errors": [{"code": "NAME_UNKNOWN"}]})
         owner, image, uid = m.groups()
         if owner != S["org"] or rank(package_mode(login)) < rank("write") or not scope_ok(scopes, "package", True):
             return self.answer(401, {"errors": [{"code": "DENIED"}]})

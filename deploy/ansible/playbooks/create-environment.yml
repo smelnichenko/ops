@@ -570,6 +570,8 @@
       delegate_to: localhost
       become: false
 
+    # the image pull secret: Forgejo's woodpecker-ci account and its pull-only token (read:package; setup-ci-bot.yml
+    # mints it), never the admin's password
     - name: Add forgejo-registry secret
       ansible.builtin.blockinfile:
         path: "{{ cluster_dir }}/cluster-config/forgejo-registry-secret.yaml"
@@ -599,12 +601,12 @@
             data:
               - secretKey: registry_user
                 remoteRef:
-                  key: secret/data/schnappy/forgejo
-                  property: admin_username
+                  key: secret/data/schnappy/woodpecker-ci
+                  property: registry_user
               - secretKey: registry_token
                 remoteRef:
-                  key: secret/data/schnappy/forgejo
-                  property: admin_password
+                  key: secret/data/schnappy/woodpecker-ci
+                  property: pull_token
       delegate_to: localhost
       become: false
 
