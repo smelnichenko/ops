@@ -262,6 +262,8 @@ WANT_SCOPE = ({"is_admin": False, "must_change_password": False, "prohibit_login
                "argocd-pulls": ("read", {"repo.pulls": "read"}, False, False, ["chat", "monitor"], [BOT])})
 ADMIN_ALL = ["argocd-20260405T154834", "pi-repo", "readonly", "woodpecker-push"]
 le = lambda x: x[-8:]  # noqa: E731
+# a run that minted none reaches the checks as a failure, never as an IndexError
+MISSING = {"id": -1, "sha1": "none", "name": "none", "scopes": [], "token_last_eight": "none"}
 
 # ── the repositories, derived ───────────────────────────────────────────────────────────────────────────────────
 r = subprocess.run([sys.executable, REPOS, INFRA, "git.pmon.dev", ORG], capture_output=True, text=True)
@@ -289,7 +291,7 @@ for label, extra, said in (
 reset()
 rc, out = run()
 s, v = fstate(), kv()
-toks = bot_tokens(s)
+toks = bot_tokens(s) or [MISSING]
 check("first run: passes", (rc, tail(out) if rc else ""), (0, ""))
 check("first run: the reader no admin; argocd-read code READ on infra and platform (what Applications clone), "
       "argocd-pulls pull requests READ on chat and monitor (the PR generator's) - derived from infra's manifests, "
@@ -318,12 +320,12 @@ first_ids = {t["name"]: t["id"] for t in s["state"]["teams"].values()}
 time.sleep(1.1)
 rc, out = run()
 s2, v2 = fstate(), kv()
-toks2 = bot_tokens(s2)
+toks2 = bot_tokens(s2) or [MISSING]
 check("rerun: the account and teams as they were (same teams); the run-1 token kept (Vault held it), a new one in "
       "Vault; retire_last_eight kept",
       (rc, scope_view(s2), {t["name"]: t["id"] for t in s2["state"]["teams"].values()}, [t["id"] for t in toks2],
-       dv(v2)["data"]["token"] == toks2[-1]["sha1"], dv(v2)["data"]["retire_last_eight"]),
-      (0, WANT_SCOPE, first_ids, [toks[0]["id"], toks2[-1]["id"]], True, dv(v)["data"]["retire_last_eight"]))
+       (dv(v2)["data"] or {}).get("token") == toks2[-1]["sha1"], (dv(v2)["data"] or {}).get("retire_last_eight")),
+      (0, WANT_SCOPE, first_ids, [toks[0]["id"], toks2[-1]["id"]], True, (dv(v)["data"] or {}).get("retire_last_eight")))
 
 # hours later: run 1's token (over 3 h, not in Vault) deleted - unless ten holds it; ten unread or not Ready: none
 st = copy.deepcopy(s2["state"])
@@ -365,6 +367,11 @@ for label, edit, said in (
          "REFUSED: team schnappy/argocd-read holds sm"),
         ("the reader put in Owners by hand (push and admin everywhere)",
          lambda st: st["teams"]["1"]["members"].append(BOT), "REFUSED: argocd-reader pushes to"),
+        ("the reader put in a team writing infra's code (push, no admin)",
+         lambda st: st["teams"].update({"7": {"id": 7, "name": "writers", "description": "", "permission": "write",
+                                              "units_map": {"repo.code": "write"}, "includes_all_repositories": False,
+                                              "can_create_org_repo": False, "members": [BOT], "repos": ["infra"]}}),
+         "REFUSED: argocd-reader pushes to schnappy/infra, administers nothing"),
         ("the reader switched off (inactive)", lambda st: st["users"][BOT].update(active=False),
          "REFUSED: argocd-reader is switched off"),
         ("the reader made admin, Forgejo not making it a user again", None, "REFUSED: argocd-reader is argocd-reader, admin True")):
@@ -434,12 +441,12 @@ def synced(token):
 
 
 reset()
-rc, out = run("--tags", "retire", env=ENVR)
-check("retire before the reader is in Vault: refused, said, nothing deleted",
+rc, out = run("--tags", "retire")
+check("retire before the reader is in Vault (.env empty): refused, said, nothing deleted",
       (rc != 0, "run task deploy:argocd-reader first" in flat(out), admin_names(fstate())), (True, True, ADMIN_ALL))
 rc, out = run()
 st, vv = fstate(), kv()
-reader_token = dv(vv)["data"]["token"]
+reader_token = (dv(vv)["data"] or {}).get("token", "none")
 for label, k8s, said in (
         ("ten still on the admin (the repo-creds not switched)", {"ready": SYNCED_ES},
          "does not hand Argo CD the reader with Vault's token"),
