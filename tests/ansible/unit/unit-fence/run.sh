@@ -43,5 +43,36 @@ printf '#!/bin/bash\nmktemp -d > /dev/null; mktemp > /dev/null\nexit 0\n' > "$W/
 out=$(TMPDIR="$W/tmproot" env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-tmp" 2>&1); rc=$?
 check "a harness leaving temp files: gone with it, nothing left in the caller's temp directory" \
   "$rc $(ls -A "$W/tmproot" | wc -l)" "0 0"
+# harnesses run side by side, UNIT_JOBS at a time (CI's container has 4 CPUs; one by one the suite outgrew Woodpecker's
+# 60 min limit, 2026-10-20): four that each wait until all four have started pass only when run at once - one by one,
+# each gives up after 5 s
+mkdir -p "$W/suite-par" "$W/meet"
+for h in a b c d; do
+  mkdir -p "$W/suite-par/$h"
+  # met: all four at once (the first to see them marks it for the rest); alone: gives up after 5 s, its mark taken away
+  printf '#!/bin/bash\nm=%s\ntouch "$m/%s"\nfor _ in $(seq 50); do\n  if [ -e "$m/all" ] || [ "$(ls "$m" | wc -l)" -ge 4 ]; then touch "$m/all"; echo "%s met"; exit 0; fi\n  sleep 0.1\ndone\nrm -f "$m/%s"; echo "%s alone"; exit 1\n' \
+    "$W/meet" "$h" "$h" "$h" "$h" > "$W/suite-par/$h/run.sh"
+done
+out=$(UNIT_JOBS=4 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-par" 2>&1); rc=$?
+check "UNIT_JOBS=4: four harnesses run at once" "$rc $(grep -c ' met$' <<< "$out")" "0 4"
+# side by side, each harness keeps a fence of its own: the one that reaches a host is the one named, the others pass;
+# a failing one fails the suite; each harness's output stays whole, under its own heading, in the suite's order
+mkdir -p "$W/suite-mix/a-clean" "$W/suite-mix/b-fenced" "$W/suite-mix/c-fails" "$W/suite-mix/d-clean"
+printf '#!/bin/bash\nfor i in 1 2 3; do echo "a-clean line $i"; sleep 0.2; done\nexit 0\n' > "$W/suite-mix/a-clean/run.sh"
+printf '#!/bin/bash\nsleep 0.3; ssh pi1 uptime || true\necho "b-fenced done"\nexit 0\n' > "$W/suite-mix/b-fenced/run.sh"
+printf '#!/bin/bash\necho "c-fails line"\nexit 1\n' > "$W/suite-mix/c-fails/run.sh"
+printf '#!/bin/bash\nfor i in 1 2 3; do echo "d-clean line $i"; sleep 0.1; done\nexit 0\n' > "$W/suite-mix/d-clean/run.sh"
+out=$(UNIT_JOBS=4 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-mix" 2>&1); rc=$?
+check "side by side: the suite fails; only the harness that reached a host named by the fence" \
+  "$rc $(grep -c 'FENCED: b-fenced reached' <<< "$out") $(grep -c 'FENCED: [acd]-' <<< "$out")" "1 1 0"
+check "side by side: each harness's output whole under its heading, the headings in the suite's order" \
+  "$(grep -E '^== |line' <<< "$out" | tr '\n' '|')" \
+  "== a-clean|a-clean line 1|a-clean line 2|a-clean line 3|== b-fenced|== c-fails|c-fails line|== d-clean|d-clean line 1|d-clean line 2|d-clean line 3|"
+# UNIT_JOBS=1: one by one, as before - the four that wait for each other fail
+rm -f "$W/meet"/*
+out=$(UNIT_JOBS=1 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-par" 2>&1); rc=$?
+check "UNIT_JOBS=1: one at a time (the waiting four do not meet)" "$rc $(grep -c ' alone$' <<< "$out")" "1 4"
+out=$(UNIT_JOBS=0 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-tmp" 2>&1); rc=$?
+check "UNIT_JOBS not a positive number: refused" "$rc $(grep -c 'UNIT_JOBS' <<< "$out")" "1 1"
 echo "unit-fence: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
