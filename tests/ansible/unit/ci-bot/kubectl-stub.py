@@ -1,7 +1,10 @@
-"""kubectl on ten for the ci-bot harness: answers the two reads the retire play makes - the ExternalSecret's Ready
-condition, a key of the Secret (base64, as the API holds it) - from a state file; every call logged (its verb and kind,
-never a value); anything but those reads refused (exit 98).
-argv: <state file> <log file> <kubectl's own arguments...>. State: {"ready": "True", "secret": {key: value}}.
+"""kubectl on ten for the ci-bot harness: answers the reads setup-ci-bot makes there - an ExternalSecret's Ready
+condition (woodpecker-ci-secrets-es, forgejo-registry-es), a key of the Secret woodpecker-ci-secrets, the
+.dockerconfigjson of the Secret forgejo-registry (base64, as the API holds them) - from a state file; every call logged
+(its verb and kind, never a value); anything else refused (exit 98), and every call refused (exit 1, as kubectl says a
+connection refused) while the state says "down".
+argv: <state file> <log file> <kubectl's own arguments...>.
+State: {"down": false, "ready": {es: "True"}, "secret": {key: value}, "pull": {"username": u, "password": p}}.
 """
 import base64
 import json
@@ -18,11 +21,15 @@ if "-n" in args:
 with open(log_file, "a") as f:
     f.write(" ".join(args[:2]) + f" -n {ns}\n")
 st = json.load(open(state_file))
+if st.get("down"):
+    sys.exit("The connection to the server 192.168.11.2:6443 was refused - did you specify the right host or port?")
 jp = next((x.split("=", 1)[1] for x in args if x.startswith("jsonpath=")), "")
-if args[:3] == ["get", "externalsecret", "woodpecker-ci-secrets-es"] and ns == "woodpecker" and "Ready" in jp:
-    print(st["ready"], end="")
+b64 = lambda s: base64.b64encode(s.encode()).decode()  # noqa: E731
+if args[:2] == ["get", "externalsecret"] and ns == "woodpecker" and "Ready" in jp and len(args) > 2:
+    print(st["ready"].get(args[2], ""), end="")
 elif args[:3] == ["get", "secret", "woodpecker-ci-secrets"] and ns == "woodpecker" and jp.startswith("{.data."):
-    key = jp[len("{.data."):-1]
-    print(base64.b64encode(st["secret"].get(key, "").encode()).decode(), end="")
+    print(b64(st["secret"].get(jp[len("{.data."):-1], "")), end="")
+elif args[:3] == ["get", "secret", "forgejo-registry"] and ns == "woodpecker" and jp == "{.data.\\.dockerconfigjson}":
+    print(b64(json.dumps({"auths": {"git.pmon.dev": st["pull"]}})), end="")
 else:
     sys.exit(98)

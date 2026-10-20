@@ -1269,10 +1269,12 @@ tasks:
     cmds:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-ci-bot.yml
 
-  # once CI runs on the bot's tokens (proven by a CD run): the admin's tokens .env names as
-  # WOODPECKER_INFRA_REPO_TOKEN and WOODPECKER_CLONE_TOKEN deleted - refused while Vault still hands CI one of them
+  # once CI runs on the bot's tokens (proven by a CD run): the admin's tokens CI held deleted - those .env names
+  # (WOODPECKER_INFRA_REPO_TOKEN, WOODPECKER_CLONE_TOKEN) and those in Vault woodpecker-ci's version history. Refused
+  # while Vault hands CI one of them, and unless ten (read only) shows woodpecker-ci-secrets-es Ready and its Secret
+  # handing CI Vault's infra_repo_token and clone_token
   deploy:ci-bot:retire-admin-tokens:
-    desc: "PRODUCTION: the admin's Forgejo tokens CI used (.env WOODPECKER_INFRA_REPO_TOKEN / _CLONE_TOKEN) deleted"
+    desc: "PRODUCTION: the admin's Forgejo tokens CI used (.env's, Vault woodpecker-ci history's) deleted - ten checked"
     dir: deploy/ansible
     deps: [deploy:install]
     dotenv: ['../../.env']

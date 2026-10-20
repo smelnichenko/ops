@@ -98,11 +98,25 @@ PYT = os.path.join(W, "py-ten")
 with open(PYT, "w") as f:
     f.write(f'#!/bin/sh\nPATH="{TEN}:{FENCE}:$PATH" exec "{sys.executable}" "$@"\n')
 os.chmod(PYT, 0o755)
+# pi2: up, but not holding the VIP (its `ip` answers nothing) - the play ends there for it
+PI2 = os.path.join(W, "pi2")
+os.mkdir(PI2)
+with open(os.path.join(PI2, "ip"), "w") as f:
+    f.write("#!/bin/sh\nexit 0\n")
+os.chmod(os.path.join(PI2, "ip"), 0o755)
+PYW2 = os.path.join(W, "py-pi2")
+with open(PYW2, "w") as f:
+    f.write(f'#!/bin/sh\nPATH="{PI2}:{FENCE}:$PATH" exec "{sys.executable}" "$@"\n')
+os.chmod(PYW2, 0o755)
+# production's inventory shape (inventory/production.yml): target an ungrouped host, the pis group two Pis
 INV = os.path.join(W, "inv.yml")
-yaml.safe_dump({"all": {"children": {
-    "pis": {"hosts": {"pi1": {"ansible_connection": "local", "ansible_python_interpreter": PYW, "ansible_become": False}}},
-    "target": {"hosts": {"ten": {"ansible_connection": "local", "ansible_python_interpreter": PYT,
-                                 "ansible_become": False}}}}}}, open(INV, "w"))
+LOCAL = {"ansible_connection": "local", "ansible_become": False}
+yaml.safe_dump({"all": {"hosts": {"target": dict(LOCAL, ansible_python_interpreter=PYT),
+                                  "pi1": dict(LOCAL, ansible_python_interpreter=PYW),
+                                  "pi2": dict(LOCAL, ansible_python_interpreter=PYW2)},
+                        "children": {"pis": {"hosts": {"pi1": None, "pi2": None}}}}}, open(INV, "w"))
+assert yaml.safe_load(open(os.path.join(ROOT, "deploy/ansible/inventory/production.yml")))["all"]["hosts"].get(
+    "target") is not None, "production's inventory no longer has target as a host - the harness's shape is stale"
 # the play's settings on a file (a value on ansible-playbook's command line is on its argv)
 VARS = os.path.join(W, "vars.yml")
 yaml.safe_dump({"keepalived_vip": VIP, "forgejo_admin_user": "forgejo_admin", "forgejo_admin_password": ADMIN_PW,
@@ -163,9 +177,24 @@ VAULT_FIXTURE = {"schnappy/woodpecker-ci": {"data": dict(VAULT_REST, infra_repo_
                                                          clone_token=ADMIN_CLONE), "version": 3}}
 
 
+def ten(down=False, ready=None, secret=None, pull=""):
+    """ten's view: both ExternalSecrets' Ready (True unless given), woodpecker-ci-secrets' keys, forgejo-registry's
+    password; down - kubectl refused."""
+    json.dump({"down": down, "ready": dict({"woodpecker-ci-secrets-es": "True", "forgejo-registry-es": "True"},
+                                           **(ready or {})),
+               "secret": secret or {}, "pull": {"username": BOT, "password": pull}}, open(K8S, "w"))
+
+
+def kubectl_calls():
+    p = os.path.join(W, "kubectl.log")
+    return open(p).read().splitlines() if os.path.exists(p) else []
+
+
 def reset(state=None, kv=None):
     forgejo("POST", "/_reset", state or fixture())
     vault("POST", "/_reset", copy.deepcopy(VAULT_FIXTURE if kv is None else kv))
+    ten()
+    open(os.path.join(W, "kubectl.log"), "w").close()
     for f in ("ran", "ran2"):
         if os.path.exists(os.path.join(W, f)):
             os.remove(os.path.join(W, f))
@@ -308,10 +337,34 @@ st["tokens"][str(young["id"])] = young
 reset(st, {"schnappy/woodpecker-ci": dv(v3)})
 rc, out = run()
 s10 = fstate()
+aged = {t["id"]: t["name"] for t in st["tokens"].values() if t["user"] == BOT}
 check("a run over 3 h later: the tokens over 3 h old Vault does not hold deleted (runs 1 and 2); those Vault held "
-      "kept however old (run 3), one under 3 h old kept; three new",
-      (rc, sorted(t["id"] for t in bot_tokens(s10))[:4], len(bot_tokens(s10))),
-      (0, sorted([t["id"] for t in toks3[6:]] + [young["id"]]), 7))
+      "kept however old (run 3), one under 3 h old kept; three new; the deleted ones named in the run's summary",
+      (rc, sorted(t["id"] for t in bot_tokens(s10))[:4], len(bot_tokens(s10)),
+       all(aged[i] in flat(out) for i in [t["id"] for t in toks3[:6]]) and "bot tokens deleted:" in flat(out)),
+      (0, sorted([t["id"] for t in toks3[6:]] + [young["id"]]), 7, True))
+check("  ... ten read for it, read only: both ExternalSecrets' Ready, the two Secrets (get alone)",
+      sorted(set(kubectl_calls())), ["get externalsecret -n woodpecker", "get secret -n woodpecker"])
+by_id = {t["id"]: t for t in toks3}
+held_infra, held_pull = toks3[0], toks3[4]  # run 1's infra token in woodpecker-ci-secrets, run 2's registry token in
+# forgejo-registry (External Secrets not synced since)
+reset(copy.deepcopy(st), {"schnappy/woodpecker-ci": dv(v3)})
+ten(secret={"infra_repo_token": held_infra["sha1"]}, pull=held_pull["sha1"])
+rc, out = run()
+check("a run over 3 h later with the cluster still holding two old tokens (run 1's infra token in "
+      "woodpecker-ci-secrets, run 2's registry token in forgejo-registry): those two kept, the others deleted",
+      (rc, sorted(t["id"] for t in bot_tokens(fstate()))[:6], len(bot_tokens(fstate()))),
+      (0, sorted([held_infra["id"], held_pull["id"], young["id"]] + [t["id"] for t in toks3[6:]]), 9))
+for label, k8s, said in (
+        ("ten not read (kubectl refused)", {"down": True}, "ten not read"),
+        ("an ExternalSecret not Ready (forgejo-registry-es)", {"ready": {"forgejo-registry-es": "False"}},
+         "forgejo-registry-es")):
+    reset(copy.deepcopy(st), {"schnappy/woodpecker-ci": dv(v3)})
+    ten(**k8s)
+    rc, out = run()
+    check(f"a run over 3 h later with {label}: no bot token deleted, said - the run passes",
+          (rc, len(bot_tokens(fstate())), "deleted none" in flat(out) and said in flat(out)),
+          (0, len(toks3) + 1 + 3, True))
 V3 = dv(v3)["data"]
 VAULT6 = {"schnappy/woodpecker-ci": {"data": V3, "version": 6}}
 
@@ -347,8 +400,8 @@ for label, edit, said in (
     reset(st, VAULT6)
     rc, out = run()
     s4, v4 = fstate(), kv()
-    check(f"refused: {label} - said; no token minted, Vault not written",
-          (rc != 0, said in flat(out), mints(s4), v4["writes"]), (True, True, [], []))
+    check(f"refused: {label} - said; no token minted, Vault not written, ten not read",
+          (rc != 0, said in flat(out), mints(s4), v4["writes"], kubectl_calls()), (True, True, [], [], []))
 check("  ... and the switched-off bot left as it was (no edit of it)",
       ([e["method"] for e in s4["log"] if e["path"].endswith("/admin/users/" + BOT) and e["method"] != "GET"],
        s4["state"]["users"][BOT]["prohibit_login"]), ([], True))
@@ -361,9 +414,6 @@ check("the switched-off bot with ci_bot_reactivate=true: switched on again, the 
 
 # ── a failure after a mint: the new tokens deleted again, Vault unchanged (or as another writer left it) ───────────
 for label, fault, want_vault in (
-        ("someone writes Vault between the read and the write (the version read refuses this write)",
-         ("vault", {"method": "GET", "path": "woodpecker-ci", "bump": True}),
-         {"data": dict(V3, someone="else"), "version": 7}),
         ("the second token's mint fails", ("forgejo", {"method": "POST", "path": "/users/woodpecker-ci/tokens$",
                                                         "status": 500, "nth": 2}), {"data": V3, "version": 6}),
         ("Forgejo makes a token with more scope than asked (all)",
@@ -378,29 +428,58 @@ for label, fault, want_vault in (
     rc, out = run()
     s5, v5 = fstate(), kv()
     check(f"failure: {label} - fails, said; this run's tokens deleted again (the bot's as before), Vault "
-          + ("as the other writer left it" if "someone" in want_vault["data"] else "unchanged"),
+          + "unchanged",
           (rc != 0, "this run's new tokens deleted again" in flat(out), [t["id"] for t in bot_tokens(s5)], dv(v5)),
           (True, True, [t["id"] for t in toks3], want_vault))
 
-# ── the Vault write's answer lost: Vault read again - holding this run's tokens, none deleted ───────────────────
+# ── the Vault write itself failing (its answer may come late - the write may still land): none deleted ──────────
+WRITE_FAILED = "the Vault write itself failed"
+for label, faults, want_vault in (
+        ("someone writes Vault between the read and the write (the version read refuses this write)",
+         [{"method": "GET", "path": "woodpecker-ci", "bump": True}], lambda new: {"data": dict(V3, someone="else"),
+                                                                                  "version": 7}),
+        ("the write applied, its answer lost", [{"method": "POST", "path": "woodpecker-ci", "lose": True}],
+         lambda new: {"data": vault_expect(new, rest=VAULT_REST), "version": 7}),
+        ("the write refused (500)", [{"method": "POST", "path": "woodpecker-ci", "status": 500}],
+         lambda new: {"data": V3, "version": 6})):
+    reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
+    for f in faults:
+        vault("POST", "/_fail", f)
+    rc, out = run()
+    s11, v11 = fstate(), kv()
+    new = bot_tokens(s11)[len(toks3):]
+    check(f"the Vault write failing - {label}: fails, saying so; none of this run's tokens deleted (left for a later "
+          "run past the 3 h)",
+          (rc != 0, WRITE_FAILED in flat(out), kinds(new), dv(v11)), (True, True, WANT_KINDS, want_vault(new)))
+
+# ── the write answered done but not applied: the read-back refuses; Vault read again, holding none - deleted again
 reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
-vault("POST", "/_fail", {"method": "POST", "path": "woodpecker-ci", "lose": True})
+vault("POST", "/_fail", {"method": "POST", "path": "woodpecker-ci", "drop": True})
+rc, out = run()
+check("the Vault write answered done but not applied: the read-back refuses; this run's tokens deleted again, Vault "
+      "unchanged",
+      (rc != 0, "REFUSED at 'Vault holds this run's tokens'" in flat(out)
+       and "this run's new tokens deleted again" in flat(out), [t["id"] for t in bot_tokens(fstate())], dv(kv())),
+      (True, True, [t["id"] for t in toks3], {"data": V3, "version": 6}))
+
+# ── a failure after the write (its read-back): Vault read again - holding this run's tokens, or unread: none deleted
+reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
+vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "nth": 2, "error": "Vault is sealed"})
 rc, out = run()
 s11, v11 = fstate(), kv()
 new = bot_tokens(s11)[len(toks3):]
-check("the Vault write applied, its answer lost: fails, saying Vault holds this run's tokens - none deleted (CI may "
-      "already get them)",
+check("the read-back after the write failing, Vault then read again holding this run's tokens: fails, saying so - "
+      "none deleted (CI may already get them)",
       (rc != 0, "Vault holds this run's tokens" in flat(out), kinds(new), dv(v11)),
       (True, True, WANT_KINDS, {"data": vault_expect(new, rest=VAULT_REST), "version": 7}))
 reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
-vault("POST", "/_fail", {"method": "POST", "path": "woodpecker-ci", "status": 500})
 vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "nth": 2, "error": "Vault is sealed"})
+vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "nth": 3, "error": "Vault is sealed"})
 rc, out = run()
-s12 = fstate()
-check("the Vault write failing and Vault unreadable after it: fails, saying so - none deleted (whether Vault holds "
+check("the read-back failing and Vault unreadable after it: fails, saying so - none deleted (whether Vault holds "
       "them is not known)",
-      (rc != 0, "Vault not read after the write" in flat(out), len(bot_tokens(s12)), dv(kv())),
-      (True, True, len(toks3) + 3, {"data": V3, "version": 6}))
+      (rc != 0, "Vault not read after the write" in flat(out), len(bot_tokens(fstate()))),
+      (True, True, len(toks3) + 3))
 
 # ── Forgejo not applying a team's units (an edit answered 200, the units left as they were): refused on reading back ──
 st = copy.deepcopy(s3["state"])
@@ -443,8 +522,7 @@ reset()
 rc, out = run("--check")
 check("--check: refused, nothing changed", (rc != 0, "no check mode" in out, BOT in fstate()["state"]["users"],
                                             kv()["writes"]), (True, True, False, []))
-check("no setup run read the cluster (kubectl on ten only on --tags retire)",
-      open(os.path.join(W, "kubectl.log")).read() if os.path.exists(os.path.join(W, "kubectl.log")) else "", "")
+check("  ... ten not read either", kubectl_calls(), [])
 
 # ── retiring the admin's CI tokens ──────────────────────────────────────────────────────────────────────────────
 RETIRE_ENV = {"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA, "WOODPECKER_CLONE_TOKEN": " " + ADMIN_CLONE + " "}
@@ -453,19 +531,20 @@ admin_names = lambda s: sorted(t["name"] for t in s["state"]["tokens"].values() 
 
 
 def cluster(ready="True", synced=True):
-    """ten's view: the ExternalSecret's Ready, the Secret as External Secrets last wrote it (Vault's now, or the
-    admin's - not synced since)."""
+    """ten's view for retire: woodpecker-ci-secrets-es's Ready, the Secret as External Secrets last wrote it (Vault's
+    now, or the admin's - not synced since)."""
     data = dv(kv())["data"] or {}
-    secret = ({k: data.get(k, "") for k in ("infra_repo_token", "clone_token")} if synced
+    secret = ({k: data.get(k, "") for k in ("infra_repo_token", "registry_token", "clone_token")} if synced
               else {"infra_repo_token": ADMIN_INFRA, "clone_token": ADMIN_CLONE})
-    json.dump({"ready": ready, "secret": secret}, open(K8S, "w"))
+    ten(ready={"woodpecker-ci-secrets-es": ready}, secret=secret)
 
 
 reset()
 cluster()
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
-check("retire before the bot's tokens are in Vault: refused, nothing deleted",
-      (rc != 0, "REFUSED" in out, admin_names(fstate())), (True, True, ALL_ADMIN))
+check("retire before the bot's tokens are in Vault: refused, nothing deleted - ten not read after the refusal "
+      "(two Pis: pi2 ending its play is no failure)",
+      (rc != 0, "REFUSED" in out, admin_names(fstate()), kubectl_calls()), (True, True, ALL_ADMIN, []))
 rc, out = run()
 st, vv = fstate(), kv()
 for label, ready, synced, said in (
@@ -634,18 +713,29 @@ check(f"no secret on any command line over every run ({w['scans']} scans of /pro
       ([h for h in w["hits"] if h["secret"] != 5], fence, w["scans"] > 50,
        os.path.exists(os.path.join(W, "ran")) or os.path.exists(os.path.join(W, "ran2"))), ([], [], True, False))
 pl = yaml.safe_load(open(PB))
-acts = set()
-for t in pl[0]["tasks"]:
-    stack = [t]
+CMD = ("shell", "command", "raw", "script", "expect")
+# the reads on ten, by task: what each runs is kubectl, every kubectl a get
+READS_ON_TEN = {"An ExternalSecret's Ready", "The cluster's tokens - their last eight characters"}
+cmds = []
+for play in pl:
+    stack = list(play.get("tasks") or []) + list(play.get("pre_tasks") or []) + list(play.get("post_tasks") or [])
     while stack:
         x = stack.pop()
-        stack += (x.get("block") or []) + (x.get("rescue") or [])
-        acts |= {k for k in x if "." in k and k.split(".")[0] in ("ansible", "community")}
+        stack += (x.get("block") or []) + (x.get("rescue") or []) + (x.get("always") or [])
+        for k, v in x.items():
+            if "." in k and k.split(".")[-1] in CMD:
+                text = " ".join(v["argv"]) if isinstance(v, dict) and "argv" in v else \
+                    (v.get("cmd", "") if isinstance(v, dict) else str(v))
+                text = re.sub(r"\{\{.*?\}\}", "X", text)  # a template one word
+                verbs = [m[1] for m in re.findall(r"\bkubectl((?:\s+(?:--kubeconfig|-n)\s+\S+)*)\s+(\S+)", text)]
+                cmds.append((play.get("hosts"), x.get("name"), x.get("name") in READS_ON_TEN and
+                             play.get("hosts") == "target" and bool(verbs) and set(verbs) == {"get"}
+                             and not re.search(r"(^|[\s|;(])(curl|wget|vault|forgejo|ssh)(\s|$)", text)))
 cfg = open(os.path.join(ROOT, "deploy/ansible/ansible.cfg")).read()
-check("the playbook runs no command of its own (Forgejo and Vault in-process, uri and hashi_vault), and production's "
-      "modules get their arguments on stdin (pipelining = True)",
-      (sorted(a for a in acts if a.split(".")[-1] in ("shell", "command", "raw", "script", "expect")),
-       "\npipelining = True\n" in cfg), ([], True))
+check("no play runs a command of its own (Forgejo and Vault in-process, uri and hashi_vault) but ten's reads - "
+      "kubectl get alone; production's modules get their arguments on stdin (pipelining = True)",
+      ([c for c in cmds if not c[2]], sorted({c[1] for c in cmds}) == sorted(READS_ON_TEN),
+       "\npipelining = True\n" in cfg), ([], True, True))
 
 for p in procs:
     p.terminate()

@@ -6,7 +6,7 @@ by argv[2] is accepted.
 Test-only routes: GET /_state, POST /_reset {path: {"data": {...}, "version": n, "history": {"n": {...}}}} (no history:
 the data is version n alone), POST /_fail {method, path (regex), nth, and: status - the nth matching request answered
 with it; or bump - someone else writes the path (someone=else, the version on) right after that read is answered; or
-lose - the write applied, its answer a 500 (a reply lost)}.
+lose - the write applied, its answer a 500 (a reply lost); or drop - the write answered done, not applied}.
 Port: bound to a free one, written to the file named by argv[1].
 """
 import json
@@ -57,17 +57,21 @@ class H(BaseHTTPRequestHandler):
             return self.answer(200, {})
         if self.headers.get("X-Vault-Token") != TOKEN:
             return self.answer(403, {"errors": ["permission denied"]})
-        bump = lose = False
-        for f in FAULTS:
-            if f["method"] == method and re.search(f["path"], path):
-                f["seen"] = f.get("seen", 0) + 1
-                if f["seen"] == f.get("nth", 1):
-                    if f.get("bump"):
-                        bump = True  # someone else writes the path right after this read
-                    elif f.get("lose"):
-                        lose = True  # the write applied, its answer lost
-                    else:
-                        return self.answer(f["status"], {"errors": [f.get("error", "injected")]})
+        bump = lose = drop = False
+        # every matching fault counts this request first (one firing must not hide it from the next), then they fire
+        hit = [f for f in FAULTS if f["method"] == method and re.search(f["path"], path)]
+        for f in hit:
+            f["seen"] = f.get("seen", 0) + 1
+        for f in hit:
+            if f["seen"] == f.get("nth", 1):
+                if f.get("bump"):
+                    bump = True  # someone else writes the path right after this read
+                elif f.get("lose"):
+                    lose = True  # the write applied, its answer lost
+                elif f.get("drop"):
+                    drop = True  # the write answered as done, not applied
+                else:
+                    return self.answer(f["status"], {"errors": [f.get("error", "injected")]})
         if path.endswith("/auth/token/lookup-self"):
             return self.answer(200, {"data": {"policies": ["root"], "ttl": 0}})
         m = re.match(r"^/v1/secret/metadata/(.+)$", path)
@@ -103,6 +107,8 @@ class H(BaseHTTPRequestHandler):
             current = KV.get(key, {}).get("version", 0)
             if cas is not None and int(cas) != current:
                 return self.answer(400, {"errors": ["check-and-set parameter did not match the current version"]})
+            if drop:
+                return self.answer(200, {"data": {"version": current + 1}})
             e = KV.setdefault(key, {"history": {}})
             e.update(data=body["data"], version=current + 1)
             e["history"][str(current + 1)] = body["data"]

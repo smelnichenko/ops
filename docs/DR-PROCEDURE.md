@@ -38,10 +38,13 @@ task deploy:pi-services
 ```
 
 Then Woodpecker CI's Forgejo account (non-admin `woodpecker-ci`) and its tokens in Vault - re-run it after any Vault
-restore too: a restored `woodpecker-ci` may hold tokens a later run deleted in Forgejo:
+restore too: a restored `woodpecker-ci` may hold tokens a later run deleted in Forgejo. Then hand CI the new tokens at
+once (External Secrets refreshes hourly otherwise):
 
 ```bash
 task deploy:ci-bot
+ssh ten 'sudo kubectl annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite'
+ssh ten 'sudo kubectl annotate externalsecret forgejo-registry-es -n woodpecker force-sync=$(date +%s) --overwrite'
 ```
 
 Wait for Forgejo to be ready, then push repos if needed:

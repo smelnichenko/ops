@@ -15,11 +15,13 @@
 #   tokens  on the bot, one per use, its scope alone: infra push write:repository, the registry write:package, clone
 #           read:repository. Minted under new names each run, each proven (infra pushable; the registry: a bearer from
 #           /v2/token, an upload to schnappy/masi started and cancelled - Kaniko's push path; every clone repository
-#           read), written to Vault. The bot's older ones deleted only when Vault does not hold them AND their name's
-#           time is over 3 h old (twice External Secrets' 1 h refresh): the cluster's Secret may hand CI a token Vault
-#           held one or two runs back. A mint, a proof or the Vault write failing deletes this run's new tokens again -
-#           unless Vault, read again, holds them (the write went through, its answer lost) or cannot be read: then none
-#           is deleted, said
+#           read), written to Vault and read back. The bot's older ones deleted only when Vault does not hold them,
+#           their name's time is over 3 h old (twice External Secrets' 1 h refresh) AND the cluster does not hold them:
+#           ten read (kubectl get alone) - woodpecker/woodpecker-ci-secrets and woodpecker/forgejo-registry; ten not
+#           read or an ExternalSecret not Ready: none deleted, said, the run passes. The deleted ones named. A mint or a
+#           proof failing deletes this run's new tokens again; the Vault write itself failing (it may still land - a
+#           client timeout) deletes none, nor does a failure after it when Vault, read again, holds them or cannot be
+#           read: said, left for a later run's cleanup
 #   Vault   {{ vault_prefix }}/woodpecker-ci: infra_repo_token, registry_user, registry_token, clone_token - read,
 #           merged, written back with the version read (cas: a write between them fails this one): every other
 #           property of the path kept (seed-vault-secrets.yml keeps these four in turn). The run says
@@ -27,7 +29,9 @@
 #           /etc/vault-unseal/root-token (never on a command line), `vault kv rollback -version=<read>
 #           secret/schnappy/woodpecker-ci` (a new version with the old data), then force External Secrets:
 #           kubectl annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite
-#           The admin's tokens the old version holds work only until --tags retire deleted them.
+#           The admin's tokens the old version holds work only until --tags retire deleted them; a bot token it holds
+#           only until a later run more than 3 h after that token's mint (Vault no longer holding it, the cluster
+#           neither once External Secrets synced)
 #
 # On the Pi holding the VIP: Forgejo on its loopback, Vault too (seed-vault-secrets.yml's way). No preview: a run
 # rotates the bot's password and its tokens. After a Vault restore, run it again (a restored woodpecker-ci may hold
@@ -36,9 +40,10 @@
 # Retiring the admin's tokens CI used (once CI runs on the bot's, proven): --tags retire deletes the admin's tokens
 # CI held - those .env names (WOODPECKER_INFRA_REPO_TOKEN, WOODPECKER_CLONE_TOKEN) and those any version in
 # woodpecker-ci's history holds as infra_repo_token or clone_token, matched by their last eight characters as Forgejo
-# lists them. Refused unless Vault's woodpecker-ci holds the bot (registry_user and its three tokens) and none of them,
-# AND, read on ten (kubectl, read only), the ExternalSecret woodpecker-ci-secrets-es is Ready and the Secret
-# woodpecker-ci-secrets hands CI the infra_repo_token and clone_token Vault holds.
+# lists them. Refused unless Vault's woodpecker-ci holds the bot (registry_user and its three tokens) and none .env
+# names (at once - ten not read), AND, read on ten (kubectl, read only), the ExternalSecret woodpecker-ci-secrets-es
+# is Ready and the Secret woodpecker-ci-secrets hands CI the infra_repo_token and clone_token Vault holds, AND none to
+# delete is one Vault holds now. ten is the inventory's host `target` (a host, not a group).
 #
 # Usage:
 #   task deploy:ci-bot                          # the bot, its teams, new tokens in Vault
@@ -47,13 +52,17 @@
   hosts: pis
   become: true
   gather_facts: false
+  # a refusal ends the run: pi2 ending its play here is no failure, so without this the next plays (ten's reads, the
+  # deletes) would still run
+  any_errors_fatal: true
 
-  vars:
+  # the plays after ten's read take the same (a play's vars are its own)
+  vars: &ci_bot_vars
     vault_prefix: schnappy
     vault_addr: "https://127.0.0.1:8200"
     vault_ca_cert: /etc/vault.d/tls/ca-cert.pem
     vault_root_token_file: /etc/vault-unseal/root-token
-    forgejo_api: &ci_forgejo_api "http://localhost:3000/api/v1"
+    forgejo_api: "http://localhost:3000/api/v1"
     # the container registry's /v2, beside the API
     forgejo_url: "{{ forgejo_api | regex_replace('/api/v1$', '') }}"
     ci_bot_user: woodpecker-ci
@@ -641,9 +650,33 @@
           register: _ci_vault_written
           no_log: true
 
+        - name: Vault read back - this run's tokens there
+          community.hashi_vault.vault_kv2_get:
+            url: "{{ vault_addr }}"
+            token: "{{ _ci_vault_token }}"
+            ca_cert: "{{ vault_ca_cert }}"
+            path: "{{ vault_prefix }}/woodpecker-ci"
+          register: _ci_vault_written_read
+          no_log: true
+
+        - name: Vault holds this run's tokens
+          ansible.builtin.assert:
+            that: >-
+              ci_bot_tokens | map(attribute='property') | map('extract', _ci_vault_written_read.secret) | list
+              == _ci_minted.results | map(attribute='json.sha1') | list
+            fail_msg: "REFUSED: Vault's woodpecker-ci read back does not hold this run's tokens"
+            quiet: true
+          no_log: true  # the tokens compared
+
       rescue:
-        # a write whose answer was lost may have gone through: Vault read again before a token is deleted
+        # the write itself failed (a client timeout, a lost answer): it may still land - none deleted, left for a later
+        # run's cleanup (Vault not holding them and over ci_bot_keep_hours old). A failure after it: Vault read again
+        - name: Whether the Vault write itself failed
+          ansible.builtin.set_fact:
+            _ci_write_failed: "{{ (ansible_failed_task.action | default('')) is search('vault_kv2_write') }}"
+
         - name: Vault read again (did the write go through?)
+          when: not (_ci_write_failed | bool)
           community.hashi_vault.vault_kv2_get:
             url: "{{ vault_addr }}"
             token: "{{ _ci_vault_token }}"
@@ -660,10 +693,11 @@
                  | selectattr('status', 'equalto', 201) | map(attribute='json') | list }}
             # read (or the path missing - nothing written there) - else whether Vault holds them is not known
             _ci_vault_after_read: >-
-              {{ _ci_vault_after.secret is defined
-                 or 'Invalid or missing path' in (_ci_vault_after.msg | default('')) }}
+              {{ (_ci_vault_after | default({})).secret is defined
+                 or 'Invalid or missing path' in ((_ci_vault_after | default({})).msg | default('')) }}
             _ci_vault_after_last_eight: >-
-              {{ (_ci_vault_after.secret | default({})).values() | map('string') | select('match', '^.{8,}$')
+              {{ ((_ci_vault_after | default({})).secret | default({})).values() | map('string')
+                 | select('match', '^.{8,}$')
                  | map('regex_replace', '^.*(.{8})$', '\1') | list }}
           no_log: true  # parts of tokens
 
@@ -678,6 +712,7 @@
             status_code: [204, 404]  # gone already is what it wants
           loop: "{{ _ci_minted_ok | map(attribute='id') | list }}"
           when:
+            - not (_ci_write_failed | bool)
             - _ci_vault_after_read | bool
             - _ci_minted_ok | map(attribute='token_last_eight') | intersect(_ci_vault_after_last_eight) | length == 0
 
@@ -685,7 +720,11 @@
           ansible.builtin.fail:
             msg: >-
               REFUSED at '{{ ansible_failed_task.name | default('?') }}' -
-              {{ ("Vault not read after the write - whether it holds this run's tokens is not known: none deleted"
+              {{ ("the Vault write itself failed - it may still land: none of this run's tokens deleted (ci-*-"
+                  ~ _ci_stamp ~ "; a later run deletes them once Vault does not hold them and they are over "
+                  ~ ci_bot_keep_hours ~ " h old)")
+                 if (_ci_write_failed | bool) else
+                 ("Vault not read after the write - whether it holds this run's tokens is not known: none deleted"
                   ~ " (ci-*-" ~ _ci_stamp ~ "; a later run deletes them once Vault does not hold them and they are"
                   ~ " over " ~ ci_bot_keep_hours ~ " h old)")
                  if not (_ci_vault_after_read | bool) else
@@ -712,34 +751,17 @@
           {{ '%Y%m%dT%H%M%S' | strftime(second=(now().timestamp() - (ci_bot_keep_hours | float) * 3600) | int,
                                         utc=true) }}
 
-    - name: The bot's older tokens deleted (Vault does not hold them and they are over the keep time)
-      ansible.builtin.uri:
-        follow_redirects: none
-        url: "{{ forgejo_api }}/users/{{ ci_bot_user }}/tokens/{{ item.id }}"
-        method: DELETE
-        url_username: "{{ ci_bot_user }}"
-        url_password: "{{ _ci_bot_password }}"
-        force_basic_auth: true
-        status_code: [204, 404]  # gone already is what it wants
+    # deleted in the play after ten's read, but for a token the cluster's Secrets still hold
+    - name: The bot's older tokens - Vault does not hold them and their time is over the keep time
+      ansible.builtin.set_fact:
+        _ci_old: "{{ (_ci_old | default([])) + [item] }}"
       loop: >-
         {{ _ci_bot_tokens_before.json | selectattr('name', 'match', _ci_token_name)
            | rejectattr('token_last_eight', 'in', _ci_keep_last_eight) | list }}
       loop_control:
         label: "{{ item.name }}"
       when: (item.name | regex_replace('^.*-', '')) < _ci_keep_since
-      changed_when: true
       no_log: true  # each item a token's last eight characters
-
-    - name: Woodpecker CI's account
-      ansible.builtin.debug:
-        msg: >-
-          {{ ci_bot_user }} (no admin) in {{ _ci_teams | map(attribute='name') | map('regex_replace', '^', ci_bot_org ~ '/')
-          | join(', ') }}; its tokens ci-*-{{ _ci_stamp }} and registry_user in Vault {{ vault_prefix }}/woodpecker-ci:
-          woodpecker-ci v{{ (_ci_vault_before.metadata | default({})).version | default(0) }}
-          -> v{{ _ci_vault_written.raw.data.version | default('?') }} (rollback: the playbook's header).
-          The cluster's woodpecker-ci-secrets takes them at External Secrets' next refresh (1 h) - at once: kubectl
-          annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite.
-          registry_user/registry_token come from there only where infra's ExternalSecret maps them from woodpecker-ci.
 
     # ── retiring the admin's CI tokens (--tags retire) ─────────────────
     # here what CI held (.env, Vault's history) and what Vault hands it now; on ten the cluster read (the next play);
@@ -828,86 +850,168 @@
         quiet: true
       tags: [never, retire]
 
-- name: Retiring the admin's CI tokens - what the cluster hands CI, read on ten (read only)
+# What the cluster hands CI, read on ten - kubectl get alone - for setup's deletes (a token a Secret still holds is
+# kept) and retire's checks. Never fails the run: what it could not read, the next plays say and delete nothing.
+- name: What the cluster hands CI, read on ten (read only)
   hosts: target
   become: true
   gather_facts: false
-  tags: [never, retire]
+  tags: [always]
   vars:
     kubeconfig: /etc/kubernetes/admin.conf
-    # the Pi that read Vault (the one holding the VIP)
-    _ci_vault_read: "{{ groups['pis'] | map('extract', hostvars) | selectattr('_ci_vault_now', 'defined') | list }}"
   tasks:
-    - name: Vault read on the Pi holding the VIP
-      ansible.builtin.assert:
-        that: _ci_vault_read | length == 1
-        fail_msg: "REFUSED: Vault's woodpecker-ci read on {{ _ci_vault_read | length }} Pis, not one - nothing deleted"
-        quiet: true
-
-    - name: The ExternalSecret's Ready
+    - name: An ExternalSecret's Ready
       ansible.builtin.command:
-        argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", -n, woodpecker, get, externalsecret, woodpecker-ci-secrets-es,
+        argv: [kubectl, --kubeconfig, "{{ kubeconfig }}", -n, woodpecker, get, externalsecret, "{{ item }}",
                -o, 'jsonpath={.status.conditions[?(@.type=="Ready")].status}']
+      loop: [woodpecker-ci-secrets-es, forgejo-registry-es]
       register: _ci_es_ready
       changed_when: false
+      failed_when: false  # said by the next plays
       check_mode: false  # a read
 
-    # the last eight characters of each - what Forgejo lists of a token - never the token
-    - name: The cluster's Secret - its infra_repo_token and clone_token, their last eight characters
+    # the last eight characters of each - what Forgejo lists of a token - never the token: woodpecker-ci-secrets'
+    # three tokens, forgejo-registry's password (the pull secret of CI's own images)
+    - name: The cluster's tokens - their last eight characters
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          for k in infra_repo_token clone_token; do
-            kubectl --kubeconfig {{ kubeconfig | quote }} -n woodpecker get secret woodpecker-ci-secrets \
-              -o "jsonpath={.data.$k}" | base64 -d | tail -c 8
-            echo
+          kc={{ kubeconfig | quote }}
+          # key=value lines (an empty value is still a line): a failed read fails the script (set -e on each)
+          for k in infra_repo_token registry_token clone_token; do
+            v=$(kubectl --kubeconfig "$kc" -n woodpecker get secret woodpecker-ci-secrets -o "jsonpath={.data.$k}" \
+              | base64 -d | tail -c 8)
+            echo "$k=$v"
           done
+          v=$(kubectl --kubeconfig "$kc" -n woodpecker get secret forgejo-registry \
+                -o 'jsonpath={.data.\.dockerconfigjson}' | base64 -d \
+              | python3 -c 'import json, sys; print(next(iter(json.load(sys.stdin)["auths"].values()))["password"][-8:])')
+          echo "pull_password=$v"
         executable: /bin/bash
-      register: _ci_secret_last_eight
+      register: _ci_cluster_tokens
       changed_when: false
+      failed_when: false  # said by the next plays
       check_mode: false  # a read
       no_log: true  # parts of tokens
 
-    - name: External Secrets synced woodpecker-ci-secrets (Ready)
-      ansible.builtin.assert:
-        that: _ci_es_ready.stdout | trim == 'True'
-        fail_msg: >-
-          REFUSED: ExternalSecret woodpecker/woodpecker-ci-secrets-es is not Ready ({{ _ci_es_ready.stdout | default('?') }})
-          - what CI holds is not known; nothing deleted
-        quiet: true
-
-    - name: The cluster's Secret hands CI what Vault holds
-      ansible.builtin.assert:
-        that: >-
-          _ci_secret_last_eight.stdout_lines
-          == [(_ci_vault_read[0]._ci_vault_now.secret.infra_repo_token | default(''))[-8:],
-              (_ci_vault_read[0]._ci_vault_now.secret.clone_token | default(''))[-8:]]
-        fail_msg: >-
-          REFUSED: the cluster's woodpecker-ci-secrets does not hand CI what Vault holds (infra_repo_token,
-          clone_token) - External Secrets has not synced since; force it (kubectl annotate externalsecret
-          woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite) and rerun; nothing deleted
-        quiet: true
-
-    - name: The cluster read, CI on Vault's tokens
+    - name: What ten said
       ansible.builtin.set_fact:
-        _ci_cluster_on_vault: true
+        _ci_cluster_read: >-
+          {{ (_ci_es_ready.results | rejectattr('rc', 'equalto', 0) | list | length == 0)
+             and _ci_cluster_tokens.rc == 0
+             and (_ci_cluster_tokens.stdout_lines | map('regex_replace', '=.*$', '') | sort)
+                 == ['clone_token', 'infra_repo_token', 'pull_password', 'registry_token'] }}
+        _ci_cluster_ready: >-
+          {{ dict(_ci_es_ready.results | map(attribute='item')
+                  | zip(_ci_es_ready.results | map(attribute='stdout', default='') | map('trim'))) }}
+        _ci_cluster_secret: >-
+          {{ dict(_ci_cluster_tokens.stdout_lines | default([]) | map('regex_replace', '=.*$', '')
+                  | zip(_ci_cluster_tokens.stdout_lines | default([]) | map('regex_replace', '^[^=]*=', ''))) }}
+      no_log: true  # parts of tokens
+
+- name: Woodpecker CI's older tokens deleted - none the cluster still holds
+  hosts: pis
+  become: true
+  gather_facts: false
+  vars: *ci_bot_vars  # the first play's
+  tasks:
+    - name: The other Pis end here (the one holding the VIP made the tokens)
+      ansible.builtin.meta: end_host
+      when: inventory_hostname != (pi_vip_holder | default(''))
+
+    # ten not read, or an ExternalSecret not Ready: what CI holds is not known - none deleted, the run still passes
+    - name: What the cluster holds, as ten said it
+      ansible.builtin.set_fact:
+        _ci_cluster_known: >-
+          {{ (hostvars['target']._ci_cluster_read | default(false) | bool)
+             and (hostvars['target']._ci_cluster_ready | default({})).values() | reject('equalto', 'True') | list
+                 | length == 0 }}
+        _ci_cluster_last_eight: >-
+          {{ (hostvars['target']._ci_cluster_secret | default({})).values() | select('match', '^.{8}$') | list }}
+        _ci_cluster_said: >-
+          {{ 'ten not read' if not (hostvars['target']._ci_cluster_read | default(false) | bool)
+             else 'not Ready: ' ~ ((hostvars['target']._ci_cluster_ready | default({})) | dict2items
+                                   | rejectattr('value', 'equalto', 'True') | map(attribute='key') | join(', ')) }}
+      no_log: true  # parts of tokens
+
+    - name: The bot's older tokens to delete - none the cluster's Secrets still hold
+      ansible.builtin.set_fact:
+        _ci_delete: "{{ (_ci_old | default([])) | rejectattr('token_last_eight', 'in', _ci_cluster_last_eight) | list }}"
+      no_log: true  # each a token's last eight characters
+
+    - name: The bot's older tokens deleted
+      ansible.builtin.uri:
+        follow_redirects: none
+        url: "{{ forgejo_api }}/users/{{ ci_bot_user }}/tokens/{{ item.id }}"
+        method: DELETE
+        url_username: "{{ ci_bot_user }}"
+        url_password: "{{ _ci_bot_password }}"
+        force_basic_auth: true
+        status_code: [204, 404]  # gone already is what it wants
+      loop: "{{ _ci_delete }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: _ci_cluster_known | bool
+      changed_when: true
+      no_log: true  # each item a token's last eight characters
+
+    - name: The bot tokens deleted (their names)
+      ansible.builtin.debug:
+        msg: >-
+          bot tokens deleted{{ ':' if (_ci_cluster_known | bool) else ' none -' }}
+          {{ (_ci_delete | map(attribute='name') | join(', ') or 'none') if (_ci_cluster_known | bool)
+             else (_ci_cluster_said ~ ' (what CI holds is not known); a later run deletes '
+                   ~ ((_ci_delete | map(attribute='name') | join(', ')) or 'them')) }}
+
+    - name: Woodpecker CI's account
+      ansible.builtin.debug:
+        msg: >-
+          {{ ci_bot_user }} (no admin) in {{ _ci_teams | map(attribute='name') | map('regex_replace', '^', ci_bot_org ~ '/')
+          | join(', ') }}; its tokens ci-*-{{ _ci_stamp }} and registry_user in Vault {{ vault_prefix }}/woodpecker-ci:
+          woodpecker-ci v{{ (_ci_vault_before.metadata | default({})).version | default(0) }}
+          -> v{{ _ci_vault_written_read.metadata.version | default('?') }} (rollback: the playbook's header).
+          The cluster's woodpecker-ci-secrets takes them at External Secrets' next refresh (1 h) - at once: kubectl
+          annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite.
+          registry_user/registry_token come from there only where infra's ExternalSecret maps them from woodpecker-ci.
+
 
 - name: Retiring the admin's CI tokens - deleted
   hosts: pis
   become: true
   gather_facts: false
   tags: [never, retire]
-  vars:
-    forgejo_api: *ci_forgejo_api  # the first play's
+  vars: *ci_bot_vars  # the first play's
   tasks:
     - name: The other Pis end here (the one holding the VIP read Vault)
       ansible.builtin.meta: end_host
       when: inventory_hostname != (pi_vip_holder | default(''))
 
-    - name: The cluster read on ten, CI on Vault's tokens
+    - name: The cluster read on ten
       ansible.builtin.assert:
-        that: groups['target'] | map('extract', hostvars) | selectattr('_ci_cluster_on_vault', 'defined') | list | length > 0
-        fail_msg: "REFUSED: the cluster not read on ten (or not on Vault's tokens) - nothing deleted"
+        that: hostvars['target']._ci_cluster_read | default(false) | bool
+        fail_msg: "REFUSED: the cluster not read on ten - what CI holds is not known; nothing deleted"
+        quiet: true
+
+    - name: External Secrets synced woodpecker-ci-secrets (Ready)
+      ansible.builtin.assert:
+        that: (hostvars['target']._ci_cluster_ready | default({})).get('woodpecker-ci-secrets-es') == 'True'
+        fail_msg: >-
+          REFUSED: ExternalSecret woodpecker/woodpecker-ci-secrets-es is not Ready
+          ({{ (hostvars['target']._ci_cluster_ready | default({})).get('woodpecker-ci-secrets-es', '?') }}) - what CI
+          holds is not known; nothing deleted
+        quiet: true
+
+    - name: The cluster's Secret hands CI what Vault holds
+      ansible.builtin.assert:
+        that: >-
+          [hostvars['target']._ci_cluster_secret.infra_repo_token | default(''),
+           hostvars['target']._ci_cluster_secret.clone_token | default('')]
+          == [(_ci_vault_now.secret.infra_repo_token | default(''))[-8:],
+              (_ci_vault_now.secret.clone_token | default(''))[-8:]]
+        fail_msg: >-
+          REFUSED: the cluster's woodpecker-ci-secrets does not hand CI what Vault holds (infra_repo_token,
+          clone_token) - External Secrets has not synced since; force it (kubectl annotate externalsecret
+          woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite) and rerun; nothing deleted
         quiet: true
 
     # page by page (Forgejo pages its answers, 50 at most)

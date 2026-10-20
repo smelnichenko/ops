@@ -123,13 +123,15 @@ class H(BaseHTTPRequestHandler):
         who = self.auth()
         LOG.append({"method": method, "path": path, "auth": who[:2] if who else None, "body": body})
         fault = {}
-        for f in FAULTS:
-            if f["method"] == method and re.search(f["path"], path):
-                f["seen"] = f.get("seen", 0) + 1
-                if f["seen"] == f.get("nth", 1):
-                    if "status" in f:
-                        return self.answer(f["status"], {"message": "injected"})
-                    fault = f  # Forgejo doing otherwise than asked: an edit not applied, a token's scopes its own
+        # every matching fault counts this request first (one firing must not hide it from the next), then they fire
+        hit = [f for f in FAULTS if f["method"] == method and re.search(f["path"], path)]
+        for f in hit:
+            f["seen"] = f.get("seen", 0) + 1
+        for f in hit:
+            if f["seen"] == f.get("nth", 1):
+                if "status" in f:
+                    return self.answer(f["status"], {"message": "injected"})
+                fault = f  # Forgejo doing otherwise than asked: an edit not applied, a token's scopes its own
         if path.startswith("/v2/"):
             return self.registry(method, path, who)
         if not path.startswith("/api/v1/"):
