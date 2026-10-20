@@ -82,11 +82,13 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def answer(self, code, body=None):
+    def answer(self, code, body=None, headers=None):
         raw = b"" if body is None else json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -95,10 +97,16 @@ class H(BaseHTTPRequestHandler):
         h = self.headers.get("Authorization", "")
         if h.startswith("Basic "):
             login, _, pw = base64.b64decode(h[6:]).decode().partition(":")
+            t = next((t for t in S["tokens"].values() if t["sha1"] == pw), None)
+            if t:
+                return ("token", t["user"], t["scopes"])
             u = S["users"].get(login)
             if not u or u["password"] != pw or u["prohibit_login"] or not u["active"]:
                 return ("bad", login, None)
             return ("basic", login, None)
+        if h.startswith("Bearer "):
+            j = S.setdefault("jwts", {}).get(h[7:])
+            return ("token", j["user"], j["scopes"]) if j else ("bad", None, None)
         if h.startswith("token "):
             t = next((t for t in S["tokens"].values() if t["sha1"] == h[6:]), None)
             return ("token", t["user"], t["scopes"]) if t else ("bad", None, None)
@@ -122,6 +130,8 @@ class H(BaseHTTPRequestHandler):
                     if "status" in f:
                         return self.answer(f["status"], {"message": "injected"})
                     fault = f  # Forgejo doing otherwise than asked: an edit not applied, a token's scopes its own
+        if path.startswith("/v2/"):
+            return self.registry(method, path, who)
         if not path.startswith("/api/v1/"):
             return self.answer(404, {"message": "not found"})
         p = path[len("/api/v1"):]
@@ -229,6 +239,11 @@ class H(BaseHTTPRequestHandler):
         if m and method == "GET":
             return self.answer(200, pg([{"name": r, "full_name": f"{S['org']}/{r}", "private": v["private"]}
                                         for r, v in sorted(S["repos"].items())]))
+        m = re.match(r"^/repos/([^/]+)/([^/]+)/branch_protections$", p)
+        if m and method == "GET":
+            if m.group(1) != S["org"] or m.group(2) not in S["repos"]:
+                return self.answer(404, {"message": "no repository"})
+            return self.answer(200, S["repos"][m.group(2)].get("protections", []))
         m = re.match(r"^/repos/([^/]+)/([^/]+)$", p)
         if m and method == "GET":
             if m.group(1) != S["org"] or m.group(2) not in S["repos"]:
@@ -271,6 +286,34 @@ class H(BaseHTTPRequestHandler):
                 del S["tokens"][tid]
                 return self.answer(204)
         return self.answer(404, {"message": f"no route {method} {p}"})
+
+    def registry(self, method, path, who):
+        """Forgejo's container registry, the push path Kaniko takes: /v2/token (basic auth - a user and a token) gives a
+        bearer; with it an upload starts (POST .../blobs/uploads/ - package write, the token's write:package) and is
+        cancelled (DELETE its Location)."""
+        if who is None or who[0] == "bad":
+            return self.answer(401, {"errors": [{"code": "UNAUTHORIZED"}]})
+        kind, login, scopes = who
+        if path == "/v2/token" and method == "GET":
+            jwt = "jwt" + secrets.token_hex(16)
+            S.setdefault("jwts", {})[jwt] = {"user": login, "scopes": scopes or ["all"]}
+            return self.answer(200, {"token": jwt})
+        m = re.match(r"^/v2/([^/]+)/([^/]+)/blobs/uploads/(.*)$", path)
+        if not m or self.headers.get("Authorization", "").split(" ")[0] != "Bearer":
+            return self.answer(401, {"errors": [{"code": "UNAUTHORIZED"}]})
+        owner, image, uid = m.groups()
+        if owner != S["org"] or rank(package_mode(login)) < rank("write") or not scope_ok(scopes, "package", True):
+            return self.answer(401, {"errors": [{"code": "DENIED"}]})
+        ups = S.setdefault("uploads", [])
+        if method == "POST" and uid == "":
+            uid = secrets.token_hex(8)
+            ups.append(f"{owner}/{image}/{uid}")
+            return self.answer(202, None, {"Location": f"/v2/{owner}/{image}/blobs/uploads/{uid}",
+                                           "Docker-Upload-UUID": uid})
+        if method == "DELETE" and f"{owner}/{image}/{uid}" in ups:
+            ups.remove(f"{owner}/{image}/{uid}")
+            return self.answer(204)
+        return self.answer(404, {"errors": [{"code": "BLOB_UPLOAD_UNKNOWN"}]})
 
     @staticmethod
     def bad_team(body):
@@ -318,6 +361,7 @@ class H(BaseHTTPRequestHandler):
                 b = e.get("body") or {}
                 if isinstance(b, dict) and isinstance(b.get("password"), str):
                     known.add(b["password"])
+            known |= set(S.get("jwts", {}))
             return self.answer(200, sorted(x for x in known | EXTRA if x))
         return self.answer(404, {})
 

@@ -37,6 +37,13 @@ task deploy:seed-vault  # Populate secrets from .env
 task deploy:pi-services
 ```
 
+Then Woodpecker CI's Forgejo account (non-admin `woodpecker-ci`) and its tokens in Vault - re-run it after any Vault
+restore too: a restored `woodpecker-ci` may hold tokens a later run deleted in Forgejo:
+
+```bash
+task deploy:ci-bot
+```
+
 Wait for Forgejo to be ready, then push repos if needed:
 ```bash
 for repo in infra platform ops; do

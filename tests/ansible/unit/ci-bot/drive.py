@@ -87,9 +87,22 @@ os.chmod(PYW, 0o755)
 if not os.access(os.path.join(os.path.dirname(AP), "python3"), os.X_OK):
     with open(PYW, "w") as f:
         f.write(f'#!/bin/sh\nPATH="{PI}:{FENCE}:$PATH" exec python3 "$@"\n')
+# ten: kubectl answering the two reads the retire play makes from k8s.json (kubectl-stub.py), anything else refused
+TEN = os.path.join(W, "ten")
+os.mkdir(TEN)
+K8S = os.path.join(W, "k8s.json")
+with open(os.path.join(TEN, "kubectl"), "w") as f:
+    f.write(f'#!/bin/sh\nexec "{sys.executable}" "{H}/kubectl-stub.py" "{K8S}" "{W}/kubectl.log" "$@"\n')
+os.chmod(os.path.join(TEN, "kubectl"), 0o755)
+PYT = os.path.join(W, "py-ten")
+with open(PYT, "w") as f:
+    f.write(f'#!/bin/sh\nPATH="{TEN}:{FENCE}:$PATH" exec "{sys.executable}" "$@"\n')
+os.chmod(PYT, 0o755)
 INV = os.path.join(W, "inv.yml")
-yaml.safe_dump({"all": {"children": {"pis": {"hosts": {"pi1": {
-    "ansible_connection": "local", "ansible_python_interpreter": PYW, "ansible_become": False}}}}}}, open(INV, "w"))
+yaml.safe_dump({"all": {"children": {
+    "pis": {"hosts": {"pi1": {"ansible_connection": "local", "ansible_python_interpreter": PYW, "ansible_become": False}}},
+    "target": {"hosts": {"ten": {"ansible_connection": "local", "ansible_python_interpreter": PYT,
+                                 "ansible_become": False}}}}}}, open(INV, "w"))
 # the play's settings on a file (a value on ansible-playbook's command line is on its argv)
 VARS = os.path.join(W, "vars.yml")
 yaml.safe_dump({"keepalived_vip": VIP, "forgejo_admin_user": "forgejo_admin", "forgejo_admin_password": ADMIN_PW,
@@ -211,6 +224,24 @@ def vault_expect(toks, rest=VAULT_REST):
                 registry_user=BOT)
 
 
+def dv(state):
+    """Vault's woodpecker-ci entry, its data and version (its history aside)."""
+    e = state["kv"].get("schnappy/woodpecker-ci", {})
+    return {"data": e.get("data"), "version": e.get("version")}
+
+
+def stamp(hours_ago):
+    return time.strftime("%Y%m%dT%H%M%S", time.gmtime(time.time() - hours_ago * 3600))
+
+
+def mints(s):
+    return [e["path"] for e in s["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")]
+
+
+def flat(out):
+    return " ".join(out.split())
+
+
 # ── setup-ci-bot.yml: first run, from production's state today ───────────────────────────────────────────────────
 reset()
 rc, out = run()
@@ -228,9 +259,15 @@ check("first run: minted as the bot (basic auth), never as the admin",
       sorted({str(e["auth"]) for e in s["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")}),
       [str(["basic", BOT])])
 check("first run: Vault holds the bot's tokens and name, every other property kept as it was, one write with the "
-      "version read (cas 3)",
-      (v["kv"]["schnappy/woodpecker-ci"]["data"], v["kv"]["schnappy/woodpecker-ci"]["version"],
-       [w["cas"] for w in v["writes"]]), (vault_expect(toks), 4, [3]))
+      "version read (cas 3); the run says the versions (v3 -> v4) - v3 is what a rollback goes back to",
+      (dv(v), [w["cas"] for w in v["writes"]], "woodpecker-ci v3 -> v4" in flat(out)),
+      ({"data": vault_expect(toks), "version": 4}, [3], True))
+check("first run: the registry token proven on the registry itself - a bearer from /v2/token, an upload to "
+      "schnappy/masi started and cancelled, none left open",
+      ([(e["method"], re.sub(r"[0-9a-f]{16}$", "<uuid>", e["path"])) for e in s["log"] if e["path"].startswith("/v2/")],
+       s["state"].get("uploads")),
+      ([("GET", "/v2/token"), ("POST", "/v2/schnappy/masi/blobs/uploads/"),
+        ("DELETE", "/v2/schnappy/masi/blobs/uploads/<uuid>")], []))
 check("first run: the admin's tokens untouched (retired only on --tags retire)",
       sorted(t["name"] for t in s["state"]["tokens"].values() if t["user"] == "forgejo_admin"),
       ["argocd-readonly", "woodpecker-clone", "woodpecker-infra"])
@@ -238,28 +275,48 @@ check("first run: what the bot can do, as Forgejo computes it from its teams: pu
       bot_rights(s["state"]), (["infra"], []))
 first_ids = {t["name"]: t["id"] for t in s["state"]["teams"].values()}
 
-# ── a rerun: the same account and teams; new tokens, the ones Vault held kept, older ones deleted ────────────────
+# ── reruns: the same account and teams; new tokens; none deleted that the cluster may still hold ─────────────────
 time.sleep(1.1)  # a new second: the next run's token names
 rc, out = run()
 s2, v2 = fstate(), kv()
 toks2 = bot_tokens(s2)
 check("rerun: passes, the account and the teams as they were (same teams, not made again)",
       (rc, scope_view(s2), {t["name"]: t["id"] for t in s2["state"]["teams"].values()}), (0, WANT_SCOPE, first_ids))
-check("rerun: the run-1 tokens kept (Vault held them - the cluster's Secret may still), three new ones, Vault on the "
-      "new ones, every other property still kept",
-      ([t["id"] for t in toks2[:3]], kinds(toks2[3:]), v2["kv"]["schnappy/woodpecker-ci"]["data"]),
+check("rerun: the run-1 tokens kept, three new ones, Vault on the new ones, every other property still kept",
+      ([t["id"] for t in toks2[:3]], kinds(toks2[3:]), dv(v2)["data"]),
       ([t["id"] for t in toks], WANT_KINDS, vault_expect(toks2[3:])))
 time.sleep(1.1)
 rc, out = run()
 s3, v3 = fstate(), kv()
 toks3 = bot_tokens(s3)
-check("third run: steady - run 1's tokens deleted, run 2's kept, three new; account and teams unchanged",
-      (rc, [t["id"] for t in toks3[:3]], kinds(toks3[3:]), len(toks3), scope_view(s3),
-       v3["kv"]["schnappy/woodpecker-ci"]["data"] == vault_expect(toks3[3:])),
-      (0, [t["id"] for t in toks2[3:]], WANT_KINDS, 6, WANT_SCOPE, True))
+check("a third run within 3 h: run 1's tokens kept too - Vault no longer holds them, but External Secrets may not "
+      "have synced since (the cluster's Secret may still hand them to CI); account and teams unchanged",
+      (rc, [t["id"] for t in toks3[:6]], kinds(toks3[6:]), len(toks3), scope_view(s3),
+       dv(v3)["data"] == vault_expect(toks3[6:])),
+      (0, [t["id"] for t in toks2], WANT_KINDS, 9, WANT_SCOPE, True))
+# hours later: runs 1 and 2's tokens over 3 h old and not in Vault - deleted; run 3's over 3 h old but in Vault - kept;
+# one 2 h 59 min old, not in Vault - kept
+st = copy.deepcopy(s3["state"])
+for t in st["tokens"].values():
+    if t["user"] == BOT:
+        t["name"] = re.sub(r"\d{8}T\d{6}$", stamp(4), t["name"])
+st["seq"] += 1
+young = {"id": st["seq"], "user": BOT, "name": "ci-infra-" + stamp(2.98), "sha1": secrets.token_hex(20),
+         "scopes": ["write:repository"]}
+young["token_last_eight"] = young["sha1"][-8:]
+st["tokens"][str(young["id"])] = young
+reset(st, {"schnappy/woodpecker-ci": dv(v3)})
+rc, out = run()
+s10 = fstate()
+check("a run over 3 h later: the tokens over 3 h old Vault does not hold deleted (runs 1 and 2); those Vault held "
+      "kept however old (run 3), one under 3 h old kept; three new",
+      (rc, sorted(t["id"] for t in bot_tokens(s10))[:4], len(bot_tokens(s10))),
+      (0, sorted([t["id"] for t in toks3[6:]] + [young["id"]]), 7))
+V3 = dv(v3)["data"]
+VAULT6 = {"schnappy/woodpecker-ci": {"data": V3, "version": 6}}
 
 # ── drift fixed or refused ──────────────────────────────────────────────────────────────────────────────────────
-st = s3["state"]
+st = copy.deepcopy(s3["state"])
 st["users"][BOT]["is_admin"] = True
 st["users"][BOT]["must_change_password"] = True
 ci = next(t for t in st["teams"].values() if t["name"] == "ci")
@@ -267,7 +324,7 @@ ci["repos"].append("platform")
 ci["includes_all_repositories"] = True
 ci["can_create_org_repo"] = True
 ci["units_map"]["repo.pulls"] = "write"
-reset(st, {"schnappy/woodpecker-ci": {"data": v3["kv"]["schnappy/woodpecker-ci"]["data"], "version": 6}})
+reset(st, VAULT6)
 rc, out = run()
 check("drift: a bot made admin by hand is made a user again; a team given another repository, every repository, "
       "repository creation or another unit is put back to its own scope", (rc, scope_view(fstate())), (0, WANT_SCOPE))
@@ -277,17 +334,32 @@ for label, edit, said in (
          lambda st: next(t for t in st["teams"].values() if t["name"] == "ci")["members"].append("sm"),
          "REFUSED: team schnappy/ci holds sm"),
         ("the bot put in Owners by hand (push and admin everywhere)",
-         lambda st: st["teams"]["1"]["members"].append(BOT), "REFUSED: woodpecker-ci pushes to")):
+         lambda st: st["teams"]["1"]["members"].append(BOT), "REFUSED: woodpecker-ci pushes to"),
+        ("a branch protection on infra (CD's push to main would be refused)",
+         lambda st: st["repos"]["infra"].update(protections=[{"branch_name": "main"}]),
+         "REFUSED: schnappy/infra has branch protections"),
+        ("the bot switched off (inactive) - a kill switch a run must not undo",
+         lambda st: st["users"][BOT].update(active=False), "REFUSED: woodpecker-ci is switched off"),
+        ("the bot's login prohibited - a kill switch a run must not undo",
+         lambda st: st["users"][BOT].update(prohibit_login=True), "REFUSED: woodpecker-ci is switched off")):
     st = copy.deepcopy(s3["state"])
     edit(st)
-    reset(st, {"schnappy/woodpecker-ci": {"data": v3["kv"]["schnappy/woodpecker-ci"]["data"], "version": 6}})
+    reset(st, VAULT6)
     rc, out = run()
     s4, v4 = fstate(), kv()
     check(f"refused: {label} - said; no token minted, Vault not written",
-          (rc != 0, said in out, len(bot_tokens(s4)), v4["writes"]), (True, True, 6, []))
+          (rc != 0, said in flat(out), mints(s4), v4["writes"]), (True, True, [], []))
+check("  ... and the switched-off bot left as it was (no edit of it)",
+      ([e["method"] for e in s4["log"] if e["path"].endswith("/admin/users/" + BOT) and e["method"] != "GET"],
+       s4["state"]["users"][BOT]["prohibit_login"]), ([], True))
+st = copy.deepcopy(s3["state"])
+st["users"][BOT]["active"] = False
+reset(st, VAULT6)
+rc, out = run("-e", "ci_bot_reactivate=true")
+check("the switched-off bot with ci_bot_reactivate=true: switched on again, the run passes",
+      (rc, scope_view(fstate())), (0, WANT_SCOPE))
 
 # ── a failure after a mint: the new tokens deleted again, Vault unchanged (or as another writer left it) ───────────
-V3 = v3["kv"]["schnappy/woodpecker-ci"]["data"]
 for label, fault, want_vault in (
         ("someone writes Vault between the read and the write (the version read refuses this write)",
          ("vault", {"method": "GET", "path": "woodpecker-ci", "bump": True}),
@@ -297,40 +369,59 @@ for label, fault, want_vault in (
         ("Forgejo makes a token with more scope than asked (all)",
          ("forgejo", {"method": "POST", "path": "/users/woodpecker-ci/tokens$", "scopes": ["all"], "nth": 3}),
          {"data": V3, "version": 6}),
-        ("the registry token's proof fails",
-         ("forgejo", {"method": "GET", "path": "^/api/v1/packages/", "status": 404}), {"data": V3, "version": 6}),
+        ("the registry refuses the push (the upload)",
+         ("forgejo", {"method": "POST", "path": "^/v2/.+/blobs/uploads/$", "status": 401}),
+         {"data": V3, "version": 6}),
 ):
-    reset(copy.deepcopy(s3["state"]), {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
+    reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
     (vault if fault[0] == "vault" else forgejo)("POST", "/_fail", fault[1])
     rc, out = run()
     s5, v5 = fstate(), kv()
     check(f"failure: {label} - fails, said; this run's tokens deleted again (the bot's as before), Vault "
           + ("as the other writer left it" if "someone" in want_vault["data"] else "unchanged"),
-          (rc != 0, "this run's new tokens deleted again" in out, [t["id"] for t in bot_tokens(s5)],
-           v5["kv"]["schnappy/woodpecker-ci"]), (True, True, [t["id"] for t in toks3], want_vault))
+          (rc != 0, "this run's new tokens deleted again" in flat(out), [t["id"] for t in bot_tokens(s5)], dv(v5)),
+          (True, True, [t["id"] for t in toks3], want_vault))
+
+# ── the Vault write's answer lost: Vault read again - holding this run's tokens, none deleted ───────────────────
+reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
+vault("POST", "/_fail", {"method": "POST", "path": "woodpecker-ci", "lose": True})
+rc, out = run()
+s11, v11 = fstate(), kv()
+new = bot_tokens(s11)[len(toks3):]
+check("the Vault write applied, its answer lost: fails, saying Vault holds this run's tokens - none deleted (CI may "
+      "already get them)",
+      (rc != 0, "Vault holds this run's tokens" in flat(out), kinds(new), dv(v11)),
+      (True, True, WANT_KINDS, {"data": vault_expect(new, rest=VAULT_REST), "version": 7}))
+reset(copy.deepcopy(s3["state"]), copy.deepcopy(VAULT6))
+vault("POST", "/_fail", {"method": "POST", "path": "woodpecker-ci", "status": 500})
+vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "nth": 2, "error": "Vault is sealed"})
+rc, out = run()
+s12 = fstate()
+check("the Vault write failing and Vault unreadable after it: fails, saying so - none deleted (whether Vault holds "
+      "them is not known)",
+      (rc != 0, "Vault not read after the write" in flat(out), len(bot_tokens(s12)), dv(kv())),
+      (True, True, len(toks3) + 3, {"data": V3, "version": 6}))
 
 # ── Forgejo not applying a team's units (an edit answered 200, the units left as they were): refused on reading back ──
 st = copy.deepcopy(s3["state"])
 next(t for t in st["teams"].values() if t["name"] == "ci")["units_map"]["repo.pulls"] = "write"
-reset(st, {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
+reset(st, copy.deepcopy(VAULT6))
 forgejo("POST", "/_fail", {"method": "PATCH", "path": "^/api/v1/teams/[0-9]+$", "ignore": ["units_map"]})
 rc, out = run()
 s9 = fstate()
 check("a team whose units Forgejo leaves wider than asked: refused on reading it back, said - no token minted, Vault "
       "not written",
-      (rc != 0, "REFUSED: team schnappy/ci reads back" in " ".join(out.split()),
-       [e["path"] for e in s9["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")], kv()["writes"]),
-      (True, True, [], []))
+      (rc != 0, "REFUSED: team schnappy/ci reads back" in flat(out), mints(s9), kv()["writes"]), (True, True, [], []))
 
 # ── Forgejo leaving the bot an admin (its edit not applied): refused before a team or a token is touched ──────────
 st = copy.deepcopy(s3["state"])
 st["users"][BOT]["is_admin"] = True
-reset(st, {"schnappy/woodpecker-ci": {"data": V3, "version": 6}})
+reset(st, copy.deepcopy(VAULT6))
 forgejo("POST", "/_fail", {"method": "PATCH", "path": "/admin/users/woodpecker-ci$", "ignore": ["admin"]})
 rc, out = run()
 s8 = fstate()
 check("an admin bot Forgejo will not make a user: refused, said - no team changed, no token minted, Vault not written",
-      (rc != 0, "REFUSED: woodpecker-ci is woodpecker-ci, admin True" in " ".join(out.split()),
+      (rc != 0, "REFUSED: woodpecker-ci is woodpecker-ci, admin True" in flat(out),
        [e["method"] + " " + e["path"] for e in s8["log"] if e["method"] != "GET" and "/admin/users" not in e["path"]],
        kv()["writes"]), (True, True, [], []))
 
@@ -339,55 +430,103 @@ reset()
 vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "status": 503, "error": "Vault is sealed"})
 rc, out = run()
 check("Vault sealed: fails before any token is minted (none asked for), nothing written",
-      (rc != 0, [e["path"] for e in fstate()["log"] if e["method"] == "POST" and e["path"].endswith("/tokens")],
-       kv()["writes"]), (True, [], []))
+      (rc != 0, mints(fstate()), kv()["writes"]), (True, [], []))
 reset(kv={})
 rc, out = run()
 s6, v6 = fstate(), kv()
 check("Vault path missing (a first install): the four written create-only (cas 0)",
-      (rc, v6["kv"].get("schnappy/woodpecker-ci", {}).get("data"), [w["cas"] for w in v6["writes"]]),
-      (0, vault_expect(bot_tokens(s6), rest={}), [0]))
+      (rc, dv(v6)["data"], [w["cas"] for w in v6["writes"]], "woodpecker-ci v0 -> v1" in flat(out)),
+      (0, vault_expect(bot_tokens(s6), rest={}), [0], True))
 
 # ── no preview ───────────────────────────────────────────────────────────────────────────────────────────────────
 reset()
 rc, out = run("--check")
 check("--check: refused, nothing changed", (rc != 0, "no check mode" in out, BOT in fstate()["state"]["users"],
                                             kv()["writes"]), (True, True, False, []))
+check("no setup run read the cluster (kubectl on ten only on --tags retire)",
+      open(os.path.join(W, "kubectl.log")).read() if os.path.exists(os.path.join(W, "kubectl.log")) else "", "")
 
 # ── retiring the admin's CI tokens ──────────────────────────────────────────────────────────────────────────────
 RETIRE_ENV = {"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA, "WOODPECKER_CLONE_TOKEN": " " + ADMIN_CLONE + " "}
+ALL_ADMIN = ["argocd-readonly", "woodpecker-clone", "woodpecker-infra"]
 admin_names = lambda s: sorted(t["name"] for t in s["state"]["tokens"].values() if t["user"] == "forgejo_admin")  # noqa
+
+
+def cluster(ready="True", synced=True):
+    """ten's view: the ExternalSecret's Ready, the Secret as External Secrets last wrote it (Vault's now, or the
+    admin's - not synced since)."""
+    data = dv(kv())["data"] or {}
+    secret = ({k: data.get(k, "") for k in ("infra_repo_token", "clone_token")} if synced
+              else {"infra_repo_token": ADMIN_INFRA, "clone_token": ADMIN_CLONE})
+    json.dump({"ready": ready, "secret": secret}, open(K8S, "w"))
+
+
 reset()
+cluster()
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
 check("retire before the bot's tokens are in Vault: refused, nothing deleted",
-      (rc != 0, "REFUSED" in out, admin_names(fstate())), (True, True, ["argocd-readonly", "woodpecker-clone",
-                                                                       "woodpecker-infra"]))
+      (rc != 0, "REFUSED" in out, admin_names(fstate())), (True, True, ALL_ADMIN))
 rc, out = run()
 st, vv = fstate(), kv()
+for label, ready, synced, said in (
+        ("the ExternalSecret not Ready", "False", True, "REFUSED: ExternalSecret woodpecker/woodpecker-ci-secrets-es"),
+        ("the cluster's Secret not synced since (still the admin's tokens)", "True", False,
+         "REFUSED: the cluster's woodpecker-ci-secrets does not hand CI what Vault holds")):
+    cluster(ready, synced)
+    rc, out = run("--tags", "retire", env=RETIRE_ENV)
+    check(f"retire with {label}: refused, said, nothing deleted",
+          (rc != 0, said in flat(out), admin_names(fstate())), (True, True, ALL_ADMIN))
+cluster()
+open(os.path.join(W, "kubectl.log"), "w").close()
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
 s7 = fstate()
-check("retire after setup: the admin's two CI tokens (as .env names them, whatever their names) deleted, its "
-      "others kept; the bot's tokens, the account and Vault untouched",
+check("retire after setup, the cluster synced: the admin's two CI tokens deleted, its others kept; the bot's tokens, "
+      "the account and Vault untouched",
       (rc, admin_names(s7), [t["id"] for t in bot_tokens(s7)], kv() == vv, scope_view(s7)),
       (0, ["argocd-readonly"], [t["id"] for t in bot_tokens(st)], True, WANT_SCOPE))
+check("retire read the cluster read-only: the ExternalSecret and the Secret, get alone",
+      sorted(set(open(os.path.join(W, "kubectl.log")).read().splitlines())),
+      ["get externalsecret -n woodpecker", "get secret -n woodpecker"])
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
 check("retire again: nothing left to delete - passes", (rc, admin_names(fstate())), (0, ["argocd-readonly"]))
-reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": dict(vv["kv"]["schnappy/woodpecker-ci"])})
-data = vault("GET", "/_state")["kv"]["schnappy/woodpecker-ci"]
-data["data"]["clone_token"] = ADMIN_CLONE
-vault("POST", "/_reset", {"schnappy/woodpecker-ci": data})
+reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": vv["kv"]["schnappy/woodpecker-ci"]})
+cluster()
+rc, out = run("--tags", "retire", env={"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA})
+check("retire with .env naming the infra token alone: the clone token found in Vault's history (v3) - both deleted",
+      (rc, admin_names(fstate())), (0, ["argocd-readonly"]))
+reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": vv["kv"]["schnappy/woodpecker-ci"]})
+cluster()
+rc, out = run("--tags", "retire")
+check("retire with nothing in .env: both found in Vault's history - deleted", (rc, admin_names(fstate())),
+      (0, ["argocd-readonly"]))
+e = copy.deepcopy(vv["kv"]["schnappy/woodpecker-ci"])
+e["data"]["clone_token"] = ADMIN_CLONE
+reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": e})
+cluster()
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
 check("retire while Vault still hands CI one of the admin's tokens: refused, nothing deleted",
-      (rc != 0, "still holds a token of the admin" in out, admin_names(fstate())),
-      (True, True, ["argocd-readonly", "woodpecker-clone", "woodpecker-infra"]))
+      (rc != 0, "still holds a token of the admin" in flat(out), admin_names(fstate())), (True, True, ALL_ADMIN))
+reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": e})
+cluster()
+rc, out = run("--tags", "retire", env={"WOODPECKER_INFRA_REPO_TOKEN": ADMIN_INFRA})
+check("retire while Vault hands CI an admin token .env does not name (found in the history): refused, nothing deleted",
+      (rc != 0, "still holds a token of the admin (woodpecker-clone)" in flat(out), admin_names(fstate())),
+      (True, True, ALL_ADMIN))
+reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": vv["kv"]["schnappy/woodpecker-ci"]})
+cluster()
+rc, out = run("--tags", "retire", "--limit", "pis", env=RETIRE_ENV)
+check("retire with ten left out (--limit pis - the cluster not read): refused, nothing deleted",
+      (rc != 0, "REFUSED: the cluster not read on ten" in flat(out), admin_names(fstate())), (True, True, ALL_ADMIN))
 reset(kv={"schnappy/woodpecker-ci": {"data": dict(VAULT_REST), "version": 1}})
+cluster()
 rc, out = run("--tags", "retire", env=RETIRE_ENV)
 check("retire while Vault holds none of the bot's (setup-ci-bot never ran): refused, said, nothing deleted",
-      (rc != 0, "run task deploy:ci-bot first" in " ".join(out.split()), len(admin_names(fstate()))), (True, True, 3))
-reset()
+      (rc != 0, "run task deploy:ci-bot first" in flat(out), len(admin_names(fstate()))), (True, True, 3))
+reset(copy.deepcopy(st["state"]), {"schnappy/woodpecker-ci": {"data": dv(vv)["data"], "version": 1}})
+cluster()
 rc, out = run("--tags", "retire")
-check("retire with no admin token named in .env: refused, nothing deleted",
-      (rc != 0, "nothing to retire" in out, len(admin_names(fstate()))), (True, True, 3))
+check("retire with nothing in .env nor in Vault's history: refused, nothing deleted",
+      (rc != 0, "nothing to retire" in out, admin_names(fstate())), (True, True, ALL_ADMIN))
 
 # ── seed-vault-secrets.yml's woodpecker-ci: Vault's CI bot properties kept, .env's old tokens never over them ────
 seed = yaml.safe_load(open(SEED))[0]
@@ -475,8 +614,7 @@ vault("POST", "/_fail", {"method": "GET", "path": "woodpecker-ci", "bump": True}
 r = subprocess.run([AP, "-i", "localhost,", SEED_PLAY], capture_output=True, text=True, cwd=W,
                    env=dict(ENV, **SEED_ENV, **OLD_ENV))
 check("seed: someone writes Vault between its read and its write - the version read refuses it, theirs kept",
-      (r.returncode != 0, kv()["kv"]["schnappy/woodpecker-ci"]), (True, {"data": dict(BOTV, someone="else"),
-                                                                        "version": 3}))
+      (r.returncode != 0, dv(kv())), (True, {"data": dict(BOTV, someone="else"), "version": 3}))
 
 # ── no secret on a command line ─────────────────────────────────────────────────────────────────────────────────
 canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])
