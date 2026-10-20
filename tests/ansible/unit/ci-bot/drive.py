@@ -370,7 +370,9 @@ check("  ... ten read for it, read only: the ExternalSecrets' Ready, woodpecker-
 by_id = {t["id"]: t for t in toks3}
 # held still (External Secrets not synced since): run 1's infra token in woodpecker-ci-secrets, run 2's registry token
 # in woodpecker's forgejo-registry, run 1's pull token in schnappy-production's
-held_infra, held_reg, held_pull = toks3[0], toks3[K + 1], toks3[3]
+# (padded: a broken playbook that minted fewer reaches the check below as a failure, not as an IndexError)
+pad = toks3 + [{"id": -1, "sha1": "none", "name": "none"}] * (3 * K)
+held_infra, held_reg, held_pull = pad[0], pad[K + 1], pad[3]
 reset(copy.deepcopy(st), {"schnappy/woodpecker-ci": dv(v3)})
 ten(secret={"infra_repo_token": held_infra["sha1"]},
     pull={"woodpecker": held_reg["sha1"], "schnappy-production": held_pull["sha1"]})
