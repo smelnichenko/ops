@@ -76,20 +76,30 @@ for tool in ("curl", "wget", "forgejo", "gitea", "vault", "http", "ssh", "kubect
     os.chmod(os.path.join(FENCE, tool), 0o755)
 
 
-def wrapper(name, path_dir):
+def wrapper(name, path_dir, cwd=None):
+    """A host's interpreter: its own tools first on PATH; a Pi's run in its own directory (a relative path a module
+    opens is that Pi's alone - each Pi's own files, as on two machines)."""
     p = os.path.join(W, "py-" + name)
     with open(p, "w") as f:
-        f.write(f'#!/bin/sh\nPATH="{path_dir}:{FENCE}:$PATH" exec "{sys.executable}" "$@"\n')
+        f.write("#!/bin/sh\n" + (f'cd "{cwd}" || exit 1\n' if cwd else "")
+                + f'PATH="{path_dir}:{FENCE}:$PATH" exec "{sys.executable}" "$@"\n')
     os.chmod(p, 0o755)
     return p
 
 
+def vip_on(holder):
+    """The Pi holding the VIP: its `ip` answers the address, the other's nothing."""
+    for name in ("pi1", "pi2"):
+        line = f'echo "2: eth0    inet {VIP}/24 scope global secondary eth0"' if name == holder else "exit 0"
+        with open(os.path.join(W, name, "ip"), "w") as f:
+            f.write(f"#!/bin/sh\n{line}\n")
+        os.chmod(os.path.join(W, name, "ip"), 0o755)
+
+
 # pi1 holds the VIP, pi2 does not (its `ip` answers nothing); ten's kubectl is the stub
-for name, line in (("pi1", f'echo "2: eth0    inet {VIP}/24 scope global secondary eth0"'), ("pi2", "exit 0")):
+for name in ("pi1", "pi2"):
     os.mkdir(os.path.join(W, name))
-    with open(os.path.join(W, name, "ip"), "w") as f:
-        f.write(f"#!/bin/sh\n{line}\n")
-    os.chmod(os.path.join(W, name, "ip"), 0o755)
+vip_on("pi1")
 TEN = os.path.join(W, "ten")
 os.mkdir(TEN)
 K8S = os.path.join(W, "k8s.json")
@@ -100,8 +110,10 @@ os.chmod(os.path.join(TEN, "kubectl"), 0o755)
 INV = os.path.join(W, "inv.yml")
 LOCAL = {"ansible_connection": "local", "ansible_become": False}
 yaml.safe_dump({"all": {"hosts": {"target": dict(LOCAL, ansible_python_interpreter=wrapper("ten", TEN)),
-                                  "pi1": dict(LOCAL, ansible_python_interpreter=wrapper("pi1", os.path.join(W, "pi1"))),
-                                  "pi2": dict(LOCAL, ansible_python_interpreter=wrapper("pi2", os.path.join(W, "pi2")))},
+                                  "pi1": dict(LOCAL, ansible_python_interpreter=wrapper("pi1", os.path.join(W, "pi1"),
+                                                                                  os.path.join(W, "pi1"))),
+                                  "pi2": dict(LOCAL, ansible_python_interpreter=wrapper("pi2", os.path.join(W, "pi2"),
+                                                                                  os.path.join(W, "pi2")))},
                         "children": {"pis": {"hosts": {"pi1": None, "pi2": None}}}}}, open(INV, "w"))
 
 # an infra checkout: what Argo CD reads - two Applications on the host (infra, platform), one on a chart repository,
@@ -162,7 +174,7 @@ def write_vars(infra=INFRA):
                     # setup-argocd's repo-creds tasks, run alone (C1)
                     "argocd_namespace": "argocd", "argocd_kubeconfig": "/no/kubeconfig",
                     "argocd_vault_addr": f"http://127.0.0.1:{VP}", "argocd_vault_ca_cert": os.path.join(W, "no-ca.pem"),
-                    "argocd_vault_root_token_file": os.path.join(W, "root-token")},
+                    "argocd_vault_root_token_file": root_token, "argocd_forgejo_api": f"http://127.0.0.1:{FP}/api/v1"},
                    open(VARS, "w"))
 
 
@@ -693,26 +705,71 @@ yaml.safe_dump([{"name": "setup-argocd's repo-creds tasks", "hosts": "target", "
                  "tasks": [{"name": "tasks/argocd-repo-creds.yml", "ansible.builtin.include_tasks":
                             os.path.join(ROOT, "deploy/ansible/playbooks/tasks/argocd-repo-creds.yml")}]}],
                open(REPO_PLAY, "w"), sort_keys=False)
-READER_TOKEN = "reader" + secrets.token_hex(17)
-reset(kv={PATH_V: {"data": {"token": READER_TOKEN, "username": BOT}, "version": 1}})
-ten(creds={"forgejo-repo-creds": ("", "")})
+# the reader as task deploy:argocd-reader makes it: its account, its teams, its token in Vault
+reset()
+rc0, out0 = run()
+READER_TOKEN = (dv(kv())["data"] or {}).get("token", "none")
+READER_STATE = copy.deepcopy(fstate()["state"])
+READER_KV = {PATH_V: copy.deepcopy(dv(kv()))}
+
+
+def repo_reset(creds=("", ""), kvs=None):
+    forgejo("POST", "/_reset", copy.deepcopy(READER_STATE))
+    vault("POST", "/_reset", copy.deepcopy(kvs or READER_KV))
+    ten(creds={"forgejo-repo-creds": creds})
+    open(os.path.join(W, "kubectl.log"), "w").close()
+
+
+def infra_read_with_token():
+    return [e["path"] for e in fstate()["log"] if e["auth"] == ["token", BOT] and e["path"].endswith("/repos/schnappy/infra")]
+
+
+repo_reset()
 rc, out = run(play=REPO_PLAY)
 sec = json.load(open(K8S))["secrets"]["forgejo-repo-creds"]
 check("setup-argocd on a rebuild (forgejo-repo-creds without credentials): argocd-reader and its token from Vault (read "
-      "on the Pi holding the VIP) patched in on kubectl's stdin; its url and type kept",
-      (rc, sec["username"], sec["password"] == READER_TOKEN, sec["url"], sec["type"],
-       "patch secret -n argocd" in kubectl_calls()), (0, BOT, True, "https://git.pmon.dev", "git", True))
+      "on the Pi holding the VIP), proven first (infra read with it from ten), patched in on kubectl's stdin; its url "
+      "and type kept",
+      (rc0, rc, sec["username"], sec["password"] == READER_TOKEN, sec["url"], sec["type"],
+       "patch secret -n argocd" in kubectl_calls(), len(infra_read_with_token())),
+      (0, 0, BOT, True, "https://git.pmon.dev", "git", True, 1))
 open(os.path.join(W, "kubectl.log"), "w").close()
 rc, out = run(play=REPO_PLAY)
 check("setup-argocd again (credentials there): left alone - no patch", (rc, "patch secret -n argocd" in kubectl_calls(),
                                                                        json.load(open(K8S))["secrets"]["forgejo-repo-creds"] == sec),
       (0, False, True))
-reset(kv={PATH_V: {"data": {"token": READONLY}, "version": 1}})
-ten(creds={"forgejo-repo-creds": ("", "")})
+repo_reset(creds=("forgejo_admin", ""))
+rc, out = run(play=REPO_PLAY)
+sec = json.load(open(K8S))["secrets"]["forgejo-repo-creds"]
+check("setup-argocd with a half-filled forgejo-repo-creds (a username, no password): argocd-reader's credentials patched in",
+      (rc, sec["username"], sec["password"] == READER_TOKEN), (0, BOT, True))
+repo_reset(kvs={PATH_V: {"data": {"token": READONLY}, "version": 1}})
 rc, out = run(play=REPO_PLAY)
 check("setup-argocd on a rebuild with no argocd-reader in Vault: refused, said - the Secret left as it is",
       (rc != 0, "run task deploy:argocd-reader first" in flat(out), "patch secret -n argocd" in kubectl_calls()),
       (True, True, False))
+repo_reset(kvs={PATH_V: {"data": {"token": "f" * 40, "username": BOT}, "version": 1}})
+rc, out = run(play=REPO_PLAY)
+check("setup-argocd with Vault holding a token Forgejo does not know (deleted, a restored Vault): refused before the "
+      "patch, said - the Secret left as it is",
+      (rc != 0, "does not read schnappy/infra" in flat(out) and "run task deploy:argocd-reader" in flat(out),
+       "patch secret -n argocd" in kubectl_calls()), (True, True, False))
+repo_reset()
+rc, out = run("-e", "reader_user=another-reader", play=REPO_PLAY)
+check("setup-argocd with reader_user another account than Vault's: refused (the reader's name is reader_user's, not "
+      "a literal) - no patch", (rc != 0, "patch secret -n argocd" in kubectl_calls()), (True, False))
+# the VIP on pi2, Vault's root token on pi2 alone (pi1 has no file at that path): the patch works through pi2
+vip_on("pi2")
+os.makedirs(os.path.join(W, "pi2", "vault"), exist_ok=True)
+open(os.path.join(W, "pi2", "vault", "root-token"), "w").write(VAULT_TOKEN + "\n")
+write_vars(root_token="vault/root-token")
+repo_reset()
+rc, out = run(play=REPO_PLAY)
+sec = json.load(open(K8S))["secrets"]["forgejo-repo-creds"]
+check("setup-argocd with pi2 holding the VIP, Vault's root token on pi2 alone: read there - the patch made",
+      (rc, tail(out) if rc else "", sec["username"], sec["password"] == READER_TOKEN), (0, "", BOT, True))
+vip_on("pi1")
+write_vars()
 SA_TASKS = [t for p_ in SA for t in (p_.get("tasks") or [])]
 inc = [i for i, t in enumerate(SA_TASKS) if str(t.get("ansible.builtin.include_tasks", "")).endswith("argocd-repo-creds.yml")]
 url_only = [i for i, t in enumerate(SA_TASKS) if t.get("name") == "The repo-creds Secret Argo CD reads Forgejo with (its url)"]
