@@ -19,22 +19,36 @@
 #           sweeper's call). Written to Vault argocd/forgejo-readonly as token, with username: read, merged, written
 #           back with the version read (cas), every other property kept, read back. The run says
 #           "argocd/forgejo-readonly v<read> -> v<written>"
-#   cluster ten read first (kubectl get alone): argocd's ExternalSecrets' Ready, forgejo-readonly-token's token and the
-#           repo-creds Secret's username and password - last eight characters, never a token - and the Applications'
-#           comparison errors. What they hold is kept; it is recorded in Vault (retire_last_eight) for --tags retire,
-#           so the admin tokens Argo CD held before the switch are known after it. Then kubectl's last-applied
-#           annotation is taken off forgejo-repo-creds (it held the Secret as first applied - an admin token)
-#   cleanup the reader's older tokens deleted only when Vault does not hold them, ten does not, and their time is
-#           over 3 h old; ten not read or an ExternalSecret there not Ready: none deleted, said, the run passes. A
-#           mint or a proof failing deletes this run's token again; the Vault write itself failing, or a failure
-#           after it with Vault holding the token or unreadable: none deleted, said
+#   cluster ten read first (kubectl get alone): argocd's ExternalSecrets' Ready, forgejo-readonly-token's token, the
+#           repo-creds Secret's username and password, kagent's copy of the token (kagent/kagent-skills-git - kagent
+#           off, its namespace or Secret gone, holds none) - last eight characters, never a token -, every argocd
+#           repository / repo-creds Secret for the Forgejo host (its username, its password's last eight; the run says
+#           whose they are) and the Applications' comparison errors. What they hold is kept; it is recorded in Vault
+#           (retire_last_eight) for --tags retire, so the admin tokens Argo CD held before the switch are known after it
+#   cleanup the reader's older tokens deleted only when they are not Vault's token, ten does not hold them, and their
+#           time is over 3 h old; ten not read or an ExternalSecret there not Ready: none deleted, said, the run passes.
+#           A proof failing deletes this run's token again; the mint itself failing deletes none (said: whether
+#           Forgejo made one); the Vault write itself failing, or a failure after it with Vault holding the token or
+#           unreadable: none deleted, said
 #
-# ROLLBACK (before --tags retire only - it deletes the admin's tokens the old state holds): revert infra's
-# forgejo-repo-creds.yaml; `kubectl delete externalsecret forgejo-repo-creds-es -n argocd` (its deletion policy
-# Retain keeps the Secret's keys); then patch the Secret's username and password back from stdin
-# (kubectl -n argocd patch secret forgejo-repo-creds --type merge --patch-file /dev/stdin, the JSON on stdin); for the
-# PR generator, on the Pi holding the VIP (VAULT_TOKEN from /etc/vault-unseal/root-token, never on a command line)
-# `vault kv rollback -version=<read> secret/argocd/forgejo-readonly`, then
+# ROLLOUT, in order: (1) infra's commit (the forgejo-repo-creds ExternalSecret, the stale-PR sweeper reading
+# pulls/<n>) pushed and argocd-extras synced; (2) task deploy:argocd-reader; (3) both ExternalSecrets force-synced:
+# `kubectl annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es -n argocd force-sync=$(date +%s)
+# --overwrite`; (4) check-argocd-repos ALL-OK and one real infra commit synced; (5) --tags retire
+# (task deploy:argocd-reader:retire-admin-tokens).
+#
+# ROLLBACK (before --tags retire only - it deletes the admin's tokens the old state holds, and takes kubectl's
+# last-applied annotation off forgejo-repo-creds: once the ExternalSecret merged the reader's in, that annotation is the
+# one copy of the admin's username and token left): revert infra's forgejo-repo-creds.yaml and wait until argocd-extras
+# shows the revert synced (before that, selfHeal makes the ExternalSecret again); then
+# `kubectl delete externalsecret forgejo-repo-creds-es -n argocd` (its deletion policy Retain keeps the Secret's keys);
+# then the old username and password back from the annotation, on stdin end to end - never echoed:
+#   kubectl -n argocd get secret forgejo-repo-creds \
+#     -o jsonpath='{.metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration}' \
+#   | python3 -c 'import json, sys; d = json.load(sys.stdin)["stringData"]; print(json.dumps({"stringData": {k: d[k] for k in ("username", "password")}}))' \
+#   | kubectl -n argocd patch secret forgejo-repo-creds --type merge --patch-file /dev/stdin
+# for the PR generator, on the Pi holding the VIP (VAULT_TOKEN from /etc/vault-unseal/root-token, never on a command
+# line) `vault kv rollback -version=<read> secret/argocd/forgejo-readonly`, then
 # `kubectl annotate externalsecret forgejo-readonly-token -n argocd force-sync=$(date +%s) --overwrite`.
 #
 # Retiring the admin's tokens Argo CD used: only after check-argocd-repos (every Forgejo Application reconciled after
@@ -43,7 +57,10 @@
 # argocd/forgejo-readonly history (token) or its retire_last_eight name. Refused unless Vault holds the reader
 # (username and token) and not the token .env names (at once), AND ten shows forgejo-readonly-token Ready with Vault's
 # token, forgejo-repo-creds's username the reader's and its password Vault's token, every argocd ExternalSecret for
-# them Ready, no Application on Forgejo with a comparison error, AND none to delete is one Vault or ten still holds.
+# them Ready, every argocd repository / repo-creds Secret for the Forgejo host on the reader, no Application on Forgejo
+# with a comparison error, AND none to delete is one Vault or ten (kagent's copy too) still holds. Then - the rollback
+# gone with those tokens - kubectl's last-applied annotation is taken off forgejo-repo-creds (on ten; the Secret gone,
+# NotFound, holds none - said; any other failure fails the run, rerun it).
 #
 # Usage:
 #   task deploy:argocd-reader                         # the reader, its teams, a new token in Vault
@@ -103,8 +120,42 @@
             v=$(kubectl --kubeconfig "$kc" -n argocd get secret "$s" -o 'jsonpath={.data.username}' | base64 -d)
             echo "${s}_username=$v"
           done
+          # kagent's copy of the readonly token (its ExternalSecret kagent-skills-git reads Vault's token): kagent off -
+          # its namespace or the Secret gone (NotFound) - holds none, said empty; any other failure fails the read
+          if out=$(kubectl --kubeconfig "$kc" -n kagent get secret kagent-skills-git -o 'jsonpath={.data.token}' 2>&1); then
+            v=$(printf %s "$out" | base64 -d | tail -c 8)
+          elif [[ $out == *"(NotFound)"* ]]; then
+            v=
+          else
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "kagent_token=$v"
         executable: /bin/bash
       register: _rd_secrets
+      changed_when: false
+      failed_when: false  # said by the next play
+      check_mode: false  # a read
+      no_log: true  # parts of tokens
+
+    # every argocd repository / repo-creds Secret for the Forgejo host (its url names it): its name, its username, its
+    # password's last eight characters - one on another account than the reader Argo CD would still read Forgejo with
+    - name: Argo CD's credentials for the Forgejo host - their usernames
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          kubectl --kubeconfig {{ reader_kubeconfig | quote }} -n argocd get secret \
+            -l 'argocd.argoproj.io/secret-type in (repository,repo-creds)' -o json | HOST={{ reader_forgejo_host | quote }} python3 -c '
+          import base64, json, os, sys
+          out = []
+          for s in json.load(sys.stdin)["items"]:
+              d = {k: base64.b64decode(v).decode() for k, v in (s.get("data") or {}).items()}
+              if os.environ["HOST"] in d.get("url", ""):
+                  out.append({"name": s["metadata"]["name"], "username": d.get("username", ""),
+                              "last_eight": d.get("password", "")[-8:]})
+          print(json.dumps(out))'
+        executable: /bin/bash
+      register: _rd_creds
       changed_when: false
       failed_when: false  # said by the next play
       check_mode: false  # a read
@@ -133,10 +184,11 @@
       ansible.builtin.set_fact:
         _rd_cluster_app_errors: "{{ _rd_apps.stdout_lines if _rd_apps.rc == 0 else ['(not read)'] }}"
         _rd_cluster_read: >-
-          {{ _rd_es.rc == 0 and _rd_secrets.rc == 0
+          {{ _rd_es.rc == 0 and _rd_secrets.rc == 0 and _rd_creds.rc == 0
              and (_rd_secrets.stdout_lines | map('regex_replace', '=.*$', '') | sort)
-                 == (['readonly_token'] + reader_repo_creds | map('regex_replace', '$', '_password') | list
+                 == (['readonly_token', 'kagent_token'] + reader_repo_creds | map('regex_replace', '$', '_password') | list
                      + reader_repo_creds | map('regex_replace', '$', '_username') | list) | sort }}
+        _rd_cluster_creds: "{{ _rd_creds.stdout | from_json if _rd_creds.rc == 0 else [] }}"
         _rd_cluster_ready: >-
           {{ dict(_rd_es.stdout_lines | map('regex_replace', '=.*$', '')
                   | zip(_rd_es.stdout_lines | map('regex_replace', '^[^=]*=', '') | map('trim'))) }}
@@ -190,6 +242,12 @@
         _rd_ten_read: "{{ hostvars['target']._rd_cluster_read | default(false) | bool }}"
         _rd_ten_ready: "{{ hostvars['target']._rd_cluster_ready | default({}) }}"
         _rd_ten_secret: "{{ hostvars['target']._rd_cluster_secret | default({}) }}"
+        _rd_ten_creds: "{{ hostvars['target']._rd_cluster_creds | default([]) }}"
+        # every token ten holds, by its last eight characters: argocd's Secrets, kagent's copy, the repository ones
+        _rd_ten_holds: >-
+          {{ (hostvars['target']._rd_cluster_secret | default({})).values() | list
+             | union(hostvars['target']._rd_cluster_creds | default([]) | map(attribute='last_eight') | list)
+             | select('match', '^.{8}$') | list }}
       no_log: true  # parts of tokens
       tags: [always]
 
@@ -724,7 +782,7 @@
                  | combine({'token': _rd_minted.json.sha1, 'username': reader_user,
                             'retire_last_eight': ((((_rd_vault_before.secret | default({})).retire_last_eight
                                                     | default('')).split(',')
-                                                   + _rd_ten_secret.values() | list)
+                                                   + _rd_ten_holds)
                                                   | select('match', '^[0-9a-f]{8}$') | unique | sort | join(',')) }) }}
           register: _rd_vault_written
           no_log: true
@@ -793,7 +851,13 @@
           ansible.builtin.fail:
             msg: >-
               REFUSED at '{{ ansible_failed_task.name | default('?') }}' -
-              {{ ("the Vault write itself failed - it may still land: this run's token not deleted (argocd-reader-"
+              {{ ("the mint failed (HTTP " ~ ((_rd_minted | default({})).status | default('?')) ~ ") - "
+                  ~ ("no token made" if (_rd_minted | default({})).status | default(0) | int in range(400, 500)
+                     else "whether Forgejo made a token is not known: none deleted (a later run deletes argocd-reader-"
+                          ~ _rd_stamp ~ " once it is over " ~ reader_keep_hours ~ " h old)")
+                  ~ "; Vault's " ~ reader_vault_path ~ " unchanged, Argo CD on the token it had")
+                 if not (_rd_minted_ok | bool) else
+                 ("the Vault write itself failed - it may still land: this run's token not deleted (argocd-reader-"
                   ~ _rd_stamp ~ "; a later run deletes it once Vault does not hold it and it is over "
                   ~ reader_keep_hours ~ " h old)")
                  if (_rd_write_failed | bool) else
@@ -808,10 +872,11 @@
     # ── the cleanup ────────────────────────────────────────────────────
     - name: What Vault and ten hold, and the oldest token time kept
       ansible.builtin.set_fact:
+        # Vault's token alone (another property ending as a token's keeps nothing), and every token ten holds
         _rd_keep_last_eight: >-
-          {{ ((_rd_vault_before.secret | default({})).values() | map('string') | select('match', '^.{8,}$')
+          {{ ([(_rd_vault_before.secret | default({})).token | default('')] | map('string') | select('match', '^.{8,}$')
               | map('regex_replace', '^.*(.{8})$', '\1') | list)
-             + (_rd_ten_secret.values() | select('match', '^.{8}$') | list) }}
+             + _rd_ten_holds }}
         _rd_keep_since: >-
           {{ '%Y%m%dT%H%M%S' | strftime(second=(now().timestamp() - (reader_keep_hours | float) * 3600) | int,
                                         utc=true) }}
@@ -870,6 +935,14 @@
           forgejo-readonly-token and the repo-creds take it at External Secrets' next refresh (1 h) - at once: kubectl
           annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es -n argocd
           force-sync=$(date +%s) --overwrite.
+
+    - name: Argo CD's Forgejo credentials on ten
+      ansible.builtin.debug:
+        msg: >-
+          Argo CD's Forgejo credentials on ten:
+          {% for c in _rd_ten_creds %}{{ c.name }} {{ c.username or '(no username)' }}{{ '' if c.username == reader_user
+          else ' (not ' ~ reader_user ~ ' - retire refuses while so)' }}{{ ', ' if not loop.last }}{% endfor %}
+          {{ '' if _rd_ten_read else '(ten not read)' }}
 
     # ── retiring the admin's Argo CD tokens (--tags retire) ────────────
     - name: Vault's argocd/forgejo-readonly, as Argo CD gets it
@@ -981,6 +1054,18 @@
         quiet: true
       tags: [never, retire]
 
+    # any other repository / repo-creds Secret for the host (made by hand, `argocd repo add`): one on another account
+    # would read Forgejo with the admin's token after the retire - or fail on a deleted one
+    - name: Every argocd credential for the Forgejo host is the reader's
+      ansible.builtin.assert:
+        that: _rd_ten_creds | rejectattr('username', 'equalto', reader_user) | list | length == 0
+        fail_msg: >-
+          REFUSED: Argo CD's credentials for {{ reader_forgejo_host }} are not all {{ reader_user }}'s:
+          {% for c in _rd_ten_creds | default([]) | rejectattr('username', 'equalto', reader_user) %}{{ c.name }}
+          {{ c.username or '(no username)' }}{{ ', ' if not loop.last }}{% endfor %} - nothing deleted
+        quiet: true
+      tags: [never, retire]
+
     # page by page (Forgejo pages its answers, 50 at most)
     - name: The admin's tokens, page by page
       ansible.builtin.uri:
@@ -1027,10 +1112,10 @@
       ansible.builtin.assert:
         that: >-
           _rd_retire | map(attribute='token_last_eight')
-          | intersect([_rd_vault_token_now] + (_rd_ten_secret.values() | list)) | length == 0
+          | intersect([_rd_vault_token_now] + _rd_ten_holds) | length == 0
         fail_msg: >-
           REFUSED: a token of the admin's Vault or ten still holds
-          ({{ _rd_retire | selectattr('token_last_eight', 'in', [_rd_vault_token_now] + (_rd_ten_secret.values() | list))
+          ({{ _rd_retire | selectattr('token_last_eight', 'in', [_rd_vault_token_now] + _rd_ten_holds)
               | map(attribute='name') | join(', ') }}) - nothing deleted
         quiet: true
       tags: [never, retire]
@@ -1052,33 +1137,36 @@
       no_log: true  # each item a token's last eight characters
       tags: [never, retire]
 
-    - name: The admin's Argo CD tokens retired
-      ansible.builtin.debug:
-        msg: >-
-          deleted: {{ _rd_retire | map(attribute='name') | join(', ') or 'none (gone already)' }} - remove
-          FORGEJO_READONLY_TOKEN from .env
-      tags: [never, retire]
-
-# kubectl's last-applied annotation on forgejo-repo-creds holds the Secret as first applied - an admin token: taken off
-# (idempotent: absent, nothing changes). Not on --tags retire. ten not reached: said, the run passes (as its cleanup).
-- name: The repo-creds Secret without kubectl's last-applied annotation
-  hosts: target
-  become: true
-  gather_facts: false
-  vars: *reader_vars
-  tasks:
+    # kubectl's last-applied annotation on forgejo-repo-creds holds the Secret as kubectl first applied it - the admin's
+    # username and token: the rollback's one copy of them (the ExternalSecret merged the reader's over the keys) until
+    # here, where those tokens are gone. Taken off on ten; the Secret gone (NotFound) holds none
     - name: The last-applied annotation taken off forgejo-repo-creds
       ansible.builtin.command:
         argv: [kubectl, --kubeconfig, "{{ reader_kubeconfig }}", -n, argocd, annotate, secret, forgejo-repo-creds,
                kubectl.kubernetes.io/last-applied-configuration-]
+      delegate_to: target
       register: _rd_annotation
-      changed_when: "' annotated' in _rd_annotation.stdout and 'not annotated' not in _rd_annotation.stdout"
-      failed_when: false  # said next
+      changed_when: >-
+        _rd_annotation.rc == 0 and ' annotated' in _rd_annotation.stdout
+        and 'not annotated' not in _rd_annotation.stdout
+      failed_when: false  # judged next: off, or the Secret NotFound - anything else fails the run
+      tags: [never, retire]
 
-    - name: The annotation's fate
+    - name: The annotation off forgejo-repo-creds, or the Secret gone
+      ansible.builtin.assert:
+        that: _rd_annotation.rc == 0 or '(NotFound)' in _rd_annotation.stderr
+        fail_msg: >-
+          the admin's tokens deleted ({{ _rd_retire | map(attribute='name') | join(', ') or 'none left' }}), but the
+          last-applied annotation NOT taken off forgejo-repo-creds: {{ (_rd_annotation.stderr | default('')
+          | trim)[:200] }} - it still holds the admin's (now dead) credentials; rerun --tags retire
+        quiet: true
+      tags: [never, retire]
+
+    - name: The admin's Argo CD tokens retired
       ansible.builtin.debug:
         msg: >-
-          {{ 'last-applied annotation off forgejo-repo-creds'
-             if _rd_annotation.rc == 0 or 'not found' in _rd_annotation.stderr
-             else 'last-applied annotation NOT taken off forgejo-repo-creds - ten not reached (' ~
-                  (_rd_annotation.stderr | default('') | trim)[:120] ~ '); rerun' }}
+          deleted: {{ _rd_retire | map(attribute='name') | join(', ') or 'none (gone already)' }} - remove
+          FORGEJO_READONLY_TOKEN from .env;
+          {{ 'last-applied annotation off forgejo-repo-creds' if _rd_annotation.rc == 0
+             else 'forgejo-repo-creds not found (NotFound) - no annotation to take off' }}
+      tags: [never, retire]

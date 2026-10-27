@@ -6,7 +6,7 @@ body); every secret it knows - passwords set, tokens issued - is listed for the 
 
 Test-only routes: GET /_state, POST /_reset {state}, GET /_secrets, POST /_fail {method, path (regex), nth, and: status -
 the nth matching request answered with it; or ignore: [fields] - an edit answered 200, those fields not applied; or
-scopes: [...] - a token made with these}.
+scopes: [...] - a token made with these; or permissions: {...} - a repository read with these}.
 Port: bound to a free one, written to the file named by argv[1].
 """
 import base64
@@ -279,9 +279,11 @@ class H(BaseHTTPRequestHandler):
             perm = repo_perm(login, m.group(2))
             if perm is None:
                 return self.answer(404, {"message": "no repository"})
+            # a fault's permissions answered over the computed ones (a combination no team gives: admin without push)
             return self.answer(200, {"name": m.group(2), "full_name": f"{S['org']}/{m.group(2)}",
                                      "private": S["repos"][m.group(2)]["private"],
-                                     "permissions": dict(zip(("admin", "push", "pull"), perm))})
+                                     "permissions": dict(zip(("admin", "push", "pull"), perm),
+                                                         **fault.get("permissions", {}))})
         m = re.match(r"^/packages/([^/]+)$", p)
         if m and method == "GET":
             if m.group(1) != S["org"] or package_mode(login) == "none":
