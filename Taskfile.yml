@@ -218,6 +218,11 @@ tasks:
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/seed-vault-secrets.yml -e @vars/vault.yml
       # External Secrets' login to the Pi Vault, once Vault serves (setup-kubeadm installed External Secrets)
       - cd ../.. && ./bootstrap.sh vault-eso
+      # Argo CD's Forgejo account and its token in Vault, before setup-argocd gives the repo-creds Secret that token
+      # (Argo CD clones the private infra before it installs External Secrets). It derives what Argo CD reads from
+      # infra's main on Forgejo: the repositories pushed there first (docs/DR-PROCEDURE.md) - without them it fails
+      # here, nothing installed
+      - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd-reader.yml
       - venv/bin/ansible-playbook -i inventory/production.yml playbooks/setup-argocd.yml -e @vars/vault.yml
 
   deploy:vault-pi:
@@ -962,6 +967,11 @@ tasks:
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.50:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
+      # as test:upgrade:argo builds the copy: infra and platform mirrored to the Vagrant Forgejo, then Argo CD's Forgejo
+      # account (its token in the Vagrant Vault, from which setup-argocd gives the repo-creds their credentials), judged
+      # by the copy's committed list (no PR-env generator there) - setup-argocd on a fresh cluster needs both
+      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
@@ -1555,6 +1565,11 @@ tasks:
       - defer: vagrant halt
       - task: _vagrant:k8s-stack
       - cmd: ssh -o StrictHostKeyChecking=no -i .vagrant/machines/kubeadm/libvirt/private_key vagrant@192.168.56.10 'for i in $(seq 1 30); do curl -sf http://192.168.56.50:3000/ > /dev/null && echo "Forgejo reachable" && exit 0; echo "Waiting for Forgejo ($i/30)..."; sleep 5; done; echo "FAIL"; exit 1'
+      # as test:upgrade:argo builds the copy: infra and platform mirrored to the Vagrant Forgejo, then Argo CD's Forgejo
+      # account (its token in the Vagrant Vault, from which setup-argocd gives the repo-creds their credentials), judged
+      # by the copy's committed list (no PR-env generator there) - setup-argocd on a fresh cluster needs both
+      - cmd: env -i HOME="$HOME" PATH="$PATH" scripts/vagrant-gitops-mirror.py
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd-reader.yml -e reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml playbooks/setup-argocd.yml -e @vars/vault-vagrant.yml
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-multi-env.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
       - cmd: env -i HOME="$HOME" PATH="$PATH" bash -c 'set -a && . tests/ansible/upgrade/vagrant-secrets.env && set +a && cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-ephemeral-env.yml -e @vars/vault-vagrant.yml'

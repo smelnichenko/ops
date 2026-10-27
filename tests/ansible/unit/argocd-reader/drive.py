@@ -733,6 +733,24 @@ check("the Vagrant copy's build (test:upgrade:argo): the reader on the copy's in
        "reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml" in tf[reader]
        if reader >= 0 else None, VAG),
       (True, True, True, {"argocd_reader_code": ["infra", "platform"], "argocd_reader_pulls": []}))
+# every build of a cluster from nothing runs setup-argocd only after the reader (its repo-creds credentials come from
+# Vault's reader token) - the Vagrant ones after the mirror (the reader derives from infra's main there), as the copy's
+TASKS = yaml.safe_load(open(os.path.join(ROOT, "Taskfile.yml")))["tasks"]
+for name in ("test:multi-env", "test:ephemeral-env-clean"):
+    tf = [c["cmd"] if isinstance(c, dict) and "cmd" in c else str(c) for c in TASKS[name]["cmds"]]
+    mirror, reader, argocd = at("vagrant-gitops-mirror.py"), at("playbooks/setup-argocd-reader.yml"), at(
+        "playbooks/setup-argocd.yml")
+    check(f"{name}: the mirror, then the reader on the copy's inventory with the copy's committed list, then "
+          "setup-argocd",
+          (0 <= mirror < reader < argocd, "-i inventory/vagrant.yml" in tf[reader] if reader >= 0 else None,
+           "reader_repos_file=../../../tests/ansible/upgrade/vagrant-argocd-reader-repos.yml" in tf[reader]
+           if reader >= 0 else None), (True, True, True))
+tf = [c["cmd"] if isinstance(c, dict) and "cmd" in c else str(c) for c in TASKS["deploy:full"]["cmds"]]
+seed, reader, argocd = at("playbooks/seed-vault-secrets.yml"), at("playbooks/setup-argocd-reader.yml"), at(
+    "playbooks/setup-argocd.yml")
+check("deploy:full: Vault seeded, then the reader on production's inventory, then setup-argocd",
+      (0 <= seed < reader < argocd, "-i inventory/production.yml" in tf[reader] if reader >= 0 else None),
+      (True, True))
 
 # ── no secret on a command line; no command but ten's reads and the derivation ───────────────────────────────────
 canary = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)", CANARY])
