@@ -26,17 +26,35 @@
     replace: 'shutdownGracePeriodCriticalPods: 30s'
   register: _kubelet_grace_critical
 
-- name: Restart kubelet to apply shutdown grace (only when changed)
+# The kubelet's image GC: past imageGCHighThresholdPercent of the image store it deletes unused images, down to the low
+# one. Its defaults (85 / 80) let containerd's old images fill ten's / past the 80% disk alert first (2026-10-27: 433 GB
+# of them, 165 of masi's builds, freed to 33% by hand) - at 70 / 60 the GC runs below the alert. tasks/image-store-room.yml
+# reads the high one back (configz) to judge a prepull's room.
+- name: The kubelet's image GC thresholds
+  ansible.builtin.set_fact:
+    _kubelet_image_gc:
+      imageGCHighThresholdPercent: 70
+      imageGCLowThresholdPercent: 60
+
+- name: The image GC thresholds in the kubelet's file
+  ansible.builtin.lineinfile:
+    path: /var/lib/kubelet/config.yaml
+    regexp: '^{{ item.key }}:'
+    line: '{{ item.key }}: {{ item.value }}'
+  loop: "{{ _kubelet_image_gc | dict2items }}"
+  register: _kubelet_image_gc_file
+
+- name: Restart kubelet to apply its config (only when changed)
   ansible.builtin.systemd_service:
     name: kubelet
     state: restarted
-  when: _kubelet_grace is changed or _kubelet_grace_critical is changed
+  when: _kubelet_grace is changed or _kubelet_grace_critical is changed or _kubelet_image_gc_file is changed
 
 # kubeadm rewrites /var/lib/kubelet/config.yaml from the kube-system/kubelet-config ConfigMap on every `kubeadm
 # upgrade`: edited only in the file, both settings went back to 0s - the next reboot then gave Kafka, ClickHouse and
 # Postgres no time to flush (ten 2026-10-04: file 180s/30s, ConfigMap 0s/0s). So they go into the
-# ConfigMap too. A switch, so the Vagrant copy's baseline can stay as ten is until the upgrade step that sets it.
-- name: The kubelet-config ConfigMap's shutdown grace - the patch it needs, if any (read-only, so the preview shows it)
+# ConfigMap too, and the image GC thresholds with them. A switch, so the Vagrant copy's baseline can stay as ten is until the upgrade step that sets it.
+- name: The kubelet-config ConfigMap's shutdown grace and image GC - the patch it needs, if any (read-only, so the preview shows it)
   check_mode: false
   ansible.builtin.shell: |
     set -euo pipefail
@@ -47,11 +65,15 @@
     import json, re, sys
     data = json.load(sys.stdin)["data"]["kubelet"]
     new = data
-    # by value: kubeadm writes 180s back as 3m0s, which is the same
+    # a duration by value (kubeadm writes 180s back as 3m0s, which is the same), anything else by its text
     secs = lambda d: sum(float(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"([0-9.]+)(h|m|s)", d))
-    for key, value in (("shutdownGracePeriod", "180s"), ("shutdownGracePeriodCriticalPods", "30s")):
+    value_of = lambda v: secs(v) if re.fullmatch(r"([0-9.]+[hms])+", v) else v
+    settings = {"shutdownGracePeriod": "180s", "shutdownGracePeriodCriticalPods": "30s"}
+    settings.update(json.loads(sys.argv[1]))
+    for key, value in settings.items():
+        value = str(value)
         held = re.search(r"(?m)^" + key + r":\s*(\S+)\s*$", new)
-        if held and secs(held.group(1)) == secs(value):
+        if held and value_of(held.group(1)) == value_of(value):
             continue
         if held:
             new = re.sub(r"(?m)^" + key + r":.*$", key + ": " + value, new)
@@ -59,7 +81,7 @@
             new = new.rstrip("\n") + "\n" + key + ": " + value + "\n"
     if new != data:
         print(json.dumps({"data": {"kubelet": new}}))
-    ' > "$patch"
+    ' {{ _kubelet_image_gc | to_json | quote }} > "$patch"
     cat "$patch"
   args:
     executable: /bin/bash
@@ -67,7 +89,7 @@
   changed_when: false
   when: kubelet_grace_in_kubelet_config_map | default(true) | bool
 
-- name: Keep the shutdown grace across kubeadm upgrades - in the kubelet-config ConfigMap
+- name: Keep the shutdown grace and image GC across kubeadm upgrades - in the kubelet-config ConfigMap
   ansible.builtin.command:
     argv: [kubectl, --kubeconfig, /etc/kubernetes/admin.conf, -n, kube-system, patch, configmap, kubelet-config,
            --type, merge, -p, "{{ _kubelet_config_patch.stdout }}"]
@@ -78,5 +100,5 @@
   ansible.builtin.debug:
     msg: >-
       PREVIEW: {{ ('kubelet-config would be patched: ' ~ _kubelet_config_patch.stdout)
-      if _kubelet_config_patch.stdout | length > 0 else 'kubelet-config holds the shutdown grace already' }}
+      if _kubelet_config_patch.stdout | length > 0 else 'kubelet-config holds the shutdown grace and image GC already' }}
   when: ansible_check_mode and kubelet_grace_in_kubelet_config_map | default(true) | bool

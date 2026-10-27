@@ -1,5 +1,6 @@
 #!/bin/bash
-# The kubelet's shutdown grace compared by value, not text: kubeadm writes 180s back as 3m0s (the full run's step 13
+# The kubelet's shutdown grace compared by value, not text (and its image GC thresholds, set in its file and the
+# kubelet-config ConfigMap, a number compared as one): kubeadm writes 180s back as 3m0s (the full run's step 13
 # failed on it, 2026-10-06). upgrade-kubeadm's two checks (the ConfigMap before, the kubelet's file after) and
 # node-config's ConfigMap patch, each run as the playbook holds it, on both spellings and on 0s - the two checks judged
 # by their own failed_when, evaluated by Ansible's templar over the registered result.
@@ -54,19 +55,55 @@ r = subprocess.run(["bash", "-c", render(tasks[name]["ansible.builtin.shell"], k
 check("The kubelet-config ConfigMap read failed", not failed(tasks[name], {"rc": r.returncode,
                                                                            "stdout_lines": r.stdout.splitlines()}), False)
 t = yaml.safe_load(open("deploy/ansible/playbooks/tasks/node-config.yml"))
-cmd = render(next(x for x in t if "ConfigMap" in x.get("name", ""))["ansible.builtin.shell"])
-patcher = cmd[cmd.index("python3 -c '") + len("python3 -c '"):cmd.index("' > \"$patch\"")]  # its python, fed JSON
+gc = next(x for x in t if "ansible.builtin.set_fact" in x)["ansible.builtin.set_fact"]["_kubelet_image_gc"]
+check("node-config: image GC high 70 / low 60 (below the 80% disk alert, low under high)",
+      (gc["imageGCHighThresholdPercent"], gc["imageGCLowThresholdPercent"]), (70, 60))
+# the whole command as the playbook holds it, run with a kubectl stub answering the ConfigMap as the test's JSON
+cmd = render(next(x for x in t if "ConfigMap" in x.get("name", ""))["ansible.builtin.shell"], _kubelet_image_gc=gc)
+cm_json = os.path.join(work, "cm.json")
+with open(os.path.join(work, "kubectl"), "w") as f:
+    f.write("#!/bin/sh\ncat %s\n" % cm_json)
 def patch(kubelet):
-    r = subprocess.run([sys.executable, "-c", patcher], input=json.dumps({"data": {"kubelet": kubelet}}),
-                       capture_output=True, text=True)
+    with open(cm_json, "w") as f:
+        json.dump({"data": {"kubelet": kubelet}}, f)
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=dict(os.environ, PATH=work + ":" + os.environ["PATH"]))
+    assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)["data"]["kubelet"] if r.stdout.strip() else None
-check("node-config: 3m0s is the value - no patch", patch("a: 1\nshutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\n"), None)
+GC = "imageGCHighThresholdPercent: 70\nimageGCLowThresholdPercent: 60\n"
+check("node-config: 3m0s is the value, the image GC set - no patch",
+      patch("a: 1\nshutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\n" + GC), None)
 check("node-config: 0s patched to 180s / 30s",
-      patch("a: 1\nshutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\n"),
-      "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
-check("node-config: missing added", patch("a: 1\n"), "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n")
+      patch("a: 1\nshutdownGracePeriod: 0s\nshutdownGracePeriodCriticalPods: 0s\n" + GC),
+      "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n" + GC)
+check("node-config: missing added", patch("a: 1\n"), "a: 1\nshutdownGracePeriod: 180s\nshutdownGracePeriodCriticalPods: 30s\n" + GC)
+# a number is no duration: read as one (secs) 85 and 70 are both 0 - the kubelet's defaults would pass as set
+check("node-config: image GC at the kubelet's defaults (85 / 80) patched",
+      patch("shutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\nimageGCHighThresholdPercent: 85\nimageGCLowThresholdPercent: 80\n"),
+      "shutdownGracePeriod: 3m0s\nshutdownGracePeriodCriticalPods: 30s\n" + GC)
+# the file: each threshold set or added by its own key (lineinfile), the others kept - ten's file holds imageMinimumGCAge
+li = next(x for x in t if "ansible.builtin.lineinfile" in x)
+def to_file(text):
+    lines = text.splitlines()
+    for key, value in gc.items():
+        rx = render(li["ansible.builtin.lineinfile"]["regexp"], item={"key": key, "value": value})
+        line = render(li["ansible.builtin.lineinfile"]["line"], item={"key": key, "value": value})
+        hits = [i for i, x in enumerate(lines) if re.search(rx, x)]
+        if hits:
+            lines[hits[-1]] = line
+        else:
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+import re
+check("node-config: the file - thresholds added beside imageMinimumGCAge, a default replaced",
+      [to_file("imageMinimumGCAge: 0s\n"), to_file("imageGCHighThresholdPercent: 85\n")],
+      ["imageMinimumGCAge: 0s\n" + GC, GC])
+restart = next(x for x in t if "ansible.builtin.systemd_service" in x)
+restarts = lambda **changed: condition(restart["when"], **{k: {"changed": v} for k, v in changed.items()})
+check("node-config: the kubelet restarted for a changed threshold, not for nothing",
+      [restarts(_kubelet_grace=False, _kubelet_grace_critical=False, _kubelet_image_gc_file=True),
+       restarts(_kubelet_grace=False, _kubelet_grace_critical=False, _kubelet_image_gc_file=False)], [True, False])
 # the patch applied only when there is one: an empty one (the ConfigMap right already) went to `kubectl patch -p ''`
-apply = next(x for x in t if x.get("name", "").startswith("Keep the shutdown grace across kubeadm upgrades"))
+apply = next(x for x in t if x.get("name", "").startswith("Keep the shutdown grace and image GC across kubeadm upgrades"))
 applies = lambda out: condition(apply["when"], _kubelet_config_patch={"stdout": out})
 check("node-config: the ConfigMap right already - nothing applied", applies(""), False)
 check("node-config: a patch - applied", applies('{"data": {"kubelet": "x"}}'), True)
