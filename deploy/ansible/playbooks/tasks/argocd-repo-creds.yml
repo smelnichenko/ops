@@ -31,7 +31,7 @@
     - name: Vault's root token, on that Pi
       ansible.builtin.slurp:
         src: "{{ argocd_vault_root_token_file | default('/etc/vault-unseal/root-token') }}"
-      delegate_to: "{{ pi_vip_holder | default(groups['pis'] | first) }}"  # templated even when skipped
+      delegate_to: "{{ pi_vip_holder | default(inventory_hostname) }}"  # templated even when skipped (never a Pi by default)
       become: true
       register: _repo_creds_vault_token
       no_log: true  # the root token, base64
@@ -42,7 +42,7 @@
         token: "{{ _repo_creds_vault_token.content | b64decode | trim }}"
         ca_cert: "{{ argocd_vault_ca_cert | default('/etc/vault.d/tls/ca-cert.pem') }}"
         path: argocd/forgejo-readonly
-      delegate_to: "{{ pi_vip_holder | default(groups['pis'] | first) }}"  # templated even when skipped
+      delegate_to: "{{ pi_vip_holder | default(inventory_hostname) }}"  # templated even when skipped (never a Pi by default)
       register: _repo_creds_vault
       no_log: true
 
