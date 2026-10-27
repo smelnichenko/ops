@@ -43,10 +43,8 @@ once (External Secrets refreshes hourly otherwise):
 
 ```bash
 task deploy:ci-bot
-task deploy:argocd-reader   # Argo CD's Forgejo account (argocd-reader) and its token
 ssh ten 'sudo kubectl annotate externalsecret woodpecker-ci-secrets-es -n woodpecker force-sync=$(date +%s) --overwrite'
 ssh ten 'sudo kubectl annotate externalsecret forgejo-registry-es -n woodpecker force-sync=$(date +%s) --overwrite'
-ssh ten 'sudo kubectl annotate externalsecret forgejo-readonly-token forgejo-repo-creds-es -n argocd force-sync=$(date +%s) --overwrite'
 ```
 
 Wait for Forgejo to be ready, then push repos if needed:
@@ -59,7 +57,13 @@ done
 
 ### 5. Setup ArgoCD
 
+Argo CD's Forgejo account first - after the push (it derives what Argo CD reads from infra's main on Forgejo) and before
+setup-argocd (which gives the repo-creds Secret the reader's token from Vault: Argo CD clones the private infra before
+it installs External Secrets). Nothing to force-sync: Argo CD and External Secrets do not exist yet - their
+ExternalSecrets take Vault's token when Argo CD makes them.
+
 ```bash
+task deploy:argocd-reader   # Argo CD's Forgejo account (argocd-reader) and its token in Vault
 task deploy:argocd
 ```
 
