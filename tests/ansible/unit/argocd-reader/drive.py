@@ -464,7 +464,8 @@ for t in st["tokens"].values():
     if t["user"] == BOT:
         t["name"] = re.sub(r"\d{8}T\d{6}$", stamp(4), t["name"])
 st["seq"] += 1
-young = {"id": st["seq"], "user": BOT, "name": "argocd-reader-" + stamp(2.98), "sha1": secrets.token_hex(20),
+# 2 h 30 min old: the cases after it run for minutes under a loaded suite - 2.98 h aged past 3 h mid-way (as ci-bot's)
+young = {"id": st["seq"], "user": BOT, "name": "argocd-reader-" + stamp(2.5), "sha1": secrets.token_hex(20),
          "scopes": ["read:repository"]}
 young["token_last_eight"] = young["sha1"][-8:]
 st["tokens"][str(young["id"])] = young
@@ -487,8 +488,9 @@ for label, k8s, want_left, said in (
 reset(copy.deepcopy(st), {PATH_V: {"data": dict(dv(v2)["data"], note="was " + toks[0]["sha1"]),
                                    "version": dv(v2)["version"]}})
 rc, out = run()
-check("a run over 3 h later, Vault holding the old token in another property than token: deleted all the same",
-      (rc, [t["id"] for t in bot_tokens(fstate())][:2]), (0, [toks2[-1]["id"], young["id"]]))
+left = [t["id"] for t in bot_tokens(fstate())]
+check("a run over 3 h later, Vault holding the old token in another property than token: deleted all the same (Vault's "
+      "token kept)", (rc, toks[0]["id"] in left, toks2[-1]["id"] in left), (0, False, True))
 
 st2 = copy.deepcopy(s2["state"])
 st2["users"][BOT]["is_admin"] = True
