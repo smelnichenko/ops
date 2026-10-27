@@ -74,5 +74,13 @@ out=$(UNIT_JOBS=1 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-par" 2>&
 check "UNIT_JOBS=1: one at a time (the waiting four do not meet)" "$rc $(grep -c ' alone$' <<< "$out")" "1 4"
 out=$(UNIT_JOBS=0 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-tmp" 2>&1); rc=$?
 check "UNIT_JOBS not a positive number: refused" "$rc $(grep -c 'UNIT_JOBS' <<< "$out")" "1 1"
+# a harness whose runner is killed before it records a verdict (OOM, a stray kill): the suite fails, naming it - the
+# runner printed the harnesses up to it and passed on the rest unread
+mkdir -p "$W/suite-lost/a-killed" "$W/suite-lost/b-clean"
+printf '#!/bin/bash\nkill -9 $PPID\nsleep 1\nexit 0\n' > "$W/suite-lost/a-killed/run.sh"
+printf '#!/bin/bash\necho fine\nexit 0\n' > "$W/suite-lost/b-clean/run.sh"
+out=$(UNIT_JOBS=2 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-lost" 2>&1); rc=$?
+check "a harness killed before its verdict: the suite fails, naming it" \
+  "$rc $(grep -c 'NO VERDICT: a-killed' <<< "$out")" "1 1"
 echo "unit-fence: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]

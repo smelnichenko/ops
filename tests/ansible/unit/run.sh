@@ -76,4 +76,18 @@ for i in "${!harnesses[@]}"; do
 done
 wait
 flush
+# every job has ended: a harness still unprinted recorded no verdict - its runner killed (OOM, a stray kill) - a failure,
+# named, and the ones after it printed and judged as usual
+while [ "$next" -lt "${#harnesses[@]}" ]; do
+  if [ -e "$ROOT/$next.rc" ]; then
+    flush
+    continue
+  fi
+  name=$(basename "$(dirname "${harnesses[$next]}")")
+  # its log (its heading first) as far as it got
+  if [ -s "$ROOT/$next.log" ]; then cat "$ROOT/$next.log"; else echo "== $name"; fi
+  echo "NO VERDICT: $name - its runner ended before recording one"
+  rc=1
+  next=$((next + 1))
+done
 exit $rc
