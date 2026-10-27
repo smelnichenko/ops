@@ -330,6 +330,64 @@ for label, extra, said in (
     r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
     check(f"argocd-repos: {label} - refused, said", (r.returncode != 0, said in r.stderr), (True, True))
 
+
+def appset(name, generators, template_src=None):
+    return {"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata": {"name": name},
+            "spec": {"generators": generators, "template": {"spec": {"source": template_src or {"repoURL": "{{ .url }}"}}}}}
+
+
+# a git generator clones its repoURL (the repo-server reads its directories/files): code, at the top or in a matrix/merge
+for label, extra, want in (
+        ("a git generator's repoURL (top level)",
+         {"g.yaml": [appset("g", [{"git": {"repoURL": "https://git.pmon.dev/schnappy/admin.git", "revision": "main",
+                                           "directories": [{"path": "x/*"}]}}])]}, "admin"),
+        ("a git generator's repoURL inside a matrix",
+         {"g.yaml": [appset("g", [{"matrix": {"generators": [
+             {"git": {"repoURL": "https://git.pmon.dev/schnappy/chess.git", "revision": "main",
+                      "files": [{"path": "a.json"}]}},
+             {"list": {"elements": [{"x": "1"}]}}]}}])]}, "chess"),
+        ("a git generator's repoURL inside a merge",
+         {"g.yaml": [appset("g", [{"merge": {"mergeKeys": ["x"], "generators": [
+             {"list": {"elements": [{"x": "1"}]}},
+             {"git": {"repoURL": "https://git.pmon.dev/schnappy/site", "revision": "main",
+                      "directories": [{"path": "*"}]}}]}}])]}, "site")):
+    d = os.path.join(W, "infra-git-" + want)
+    infra_fixture(d, extra)
+    r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
+    check(f"argocd-repos: {label} is a cloned repository (code)",
+          (r.returncode, want in json.loads(r.stdout)["code"] if r.returncode == 0 else r.stderr), (0, True))
+# a repoURL on the host that is a template: which repository it names is not derivable - refused, the file named
+for label, extra in (
+        ("a git generator's templated repoURL", {"t.yaml": [appset("t", [{"git": {
+            "repoURL": "https://git.pmon.dev/schnappy/{{ .repo }}.git", "revision": "main"}}])]}),
+        ("an ApplicationSet template's repoURL templated on the host",
+         {"t.yaml": [appset("t", [{"list": {"elements": [{"repo": "x"}]}}],
+                            {"repoURL": "https://git.pmon.dev/schnappy/{{ .repo }}.git"})]})):
+    d = os.path.join(W, "infra-tpl-" + str(len(label)))
+    infra_fixture(d, extra)
+    r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
+    check(f"argocd-repos: {label} - refused, the file named, no traceback",
+          (r.returncode != 0, "clusters/production/argocd/apps/t.yaml" in r.stderr and "templated" in r.stderr,
+           "Traceback" in r.stderr), (True, True, False))
+# a key present but null (YAML's `key:` with nothing after it) reads as absent - never an AttributeError
+d = os.path.join(W, "infra-nulls")
+infra_fixture(d, {"n.yaml": "apiVersion: argoproj.io/v1alpha1\nkind: ApplicationSet\nmetadata: {name: n}\nspec:\n"
+                            "  generators:\n  - list:\n      elements:\n  - matrix:\n      generators:\n"
+                            "  - list:\n  - git:\n      repoURL:\n  template:\n    spec:\n      source:\n"
+                            "      sources:\n---\napiVersion:\nkind: Application\n---\n"
+                            "apiVersion: argoproj.io/v1alpha1\nkind: Application\nmetadata: {name: a}\nspec:\n"
+                            "  source:\n    repoURL:\n"})
+r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
+check("argocd-repos: keys present but null (elements, generators, a git generator's repoURL, source, sources, "
+      "apiVersion, an Application's repoURL) read as absent - no traceback, the rest derived",
+      (r.returncode, "Traceback" in r.stderr, json.loads(r.stdout)["code"] if r.returncode == 0 else r.stderr),
+      (0, False, ["infra", "platform"]))
+d = os.path.join(W, "infra-nullapi")
+infra_fixture(d, {"n.yaml": [appset("p", [{"pullRequest": {"gitea": {"owner": ORG, "repo": "chat", "api": None}}}])]})
+r = subprocess.run([sys.executable, REPOS, d, "git.pmon.dev", ORG], capture_output=True, text=True)
+check("argocd-repos: a pull-request generator whose api is null - refused as not on the host, no traceback",
+      (r.returncode != 0, "a pullRequest generator on None" in r.stderr, "Traceback" in r.stderr), (True, True, False))
+
 # ── first run, from production's state today ─────────────────────────────────────────────────────────────────────
 reset()
 rc, out = run()
