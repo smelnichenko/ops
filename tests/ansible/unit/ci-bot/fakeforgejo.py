@@ -259,7 +259,10 @@ class H(BaseHTTPRequestHandler):
             unit = {"branches": "repo.code", "pulls": "repo.pulls", "issues": "repo.issues"}[what]
             if kind == "token" and what == "issues" and not scope_ok(scopes, "issue", False):
                 return self.answer(403, {"message": "token does not have at least one of required scope(s): [read:issue]"})
-            if unit_mode(login, m.group(2), unit) == "none":
+            # Forgejo's pulls API (listed or one) also wants the code unit read - pull requests reference git: a team with
+            # pull requests read alone gets 403 on it (live, Forgejo 15.0.3, 2026-10-27: argocd-reader's first run)
+            needs = [unit] + (["repo.code"] if what == "pulls" else [])
+            if any(unit_mode(login, m.group(2), un) == "none" for un in needs):
                 return self.answer(404 if repo_perm(login, m.group(2)) is None else 403, {"message": "no access"})
             prs = S.get("prs", {}).get(m.group(2), [])
             n = m.group(4) or m.group(5)

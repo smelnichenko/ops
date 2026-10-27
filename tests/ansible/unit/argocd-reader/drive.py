@@ -317,7 +317,8 @@ def stamp(hours_ago):
 
 WANT_SCOPE = ({"is_admin": False, "must_change_password": False, "prohibit_login": False, "active": True},
               {"argocd-read": ("read", {"repo.code": "read"}, False, False, ["infra", "platform"], [BOT]),
-               "argocd-pulls": ("read", {"repo.pulls": "read"}, False, False, ["chat", "monitor"], [BOT])})
+               "argocd-pulls": ("read", {"repo.code": "read", "repo.pulls": "read"}, False, False, ["chat", "monitor"],
+                                [BOT])})
 ADMIN_ALL = ["argocd-20260405T154834", "readonly", "woodpecker-push"]
 le = lambda x: x[-8:]  # noqa: E731
 # a run that minted none reaches the checks as a failure, never as an IndexError
@@ -415,7 +416,7 @@ s, v = fstate(), kv()
 toks = bot_tokens(s) or [MISSING]
 check("first run: passes", (rc, tail(out) if rc else ""), (0, ""))
 check("first run: the reader no admin; argocd-read code READ on infra and platform (what Applications clone), "
-      "argocd-pulls pull requests READ on chat and monitor (the PR generator's) - derived from infra's manifests, "
+      "argocd-pulls code and pull requests READ on chat and monitor (the PR generator's) - derived from infra's manifests, "
       "nothing else, each holding the reader alone", scope_view(s), WANT_SCOPE)
 check("first run: one token on the reader, read:repository alone, named argocd-reader-<UTC time>, minted as the reader",
       ([(t["scopes"], bool(re.match(r"^argocd-reader-\d{8}T\d{6}$", t["name"]))) for t in toks],

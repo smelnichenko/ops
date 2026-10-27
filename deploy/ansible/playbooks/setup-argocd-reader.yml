@@ -11,7 +11,8 @@
 #   user    argocd-reader - no admin; a random password, set anew each run and kept nowhere. A reader switched off
 #           (inactive, login prohibited) is refused unless -e reader_reactivate=true
 #   teams   schnappy/argocd-read   code READ on the cloned repositories alone
-#           schnappy/argocd-pulls  pull requests READ on the PR generator's repositories alone
+#           schnappy/argocd-pulls  code and pull requests READ on the PR generator's repositories alone (Forgejo's
+#                                  pulls API wants the code unit read too)
 #           each holding the reader alone (a team of that name with anyone else in it refused, never changed); read
 #           back AS the reader over every repository of the org: pushes to none, administers none
 #   token   argocd-reader-<UTC time>, read:repository alone - proven: each cloned repository's branches read, each PR
@@ -296,7 +297,9 @@
           - name: argocd-pulls
             description: "Argo CD: the pull requests its PR generator lists, read"
             permission: read
-            units_map: {repo.pulls: read}
+            # code read too: Forgejo's pulls API wants it (pull requests reference git) - pull requests alone got 403 on
+            # every repository (production's first run, 2026-10-27)
+            units_map: {repo.code: read, repo.pulls: read}
             repos: "{{ (_rd_repos_said.stdout | from_json).pulls }}"
 
     - name: Argo CD reads repositories, as the committed list says, at infra's main
@@ -927,7 +930,7 @@
       ansible.builtin.debug:
         msg: >-
           {{ reader_user }} (no admin) in {{ reader_teams | map(attribute='name') | map('regex_replace', '^', reader_org ~ '/')
-          | join(', ') }} - code read on {{ _rd_repos.code | join(', ') }}, pull requests read on
+          | join(', ') }} - code read on {{ _rd_repos.code | join(', ') }}, code and pull requests read on
           {{ _rd_repos.pulls | join(', ') or 'none' }} (infra {{ _rd_repos.commit }}); its token argocd-reader-{{ _rd_stamp }}
           and username in Vault: argocd/forgejo-readonly
           v{{ (_rd_vault_before.metadata | default({})).version | default(0) }}

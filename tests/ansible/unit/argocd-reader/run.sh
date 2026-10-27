@@ -4,7 +4,7 @@
 # production's inventory shape (target an ungrouped host, two Pis), an infra checkout of fixtures:
 #   - the repositories Argo CD reads derived from infra's manifests (scripts/argocd-repos.py): what Applications and
 #     ApplicationSets clone, what a pull-request generator lists; another org's on the host, an unresolved one refused;
-#   - the reader no admin, its teams scoped exactly (code read on what is cloned, pull requests read on what the PR
+#   - the reader no admin, its teams scoped exactly (code read on what is cloned, code and pull requests read on what the PR
 #     generator lists), holding it alone, read back as the reader (pushes nothing); a kill switch never undone;
 #   - its read:repository token proven, written to Vault argocd/forgejo-readonly (token, username, what ten held for
 #     retire) with every other property kept, with the version read; a failure deletes it again unless the Vault write
