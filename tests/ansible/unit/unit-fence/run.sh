@@ -82,5 +82,16 @@ printf '#!/bin/bash\necho fine\nexit 0\n' > "$W/suite-lost/b-clean/run.sh"
 out=$(UNIT_JOBS=2 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-lost" 2>&1); rc=$?
 check "a harness killed before its verdict: the suite fails, naming it" \
   "$rc $(grep -c 'NO VERDICT: a-killed' <<< "$out")" "1 1"
+# the harness after the killed one is still printed and judged - its output once, never itself NO VERDICT
+check "a harness killed before its verdict: the clean one after it printed once, judged (not NO VERDICT)" \
+  "$(grep -c '^fine$' <<< "$out") $(grep -c 'NO VERDICT: b-clean' <<< "$out")" "1 0"
+# and one failing after it: printed whole and judged as usual, never swallowed as NO VERDICT (the suite's exit cannot
+# tell it apart - the killed one fails the suite already - its own output and no NO VERDICT for it can)
+mkdir -p "$W/suite-lost/c-fails"
+printf '#!/bin/bash\necho "c-fails line"\nexit 1\n' > "$W/suite-lost/c-fails/run.sh"
+out=$(UNIT_JOBS=1 env -u FENCE bash tests/ansible/unit/run.sh "$W/suite-lost" 2>&1); rc=$?
+check "a killed harness, then a failing one: both printed - the killed named, the failing one's output whole" \
+  "$rc $(grep -c 'NO VERDICT: a-killed' <<< "$out") $(grep -c '^c-fails line$' <<< "$out") $(grep -c 'NO VERDICT: [bc]-' <<< "$out")" \
+  "1 1 1 0"
 echo "unit-fence: $([ $fails = 0 ] && echo ALL-PASS || echo "$fails FAILED")"
 [ $fails = 0 ]
