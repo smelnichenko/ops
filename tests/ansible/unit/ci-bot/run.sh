@@ -30,4 +30,10 @@ unset ANSIBLE_CONFIG
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 cd "$ROOT" || exit 1
-PYTHONDONTWRITEBYTECODE=1 timeout 900 "$PY" -B "$H/drive.py" "$AP" "$W"
+# its own limit, 30 min: 15 killed it silently in CI on a busy ten (2026-10-27, pipelines 887-888: the step 1137 s, its
+# 4 CPUs shared with a 20-core load) - locally ~5 min; Woodpecker's own limit is 60. Reached, it says so
+LIMIT=${CI_BOT_LIMIT_S:-1800}
+PYTHONDONTWRITEBYTECODE=1 timeout "$LIMIT" "$PY" -B "$H/drive.py" "$AP" "$W"
+rc=$?
+[ "$rc" != 124 ] || echo "ci-bot: TIMED OUT after $LIMIT s (its own limit) - FAILED"
+exit "$rc"
