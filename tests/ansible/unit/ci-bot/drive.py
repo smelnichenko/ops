@@ -345,13 +345,14 @@ check("a third run within 3 h: run 1's tokens kept too - Vault no longer holds t
        dv(v3)["data"] == vault_expect(toks3[2 * K:])),
       (0, [t["id"] for t in toks2], WANT_KINDS, 3 * K, WANT_SCOPE, True))
 # hours later: runs 1 and 2's tokens over 3 h old and not in Vault - deleted; run 3's over 3 h old but in Vault - kept;
-# one 2 h 59 min old, not in Vault - kept
+# one 2 h 30 min old, not in Vault - kept (30 min short of the limit: a slow run - CI on 4 busy CPUs - must not age it past
+# 3 h before the playbook reads its clock; 2 h 59 min failed ops main 2026-10-27, pipeline 887)
 st = copy.deepcopy(s3["state"])
 for t in st["tokens"].values():
     if t["user"] == BOT:
         t["name"] = re.sub(r"\d{8}T\d{6}$", stamp(4), t["name"])
 st["seq"] += 1
-young = {"id": st["seq"], "user": BOT, "name": "ci-infra-" + stamp(2.98), "sha1": secrets.token_hex(20),
+young = {"id": st["seq"], "user": BOT, "name": "ci-infra-" + stamp(2.5), "sha1": secrets.token_hex(20),
          "scopes": ["write:repository"]}
 young["token_last_eight"] = young["sha1"][-8:]
 st["tokens"][str(young["id"])] = young
