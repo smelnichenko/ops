@@ -46,6 +46,17 @@ clients, and its single-client lock is the mutex. The windows are a table both s
 - **Later, not now:** if NAVTEX should listen around the clock, the answer is a second SDR - one choice changes,
   nothing else in this plan.
 
+## The repo's history
+
+Operator, 2026-11-03: the project's history must look like one vibe-coding session.
+
+- `schnappy/navtex` starts empty. The code is copied over, not carried with radar's history (no `git filter-repo`
+  of radar), so none of radar's ~1150 PRs, incident narratives or plan numbers appear in it.
+- It is built in one continuous run: short, plain commit messages in the order the work happens (decoder, receiver,
+  UI, Telegram, deploy), no "Plan 105", no long post-mortems in messages.
+- The PRs below are still separate reviews and gates; on this repo each lands as one commit on main.
+- Existing repos (radar, ops, infra) keep their history as it is.
+
 ## PRs, in order
 
 1. **Repo `schnappy/navtex`.** Java 25 / Spring Boot 4, Gradle, Liquibase XML, a Taskfile with `task gate`. The
