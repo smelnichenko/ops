@@ -32,6 +32,20 @@ Every receiver row runs its own copy of that loop, and the radio's owner is spre
     restarts).
 - Broker down: a holder keeps its lease to its expiry; nothing new is granted.
 
+## Hybrid: control on MQTT, data to the cluster's Kafka (operator, 2026-11-04)
+
+- **Control stays local, on MQTT on the pi4:** leases, requests, receiver state, SDR health. Radio arbitration never
+  depends on ten, the cluster or a broker restart there.
+- **Data goes to the cluster's Kafka** (Strimzi, `schnappy-production-kafka`, one broker, ClusterIP only today):
+  NAVTEX and RTTY bulletins, receptions, SDR health history. Consumers in the cluster: the navtex.ee site, Telegram,
+  alerts, Grafana, the archive.
+- **One bridge** subscribes to the data topics on MQTT and produces them to Kafka (topics keyed by receiver, idempotent
+  producer). It runs on the pi4 with Mosquitto persistent sessions, so a cluster outage is buffered and caught up.
+- **Kafka gets one external client**, the bridge, write-only: an external listener (address from the Cilium L2 pool,
+  TLS, SCRAM user with produce rights on the station's topics only), a NetworkPolicy for it, LAN only. infra/platform
+  change, through a full run and review like any production change.
+- Kafka's topic naming and retention per data kind are decided in that infra change.
+
 ## Step 3 — the scheduler service
 
 - New repo `schnappy/radio-scheduler` (Java 25 / Spring Boot, the MQTT client from Eclipse Paho or HiveMQ).
