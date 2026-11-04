@@ -11,7 +11,13 @@ Every receiver row runs its own copy of that loop, and the radio's owner is spre
 `PeriodicWindowScheduler`, `BandArbiter`, `RadioBuses` and `ReceiverControl` (about 3k lines). NAVTEX moving to the pi4
 (plan 105) needs the same tuner arbitrated across two processes, which an in-process arbiter cannot do.
 
-## Step 1 — events inside radar (now, no new service)
+## Step 1 — events inside radar (now, no new service) — DONE 2026-11-04
+
+Merged and live: radar #1156 (a capture whose reader gave up is opened again), #1157 (switches and a reader giving
+up are events on the receiver's ticker thread; an off-and-on inside one tick is latched; the 10 s tick is the safety
+net), #1160 (a booking on the outlet the capture is already on does not re-open it). A setting that needs a
+re-open was an event already (`retuneNow`). Not yet events: a booking's edge and the preemption it brings - found
+by `ScheduleRunner`'s 20 s poll, so a booking starts up to 20 s late.
 
 - Every change that decides who holds a radio is an event on the receiver's own single-thread executor, handled at
   once and in order: a switch on/off, a booking's edge, a setting that needs a re-open, a reader that gave up, a
