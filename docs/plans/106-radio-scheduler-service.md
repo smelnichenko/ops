@@ -26,6 +26,30 @@ by `ScheduleRunner`'s 20 s poll, so a booking starts up to 20 s late.
 - The 10 s tick stays as a safety net only.
 - Tests: each event acts within the same executor turn; a toggle inside one tick re-opens; a dead reader re-opens.
 
+Booking edges and calendar edits as events: radar `feat/schedule-edges-as-events` - the runner arms a timer at
+the calendar's next start or end (`ObservationSchedule.nextEdgeS`), and every calendar change calls its
+`applyNow`. The 20 s poll stays as the safety net.
+
+## Step 1b — the lease decision apart from the sessions (radar, pure refactor)
+
+Today `BandArbiter` (one per radio, `RadioBuses`) both DECIDES who holds a radio and RUNS the sessions (stops the
+displaced capture, stops/starts ADS-B or AIS) under one lock. Only the decision can move to a service; the sessions
+stay with the process that owns the samples. So, first, inside radar:
+
+- `RadioLeaseBook` (new, `io.schnappy.radar.radio`): one per radio, no `SdrSession` in it. State: the holder
+  (claimant, priority, switch order), the asks (priority, first/last asked, patience), the continuous hold.
+  Operations, each returning a decision and never touching a device:
+  - `request(claimant, priority, switchSeq, patienceMs, nowMs)` -> GRANTED, GRANTED displacing X, REFUSED (holder
+    or whose turn it is);
+  - `release(claimant)`, `rerank(rungOf)`, `holdContinuous(held)` -> displaced X or nothing;
+  - `holder()`, `othersWaiting()`.
+- `BandArbiter` keeps its public API and its lock, asks the book, and carries out the answer: stop the displaced
+  capture, free the continuous session, start the new one. Behaviour unchanged - the existing `BandArbiter*` and
+  `RadioBuses*` tests are the regression net, plus the book's own tests (turns, patience lapse, switch order,
+  displacement, hold).
+- The book's state is what `radio/<radio>/lease` (retained) will carry, and `request` is
+  `radio/<radio>/request`'s handler: step 3 moves the book, not a rewrite of it.
+
 ## Step 2 — MQTT on the pi4
 
 - Mosquitto on the pi4, next to the tuner; LAN only; a login per service and an ACL per topic.
