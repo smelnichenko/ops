@@ -78,9 +78,9 @@ not the buffer.
 
 - No lateness bound; records carry the air's time (design 5).
 - All decoders on the one shared system (design 2, steps 3-4).
+- The backlog is bounded by time, no memory reserved per capture or station-wide ("without specific reservations").
+- Retention timeout 60 s, one for every decoder; the log is Valkey Streams.
 
 ## Open questions for the operator
 
-1. The retention timeout (one for all decoders). Recommended: 60 s.
-2. Valkey Streams (local, in RAM, Kafka's semantics: offsets, time-trimmed log) or the cluster's Kafka itself
-   (32 MB/s of IQ over the LAN to brokers on disk). Recommended: Valkey Streams.
+None open.
