@@ -107,6 +107,27 @@ not the buffer.
      `XTRIM MINID` on the chunks' air time, a consumer offset trimmed past read as "N s of air timed out unread");
      **3b** the Valkey store on its own instance (deploy compose + the backend's second connection); **3c** RS41's
      capture on it, live-checked under a gate (the 2026-10-31 drop case).
+   - **3a as built (2026-11-06, radar `feat/iq-spill`):**
+     - **The protocol:** the switch back needs no marker. The reader switches back on its first chunk after the queue
+       has drained, and records the spill sequence it had reached. The consumer reads the store up to that sequence
+       before anything queued since.
+     - **Retention:** trimmed on the store's id clock, which is not the chunks' air time (the store's ids order by
+       arrival). The decoder also trims what it has read once it is back on the queue.
+     - **Found by the concurrency review and the test audit, then fixed:**
+       - **A later spill read ahead of the queue.** The decoder asked for "all it has", and the store's answer could
+         include a spill that began after a switch back. The bound is now what the store had taken, under the lock.
+       - **A refused append is not known to be unwritten.** A timed-out XADD still runs: reproduced with
+         `docker pause`. Its sequence is never reused or delivered.
+       - **A refusal backs off for 1 s mid-spill too.** Before, each chunk cost one client timeout.
+       - **Gaps are counted by each entry's own byte offset.** The spill's average left the lag wrong for good.
+       - **A store that cannot be read writes off only up to its bound**, and never fetches it again.
+       - **A throwing client is a refusal.**
+       - **Close:** an append in flight at close leaves no log, and a read inside the store at close delivers nothing.
+     - **The contract 3b must meet** (`SpillStore`, `SpillStoreContract`):
+       - a call answers within a small part of a chunk, or refuses;
+       - exact `MINID` trim (no `~`);
+       - a null loss round-trips;
+       - `UNLINK`, not `DEL`, for a whole log (a minute of RS41 is 1.9 GB).
 4. Every other decoder stamps from the chunk: NAVTEX, RTTY, WFAX, HFDL, FT8/FT4/WSPR (slot alignment from the air's
    time), DCF77/MSF/VLF, VOR, SAT-REC, ADS-B/AIS (with plan 106 step 1b, where they become ordinary bands). After it, no
    decoder reads the wall clock for a record's time.
