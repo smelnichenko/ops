@@ -40,9 +40,13 @@ not the buffer.
    dropping; once spilling has begun every chunk goes there until the consumer has drained it, so the order is the
    radio's. The consumer drains the ring, then the stream, then the ring again. A capture's stream is deleted when the
    capture's decode has caught up or the capture is closed and drained.
-4. **Bounded, and never blocking.** A per-capture and a station-wide byte budget (Valkey `maxmemory` set, policy
-   `noeviction` for this keyspace in its own logical DB). Over budget, or Valkey down: today's drop with the gap marked
-   - the reader never waits on Valkey. RS41 at 8 MS/s is 32 MB/s: one minute behind is ~1.9 GB.
+4. **Bounded by TIME, like a Kafka topic's retention - never blocking** (operator 2026-11-05: "kafka sends received
+   data to decoders and once it times out - goes to log and out of the wheel"). The received data is a log the
+   decoder reads at its own offset; a chunk older than the retention timeout leaves the wheel (Valkey `XTRIM MINID`,
+   the stream ids being the chunks' air time) and, if its decoder had not read it, the decoder's offset jumps past it
+   and the loss is logged ("RS41: 12.4 s of air timed out unread") and counted in `dropped_s`. No byte budgets: the
+   RAM used is rate x timeout per capture (RS41 32 MB/s x 60 s = 1.9 GB; NAVTEX 1 MB/s x 60 s = 60 MB), one timeout
+   for every decoder. Valkey down: the same timeout on the in-process ring alone, never a wait in the reader.
 5. **Records carry the air's time.** A record decoded from the backlog carries its sample time; the reception log and
    any push (Telegram) state when it was on the air, and the panel shows each decoder's backlog depth. No lateness
    bound and no late-push cut-off: the operator expects no such delays (2026-11-05) - the backlog absorbs stalls of
@@ -77,6 +81,6 @@ not the buffer.
 
 ## Open questions for the operator
 
-1. The Valkey budget for undecoded IQ (17 GB of RAM free on the station today): one station-wide pool only, or also a
-   per-capture cap so one stalled wide-band decoder (RS41, 32 MB/s) cannot fill the pool that a narrow one (NAVTEX,
-   1 MB/s) needs?
+1. The retention timeout (one for all decoders). Recommended: 60 s.
+2. Valkey Streams (local, in RAM, Kafka's semantics: offsets, time-trimmed log) or the cluster's Kafka itself
+   (32 MB/s of IQ over the LAN to brokers on disk). Recommended: Valkey Streams.
