@@ -49,6 +49,10 @@ stay with the process that owns the samples. So, first, inside radar:
   displacement, hold).
 - The book's state is what `radio/<radio>/lease` (retained) will carry, and `request` is
   `radio/<radio>/request`'s handler: step 3 moves the book, not a rewrite of it.
+- **ADS-B and AIS become ordinary bands here** (operator 2026-11-05: the continuous sessions "убрать", folded into
+  this step rather than a PR of their own that this refactor would rewrite): no continuous hold in the book, no
+  session slot in `BandArbiter`; they ask for the radio, are switched and booked like every other band, and lose it
+  to a hand switch on the same tuner like every other band. The book above is written without `holdContinuous`.
 
 ## Step 2 — MQTT on the pi4
 
