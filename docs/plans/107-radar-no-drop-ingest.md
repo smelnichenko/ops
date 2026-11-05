@@ -91,6 +91,22 @@ not the buffer.
    Budgets and the Valkey-down fallback as in the design (tests: a stalled consumer loses nothing within budget and
    decodes everything in order with the air's times; over budget the gap is marked; Valkey down never blocks the reader).
    The ring and the spill are the shared read path: every capture gets them, not only RS41's.
+
+   **Found before writing it (2026-11-06, the live station):**
+   - The station's Valkey (`radar-valkey-1`, the L1 cache) runs `noeviction` with no `maxmemory` - a spill stream is
+     never evicted silently - but with `--save 60 1`: a stream taking RS41's 32 MB/s would fork and write an RDB
+     snapshot of gigabytes every minute (copy-on-write doubling its memory under that write load). The IQ log gets its
+     OWN instance, persistence off (`--save "" --appendonly no`), beside the cache; a restart loses at most the 60 s
+     the retention keeps anyway. The host has 31 GB (18 GB free): RS41 1.9 GB + NAVTEX 60 MB at the 60 s retention.
+   - Valkey down: the in-process ring alone (half a second), the reader never waits; a full ring then drops the
+     NEWEST chunk, marked - a Disruptor ring cannot drop its oldest, and with air time on every chunk the decoder's
+     records stay right either way. The JVM heap (no -Xmx: a quarter of the host, ~7.7 GB) is not used for the 60 s.
+   - Sub-steps: **3a** the ring and the spill behind a `SpillStore` seam (an in-memory store for the tests; the
+     switch protocol: once the ring is full the reader spills EVERY chunk until the consumer has drained the stream,
+     a SWITCH marker in the stream handing the consumer back to the ring, so the order is the radio's; retention by
+     `XTRIM MINID` on the chunks' air time, a consumer offset trimmed past read as "N s of air timed out unread");
+     **3b** the Valkey store on its own instance (deploy compose + the backend's second connection); **3c** RS41's
+     capture on it, live-checked under a gate (the 2026-10-31 drop case).
 4. Every other decoder stamps from the chunk: NAVTEX, RTTY, WFAX, HFDL, FT8/FT4/WSPR (slot alignment from the air's
    time), DCF77/MSF/VLF, VOR, SAT-REC, ADS-B/AIS (with plan 106 step 1b, where they become ordinary bands). After it, no
    decoder reads the wall clock for a record's time.
