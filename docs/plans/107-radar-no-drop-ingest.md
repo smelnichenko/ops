@@ -46,15 +46,21 @@ not the buffer.
 
 ## Steps (one PR each, failing test first, revert checks, gate, test-quality audit)
 
-1. Metrics only: per-capture read-ahead depth, consumer lag and dropped bytes on the panel/actuator - the measure the
-   rest is judged by.
-2. The read-ahead on a Disruptor ring, same depth, same drop rule (a stalled consumer still drops the oldest, marked).
-3. Sample time on every chunk through `IqStream`; RS41 stamps frames from it (a test feeds a capture whose consumer
+1. **DONE 2026-11-05 (radar #1172, live):** each running capture's decoder lag and drops on the recent-tunes card
+   ("decoder 0.3 s behind · 8 ms dropped"; `/api/sdr/opens` `behind_s`, `dropped_s`) - the measure the rest is judged by.
+2. Sample time on every chunk through `IqStream`; RS41 stamps frames from it (a test feeds a capture whose consumer
    stalls 10 s and checks the frame times are the air's, not the read's).
-4. Valkey spill for adopted decoders, with the budgets and the Valkey-down fallback (tests: a stalled consumer loses
-   nothing within budget and decodes everything in order; over budget the gap is marked; Valkey down never blocks the
-   reader).
-5. Adopt the other timed decoders (NAVTEX, RTTY, ADS-B/AIS after plan 106's lease work, the slot-aligned FT8/WSPR).
+3. The read-ahead on a Disruptor ring TOGETHER with the Valkey spill, for decoders adopted in step 2 only.
+
+   **Why not the ring first (found 2026-11-05, before writing it):** a single-producer ring cannot drop its OLDEST
+   chunk - only the consumer advances past a slot - so a ring alone drops the NEWEST. After a long stall the decoder
+   would then resume on air as old as the stall (10 s after a 10 s stall) and, stamping time as it reads, file it ten
+   seconds wrong; today's drop-the-oldest leaves it the newest half second. With sample time on every chunk (step 2) the
+   newest end is the right end - and in this step it is spilled to Valkey, never dropped, in the radio's order.
+
+   Budgets and the Valkey-down fallback as in the design (tests: a stalled consumer loses nothing within budget and
+   decodes everything in order with the air's times; over budget the gap is marked; Valkey down never blocks the reader).
+4. Adopt the other timed decoders (NAVTEX, RTTY, ADS-B/AIS after plan 106's lease work, the slot-aligned FT8/WSPR).
 
 ## Open questions for the operator
 
