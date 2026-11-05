@@ -59,6 +59,14 @@ not the buffer.
 2. Sample time on every chunk through `IqStream`, for every source (SoapySDR, rsp_tcp, the recorded-IQ replay);
    RS41 stamps frames from it first (a test feeds a capture whose consumer stalls 10 s and checks the frame times are
    the air's, not the read's).
+   **2a - in review 2026-11-05 (radar #1173):** local SoapySDR captures - `AirStamp` on the read-ahead's reader thread,
+   `IqAirTime` carried to the receiver's end of the chain, `IqStream.airNanos()` (no default); RS41 frames, fixes,
+   follow, mount age, start date, heard marks, frames/min and SARSAT bursts by the air. 38 revert checks caught.
+   **2b - next:** rsp_tcp captures on the same reader thread (the socket drained in whole samples, each chunk stamped),
+   the shift/resample chain in one class both transports use; `/api/sdr/opens` lag then shown for remote captures too.
+   Found before writing it: a remote capture's live gain/notch settle is sent from the CONSUMER's reads today; with the
+   socket read ahead, a settle after a finite burst would never be sent - settles must go out from the reader thread on
+   their own (a settings event or a bounded poll), not ride on data reads.
 3. The read-ahead on a Disruptor ring TOGETHER with the Valkey spill, for decoders adopted in step 2 only.
 
    **Why not the ring first (found 2026-11-05, before writing it):** a single-producer ring cannot drop its OLDEST
