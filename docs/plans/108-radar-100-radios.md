@@ -102,7 +102,13 @@ pool is a large rewrite (6 of them have a push `processChunk` today). So:
 
 ### 4. Several hosts
 
-From step 0's numbers. Each host owns its radios, readers, decoders and Valkey, since the sessions stay with the process
+No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, some hosts will have a few, some more"):
+
+- A host's load is what it was measured to carry, never one size for all, and 100 is not a limit built into anything.
+- Adding a radio or a host is a row in the directory and the box coming up: no code change, no deploy of the others.
+- Nothing may assume radios are evenly spread: the page, the budgets and the Valkey sizing go per host.
+
+Each host owns its radios, readers, decoders and Valkey, since the sessions stay with the process
 that owns the samples (plan 106). Control over plan 106's MQTT, records to Kafka. A wedged or dead host costs its own
 radios only. Plan 106's open question about one scheduler or one per host is answered here.
 
@@ -117,8 +123,10 @@ radios only. Plan 106's open question about one scheduler or one per host is ans
 1. **Which radios?** Mostly from the network (operator, 2026-11-07). Still open: which boxes, and the link to each.
 2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or
    they take turns by calendar.
-3. **Where?** All at one site, how many hosts, and what network between them. Does aqua stay the only radar host?
-4. **By when, and growing how?** 100 at once, or in stages? It sets how early step 4 is needed.
+3. **Where?** Hosts differ and grow: some with a few radios, some with more (operator, 2026-11-07). Still open: is a host
+   a box carrying radios, a machine running decoders, or both? Does aqua stay the only machine decoding?
+4. **Growing how?** No fixed end (operator, 2026-11-07), so stages by need. Still open: roughly how many in the next stage,
+   which sets how early step 4 is needed.
 5. **Should every band still run one radio, one capture, one decoder at 100?** A wideband capture with many decoders in
    it would need far fewer radios, but the operator's rule of 2026-11-06 says no. Recorded here only so that the rule is
    held on purpose.
