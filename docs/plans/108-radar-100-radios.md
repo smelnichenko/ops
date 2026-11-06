@@ -16,8 +16,8 @@ Measured on the live station, 2026-11-07 (one 5 s thread sample, so a first figu
 | RS41, 8 MS/s, 32 MB/s | 23% | 0.8% | - | about 24% |
 | RTTY, 96 kS/s, 0.38 MB/s | 5.4% | 1.0% | 1.2% | about 8% |
 
-GC: 320 young collections, 0.71 s in 1026 s, 2.2 ms each on average. Sample losses on the local radio: none in 24 h, gates
-included.
+GC: 320 young collections, 0.71 s in 1026 s, 2.2 ms each on average. Sample losses on the local radio: none in 24 h,
+gates included.
 
 ## What runs out
 
@@ -49,10 +49,11 @@ Also found by reading the code, not measured:
 ## Not decided
 
 - **Ring or lock inside each capture.** Built on radar `feat/iq-read-ahead-ring`, unmerged. Bench, 240,000 hand-overs a
-  side beside a gate: stalls over 1 ms 95 for the lock, 114 for the ring, 0 dropped. No gain as built. Its buffers are not
-  preallocated yet, and at the RS41-type mix allocation becomes a real cost, so step 2 measures reuse before this closes.
-- **Pinning.** Bench beside a gate, 480,000 hand-overs: all cores 209 stalls over 1 ms, P cores 119, E cores 83, with the
-  load falling across the runs and the gate not kept off those cores. Not proof either way. It says nothing about a
+  side beside a gate: stalls over 1 ms 95 for the lock, 114 for the ring, 0 dropped. No gain as built. Its buffers are
+  not preallocated yet, and at the RS41-type mix allocation becomes a real cost, so step 2 measures reuse before this
+  closes.
+- **Pinning.** Bench beside a gate, 480,000 hand-overs: all cores 209 stalls over 1 ms, P cores 119, E cores 83, with
+  the load falling across the runs and the gate not kept off those cores. Not proof either way. It says nothing about a
   decoder's DSP.
 - **The gate on all cores** is a standing rule. Reserving cores for radios on a host that also builds would change it:
   the operator's call.
@@ -71,8 +72,8 @@ sizes everything after it, and shows which decoders actually need P cores.
 
 ### 2. A rig with simulated radios
 
-A test harness: N fake radios feeding real recorded IQ at the real rate into one JVM, N = 10, 25, 50, 100, in the mix from
-step 0. No hardware. Runs on a host the operator picks, never beside the live station at full size.
+A test harness: N fake radios feeding real recorded IQ at the real rate into one JVM, N = 10, 25, 50, 100, in the mix
+from step 0. No hardware. Runs on a host the operator picks, never beside the live station at full size.
 
 Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC pauses, Valkey latency. Then, on the same
 rig: lock against ring; ring with reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
@@ -83,8 +84,8 @@ adopted only on a measured gain. The knee in N says how many radios one host car
 Keep one thread per decoder at first: threads parked in a read cost nothing, and moving 24 session classes to a shared
 pool is a large rewrite (6 of them have a push `processChunk` today). So:
 
-- Core groups by decoder class, from step 1: the thread sets its own affinity to a group, never to one core. `sched_setaffinity`
-  through FFM; the JDK has no API for it.
+- Core groups by decoder class, from step 1: the thread sets its own affinity to a group, never to one core.
+  `sched_setaffinity` through FFM; the JDK has no API for it.
 - Admission: a host knows its decode budget from step 1. A capture past it is refused and visible, rather than slowing
   every other capture.
 - A worker pool only if step 2 shows threads themselves as the limit.
@@ -92,8 +93,8 @@ pool is a large rewrite (6 of them have a push `processChunk` today). So:
 ### 4. Several hosts
 
 From step 0's numbers. Each host owns its radios, readers, decoders and Valkey, since the sessions stay with the process
-that owns the samples (plan 106). Control over plan 106's MQTT, records to Kafka. A wedged or dead host costs its own radios
-only. Plan 106's open question about one scheduler or one per host is answered here.
+that owns the samples (plan 106). Control over plan 106's MQTT, records to Kafka. A wedged or dead host costs its own
+radios only. Plan 106's open question about one scheduler or one per host is answered here.
 
 ### 5. Running 100 by hand is not an option
 
@@ -104,8 +105,8 @@ only. Plan 106's open question about one scheduler or one per host is answered h
 ## Open questions for the operator
 
 1. **Which radios?** RSP-type, RTL-SDR-type, other; USB on a host, or boxes on the network?
-2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or they
-   take turns by calendar.
+2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or
+   they take turns by calendar.
 3. **Where?** All at one site, how many hosts, and what network between them. Does aqua stay the only radar host?
 4. **By when, and growing how?** 100 at once, or in stages? It sets how early step 4 is needed.
 5. **Should every band still run one radio, one capture, one decoder at 100?** A wideband capture with many decoders in
