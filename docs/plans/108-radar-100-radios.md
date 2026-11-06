@@ -56,7 +56,8 @@ Also found by reading the code, not measured:
   every radio; writers would contend on one cursor; each consumer would step over every other radio's chunks. Each
   capture keeps its own queue, and a lock or ring on it has two threads however many radios there are.
 
-- **The Disruptor stays (operator, 2026-11-07):** "in any way disruptor will stay". One ring per capture. Measured so far,
+- **The Disruptor stays (operator, 2026-11-07):** "in any way disruptor will stay". One ring per capture. Measured so
+  far,
   no gain over the lock at hand-over, so its value here is in what step 2 measures next: reused buffers.
 - **The radio app is built into the cluster (operator, 2026-11-07):** "the idea is to build radio app into the cluster".
   The whole app, not only its decoders.
@@ -113,7 +114,8 @@ sizes everything after it, and shows which decoders actually need P cores.
 A test harness: N fake radios feeding real recorded IQ at the real rate into one JVM, N = 10, 25, 50, 100, in the mix
 from step 0. No hardware. Runs on a host the operator picks, never beside the live station at full size.
 
-Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC pauses, Valkey latency. Then, on the same rig: the ring with and without reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
+Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC pauses, Valkey latency. Then, on the same
+rig: the ring with and without reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
 adopted only on a measured gain. The knee in N says how many radios one host carries.
 
 ### 3. radar on the cluster, as it is
