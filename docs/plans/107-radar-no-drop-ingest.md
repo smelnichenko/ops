@@ -203,11 +203,33 @@ not the buffer.
      - pi4-C (rsp_tcp) logged two losses in the first 20 s after start, 15 ms and then 1291 ms, 10 s apart (one
        `AirStamp` window). Probably the reader stalled during JVM warm-up and the box dropped what overflowed. None
        since. Watch the hourly count of "ms lost on the air".
-   - **WSPR:** built on `feat/wspr-air-time`, test audit running.
+   - **WSPR (radar #1184), live 2026-11-06 18:45:**
      - Spots are filed at the even UTC minute the capture's first sample was on the air in.
-     - Revert checks: 10 of 10 caught.
+     - A capture held across slots (a one-band plan, no reconnects) is cut at each slot's end, each slot decoded as
+       it closes.
+     - WSPR is switched off in the station's panel, so the row's `last_heard % 120 == 0` check waits until it is on.
    - **Next:** DCF77/MSF/VLF, VOR, HFDL, WFAX, DSC, SAT-REC, and ADS-B/AIS with plan 106 step 1b. Then the
      recordings stamped by the air (`IqRecordings`, `RecordTap`), after which the marks move to the air.
+
+## One band, one capture, one decoder (operator 2026-11-06)
+
+"separate bands processing - no simultaneous ft processing together with rtty, for all bands same principle".
+Reverses radar doc 098 (2026-09-19). No decoder rides another band's capture. All live 2026-11-06:
+
+- **FT8 off RTTY (radar #1185):** the passenger mechanism is gone; FT8 30 m is an ordinary band of FT8's plan.
+- **SARSAT (radar #1186):** its own row and capture (406.05 MHz, 200 kHz above the tune, 2 MS/s). Operator: stays off.
+- **RBU (radar #1187):** its own row and capture (66.66 kHz); its meter out of `MsfDemod`, bit-for-bit the same reading.
+  Off until assigned a radio: unassigned it opens on the sdrplay RS41 holds; MSF is on pi4-C.
+- **RTTY back to 96 kS/s** (live config): its reasons for 192 kS/s, passengers and the DDH47 LW window, are gone. CPU
+  fell about a third. Its copy at 96k is still to be judged on daytime traffic.
+
+**Open, found 2026-11-06:** pi4-C delivers about 1.1-1.3 s fewer samples than counted early in every rsp_tcp capture,
+seen at the second `AirStamp` window, about 20.5 s after the open (15:53, 17:45, 18:42, 19:02). Suspected: the SDRplay
+driver dropping samples while it applies the open's settings commands. Matters for FT8 on pi4-C, where each slot is a
+fresh 14 s capture.
+
+**Open, design item 1:** `IqReadAhead` is still an `ArrayDeque` under a `ReentrantLock`. Step 3 built the spill around
+it; the LMAX `RingBuffer` for its fast path is next.
 
 ## Decided (operator 2026-11-05)
 
