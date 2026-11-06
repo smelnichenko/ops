@@ -1,4 +1,4 @@
-# Plan 108 — radar at 100 radios
+# Plan 108 — radar on the cluster, at 100 radios
 
 **Status:** draft 2026-11-07, nothing built. Operator, 2026-11-07: "100 radios are real target"; "dropping single ring
 idea". Goes with plan 106 (the scheduler as a service, over MQTT) and plan 107 (a late decoder never drops samples).
