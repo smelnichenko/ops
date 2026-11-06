@@ -128,6 +128,32 @@ not the buffer.
        - exact `MINID` trim (no `~`);
        - a null loss round-trips;
        - `UNLINK`, not `DEL`, for a whole log (a minute of RS41 is 1.9 GB).
+   - **3b as built (2026-11-06, radar `feat/iq-spill-valkey`): the contract went ASYNCHRONOUS.**
+     - **Why:** the concurrency review found that a synchronous XADD holds the radio's reader up to 100 ms (300 ms on a
+       first connect), where the driver holds tens of ms. That re-creates the overflow the spill exists to remove.
+     - **The contract now:**
+       - `append` hands the chunk over and returns: false = not taken; otherwise an id, or a failure, arrives at a
+         callback.
+       - The read-ahead reads only up to the settled sequence (every one before it answered) and waits for the rest.
+       - A failed answer is a loss, marked where it was. Failures may be answered out of order (each times out alone).
+     - **Measured on valkey 8:**
+       - XADD of 256 KiB: median 0.18 ms, p99 0.54 ms.
+       - A minute of RS41: 2.46 GB of instance memory for 1.97 GB of chunks.
+       - XTRIM of that minute at once: 109 ms. So trims are bounded (`~ LIMIT 500`), and the decoder trims as it
+         reads, one batch at a time.
+     - **The store:**
+       - Writes on their own client: 1 s timeout, 64 MB in flight at most. A fault drops the connection, which frees
+         the chunks it pinned, rests the link 1 s, then reopens it in the background.
+       - Reads on another client: 2 s.
+       - `-OOM` and an interrupted read refuse that command alone.
+       - Every log expires 2 min after its last append or trim.
+     - **No sweep.** Each backend run writes under `radar:iq:<run>:`. Before this, every Spring test context and
+       `task dev` on the station swept the live backend's logs (the platform review). Tests and `task dev` run with
+       the spill off.
+     - **The instance (`valkey-iq`):**
+       - host networking (no docker-proxy), 127.0.0.1:6380;
+       - `--maxmemory 4gb`, a 5 GB cgroup, no swap, `oom_score_adj 500`;
+       - `task deploy:live` brings it up before the restart and reports its memory.
 4. Every other decoder stamps from the chunk: NAVTEX, RTTY, WFAX, HFDL, FT8/FT4/WSPR (slot alignment from the air's
    time), DCF77/MSF/VLF, VOR, SAT-REC, ADS-B/AIS (with plan 106 step 1b, where they become ordinary bands). After it, no
    decoder reads the wall clock for a record's time.
