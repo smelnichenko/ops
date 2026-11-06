@@ -164,7 +164,15 @@ not the buffer.
        run's logs first; otherwise a minute of RS41 would sit next to the next run's spill for 2 min.
      - **Reads:** a failed read is asked again once before the backlog is abandoned.
      - **Tests:** the test JVM pins the spill off.
-     - **Live check:** RS41 is off (operator), so it ran on the RTTY capture under `task gate` load; results below.
+     - **Live check, 2026-11-06, with `task gate` running as load** (sampler and data in `107-data/`, one row
+       every 2 s per open capture):
+       - **RTTY**, rsp_tcp at 192 kS/s, 07:16-07:35: at most 11 ms behind at load 31.9. It never needed the spill.
+       - **RS41**, local SDRplay at 8 MS/s, on its own schedule, 07:35-07:53. This is the 2026-10-31 drop case. In
+         the gate's Gradle phase (load 30-33) it fell up to **2.29 s** behind, more than 0.5 s for about 64 s of
+         samples. The store took the excess, up to **62 MB** in its one log.
+         - **Dropped: 0.000 s** throughout. No driver overflow and no spill warning in the log.
+         - The store emptied as it caught up: 0 keys and 1.19 MB after.
+         - Before step 3, everything past half a second would have been dropped.
 4. Every other decoder stamps from the chunk: NAVTEX, RTTY, WFAX, HFDL, FT8/FT4/WSPR (slot alignment from the air's
    time), DCF77/MSF/VLF, VOR, SAT-REC, ADS-B/AIS (with plan 106 step 1b, where they become ordinary bands). After it, no
    decoder reads the wall clock for a record's time.
