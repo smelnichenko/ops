@@ -154,6 +154,17 @@ not the buffer.
        - host networking (no docker-proxy), 127.0.0.1:6380;
        - `--maxmemory 4gb`, a 5 GB cgroup, no swap, `oom_score_adj 500`;
        - `task deploy:live` brings it up before the restart and reports its memory.
+     - **Live 2026-11-06 04:52** (#1178, then #1179, which fixes the deploy's report line): `valkey-iq` healthy, with
+       the backend's `radar-iq-reads` and `radar-iq-writes` connections on it.
+   - **3c as built (2026-11-06, radar #1180, live 07:16):** every capture's read-ahead spills to the station store, under
+     `<receiver>:<captureId>`.
+     - **Store pickup:** each capture takes the store at its first spill. The continuous ADS-B/AIS session opens its
+       radio before the store's bean exists, so a store looked up at open would never reach it.
+     - **Shutdown:** Spring destroys the store before the captures. The store's `close()` therefore unlinks its own
+       run's logs first; otherwise a minute of RS41 would sit next to the next run's spill for 2 min.
+     - **Reads:** a failed read is asked again once before the backlog is abandoned.
+     - **Tests:** the test JVM pins the spill off.
+     - **Live check:** RS41 is off (operator), so it ran on the RTTY capture under `task gate` load; results below.
 4. Every other decoder stamps from the chunk: NAVTEX, RTTY, WFAX, HFDL, FT8/FT4/WSPR (slot alignment from the air's
    time), DCF77/MSF/VLF, VOR, SAT-REC, ADS-B/AIS (with plan 106 step 1b, where they become ordinary bands). After it, no
    decoder reads the wall clock for a record's time.
