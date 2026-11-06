@@ -56,6 +56,8 @@ Also found by reading the code, not measured:
   every radio; writers would contend on one cursor; each consumer would step over every other radio's chunks. Each
   capture keeps its own queue, and a lock or ring on it has two threads however many radios there are.
 
+- **The radio app is built into the cluster (operator, 2026-11-07):** "the idea is to build radio app into the cluster".
+  The whole app, not only its decoders.
 - **A decoder is a microservice, on the Kubernetes cluster (operator, 2026-11-07).** "some machines may run subset of
   decoders, decoder should be a microservice"; "we have kubernetes cluster". Radios are on the network, so a decoder
   need not run where its radio is.
@@ -63,7 +65,9 @@ Also found by reading the code, not measured:
 ## The shape
 
 Box (rsp_tcp) -> decoder pod (read path, decoder, its captures) -> records. Plan 106's scheduler says who holds a radio;
-the pod opens the capture directly when it holds the lease. radar keeps the page and the history.
+the pod opens the capture directly when it holds the lease. radar's page and history are services on the cluster too:
+built by Woodpecker, deployed by Argo CD from a chart, Postgres on CNPG, Keycloak in front, logs in ClickHouse, like the
+rest of the platform.
 
 | Wanted | What the cluster gives | What it does not |
 |---|---|---|
@@ -73,8 +77,8 @@ the pod opens the capture directly when it holds the lease. radar keeps the page
 | A slow or crashed decoder stays its own | a process per pod: its own heap, GC and crash | |
 | Adding a host | a node joins | |
 
-The cluster today, read 2026-11-07: one node, `ten`, 20 CPUs, 64 GB with 34 GB in use, 5% CPU at that moment, a limit of
-110 pods. So:
+The cluster today, read 2026-11-07: one node, `ten`, 20 CPUs, 64 GB with 34 GB in use, 5% CPU at that moment, 92 of a
+limit of 110 pods running, fastest interface 10 Gb/s. So:
 - `ten` reboots take every decoder with them. Today's radar on aqua does not depend on it.
 - 100 pods do not fit beside what runs there under that pod limit; a pod carrying several captures of one decoder, or
   more nodes, is the answer. Memory is the other limit: one JVM per pod, its idle size not measured yet.
@@ -116,7 +120,21 @@ Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC p
 rig: lock against ring; ring with reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
 adopted only on a measured gain. The knee in N says how many radios one host carries.
 
-### 3. One decoder as a service: the pilot
+### 3. radar on the cluster, as it is
+
+The one JVM as one pod, network radios only, the aqua instance still running and its row for that radio off. No decoder
+split and no scheduler service are needed. It proves what every later step needs: IQ from a pod to a box outside the
+mesh, the chart, the images, storage, the budget on `ten`.
+
+What ties radar to aqua today, each needing an answer here:
+- The local sdrplay: `rsp_tcp` on aqua makes it a network radio like the others. aqua's link is 1 Gb/s: RS41 at 32 MB/s
+  fits.
+- `mount`, `servo`, `HardwareSwitch`: hardware at the station. Not surveyed yet.
+- Files: IQ recordings, satellite captures, map tiles, photos, the state directory, all on aqua's disk today.
+- The database: 602 MB, moved to CNPG. A stateful move on production: commands shown, explicit OK.
+- A production change like any other: a full run and full review first. `ten` writes need approval.
+
+### 3b. One decoder as a service: the pilot
 
 One narrow decoder, from a network radio, as a pod on the cluster, side by side with radar and compared on the same air:
 same bulletins, stamps within a slot, no more losses. It needs plan 106's lease (step 1b onward), so that two owners
@@ -132,7 +150,7 @@ each needs an answer in this step: stay in the pod, or a stream out of it.
 
 No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, some hosts will have a few, some more"):
 
-- A pod's CPU and memory requests come from steps 1 and 3: never one size for all, and 100 is not a limit built into
+- A pod's CPU and memory requests come from steps 1 and 3b: never one size for all, and 100 is not a limit built into
   anything.
 - A capture past what its pod carries is refused and visible, rather than slowing every other capture.
 - Exclusive cores only if step 2 shows stalls that cost samples: kubelet static CPU manager, Guaranteed pods. A machine
@@ -164,4 +182,4 @@ No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, som
    carry 24 copies of the read path, or bring the common library back.
 7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4. 106 keeps radio control independent of
    `ten`. Decoders on the cluster depend on `ten`, though leases on the pi4 still need not.
-
+8. **Mount, servos and the switch:** do they move to the cluster with a small agent at the hardware, or stay on aqua?
