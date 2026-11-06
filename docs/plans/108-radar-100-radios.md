@@ -36,13 +36,13 @@ The mix decides almost everything, so step 0 comes first.
 
 Radios come mostly from the network (operator, 2026-11-07), so:
 
-- The host's network link is the wideband limit, not USB: at full 16-bit IQ one RS41-type radio is 32 MB/s, so about 3 on
-  1 Gb/s and about 39 on 10 Gb/s. Decimating on the box would cut this, but moves work and failure there.
+- The host's network link is the wideband limit, not USB: at full 16-bit IQ one RS41-type radio is 32 MB/s, so about 3
+  on 1 Gb/s and about 39 on 10 Gb/s. Decimating on the box would cut this, but moves work and failure there.
 - A reader is a blocked socket and stays cheap. Its slack is the TCP buffers on both ends and the box's own, and a late
   reader shows up as a stalled box, not a driver overflow. What the box drops, the host only sees as missing samples.
 - Today's pi4-C is that class of radio, so its 1.1-1.3 s start deficit is a problem of the main case, not of one box.
-- rsp_tcp's wedging on repeated connects multiplies with the box count, and one-capture-per-slot rows (FT8) connect often.
-  Retuning a running stream, not built today, would cut those connects and the time a switch takes.
+- rsp_tcp's wedging on repeated connects multiplies with the box count, and one-capture-per-slot rows (FT8) connect
+  often. Retuning a running stream, not built today, would cut those connects and the time a switch takes.
 
 Also found by reading the code, not measured:
 - Valkey runs its commands on one thread: many captures spilling at once meet there.
@@ -56,12 +56,39 @@ Also found by reading the code, not measured:
   every radio; writers would contend on one cursor; each consumer would step over every other radio's chunks. Each
   capture keeps its own queue, and a lock or ring on it has two threads however many radios there are.
 
+- **A decoder is a microservice, on the Kubernetes cluster (operator, 2026-11-07).** "some machines may run subset of
+  decoders, decoder should be a microservice"; "we have kubernetes cluster". Radios are on the network, so a decoder
+  need not run where its radio is.
+
+## The shape
+
+Box (rsp_tcp) -> decoder pod (read path, decoder, its captures) -> records. Plan 106's scheduler says who holds a radio;
+the pod opens the capture directly when it holds the lease. radar keeps the page and the history.
+
+| Wanted | What the cluster gives | What it does not |
+|---|---|---|
+| A machine runs a subset | a Deployment per decoder, node labels | |
+| Consumers on need | replicas and rollouts; later, scaling on demand | a JVM starts in seconds: too slow to start per FT8 slot, so a pod stays up and opens captures |
+| Pinned consumers | kubelet static CPU manager: a Guaranteed pod with whole CPUs gets exclusive cores | it does not know P cores from E cores; `ten` runs policy `none` today, and changing it is a write on ten |
+| A slow or crashed decoder stays its own | a process per pod: its own heap, GC and crash | |
+| Adding a host | a node joins | |
+
+The cluster today, read 2026-11-07: one node, `ten`, 20 CPUs, 64 GB with 34 GB in use, 5% CPU at that moment, a limit of
+110 pods. So:
+- `ten` reboots take every decoder with them. Today's radar on aqua does not depend on it.
+- 100 pods do not fit beside what runs there under that pod limit; a pod carrying several captures of one decoder, or
+  more nodes, is the answer. Memory is the other limit: one JVM per pod, its idle size not measured yet.
+- IQ stays out of the mesh's sidecars: a proxy on every chunk costs CPU for nothing. Pods reach the boxes on the LAN
+  through an egress NetworkPolicy.
+- Each pod's JVM carries only its own radios, so GC is no longer shared between 100 readers: the case for reused buffers
+  below mostly goes away.
+
 ## Not decided
 
 - **Ring or lock inside each capture.** Built on radar `feat/iq-read-ahead-ring`, unmerged. Bench, 240,000 hand-overs a
-  side beside a gate: stalls over 1 ms 95 for the lock, 114 for the ring, 0 dropped. No gain as built. Its buffers are
-  not preallocated yet, and at the RS41-type mix allocation becomes a real cost, so step 2 measures reuse before this
-  closes.
+  side beside a gate: stalls over 1 ms 95 for the lock, 114 for the ring, 0 dropped. No gain as built, and with a JVM
+  per pod allocation stays near today's per radio. Recommendation: drop it, keep the locked queue and the spill, unless
+  step 2 finds a pod carrying many wideband captures.
 - **Pinning.** Bench beside a gate, 480,000 hand-overs: all cores 209 stalls over 1 ms, P cores 119, E cores 83, with
   the load falling across the runs and the gate not kept off those cores. Not proof either way. It says nothing about a
   decoder's DSP.
@@ -89,28 +116,32 @@ Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC p
 rig: lock against ring; ring with reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
 adopted only on a measured gain. The knee in N says how many radios one host carries.
 
-### 3. Decoder budget on a host
+### 3. One decoder as a service: the pilot
 
-Keep one thread per decoder at first: threads parked in a read cost nothing, and moving 24 session classes to a shared
-pool is a large rewrite (6 of them have a push `processChunk` today). So:
+One narrow decoder, from a network radio, as a pod on the cluster, side by side with radar and compared on the same air:
+same bulletins, stamps within a slot, no more losses. It needs plan 106's lease (step 1b onward), so that two owners
+never open one box. Measured: idle JVM size, CPU against step 1, connect-to-first-sample. This sets the template for the
+rest.
 
-- Core groups by decoder class, from step 1: the thread sets its own affinity to a group, never to one core.
-  `sched_setaffinity` through FFM; the JDK has no API for it.
-- Admission: a host knows its decode budget from step 1. A capture past it is refused and visible, rather than slowing
-  every other capture.
-- A worker pool only if step 2 shows threads themselves as the limit.
+Then the others one at a time, heaviest last. The read path (`IqReadAhead`, `AirStamp`, the spill, rsp_tcp's client)
+goes with them. The common library was removed from all services in March, so one repo and one image with a Deployment
+per decoder keeps one copy of it (question 6). Waterfall, audio and IQ recording read a capture in process today, and
+each needs an answer in this step: stay in the pod, or a stream out of it.
 
-### 4. Several hosts
+### 4. Budget, pinning, nodes
 
 No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, some hosts will have a few, some more"):
 
-- A host's load is what it was measured to carry, never one size for all, and 100 is not a limit built into anything.
-- Adding a radio or a host is a row in the directory and the box coming up: no code change, no deploy of the others.
-- Nothing may assume radios are evenly spread: the page, the budgets and the Valkey sizing go per host.
-
-Each host owns its radios, readers, decoders and Valkey, since the sessions stay with the process
-that owns the samples (plan 106). Control over plan 106's MQTT, records to Kafka. A wedged or dead host costs its own
-radios only. Plan 106's open question about one scheduler or one per host is answered here.
+- A pod's CPU and memory requests come from steps 1 and 3: never one size for all, and 100 is not a limit built into
+  anything.
+- A capture past what its pod carries is refused and visible, rather than slowing every other capture.
+- Exclusive cores only if step 2 shows stalls that cost samples: kubelet static CPU manager, Guaranteed pods. A machine
+  that runs subsets by a node label.
+- Adding a radio is a row in the directory; adding a machine is a node joining. No code change, no redeploy of the
+  others.
+- Nothing assumes radios are evenly spread: the page and the budgets go per pod and node. Valkey per node, not one for
+  all.
+- Control over plan 106's MQTT, records to Kafka.
 
 ### 5. Running 100 by hand is not an option
 
@@ -123,10 +154,14 @@ radios only. Plan 106's open question about one scheduler or one per host is ans
 1. **Which radios?** Mostly from the network (operator, 2026-11-07). Still open: which boxes, and the link to each.
 2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or
    they take turns by calendar.
-3. **Where?** Hosts differ and grow: some with a few radios, some with more (operator, 2026-11-07). Still open: is a host
-   a box carrying radios, a machine running decoders, or both? Does aqua stay the only machine decoding?
-4. **Growing how?** No fixed end (operator, 2026-11-07), so stages by need. Still open: roughly how many in the next stage,
-   which sets how early step 4 is needed.
+3. **Which machines?** Hosts differ and grow (operator, 2026-11-07). Does a second node come early, or does `ten` carry
+   the decoders alone at first, reboots included? Does aqua join the cluster, or keep its local radios outside?
+4. **Growing how?** No fixed end, so stages by need (operator, 2026-11-07). Roughly how many in the next stage?
 5. **Should every band still run one radio, one capture, one decoder at 100?** A wideband capture with many decoders in
    it would need far fewer radios, but the operator's rule of 2026-11-06 says no. Recorded here only so that the rule is
    held on purpose.
+6. **One image, or one repo per decoder?** Recommended: one repo and image, a Deployment per decoder. 24 repos would
+   carry 24 copies of the read path, or bring the common library back.
+7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4. 106 keeps radio control independent of
+   `ten`. Decoders on the cluster depend on `ten`, though leases on the pi4 still need not.
+
