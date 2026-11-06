@@ -56,6 +56,8 @@ Also found by reading the code, not measured:
   every radio; writers would contend on one cursor; each consumer would step over every other radio's chunks. Each
   capture keeps its own queue, and a lock or ring on it has two threads however many radios there are.
 
+- **The Disruptor stays (operator, 2026-11-07):** "in any way disruptor will stay". One ring per capture. Measured so far,
+  no gain over the lock at hand-over, so its value here is in what step 2 measures next: reused buffers.
 - **The radio app is built into the cluster (operator, 2026-11-07):** "the idea is to build radio app into the cluster".
   The whole app, not only its decoders.
 - **A decoder is a microservice, on the Kubernetes cluster (operator, 2026-11-07).** "some machines may run subset of
@@ -84,15 +86,10 @@ limit of 110 pods running, fastest interface 10 Gb/s. So:
   more nodes, is the answer. Memory is the other limit: one JVM per pod, its idle size not measured yet.
 - IQ stays out of the mesh's sidecars: a proxy on every chunk costs CPU for nothing. Pods reach the boxes on the LAN
   through an egress NetworkPolicy.
-- Each pod's JVM carries only its own radios, so GC is no longer shared between 100 readers: the case for reused buffers
-  below mostly goes away.
+- Each pod's JVM carries only its own radios, so GC is no longer shared between 100 readers.
 
 ## Not decided
 
-- **Ring or lock inside each capture.** Built on radar `feat/iq-read-ahead-ring`, unmerged. Bench, 240,000 hand-overs a
-  side beside a gate: stalls over 1 ms 95 for the lock, 114 for the ring, 0 dropped. No gain as built, and with a JVM
-  per pod allocation stays near today's per radio. Recommendation: drop it, keep the locked queue and the spill, unless
-  step 2 finds a pod carrying many wideband captures.
 - **Pinning.** Bench beside a gate, 480,000 hand-overs: all cores 209 stalls over 1 ms, P cores 119, E cores 83, with
   the load falling across the runs and the gate not kept off those cores. Not proof either way. It says nothing about a
   decoder's DSP.
@@ -116,8 +113,7 @@ sizes everything after it, and shows which decoders actually need P cores.
 A test harness: N fake radios feeding real recorded IQ at the real rate into one JVM, N = 10, 25, 50, 100, in the mix
 from step 0. No hardware. Runs on a host the operator picks, never beside the live station at full size.
 
-Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC pauses, Valkey latency. Then, on the same
-rig: lock against ring; ring with reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
+Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC pauses, Valkey latency. Then, on the same rig: the ring with and without reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
 adopted only on a measured gain. The knee in N says how many radios one host carries.
 
 ### 3. radar on the cluster, as it is
