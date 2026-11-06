@@ -79,6 +79,12 @@ not the buffer.
      rate ASKED, and rsp_tcp acknowledges nothing - a rate the box ignores, or samples it drops inside, are no loss to
      the read-ahead, so stamps run early until the window floor re-anchors them (up to ~20 s). The delivered-rate
      deficit (`diagnose()` measures it once) should be reported as a loss, so the next chunk re-anchors.
+     - Weighed when FT8 took the air (radar #1183):
+       - A drop inside the box shows as a forward jump at the next window's correction, and FT8 turns it into a hole
+         at most 10 s after it happened.
+       - Arrival dating held a loss under 1 s unseen for up to a minute, so FT8 is better off on the air, even remote.
+       - The deficit report would shorten the 10 s to one chunk. It stays open; only FT8 needs it. WSPR reads only
+         its first sample's air, so a drop mid-capture never moves its slot.
 3. The read-ahead on a Disruptor ring TOGETHER with the Valkey spill, for decoders adopted in step 2 only.
 3. The read-ahead on a Disruptor ring TOGETHER with the Valkey spill, for decoders adopted in step 2 only.
 
@@ -176,6 +182,32 @@ not the buffer.
 4. Every other decoder stamps from the chunk: NAVTEX, RTTY, WFAX, HFDL, FT8/FT4/WSPR (slot alignment from the air's
    time), DCF77/MSF/VLF, VOR, SAT-REC, ADS-B/AIS (with plan 106 step 1b, where they become ordinary bands). After it, no
    decoder reads the wall clock for a record's time.
+   - **NAVTEX (radar #1181), live 2026-11-06:**
+     - the heard time and the slot judgement, the panel's slot, the recording span, and the row (`received_at`,
+       `day`) read the air;
+     - ages and pruning stay on the clock.
+   - **RTTY (radar #1182), live 2026-11-06 11:01:**
+     - the heard time, the timetable product, a fade's slot, the day-time mend, and the row read the air;
+     - the silence that closes a bulletin and the card's freshness stay on the clock.
+     - Recordings are written through the tap and stamped by the clock, so their marks are moved by the decoder's
+       lag. This fixed NAVTEX's marks too.
+   - **FT8/FT4 (radar #1183), live 2026-11-06 15:53:**
+     - Slots are cut on the air's grid. A forward jump of the air over 10 ms is a loss:
+       - inside its slot, the hole is zero-filled;
+       - past the slot's end, the slot is handed off and the stream re-dated.
+     - Decodes are filed at the slot's start, and an older slot's decode never replaces a newer row.
+     - The test-quality audit found a real bug: the row guard dropped an older CQ's grid. Fixed.
+     - Live check, over the last hour of `ft8_contact`:
+       - all 72 rows filed after the deploy have `last_heard` exactly on the 15 s grid;
+       - the 160 rows before it were 2.4-6.4 s into their slot, which is when the decode finished.
+     - pi4-C (rsp_tcp) logged two losses in the first 20 s after start, 15 ms and then 1291 ms, 10 s apart (one
+       `AirStamp` window). Probably the reader stalled during JVM warm-up and the box dropped what overflowed. None
+       since. Watch the hourly count of "ms lost on the air".
+   - **WSPR:** built on `feat/wspr-air-time`, test audit running.
+     - Spots are filed at the even UTC minute the capture's first sample was on the air in.
+     - Revert checks: 10 of 10 caught.
+   - **Next:** DCF77/MSF/VLF, VOR, HFDL, WFAX, DSC, SAT-REC, and ADS-B/AIS with plan 106 step 1b. Then the
+     recordings stamped by the air (`IqRecordings`, `RecordTap`), after which the marks move to the air.
 
 ## Decided (operator 2026-11-05)
 
