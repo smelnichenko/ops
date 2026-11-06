@@ -34,6 +34,16 @@ Estimates, scaled from the table above. Step 2 replaces them with measurements.
 
 The mix decides almost everything, so step 0 comes first.
 
+Radios come mostly from the network (operator, 2026-11-07), so:
+
+- The host's network link is the wideband limit, not USB: at full 16-bit IQ one RS41-type radio is 32 MB/s, so about 3 on
+  1 Gb/s and about 39 on 10 Gb/s. Decimating on the box would cut this, but moves work and failure there.
+- A reader is a blocked socket and stays cheap. Its slack is the TCP buffers on both ends and the box's own, and a late
+  reader shows up as a stalled box, not a driver overflow. What the box drops, the host only sees as missing samples.
+- Today's pi4-C is that class of radio, so its 1.1-1.3 s start deficit is a problem of the main case, not of one box.
+- rsp_tcp's wedging on repeated connects multiplies with the box count, and one-capture-per-slot rows (FT8) connect often.
+  Retuning a running stream, not built today, would cut those connects and the time a switch takes.
+
 Also found by reading the code, not measured:
 - Valkey runs its commands on one thread: many captures spilling at once meet there.
 - The page lists rows one by one, and the calendar and row switches assume someone looks at each.
@@ -104,7 +114,7 @@ radios only. Plan 106's open question about one scheduler or one per host is ans
 
 ## Open questions for the operator
 
-1. **Which radios?** RSP-type, RTL-SDR-type, other; USB on a host, or boxes on the network?
+1. **Which radios?** Mostly from the network (operator, 2026-11-07). Still open: which boxes, and the link to each.
 2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or
    they take turns by calendar.
 3. **Where?** All at one site, how many hosts, and what network between them. Does aqua stay the only radar host?
