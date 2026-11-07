@@ -231,6 +231,25 @@ fresh 14 s capture.
 **Open, design item 1:** `IqReadAhead` is still an `ArrayDeque` under a `ReentrantLock`. Step 3 built the spill around
 it; the LMAX `RingBuffer` for its fast path is next.
 
+## Done 2026-11-07
+
+- **The read-ahead on a Disruptor ring** (radar #1189), one per capture; the operator kept it ("in any way disruptor will
+  stay"). No gain over the lock at hand-over, measured; a concurrency review and a test audit both fixed things in it.
+  Full with no store it drops the newest.
+- **AirStamp says when its anchor moves** (#1188, #1193): added up, at most once a minute, the longest read gap behind it,
+  and what a capture ends with. This found the pi4-C start deficit.
+- **The pi4-C deficit, found and fixed on the box:**
+  - The HDR patch restarted the stream (about 770 ms) even when HDR was already off (#1194).
+  - The box streamed at its defaults before the client's commands landed: seconds of air at the wrong rate and frequency
+    at every open (#1195). It now holds samples until the client's new start command.
+  - HDR left on by NAVTEX is cleared at each client's init (#1195).
+  - Live after it: an open moves 17 ms and then nothing.
+- **Radiofax** (#1191) had read noise 1900 Hz above every signal since it was built. Proved on a chart recorded off DWD.
+- Band map with the station's own channels (#1190), recordings paging (#1192).
+
+Still to do in this plan: FT8 holding one capture across slots, the other decoders' air time, recordings dated by the
+air, RTTY's dropped characters.
+
 ## Decided (operator 2026-11-05)
 
 - No lateness bound; records carry the air's time (design 5).
