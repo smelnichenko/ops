@@ -66,7 +66,7 @@ Also found by reading the code, not measured:
 
 ## The split
 
-radar's backend today, 93,000 lines. A proposal, from what imports what:
+radar's backend today, 93,000 lines, in four parts (agreed by the operator, 2026-11-07), by what imports what:
 
 | Part | Packages | Lines | Where it can live |
 |---|---|---|---|
@@ -158,7 +158,12 @@ No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, som
 
 ## Open questions for the operator
 
-1. **Which radios?** Mostly from the network (operator, 2026-11-07). Still open: which boxes, and the link to each.
+1. **Which radios?** Mostly from the network; SDRplay and RTL-SDR for sure (operator, 2026-11-07). Still open: other
+   kinds,
+   and the link to each. The radio does not set the load: a row's rate does. An SDRplay running RTTY is 96 kS/s, and an
+   RTL-SDR tops out near 2.4 MS/s at 8 bits, 4.8 MB/s. radar's network client speaks rsp_tcp, so RTL-SDR over the
+   network
+   needs checking in step 0.
 2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or
    they take turns by calendar.
 3. **Which machines?** Hosts differ and grow (operator, 2026-11-07). How many in the next stage, and what are they?
@@ -166,7 +171,5 @@ No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, som
 5. **Should every band still run one radio, one capture, one decoder at 100?** A wideband capture with many decoders in
    it would need far fewer radios, but the operator's rule of 2026-11-06 says no. Recorded here only so that the rule is
    held on purpose.
-6. **One repo per part, or one per decoder?** Recommended: one repo and jar for capture and decoders, run per decoder.
-   24
-   repos would carry 24 copies of the read path, or bring the common library back.
+6. **Repos:** a single repo for now (operator, 2026-11-07).
 7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4; 106 runs the scheduler there.
