@@ -107,6 +107,14 @@ in its own process, the side that files a record no longer shares its clock or i
 it was heard. The time signals, VOR, HFDL, ACARS, APRS, FLARM, DMR, DSC (to the call's end), HF DSC, LORAN, VLF,
 WFAX, ADS-B (through the demod's pipe) and AIS now do; a capture with no air falls back to the clock.
 
+**The records seam: done, 2026-11-07 (radar #1203-#1212).** No records class names `source` or `decode`. They read
+through `feed`: plain records and interfaces the capture side implements (NAVTEX bulletins and slots, symbols, time
+signals, charts, sondes, vessels, satellite decoding, sightings, radio opens, spectra, radio probes, notches, gain,
+audio by sample index, the IQ archive). Shared values moved to neutral packages: `model` (row names, the sonde
+serial, the NAVTEX station table), `atmosphere` (ozone, dew point), `sigmf` (the archive format). `RecordsSeamTest`
+now forbids any mention - import, static import, or a qualified name; it found one the import-only check had missed
+(the history controller named `decode.NavtexStations` in full).
+
 ### The radio-control surface: an API, designed (2026-11-07)
 
 Steps 1-4 of the seam (#1203-#1206) left 7 records classes, all the page's control of the radios. Each needs these from
@@ -149,6 +157,12 @@ another part, 86 of those imports from `source`. The direction is already one-wa
 `BandArbiter` has no imports of its own and both parts use it (capture loops, `IqSpawn`, `RadioBuses`; the engine), so it
 is shared contract, not scheduler-only. A ratchet like `RecordsSeamTest` guards `engine` against `source`/`decode`,
 starting from what it imports now.
+
+**Step 1, 2026-11-07 (radar `feat/sched-seam1`):** `SdrSession`, `RadioId`, `BandArbiter`, `SdrDevices` and
+`RspTcpSelector` (a closed group, no station imports) moved to `radio`. `engine` now names `source` in 6 files, not 15:
+`EngineSourceConfig` (the composition root, excused), `Engine` and `AsyncPlaces` (the trackers), `ContinuousSessions`,
+`ReceiverControl`, `SatCaptureScheduler`. `EngineSeamTest`: that list only shrinks, `radio` names no part, and
+`source`/`decode` never name `engine`.
 
 ## The shape
 
