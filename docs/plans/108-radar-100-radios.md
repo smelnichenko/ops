@@ -164,6 +164,23 @@ starting from what it imports now.
 `ReceiverControl`, `SatCaptureScheduler`. `EngineSeamTest`: that list only shrinks, `radio` names no part, and
 `source`/`decode` never name `engine`.
 
+**Steps 2-4, 2026-11-07/08 (radar #1214, #1215, `feat/sched-seam4`): the scheduler seam is done.**
+- Step 2: `ContinuousBands` to `radio` (the AIS channels are the stated fact; the dial and the demod's offsets derive
+  from them); `radio.FileSession` for the pass recorder's file; `Places` to `model`.
+- Step 3: `ReceiverControl` reads the inherited gain and notch through `feed.Gain`/`feed.Notch`
+  (`bandAt`/`ifgrAt`/`rfgrAt`, `rfAt`/`dabAt`).
+- Step 4: the engine's tick stops holding 20 receivers. `TickPublisher.InOrder`, built in `EngineSourceConfig`, copies
+  each receiver's readings into the store in the tick's own order; the sonde the mount follows comes through
+  `feed.SondeTrack`; `AircraftSource`/`VesselSource` moved to `feed`. AIS weather is passed on by the AIS receiver's
+  own publisher: `AisMeteo` belongs to the sealed `decode.AisMessage` and cannot leave `decode`.
+- `EngineSeamTest` is now a rule: only the composition root in `engine` names `source`/`decode`.
+- Four test gaps the reverts found on the way, each closed: the inherited gain and notch on the panel; the AIS
+  weather, ADS-B rate and NAVTEX readings reaching the store.
+
+Next: the module split. Both seams are rules, so the parts' boundaries are the packages: records (`controller`,
+`service`, `history`, ... over `feed`), scheduler (`engine` over `radio`/`feed`), capture (`source`, `decode`), and
+the neutral `radio`/`feed`/`model`/`atmosphere`/`sigmf`. The composition root splits per part with them.
+
 ## The shape
 
 Box (rsp_tcp) -> decoder service (read path, decoder, its captures) -> records. Plan 106's scheduler says
