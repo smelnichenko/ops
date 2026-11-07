@@ -1,4 +1,4 @@
-# Plan 108 — radar on the cluster, at 100 radios
+# Plan 108 — radar at 100 radios
 
 **Status:** draft 2026-11-07, nothing built. Operator, 2026-11-07: "100 radios are real target"; "dropping single ring
 idea". Goes with plan 106 (the scheduler as a service, over MQTT) and plan 107 (a late decoder never drops samples).
@@ -57,37 +57,22 @@ Also found by reading the code, not measured:
   capture keeps its own queue, and a lock or ring on it has two threads however many radios there are.
 
 - **The Disruptor stays (operator, 2026-11-07):** "in any way disruptor will stay". One ring per capture. Measured so
-  far,
-  no gain over the lock at hand-over, so its value here is in what step 2 measures next: reused buffers.
-- **The radio app is built into the cluster (operator, 2026-11-07):** "the idea is to build radio app into the cluster".
-  The whole app, not only its decoders.
-- **A decoder is a microservice, on the Kubernetes cluster (operator, 2026-11-07).** "some machines may run subset of
-  decoders, decoder should be a microservice"; "we have kubernetes cluster". Radios are on the network, so a decoder
-  need not run where its radio is.
+  far, no gain over the lock at hand-over, so its value here is in what step 2 measures next: reused buffers.
+- **radar does not move into the cluster (operator, 2026-11-07):** "we will not move radar into cluster". That idea was
+  in this plan for an hour; nothing was built for it.
+- **A decoder is a microservice (operator, 2026-11-07):** "some machines may run subset of decoders, decoder should be a
+  microservice". Radios are on the network, so a decoder need not run where its radio is. Said while the cluster was the
+  idea: see question 6.
 
 ## The shape
 
-Box (rsp_tcp) -> decoder pod (read path, decoder, its captures) -> records. Plan 106's scheduler says who holds a radio;
-the pod opens the capture directly when it holds the lease. radar's page and history are services on the cluster too:
-built by Woodpecker, deployed by Argo CD from a chart, Postgres on CNPG, Keycloak in front, logs in ClickHouse, like the
-rest of the platform.
+Box (rsp_tcp) -> decoder service on a machine (read path, decoder, its captures) -> records. Plan 106's scheduler says
+who
+holds a radio; the service opens the capture directly when it holds the lease. radar keeps the page and the history.
 
-| Wanted | What the cluster gives | What it does not |
-|---|---|---|
-| A machine runs a subset | a Deployment per decoder, node labels | |
-| Consumers on need | replicas and rollouts; later, scaling on demand | a JVM starts in seconds: too slow to start per FT8 slot, so a pod stays up and opens captures |
-| Pinned consumers | kubelet static CPU manager: a Guaranteed pod with whole CPUs gets exclusive cores | it does not know P cores from E cores; `ten` runs policy `none` today, and changing it is a write on ten |
-| A slow or crashed decoder stays its own | a process per pod: its own heap, GC and crash | |
-| Adding a host | a node joins | |
-
-The cluster today, read 2026-11-07: one node, `ten`, 20 CPUs, 64 GB with 34 GB in use, 5% CPU at that moment, 92 of a
-limit of 110 pods running, fastest interface 10 Gb/s. So:
-- `ten` reboots take every decoder with them. Today's radar on aqua does not depend on it.
-- 100 pods do not fit beside what runs there under that pod limit; a pod carrying several captures of one decoder, or
-  more nodes, is the answer. Memory is the other limit: one JVM per pod, its idle size not measured yet.
-- IQ stays out of the mesh's sidecars: a proxy on every chunk costs CPU for nothing. Pods reach the boxes on the LAN
-  through an egress NetworkPolicy.
-- Each pod's JVM carries only its own radios, so GC is no longer shared between 100 readers.
+- A process per decoder service has its own heap, GC and crash, so GC is no longer shared between 100 readers.
+- A JVM starts in seconds, too slow to start per FT8 slot: a service stays up and opens captures on need.
+- A machine runs the subset it is configured for.
 
 ## Not decided
 
@@ -118,46 +103,33 @@ Measured at each N: reader stalls, chunks spilled and dropped, decoder lag, GC p
 rig: the ring with and without reused buffers; G1 against generational ZGC; core groups on and off. Each of these is
 adopted only on a measured gain. The knee in N says how many radios one host carries.
 
-### 3. radar on the cluster, as it is
+### 3. One decoder as a service: the pilot
 
-The one JVM as one pod, network radios only, the aqua instance still running and its row for that radio off. No decoder
-split and no scheduler service are needed. It proves what every later step needs: IQ from a pod to a box outside the
-mesh, the chart, the images, storage, the budget on `ten`.
-
-What ties radar to aqua today, each needing an answer here:
-- The local sdrplay: `rsp_tcp` on aqua makes it a network radio like the others. aqua's link is 1 Gb/s: RS41 at 32 MB/s
-  fits.
-- `mount`, `servo`, `HardwareSwitch`: hardware at the station. Not surveyed yet.
-- Files: IQ recordings, satellite captures, map tiles, photos, the state directory, all on aqua's disk today.
-- The database: 602 MB, moved to CNPG. A stateful move on production: commands shown, explicit OK.
-- A production change like any other: a full run and full review first. `ten` writes need approval.
-
-### 3b. One decoder as a service: the pilot
-
-One narrow decoder, from a network radio, as a pod on the cluster, side by side with radar and compared on the same air:
+One narrow decoder, from a network radio, as a service on a machine, side by side with radar and compared on the same
+air:
 same bulletins, stamps within a slot, no more losses. It needs plan 106's lease (step 1b onward), so that two owners
 never open one box. Measured: idle JVM size, CPU against step 1, connect-to-first-sample. This sets the template for the
 rest.
 
 Then the others one at a time, heaviest last. The read path (`IqReadAhead`, `AirStamp`, the spill, rsp_tcp's client)
-goes with them. The common library was removed from all services in March, so one repo and one image with a Deployment
-per decoder keeps one copy of it (question 6). Waterfall, audio and IQ recording read a capture in process today, and
-each needs an answer in this step: stay in the pod, or a stream out of it.
+goes with them. The common library was removed from all services in March, so one repo and one jar, run per decoder,
+keeps one copy of it (question 6). Waterfall, audio and IQ recording read a capture in process today, and
+each needs an answer in this step: stay in the service, or a stream out of it.
 
-### 4. Budget, pinning, nodes
+### 4. Budget, pinning, machines
 
 No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, some hosts will have a few, some more"):
 
-- A pod's CPU and memory requests come from steps 1 and 3b: never one size for all, and 100 is not a limit built into
-  anything.
-- A capture past what its pod carries is refused and visible, rather than slowing every other capture.
-- Exclusive cores only if step 2 shows stalls that cost samples: kubelet static CPU manager, Guaranteed pods. A machine
-  that runs subsets by a node label.
-- Adding a radio is a row in the directory; adding a machine is a node joining. No code change, no redeploy of the
-  others.
-- Nothing assumes radios are evenly spread: the page and the budgets go per pod and node. Valkey per node, not one for
+- What a service may use comes from steps 1 and 3: never one size for all, and 100 is not a limit built into anything.
+- A capture past what its machine carries is refused and visible, rather than slowing every other capture.
+- Core groups only if step 2 shows stalls that cost samples: the thread sets its own affinity to a group, never to one
+  core, `sched_setaffinity` through FFM.
+- Adding a radio is a row in the directory; adding a machine is a service coming up on it. No code change, no redeploy
+  of
+  the others.
+- Nothing assumes radios are evenly spread: the page and the budgets go per machine. Valkey per machine, not one for
   all.
-- Control over plan 106's MQTT, records to Kafka.
+- Control over plan 106's MQTT. Records: plan 106 sends them to the cluster's Kafka, which radar on aqua can still do.
 
 ### 5. Running 100 by hand is not an option
 
@@ -170,14 +142,13 @@ No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, som
 1. **Which radios?** Mostly from the network (operator, 2026-11-07). Still open: which boxes, and the link to each.
 2. **What mix?** How many wideband (8 MS/s) and how many narrow (under 250 kS/s). Whether every radio runs at once, or
    they take turns by calendar.
-3. **Which machines?** Hosts differ and grow (operator, 2026-11-07). Does a second node come early, or does `ten` carry
-   the decoders alone at first, reboots included? Does aqua join the cluster, or keep its local radios outside?
+3. **Which machines?** Hosts differ and grow (operator, 2026-11-07). How many in the next stage, and what are they?
 4. **Growing how?** No fixed end, so stages by need (operator, 2026-11-07). Roughly how many in the next stage?
 5. **Should every band still run one radio, one capture, one decoder at 100?** A wideband capture with many decoders in
    it would need far fewer radios, but the operator's rule of 2026-11-06 says no. Recorded here only so that the rule is
    held on purpose.
-6. **One image, or one repo per decoder?** Recommended: one repo and image, a Deployment per decoder. 24 repos would
-   carry 24 copies of the read path, or bring the common library back.
-7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4. 106 keeps radio control independent of
-   `ten`. Decoders on the cluster depend on `ten`, though leases on the pi4 still need not.
-8. **Mount, servos and the switch:** do they move to the cluster with a small agent at the hardware, or stay on aqua?
+6. **Does "a decoder is a microservice" stand without the cluster?** It was said with the cluster in mind. If yes: one
+   repo
+   and jar, run per decoder (recommended; 24 repos would carry 24 copies of the read path, or bring the common library
+   back). If not, one radar JVM per machine with its subset of rows switched on gives the same split with far less work.
+7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4; 106 runs the scheduler there.
