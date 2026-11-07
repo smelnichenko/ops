@@ -132,6 +132,24 @@ Rules for the API, so it can later cross a process boundary without a redesign:
 Order: the read-only four first (`Opens`, `Spectrum`, `Radios`, `Recordings` listing), then the ones that change state
 (`Gain`, `Notch`, `Audio` arming, `Recordings` export), each with tests that the page's requests still do the same.
 
+### The scheduler's seam, mapped (2026-11-07)
+
+Operator, 2026-11-07: the scheduler part's seam comes before the module split. Measured: 18 of `engine`'s 31 files import
+another part, 86 of those imports from `source`. The direction is already one-way: `source` imports nothing from
+`engine`.
+
+| Group | Files | What they use | Becomes |
+|---|---|---|---|
+| The composition root | `EngineSourceConfig` | every receiver and capture loop, to build them | stays the wiring; split per part with the modules |
+| The session contract | the 7 schedulers, `ContinuousSessions`, `ContinuousStallWatchdog`, `RadioSources`, `EngineProperties`, `SdrAutoDetect`, `ReceiverControl` | `SdrSession` (24 implementers in `source`), `RadioId`, `SdrDevices`, `BandArbiter` and its overlay port | a neutral `radio` package both parts import: a session, a radio's identity, radio time |
+| The trackers the tick reads | `Engine`, `AsyncPlaces` | ADS-B, AIS, RS41, UVB-76, FT8 receivers; aircraft and vessel sources | `feed` read interfaces (vessels already exist) |
+| Policies | `ReceiverControl` | `SdrGainPolicy`, `SdrNotchPolicy` | `feed.Gain`, `feed.Notch` (records seam steps 7-8) |
+| Other parts | `Engine`, `NavtexScheduler`, `SatCaptureScheduler`, `VlfScheduler`, `StoreConfig`, `ScheduleStore`, `ReceiverControl`, `EngineController` | `tracking.StateStore` (station hardware), `settings.BookingStore`, `bandmap`, `service`, `orbit`, `map` | each its own seam, after `source` |
+
+`BandArbiter` has no imports of its own and both parts use it (capture loops, `IqSpawn`, `RadioBuses`; the engine), so it
+is shared contract, not scheduler-only. A ratchet like `RecordsSeamTest` guards `engine` against `source`/`decode`,
+starting from what it imports now.
+
 ## The shape
 
 Box (rsp_tcp) -> decoder service (read path, decoder, its captures) -> records. Plan 106's scheduler says
