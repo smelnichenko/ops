@@ -107,6 +107,31 @@ in its own process, the side that files a record no longer shares its clock or i
 it was heard. The time signals, VOR, HFDL, ACARS, APRS, FLARM, DMR, DSC (to the call's end), HF DSC, LORAN, VLF,
 WFAX, ADS-B (through the demod's pipe) and AIS now do; a capture with no air falls back to the clock.
 
+### The radio-control surface: an API, designed (2026-11-07)
+
+Steps 1-4 of the seam (#1203-#1206) left 7 records classes, all the page's control of the radios. Each needs these from
+the capture code today, mostly static policy classes and record types:
+
+| Controller | Uses | As an API |
+|---|---|---|
+| `GainController` | `SdrGainPolicy`: the bands, IFGR limits, per-band overrides and effective values, set IFGR/RFGR | `Gain`: bands with limits, overrides, effective values; set |
+| `NotchController` | `SdrNotchPolicy`: RF and DAB notch modes, set | `Notch`: modes per band; set |
+| `RadioSourceController` | `RspTcpIq.probe`, `SoapySdr.probe`, `RspTcpSelector.matches`, `RspCapabilities` | `Radios`: probe a source, its capabilities |
+| `SdrController` | `SdrOpens`: recent opens, their ends, read lag | `Opens`: recent opens with ends and lag |
+| `SpectrumController` | `Spectrum.snapshot` | `Spectrum`: a snapshot |
+| `AudioController` | `AudioMonitor`: arm, armed, rows, rings, a row's radio | `Audio`: arm, what is armed, its audio |
+| `IqController` | `IqRecordings` (policy, usage, recordings, found/gone), `SigmfArchive` (write, sizes), `IqRecordingSpectrum`, `SdrOpens.recentWithEnds` | `Recordings`: list, usage, policy, export, a recording's spectrum |
+
+Rules for the API, so it can later cross a process boundary without a redesign:
+- **Plain values only:** records of strings, numbers and lists, in `feed`. No stream, file handle or capture object
+  crosses; a recording's export is named by id, and the capture side writes it.
+- **One interface per row of the table**, implemented on the capture side by the classes that hold the state now. The
+  static policies (`SdrGainPolicy`, `SdrNotchPolicy`) stay where they are, behind an instance the controller is given.
+- **Each controller keeps its HTTP shape.** The page does not change; only where the controller gets its answers.
+
+Order: the read-only four first (`Opens`, `Spectrum`, `Radios`, `Recordings` listing), then the ones that change state
+(`Gain`, `Notch`, `Audio` arming, `Recordings` export), each with tests that the page's requests still do the same.
+
 ## The shape
 
 Box (rsp_tcp) -> decoder service (read path, decoder, its captures) -> records. Plan 106's scheduler says
