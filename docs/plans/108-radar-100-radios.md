@@ -186,12 +186,12 @@ cannot form a cycle, so the split needs every edge that runs against the module 
 
 | Module | Packages | May depend on |
 |---|---|---|
-| core | `model`, `geo`, `feed`, `radio`, `atmosphere`, `sigmf`, `select` | - |
+| core | `model`, `geo`, `feed`, `radio`, `atmosphere`, `sigmf`, `select`, `orbit`, `identity` | - |
 | capture | `source`, `decode` | core |
 | settings | the stores in `settings` (bookings, radio directory, receiver/station settings) | core |
 | state | `tracking`, `mount`, `servo` | core, settings |
 | scheduler | `engine` without its composition root | core, settings, state |
-| records | `controller`, `service`, `history`, `repository`, `track`, `entity`, `dto`, `alerts`, `bandmap`, `photo`, `identity`, `client`, `orbit`, `map` | everything except capture |
+| records | `controller`, `service`, `history`, `repository`, `track`, `entity`, `dto`, `alerts`, `bandmap`, `photo`, `client`, `map` | everything except capture |
 | app | `Application`, the composition roots (`EngineSourceConfig`, `StoreConfig`, `HistoryConfig`, `TrackConfig`), the `*Wiring` classes | all |
 
 The cycles inside one module (`geo`/`model`, `dto`/`entity`, `decode`/`source`, `repository`/`history`/`track`) need
@@ -211,6 +211,10 @@ nothing. The edges that run against the order, and the cut for each:
 
 Each cut is its own PR with a ratchet like the seams' (a package-order test from the same mention scan), then one
 PR moves the packages into Gradle modules and lets the compiler hold the order.
+
+**Step 1 (radar `feat/split-1`):** `ModuleOrderTest` holds the order above; 20 file-level edges listed against it, the
+list only shrinks. `orbit` and `identity` turned out to import nothing but core while the scheduler and the capture
+both use them, so they are core. `PositionVelocityFilter` moved to `geo` and `SnapshotListener` to `feed`.
 
 ## The shape
 
