@@ -177,9 +177,40 @@ starting from what it imports now.
 - Four test gaps the reverts found on the way, each closed: the inherited gain and notch on the panel; the AIS
   weather, ADS-B rate and NAVTEX readings reaching the store.
 
-Next: the module split. Both seams are rules, so the parts' boundaries are the packages: records (`controller`,
-`service`, `history`, ... over `feed`), scheduler (`engine` over `radio`/`feed`), capture (`source`, `decode`), and
-the neutral `radio`/`feed`/`model`/`atmosphere`/`sigmf`. The composition root splits per part with them.
+### The module split, mapped (2026-11-08)
+
+Both seams are rules now, but the package graph still has three cycles. Measured from every mention, imports and
+qualified names alike: `geo` <-> `model`, `dto` <-> `entity`, and one of 12 packages (`source`, `decode`, `engine`,
+`settings`, `tracking`, `mount`, `servo`, `history`, `repository`, `track`, `service`, `bandmap`). Gradle modules
+cannot form a cycle, so the split needs every edge that runs against the module order cut first.
+
+| Module | Packages | May depend on |
+|---|---|---|
+| core | `model`, `geo`, `feed`, `radio`, `atmosphere`, `sigmf`, `select` | - |
+| capture | `source`, `decode` | core |
+| settings | the stores in `settings` (bookings, radio directory, receiver/station settings) | core |
+| state | `tracking`, `mount`, `servo` | core, settings |
+| scheduler | `engine` without its composition root | core, settings, state |
+| records | `controller`, `service`, `history`, `repository`, `track`, `entity`, `dto`, `alerts`, `bandmap`, `photo`, `identity`, `client`, `orbit`, `map` | everything except capture |
+| app | `Application`, the composition roots (`EngineSourceConfig`, `StoreConfig`, `HistoryConfig`, `TrackConfig`), the `*Wiring` classes | all |
+
+The cycles inside one module (`geo`/`model`, `dto`/`entity`, `decode`/`source`, `repository`/`history`/`track`) need
+nothing. The edges that run against the order, and the cut for each:
+
+| Edge | What it uses | Cut |
+|---|---|---|
+| `tracking` -> `source`, `decode` | `StateStore.updateMeteo(AisReceiver.MeteoReading)`, `AisMeteo` | a plain meteo record in core; the AIS publisher converts |
+| `source` -> `tracking` | `PositionVelocityFilter` (pure maths) | to `geo` |
+| `history`, `track` -> `engine` | `SnapshotListener` | to `feed` |
+| `engine` -> `service` | `SatellitePassService` (pass table, resolve), `GeocodeService` | `feed` interfaces, the services implement them |
+| `engine` -> `bandmap` | `Entry`, `OwnChannels` (the band-map row types) | to core |
+| `mount` -> `engine`, `engine` -> `mount` | `SdrAutoDetect`; `MountProperties` (in `StoreConfig`, the root) | `SdrAutoDetect` to core; the root moves to app |
+| `tracking` -> `engine`, `settings` | `StatePersistence`, `ReceiverStatePersistence` use `EngineProperties`, `ReceiverControl`, stores | persistence is wiring: to app |
+| `settings` -> `source`, `decode`, `engine`, `repository` | the `*Wiring` classes, `Rs41FixStore`, `Uvb76*`, `RfSettingsReady` | wiring to app; capture-owned stores to capture |
+| `source` -> `settings` | `SdrGainPolicy` uses `BandSettingWiring` | invert: the wiring sets a policy writer |
+
+Each cut is its own PR with a ratchet like the seams' (a package-order test from the same mention scan), then one
+PR moves the packages into Gradle modules and lets the compiler hold the order.
 
 ## The shape
 
