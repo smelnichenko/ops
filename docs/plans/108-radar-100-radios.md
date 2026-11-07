@@ -83,6 +83,30 @@ one JVM, with nothing moved: that is the split's first step, it needs no new dep
 of
 the rest. `engine` also imports `source` in 15 files, which plan 106's step 1b already separates.
 
+### The seam, mapped (2026-11-07)
+
+Counted again after the air-time work: 18 files in the records packages touch `source` or `decode`, plus 12 in
+`settings` (left to settle, above). What each one actually uses decides what it becomes:
+
+| Group | Files | What they use | Becomes |
+|---|---|---|---|
+| Row names | `AlertBands`, `Uvb76AlertService`, part of `NavtexAlertService`, `Rs41Controller` (the serial key) | `NAME`/`SERIAL` constants | constants in a neutral class |
+| Current state of a receiver | `NavtexSymbolController`, `Dcf77HistoryController`, `WfaxController`, `ReceptionHistoryController`, `Rs41Controller`, `ControlController` | snapshots, history | read interfaces the receivers implement |
+| Decoded messages | `NavtexAlertService` | NAVTEX bulletins via a listener | an event type outside `source`/`decode` |
+| The radio-control surface | `GainController`, `NotchController`, `RadioSourceController`, `SdrController`, `SpectrumController`, `AudioController`, `IqController` | gain/notch stores and policy, probes, opens, spectrum, audio, recordings | the capture part's control interface |
+| Pure science | `Rs41Controller` | ozone and dew-point maths | moved out of `decode` |
+| A decoder on the wrong side | `SatDecodeService` | offline LRPT decode | moved to the decoder part |
+| An inverted dependency | `SeenRegistry` | implements `SightingRecorder` | the interface moves to the records side |
+
+The first three are the events step proper: no behaviour changes, the records side stops importing decoder classes.
+The radio-control surface is the one that becomes an API between parts later, so it gets its interface designed rather
+than extracted.
+
+**Done first, 2026-11-07: every record carries the time it was on the air** (#1196, #1198-#1202). Once a decoder runs
+in its own process, the side that files a record no longer shares its clock or its lag, so the record has to say when
+it was heard. The time signals, VOR, HFDL, ACARS, APRS, FLARM, DMR, DSC (to the call's end), HF DSC, LORAN, VLF,
+WFAX, ADS-B (through the demod's pipe) and AIS now do; a capture with no air falls back to the clock.
+
 ## The shape
 
 Box (rsp_tcp) -> decoder service (read path, decoder, its captures) -> records. Plan 106's scheduler says
