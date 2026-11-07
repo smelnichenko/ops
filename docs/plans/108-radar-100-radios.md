@@ -58,15 +58,34 @@ Also found by reading the code, not measured:
 
 - **The Disruptor stays (operator, 2026-11-07):** "in any way disruptor will stay". One ring per capture. Measured so
   far, no gain over the lock at hand-over, so its value here is in what step 2 measures next: reused buffers.
-- **radar does not move into the cluster (operator, 2026-11-07):** "we will not move radar into cluster". That idea was
-  in this plan for an hour; nothing was built for it.
+- **radar is split into parts first; then some of them go into the cluster (operator, 2026-11-07):** "we will split
+  radar
+  into parts first, then some of them will go into cluster". Not the whole app as it is.
 - **A decoder is a microservice (operator, 2026-11-07):** "some machines may run subset of decoders, decoder should be a
-  microservice". Radios are on the network, so a decoder need not run where its radio is. Said while the cluster was the
-  idea: see question 6.
+  microservice". Radios are on the network, so a decoder need not run where its radio is.
+
+## The split
+
+radar's backend today, 93,000 lines. A proposal, from what imports what:
+
+| Part | Packages | Lines | Where it can live |
+|---|---|---|---|
+| Capture and decoders | `source`, `decode` | 56,500 | on machines, per decoder; the cluster only if measured to carry IQ |
+| Scheduler | `engine` | 8,800 | plan 106's service |
+| Station hardware | `mount`, `servo`, `tracking`, `select` | 7,400 | at the hardware |
+| Records and page | `controller`, `service`, `history`, `repository`, `entity`, `dto`, `alerts`, `bandmap`, `identity`, `photo`, `track`, `map`, `client`, `orbit`, the frontend | 14,200, plus the frontend | the cluster's first candidates: no samples, no hardware |
+
+Left to settle: `settings` (2,900) reaches into both sides, and `model` and `geo` (700) are used everywhere; the common
+library was removed in March, so they are copied or kept minimal.
+
+The hard seam: 28 files on the records side import `source` or `decode` directly. Those become events first, inside the
+one JVM, with nothing moved: that is the split's first step, it needs no new deployment, and it shows up the real size
+of
+the rest. `engine` also imports `source` in 15 files, which plan 106's step 1b already separates.
 
 ## The shape
 
-Box (rsp_tcp) -> decoder service on a machine (read path, decoder, its captures) -> records. Plan 106's scheduler says
+Box (rsp_tcp) -> decoder service (read path, decoder, its captures) -> records. Plan 106's scheduler says
 who
 holds a radio; the service opens the capture directly when it holds the lease. radar keeps the page and the history.
 
@@ -147,8 +166,7 @@ No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, som
 5. **Should every band still run one radio, one capture, one decoder at 100?** A wideband capture with many decoders in
    it would need far fewer radios, but the operator's rule of 2026-11-06 says no. Recorded here only so that the rule is
    held on purpose.
-6. **Does "a decoder is a microservice" stand without the cluster?** It was said with the cluster in mind. If yes: one
-   repo
-   and jar, run per decoder (recommended; 24 repos would carry 24 copies of the read path, or bring the common library
-   back). If not, one radar JVM per machine with its subset of rows switched on gives the same split with far less work.
+6. **One repo per part, or one per decoder?** Recommended: one repo and jar for capture and decoders, run per decoder.
+   24
+   repos would carry 24 copies of the read path, or bring the common library back.
 7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4; 106 runs the scheduler there.
