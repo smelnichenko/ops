@@ -307,8 +307,9 @@ preamble search at 6 MS/s is the cost, not the frames. It is the one band with l
 SARSAT has no capture of its own: its row is the front end alone.
 
 What it says: no demod here needs a P core - each keeps up on an E core at 15x real time or better, and all sixteen
-together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the spectrum tap is
-not in it (the read path, the read-ahead and recording are, in the session rows below); WSPR's (and FT8's) slot decode runs at the slot's end, not in
+together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the band rows are the
+demod alone - the session rows below carry the rest: the read path, the read-ahead, the spectrum and audio taps
+(every capture `IqStreams.open` returns is wrapped in them) and recording; WSPR's (and FT8's) slot decode runs at the slot's end, not in
 the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
 are the front end alone. RS41's row is the demod a hunt hands the carrier to (119 frames decoded; the hunt's FFT blocks are not in it); FT8's
 decode runs once a slot on its own thread, measured as one slot decoded repeatedly - this cut decodes nothing (a fixed
