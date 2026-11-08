@@ -322,6 +322,7 @@ and the receiver. CPU of every thread but the box's, per second of air delivered
 |---|---|---|---|---|---|
 | ADS-B, readsb sample | 6M | 118% | 137% | receiver 79%, demod 38%, read 1.1% | ~228,000 candidates/s, no aircraft |
 | ADS-B quiet | 6M | 27% | 42% | demod 25%, read 1.1% | 40 candidates in 75 s |
+| **ADS-B, real 1090 air** (station, 10-04) | 6M | **32%** | **50%** | demod 30%, receiver 0.9%, read 1.1% | ~910 candidates/s, 4 aircraft, 1416 frames/min |
 | AIS | 250k | 18% | 25% | session 17.6%, read 0.4% | 41 sentences |
 | NAVTEX | 250k | 4.8% | 5.7% | session 4.2%, read 0.35% | symbols; no whole bulletin in the loop |
 | RTTY | 96k | 3.6% | 4.7% | session 3.0%, read 0.33% | 102 characters |
@@ -334,8 +335,10 @@ What it shows:
   thread ran at 90% and 18% fewer candidates came through from the same delivered air: the session fell behind (a
   blocking pipe joins the demod to the receiver, so a slow receiver holds the demod back). On air with no candidates
   the session is its demod alone.
-  Live cost therefore depends on how many candidates real 1090 air offers a second - that number is the next thing to
-  measure on the station, with ADS-B listening.
+- Real 1090 air (the station's own recording, `DECODER_COST_ADSB_AIR`) offers about 910 candidates a second, 250 times
+  fewer than the readsb sample: the receiver takes under 1% of a core and the session is its demod, 32% of a P core and
+  50% of an E core, near the quiet bound. The candidate-dense row is a synthetic worst case, not the sky; ADS-B is
+  still the one heavy session, and still fits an E core at twice real time.
 - Check against the station: the live RTTY session (96k) takes about 6.6% of a core in `top -H`; the bench says 3.8%
   (process) on a P core. The live JVM runs unpinned, beside the recording, the spectrum tap and the API.
 
