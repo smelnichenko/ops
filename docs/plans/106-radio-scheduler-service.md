@@ -86,7 +86,12 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
   over the row's capture: it fired 123 times on 10-02..05 with samples flowing.
 - Found on the way, #1235 LIVE 16:44: a booking's outlet is set before the booking is announced. RTTY's capture was
   re-tuned 1 ms after opening, at every booking edge.
-- PR 3 (in review): the arbiter's continuous slot and the registry's continuous bases are deleted.
+- PR 3 #1239 LIVE 19:52: the arbiter's continuous slot and the registry's continuous bases are deleted; one
+  arbiter per radio, every band claims it the same way. (#1236 held the pre-rebase commits; the force-push was
+  blocked, so the rebase went up as #1239.) Its review found a shutdown order bug (a destroyed registry threw in a
+  scheduler's stop), fixed in the PR.
+- Found in PR 3's review, #1240 LIVE 20:36: a band's claim and its session each looked up the row's radio, so a row
+  moved between the two claimed one radio while its session opened another. The radio is now read once per capture.
 - PR 4 next: the observation slot, `CONTINUOUS_ROWS`, `overlay-device`, and the store's `sdrParked`/`sdrHeldBy`.
 
 ## Step 2 — MQTT on the pi4
