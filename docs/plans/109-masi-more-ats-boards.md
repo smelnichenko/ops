@@ -131,8 +131,45 @@ It is kept as a last resort, at a capped rate:
 
 **Listing every board instead.** Common Crawl's index lists the boards a vendor hosts, with no name to guess: 1,005
 Teamtailor, 286 Lever, 89 Lever EU, 5,256 Greenhouse and 543 Greenhouse EU boards. Each list is asked once for postings
-located in Estonia; a board with some is matched to a company by its name, and the match is shown for the operator.
-The counts are below once the run finishes.
+located in Estonia. A board with some is matched to a company by its name, and the match is shown for the operator.
+
+**The census, measured.** 19 vendors, about 37,000 boards listed across three crawls; 25,571 boards on 13 vendors asked
+once each:
+
+| Vendor | Boards asked | With Estonian postings | Estonian postings |
+|---|---|---|---|
+| Ashby | 3,872 | 32 | 146 |
+| SmartRecruiters | 1,100 | 11 | 115 |
+| Greenhouse (all hosts) | 6,028 | 26 | 69 |
+| Teamtailor | 1,005 | 8 | 40 |
+| BambooHR | 5,856 | 11 | 36 |
+| Lever and Lever EU | 375 | 9 | 29 |
+| Recruitee, Breezy | 2,970 | 4 | 10 |
+| Personio | 1,785 | 0 | 0 (the reader works: Salv's board, not in the lists, shows 3) |
+| Workable | 2,580 | not measured | |
+
+About 85 of these boards are not read by masi, holding roughly 340 Estonian postings. Examples: Cast AI (10), SEB
+(10), IKEA Eesti (8), H&M Group (14), JYSK Baltics (11), n8n (14), Wallester (7), Stargate Hydrogen (6), Kraken (5),
+Wolt, Wrike, Boku, Nebius, Optimove, Checkout.com, DuckDuckGo and Estateguru. Most of these companies are not
+Estonian-registered IT firms: neither visits nor guessing reaches them.
+
+Some Ashby hits may be remote-friendly boards whose locations name Estonia. masi's own `locationRegex` decides on
+ingest.
+
+**Caveats.**
+- **Workable.** Cloudflare banned the census's address (error 1015) after about 2,580 calls at 6 processes. Every
+  answer after that was the ban, and the "0" counts nothing. The address is production's too, so `ats:skeleton`'s
+  next run is checked.
+- **Other vendors.** They may have thrown away a few answers the same way, so the counts are a floor.
+
+**TeamDash and Recrur.** The lists name 97 TeamDash customers, among them RIK, Elering, Guardtime, CR14, Omniva, Tele2,
+Tervisekassa, Töötukassa, Utilitas, Elko, KPMG, Tallink Silja and the City of Tallinn. They also name 9 Recrur
+customers: Tartu Ülikool, TalTech, Tartu Linnavalitsus, Citadele, HANZA, Manpower and others. TeamDash has no public
+list of a customer's jobs (every path asked answers 404), so its boards are read from each employer's careers page
+(PR 1c).
+
+**Verdict.** The census beats guessing by an order of magnitude: about 85 boards for about 25,000 requests, against 1
+for 16,000. It becomes PR 2b.
 
 ## PRs, in order
 
@@ -153,6 +190,14 @@ The counts are below once the run finishes.
 2. **Detection over the links already held.** A one-off, re-runnable pass over every listing's apply link and every
    company's careers link, through `attachAts`. It only creates rows that are missing, and asks each board once. This
    is what turns section 1's 18 Teamtailor boards, SEB and Enefit into rows. **Check:** their rows exist in production.
+2b. **The board census.** Monthly, from the newest Common Crawl index: every board each vendor hosts is listed, asked
+   once for postings located in Estonia, and a board with some gets a row through the same path a link takes. That path
+   brings the duplicate guard, the location filter and enabled-on-public-feed.
+   - Each vendor is asked by one worker at its own pace (Workable's Cloudflare bans at the census's first rate).
+   - An answer that is a ban (403, 429, 1015) counts as "not asked", never as "no Estonian posting".
+   - The index's flaky answers (502/504) are retried; a crawl the index cannot answer is skipped and the next month
+     tries again.
+   - **Check:** the census's rows and their first runs in production.
 3. **Visits to companies with no job.** A second queue for the visit lane: active, not blacklisted companies with 10 or
    more staff and no open job. It is ordered by size, revisited every 30 days, and runs after the hiring companies at
    the same per-tick rate.
