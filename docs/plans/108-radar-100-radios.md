@@ -216,6 +216,26 @@ PR moves the packages into Gradle modules and lets the compiler hold the order.
 list only shrinks. `orbit` and `identity` turned out to import nothing but core while the scheduler and the capture
 both use them, so they are core. `PositionVelocityFilter` moved to `geo` and `SnapshotListener` to `feed`.
 
+**Steps 2-7, 2026-11-08 (radar #1218-#1222, `feat/split-7`): the module order holds, and the compiler holds it.**
+- Step 2: the scheduler names no records package (`Entry`/`OwnChannels` to `model`, `AsyncPlaces` to `service`,
+  `EngineController` to `controller`, `feed.Satellites` for the pass table).
+- Step 3: the AIS weather the store shows is `model.MeteoReading`.
+- Step 4: two javadoc links, `LiveSettings` to `radio`, `UvbRecordings` to `feed`, three wiring classes counted as the
+  app's.
+- Step 5: the RS41 fix contract (`feed.Rs41Fixes`) speaks core records; `Rs41FixWiring` hooks the store up; the launch
+  height helper is `Geodesic`'s.
+- Step 6: the UVB-76 transcripts reach the recognizer through `feed.SpeechToText`; `ModuleOrderTest` became a rule.
+- Step 7: one Gradle source set per module over the same `src/main/java`, each seeing only the modules before it;
+  `compileModules` runs in `check`, so the gate fails a class that names a later module. The jar is unchanged. The
+  compiler found three edges the mention scan could not see (a same-package simple name into a wiring class; the root
+  package's `HardwareSwitch`, now `radio`'s; `IqController` taking `IqRecordingWiring`, now `feed.IqRecordingControl`).
+- Two flaky tests the gates found, each reproduced and fixed: a gain seed leaking between test classes
+  (`ReceiverDefaultsTest` cleaned up with a `parse("")` that does nothing), and a race between a receiver change and
+  its announcement (`ScheduleRunnerWiringTest`).
+
+Next: separate Gradle subprojects (and their own jars) when the first part runs as its own process; the source sets
+already hold the boundaries those subprojects will have.
+
 ## The shape
 
 Box (rsp_tcp) -> decoder service (read path, decoder, its captures) -> records. Plan 106's scheduler says
