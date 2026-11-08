@@ -15,6 +15,11 @@ first, to deeper investigation".
   Estonia. That means remote for the EU, EEA, Europe or EMEA, or anywhere, worldwide or global. Until now every row's
   `locationRegex` kept only postings naming Estonia, Tallinn or Tartu. PR 1d widens it, and the census judges boards by
   the same rule.
+- **Any form and any workplace** (the operator, 2026-11-08): "B2B is also ok, hybrid or remote or onsite - does not
+  matter". Contract, B2B and freelance postings count as employment does; on-site, hybrid and remote all count. The
+  only test is the connection to Estonia. Checked 2026-11-08: no reader drops a posting by its form or workplace;
+  MeetFrank's remote type only labels a remote role's allowed places. PR 1d keeps it that way and adds a test that says
+  so.
 
 The operator first asked whether masi can widen its sources by finding each company's ATS, then whether more kinds of
 ATS are worth reading ("maybe more flavours of ATS?").
