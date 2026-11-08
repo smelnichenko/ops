@@ -1,7 +1,14 @@
 # Plan 109 — masi: more companies' own job boards
 
-**Status:** proposed 2026-11-08, waiting for the operator's OK. The operator asked whether masi can widen its sources by
-finding each company's ATS, then whether more kinds of ATS are worth reading ("maybe more flavours of ATS?").
+**Status:** approved 2026-11-08: "ok to all, more readers/aggregators/etc. - go. please reconsider guessing slugs
+first, to deeper investigation".
+
+- Auto-detected rows on the public-feed vendors are created **enabled** (the decision below: yes).
+- More readers and aggregators are wanted beyond PRs 5 and 6.
+- Slug guessing is investigated more deeply before PR 1 starts; see "Slug guessing, the deeper look".
+
+The operator first asked whether masi can widen its sources by finding each company's ATS, then whether more kinds of
+ATS are worth reading ("maybe more flavours of ATS?").
 
 Masi gets one PR at a time. Each PR follows the usual routine: a failing test first, revert checks, the clean check, a
 PR, CI, merge, a smoke test on test, a promote, and a check in production.
@@ -74,7 +81,7 @@ The two false matches were Tieto's `my-applications` and Tilde's `oneclick-ui`. 
 the company's own site with no ATS link, or name a vendor only through the page itself, as the custom-domain Teamtailor
 boards above do.
 
-### 3. Guessing the slug, rejected
+### 3. Guessing the slug: the first look
 
 Slugs were made from each company's name and domain and asked at nine vendor APIs. Only about 5 of the 13 hits with
 jobs were the company (D&B, Konecranes, Powerfleet, Twilio, SocialLab), and those boards are mostly abroad. The false
@@ -84,7 +91,48 @@ hits were:
 - `aka`, `build` and `mobi` on Ashby;
 - `spin`, `alpha` and `opus` on Greenhouse and Recruitee.
 
-Workable answers 200 for any name at all. Guessing makes rows that point at the wrong company, and is not built.
+Workable answers 200 for any name at all. The operator asked for a deeper look before deciding; it is the next section.
+
+### 4. Slug guessing, the deeper look (2026-11-08)
+
+The scripts are `109-data/guess.py`, `cc.py` and `eefilter.py`; the results are beside them.
+
+**Recall.** Against the 51 boards masi already knows, the derived slugs (domain label, the name's words joined,
+hyphenated, the first word, the first two) contain the true slug for 42. The misses are suffixes (`luminorbank`,
+`sisugroup`, `breakwatertech`), a prefix (`eegrafton`), an acronym (TEHIK) and slugs no rule gives (`ibkr`,
+`cybers`). With the suffixes `bank`, `group`, `tech` and `development` and the prefix `ee`, the guess finds 37 of the
+44 asked.
+
+**Evidence per board.** Each answering board was judged on:
+
+- the postings located in Estonia (the structured location fields);
+- the company's name tokens in the board's own name;
+- the company's domain appearing on the board.
+
+**Precision.** Over the 146 companies with no job: 1,017 slugs, about 16,000 requests, 53 boards answered.
+
+- **Accepted** (an Estonian posting, and the name or the domain): 4 boards, all correct. Rush Street Interactive,
+  Trinidad Wiseman (`twn`, which fingerprinting missed), Twilio and Fractory. The last two are sources already.
+- **Real but abroad** (domain or name, no Estonian posting): D&B, CoinsPaid, Evolution, HANZA, Powerfleet,
+  Konecranes. Their rows would read nothing now: the location filter keeps Estonian postings only.
+- **Wrong company:** Uptime Development A/S (Danish), Spin, Alpha, Opus, Iglu.com, Velvet, Hugo. All have no
+  Estonian posting, so the rule rejects every one.
+- **TeamDash:** any subdomain that exists answers with its login page and no board, so a guess there proves only the
+  vendor.
+
+**Verdict.** Guessing with that rule is precise: 4 of 4 accepted were right. It is also expensive (about 110 requests a
+company) and finds little: 1 new board in 146 companies, where reading the careers page found 10.
+
+It is kept as a last resort, at a capped rate:
+- for a company whose visit found no board;
+- on the vendors that gave real hits (Greenhouse, Lever and Lever EU, Teamtailor, SmartRecruiters, BambooHR);
+- with the four base slugs;
+- accepted only on the rule above.
+
+**Listing every board instead.** Common Crawl's index lists the boards a vendor hosts, with no name to guess: 1,005
+Teamtailor, 286 Lever, 89 Lever EU, 5,256 Greenhouse and 543 Greenhouse EU boards. Each list is asked once for postings
+located in Estonia; a board with some is matched to a company by its name, and the match is shown for the operator.
+The counts are below once the run finishes.
 
 ## PRs, in order
 
@@ -143,5 +191,5 @@ about 20 rows, and PR 3 keeps making them.
 
 ## Not doing
 
-- Guessing slugs (section 3 above).
+- Guessing slugs as a first step: it is a capped last resort (section 4).
 - Reading boards abroad: the `locationRegex` filter (Estonia, Tallinn, Tartu) stays on every row.
