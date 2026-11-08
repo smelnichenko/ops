@@ -54,6 +54,29 @@ stay with the process that owns the samples. So, first, inside radar:
   session slot in `BandArbiter`; they ask for the radio, are switched and booked like every other band, and lose it
   to a hand switch on the same tuner like every other band. The book above is written without `holdContinuous`.
 
+### Step 1b, mapped (2026-11-08)
+
+What still runs on the continuous model, measured: `BandArbiter`'s continuous slot (two factories, the band, park,
+hold, rebind, running, starts, `captureOnContinuousRadio`, `dedicatedOverlayRadio`), `ContinuousSessions` (projects the
+ADS-B/AIS switches onto each radio), two `ContinuousStallWatchdog`s, `RadioBuses`' continuous bases (`Lease.onContinuous`,
+`moveObservation`, quarantine), `RadioSources`' observation slot (`CONTINUOUS_ROWS`, `deviceFor(row, continuous)`,
+`continuousDevices`), the store's `sdrParked`/`sdrHeldBy`/`activeBand`, and the page's `sdr_status`/`sea_status`. About
+7,300 lines of main code and 19 test classes touch it.
+
+A live symptom of the coupling (2026-11-08 14:25): RTTY taking pi4-C - AIS's radio - stamped "paused - RTTY has the
+radio" on the air status while ADS-B received ten aircraft on the sdrplay. The overlay port marks the air radio held
+whenever a capture lands on any radio a continuous row is assigned to.
+
+The cuts, each its own PR, each behaviour-checked by the existing tests plus its own:
+
+| PR | What | Why first / what it frees |
+|---|---|---|
+| 1 | A local radio that goes silent ends its stream: SoapySDR read timeouts for 10 s are an end, as rsp_tcp's `SO_TIMEOUT` already is | The watchdog exists for the 2026-08-22 stall (a local read delivering nothing for 105 min). `DemodProcess` and `AisRxProcess` already reopen on a stream end, and a staying window row reopens on a reader that gave up - so the fix belongs in the read path, for every row, and the watchdog has nothing left to do |
+| 2 | ADS-B and AIS become `PeriodicWindowScheduler` rows on `overlayPort(row)`, their sessions the same `DemodProcess`/`AisRxProcess`; `ContinuousSessions` and both watchdogs go; the mount's domain is derived from which row listens (ADS-B first); the port stops setting `sdrHeldBy` | The behaviour change the operator decided (2026-11-05): switched, booked and preempted like every band. The continuous slot is then never started (radios are built parked) |
+| 3 | `BandArbiter` loses its continuous slot; `RadioBuses` loses bases, `Lease.onContinuous`, `moveObservation` | Dead after 2 |
+| 4 | `RadioSources`' observation slot, `CONTINUOUS_ROWS`, the `continuous` flag, `overlay-device` go (ADS-B/AIS assignments migrated to explicit first); the store's `sdrParked`/`sdrHeldBy`, `sdr_status`/`sea_status` and `Engine.radioStatus` go, the page reading the rows' own status | Dead after 2-3 |
+| 5 | `RadioLeaseBook` out of the then-plain `BandArbiter` (the pure refactor above) | Written once, without the continuous hold |
+
 ## Step 2 — MQTT on the pi4
 
 - Mosquitto on the pi4, next to the tuner; LAN only; a login per service and an ACL per topic.
