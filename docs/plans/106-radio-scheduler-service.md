@@ -77,6 +77,18 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
 | 4 | `RadioSources`' observation slot, `CONTINUOUS_ROWS`, the `continuous` flag, `overlay-device` go (ADS-B/AIS assignments migrated to explicit first); the store's `sdrParked`/`sdrHeldBy`, `sdr_status`/`sea_status` and `Engine.radioStatus` go, the page reading the rows' own status | Dead after 2-3 |
 | 5 | `RadioLeaseBook` out of the then-plain `BandArbiter` (the pure refactor above) | Written once, without the continuous hold |
 
+**Progress (2026-11-08):**
+- PR 1 #1233 LIVE 14:57: a silent local radio ends its stream (`SoapySdr.Silence`, rsp_tcp's 10 s).
+- PR 2 #1234 LIVE 16:09: ADS-B and AIS are ordinary window rows. An independent review found two critical problems
+  before it shipped, both fixed: a row's claim and its session could resolve different radios, and a radio could get
+  a second arbiter. It found three warnings too, also fixed: a staying capture never yielded, a directory edit never
+  re-tuned a staying row, and the status read a bare "stopped". The decode-stall watch is kept as `DecodeStallWatchdog`
+  over the row's capture: it fired 123 times on 10-02..05 with samples flowing.
+- Found on the way, #1235 LIVE 16:44: a booking's outlet is set before the booking is announced. RTTY's capture was
+  re-tuned 1 ms after opening, at every booking edge.
+- PR 3 (in review): the arbiter's continuous slot and the registry's continuous bases are deleted.
+- PR 4 next: the observation slot, `CONTINUOUS_ROWS`, `overlay-device`, and the store's `sdrParked`/`sdrHeldBy`.
+
 ## Step 2 — MQTT on the pi4
 
 - Mosquitto on the pi4, next to the tuner; LAN only; a login per service and an ACL per topic.
