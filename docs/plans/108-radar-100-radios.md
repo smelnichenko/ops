@@ -290,6 +290,7 @@ to the P cores (0-7, 4.5 GHz), one to the E cores (8-15, 3.6 GHz), on the workst
 | LORAN | 96k | 0.05% | 0.10% | 2.00 | 959x |
 | **16 bands** | | **19% of a core** | **31% of a core** | **1.59** | |
 | ADS-B | 6M | 34.18% | 52.08% | 1.52 | 1.9x |
+| ADS-B quiet (no frames) | 6M | 25.29% | 40.95% | 1.62 | 2.4x |
 | AIS | 250k | 10.17% | 15.75% | 1.55 | 6.3x |
 | SARSAT | 2M | 3.12% | 4.75% | 1.52 | 21x |
 | RS41 | 8M | 7.82% | 11.25% | 1.44 | 8.9x |
@@ -299,8 +300,9 @@ to the P cores (0-7, 4.5 GHz), one to the E cores (8-15, 3.6 GHz), on the workst
 | **all 22 at once** | | **~83% of a core** | **~130% of a core** | | |
 
 ADS-B, AIS and SARSAT are driven as their sessions call them (a chunk at a time, a block at a time, into the burst
-collector). ADS-B's row is an upper bound: its only fixture is a short readsb sample, looped, so its input is nearly all
-frames where real air is mostly noise - and still it is the one band near the edge, 1.9x real time on an E core.
+collector). ADS-B is bracketed: on its only fixture, a short readsb sample looped (nearly all frames), and on air with no frames in
+it ("quiet"). Real air at 1090 sits between 25% and 34% of a P core, 41-52% of an E core - the per-sample magnitude and
+preamble search at 6 MS/s is the cost, not the frames. It is the one band with little headroom on an E core.
 SARSAT has no capture of its own: its row is the front end alone.
 
 What it says: no demod here needs a P core - each keeps up on an E core at 15x real time or better, and all sixteen
@@ -309,7 +311,7 @@ read-ahead, recording and the spectrum tap are not in it; WSPR's (and FT8's) slo
 the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
 are the front end alone. RS41's row is the demod a hunt hands the carrier to (119 frames decoded; the hunt's FFT blocks are not in it); FT8's
 decode runs once a slot on its own thread, measured as one slot decoded repeatedly - this cut decodes nothing (a fixed
-slot misses the capture's frame boundaries), so it is the search without decoded frames. Left: an ADS-B input of real air, and one row per band through its whole session (read path included).
+slot misses the capture's frame boundaries), so it is the search without decoded frames. Left: one row per band through its whole session (read path included).
 
 ### 2. A rig with simulated radios
 
