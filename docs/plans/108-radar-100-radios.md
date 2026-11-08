@@ -292,6 +292,11 @@ to the P cores (0-7, 4.5 GHz), one to the E cores (8-15, 3.6 GHz), on the workst
 | ADS-B | 6M | 34.18% | 52.08% | 1.52 | 1.9x |
 | AIS | 250k | 10.17% | 15.75% | 1.55 | 6.3x |
 | SARSAT | 2M | 3.12% | 4.75% | 1.52 | 21x |
+| RS41 | 8M | 7.82% | 11.25% | 1.44 | 8.9x |
+| FT8 decode (per s of slot) | 12k audio | 7.68% | 12.05% | 1.57 | 8.3x |
+| UVB-76 (USB demod) | 96k | 0.46% | 0.68% | 1.47 | 148x |
+| FT8 feed (USB demod) | 96k | 0.46% | 0.68% | 1.47 | 147x |
+| **all 22 at once** | | **~83% of a core** | **~130% of a core** | | |
 
 ADS-B, AIS and SARSAT are driven as their sessions call them (a chunk at a time, a block at a time, into the burst
 collector). ADS-B's row is an upper bound: its only fixture is a short readsb sample, looped, so its input is nearly all
@@ -302,7 +307,9 @@ What it says: no demod here needs a P core - each keeps up on an E core at 15x r
 together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the IQ read path,
 read-ahead, recording and the spectrum tap are not in it; WSPR's (and FT8's) slot decode runs at the slot's end, not in
 the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
-are the front end alone. Left: RS41 (8 MS/s, channelised), FT8 and UVB-76, each with its own driver, an ADS-B input of real air, and one row per band through its whole session (read path included).
+are the front end alone. RS41's row is the demod a hunt hands the carrier to (119 frames decoded; the hunt's FFT blocks are not in it); FT8's
+decode runs once a slot on its own thread, measured as one slot decoded repeatedly - this cut decodes nothing (a fixed
+slot misses the capture's frame boundaries), so it is the search without decoded frames. Left: an ADS-B input of real air, and one row per band through its whole session (read path included).
 
 ### 2. A rig with simulated radios
 
