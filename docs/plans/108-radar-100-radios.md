@@ -289,13 +289,20 @@ to the P cores (0-7, 4.5 GHz), one to the E cores (8-15, 3.6 GHz), on the workst
 | WSPR | 96k | 0.08% | 0.14% | 1.75 | 740x |
 | LORAN | 96k | 0.05% | 0.10% | 2.00 | 959x |
 | **16 bands** | | **19% of a core** | **31% of a core** | **1.59** | |
+| ADS-B | 6M | 34.18% | 52.08% | 1.52 | 1.9x |
+| AIS | 250k | 10.17% | 15.75% | 1.55 | 6.3x |
+| SARSAT | 2M | 3.12% | 4.75% | 1.52 | 21x |
+
+ADS-B, AIS and SARSAT are driven as their sessions call them (a chunk at a time, a block at a time, into the burst
+collector). ADS-B's row is an upper bound: its only fixture is a short readsb sample, looped, so its input is nearly all
+frames where real air is mostly noise - and still it is the one band near the edge, 1.9x real time on an E core.
+SARSAT has no capture of its own: its row is the front end alone.
 
 What it says: no demod here needs a P core - each keeps up on an E core at 15x real time or better, and all sixteen
 together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the IQ read path,
 read-ahead, recording and the spectrum tap are not in it; WSPR's (and FT8's) slot decode runs at the slot's end, not in
 the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
-are the front end alone. Second cut: RS41 (8 MS/s, channelised), ADS-B (2 MS/s), AIS, SARSAT, FT8, UVB-76, each with
-its own driver, and one row per band through its whole session (read path included).
+are the front end alone. Left: RS41 (8 MS/s, channelised), FT8 and UVB-76, each with its own driver, an ADS-B input of real air, and one row per band through its whole session (read path included).
 
 ### 2. A rig with simulated radios
 
