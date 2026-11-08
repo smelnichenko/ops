@@ -1,0 +1,81 @@
+{
+ "checks": {
+  "pairs": 6000,
+  "same_pairs": 3000,
+  "folds_balanced": true,
+  "images_needed": 7701,
+  "images_exist": 7701,
+  "ref_covers": 7701,
+  "masi_covers": 7701,
+  "same_pair_names_match": true,
+  "diff_pair_names_differ": true,
+  "ref_no_face": 11,
+  "masi_zero_vectors_counted_as_no_face": 0,
+  "masi_no_face": 11,
+  "masi_norm_min_max": [
+   1.0,
+   1.0
+  ],
+  "ref_norm_min_max": [
+   1.0,
+   1.0
+  ],
+  "dims": [
+   512
+  ]
+ },
+ "per_image_agreement_cosine": {
+  "p1": 1.0,
+  "p5": 1.0,
+  "p50": 1.0,
+  "p95": 1.0,
+  "p99": 1.0,
+  "n": 7690,
+  "below_0.9": 3,
+  "below_0.5": 3
+ },
+ "reference": {
+  "accuracy_10fold": 0.9697,
+  "accuracy_std": 0.0067,
+  "threshold_median": 0.747,
+  "same_distance": {
+   "p1": 0.122,
+   "p5": 0.178,
+   "p50": 0.327,
+   "p95": 0.892,
+   "p99": 1.026
+  },
+  "different_distance": {
+   "p1": 0.858,
+   "p5": 0.902,
+   "p50": 0.996,
+   "p95": 1.087,
+   "p99": 1.127
+  },
+  "pairs_missing_a_face": 17,
+  "threshold_at_far_0.1%": 0.771,
+  "true_match_rate_at_far_0.1%": 0.9451
+ },
+ "masi": {
+  "accuracy_10fold": 0.9697,
+  "accuracy_std": 0.0067,
+  "threshold_median": 0.748,
+  "same_distance": {
+   "p1": 0.121,
+   "p5": 0.178,
+   "p50": 0.327,
+   "p95": 0.89,
+   "p99": 1.025
+  },
+  "different_distance": {
+   "p1": 0.858,
+   "p5": 0.903,
+   "p50": 0.996,
+   "p95": 1.087,
+   "p99": 1.127
+  },
+  "pairs_missing_a_face": 17,
+  "threshold_at_far_0.1%": 0.774,
+  "true_match_rate_at_far_0.1%": 0.9451
+ }
+}

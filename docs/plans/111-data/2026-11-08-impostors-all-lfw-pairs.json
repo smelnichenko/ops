@@ -1,0 +1,77 @@
+{
+ "pictures": 7690,
+ "identities": 4279,
+ "impostor_pairs": 29556129,
+ "genuine_pairs": 8076,
+ "closest_impostor": 0.0403,
+ "rates": [
+  {
+   "false_match_rate": 0.001,
+   "threshold": 0.7972,
+   "impostors_below": 29556,
+   "genuine_kept": 0.9986
+  },
+  {
+   "false_match_rate": 0.0001,
+   "threshold": 0.7425,
+   "impostors_below": 2955,
+   "genuine_kept": 0.9975
+  },
+  {
+   "false_match_rate": 1e-05,
+   "threshold": 0.6861,
+   "impostors_below": 295,
+   "genuine_kept": 0.9955
+  },
+  {
+   "false_match_rate": 1e-06,
+   "threshold": 0.4265,
+   "impostors_below": 29,
+   "genuine_kept": 0.8564
+  }
+ ],
+ "at": [
+  {
+   "threshold": 0.4,
+   "impostor_rate": 7.443464602553332e-07,
+   "impostors_below": 22,
+   "genuine_kept": 0.7873
+  },
+  {
+   "threshold": 0.5,
+   "impostor_rate": 1.1503536203946059e-06,
+   "impostors_below": 34,
+   "genuine_kept": 0.9547
+  },
+  {
+   "threshold": 0.55,
+   "impostor_rate": 1.2180214804178179e-06,
+   "impostors_below": 36,
+   "genuine_kept": 0.9773
+  },
+  {
+   "threshold": 0.6,
+   "impostor_rate": 1.353357200464242e-06,
+   "impostors_below": 40,
+   "genuine_kept": 0.99
+  },
+  {
+   "threshold": 0.65,
+   "impostor_rate": 2.706714400928484e-06,
+   "impostors_below": 80,
+   "genuine_kept": 0.9944
+  },
+  {
+   "threshold": 0.7,
+   "impostor_rate": 1.7356806095953904e-05,
+   "impostors_below": 513,
+   "genuine_kept": 0.9959
+  },
+  {
+   "threshold": 0.774,
+   "impostor_rate": 0.0003763009695890825,
+   "impostors_below": 11122,
+   "genuine_kept": 0.9984
+  }
+ ]
+}
