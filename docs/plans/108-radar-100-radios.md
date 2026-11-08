@@ -266,6 +266,37 @@ Replay the committed captures through each of the 24 session classes, one at a t
 group (`taskset`, offline). The result is a table: CPU per decoder per core class, and whether it keeps up on each. This
 sizes everything after it, and shows which decoders actually need P cores.
 
+**First cut, 2026-11-08 (radar `DecoderCostBench`, `feat/decoder-cost`).** Each band's committed capture, resampled
+to its live rate and looped to 120 s of air, through its demod at its live offset after a 10 s warm-up; one run pinned
+to the P cores (0-7, 4.5 GHz), one to the E cores (8-15, 3.6 GHz), on the workstation beside the live station.
+
+| Band | Rate | P core | E core | E/P | Real time on E |
+|---|---|---|---|---|---|
+| DMR | 768k | 4.65% | 6.52% | 1.40 | 15x |
+| FLARM | 500k | 3.79% | 6.11% | 1.61 | 16x |
+| VOR | 192k | 2.73% | 4.90% | 1.79 | 20x |
+| RTTY | 96k | 2.56% | 3.59% | 1.40 | 26x |
+| NAVTEX | 250k | 1.32% | 2.15% | 1.63 | 47x |
+| ACARS | 768k | 1.09% | 1.98% | 1.82 | 51x |
+| VLF | 96k | 0.98% | 1.59% | 1.62 | 63x |
+| APRS | 192k | 0.56% | 1.00% | 1.79 | 100x |
+| HF DSC | 96k | 0.42% | 0.83% | 1.98 | 120x |
+| DSC | 192k | 0.40% | 0.65% | 1.62 | 154x |
+| RBU | 96k | 0.27% | 0.41% | 1.52 | 242x |
+| WFAX | 96k | 0.22% | 0.38% | 1.73 | 265x |
+| MSF | 96k | 0.16% | 0.23% | 1.44 | 435x |
+| DCF77 | 96k | 0.15% | 0.22% | 1.47 | 447x |
+| WSPR | 96k | 0.08% | 0.14% | 1.75 | 740x |
+| LORAN | 96k | 0.05% | 0.10% | 2.00 | 959x |
+| **16 bands** | | **19% of a core** | **31% of a core** | **1.59** | |
+
+What it says: no demod here needs a P core - each keeps up on an E core at 15x real time or better, and all sixteen
+together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the IQ read path,
+read-ahead, recording and the spectrum tap are not in it; WSPR's (and FT8's) slot decode runs at the slot's end, not in
+the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
+are the front end alone. Second cut: RS41 (8 MS/s, channelised), ADS-B (2 MS/s), AIS, SARSAT, FT8, UVB-76, each with
+its own driver, and one row per band through its whole session (read path included).
+
 ### 2. A rig with simulated radios
 
 A test harness: N fake radios feeding real recorded IQ at the real rate into one JVM, N = 10, 25, 50, 100, in the mix
