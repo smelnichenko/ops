@@ -300,8 +300,9 @@ to the P cores (0-7, 4.5 GHz), one to the E cores (8-15, 3.6 GHz), on the workst
 | **all 22 at once** | | **~83% of a core** | **~130% of a core** | | |
 
 ADS-B, AIS and SARSAT are driven as their sessions call them (a chunk at a time, a block at a time, into the burst
-collector). ADS-B is bracketed: on its only fixture, a short readsb sample looped (nearly all frames), and on air with no frames in
-it ("quiet"). Real air at 1090 sits between 25% and 34% of a P core, 41-52% of an E core - the per-sample magnitude and
+collector). ADS-B is bracketed: on its only fixture, a short readsb sample looped, and on air with no frames in it ("quiet").
+The readsb sample holds one frame readsb reads, but fires a preamble candidate almost everywhere: about 225,000 a
+second, which is what its "decoded" counted. Real air at 1090 sits between 25% and 34% of a P core, 41-52% of an E core - the per-sample magnitude and
 preamble search at 6 MS/s is the cost, not the frames. It is the one band with little headroom on an E core.
 SARSAT has no capture of its own: its row is the front end alone.
 
@@ -311,7 +312,32 @@ read-ahead, recording and the spectrum tap are not in it; WSPR's (and FT8's) slo
 the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
 are the front end alone. RS41's row is the demod a hunt hands the carrier to (119 frames decoded; the hunt's FFT blocks are not in it); FT8's
 decode runs once a slot on its own thread, measured as one slot decoded repeatedly - this cut decodes nothing (a fixed
-slot misses the capture's frame boundaries), so it is the search without decoded frames. Left: one row per band through its whole session (read path included).
+slot misses the capture's frame boundaries), so it is the search without decoded frames. Whole sessions are measured next.
+
+Whole sessions (`wholeSessionCost`). Each session is built by the station's own factory and reads a stand-in rsp_tcp
+box that streams the band's capture in a loop at the live rate: the open, the socket read, the read-ahead, the demod
+and the receiver. CPU of every thread but the box's, per second of air delivered, 60 s after a 15 s warm-up:
+
+| Session | Rate | P core | E core | Busiest threads (P) | Heard |
+|---|---|---|---|---|---|
+| ADS-B, readsb sample | 6M | 118% | 137% | receiver 79%, demod 38%, read 1.1% | ~228,000 candidates/s, no aircraft |
+| ADS-B quiet | 6M | 27% | 42% | demod 25%, read 1.1% | 40 candidates in 75 s |
+| AIS | 250k | 18% | 25% | session 17.6%, read 0.4% | 41 sentences |
+| NAVTEX | 250k | 4.8% | 5.7% | session 4.2%, read 0.35% | symbols; no whole bulletin in the loop |
+| RTTY | 96k | 3.6% | 4.7% | session 3.0%, read 0.33% | 102 characters |
+
+What it shows:
+- The read path is cheap: the socket read and the read-ahead's spill writer take 0.3-1.1% of a core per session.
+- A session costs its demod plus its receiver. For the narrow bands that is within a percent or two of the band row.
+- ADS-B's receiver checks every preamble candidate the demod offers: CRC with a one-bit correction, about 3.5 us each
+  on a P core. On candidate-dense air that is twice the demod: 118% of a P core in all. On an E core the receiver
+  thread ran at 90% and 18% fewer candidates came through from the same delivered air: the session fell behind (a
+  blocking pipe joins the demod to the receiver, so a slow receiver holds the demod back). On air with no candidates
+  the session is its demod alone.
+  Live cost therefore depends on how many candidates real 1090 air offers a second - that number is the next thing to
+  measure on the station, with ADS-B listening.
+- Check against the station: the live RTTY session (96k) takes about 6.6% of a core in `top -H`; the bench says 3.8%
+  (process) on a P core. The live JVM runs unpinned, beside the recording, the spectrum tap and the API.
 
 ### 2. A rig with simulated radios
 
