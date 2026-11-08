@@ -7,6 +7,10 @@ first, to deeper investigation".
 - More readers and aggregators are wanted beyond PRs 5 and 6.
 - Slug guessing is investigated more deeply before PR 1 starts; see "Slug guessing, the deeper look".
 
+- **What counts** (the operator, 2026-11-08): "the company may not be a registered EE firm, it only matters if they
+  have job posts that are connected to estonia". A board is wanted for its postings connected to Estonia, whoever owns
+  it. No company match is needed to make its row, and the row's location filter keeps the Estonian postings only.
+
 The operator first asked whether masi can widen its sources by finding each company's ATS, then whether more kinds of
 ATS are worth reading ("maybe more flavours of ATS?").
 
@@ -131,7 +135,8 @@ It is kept as a last resort, at a capped rate:
 
 **Listing every board instead.** Common Crawl's index lists the boards a vendor hosts, with no name to guess: 1,005
 Teamtailor, 286 Lever, 89 Lever EU, 5,256 Greenhouse and 543 Greenhouse EU boards. Each list is asked once for postings
-located in Estonia. A board with some is matched to a company by its name, and the match is shown for the operator.
+located in Estonia. A board with some gets its row; no company match is needed (the operator: only the postings'
+connection to Estonia matters).
 
 **The census, measured.** 19 vendors, about 37,000 boards listed across three crawls; 25,571 boards on 13 vendors asked
 once each:
@@ -169,7 +174,8 @@ list of a customer's jobs (every path asked answers 404), so its boards are read
 (PR 1c).
 
 **Verdict.** The census beats guessing by an order of magnitude: about 85 boards for about 25,000 requests, against 1
-for 16,000. It becomes PR 2b.
+for 16,000. It reaches boards whatever the company's registration, which is the operator's measure. It becomes PR 2b,
+and goes before PR 3: visits only ever reach companies masi already knows.
 
 ## PRs, in order
 
@@ -198,7 +204,7 @@ for 16,000. It becomes PR 2b.
    - The index's flaky answers (502/504) are retried; a crawl the index cannot answer is skipped and the next month
      tries again.
    - **Check:** the census's rows and their first runs in production.
-3. **Visits to companies with no job.** A second queue for the visit lane: active, not blacklisted companies with 10 or
+3. **Visits to companies with no job** (after 2b: the census reaches more of what matters). A second queue for the visit lane: active, not blacklisted companies with 10 or
    more staff and no open job. It is ordered by size, revisited every 30 days, and runs after the hiring companies at
    the same per-tick rate.
    - It covers companies with no website, through the visit's existing website guesses.
