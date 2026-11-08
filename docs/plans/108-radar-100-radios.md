@@ -307,8 +307,8 @@ preamble search at 6 MS/s is the cost, not the frames. It is the one band with l
 SARSAT has no capture of its own: its row is the front end alone.
 
 What it says: no demod here needs a P core - each keeps up on an E core at 15x real time or better, and all sixteen
-together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the IQ read path,
-read-ahead, recording and the spectrum tap are not in it; WSPR's (and FT8's) slot decode runs at the slot's end, not in
+together take a third of one E core; an E core costs 1.4-2x a P core. What it does not say yet: the spectrum tap is
+not in it (the read path, the read-ahead and recording are, in the session rows below); WSPR's (and FT8's) slot decode runs at the slot's end, not in
 the chunks, so their rows understate them; several captures sit off the live offset and decode nothing, so their rows
 are the front end alone. RS41's row is the demod a hunt hands the carrier to (119 frames decoded; the hunt's FFT blocks are not in it); FT8's
 decode runs once a slot on its own thread, measured as one slot decoded repeatedly - this cut decodes nothing (a fixed
@@ -326,6 +326,7 @@ and the receiver. CPU of every thread but the box's, per second of air delivered
 | AIS | 250k | 18% | 25% | session 17.6%, read 0.4% | 41 sentences |
 | NAVTEX | 250k | 4.8% | 5.7% | session 4.2%, read 0.35% | symbols; no whole bulletin in the loop |
 | RTTY | 96k | 3.6% | 4.7% | session 3.0%, read 0.33% | 102 characters |
+| RTTY, recorded (live policy, 120 s segments) | 96k | 3.4% | 4.6% | session 2.5%, spill 0.46%, read 0.42% | 102 characters, 28.8 MB recorded |
 
 What it shows:
 - The read path is cheap: the socket read and the read-ahead's spill writer take 0.3-1.1% of a core per session.
@@ -339,8 +340,12 @@ What it shows:
   fewer than the readsb sample: the receiver takes under 1% of a core and the session is its demod, 32% of a P core and
   50% of an E core, near the quiet bound. The candidate-dense row is a synthetic worst case, not the sky; ADS-B is
   still the one heavy session, and still fits an E core at twice real time.
-- Check against the station: the live RTTY session (96k) takes about 6.6% of a core in `top -H`; the bench says 3.8%
-  (process) on a P core. The live JVM runs unpinned, beside the recording, the spectrum tap and the API.
+- Recording costs nothing measurable: RTTY recorded at the live policy took 3.4% of a P core against 3.3% plain (the
+  same run), and on E cores the recorded row came out below the plain one - within the run's noise either way.
+- Check against the station: the live RTTY session (96k) takes about 6.6% of a core in `top -H` (`rtty-rx` 4.8%,
+  `iq-read` 1.2%, spill 0.6%); the bench says 3.8% on a P core, 5.8% on an E core. The live JVM runs unpinned, reads
+  pi4-C over the network rather than loopback, and decodes real traffic rather than a looped capture: the bench is a
+  floor for a session, close to it on an E core, not a match.
 
 ### 2. A rig with simulated radios
 
