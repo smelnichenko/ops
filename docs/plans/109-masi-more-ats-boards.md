@@ -9,7 +9,12 @@ first, to deeper investigation".
 
 - **What counts** (the operator, 2026-11-08): "the company may not be a registered EE firm, it only matters if they
   have job posts that are connected to estonia". A board is wanted for its postings connected to Estonia, whoever owns
-  it. No company match is needed to make its row, and the row's location filter keeps the Estonian postings only.
+  it. No company match is needed to make its row, and the row's location filter keeps the postings connected to
+  Estonia only.
+- **Connected to Estonia** (the operator, 2026-11-08, "widen it"): a posting located in Estonia, or a remote one open to
+  Estonia. That means remote for the EU, EEA, Europe or EMEA, or anywhere, worldwide or global. Until now every row's
+  `locationRegex` kept only postings naming Estonia, Tallinn or Tartu. PR 1d widens it, and the census judges boards by
+  the same rule.
 
 The operator first asked whether masi can widen its sources by finding each company's ATS, then whether more kinds of
 ATS are worth reading ("maybe more flavours of ATS?").
@@ -193,6 +198,18 @@ and goes before PR 3: visits only ever reach companies masi already knows.
      - Workable gets `accountId`, read once from its widget API (`/api/v1/widget/accounts/<slug>`).
      - Workday and Eightfold stay vendor-only: a Workday row needs a country facet no link carries.
    - **Tests.** The real links measured above, each with its expected row, plus the two false matches staying out.
+1d. **Remote roles open to Estonia.** One rule for every ATS reader, in place of each row's Estonia-only
+   `locationRegex`: a posting is kept when its place is in Estonia, or when it is remote and its region admits Estonia.
+   - The region admits Estonia when it names the EU, EEA, Europe, EMEA, Baltics, Nordics and Baltics, anywhere,
+     worldwide or global, or a country list with Estonia in it.
+   - Remote is read from what each vendor states: Lever `workplaceType`, Ashby `isRemote`, Teamtailor and JobPosting
+     `TELECOMMUTE` with `applicantLocationRequirements`, SmartRecruiters `location.remote`, BambooHR `isRemote`, Workday
+     and Greenhouse location text ("Remote - Europe").
+   - Such a posting is stored with its remote scope (plan 104's fields), so the jobs page can tell "in Tallinn" from
+     "remote, EU".
+   - **Tests:** each vendor's real shapes (a Tallinn office, "Remote - EU", "Remote (US only)", "EMEA", "Anywhere", a
+     country list with and without Estonia).
+   - **Check:** the jobs a week later, by place and scope.
 2. **Detection over the links already held.** A one-off, re-runnable pass over every listing's apply link and every
    company's careers link, through `attachAts`. It only creates rows that are missing, and asks each board once. This
    is what turns section 1's 18 Teamtailor boards, SEB and Enefit into rows. **Check:** their rows exist in production.
