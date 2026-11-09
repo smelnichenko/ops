@@ -171,5 +171,5 @@ Decided (operator, 2026-11-09):
 
 ## Open questions for the operator
 
-- Calendar UI: stays in radar's web UI (talking to the calendar service), or moves with the service?
-- Where the calendar service runs.
+None left for step 3. Decided 2026-11-09: the calendar UI stays in radar's web UI, talking to the calendar service; the
+calendar service runs on the pi4 for now, and parts are relocated after the decomposition.
