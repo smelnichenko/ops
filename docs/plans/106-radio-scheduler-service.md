@@ -187,8 +187,8 @@ not a rewrite of it" no longer holds for these parts:
   off, Last Will), and lapsed asks are dropped so names from messages cannot grow the book for ever.
 - **The switch order is the row's.** Each request carries `switchedAt`, when the operator switched that row on (0 if never).
   radar keeps it with the row's saved switch. A scheduler-owned counter was tried on paper and rejected in review: not safe
-  to redeliver, lost on restart, grown by names from messages, shared across radios. A future time counts as now. The
-  holder's is in the lease.
+  to redeliver, lost on restart, grown by names from messages, shared across radios. It is taken as given, so the order
+  never depends on which message arrived first. The holder's is in the lease.
 - **Durations come from messages, so they are bounded:** a hold from 1 ms to 1 hour, patience up to 1 hour.
 - **The scheduler publishes the lease whenever it changed**, after any operation: a request can end a lapsed lease on the way
   to any answer. It waits up to about 2 minutes for a synchronised clock, then starts anyway and warns: a lease's end is
