@@ -408,4 +408,5 @@ No fixed number of radios or hosts (operator, 2026-11-07: "numbers can grow, som
    it would need far fewer radios, but the operator's rule of 2026-11-06 says no. Recorded here only so that the rule is
    held on purpose.
 6. **Repos:** a single repo for now (operator, 2026-11-07).
-7. **Do plans 105 and 106 still stand as written?** 105 puts NAVTEX on the pi4; 106 runs the scheduler there.
+7. **Do plans 105 and 106 still stand as written?** Answered 2026-11-09: one scheduler on each radio host, the calendar
+   apart from it (plan 106 step 3); NAVTEX is an MQTT client, which replaces plan 105's `/api/tuner/windows`.

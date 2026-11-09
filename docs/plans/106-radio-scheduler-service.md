@@ -134,8 +134,6 @@ Decided for step 3 by step 2's review (2026-11-09):
 
 Open, for the operator before step 3:
 
-- Plan 108 asks whether the scheduler stays on the pi4 at all.
-
 Decided (operator, 2026-11-09):
 
 - **NAVTEX is an MQTT client.** Leases replace plan 105's `/api/tuner/windows` and its reliance on rsp_tcp's single-client
@@ -161,14 +159,17 @@ Decided (operator, 2026-11-09):
 - New repo `schnappy/radio-scheduler` (Java 25 / Spring Boot, the MQTT client from Eclipse Paho or HiveMQ).
 - Its own SonarQube project from the first commit, in CI like every service: PR test + sonar, main test + sonar + deploy
   (operator, 2026-11-09: every decomposed part gets one; radar itself does not).
-- It owns the radio directory, the calendar (bookings and their outlets), and the leases; it decides, the receivers
-  ask. The windows, holds and stays become lease requests and renewals from the receiver side.
-- Runs on the pi4 (so NAVTEX does not depend on the workstation); radar's receivers on the workstation's own radios are
-  its clients too.
+- **One scheduler on each radio host, deciding only that host's radios (operator, 2026-11-09).** A lease depends only on
+  the machine the radio is on, so a dead host costs its own radios and nothing else. The pi4 is first; the workstation's
+  radios get their own scheduler and broker when they move over.
+- It owns that host's leases and radio directory; it decides, the receivers ask. The windows, holds and stays become
+  lease requests and renewals from the receiver side.
+- The calendar (bookings and their outlets) is separate: one small service that asks for leases on behalf of its
+  bookings. If it is down, rows already holding a radio keep it; bookings just do not start.
 - radar's `ScheduleRunner` / `BandArbiter` / per-row `PeriodicWindowScheduler` loops are replaced by a client of the
   service, one row at a time, RTTY first.
 
 ## Open questions for the operator
 
-- The service on the pi4 also deciding for the workstation's own radios - or one scheduler per host?
-- Calendar UI: stays in radar's web UI (talking to the service), or moves with the service?
+- Calendar UI: stays in radar's web UI (talking to the calendar service), or moves with the service?
+- Where the calendar service runs.
