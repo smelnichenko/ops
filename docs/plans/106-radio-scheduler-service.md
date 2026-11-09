@@ -185,9 +185,10 @@ not a rewrite of it" no longer holds for these parts:
 - **A release names its claimant and generation.** A displaced row's late release changes nothing.
 - **Waiters go by rung, then by who waited longest**, then by name so the order is defined. A waiter can withdraw (switched
   off, Last Will), and lapsed asks are dropped so names from messages cannot grow the book for ever.
-- **The switch order is the scheduler's.** radar's counter is in its memory and resets with it; the book now outlives it. A
-  `switched` message assigns the next number inside the scheduler, built on the boot counter too so it keeps rising across
-  restarts; requests carry none. The holder's number is in the lease, so a restart cannot invert the operator's order.
+- **The switch order is the row's.** Each request carries `switchedAt`, when the operator switched that row on (0 if never).
+  radar keeps it with the row's saved switch. A scheduler-owned counter was tried on paper and rejected in review: not safe
+  to redeliver, lost on restart, grown by names from messages, shared across radios. A future time counts as now. The
+  holder's is in the lease.
 - **Durations come from messages, so they are bounded:** a hold from 1 ms to 1 hour, patience up to 1 hour.
 - **The scheduler publishes the lease whenever it changed**, after any operation: a request can end a lapsed lease on the way
   to any answer. It starts only after the clock is synchronised (`systemd-time-wait-sync`): a lease's end is wall-clock time
@@ -198,9 +199,19 @@ not a rewrite of it" no longer holds for these parts:
 Messages (JSON, QoS 1):
 - `radio/<radio>/lease`, retained: `{"holder", "priority", "generation", "until", "switchSeq"}`; holder null while free.
 - `radio/<radio>/request`, with MQTT 5 Response Topic `reply/<login>/...`, Correlation Data and a message expiry:
-  `{"op": "request", "receiver", "priority", "holdMs", "patienceMs"}`, `{"op": "release", "receiver", "generation"}`,
-  `{"op": "withdraw", "receiver"}`, `{"op": "switched", "receiver"}`.
-- The reply: `{"decision": "GRANTED|RENEWED|DISPLACING|REFUSED", "displaced", "generation", "until"}`.
+  `{"op": "request", "receiver", "priority", "holdMs", "patienceMs", "switchedAt"}`, `{"op": "release", "receiver", "generation"}`,
+  `{"op": "withdraw", "receiver"}`.
+- The reply: `{"decision", "displaced", "generation", "until"}`, the decision being GRANTED, RENEWED, DISPLACING, REFUSED,
+  RELEASED, NOT_HOLDER, WITHDRAWN, UNKNOWN_RADIO or INVALID. A Response Topic must be under `reply/`, or there is no answer.
+- At start the scheduler subscribes to its own radios' leases, publishes a marker on `reply/<login>/settle-<id>`, and treats
+  what arrived before the marker as the retained leases. That order is Mosquitto's, not an MQTT guarantee.
+
+Before radar is a client: the scheduler does not yet read `rx/<receiver>/state`, so a row that dies while waiting holds its
+place until its patience lapses. radar uses short patience until the Last Will choice above is made. A request sent while
+the scheduler restarts is lost: radar times out and asks again.
+
+Before it runs on the pi4: Java on the box, `Requires=` nothing but `After=` the broker, `systemd-time-wait-sync` (decide what
+happens if no NTP is reachable after a power cut), a heap cap, and how it is deployed.
 
 PRs, one at a time: the book with leases (no MQTT); the MQTT service against a real Mosquitto; running on the pi4; radar as a
 client, RTTY first and switchable back; the calendar service.
