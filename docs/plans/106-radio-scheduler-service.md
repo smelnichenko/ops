@@ -153,6 +153,8 @@ Open, for the operator before step 3:
 ## Step 3 — the scheduler service
 
 - New repo `schnappy/radio-scheduler` (Java 25 / Spring Boot, the MQTT client from Eclipse Paho or HiveMQ).
+- Its own SonarQube project from the first commit, in CI like every service: PR test + sonar, main test + sonar + deploy
+  (operator, 2026-11-09: every decomposed part gets one). radar itself has none today.
 - It owns the radio directory, the calendar (bookings and their outlets), and the leases; it decides, the receivers
   ask. The windows, holds and stays become lease requests and renewals from the receiver side.
 - Runs on the pi4 (so NAVTEX does not depend on the workstation); radar's receivers on the workstation's own radios are

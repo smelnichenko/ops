@@ -363,7 +363,8 @@ One narrow decoder, from a network radio, as a service on a machine, side by sid
 air:
 same bulletins, stamps within a slot, no more losses. It needs plan 106's lease (step 1b onward), so that two owners
 never open one box. Measured: idle JVM size, CPU against step 1, connect-to-first-sample. This sets the template for the
-rest.
+rest, and the template includes a SonarQube project in CI from the first commit (operator, 2026-11-09: every decomposed
+part gets one).
 
 Then the others one at a time, heaviest last. The read path (`IqReadAhead`, `AirStamp`, the spill, rsp_tcp's client)
 goes with them. The common library was removed from all services in March, so one repo and one jar, run per decoder,
