@@ -114,10 +114,15 @@ in `111-data/2026-11-09-dry-run-production.json`; it holds counts only, no names
   up to 0.70, which is why 0.70 is too loose.
 - **Of the 4 pairs at 0.60,** 3 are identical files of contacts masi already holds as one person, so they add nothing.
   One is new: two contacts with the same surname at the same company, different first names, different files, distance
-  0.322. The operator decides whether they are one person.
+  0.322. **The operator's verdict (2026-11-09): two different people.** So 0.60 makes no correct new link on today's
+  pictures and one false one, far inside the range where real matches lie: no threshold separates it.
+- **A face link is a note, not a merge.** `saveFaceLink` writes a `contact_picture_link` row that the contact's page
+  lists; nothing merges people from it.
 - **Side finding: name search.** 4 pairs that masi holds as one person (one contact, or one person) have clearly
   different faces (0.873 to 1.077), and every one of them involves a `NAME_SEARCH` picture. A picture found by name can
-  be someone else's.
+  be someone else's: of the 3 contacts whose name-search picture can be compared with their GitHub picture, 1 matches
+  and 2 do not. 97 name-search pictures are stored. The 1.077 pair is two people merged by a shared mailbox
+  (`PersonService` matches on the address), the only person out of 11,941 that holds two different names.
 
 ## Process
 
