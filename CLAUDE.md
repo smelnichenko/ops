@@ -956,7 +956,7 @@ Self-hosted SonarQube CE 26.3.0 at `https://sonar.pmon.dev/` for static analysis
 
 - **Namespace:** `schnappy` (shared with the app)
 - **Feature-flagged:** `sonarqube.enabled` in Helm (disabled by default)
-- **Eight projects:** `schnappy-monitor`, `schnappy-admin`, `schnappy-chat`, `schnappy-chess`, `schnappy-masi`, `schnappy-gateway`, `schnappy-site`, `schnappy-infrastructure`
+- **Projects:** `schnappy-monitor`, `schnappy-admin`, `schnappy-chat`, `schnappy-chess`, `schnappy-masi`, `schnappy-gateway`, `schnappy-site`, `schnappy-infrastructure` `schnappy-radio-scheduler` and `schnappy-radio-scheduler-pr` (declared in infra's `schnappy-sonarqube/values.yaml`).
 - **Coverage:**
   - Backend services: JaCoCo → XML report, excludes jOOQ generated code and config/dto/entity from coverage
   - Frontend: `@vitest/coverage-v8` → LCOV report
