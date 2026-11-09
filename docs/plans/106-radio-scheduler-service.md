@@ -92,7 +92,12 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
   scheduler's stop), fixed in the PR.
 - Found in PR 3's review, #1240 LIVE 20:36: a band's claim and its session each looked up the row's radio, so a row
   moved between the two claimed one radio while its session opened another. The radio is now read once per capture.
-- PR 4 next: the observation slot, `CONTINUOUS_ROWS`, `overlay-device`, and the store's `sdrParked`/`sdrHeldBy`.
+- PR 4a #1248 LIVE 2026-11-09 04:02: the observation and overlay slots, `CONTINUOUS_ROWS`, the `continuous` flag,
+  `overlay-device`, `ais-device` and the slot migration are gone. A row opens its assignment or the boot radio
+  (`sdr-device`). All 26 rows opened the same radio before and after; `overlay-device` is out of the live config.
+- PR 4b (rendered sample shown, awaiting the operator's OK): the store's `sdr_status`/`sea_status`/`sdrParked`/
+  `sdrHeldBy` and `Engine.radioStatus` go; the top bar reads the ADS-B and AIS rows' own status.
+- Then PR 5: `RadioLeaseBook`.
 
 ## Step 2 — MQTT on the pi4
 
