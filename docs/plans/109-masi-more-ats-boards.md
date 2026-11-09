@@ -258,7 +258,19 @@ and goes before PR 3: visits only ever reach companies masi already knows.
   - A careers page listing `<sub>.teamdash.com/p/job/...` links becomes a `teamdash:<sub>` row, with the page as its
     list.
   - The row starts disabled, because TeamDash is a page read and not a public feed.
-- **Next:** PR 2b (the census, paced per vendor), PR 3 (visits to non-hiring companies), PR 5 (Recrur), PR 6 (iCIMS).
+- **PR 3, visits to companies with no job.** masi #206, live 2026-11-09 08:01 (deployed with #207).
+  - Quiet companies are those active, not blacklisted, with 10 or more staff and no open job. They get the slots the
+    hiring companies leave in each tick, largest first. Production has 637 of them.
+  - First 25 minutes: no hiring company was due, so 29 quiet companies were visited. Most were UNCONFIRMED (a guessed site
+    not confirmed); 5 had a known site, 2 a proved one, 5 failed. Boards found get checked a week on.
+- **PR 6, iCIMS, for Nortal.** masi #208. The reader uses Nortal's careers page's own feed
+  (`careers.nortal.com/hs/serverless/icims-listing`): 72 jobs, 8 in Estonia (2026-11-09). The row `icims:nortal` starts
+  **disabled** for the operator's terms check. Nortal's 22 Greenhouse jobs are all in Latin America and are not read.
+- **PR 5, Recrur: not built.** Its job pages render in the browser: the HTML holds no job text, and the data comes from an
+  anonymous API that a runtime bundle names. A reader needs the browser pod and each employer's public list URL. Its 6
+  employers (Tartu Ülikool, TalTech, Tartu Linnavalitsus, Citadele, HANZA, Manpower) post few IT jobs, so it waits.
+- **Next:** PR 2b, the census, paced per vendor. Workable still answers 429 to `ats:skeleton` (2026-11-09 06:33), more
+  than a day after the census's burst.
 
 ## Decision needed from the operator
 
