@@ -243,6 +243,23 @@ and goes before PR 3: visits only ever reach companies masi already knows.
    Jobvite, njoyn, HaileyHR, Recman) each have one employer, so a reader is added only once more employers on that
    vendor turn up; until then the company is written as that vendor only.
 
+## Progress
+
+- **PR 1, the detector reads the page as well as the host.** masi #190 and #191, live 2026-11-08.
+  - #190: Lever EU, Personio and BambooHR, with public feeds enabled on creation.
+  - #191: Teamtailor on an own domain, and short links followed.
+- **PR 1d, remote roles open to Estonia.** masi #192 (`EstoniaReach`), live 2026-11-08.
+- **PR 2, detection over the links already held.** masi #203, live 2026-11-09.
+  - Production's scan read 1,210 links and made 8 rows, with 0 failures: `ats:coolbet`, `cybers`, `ergobaltics`, `iute`,
+    `netgroup`, `piletilevi`, `rushstreetinteractive` and `stebby`. All are public feeds, so they started enabled.
+  - It runs once per detector version (`app_flag held-link-scan`), on one replica under an advisory lock, 2 s apart.
+  - #205 makes it ask a dead board once for all its links: the scan had asked sisutech.teamtailor.com three times.
+- **PR 1c, TeamDash on any domain.** masi #205.
+  - A careers page listing `<sub>.teamdash.com/p/job/...` links becomes a `teamdash:<sub>` row, with the page as its
+    list.
+  - The row starts disabled, because TeamDash is a page read and not a public feed.
+- **Next:** PR 2b (the census, paced per vendor), PR 3 (visits to non-hiring companies), PR 5 (Recrur), PR 6 (iCIMS).
+
 ## Decision needed from the operator
 
 Auto-detected rows are created **disabled** today, "for the operator to enable after the terms check". PR 2 alone makes
