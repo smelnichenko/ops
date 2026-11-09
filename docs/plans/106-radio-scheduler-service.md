@@ -134,10 +134,13 @@ Decided for step 3 by step 2's review (2026-11-09):
 
 Open, for the operator before step 3:
 
-- Is NAVTEX an MQTT client? This plan shares the tuner through leases; plan 105 uses `/api/tuner/windows` and rsp_tcp's
-  single-client lock. If it is a client it needs its own login (`navtex`: lease read, request write, its own `rx/`
-  state, health read, `data/navtex/#` write).
 - Plan 108 asks whether the scheduler stays on the pi4 at all.
+
+Decided (operator, 2026-11-09):
+
+- **NAVTEX is an MQTT client.** Leases replace plan 105's `/api/tuner/windows` and its reliance on rsp_tcp's single-client
+  lock. It gets its own login with the client: `navtex`, lease read, request write, its own `rx/` state, health read,
+  `data/navtex/#` write, and `RADAR_MQTT_PASSWORD_NAVTEX` in the secret file.
 
 ## Hybrid: control on MQTT, data to the cluster's Kafka (operator, 2026-11-04)
 
@@ -157,7 +160,7 @@ Open, for the operator before step 3:
 
 - New repo `schnappy/radio-scheduler` (Java 25 / Spring Boot, the MQTT client from Eclipse Paho or HiveMQ).
 - Its own SonarQube project from the first commit, in CI like every service: PR test + sonar, main test + sonar + deploy
-  (operator, 2026-11-09: every decomposed part gets one). radar itself has none today.
+  (operator, 2026-11-09: every decomposed part gets one; radar itself does not).
 - It owns the radio directory, the calendar (bookings and their outlets), and the leases; it decides, the receivers
   ask. The windows, holds and stays become lease requests and renewals from the receiver side.
 - Runs on the pi4 (so NAVTEX does not depend on the workstation); radar's receivers on the workstation's own radios are
