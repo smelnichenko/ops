@@ -101,6 +101,7 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
 - PR 5 #1249 LIVE 2026-11-09 04:41: `RadioLeaseBook` decides who holds a radio with no session in it; `BandArbiter`
   keeps its API and lock and carries the answer out. The `BandArbiter*` tests passed unmodified; 12 of 12 reverts caught.
 - #1251 LIVE 2026-11-09 17:27: step 1b is DONE.
+- Step 3, the scheduler on the pi4 LIVE 2026-11-10 01:01 (radio-scheduler #1-#3, radar #1254; rsp_tcp not restarted): boot 1, one real grant and release proved on the real broker, a second deploy changes nothing. No row asks it yet. Next: radar as a client.
 - Step 2 LIVE 2026-11-09 17:00 (#1252, deployed with the broker's tasks only; rsp_tcp not restarted): Mosquitto on the
   pi4, no clients yet. Checked on the real broker: anonymous and wrong password refused from the workstation, the four
   logins accepted, ACL as designed, one LAN-only ufw rule, a second deploy changes nothing.
