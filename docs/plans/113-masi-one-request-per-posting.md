@@ -1,7 +1,7 @@
 # Plan 113 — masi: requests made once, a history that replays and verifies
 
-**Status:** reviewed 2026-11-09 (architecture and platform reliability), findings merged below; waiting on the operator's
-decisions. Asked for by the operator, in order: "is it possible to add timestamps so no retries ever made again on source
+**Status:** reviewed 2026-11-09 (architecture and platform reliability), findings merged below. The operator accepted all
+seven decisions as proposed the same day ("agree, go"); Phase 1 is being built. Asked for by the operator, in order: "is it possible to add timestamps so no retries ever made again on source
 request level?", "make plan and build", "essentially we should be able to replay the history to get a determined data
 state", "maybe we need cluster's scylla for this?", "good to have a data verification built-in, like blockchain", "plan
 needs update and review".
@@ -140,7 +140,7 @@ A replaying fetcher serves answers by run, URL and request hash, so new code tha
 replay never sends a request.** A replay clock replaces `Instant.now()`. It runs into a scratch database and compares a digest
 with production. First target: `cvkeskus` postings, replayed twice to the same digest.
 
-## Decisions for the operator
+## Decisions (taken by the operator 2026-11-09, as proposed)
 
 1. **Retention:** forever, or a number of years? Proposed: forever, while the measured size allows. Retention by age needs a
    signed checkpoint to keep the chain verifiable.
