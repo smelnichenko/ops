@@ -169,6 +169,36 @@ Decided (operator, 2026-11-09):
 - radar's `ScheduleRunner` / `BandArbiter` / per-row `PeriodicWindowScheduler` loops are replaced by a client of the
   service, one row at a time, RTTY first.
 
+### Step 3, the lease protocol (2026-11-09, from PR 1's review)
+
+The book as moved decided who holds a radio inside one process. Across processes it needs more, so "step 3 moves the book,
+not a rewrite of it" no longer holds for these parts:
+
+- **A lease has an end.** `until` (wall clock, epoch ms; the hosts run NTP) is set on every grant and renewal. A holder that
+  dies stops renewing and its lease lapses. Holds are short and renewed, so a stale state does not last.
+- **Generation.** It rises each time the holder changes, not on a renewal, so a redelivered request changes nothing. It
+  starts from `(boot epoch << 32)`, the boot epoch being a counter persisted and fsynced once per start on the host's disk:
+  a Pi has no RTC, and a counter held in memory or seeded from a retained lease would start below what holders have seen
+  after the same power cut. Holders reject a lower generation.
+- **The holder asking again is a renewal**, never a refusal or a displacement of itself. QoS 1 redelivery is harmless.
+- **A release names its claimant and generation.** A displaced row's late release changes nothing.
+- **Waiters go by rung, then by who waited longest**, then by name so the order is defined. A waiter can withdraw (switched
+  off, Last Will), and lapsed asks are dropped so names from messages cannot grow the book for ever.
+- **The switch order is the scheduler's.** radar's counter is in its memory and resets with it; the book now outlives it. A
+  `switched` message assigns the next number inside the scheduler; requests carry none.
+- **After a restart** the scheduler reads the retained leases, restores the live ones under a new generation, republishes
+  them, and only then grants. A retained lease can be 5 minutes stale, which the short holds and the generation absorb.
+
+Messages (JSON, QoS 1):
+- `radio/<radio>/lease`, retained: `{"holder", "priority", "generation", "until"}`; holder null while free.
+- `radio/<radio>/request`, with MQTT 5 Response Topic `reply/<login>/...`, Correlation Data and a message expiry:
+  `{"op": "request", "receiver", "priority", "holdMs", "patienceMs"}`, `{"op": "release", "receiver", "generation"}`,
+  `{"op": "withdraw", "receiver"}`, `{"op": "switched", "receiver"}`.
+- The reply: `{"decision": "GRANTED|RENEWED|DISPLACING|REFUSED", "displaced", "generation", "until"}`.
+
+PRs, one at a time: the book with leases (no MQTT); the MQTT service against a real Mosquitto; running on the pi4; radar as a
+client, RTTY first and switchable back; the calendar service.
+
 ## Open questions for the operator
 
 None left for step 3. Decided 2026-11-09: the calendar UI stays in radar's web UI, talking to the calendar service; the
