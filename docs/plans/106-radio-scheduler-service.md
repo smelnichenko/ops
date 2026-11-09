@@ -176,21 +176,27 @@ not a rewrite of it" no longer holds for these parts:
 
 - **A lease has an end.** `until` (wall clock, epoch ms; the hosts run NTP) is set on every grant and renewal. A holder that
   dies stops renewing and its lease lapses. Holds are short and renewed, so a stale state does not last.
-- **Generation.** It rises each time the holder changes, not on a renewal, so a redelivered request changes nothing. It
+- **Generation.** It rises each time the holder changes, not on a renewal, so a redelivered request is at most one more
+  renewal. It
   starts from `(boot epoch << 32)`, the boot epoch being a counter persisted and fsynced once per start on the host's disk:
   a Pi has no RTC, and a counter held in memory or seeded from a retained lease would start below what holders have seen
-  after the same power cut. Holders reject a lower generation.
+  after the same power cut. The counter is a `long`: `<< 32` on an `int` does nothing. Holders reject a lower generation.
 - **The holder asking again is a renewal**, never a refusal or a displacement of itself. QoS 1 redelivery is harmless.
 - **A release names its claimant and generation.** A displaced row's late release changes nothing.
 - **Waiters go by rung, then by who waited longest**, then by name so the order is defined. A waiter can withdraw (switched
   off, Last Will), and lapsed asks are dropped so names from messages cannot grow the book for ever.
 - **The switch order is the scheduler's.** radar's counter is in its memory and resets with it; the book now outlives it. A
-  `switched` message assigns the next number inside the scheduler; requests carry none.
+  `switched` message assigns the next number inside the scheduler, built on the boot counter too so it keeps rising across
+  restarts; requests carry none. The holder's number is in the lease, so a restart cannot invert the operator's order.
+- **Durations come from messages, so they are bounded:** a hold from 1 ms to 1 hour, patience up to 1 hour.
+- **The scheduler publishes the lease whenever it changed**, after any operation: a request can end a lapsed lease on the way
+  to any answer. It starts only after the clock is synchronised (`systemd-time-wait-sync`): a lease's end is wall-clock time
+  and a Pi boots with a wrong one.
 - **After a restart** the scheduler reads the retained leases, restores the live ones under a new generation, republishes
   them, and only then grants. A retained lease can be 5 minutes stale, which the short holds and the generation absorb.
 
 Messages (JSON, QoS 1):
-- `radio/<radio>/lease`, retained: `{"holder", "priority", "generation", "until"}`; holder null while free.
+- `radio/<radio>/lease`, retained: `{"holder", "priority", "generation", "until", "switchSeq"}`; holder null while free.
 - `radio/<radio>/request`, with MQTT 5 Response Topic `reply/<login>/...`, Correlation Data and a message expiry:
   `{"op": "request", "receiver", "priority", "holdMs", "patienceMs"}`, `{"op": "release", "receiver", "generation"}`,
   `{"op": "withdraw", "receiver"}`, `{"op": "switched", "receiver"}`.
