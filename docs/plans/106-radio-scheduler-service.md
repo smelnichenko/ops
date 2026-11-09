@@ -97,7 +97,9 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
   (`sdr-device`). All 26 rows opened the same radio before and after; `overlay-device` is out of the live config.
 - PR 4b (rendered sample shown, awaiting the operator's OK): the store's `sdr_status`/`sea_status`/`sdrParked`/
   `sdrHeldBy` and `Engine.radioStatus` go; the top bar reads the ADS-B and AIS rows' own status.
-- Then PR 5: `RadioLeaseBook`.
+- PR 5 #1249 LIVE 2026-11-09 04:41: `RadioLeaseBook` decides who holds a radio with no session in it; `BandArbiter`
+  keeps its API and lock and carries the answer out. The `BandArbiter*` tests passed unmodified; 12 of 12 reverts caught.
+- Step 1b is done once PR 4b ships. Step 2 (MQTT on the pi4) is next.
 
 ## Step 2 — MQTT on the pi4
 
