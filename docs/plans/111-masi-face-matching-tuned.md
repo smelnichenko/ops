@@ -94,6 +94,31 @@ are cleared, with the operator's OK, before the switch is turned on; the backfil
 
 - **Candidate: 0.6.** The dry run on production's pictures and the operator's review of its sample decide.
 
+### Step 4: the dry run on production's pictures (2026-11-09, nothing written)
+
+masi's own `FaceEmbedder` (d612195, largest face) ran over a read-only export of production's 834 pictures. Figures are
+in `111-data/2026-11-09-dry-run-production.json`; it holds counts only, no names or faces.
+
+- 732 pictures have a face, 102 do not. That makes 267,541 pairs across different contacts.
+- **The gap is wide.** Up to 0.60 there are 4 pairs, and nothing lies between 0.322 and 0.661.
+
+  | Threshold | Pairs that would link |
+  |---|---|
+  | 0.60 | 4 |
+  | 0.69 | 6 |
+  | 0.70 | 8 |
+  | 0.74 | 58 |
+  | 0.80 | 678 |
+
+- **The LFW forecast held.** Above 0.60 the pairs carry different people's names: 2 up to 0.69 (forecast about 2) and 4
+  up to 0.70, which is why 0.70 is too loose.
+- **Of the 4 pairs at 0.60,** 3 are identical files of contacts masi already holds as one person, so they add nothing.
+  One is new: two contacts with the same surname at the same company, different first names, different files, distance
+  0.322. The operator decides whether they are one person.
+- **Side finding: name search.** 4 pairs that masi holds as one person (one contact, or one person) have clearly
+  different faces (0.873 to 1.077), and every one of them involves a `NAME_SEARCH` picture. A picture found by name can
+  be someone else's.
+
 ## Process
 
 - A test of `FaceEmbedder` on a few LFW pairs (same person close, different people far) runs in the suite from step 3.

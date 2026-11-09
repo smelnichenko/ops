@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-09",
+  "what": "Plan 111 step 4 dry run: masi FaceEmbedder (masi d612195, largest face) over a read-only export of production's contact pictures. Nothing written to production. Counts only: no names, no faces.",
+  "pictures": 834,
+  "with_a_face": 732,
+  "no_face": 102,
+  "no_face_by_source": { "GRAVATAR": 84, "GITHUB": 11, "NAME_SEARCH": 5, "UNAVATAR": 1, "COMPANY_SITE": 1 },
+  "face_by_source": { "GRAVATAR": 363, "GITHUB": 259, "NAME_SEARCH": 92, "UNAVATAR": 12, "COMPANY_SITE": 6 },
+  "pairs_across_contacts": 267541,
+  "pairs_at_or_under": { "0.3": 3, "0.4": 4, "0.5": 4, "0.55": 4, "0.6": 4, "0.65": 4, "0.69": 6, "0.7": 8, "0.74": 58, "0.8": 678, "0.85": 4171, "0.9": 19967 },
+  "distance_quantiles": { "0.0001": 0.72, "0.001": 0.776, "0.01": 0.838, "0.5": 0.99 },
+  "at_0_6": {
+    "identical_files_already_one_person": 3,
+    "new_pairs": 1,
+    "new_pair_distance": 0.322,
+    "new_pair_note": "same surname, same company, different first names, different files; for the operator to judge"
+  },
+  "pairs_masi_holds_as_one_person": {
+    "across_contacts": { "identical_files_distance_0": 3, "distance_1_077_both_name_search": 1 },
+    "within_one_contact": { "total": 5, "distance_0_identical_file": 1, "distance_0_003": 1, "distances_0_873_0_873_0_983_with_a_name_search_picture": 3 }
+  }
+}
