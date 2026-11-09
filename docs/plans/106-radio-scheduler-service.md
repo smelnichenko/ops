@@ -95,11 +95,12 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
 - PR 4a #1248 LIVE 2026-11-09 04:02: the observation and overlay slots, `CONTINUOUS_ROWS`, the `continuous` flag,
   `overlay-device`, `ais-device` and the slot migration are gone. A row opens its assignment or the boot radio
   (`sdr-device`). All 26 rows opened the same radio before and after; `overlay-device` is out of the live config.
-- PR 4b (rendered sample shown, awaiting the operator's OK): the store's `sdr_status`/`sea_status`/`sdrParked`/
-  `sdrHeldBy` and `Engine.radioStatus` go; the top bar reads the ADS-B and AIS rows' own status.
+- PR 4b DROPPED 2026-11-09: it gave the ADS-B and AIS rows named status lines, a special path for two bands. Instead:
+  #1250 LIVE (no special rows: `alwaysOnRow`, `STAYING_ROWS`, `DecodeStallWatchdog` and `quietSeconds` gone), and #1251
+  (CI green, not merged): `sdr_status`/`sea_status`/`sdr_parked`, `AirRows`, `Engine.radioStatus` and the top-bar lines go.
 - PR 5 #1249 LIVE 2026-11-09 04:41: `RadioLeaseBook` decides who holds a radio with no session in it; `BandArbiter`
   keeps its API and lock and carries the answer out. The `BandArbiter*` tests passed unmodified; 12 of 12 reverts caught.
-- Step 1b is done once PR 4b ships. Step 2 (MQTT on the pi4) is next.
+- Step 1b is done once #1251 ships. Step 2 (MQTT on the pi4) is in review on `feat/mqtt-pi4`.
 
 ## Step 2 — MQTT on the pi4
 
@@ -111,7 +112,29 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
   - `rx/<receiver>/state` (retained, Last Will `offline`) - listening, ended, off.
   - `sdr/<radio>/health` (retained, Last Will) - rsp_tcp and the tuner, from the agent on the pi4 (initHw errors,
     restarts).
+  - `reply/<login>/...` - the answer to a request, on the asker's Response Topic. Each login reads only its own.
+  - `data/...` - what the bridge carries to Kafka: bulletins and receptions from radar, `data/sdr/...` health history
+    from the agent. The bridge reads only these.
+- `<radio>` is one topic level: `RadioId` with no `/`, `+` or `#` (`rsptcp://192.168.11.7:1234` is
+  `rsptcp-192.168.11.7-1234`). Directory names like `pi4-A` and `pi4-C` are not ids: they are one tuner.
 - Broker down: a holder keeps its lease to its expiry; nothing new is granted.
+
+Decided for step 3 by step 2's review (2026-11-09):
+
+- **A power cut can bring back an old lease.** Retained state reaches the SD card every 5 minutes, so a restart may
+  restore a lease that has since moved. The scheduler republishes every lease on connect before it grants anything,
+  and a lease carries a generation number that holders check along with `until`.
+- **A Last Will is per connection.** Each `rx/<receiver>/state` Will needs its own connection (distinct client id, one
+  login), or one process-level liveness topic replaces them; the ACL may change with that choice.
+- **The broker needs an alert before step 3 relies on it.** It has no monitoring on the pi4 today: a dead broker
+  silently means nothing new is granted. An exporter needs a `$SYS` read login, which the ACL does not have yet.
+
+Open, for the operator before step 3:
+
+- Is NAVTEX an MQTT client? This plan shares the tuner through leases; plan 105 uses `/api/tuner/windows` and rsp_tcp's
+  single-client lock. If it is a client it needs its own login (`navtex`: lease read, request write, its own `rx/`
+  state, health read, `data/navtex/#` write).
+- Plan 108 asks whether the scheduler stays on the pi4 at all.
 
 ## Hybrid: control on MQTT, data to the cluster's Kafka (operator, 2026-11-04)
 
