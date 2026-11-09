@@ -118,11 +118,18 @@ in `111-data/2026-11-09-dry-run-production.json`; it holds counts only, no names
   pictures and one false one, far inside the range where real matches lie: no threshold separates it.
 - **A face link is a note, not a merge.** `saveFaceLink` writes a `contact_picture_link` row that the contact's page
   lists; nothing merges people from it.
-- **Side finding: name search.** 4 pairs that masi holds as one person (one contact, or one person) have clearly
-  different faces (0.873 to 1.077), and every one of them involves a `NAME_SEARCH` picture. A picture found by name can
-  be someone else's: of the 3 contacts whose name-search picture can be compared with their GitHub picture, 1 matches
-  and 2 do not. 97 name-search pictures are stored. The 1.077 pair is two people merged by a shared mailbox
-  (`PersonService` matches on the address), the only person out of 11,941 that holds two different names.
+- **The operator's review of the sample (2026-11-09).** Every pair above 0.60 up to 0.70 is clearly two different people.
+  So the 0.60 boundary holds for strangers, and the model's weak point on these pictures is at the other end: it would
+  link two different people with the same surname at 0.322.
+- **A real match it misses.** Dmitri G.'s name-search picture and his GitHub picture are one person (the operator's word)
+  at 0.873, far over any usable threshold: LFW's 99% of same-person pairs kept does not carry over to these small
+  avatars. Another pair at 0.983 cannot be judged: the operator does not trust those photos. A face distance is therefore
+  no ground for dropping a picture.
+- **A shared mailbox had made two people one.** The pair at 1.077 is two people filed as one because both published
+  `hree@` ("HR Estonia"). It is the only person of 11,941 holding two names. masi's fix: an address joins two sightings
+  only when their names can be one person.
+- **Recommendation: leave it off.** On today's pictures 0.60 gives no correct new link and one false one, and misses the
+  one real pair that has different pictures.
 
 ## Process
 
