@@ -191,8 +191,8 @@ not a rewrite of it" no longer holds for these parts:
   holder's is in the lease.
 - **Durations come from messages, so they are bounded:** a hold from 1 ms to 1 hour, patience up to 1 hour.
 - **The scheduler publishes the lease whenever it changed**, after any operation: a request can end a lapsed lease on the way
-  to any answer. It starts only after the clock is synchronised (`systemd-time-wait-sync`): a lease's end is wall-clock time
-  and a Pi boots with a wrong one.
+  to any answer. It waits up to about 2 minutes for a synchronised clock, then starts anyway and warns: a lease's end is
+  wall-clock time and a Pi boots with a wrong one, but after a power cut with no internet the radios must still be shared.
 - **After a restart** the scheduler reads the retained leases, restores the live ones under a new generation, republishes
   them, and only then grants. A retained lease can be 5 minutes stale, which the short holds and the generation absorb.
 
@@ -210,8 +210,8 @@ Before radar is a client: the scheduler does not yet read `rx/<receiver>/state`,
 place until its patience lapses. radar uses short patience until the Last Will choice above is made. A request sent while
 the scheduler restarts is lost: radar times out and asks again.
 
-Before it runs on the pi4: Java on the box, `Requires=` nothing but `After=` the broker, `systemd-time-wait-sync` (decide what
-happens if no NTP is reachable after a power cut), a heap cap, and how it is deployed.
+Before it runs on the pi4: Java on the box, `Requires=` nothing but `After=` the broker, a wait for a synced clock of about 2 minutes, then
+starting anyway with a warning on the last known time (operator, 2026-11-09: control stays local, even with no internet), a heap cap, and how it is deployed.
 
 PRs, one at a time: the book with leases (no MQTT); the MQTT service against a real Mosquitto; running on the pi4; radar as a
 client, RTTY first and switchable back; the calendar service.
