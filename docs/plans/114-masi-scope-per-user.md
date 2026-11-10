@@ -6,8 +6,8 @@ visible for admins, where the countries list can be configured, bootstrapped as 
 connections as well. turning on a new country is like extending to a new market", and "user should be able to configure,
 which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
 have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
-should be a list of estonia addresses - cities, etc. with postal indexes somewhere". Phase 0 (Estonia's official places),
-then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+should be a list of estonia addresses - cities, etc. with postal indexes somewhere", "we will need to have periodic update
+service". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -186,9 +186,17 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   (`asustusyksus` attributes `ANIMI`, `TYYP`, `ONIMI`, `MNIMI`). Use not restricted; credit the Board and the data's date.
 - **Postal codes:** assigned by Omniva and carried in the address data system (ADS) extracts (open data, credit the
   Board); Omniva's own CSV as the check. Each code with the settlements it serves.
-- **The derived file** (`ee-places.csv` in masi's resources: name, type, municipality, county, postal codes) is built by a
-  script from the downloads, its source dates in its header and in `NOTICE`, renewed by a PR when EHAK changes (a few
-  times a year), pinned by the gate's pin test.
+- **Kept current by masi itself:** a source `places:ee` (a collector like any other: a cron, runs on the Sources page,
+  its failures alerted) reads the downloads monthly, after the Board's beginning-of-month release, and updates table
+  `place (country, name, kind, municipality, county, postal_codes, source_date)` - diff-only, every run's added and removed
+  names on its run row. Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, the ADS service for postal codes).
+- **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
+  header and in `NOTICE`); the service brings it current. A run that reads nothing, or far fewer places than the table
+  holds, changes nothing and fails (guards fail closed).
+- **The places' version joins the sweep stamp** (a digest of the `place` rows in use, read at run start like the market
+  list), so an update begins running sweeps again, as a code change does. A settlement the update removes (municipalities
+  merge) closes nothing at once: its postings keep the old verdict for the retirement grace, then are judged anew.
+- The gate's pin test pins the matching code; the data is pinned by its version in the stamp.
 - **Matching, without false keeps:** village names are often words ("Kuu", "Ala", "Ida", "Loo" is one too), so the full
   list matches **only in place fields** (a location, an address, a remote scope), never in a title or a description; the
   hand-made list of towns, counties and address words stays for free text. A postal code counts only beside a settlement it
@@ -257,7 +265,7 @@ mirrored can still save). Only users with masi access ever write one.
 
 | # | What | Visible change |
 |---|---|---|
-| 0 | Estonia's official places (EHAK settlements and postal codes) replace the hand-made list in place fields; the old-vs-new verdict difference over production listed and checked | postings in Estonian villages no longer dropped |
+| 0 | Estonia's official places (EHAK settlements and postal codes) in table `place`, seeded from a snapshot and kept current by the monthly source `places:ee`; they replace the hand-made list in place fields; the places' version in the sweep stamp; the old-vs-new verdict difference over production listed and checked | postings in Estonian villages no longer dropped; a new run row each month |
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
