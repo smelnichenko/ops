@@ -1,7 +1,7 @@
 # Plan 114 — masi: each user's own scope (countries, remote work)
 
-**Status:** draft 2026-11-11, reviewed the same day (architecture: 4 critical, 15 warnings, all merged below). For the
-operator's decisions before any code. Asked for by the operator: "set of countries scope and/or remote jobs should be
+**Status:** reviewed 2026-11-11 (architecture: 4 critical, 15 warnings, all merged below). **The operator accepted all six
+decisions as proposed the same day ("yes to everything"):** phases 1-3 are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
