@@ -7,7 +7,8 @@ connections as well. turning on a new country is like extending to a new market"
 which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
 have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
 should be a list of estonia addresses - cities, etc. with postal indexes somewhere", "we will need to have periodic update
-service", "renames should be supported", "later we will have address sources for other countries as well, should
+service", "renames should be supported", "and remember, we are not deleting data when admin clears some country from list - we
+just modify filters and stop updating country-related data by subsystems", "later we will have address sources for other countries as well, should
 depend on supported list, configured by admin", "make addresses easily searcheable - like with something we have instead
 of elasticsearch". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
@@ -167,18 +168,21 @@ Measured in production 2026-11-11: `company` 28,953 rows, `person` 11,956, `cont
 
 - `EstoniaScope` becomes `ScopeGate(on)`, `EstoniaReach` becomes `CountryReach` per country, from data (below).
   **Kept** = the posting reaches a country that is on. Today that is exactly `{EE}`.
-- **ScopeWatch** closes only on the market list, read from the database after its open-postings query (no per-pod
-  cache). **A market list that is empty or cannot be read closes nothing:** the sweep logs, alerts and leaves the gauge
+- **ScopeWatch** closes only a posting that reaches **no country ever on the market list** - never one whose country is
+  merely off - read from the database after its open-postings query (no per-pod cache). **A market list that is empty or cannot be read closes nothing:** the sweep logs, alerts and leaves the gauge
   stale. `EE` is a floor that cannot be removed without a code change.
-- **Retiring a country** (the operator removing it) closes nothing at once: it is marked retired, and its listings close
-  by their boards' own misses, or after 7 days, with the reason recorded. No wave of closures and reposts in the reports.
+- **Turning a country off deletes and closes nothing** (the operator, 2026-11-11): it changes the filters - views,
+  matching, reports and digests stop showing its jobs, companies and people - and the subsystems stop updating its data:
+  collectors stop asking for it, its places source stops, its listings are neither refreshed nor miss-counted (a sweep
+  does not count misses for a country that is off). Its rows stay exactly as they were, open ones open; turning it on
+  again resumes from there. No wave of closures and reposts in the reports.
 - **Sweep stamp:** a digest of the market list joins `Collector.reading(config)`, snapshotted into `CollectContext` at
   run start; `RegistryService.listings` gates with that snapshot, so a change during a run neither mis-stamps nor half-gates
   it. The gate pin covers the new classes and the country data file.
 - **People** follow the same list (the operator, 2026-11-11): the person gate keeps a person whose own stated place is in
   a country that is on; GitHub's place searches come from each country's place names; `masi_out_of_scope_rows{kind="people"}`
-  counts against the list; a retired country's people are counted out of scope after the same grace (never deleted by a
-  sweep, as today). The runbooks `MasiOutOfScopeRows.md` and `MasiOutOfScopeNotCounted.md` say "the countries that are on".
+  counts against the countries ever on the list; a country turned off hides its people from the views and stops their
+  updates - they are never deleted or closed, as today. The runbooks `MasiOutOfScopeRows.md` and `MasiOutOfScopeNotCounted.md` say "the countries that are on".
 - **Partner pushes** are gated on the market list. The scope is a relevance filter, not an access boundary: the partner
   API stays unscoped.
 
@@ -204,7 +208,7 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   had. A rename adds the new name and closes the old one's validity, and **the old name still matches**, to the same place:
   boards and people write old names for years. A merged or abolished settlement gets `superseded_by` its successor (ADS's
   history extract, nr 9, gives both), and its names match the successor. So an update never drops a posting or a person
-  by a rename; only a name that leaves Estonia's places entirely (none expected) changes a verdict, with the grace below.
+  by a rename; a name that leaves Estonia's places entirely (none expected) stays as a former name, so it still matches.
   Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, the ADS service for postal codes).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing, or far fewer places than the table
@@ -219,7 +223,7 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   later phase needs them. The gate does not search: it matches through its in-memory lookup.
 - **The places' version joins the sweep stamp** (a digest of the names that match, old ones included, read at run start
   like the market list; a rename that only adds a name still changes it, as any reading change does), so an update begins running sweeps again, as a code change does. A settlement the update removes (municipalities
-  merge) closes nothing at once: its postings keep the old verdict for the retirement grace, then are judged anew.
+  merge) closes nothing: its names stay as former names of its successor, or of Estonia when none is known.
 - The gate's pin test pins the matching code; the data is pinned by its version in the stamp.
 - **Matching, without false keeps:** village names are often words ("Kuu", "Ala", "Ida", "Loo" is one too), so the full
   list matches **only in place fields** (a location, an address, a remote scope), never in a title or a description; the
@@ -240,7 +244,7 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   country on the list or being turned on. Turning a market on is staged, on the admin page: (1) the admin picks the
   country; its places source is enabled and loads; (2) when it has loaded (the "far fewer places" guard passed), the
   country is ready; (3) only then is it on, and collectors ask for it. Turning a market off stops its places source; the
-  places already loaded stay (old postings and people keep their verdicts through the retirement grace). A country with no
+  places already loaded stay, and so do its postings and people, hidden by the filters and no longer updated. A country with no
   places source cannot be picked.
 - **Matching by lookup, not regex alternations:** a token and bigram map `name -> countries`, linear, no ReDoS.
 - **Ambiguity guards:** ISO codes match case-sensitively and only in country or remote-scope fields ("IN", "IT", "NO",
@@ -284,8 +288,9 @@ to the activity log with who and when.
   the sweeps that begin again, and (once measured) the postings it adds. A country can be turned on only when its country
   data exists (phase 4); before that the page lists the countries and refuses with "not ready: its places are not in masi
   yet".
-- **Turning a country off** retires it (the grace above); users whose scope held it keep their other countries, and one
-  left with none falls back to the list's first country.
+- **Turning a country off** hides it and stops its updates (above) - nothing is deleted or closed; users whose scope held
+  it keep their other countries, and one left with none falls back to the list's first country (their saved choice kept,
+  so it returns if the country does).
 - At least one country stays on.
 Rendered sample to the operator before either page ships.
 
@@ -303,7 +308,7 @@ mirrored can still save). Only users with masi access ever write one.
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
-| 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch on the list with the empty-list guard; retirement grace; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
+| 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch closing only what reaches no country ever on the list, with the empty-list guard; off = filtered and not updated, never closed; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
 | 6+ | A market's own boards and registers (its job boards, its company register), one by one, each with numbers and the operator's OK | per source |
 
