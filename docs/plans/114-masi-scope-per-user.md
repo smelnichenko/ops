@@ -189,8 +189,12 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
 - **Settlements: EHAK,** published monthly by Maa- ja Ruumiamet (the Estonian Land and Spatial Development Board) - every
   county, municipality and settlement (city, small town, village, city district) with its type and the units it lies in
   (`asustusyksus` attributes `ANIMI`, `TYYP`, `ONIMI`, `MNIMI`). Use not restricted; credit the Board and the data's date.
-- **Postal codes:** assigned by Omniva and carried in the address data system (ADS) extracts (open data, credit the
-  Board); Omniva's own CSV as the check. Each code with the settlements it serves.
+- **Postal codes:** assigned by Omniva. Read from GeoNames' Estonian postal file (`download.geonames.org/export/zip/EE.zip`,
+  CC BY 4.0), which gives each of its 5,293 codes **with its settlement's EHAK code** (Laagri alevik 76401, Loo alevik
+  74201): joined by code, no name matching. Omniva's own file and ADS's extracts as the cross-check.
+- **Measured 2026-11-11:** EHAK `asustusyksus` (exported 2026-11-01) holds 4,715 settlements - `TYYP` 3 alev, 4 and 5
+  linn, 6 linnaosa, 7 alevik (185), 8 küla (4,459) - each name with its type word ("Loo alevik", "Loo küla"; matched
+  without it, compounds like "Mäeküla" whole), 394 names in more than one parish; the DBF is cp1257, not UTF-8.
 - **Kept current by masi itself:** a source `places:ee` (a collector like any other: a cron, runs on the Sources page,
   its failures alerted) reads the downloads monthly, after the Board's beginning-of-month release, and updates table
   `place (country, code, kind, municipality_code, county_code, postal_codes, source_date, superseded_by)` - keyed by the
@@ -292,7 +296,8 @@ mirrored can still save). Only users with masi access ever write one.
 
 | # | What | Visible change |
 |---|---|---|
-| 0 | Estonia's official places (EHAK settlements and postal codes) in table `place`, seeded from a snapshot and kept current by the monthly source `places:ee`; searchable (`/places/search`, `pg_trgm` + `unaccent`); they replace the hand-made list in place fields; the places' version in the sweep stamp; the old-vs-new verdict difference over production listed and checked | postings in Estonian villages no longer dropped; a new run row each month |
+| 0a | Tables `place` and `place_name` (trigram index built concurrently), the snapshot seed, the monthly source `places:ee` (EHAK + GeoNames postal codes, diff-only, renames kept), `/places/search` | place search; a new run row each month |
+| 0b | The gate reads the places in place fields (postings and people), the places' version in the sweep stamp, `READING` raised; the old-vs-new verdict difference over production listed and checked in the PR | postings in Estonian villages no longer dropped |
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
