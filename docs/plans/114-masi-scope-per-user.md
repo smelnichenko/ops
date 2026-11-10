@@ -288,9 +288,10 @@ to the activity log with who and when.
   the sweeps that begin again, and (once measured) the postings it adds. A country can be turned on only when its country
   data exists (phase 4); before that the page lists the countries and refuses with "not ready: its places are not in masi
   yet".
-- **Turning a country off** hides it and stops its updates (above) - nothing is deleted or closed; users whose scope held
-  it keep their other countries, and one left with none falls back to the list's first country (their saved choice kept,
-  so it returns if the country does).
+- **Turning a country off** hides it and stops its updates (above) - nothing is deleted or closed. For the users it is as if
+  every user's list lost that entry (the operator, 2026-11-11): **a user's effective scope = their saved countries ∩ the
+  market list**, computed at read time; their saved choice is never rewritten, so the country comes back to everyone who had
+  it when it is turned on again. One whose effective list is empty sees the list's first country until they choose.
 - At least one country stays on.
 Rendered sample to the operator before either page ships.
 
