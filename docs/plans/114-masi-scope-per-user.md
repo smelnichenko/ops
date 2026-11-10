@@ -4,7 +4,8 @@
 decisions as proposed the same day ("yes to everything"),** then amended them: "there should be an admin settings page,
 visible for admins, where the countries list can be configured, bootstrapped as estonia, this list will be used by people
 connections as well. turning on a new country is like extending to a new market", and "user should be able to configure,
-which companies and people - all data classes country filters apply to him". Phases 1-3 are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
+have some location, either physical or virtual, so it can be sorted by". Phases 1-3 are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -13,6 +14,7 @@ remote or work from home positions" (2026-11-10).
 1. **Each user sets their scope in the app,** per kind of data: the countries for jobs (and how remote jobs count), for
    companies, and for people.
 2. **Each user sees, is matched to and is told about only the jobs, companies and people in their scope.**
+4. **Every masi entity has a location, physical or virtual,** shown and sortable in every list (plan 112's practice).
 3. **masi collects for the countries an admin has turned on, and nothing beyond them** (plan 110's rule, generalised:
    the list starts as `{EE}`). Jobs and people alike. **Turning a country on is entering a new market.**
 
@@ -83,6 +85,39 @@ listing is judged on its own words. Until each source's next run fills them, a r
 
 **Reads by id stay unscoped:** `/jobs/{id}`, packages, links in alerts and the digest. Removing a country never hides a
 user's applications in flight.
+
+### Every entity has a location
+
+`Location = (kind: PHYSICAL | VIRTUAL, country: ISO-2 or null, region: EU | EEA | EUROPE | EMEA | NORDICS | BALTICS |
+WORLDWIDE | null, place: text or null)`. **Physical:** a place on the map (an office, a home address, a town). **Virtual:**
+a presence with no place - remote work, a website, an online meeting, a mail domain - placed by the country or region it
+serves when it says one.
+
+**One primary location per entity, for showing and sorting;** the reach rows (below) for filtering, since a job or company
+can reach several countries. Stored as `loc_kind`, `loc_country`, `loc_region`, `loc_place` on the root entities; the
+others take theirs from what they belong to.
+
+| Entity | Its location |
+|---|---|
+| Listing | its own words: a place (physical) or remote with its scope (virtual) |
+| Job | its open listings': the first physical one, else the first virtual one; a closed job keeps its last |
+| Company | its registered address (physical; an Äriregister code is `EE`); else its website's country-code domain or its jobs' (virtual) |
+| Person | the place they state (physical); else where they were found: a register's country, or GitHub with no place (virtual, no country) |
+| Contact | the person's or, failing that, the company's |
+| Source | virtual: the board's site and the market it serves (cvkeskus `EE`, Jobicy `WORLDWIDE`); an employer's own board takes the employer's |
+| Calendar event | its meeting place (physical), an online meeting (virtual), else the linked job's or company's |
+| Inbound mail | virtual: the sender's country-code domain, else the linked company's |
+| CV version | virtual: the market its language serves (`et` -> `EE`, `en` -> none) |
+| Report | virtual: the market list it covers |
+| Package, match, override, activity, run, lifecycle event | the job's, company's, person's or source's they belong to (a join, not a copy) |
+| Internal rows (flags, LLM calls, fingerprints, rejections, pictures, register placements) | their parent's; not shown |
+
+**Sorting** (one rule for every list): by the country's English name (a region's label when there is no country, after the
+countries; no location last), then physical before virtual, then the place text. Server-side for paged lists, as plan 112
+requires; a `Location` column on every list that shows one of these entities.
+
+**Filtering** stays on the reach rows: the location says where an entity is, the reach says which markets it counts for
+("remote, EU" is one virtual location reaching every EU country that is on).
 
 ### Companies and people, judged once too
 
@@ -175,8 +210,8 @@ mirrored can still save). Only users with masi access ever write one.
 |---|---|---|
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
-| 3a | `job_listing` place columns; `job_reach`, `company_reach`, `person_reach` written at ingest, registration, close and merge; idempotent backfill of every job (open, closed, manual), company and person, repeated until none lacks rows; gauge `masi_rows_without_reach{kind}` with an alert and runbook | none |
-| 3b | Read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
+| 3a | location columns on the root entities, filled at write and backfilled; `job_listing` place columns; `job_reach`, `company_reach`, `person_reach` written at ingest, registration, close and merge; idempotent backfill of every job (open, closed, manual), company and person, repeated until none lacks rows; gauge `masi_rows_without_reach{kind}` with an alert and runbook | none |
+| 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch on the list with the empty-list guard; retirement grace; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
