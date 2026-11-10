@@ -207,10 +207,12 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
 
 ### Country data and matching
 
-- One bundled, versioned, pinned file: per country its names (English and own language), ISO codes, regions (EU, EEA,
-  Europe, EMEA, Nordics, Baltics...), UTC offsets (standard and summer), and place names. Estonia keeps its hand-made list.
-  Others start from GeoNames `cities15000` filtered to cities of 100k or more plus capitals (CC BY 4.0: attribution in
-  `NOTICE` and on the settings page; the dump date pinned; only the derived file committed).
+- **Per country, small and stable, in code:** its names (English and own language), ISO codes, regions (EU, EEA, Europe,
+  EMEA, Nordics, Baltics...), UTC offsets (standard and summer) - pinned by the gate's pin test.
+- **Places, in table `place`, kept current by a periodic source per country** (as `places:ee`, phase 0): a country's
+  official feed where one exists, else GeoNames `cities15000` filtered to cities of 100k or more plus capitals (CC BY 4.0:
+  attribution in `NOTICE` and on the settings page), monthly; a snapshot in masi's resources seeds a fresh database. Turning
+  a market on needs its places loaded (the admin page says "not ready" until they are).
 - **Matching by lookup, not regex alternations:** a token and bigram map `name -> countries`, linear, no ReDoS.
 - **Ambiguity guards:** ISO codes match case-sensitively and only in country or remote-scope fields ("IN", "IT", "NO",
   "BE" are English words); foreign city names match only in location fields, never free text, with a stop-list ("Reading",
