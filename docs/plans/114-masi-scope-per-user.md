@@ -5,8 +5,9 @@ decisions as proposed the same day ("yes to everything"),** then amended them: "
 visible for admins, where the countries list can be configured, bootstrapped as estonia, this list will be used by people
 connections as well. turning on a new country is like extending to a new market", and "user should be able to configure,
 which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
-have some location, either physical or virtual, so it can be sorted by", and "think about db performance!". Phases 1-3
-are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
+should be a list of estonia addresses - cities, etc. with postal indexes somewhere". Phase 0 (Estonia's official places),
+then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -176,6 +177,26 @@ Measured in production 2026-11-11: `company` 28,953 rows, `person` 11,956, `cont
 - **Partner pushes** are gated on the market list. The scope is a relevance filter, not an access boundary: the partner
   API stays unscoped.
 
+### Estonia's official places (phase 0, before the rest)
+
+masi's Estonian places are a hand-made list today; cvkeskus' cards named Laagri and Loo, which it lacked, and their
+postings were dropped as abroad (2026-11-10). Replaced by the official data:
+- **Settlements: EHAK,** published monthly by Maa- ja Ruumiamet (the Estonian Land and Spatial Development Board) - every
+  county, municipality and settlement (city, small town, village, city district) with its type and the units it lies in
+  (`asustusyksus` attributes `ANIMI`, `TYYP`, `ONIMI`, `MNIMI`). Use not restricted; credit the Board and the data's date.
+- **Postal codes:** assigned by Omniva and carried in the address data system (ADS) extracts (open data, credit the
+  Board); Omniva's own CSV as the check. Each code with the settlements it serves.
+- **The derived file** (`ee-places.csv` in masi's resources: name, type, municipality, county, postal codes) is built by a
+  script from the downloads, its source dates in its header and in `NOTICE`, renewed by a PR when EHAK changes (a few
+  times a year), pinned by the gate's pin test.
+- **Matching, without false keeps:** village names are often words ("Kuu", "Ala", "Ida", "Loo" is one too), so the full
+  list matches **only in place fields** (a location, an address, a remote scope), never in a title or a description; the
+  hand-made list of towns, counties and address words stays for free text. A postal code counts only beside a settlement it
+  serves or "Estonia"/"Eesti" in the same field (Finland's codes are five digits too). Matching by lookup (a token and
+  bigram map), not one regex of 4,700 names.
+- **Measured before it ships:** every open listing and every person in production judged by the old list and the new; the
+  difference is listed in the PR (expected: only more kept, each one checked against its posting); `READING` raised.
+
 ### Country data and matching
 
 - One bundled, versioned, pinned file: per country its names (English and own language), ISO codes, regions (EU, EEA,
@@ -236,6 +257,7 @@ mirrored can still save). Only users with masi access ever write one.
 
 | # | What | Visible change |
 |---|---|---|
+| 0 | Estonia's official places (EHAK settlements and postal codes) replace the hand-made list in place fields; the old-vs-new verdict difference over production listed and checked | postings in Estonian villages no longer dropped |
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
