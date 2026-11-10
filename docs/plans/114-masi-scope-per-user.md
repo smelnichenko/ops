@@ -7,7 +7,8 @@ connections as well. turning on a new country is like extending to a new market"
 which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
 have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
 should be a list of estonia addresses - cities, etc. with postal indexes somewhere", "we will need to have periodic update
-service", "renames should be supported". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+service", "renames should be supported", "later we will have address sources for other countries as well, should
+depend on supported list, configured by admin". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -218,8 +219,13 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   EMEA, Nordics, Baltics...), UTC offsets (standard and summer) - pinned by the gate's pin test.
 - **Places, in table `place`, kept current by a periodic source per country** (as `places:ee`, phase 0): a country's
   official feed where one exists, else GeoNames `cities15000` filtered to cities of 100k or more plus capitals (CC BY 4.0:
-  attribution in `NOTICE` and on the settings page), monthly; a snapshot in masi's resources seeds a fresh database. Turning
-  a market on needs its places loaded (the admin page says "not ready" until they are).
+  attribution in `NOTICE` and on the settings page), monthly; a snapshot in masi's resources seeds a fresh database.
+- **Address sources follow the market list:** a country's places source (`places:ee`, later `places:lv`...) runs only for a
+  country on the list or being turned on. Turning a market on is staged, on the admin page: (1) the admin picks the
+  country; its places source is enabled and loads; (2) when it has loaded (the "far fewer places" guard passed), the
+  country is ready; (3) only then is it on, and collectors ask for it. Turning a market off stops its places source; the
+  places already loaded stay (old postings and people keep their verdicts through the retirement grace). A country with no
+  places source cannot be picked.
 - **Matching by lookup, not regex alternations:** a token and bigram map `name -> countries`, linear, no ReDoS.
 - **Ambiguity guards:** ISO codes match case-sensitively and only in country or remote-scope fields ("IN", "IT", "NO",
   "BE" are English words); foreign city names match only in location fields, never free text, with a stop-list ("Reading",
