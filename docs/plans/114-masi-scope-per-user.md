@@ -7,7 +7,7 @@ connections as well. turning on a new country is like extending to a new market"
 which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
 have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
 should be a list of estonia addresses - cities, etc. with postal indexes somewhere", "we will need to have periodic update
-service". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+service", "renames should be supported". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -188,13 +188,20 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   Board); Omniva's own CSV as the check. Each code with the settlements it serves.
 - **Kept current by masi itself:** a source `places:ee` (a collector like any other: a cron, runs on the Sources page,
   its failures alerted) reads the downloads monthly, after the Board's beginning-of-month release, and updates table
-  `place (country, name, kind, municipality, county, postal_codes, source_date)` - diff-only, every run's added and removed
-  names on its run row. Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, the ADS service for postal codes).
+  `place (country, code, kind, municipality_code, county_code, postal_codes, source_date, superseded_by)` - keyed by the
+  source's own code (EHAK's `AKOOD`), never by a name - diff-only, every run's added, renamed, merged and removed places on
+  its run row.
+- **Renames and merges keep every name:** `place_name (place_id, name, valid_from, valid_to)` holds each name a place has
+  had. A rename adds the new name and closes the old one's validity, and **the old name still matches**, to the same place:
+  boards and people write old names for years. A merged or abolished settlement gets `superseded_by` its successor (ADS's
+  history extract, nr 9, gives both), and its names match the successor. So an update never drops a posting or a person
+  by a rename; only a name that leaves Estonia's places entirely (none expected) changes a verdict, with the grace below.
+  Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, the ADS service for postal codes).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing, or far fewer places than the table
   holds, changes nothing and fails (guards fail closed).
-- **The places' version joins the sweep stamp** (a digest of the `place` rows in use, read at run start like the market
-  list), so an update begins running sweeps again, as a code change does. A settlement the update removes (municipalities
+- **The places' version joins the sweep stamp** (a digest of the names that match, old ones included, read at run start
+  like the market list; a rename that only adds a name still changes it, as any reading change does), so an update begins running sweeps again, as a code change does. A settlement the update removes (municipalities
   merge) closes nothing at once: its postings keep the old verdict for the retirement grace, then are judged anew.
 - The gate's pin test pins the matching code; the data is pinned by its version in the stamp.
 - **Matching, without false keeps:** village names are often words ("Kuu", "Ala", "Ida", "Loo" is one too), so the full
