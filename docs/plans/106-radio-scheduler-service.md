@@ -113,7 +113,8 @@ The cuts, each its own PR, each behaviour-checked by the existing tests plus its
   - `radio/<radio>/lease` (retained) - who holds the radio and until when. Published by the scheduler only.
   - `radio/<radio>/request` - a row asks for a radio (receiver, priority, wanted until); request/response by
     correlation id, with a message expiry so a stale ask never runs late.
-  - `rx/<receiver>/state` (retained, Last Will `offline`) - listening, ended, off.
+  - `radar/<host>/alive` (retained `online`, Last Will `offline`) - the radar process: one connection, one Will.
+  - `rx/<receiver>/state` (retained, no Will of its own) - listening, ended, off.
   - `sdr/<radio>/health` (retained, Last Will) - rsp_tcp and the tuner, from the agent on the pi4 (initHw errors,
     restarts).
   - `reply/<login>/...` - the answer to a request, on the asker's Response Topic. Each login reads only its own.
@@ -130,6 +131,15 @@ Decided for step 3 by step 2's review (2026-11-09):
   and a lease carries a generation number that holders check along with `until`.
 - **A Last Will is per connection.** Each `rx/<receiver>/state` Will needs its own connection (distinct client id, one
   login), or one process-level liveness topic replaces them; the ACL may change with that choice.
+  **Decided (operator, 2026-11-10): one Will per radar process.** Rows live and die in one JVM, so per-row Wills buy ~26
+  connections and catch nothing more. Liveness is layered:
+  - clean stop: radar releases its leases and publishes `offline` itself;
+  - sudden death, network cut: the broker publishes the Will after 1.5 keepalives (10 s keepalive: within 15 s), and the
+    scheduler drops every lease held by that host (holders are named `<host>/<row>`);
+  - alive but stuck (the MQTT client still pings, nothing decoded): a row renews its lease only while its reader gets
+    samples, so the lease expires on the scheduler's clock;
+  - a reader that dies inside a live radar releases its lease at once (`ended()`, the keep-open arc's step 3);
+  - broker down: radar reconnects and asks again, and leases not renewed meanwhile are expired.
 - **The broker needs an alert before step 3 relies on it.** It has no monitoring on the pi4 today: a dead broker
   silently means nothing new is granted. An exporter needs a `$SYS` read login, which the ACL does not have yet.
 
@@ -208,7 +218,7 @@ Messages (JSON, QoS 1):
   what arrived before the marker as the retained leases. That order is Mosquitto's, not an MQTT guarantee.
 
 Before radar is a client: the scheduler does not yet read `rx/<receiver>/state`, so a row that dies while waiting holds its
-place until its patience lapses. radar uses short patience until the Last Will choice above is made. A request sent while
+place until its patience lapses. radar uses short patience until `radar/<host>/alive` is read. A request sent while
 the scheduler restarts is lost: radar times out and asks again.
 
 Before it runs on the pi4: Java on the box, `Requires=` nothing but `After=` the broker, a wait for a synced clock of about 2 minutes, then
