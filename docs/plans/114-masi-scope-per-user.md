@@ -3,14 +3,16 @@
 **Status:** reviewed 2026-11-11 (architecture: 4 critical, 15 warnings, all merged below). **The operator accepted all six
 decisions as proposed the same day ("yes to everything"),** then amended them: "there should be an admin settings page,
 visible for admins, where the countries list can be configured, bootstrapped as estonia, this list will be used by people
-connections as well. turning on a new country is like extending to a new market". Phases 1-3 are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+connections as well. turning on a new country is like extending to a new market", and "user should be able to configure,
+which companies and people - all data classes country filters apply to him". Phases 1-3 are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
 ## Goal
 
-1. **Each user sets their scope in the app:** the countries they can work in, and how remote jobs count.
-2. **Each user sees, is matched to and is told about only the jobs in their scope.**
+1. **Each user sets their scope in the app,** per kind of data: the countries for jobs (and how remote jobs count), for
+   companies, and for people.
+2. **Each user sees, is matched to and is told about only the jobs, companies and people in their scope.**
 3. **masi collects for the countries an admin has turned on, and nothing beyond them** (plan 110's rule, generalised:
    the list starts as `{EE}`). Jobs and people alike. **Turning a country on is entering a new market.**
 
@@ -53,8 +55,11 @@ remote open to it counted. So the first phases change nothing anyone sees.
 
 ### A scope
 
-`Scope = (countries: non-empty set of ISO-2 codes of countries that are on, remote: OFF | ALSO | ONLY)`.
-- **countries:** where the user can work. Default `{EE}`. At least one; only countries that are on.
+`Scope = (jobs: countries + remote, companies: countries, people: countries)`, each a non-empty set of ISO-2 codes of
+countries that are on.
+- **jobs.countries:** where the user can work. Default `{EE}`. At least one; only countries that are on.
+- **companies.countries, people.countries:** default "the same as jobs" (one list for most users, kept in step when the
+  jobs list changes); a user may set either separately - Estonian companies but people from every market, say.
 - **remote:** `ALSO` (default, today's rule): on-site and hybrid jobs in the countries, and remote jobs that can be done
   from them. `ONLY`: remote jobs alone. `OFF`: on-site and hybrid alone.
 - A job of unknown work form counts as on-site or hybrid (it is shown under `ALSO` and `OFF`, not `ONLY`).
@@ -78,6 +83,16 @@ listing is judged on its own words. Until each source's next run fills them, a r
 
 **Reads by id stay unscoped:** `/jobs/{id}`, packages, links in alerts and the digest. Removing a country never hides a
 user's applications in flight.
+
+### Companies and people, judged once too
+
+- `company_reach(company_id, country, how)`, `how` = `REGISTERED` (its register: an Äriregister code is `EE`) or
+  `HIRING` (it has a job whose `job_reach` holds the country). Written when a company is registered or merged and when its
+  jobs' rows change, diff-only under the company's lock.
+- `person_reach(person_id, country, how)`, `how` = `STATED` (the place the person states, by `CountryReach`) or
+  `REGISTERED` (a register lists them: Äriregister's people are `EE`). Written when a person is captured or merged.
+- A user's filter for companies and people is the same indexed `exists` on their own list. Read paths: `/companies` and
+  their figures and contacts, `/persons` and `/persons/of-company`, `/contacts`. Reads by id stay unscoped, as for jobs.
 
 ### The gate on the market list
 
@@ -131,8 +146,9 @@ are each their own collection path.
 
 ### The settings page
 
-`/masi/settings` (tab "Settings"): the user's countries (searchable multi-select of the countries that are on), the remote
-choice (three radio buttons), a line on what remote means, and the GeoNames attribution. API: `GET/PUT /me/scope`, the
+`/masi/settings` (tab "Settings"): three blocks - Jobs (countries, the remote choice as three radio buttons, a line on
+what remote means), Companies and People (each "same as jobs" or their own countries) - each a searchable multi-select
+of the countries that are on; and the GeoNames attribution. API: `GET/PUT /me/scope`, the
 caller's own only; refused: no countries, a country that is off. Countries are never shown with their owners.
 
 ### The admin settings page
@@ -159,8 +175,8 @@ mirrored can still save). Only users with masi access ever write one.
 |---|---|---|
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
-| 3a | `job_listing` place columns; `job_reach` written at ingest, close and merge; idempotent backfill of every job (open, closed, manual) repeated until none lacks rows; gauge `masi_jobs_without_reach` with an alert and runbook | none |
-| 3b | Read filters on every list path (jobs, similar, listings, companies and figures, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
+| 3a | `job_listing` place columns; `job_reach`, `company_reach`, `person_reach` written at ingest, registration, close and merge; idempotent backfill of every job (open, closed, manual), company and person, repeated until none lacks rows; gauge `masi_rows_without_reach{kind}` with an alert and runbook | none |
+| 3b | Read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch on the list with the empty-list guard; retirement grace; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
