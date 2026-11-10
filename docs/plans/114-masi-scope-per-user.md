@@ -8,7 +8,8 @@ which companies and people - all data classes country filters apply to him", and
 have some location, either physical or virtual, so it can be sorted by", "think about db performance!", and "there
 should be a list of estonia addresses - cities, etc. with postal indexes somewhere", "we will need to have periodic update
 service", "renames should be supported", "later we will have address sources for other countries as well, should
-depend on supported list, configured by admin". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+depend on supported list, configured by admin", "make addresses easily searcheable - like with something we have instead
+of elasticsearch". Phase 0 (Estonia's official places, kept current by masi), then 1-3, are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -201,6 +202,14 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing, or far fewer places than the table
   holds, changes nothing and fails (guards fail closed).
+- **Searchable, in Postgres:** nothing like Elasticsearch runs on the platform (logs moved to ClickHouse, an analytics
+  store); masi's own database already has `pg_trgm`, and `unaccent` is available. `place_name.search` = the name
+  lower-cased and without diacritics (`unaccent`), with a GIN trigram index (`gin_trgm_ops`); postal codes indexed too.
+  `GET /places/search?q=&country=&limit=` answers by trigram similarity, a prefix first ("parnu" finds Pärnu, "tallin"
+  Tallinn, "10148" its settlement), a former name shown with the current one ("Kohtla-Nõmme -> Toila vald"). One query, in
+  the same transaction as everything else, no copy kept in sync. Budget as the lists: p95 under 50 ms, EXPLAIN on the
+  standby in the PR. Street-level addresses (ADS's full extract, about a million rows) fit the same table and index if a
+  later phase needs them. The gate does not search: it matches through its in-memory lookup.
 - **The places' version joins the sweep stamp** (a digest of the names that match, old ones included, read at run start
   like the market list; a rename that only adds a name still changes it, as any reading change does), so an update begins running sweeps again, as a code change does. A settlement the update removes (municipalities
   merge) closes nothing at once: its postings keep the old verdict for the retirement grace, then are judged anew.
@@ -280,7 +289,7 @@ mirrored can still save). Only users with masi access ever write one.
 
 | # | What | Visible change |
 |---|---|---|
-| 0 | Estonia's official places (EHAK settlements and postal codes) in table `place`, seeded from a snapshot and kept current by the monthly source `places:ee`; they replace the hand-made list in place fields; the places' version in the sweep stamp; the old-vs-new verdict difference over production listed and checked | postings in Estonian villages no longer dropped; a new run row each month |
+| 0 | Estonia's official places (EHAK settlements and postal codes) in table `place`, seeded from a snapshot and kept current by the monthly source `places:ee`; searchable (`/places/search`, `pg_trgm` + `unaccent`); they replace the hand-made list in place fields; the places' version in the sweep stamp; the old-vs-new verdict difference over production listed and checked | postings in Estonian villages no longer dropped; a new run row each month |
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
