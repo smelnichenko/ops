@@ -98,7 +98,7 @@ WORLDWIDE | null, place: text or null)`. **Physical:** a place on the map (an of
 a presence with no place - remote work, a website, an online meeting, a mail domain - placed by the country or region it
 serves when it says one.
 
-**One primary location per entity, for showing and sorting;** the reach rows (below) for filtering, since a job or company
+**One primary location per entity, for showing and sorting;** the reach arrays (above) for filtering, since a job or company
 can reach several countries. Stored as `loc_kind`, `loc_country`, `loc_region`, `loc_place` on the root entities; the
 others take theirs from what they belong to.
 
@@ -121,7 +121,7 @@ others take theirs from what they belong to.
 countries; no location last), then physical before virtual, then the place text. Server-side for paged lists, as plan 112
 requires; a `Location` column on every list that shows one of these entities.
 
-**Filtering** stays on the reach rows: the location says where an entity is, the reach says which markets it counts for
+**Filtering** stays on the reach arrays: the location says where an entity is, the reach says which markets it counts for
 ("remote, EU" is one virtual location reaching every EU country that is on).
 
 ### Companies and people, judged once too
@@ -245,7 +245,7 @@ mirrored can still save). Only users with masi access ever write one.
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
 | 6+ | A market's own boards and registers (its job boards, its company register), one by one, each with numbers and the operator's OK | per source |
 
-**Tests named now:** the EE verdict replay; a reach-row invariant (every job has rows; rows match its open listings);
+**Tests named now:** the EE verdict replay; a reach invariant (every row has its arrays; a job's are the union of its open listings');
 the reach arrays' GIN and `loc_sort` indexes present (`SchemaIntegrityTest`); a list-query plan test (no sequential scan on `job`, `company`, `person` for a scoped list); `TwoInstancesTest` for ScopeWatch and reach writes; a run whose market list changes
 mid-run keeps its stamp and gate; the empty-set guard closes nothing; the scoped-read architecture test; vitest for the
 settings page; Sonar complexity checked by eye on `CountryReach`.
