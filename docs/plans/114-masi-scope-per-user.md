@@ -154,6 +154,9 @@ Measured in production 2026-11-11: `company` 28,953 rows, `person` 11,956, `cont
 - **No write churn:** arrays and locations are compared before an update and written only when they differ, so the WAL and
   the GIN indexes see changes, not traffic; a `reach_of text` column holds the market-list digest a row was judged under,
   and only rows whose digest differs are re-judged - once per market change, in batches, never every `ScopeWatch` sweep.
+- **masi shares its Postgres** (CNPG `schnappy-production-postgres`, primary + standby, direct to `-rw`, no PgBouncer) with
+  monitor, admin, chat and chess: an index on a table that can be large is built `CREATE INDEX CONCURRENTLY` (a Liquibase
+  changeset with `runInTransaction="false"`), never locking writes; checks and EXPLAINs run on the standby (`-ro`).
 - **Backfill in batches** of 1,000 rows per transaction with a pause between, idempotent and resumable, outside the busy
   collection minutes; the gauge `masi_rows_without_reach{kind}` shows the rest.
 - **Measured before each phase ships:** `EXPLAIN (ANALYZE, BUFFERS)` of every new or changed list query on production's
