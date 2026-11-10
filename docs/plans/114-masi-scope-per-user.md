@@ -5,7 +5,8 @@ decisions as proposed the same day ("yes to everything"),** then amended them: "
 visible for admins, where the countries list can be configured, bootstrapped as estonia, this list will be used by people
 connections as well. turning on a new country is like extending to a new market", and "user should be able to configure,
 which companies and people - all data classes country filters apply to him", and "essentially, any masi entity should
-have some location, either physical or virtual, so it can be sorted by". Phases 1-3 are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
+have some location, either physical or virtual, so it can be sorted by", and "think about db performance!". Phases 1-3
+are next. Asked for by the operator: "set of countries scope and/or remote jobs should be
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
@@ -69,16 +70,20 @@ countries that are on.
 
 ### Judging each listing once, reading per user
 
-`job_reach(job_id, listing_id, country, form)`, `form` ∈ `ON_SITE` | `HYBRID` | `REMOTE_PLACED` (remote, located in the
-country) | `REMOTE_OPEN` (remote, open to it by region, by naming it, or by working hours) | `UNKNOWN`. One row per listing
-and market country it reaches: rows carry their listing, so a closed listing's rows go with it and a merge moves rows
-with their listings. Written under the job lock at ingest (`ingestOne`), on close (`closeListingsOf`) and on merge
-(`mergeDuplicates`), diff-only (insert on conflict do nothing, delete what no longer holds), so two pods converge.
+Each listing is judged once against the market list, and the verdict is stored **on the row itself** as two small arrays
+of ISO-2 codes (design for speed: see "Database performance"):
+- `reach_onsite char(2)[]`: the market countries where it is on site, hybrid, or of unknown work form (unknown counts as
+  on-site);
+- `reach_remote char(2)[]`: the market countries it can be done remotely from - located there and remote, or open to
+  them by region, by naming them, or by working hours.
 
-**A user's filter**, one indexed `exists` for every list path: `r.country in (:countries) and (:remote = 'ALSO' or
-:remote = 'ONLY' and r.form in ('REMOTE_PLACED','REMOTE_OPEN') or :remote = 'OFF' and r.form not in
-('REMOTE_PLACED','REMOTE_OPEN'))`. Listings of open and closed jobs alike, `manual` included (they get rows for every
-market country they reach, or `EE` when they state nothing).
+A **job's** arrays are the union of its open listings' (a closed job keeps its last), recomputed under the job lock in
+`ingestOne`, `closeListingsOf` and `mergeDuplicates`, and written only when they change. `manual` listings get arrays too
+(`EE` when they state nothing). Listings of open and closed jobs alike.
+
+**A user's filter**, one indexed predicate on the job row: `ALSO`: `reach_onsite && :c or reach_remote && :c`; `ONLY`:
+`reach_remote && :c`; `OFF`: `reach_onsite && :c`. **When the user's countries cover the whole market list and remote is
+`ALSO`, no filter is added at all** - every user today, and most later.
 
 **Listing fields:** a changeset adds `country`, `remote`, `remote_scope` to `job_listing`, filled at ingest, so each
 listing is judged on its own words. Until each source's next run fills them, a re-judge uses the job's fields.
@@ -121,13 +126,36 @@ requires; a `Location` column on every list that shows one of these entities.
 
 ### Companies and people, judged once too
 
-- `company_reach(company_id, country, how)`, `how` = `REGISTERED` (its register: an Äriregister code is `EE`) or
-  `HIRING` (it has a job whose `job_reach` holds the country). Written when a company is registered or merged and when its
-  jobs' rows change, diff-only under the company's lock.
-- `person_reach(person_id, country, how)`, `how` = `STATED` (the place the person states, by `CountryReach`) or
-  `REGISTERED` (a register lists them: Äriregister's people are `EE`). Written when a person is captured or merged.
-- A user's filter for companies and people is the same indexed `exists` on their own list. Read paths: `/companies` and
-  their figures and contacts, `/persons` and `/persons/of-company`, `/contacts`. Reads by id stay unscoped, as for jobs.
+- `company.reach char(2)[]`: the market countries it is registered in (an Äriregister code is `EE`) or hiring in (a job
+  of its reaches the country). Rewritten when the company is registered or merged and when its jobs' arrays change.
+- `person.reach char(2)[]`: the country of the place the person states (by `CountryReach`), or of a register listing
+  them (Äriregister's people are `EE`). Rewritten when the person is captured or merged.
+- The user's filter is `reach && :c` on the row, skipped when their list covers the market list. Read paths: `/companies`
+  and their figures and contacts, `/persons` and `/persons/of-company`, `/contacts` (the person's array). Reads by id stay
+  unscoped, as for jobs.
+
+### Database performance
+
+Measured in production 2026-11-11: `company` 28,953 rows, `person` 11,956, `contact` 11,994, open jobs 1,410, open listings
+1,709, `register_company` 371,595 (the register's index). Designed to stay fast at ten times that, when markets are added.
+- **No reach tables, no joins:** the arrays live on the row, each with a GIN index (`gin (reach_onsite)`, `gin
+  (reach_remote)`, `gin (reach)`); `&&` with a handful of codes is an index scan, and the planner ORs the two job indexes.
+  A market list has a few countries, so the arrays stay tiny.
+- **The common case costs nothing:** no predicate when a user's lists cover the market list.
+- **Sorting by location never computes:** `loc_sort text` is written with the location (the country's English name or the
+  region's label, kind, place, lower-cased), with a btree index `(loc_sort, id)`; on `job` a partial one `where status =
+  'OPEN'`. Paged lists that can grow large (companies, people, the register) page by key (`where (loc_sort, id) > (...)`),
+  not `OFFSET`.
+- **Derived locations** (packages, matches, activity, runs) sort through a join to their parent's indexed `loc_sort`: the
+  parents are small and the foreign keys are indexed (`SchemaIntegrityTest`).
+- **No write churn:** arrays and locations are compared before an update and written only when they differ, so the WAL and
+  the GIN indexes see changes, not traffic; a `reach_of text` column holds the market-list digest a row was judged under,
+  and only rows whose digest differs are re-judged - once per market change, in batches, never every `ScopeWatch` sweep.
+- **Backfill in batches** of 1,000 rows per transaction with a pause between, idempotent and resumable, outside the busy
+  collection minutes; the gauge `masi_rows_without_reach{kind}` shows the rest.
+- **Measured before each phase ships:** `EXPLAIN (ANALYZE, BUFFERS)` of every new or changed list query on production's
+  standby (read-only), pasted in the PR; budget **p95 under 50 ms** for a list page and its count; after deploy,
+  `pg_stat_statements` compared with the week before.
 
 ### The gate on the market list
 
@@ -210,7 +238,7 @@ mirrored can still save). Only users with masi access ever write one.
 |---|---|---|
 | 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
-| 3a | location columns on the root entities, filled at write and backfilled; `job_listing` place columns; `job_reach`, `company_reach`, `person_reach` written at ingest, registration, close and merge; idempotent backfill of every job (open, closed, manual), company and person, repeated until none lacks rows; gauge `masi_rows_without_reach{kind}` with an alert and runbook | none |
+| 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch on the list with the empty-list guard; retirement grace; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
@@ -218,7 +246,7 @@ mirrored can still save). Only users with masi access ever write one.
 | 6+ | A market's own boards and registers (its job boards, its company register), one by one, each with numbers and the operator's OK | per source |
 
 **Tests named now:** the EE verdict replay; a reach-row invariant (every job has rows; rows match its open listings);
-`SchemaIntegrityTest` on `job_reach`; `TwoInstancesTest` for ScopeWatch and reach writes; a run whose market list changes
+the reach arrays' GIN and `loc_sort` indexes present (`SchemaIntegrityTest`); a list-query plan test (no sequential scan on `job`, `company`, `person` for a scoped list); `TwoInstancesTest` for ScopeWatch and reach writes; a run whose market list changes
 mid-run keeps its stamp and gate; the empty-set guard closes nothing; the scoped-read architecture test; vitest for the
 settings page; Sonar complexity checked by eye on `CountryReach`.
 
@@ -237,4 +265,4 @@ settings page; Sonar complexity checked by eye on `CountryReach`.
   codes and the ambiguity rule keep false keeps rare; misses are shown on the Sources page per country.
 - **Spend:** a new market adds postings to analyse; the AI lanes keep their daily budgets, and the Sources page
   shows what each market adds.
-- **A gap in reach rows** hides a job from every user: the gauge and its alert, and ScopeWatch filling gaps it finds.
+- **A row without reach** hides a job from every user: the gauge and its alert, and ScopeWatch filling gaps it finds.
