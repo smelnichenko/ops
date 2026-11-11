@@ -146,16 +146,22 @@ stated place); remote and virtual locations are untouched by it and follow the r
 - **The origin** is the user's own: a place from the list (settlement, district or postal code, through `/places/search`)
   or a point picked on a map. No street addresses are kept and no address leaves the cluster: no outside geocoder.
   Never shown to another user.
-- **Distance (km/mi) in Postgres:** `cube` and `earthdistance` (contrib, in production's Postgres 18 image; PostGIS is not
-  in the CNPG image and is not needed at this scale): a GiST index on `ll_to_earth(lat, lon)` of `place`; the places within
-  the radius are `earth_box(ll_to_earth(:lat, :lon), :m) @> ll_to_earth(lat, lon) and earth_distance(...) <= :m` - an
-  index scan over ~5,000 points, a few hundred ids - then `loc_place_id = any(:ids)` on the btree index. Sorting by
-  distance: the same expression per page row (the page is small). Budget as every list: p95 under 50 ms.
-- **Travel time (min) by a routing engine, self-hosted:** OpenTripPlanner (or R5, chosen in a spike) on Estonia's
-  OpenStreetMap extract and the national public transport timetable (GTFS, Transpordiamet, daily) - car, bike, walk and
-  transit in one service. It is asked once per user origin and mode: the minutes to every place's point, stored in
-  `user_reach(user_uuid, place_id, mode, minutes)` (~5,000 rows a user), refreshed when the origin changes and weekly
-  when the timetable does. The filter is then a join on `place_id` - no routing at read time.
+- **Computed once per user, never at read time** (the operator, 2026-11-11: "we will need to cache distances for users if
+  they use such filter, not to recalculate anything"): `user_reach(user_uuid, place_id, mode, km, minutes, origin_of)`,
+  PK `(user_uuid, mode, place_id)` and an index `(user_uuid, mode, km)` / `(user_uuid, mode, minutes)`; ~5,000 rows a user
+  and mode, written only for a user who sets a reach (lazily, on saving it, in one batch), for the modes they use. A list's
+  filter and its sort by distance are then a join on `loc_place_id` with a range on the cached value - no distance or
+  route is computed while reading. The cache is rewritten only when its inputs change: the user's origin (all their rows,
+  `origin_of` = the origin's digest), a place added or its point moved (that place's rows for every user, nothing else),
+  and for TRANSIT the timetable's weekly refresh (only users with a TRANSIT reach). Turning the reach off deletes the
+  user's rows (a cache, not data).
+- **Distance (km/mi):** filled in Postgres by `cube` and `earthdistance` (contrib, in production's Postgres 18 image;
+  PostGIS is not in the CNPG image and is not needed at this scale) - one `insert ... select earth_distance(...)` over
+  ~5,000 points, milliseconds.
+- **Travel time (min):** filled by a routing engine, self-hosted: OpenTripPlanner (or R5, chosen in a spike) on
+  Estonia's OpenStreetMap extract and the national public transport timetable (GTFS, Transpordiamet, daily) - car, bike,
+  walk and transit in one service, asked once per origin and mode for the minutes to every place's point (one
+  one-to-many request, not 5,000).
 - **A job with a coarse place** (only "Harju maakond" or "Estonia") has no point: under a reach it is kept or left out
   by a switch beside the filter ("include jobs with no exact place"), off by default, and counted ("12 more with no exact
   place").
@@ -354,8 +360,8 @@ mirrored can still save). Only users with masi access ever write one.
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
-| 3d | Points on every place (EHAK polygons, converted; GeoNames cross-check), `loc_place_id` on job, company, person; `cube` + `earthdistance` and the GiST index; the reach filter by distance (km/mi) from a place or map point, with the coarse-place switch; Settings: the origin and radius | "within N km of ..." |
-| 3e | The routing engine as a cluster service (after its spike; the service OK'd 2026-11-11), `user_reach`, the travel-time reach by mode | "within N min by transit/car/bike/walk" |
+| 3d | Points on every place (EHAK polygons, converted; GeoNames cross-check), `loc_place_id` on job, company, person; `cube` + `earthdistance`; `user_reach` (the per-user cache) and the reach filter by distance (km/mi) from a place or map point, with the coarse-place switch; Settings: the origin and radius | "within N km of ..." |
+| 3e | The routing engine as a cluster service (after its spike; the service OK'd 2026-11-11), its minutes in `user_reach`, the travel-time reach by mode | "within N min by transit/car/bike/walk" |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch closing only what reaches no country ever on the list, with the empty-list guard; off = filtered and not updated, never closed; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
 | 6+ | A market's own boards and registers (its job boards, its company register), one by one, each with numbers and the operator's OK | per source |
