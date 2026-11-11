@@ -330,6 +330,29 @@ later each market's own). They are never stored as separate places that happen t
 - **Tests:** the same village from each source joined once; namesakes in two municipalities kept apart; a renumbered
   code joined through history; a tie left unmatched; a hand link survives the next run.
 
+### Search: OpenSearch
+
+Accepted 2026-11-11 (decision 8). Postgres stays the source of truth; OpenSearch holds derived indexes, rebuilt from
+Postgres at will (a full rebuild of ~5,000 places and ~30,000 companies takes seconds), so it needs no backup.
+- **Service:** in the schnappy-data chart, off by default; one node (StatefulSet, local-path volume, heap 2 GB, request
+  3 Gi, limit 4 Gi), indexes with 0 replicas (one node: green, not yellow), the security plugin off - reached only by masi
+  through the mesh (Istio STRICT mTLS) and a NetworkPolicy; its own metrics to Prometheus. An exact image version, pinned.
+  Rehearsed in Vagrant (`task test:opensearch`) before production.
+- **Index `places`:** one document per place and name form: `name.<lang>` per language with that language's analyzer
+  (`estonian`, `finnish`, `swedish`, `latvian`, `lithuanian`, `german`, `russian`...) plus `asciifolding`, an edge
+  n-gram field for typing, the synonym graph of the country profiles' forms ("Harju maakond" = "Harjumaa" = "Harju"),
+  level, kind, parent codes, population prior, `geo_point` (the place's point) and `geo_shape` (its EHAK polygon).
+- **Sync:** an outbox table written in the same transaction as each place/entity change; a masi lane drains it in
+  batches; a full rebuild into a new index behind an alias, switched atomically, on start when the alias is missing and
+  on a mapping version change. A gauge of the outbox's age, alerted.
+- **Resolver:** masi parses the text into parts (the lexicon parser above); OpenSearch finds each part's candidates
+  (a bool query with one boosted clause per level, fuzziness only for names of 5+ letters, filtered to the market
+  countries' places); masi scores them with the level weights and decides on score and margin.
+- **Later indexes:** companies, jobs, people for the search box (BM25, facets, highlighting) and the `geo_distance`
+  filter beside the per-user reach cache.
+- **Phases:** (S1) the chart and its Vagrant rehearsal; (S2) production; (S3) masi's client, the places index and its
+  sync; (S4) the resolver on the 171 production strings, measured; (S5) entity indexes and the search box.
+
 ### Country data and matching
 
 - **Per country, small and stable, in code:** its names (English and own language), ISO codes, regions (EU, EEA, Europe,
@@ -440,6 +463,13 @@ settings page; Sonar complexity checked by eye on `CountryReach`.
 
 7. **Travel time needs a new service** (the routing engine, ~2-3 GB of memory for Estonia, its data refreshed daily
    from Transpordiamet and Geofabrik): accepted by the operator, 2026-11-11 ("that's ok"); distance by km needs nothing new.
+
+8. **OpenSearch for places, address resolution and search** (the operator, 2026-11-11: "PG is not enough!",
+   "libpostal is too primitive, tried it", "why not opensearch?" - then "yes"). One node on ten (~3-4 GB; ten has 64 GB,
+   63% requested), Postgres stays the truth and the index is derived - rebuilt from Postgres, so no snapshots and no
+   Velero; `vm.max_map_count` is 524288 on ten already (setup-kubeadm.yml). See "Search: OpenSearch" above.
+9. **Production Postgres restart for statement statistics and the exporter's metrics**: yes (the operator,
+   2026-11-11), after `task test:cnpg-stats` passes, at a quiet minute (no masi source run, no deploy).
 
 ## Risks
 
