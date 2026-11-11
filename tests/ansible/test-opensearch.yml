@@ -1,0 +1,252 @@
+---
+# OpenSearch as production would run it, rehearsed
+#
+# The schnappy-data chart's OpenSearch (platform helm/schnappy-data/templates/opensearch.yaml) in a namespace meshed as
+# production's is (Istio sidecars, STRICT mTLS, the mesh chart's AuthorizationPolicies):
+#   - it starts on a read-only root filesystem, one node, the cluster green with an index (no replica wanted)
+#   - what masi's places index needs works: the language analyzers of the market countries to come (Estonian first),
+#     ascii folding, a synonym graph of a place's forms, edge n-grams, a point in a settlement's polygon (geo_shape), a
+#     distance filter and sort (geo_point)
+#   - its data outlives the pod (the volume)
+#   - masi alone reaches it: a pod as masi (its labels and ServiceAccount) is answered; one as monitor is refused
+#
+# Usage: task test:opensearch
+
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+- name: OpenSearch, rehearsed
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: ostest
+    kc: kubectl --kubeconfig /etc/kubernetes/admin.conf -n ostest
+    os_url: http://schnappy-opensearch:9200
+    curl_image: curlimages/curl:8.11.1
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    - name: Namespace, Istio-injected as production's
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl create namespace {{ ns }} --dry-run=client -o yaml | kubectl apply -f -
+        kubectl label namespace {{ ns }} istio.io/rev=default --overwrite
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Sync platform charts
+      ansible.builtin.import_tasks: tasks/sync-platform-charts.yml
+
+    - name: The mesh as production's - STRICT mTLS and the AuthorizationPolicies
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy-mesh
+        chart_ref: /vagrant-platform/helm/schnappy-mesh
+        release_namespace: "{{ ns }}"
+        values:
+          fullnameOverride: schnappy
+          gateway:
+            enabled: false
+          peerAuthentication:
+            enabled: true
+          authorizationPolicies:
+            enabled: true
+          scyllaOperator:
+            enabled: false
+        wait: true
+
+    - name: OpenSearch alone from the data chart
+      kubernetes.core.helm:
+        kubeconfig: /etc/kubernetes/admin.conf
+        name: schnappy
+        chart_ref: /vagrant-platform/helm/schnappy-data
+        release_namespace: "{{ ns }}"
+        values:
+          fullnameOverride: schnappy
+          postgres: { enabled: false, password: unused }
+          cnpg: { enabled: false }
+          valkey: { enabled: false }
+          kafka: { enabled: false }
+          scylla: { enabled: false }
+          s3gw: { enabled: false }
+          aptCache: { enabled: false }
+          vault: { secretsEnabled: false }
+          opensearch:
+            enabled: true
+            storage: { size: 2Gi, storageClass: local-path }
+        wait: false
+
+    - name: Wait for OpenSearch ready
+      ansible.builtin.command: "{{ kc }} rollout status statefulset/schnappy-opensearch --timeout=600s"
+      register: _rollout
+      changed_when: false
+      failed_when: false
+
+    - name: Diagnose OpenSearch
+      when: _rollout.rc != 0
+      ansible.builtin.shell: |
+        {{ kc }} get pods -o wide
+        {{ kc }} describe pod schnappy-opensearch-0 | tail -40
+        {{ kc }} logs schnappy-opensearch-0 -c opensearch --tail=80
+        {{ kc }} logs schnappy-opensearch-0 -c config --tail=20
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: true
+
+    # a client pod as masi: its selector labels (NetworkPolicy) and ServiceAccount (AuthorizationPolicy); one as monitor
+    - name: Client pods - one as masi, one as monitor
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for who in masi monitor; do
+          cat <<POD_CLIENT | kubectl apply -n {{ ns }} -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: client-$who
+          labels:
+            app.kubernetes.io/name: schnappy
+            app.kubernetes.io/instance: schnappy
+            app.kubernetes.io/component: $who
+        spec:
+          serviceAccountName: schnappy-$who
+          containers:
+            - name: curl
+              image: {{ curl_image }}
+              command: ["sleep", "infinity"]
+        POD_CLIENT
+        done
+        kubectl -n {{ ns }} wait pod/client-masi pod/client-monitor --for=condition=Ready --timeout=300s
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: The root filesystem read-only, and the cluster
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kc }} exec schnappy-opensearch-0 -c opensearch -- sh -c 'touch /usr/share/opensearch/x 2>&1 || echo read-only'
+        {{ kc }} exec client-masi -c curl -- curl -sf "{{ os_url }}/_cluster/health"
+      args:
+        executable: /bin/bash
+      register: _base
+      changed_when: false
+
+    - name: Assert read-only and one node
+      ansible.builtin.assert:
+        that:
+          - "'read-only' in _base.stdout_lines[0] or 'Read-only' in _base.stdout_lines[0]"
+          - (_base.stdout_lines[-1] | from_json).number_of_nodes == 1
+        fail_msg: "{{ _base.stdout_lines }}"
+        quiet: true
+
+    - name: The analyzers masi's places need, by language
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for pair in estonian:Tallinnas finnish:Helsingissä swedish:Göteborgs latvian:Rīgā lithuanian:Vilniuje german:Münchens russian:Таллине; do
+          a=${pair%%:*}; w=${pair#*:}
+          t=$({{ kc }} exec client-masi -c curl -- curl -s -H 'Content-Type: application/json' "{{ os_url }}/_analyze" \
+                -d "{\"analyzer\":\"$a\",\"text\":\"$w\"}" | sed -E 's/.*"token":"([^"]*)".*/\1/; s/.*"reason":"([^"]*)".*/NONE: \1/')
+          echo "$a $w $t"
+        done
+      args:
+        executable: /bin/bash
+      register: _analyzers
+      changed_when: false
+
+    - name: Report the analyzers
+      ansible.builtin.debug:
+        var: _analyzers.stdout_lines
+
+    - name: Assert every analyzer exists and stems
+      ansible.builtin.assert:
+        that:
+          - _analyzers.stdout_lines | length == 7
+          - _analyzers.stdout_lines | select('search', 'NONE:') | list | length == 0
+          - _analyzers.stdout_lines | select('search', '^estonian Tallinnas tallinn$') | list | length == 1
+        fail_msg: "{{ _analyzers.stdout_lines }}"
+        quiet: true
+
+    # a places index as masi will make it: forms by synonym graph, ascii folding, edge n-grams, a point and a polygon
+    - name: A places index and three places
+      ansible.builtin.shell: |
+        set -euo pipefail
+        c() { {{ kc }} exec client-masi -c curl -- curl -sf -H 'Content-Type: application/json' "$@"; }
+        c -X PUT "{{ os_url }}/places-test" -d '{
+          "settings": {"analysis": {
+            "filter": {"forms": {"type": "synonym_graph", "synonyms": ["harju maakond, harjumaa, harju"]},
+                       "prefixes": {"type": "edge_ngram", "min_gram": 2, "max_gram": 15}},
+            "analyzer": {"name_index": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding"]},
+                         "name_et": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding", "forms"]},
+                         "name_typing": {"tokenizer": "standard", "filter": ["lowercase", "asciifolding", "prefixes"]}}}},
+          "mappings": {"properties": {
+            "name": {"type": "text", "analyzer": "name_index", "search_analyzer": "name_et", "fields": {"typing": {"type": "text", "analyzer": "name_typing", "search_analyzer": "standard"}}},
+            "point": {"type": "geo_point"}, "area": {"type": "geo_shape"}}}}' >/dev/null
+        c -X PUT "{{ os_url }}/places-test/_doc/1" -d '{"name": "Harju maakond", "point": {"lat": 59.33, "lon": 24.9}}' >/dev/null
+        c -X PUT "{{ os_url }}/places-test/_doc/2" -d '{"name": "Pärnu linn", "point": {"lat": 58.385, "lon": 24.497},
+          "area": {"type": "polygon", "coordinates": [[[24.40, 58.33], [24.60, 58.33], [24.60, 58.43], [24.40, 58.43], [24.40, 58.33]]]}}' >/dev/null
+        c -X PUT "{{ os_url }}/places-test/_doc/3?refresh=true" -d '{"name": "Laagri alevik", "point": {"lat": 59.35, "lon": 24.62},
+          "area": {"type": "polygon", "coordinates": [[[24.58, 59.33], [24.66, 59.33], [24.66, 59.37], [24.58, 59.37], [24.58, 59.33]]]}}' >/dev/null
+        q() { c "{{ os_url }}/places-test/_search?filter_path=hits.hits._id" -d "$1" | tr -dc '0-9,'; echo; }
+        echo "synonym $(q '{"query": {"match": {"name": "Harjumaa"}}}')"
+        echo "folding $(q '{"query": {"match": {"name": "parnu"}}}')"
+        echo "typing $(q '{"query": {"match": {"name.typing": "laag"}}}')"
+        echo "polygon $(q '{"query": {"geo_shape": {"area": {"shape": {"type": "point", "coordinates": [24.50, 58.38]}, "relation": "intersects"}}}}')"
+        echo "radius $(q '{"query": {"geo_distance": {"distance": "30km", "point": {"lat": 59.437, "lon": 24.745}}}, "sort": [{"_geo_distance": {"point": {"lat": 59.437, "lon": 24.745}, "order": "asc"}}]}')"
+        c "{{ os_url }}/_cluster/health?filter_path=status"
+      args:
+        executable: /bin/bash
+      register: _places
+      changed_when: true
+
+    - name: Assert the places index answers as masi needs
+      ansible.builtin.assert:
+        that:
+          - "'synonym 1' in _places.stdout_lines"
+          - "'folding 2' in _places.stdout_lines"
+          - "'typing 3' in _places.stdout_lines"
+          - "'polygon 2' in _places.stdout_lines"
+          # Tallinn's centre: Laagri (~12 km) before Harju's point (~15 km), Pärnu (~110 km) not at all
+          - "'radius 3,1' in _places.stdout_lines"
+          - "'green' in _places.stdout_lines[-1]"
+        fail_msg: "{{ _places.stdout_lines }}"
+        quiet: true
+
+    - name: Restart the pod - the data stays
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ kc }} delete pod schnappy-opensearch-0 --wait=true
+        {{ kc }} rollout status statefulset/schnappy-opensearch --timeout=600s
+        {{ kc }} exec client-masi -c curl -- curl -sf "{{ os_url }}/places-test/_count" | sed -E 's/.*"count":([0-9]+).*/\1/'
+      args:
+        executable: /bin/bash
+      register: _after
+      changed_when: true
+
+    - name: Assert the three places kept
+      ansible.builtin.assert:
+        that: _after.stdout_lines[-1] == '3'
+        fail_msg: "{{ _after.stdout_lines }}"
+        quiet: true
+
+    - name: Monitor's pod is refused
+      ansible.builtin.shell: |
+        {{ kc }} exec client-monitor -c curl -- curl -s -o /dev/null -w '%{http_code}' --max-time 10 "{{ os_url }}/_cluster/health"; echo " rc=$?"
+      args:
+        executable: /bin/bash
+      register: _monitor
+      changed_when: false
+
+    - name: Assert monitor refused (403 by the mesh, or dropped by the NetworkPolicy)
+      ansible.builtin.assert:
+        that: _monitor.stdout is search('^(403|000) ')
+        fail_msg: "monitor reached OpenSearch: {{ _monitor.stdout }}"
+        quiet: true
+
+    - name: PASS
+      ansible.builtin.debug:
+        msg: "PASS: OpenSearch one node, read-only root, analyzers {{ _analyzers.stdout_lines | map('split', ' ') | map('first') | join(',') }}, places index, data kept, masi alone"

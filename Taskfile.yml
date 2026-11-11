@@ -1006,6 +1006,22 @@ tasks:
       - task: _vagrant:k8s-stack
       - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cnpg-stats.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
 
+  test:opensearch:
+    desc: Rehearse OpenSearch (schnappy-data) in Vagrant as production would run it - meshed, read-only, analyzers, a places index, masi alone
+    deps: [deploy:install]
+    cmds:
+      # from nothing: every VM destroyed, and proven gone, before the build
+      - cmd: vagrant destroy -f
+      - cmd: |
+          set -euo pipefail
+          left=$(vagrant status --machine-readable | awk -F, '$3 == "state" && $4 != "not_created" {print $2 "=" $4}')
+          [ -z "$left" ] || { echo "VMs not destroyed: $left"; exit 1; }
+      - cmd: vagrant up
+      # the VMs destroyed when the run ends, passed or not
+      - defer: vagrant destroy -f
+      - task: _vagrant:k8s-stack
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-opensearch.yml -e @vars/vault.yml -e @vars/vault-vagrant.yml
+
   test:sonarqube:
     desc: Test SonarQube in Vagrant
     deps: [deploy:install]
