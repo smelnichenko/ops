@@ -199,6 +199,12 @@ Measured in production 2026-11-11: `company` 28,953 rows, `person` 11,956, `cont
   changeset with `runInTransaction="false"`), never locking writes; checks and EXPLAINs run on the standby (`-ro`).
 - **Backfill in batches** of 1,000 rows per transaction with a pause between, idempotent and resumable, outside the busy
   collection minutes; the gauge `masi_rows_without_reach{kind}` shows the rest.
+- **Every list is paged, everywhere** (the operator, 2026-11-11: "make sure we use paging everywhere and never get like
+  millions in result lists"): every endpoint that returns rows takes a page size clamped on the server (default 50, at
+  most 200; a larger request gets 200, never more), large or ever-growing tables page by key, not `OFFSET`; a count is
+  shown capped ("10,000+") where an exact count would scan; no client loop fetches every page; no service loads a large
+  or growing table into a `List` (streamed or batched instead). A reach join is paged like any list (`LIMIT` on the
+  joined result). An architecture test fails the build on a list endpoint without a clamped page.
 - **Measured before each phase ships:** `EXPLAIN (ANALYZE, BUFFERS)` of every new or changed list query on production's
   standby (read-only), pasted in the PR; budget **p95 under 50 ms** for a list page and its count; after deploy,
   `pg_stat_statements` compared with the week before.
