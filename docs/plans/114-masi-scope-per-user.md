@@ -297,10 +297,12 @@ to the activity log with who and when.
   configuring address collector recurrency and triggering manual update and reset", "per country"): per market country
   its places source's schedule (how often: monthly by default, a day of the month and a time, shown in words and saved as
   the source's cron, Tallinn time), its last run (when, what changed, the note), **Run now** (one run at once, through the
-  same runner and claims as any run - never two at a time), and **Reset**. Proposed meaning of Reset, for the operator to
-  confirm: the source's failure state cleared and one full read run with the "far fewer places" and "mass rename" guards
-  bypassed once, after the admin confirms what it would change (the plan of the diff shown first) - for a real large
-  change a guard refused (a municipal reform). Nothing is deleted by a reset either. Endpoints under `/admin/countries/
+  same runner and claims as any run - never two at a time), and **Force update** (the operator: "let's just use forced
+  replace and mark instead of reset"): one run that replaces the country's places with what the feed carries now, the
+  "far fewer places", "postal codes" and "mass rename" guards bypassed once, after the admin confirms the plan of the diff
+  shown first - for a real large change a guard refused (a municipal reform). Replace and mark, never delete: a renamed
+  place keeps its old names, a place no longer carried is marked retired, a postal code no longer given is marked with
+  the date it stopped. Endpoints under `/admin/countries/
   {code}/places` (`MANAGE_USERS`), each action written to the activity log with who and when.
 Rendered sample to the operator before either page ships.
 
