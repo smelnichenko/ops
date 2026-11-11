@@ -293,6 +293,17 @@ later each market's own). They are never stored as separate places that happen t
   searchable name without its type word ("Loo alevik" = "Loo") within the same municipality, else the same county;
   (4) with points, the nearest place of that name within 5 km; (5) a postal code that place already holds. A step
   decides only when it leaves exactly one place: two candidates are a tie, never a guess.
+- **Resolving an entity's address to a place** (a company's registered address, a posting's location, a person's stated
+  place; the operator asked whether nearest-neighbour search is the way, 2026-11-11): text first, never a nearest point
+  for text. (1) A code the source gives: the Business Register's addresses carry their EHAK code (and the ADS address
+  id) - a company's place is a lookup, no matching; a postal code through `place_postal`. (2) Text parsed into its levels
+  (settlement, municipality, county, country: "Tallinn, Harjumaa, Estonia", "Peetri alevik, Rae vald") and each level
+  looked up exactly - searchable name, type word aside - inside the level above it; a tie stays unresolved. (3) Only
+  then trigram similarity (pg_trgm, the search's index) for a misspelling ("Tallin", "Parnu"), inside the same parent
+  and above a threshold. (4) A point (a map pick, an ATS's coordinates): the settlement whose EHAK polygon contains it
+  (JTS in the service; nearest points only to pick the candidate polygons), never the nearest centre - a point near a
+  boundary is often nearer the neighbour's. Each resolution keeps its method (`CODE`, `POSTAL`, `EXACT`, `FUZZY`,
+  `POINT`, `MANUAL`) and score on the entity, so fuzzy and tied ones can be listed and fixed.
 - **Never merged:** two places with different authority codes (two villages named Mäeküla are two places); a record
   that matches none is kept apart as a candidate (`place_candidate`, with the reason), never added as a place; a
   former name stays a former place with its successor.
