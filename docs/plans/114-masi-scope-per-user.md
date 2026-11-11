@@ -355,7 +355,7 @@ mirrored can still save). Only users with masi access ever write one.
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
 | 3d | Points on every place (EHAK polygons, converted; GeoNames cross-check), `loc_place_id` on job, company, person; `cube` + `earthdistance` and the GiST index; the reach filter by distance (km/mi) from a place or map point, with the coarse-place switch; Settings: the origin and radius | "within N km of ..." |
-| 3e | The routing engine as a cluster service (after its spike and the operator's OK), `user_reach`, the travel-time reach by mode | "within N min by transit/car/bike/walk" |
+| 3e | The routing engine as a cluster service (after its spike; the service OK'd 2026-11-11), `user_reach`, the travel-time reach by mode | "within N min by transit/car/bike/walk" |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch closing only what reaches no country ever on the list, with the empty-list guard; off = filtered and not updated, never closed; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
 | 6+ | A market's own boards and registers (its job boards, its company register), one by one, each with numbers and the operator's OK | per source |
@@ -375,7 +375,7 @@ settings page; Sonar complexity checked by eye on `CountryReach`.
 6. **The partner API stays unscoped** (a relevance filter, not access control). Proposed: yes.
 
 7. **Travel time needs a new service** (the routing engine, ~2-3 GB of memory for Estonia, its data refreshed daily
-   from Transpordiamet and Geofabrik): proposed, waiting for the operator's OK; distance by km needs nothing new.
+   from Transpordiamet and Geofabrik): accepted by the operator, 2026-11-11 ("that's ok"); distance by km needs nothing new.
 
 ## Risks
 
