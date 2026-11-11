@@ -128,6 +128,38 @@ requires; a `Location` column on every list that shows one of these entities.
 **Filtering** stays on the reach arrays: the location says where an entity is, the reach says which markets it counts for
 ("remote, EU" is one virtual location reaching every EU country that is on).
 
+### Distance and travel time from a point
+
+The operator, 2026-11-11: "we need to be able to set radius in units from some point/address which to use in search by
+distance from home", "generic way - like which suburb you can reach by transport", "like by job location", "we use
+something like geospatial". A user's filter can hold a **reach**: an origin, a measure and a limit -
+`Reach = (origin, measure: DISTANCE | TIME, limit, unit: km | mi | min, mode: STRAIGHT | CAR | TRANSIT | BIKE | WALK,
+depart: weekday 08:30 by default for TRANSIT)`. "Within 30 km of Saku", "within 45 min of Mustamäe by public transport".
+It narrows any list of entities with a physical location (jobs by their place, companies by their office, people by their
+stated place); remote and virtual locations are untouched by it and follow the remote choice.
+- **Points:** each place gets a point (`lat`, `lon`, WGS84): a settlement's from EHAK's own polygons (the shapefile beside
+  the DBF the feed already reads; L-EST97, EPSG:3301, converted), a county's and municipality's the same way, a former
+  place its successor's; GeoNames' postal points (already in its file) cross-check them (a settlement more than 5 km from
+  its postal points is listed in the run's note). Tallinn's and Tartu's districts (LINNAOSA) give finer points than the
+  city. Phase 0b/3a resolve each listing's place to a `place_id`; `job.loc_place_id`, `company.loc_place_id`,
+  `person.loc_place_id`, each indexed.
+- **The origin** is the user's own: a place from the list (settlement, district or postal code, through `/places/search`)
+  or a point picked on a map. No street addresses are kept and no address leaves the cluster: no outside geocoder.
+  Never shown to another user.
+- **Distance (km/mi) in Postgres:** `cube` and `earthdistance` (contrib, in production's Postgres 18 image; PostGIS is not
+  in the CNPG image and is not needed at this scale): a GiST index on `ll_to_earth(lat, lon)` of `place`; the places within
+  the radius are `earth_box(ll_to_earth(:lat, :lon), :m) @> ll_to_earth(lat, lon) and earth_distance(...) <= :m` - an
+  index scan over ~5,000 points, a few hundred ids - then `loc_place_id = any(:ids)` on the btree index. Sorting by
+  distance: the same expression per page row (the page is small). Budget as every list: p95 under 50 ms.
+- **Travel time (min) by a routing engine, self-hosted:** OpenTripPlanner (or R5, chosen in a spike) on Estonia's
+  OpenStreetMap extract and the national public transport timetable (GTFS, Transpordiamet, daily) - car, bike, walk and
+  transit in one service. It is asked once per user origin and mode: the minutes to every place's point, stored in
+  `user_reach(user_uuid, place_id, mode, minutes)` (~5,000 rows a user), refreshed when the origin changes and weekly
+  when the timetable does. The filter is then a join on `place_id` - no routing at read time.
+- **A job with a coarse place** (only "Harju maakond" or "Estonia") has no point: under a reach it is kept or left out
+  by a switch beside the filter ("include jobs with no exact place"), off by default, and counted ("12 more with no exact
+  place").
+
 ### Companies and people, judged once too
 
 - `company.reach char(2)[]`: the market countries it is registered in (an Äriregister code is `EE`) or hiring in (a job
@@ -322,6 +354,8 @@ mirrored can still save). Only users with masi access ever write one.
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
+| 3d | Points on every place (EHAK polygons, converted; GeoNames cross-check), `loc_place_id` on job, company, person; `cube` + `earthdistance` and the GiST index; the reach filter by distance (km/mi) from a place or map point, with the coarse-place switch; Settings: the origin and radius | "within N km of ..." |
+| 3e | The routing engine as a cluster service (after its spike and the operator's OK), `user_reach`, the travel-time reach by mode | "within N min by transit/car/bike/walk" |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch closing only what reaches no country ever on the list, with the empty-list guard; off = filtered and not updated, never closed; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
 | 6+ | A market's own boards and registers (its job boards, its company register), one by one, each with numbers and the operator's OK | per source |
@@ -339,6 +373,9 @@ settings page; Sonar complexity checked by eye on `CountryReach`.
 4. **Each user sets only their own scope.** Proposed: yes.
 5. ~~People stay Estonia-only~~ **People follow the market list** (the operator, 2026-11-11).
 6. **The partner API stays unscoped** (a relevance filter, not access control). Proposed: yes.
+
+7. **Travel time needs a new service** (the routing engine, ~2-3 GB of memory for Estonia, its data refreshed daily
+   from Transpordiamet and Geofabrik): proposed, waiting for the operator's OK; distance by km needs nothing new.
 
 ## Risks
 
