@@ -316,6 +316,40 @@
         fail_msg: "masi's role does not read its own statement: {{ _own.stdout_lines }}"
         quiet: true
 
+    # CNPG may restart an instance's Postgres in place for the new parameter, not recreate its pod; the sidecar reads the
+    # exporter's annotations only when a pod is created (the rehearsal of 2026-11-11: one pod merged, one did not). A pod
+    # without the merged metrics is recreated by a rolling restart of the Cluster - production's second step.
+    - name: Instances whose endpoint already merges the exporter
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for p in $({{ kc }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o name); do
+          m=$(kubectl get --raw "/api/v1/namespaces/{{ ns }}/pods/${p#pod/}:15020/proxy/stats/prometheus")
+          echo "${p#pod/} $(echo "$m" | grep -c '^cnpg_collector_up' || true)"
+        done
+      args:
+        executable: /bin/bash
+      register: _merged
+      changed_when: false
+
+    - name: A rolling restart, recreating the pods that do not
+      when: _merged.stdout_lines | select('search', ' 0$') | list | length > 0
+      block:
+        - name: Restart the Cluster (CNPG recreates each instance, the primary by switchover)
+          ansible.builtin.command: >-
+            {{ kc }} annotate cluster {{ cluster }} --overwrite kubectl.kubernetes.io/restartedAt={{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}
+          changed_when: true
+
+        - name: Wait for the restart to begin
+          ansible.builtin.command: "{{ kc }} get cluster {{ cluster }} -o jsonpath={.status.phase}"
+          register: _phase_restart
+          until: _phase_restart.stdout != 'Cluster in healthy state'
+          retries: 60
+          delay: 2
+          changed_when: false
+
+        - name: Wait for the Cluster healthy after the restart
+          ansible.builtin.include_tasks: tasks/cnpg-stats-healthy.yml
+
     - name: The exporter's metrics in the endpoint Prometheus scrapes (15020, through the API server)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -351,8 +385,9 @@
     - name: Report the switchover
       ansible.builtin.debug:
         msg: >-
-          primary {{ _primary_before.stdout }} -> {{ _primary_after.stdout }}; writes: longest gap
-          {{ _gap.stdout.split('|')[0] }} s over {{ _gap.stdout.split('|')[1] }} rows
+          primary {{ _primary_before.stdout }} -> {{ _primary_after.stdout }}; merged before any restart:
+          {{ _merged.stdout_lines }}; a rolling restart {{ 'needed' if (_merged.stdout_lines | select('search', ' 0$') | list | length > 0) else 'not needed' }};
+          writes: longest gap {{ _gap.stdout.split('|')[0] }} s over {{ _gap.stdout.split('|')[1] }} rows
 
     - name: Assert the writes came back within the bound
       ansible.builtin.assert:
