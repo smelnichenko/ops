@@ -17,7 +17,7 @@
 | Caută cod poștal (postcode search) | Poșta Română | https://www.posta-romana.ro/cauta-cod-postal.html | Postcode look-up, described as updated periodically | Web look-up only; no file link on the page | Not stated | Not stated | confirmed |
 | SIRUTA, register of administrative-territorial units | Institutul Național de Statistică (National Institute of Statistics), on data.gov.ro | https://data.gov.ro/api/3/action/package_search?q=SIRUTA&rows=12 | Administrative units down to settlement level; no streets, no addresses | File downloads | CC BY 4.0 | Latest "SIRUTA_s1 2026", modified 2026-08-11 | confirmed |
 | GISCO Address API | Eurostat | https://gisco-services.ec.europa.eu/addressapi | Address look-up; serves Romania | No key; look-up only, 1,000-row cap, no bulk download | None stated | Some country snapshots date from 2021-2022 | confirmed |
-| OpenAddresses, two city sources | OpenAddresses | https://github.com/openaddresses/openaddresses/blob/master/sources/ro/bucharest.json ; https://github.com/openaddresses/openaddresses/blob/master/sources/ro/bucharest-metro.json ; downloads: https://batch.openaddresses.io | No countrywide source. The output is four towns around Bucharest, frozen in 2020 | Free download; needs a logged-in account | None recorded | Frozen 2020 | confirmed; upstream server status corrected |
+| OpenAddresses, two city sources | OpenAddresses | https://github.com/openaddresses/openaddresses/blob/master/sources/ro/bucharest.json ; https://github.com/openaddresses/openaddresses/blob/master/sources/ro/bucharest-metro.json ; downloads: https://batch.openaddresses.io | No countrywide source. Two source files: one for Bucharest, one noting Otopeni, Sinaia, Voluntari and Chitila. The output is four towns around Bucharest, frozen in 2020 | Free download; needs a logged-in account | None recorded | Frozen 2020 | confirmed; upstream server status corrected |
 | GeoNames postcodes | GeoNames | https://download.geonames.org/export/zip/ | Postcode centroids only, no addresses | File download | CC BY 4.0 | Not stated | confirmed |
 
 ### Free APIs and services
@@ -46,7 +46,7 @@
 
 - National house-number addresses with coordinates: none found. Searched: data.gov.ro ("RENNS": 0 results; "adrese": 4 unrelated results; "ANCPI": 121 datasets, none about addresses or streets; "nomenclator stradal" and "strazi": street lists only) and the EU catalogue data.europa.eu (three RENNS records, all pointing to offline services).
 - RENNS view and download services: offline since 14 July 2026. The download feed was at `http://geoportal.ancpi.ro/inspiredownload/rest/directories/arcgisforinspire/AD/AD_Download_MapServer/Main_ATOM_AD.xml`.
-- Postcode file newer than 2016: none found on data.gov.ro. Poșta Română's site offers the look-up only.
+- Postcode file newer than 2016: none found on data.gov.ro. Poșta Română's postcode page offers a look-up only, with no file link.
 - Overture Maps addresses (release 2026-10-21.0): no Romanian data.
 
 ### Could not be verified

@@ -53,7 +53,7 @@
 
 ### Could not be verified
 
-- The SFTP server and the AKS extract downloads (current file names, sizes, and whether foreign IPs are really blocked): the application is JavaScript-only and no SFTP login was made. The SFTP port answered from the checking machine, which says nothing about foreign IPs.
+- The SFTP server and the AKS extract downloads (current file names, sizes, and whether foreign IPs are really blocked): the application is JavaScript-only and no SFTP login was made. The SFTP port answered a connection test, which says nothing about foreign IPs.
 - Terms of use and rate limits for In-AKS: none found. The published limits are in the In-ADS terms.
 - What happens to the Geocoder API on the old host `inaadress.maaamet.ee` when that host closes: not stated in the material read.
 - KML and SHP as geocoder output formats: those two lines were not re-read; CSV, XLSX, GeoJSON and GeoPackage were.

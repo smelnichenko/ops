@@ -27,7 +27,7 @@
 
 ### Caveats and recent changes
 
-- **Coordinate system changed on 7 October 2026.** The dataset's change log reads "07.10.2026 – transformētas koordinātas no LKS-92 TM uz LKS -2020 TM" (coordinates transformed from LKS-92 TM to LKS-2020 TM). `KOORD_X` and `KOORD_Y` are now the object's centroid in LKS-2020. Code that still reads them as LKS-92 TM gets shifted positions without any error. The file also carries decimal degrees in `DD_N` and `DD_E`.
+- **Coordinate system changed on 7 October 2026.** The dataset's change log reads "07.10.2026 – transformētas koordinātas no LKS-92 TM uz LKS -2020 TM" (coordinates transformed from LKS-92 TM to LKS-2020 TM). `KOORD_X` and `KOORD_Y` are now the object's centroid in LKS-2020. Code that still treats them as LKS-92 TM now reads a different reference system, and nothing in the file format signals it. The file also carries decimal degrees in `DD_N` and `DD_E`.
 - **Encoding.** The CSV metadata declares `ISO-8859-1`, but `aw_eka.csv` starts with a UTF-8 byte-order mark (`EF BB BF`) and decodes as UTF-8 with Latvian diacritics intact. Read it as UTF-8.
 - Columns of `aw_eka.csv`: `KODS` (object code), `TIPS_CD`, `STATUSS`, `APSTIPR`, `APST_PAK`, `VKUR_CD` and `VKUR_TIPS` (parent object), `NOSAUKUMS` (name or number), `SORT_NOS`, `ATRIB` (postcode, for example LV-4211), `PNOD_CD` (post office service-area code), `DAT_SAK`, `DAT_MOD`, `DAT_BEIG`, `FOR_BUILD`, `PLAN_ADR` (planned address), `STD` (full address string), `KOORD_X`, `KOORD_Y`, `DD_N`, `DD_E`.
 - The file is not only live addresses. It has a status column (`STATUSS`, value `EKS` seen for existing objects) and includes parcels intended for building (`FOR_BUILD`). Filter before import.
@@ -35,7 +35,7 @@
 - The portal record was issued on 2021-12-27 and last modified on 2026-10-07.
 - High-value dataset: the CSV metadata carries the keyword "Augstvērtīga datu kopa" (high-value dataset), data.europa.eu flags the dataset `is_hvd: true`, and the portal record names Implementing Regulation (EU) 2023/138 as applicable legislation.
 - The INSPIRE bulk file on geolatvija.lv may be old: the portal record says weekly, but the feed is stamped 2024-06-07. Prefer the daily data.gov.lv files.
-- File sizes move by a few hundred bytes from day to day as the register changes.
+- File sizes move from day to day as the register changes (by under 1 KB between 2026-11-10 and 2026-11-11).
 
 ### Not free or not available
 

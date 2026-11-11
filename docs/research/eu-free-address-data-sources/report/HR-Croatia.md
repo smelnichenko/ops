@@ -16,7 +16,7 @@
 | Preuzimanje podataka o poštanskim uredima (post office data downloads) | Hrvatska pošta (Croatian Post) | Page: https://www.posta.hr/preuzimanje-podataka-o-postanskim-uredima ; settlements: https://www.posta.hr/mjestaRh.aspx?vrsta=xml ; Zagreb streets: https://www.posta.hr/zagrebulice.aspx?vrsta=xml | Settlements with postcode (6,787 records: `brojPu` postcode, `nazivPu` post office, `naselje` settlement, `zupanija` county); Zagreb streets with delivery post office (5,378 rows, some with house-number ranges); post offices; parcel lockers | Excel and XML, no login | None stated on the page | Not stated | confirmed |
 | GISCO Address API | Eurostat | https://gisco-services.ec.europa.eu/addressapi | Address look-up; serves Croatia | No key; look-up only, 1,000-row cap, no bulk download | None stated | Some country snapshots date from 2021-2022 | confirmed |
 | OpenAddresses, Croatian countrywide source | OpenAddresses | Source file: https://github.com/openaddresses/openaddresses/blob/master/sources/hr/countrywide.json ; downloads: https://batch.openaddresses.io | The same DGU zip, parsed from the one-string address field with regular expressions | Free download; needs a logged-in account | Recorded there as "no limitations to public access" | Marked weekly; source added 2024-04-25 | confirmed |
-| Overture Maps addresses | Overture Maps | Release 2026-10-21.0 | Croatia is among the 19 EU countries covered | GeoParquet, no account | Per country | Per release | confirmed |
+| Overture Maps addresses | Overture Maps | No link recorded | Croatia is among the 19 EU countries covered | GeoParquet, no account | Set per country; Croatia's not recorded | Release 2026-10-21.0 | confirmed |
 | GeoNames postcodes | GeoNames | https://download.geonames.org/export/zip/ | Postcode centroids only, no addresses | File download | CC BY 4.0 | Not stated | confirmed |
 
 ### Free APIs and services
@@ -44,7 +44,7 @@
 
 ### Not free or not available
 
-- Download in any format other than INSPIRE GML (CSV, GeoPackage, regional split): none found on the ATOM feed or the portal record.
+- A download in another format (CSV, GeoPackage) or split by region: none found. The zip holds four GML files. Looked at: the ATOM feed and the portal record only.
 - Working address WFS: by agreement only. "Adrese - WFS INSPIRE (sporazum)", `https://geoportal.dgu.hr/services/sla/inspire/wfs_ad/wfs?authKey=…`, is open to public-law bodies with special user status that sign a data-use protocol with DGU (https://registri.nipp.hr/api/izvori/452/pdf/).
 
 ### Could not be verified

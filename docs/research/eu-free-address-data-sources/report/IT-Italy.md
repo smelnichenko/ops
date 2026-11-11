@@ -4,7 +4,7 @@
 |---|---|---|---|---|---|---|
 | Yes | ANNCSU (ISTAT and Agenzia delle Entrate) | bulk CSV in ZIP, no registration | CC BY 4.0 | yes, lon/lat ETRF2000, on 67.0% of rows (31/03/2026) | no | monthly |
 
-**In short.** Use ANNCSU (Archivio Nazionale dei Numeri Civici delle Strade Urbane, the national archive of urban street civic numbers): one national CSV of civic numbers, rebuilt monthly, CC BY 4.0, plain download without registration. Two things trip up an import. Coordinates exist only where the municipality entered them, officially 67.0% of accesses at 31/03/2026 and very uneven between municipalities. And the file has no postcode (CAP): bulk CAP data remain a paid Poste Italiane product. Regional and municipal datasets fill some of the gaps.
+**In short.** Use ANNCSU (Archivio Nazionale dei Numeri Civici delle Strade Urbane, the national archive of urban street civic numbers): one national CSV of civic numbers, rebuilt monthly, CC BY 4.0, plain download without registration. Two things trip up an import. Coordinates exist only where the municipality entered them, officially 67.0% of accesses at 31/03/2026 and very uneven between municipalities. And the file has no postcode (CAP): bulk CAP data remain a paid Poste Italiane product. Regional and municipal datasets exist for several areas; Bologna's also carries postcodes.
 
 ### Sources
 
@@ -15,9 +15,9 @@
 | ANNCSU regional files | ISTAT and Agenzia delle Entrate | https://www.anncsu.gov.it/it/consultazione-dellarchivio/open-data/Accedi-ai-servizi-di-dowload-massivo-in-Open-data/ ; example: https://anncsu.open.agenziaentrate.gov.it/age-inspire/opendata/anncsu/getds.php?INDIR_VALL | The same address and street files cut per region: 20 pairs with the codes ABRU, BASI, CALA, CAMP, EMIL, FRIU, LAZI, LIGU, LOMB, MARC, MOLI, PIEM, PUGL, SARD, SICI, TOSC, TREN, UMBR, VALL, VENE | Plain GET. Lombardia address file: 36,906,989 bytes | CC BY 4.0 | Monthly | confirmed |
 | CAP (postcode) database | Poste Italiane | https://business.poste.it/business/files/1473808238165/banchedati-faq-cap.pdf | Complete postcode files | Not free. Only lookup tools are free; CAP Professional (MS Access) and CAP Zone (shapefile) are sold | Proprietary | - | confirmed |
 | GISCO Address API | Eurostat | https://gisco-services.ec.europa.eu/addressapi | Forward and reverse lookup of Italian addresses: house number, street, city, postcode, coordinates. Declared source: "© Geoportale nazionale" | No key. Lookup only, 1,000-row cap, no bulk download | None stated | Not stated | confirmed |
-| OpenAddresses | OpenAddresses | https://batch.openaddresses.io ; source definition: https://github.com/openaddresses/openaddresses/blob/master/sources/it/countrywide.json | Countrywide layer from ANNCSU without postcodes, plus about 38 regional and municipal sources | Free download, needs a logged-in account | CC-BY 4.0, attribution "Istat e dall'Agenzia delle Entrate" | Cached file `INDIR_ITA_20260703_GEO.csv`; last successful run 2026-08-14 | confirmed |
+| OpenAddresses | OpenAddresses | https://batch.openaddresses.io ; source definition: https://github.com/openaddresses/openaddresses/blob/master/sources/it/countrywide.json | Countrywide layer from ANNCSU without postcodes, plus about 38 further Italian source files | Free download, needs a logged-in account | CC-BY 4.0, attribution "Istat e dall'Agenzia delle Entrate" | Cached file `INDIR_ITA_20260703_GEO.csv`; last successful run 2026-08-14 | confirmed |
 | Overture Maps addresses, release 2026-10-21.0 | Overture Maps | https://docs.overturemaps.org/guides/addresses/ | 26,841,754 Italian addresses (publisher's figure), from ANNCSU | GeoParquet, no account | CC BY 4.0 (ANNCSU) | Source pulled 2026-10-15 | confirmed |
-| GeoNames postcodes | GeoNames | https://download.geonames.org/export/zip/ | Postcode centroids only, no addresses | Direct file download | CC BY 4.0 | Regenerated daily | confirmed |
+| GeoNames postcodes | GeoNames | https://download.geonames.org/export/zip/ | Postcode centroids only, no addresses | ZIP file per country | CC BY 4.0 | Regenerated daily | confirmed |
 
 ### Regional sources
 

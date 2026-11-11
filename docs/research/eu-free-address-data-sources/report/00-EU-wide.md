@@ -183,3 +183,215 @@ Notes on the table:
 - Greece in GeoNames: the download directory holds no `GR.zip` and no `EL.zip`. The combined file `allCountries.zip` was not opened.
 - Estimate of where a national check matters most. GISCO serves 26 countries and Overture 19. The seven in GISCO but not in Overture are BG, CY, GR, HU, MT, RO and SE; Ireland is in neither. For these eight, Overture has nothing and OpenAddresses has nothing or a limited set, so open availability has to be established at the national register. This rests on comparing the two country lists, both confirmed.
 - The table shows what the aggregators carry. A country missing from an aggregator can still publish open address data; the country sections answer that.
+
+### OpenStreetMap as an address source
+
+**Licence consequences.**
+
+- Geofabrik's extracts carry the line "Data processed by Geofabrik GmbH and created by OpenStreetMap Contributors | License: ODbL 1.0" ([Geofabrik, Europe](https://download.geofabrik.de/europe.html)).
+- The OpenStreetMap Foundation's guideline on geocoding ([OSMF Geocoding Guideline](https://osmfoundation.org/wiki/Licence/Community_Guidelines/Geocoding_-_Guideline)) draws the line between single lookups and bulk extraction:
+  - "Individual Geocoding Results are insubstantial database extracts".
+  - "systematically reverse engineering the whole or a substantial part of the OSM database through Geocoding would result in creation of a Derivative Database".
+  - A collection of results stays insubstantial only if "the collection is not a systematic attempt to aggregate all or substantially all Primary Features of a given type ... within a geographic area city-sized or larger".
+  - Users "must provide attribution to OpenStreetMap as described in Section 4.3 of the ODbL".
+- Reading for an import, not a quoted rule: a national address table built from an OSM extract is such a systematic collection, so it is a Derivative Database and ODbL's share-alike terms apply to it. This follows from the guideline's wording above; no source in this research states it for address imports specifically.
+- Two products derived from OSM were seen to carry ODbL. Geoapify's postcode file for Germany is "Compiled by Geoapify from OpenStreetMap | ODbL" ([Geoapify downloads](https://www.geoapify.com/downloads/)). The French BANO composite described on the OSM wiki is "available under ODbL" ([OSM wiki, Addresses](https://wiki.openstreetmap.org/wiki/Addresses)).
+
+**How complete house numbers are.** The table counts OSM objects tagged `addr:housenumber` per country extract (Geofabrik taginfo, data up to 2026-11-10; each country code links to its page; API pattern `https://taginfo.geofabrik.de/europe:{country}/api/4/key/stats?key=addr:housenumber`). The last column is an estimate: the OSM count divided by the address count Overture publishes for the same country from official registers. It was computed on the 2026-11-09 counts, which differ from those shown by under 0.06 %.
+
+| Country | OSM objects with `addr:housenumber` | of which nodes | OSM count as share of Overture's register count (estimate) |
+|---|---|---|---|
+| [AT](https://taginfo.geofabrik.de/europe:austria/keys/addr:housenumber) | 2,513,835 | 404,388 | 99.6 % |
+| [BE](https://taginfo.geofabrik.de/europe:belgium/keys/addr:housenumber) | 4,160,102 | 182,737 | 59 % (see below) |
+| [BG](https://taginfo.geofabrik.de/europe:bulgaria/keys/addr:housenumber) | 182,317 | 16,034 | no register count to compare |
+| [CY](https://taginfo.geofabrik.de/europe:cyprus/keys/addr:housenumber) | 30,820 | 7,257 | no register count to compare |
+| [CZ](https://taginfo.geofabrik.de/europe:czech-republic/keys/addr:housenumber) | 3,095,114 | 2,958,182 | 102 % |
+| [DE](https://taginfo.geofabrik.de/europe:germany/keys/addr:housenumber) | 20,845,744 | 4,062,817 | not comparable: Overture's 19.3 million leaves out Bavaria |
+| [DK](https://taginfo.geofabrik.de/europe:denmark/keys/addr:housenumber) | 2,616,362 | 2,616,200 | 67 % |
+| [EE](https://taginfo.geofabrik.de/europe:estonia/keys/addr:housenumber) | 437,832 | 12,014 | 19 % |
+| [ES](https://taginfo.geofabrik.de/europe:spain/keys/addr:housenumber) | 2,262,964 | 1,600,415 | 14.5 % |
+| [FI](https://taginfo.geofabrik.de/europe:finland/keys/addr:housenumber) | 1,111,499 | 153,332 | 30 % |
+| [FR](https://taginfo.geofabrik.de/europe:france/keys/addr:housenumber) | 12,467,384 | 11,218,739 | 48 % |
+| [GR](https://taginfo.geofabrik.de/europe:greece/keys/addr:housenumber) | 172,686 | 89,298 | no register count to compare |
+| [HR](https://taginfo.geofabrik.de/europe:croatia/keys/addr:housenumber) | 274,842 | 106,463 | 16 % |
+| [HU](https://taginfo.geofabrik.de/europe:hungary/keys/addr:housenumber) | 781,018 | 202,445 | no register count to compare |
+| [IE, with Northern Ireland](https://taginfo.geofabrik.de/europe:ireland-and-northern-ireland/keys/addr:housenumber) | 491,868 | 23,064 | no register count to compare |
+| [IT](https://taginfo.geofabrik.de/europe:italy/keys/addr:housenumber) | 4,671,280 | 4,550,005 | 17 % |
+| [LT](https://taginfo.geofabrik.de/europe:lithuania/keys/addr:housenumber) | 1,074,718 | 301,141 | 95 % |
+| [LU](https://taginfo.geofabrik.de/europe:luxembourg/keys/addr:housenumber) | 171,828 | 55,010 | 96 % |
+| [LV](https://taginfo.geofabrik.de/europe:latvia/keys/addr:housenumber) | 361,894 | 142,270 | 66 % |
+| [MT](https://taginfo.geofabrik.de/europe:malta/keys/addr:housenumber) | 4,636 | 2,452 | no register count to compare |
+| [NL](https://taginfo.geofabrik.de/europe:netherlands/keys/addr:housenumber) | 9,956,110 | 9,871,860 | 99.7 % |
+| [PL](https://taginfo.geofabrik.de/europe:poland/keys/addr:housenumber) | 8,606,626 | 3,205,275 | 99.7 % |
+| [PT](https://taginfo.geofabrik.de/europe:portugal/keys/addr:housenumber) | 605,409 | 479,964 | 11 % |
+| [RO](https://taginfo.geofabrik.de/europe:romania/keys/addr:housenumber) | 1,096,598 | 904,390 | no register count to compare |
+| [SE](https://taginfo.geofabrik.de/europe:sweden/keys/addr:housenumber) | 1,008,652 | 375,025 | no register count to compare |
+| [SI](https://taginfo.geofabrik.de/europe:slovenia/keys/addr:housenumber) | 446,653 | 67,880 | 77 % |
+| [SK](https://taginfo.geofabrik.de/europe:slovakia/keys/addr:housenumber) | 1,626,980 | 65,797 | 95 % |
+
+How to read the estimates:
+
+- They compare unlike things. OSM counts tagged objects. A register can count units, entrances or, in Estonia, every address object. Treat the shares as a rough ranking, not as completeness figures.
+- On these estimates OSM is close to the register count in NL, PL, AT, CZ, LU, SK and LT, and at roughly 10 to 20 % in PT, ES, HR, IT and EE.
+- Belgium is the one country with a dated, methodical comparison. An OSM extract of 24 April 2025 held 3,900,105 addresses against 4,454,017 official positions, "a nice rate of 87.6 %". The official file had 7,004,321 records before points within 1 metre of each other were merged. The author adds: "We don't check the address quality here" ([juminet's OSM diary, 28 April 2025](https://www.openstreetmap.org/user/juminet/diary/406654)). The 59 % in the table divides by Overture's 7,001,489, which is close to that unmerged figure.
+- In several countries OSM addresses come from official data. The OSM wiki records imports or syncs for the Netherlands (BAG import), Denmark ("All Danish address nodes have since February 2009 been imported"), Czechia (RÚIAN, "updated approximately every month") and Latvia (State Address Register, open data since January 2022, daily bot updates since 24 December 2024) ([OSM wiki, Addresses](https://wiki.openstreetmap.org/wiki/Addresses)).
+- No study comparing OSM address completeness with official registers across several EU countries was found.
+
+**Getting the data in bulk.**
+
+- Geofabrik has an `.osm.pbf` extract for every Member State, without login; Ireland comes combined with Northern Ireland. `.gpkg.zip` is missing for Czechia, France, Germany, Italy, the Netherlands, Poland and Spain. The public files "do not contain the user names, user IDs and changeset IDs" ([Geofabrik, Europe](https://download.geofabrik.de/europe.html)).
+- Photon geocoder dumps ([download1.graphhopper.com/public/](https://download1.graphhopper.com/public/)): planet database for Photon 1.x, 63.2 GB, updated 2026-11-10; planet JSON dump, 27.1 GB, updated 2026-11-09. The database supports only English, German, French and the local language and has "no support for structured search or full geometries". [Country extracts](https://download1.graphhopper.com/public/europe/) flag a ready database for Austria, Denmark, France-Monaco, Germany, Luxemburg, the Netherlands, Slovakia and Spain, and none for the other EU entries.
+- OSMNames is stale: latest release v2.2.0 of 2022-12-09, last push 2024-08-07, code GPL-2.0 ([OSMNames releases](https://github.com/OSMNames/OSMNames/releases)).
+
+**Usage limits of the public services.** Neither public service is a way to collect a country's addresses.
+
+- Nominatim ([OSMF Nominatim Usage Policy](https://operations.osmfoundation.org/policies/nominatim/)):
+  - "an absolute maximum of 1 request per second";
+  - a Referer or User-Agent that identifies the application ("stock User-Agents as set by http libraries will not do");
+  - "Results must be cached on your side";
+  - no autocomplete;
+  - no systematic queries: "This includes reverse queries in a grid, searching for complete lists of postcodes, towns etc.";
+  - bulk geocoding on a single thread; "Scripts running longer than a day and scripts that are run at regular intervals are restricted to 4 requests per minute";
+  - for complete data the policy says to "get it from the OSM planet or an extract", and for heavy use to "install your own instance".
+- Overpass API, main instance ([OSM wiki, Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)): no key. The guideline for one-off use is "less than 10,000 queries per day and download less than 1 GB data per day"; for regular use the wiki divides those numbers by 100. For country-sized areas "it's better to use planet.osm mirrors". "Commercial use should use self-hosted or paid Overpass servers".
+
+### Postcode-only sources
+
+None of these holds addresses. Each gives a postcode with a place name or a point, and no street or house number.
+
+**GeoNames postal codes.**
+
+- What: a tab-delimited dump of country code, postal code, place name, three administrative levels, latitude, longitude and an accuracy code (1 = estimated, 4 = geonameid, 6 = centroid of addresses or shape). "about 120 countries are currently supported" ([readme](https://download.geonames.org/export/zip/readme.txt)).
+- Licence: "This work is licensed under a Creative Commons Attribution 4.0 License. This means you can use the dump as long as you give credit to geonames (a link on your website to www.geonames.org is ok)".
+- Coordinates are often estimates: "For many countries lat/lng are determined with an algorithm that searches the place names in the main geonames database"; otherwise "an average lat/lng of 'neighbouring' postal codes is calculated".
+- EU coverage ([download directory](https://download.geonames.org/export/zip/)): a country file for 26 Member States; none for Greece. The files are regenerated daily; the listing showed 2026-11-11 03:53-03:54.
+- Limits: "For Ireland we have only the first letters of the full postal codes (for copyright reasons)"; the readme says the same of Malta. For the Netherlands the combined `allCountries.zip` (19 MB) has "only the first part of the codes"; the full Dutch codes are in `NL_full.csv.zip` (3.5 MB).
+
+**GISCO postal code points (Eurostat).**
+
+- What: "The postal code point dataset shows the location of postal codes, NUTS codes and the degree of urbanisation classification across EU, EFTA and candidate countries from various sources" ([Eurostat GISCO, Postal codes](https://ec.europa.eu/eurostat/web/gisco/geodata/administrative-units/postal-codes)). Versions 2024 and 2020. Formats GeoPackage, SHP and CSV, in EPSG 3035, 4326 or 3857.
+- Licence: "The dataset is released under the CC-BY-SA-4.0 licence and requires the following acknowledgement whenever used: © European Union - GISCO, 2024, postal code point dataset, Licence CC-BY-SA 4.0." This is a share-alike licence, unlike GeoNames' CC BY 4.0.
+- Limits stated by the publisher: "'Non-geographical' postal codes (e.g. post boxes and postal codes used by large organisations) are not included", and "all existing postal codes might not be included or correctly located".
+- Purpose: "to create correspondence tables for the NUTS classification" (TERCET). The tables are offered on the [TERCET flat files page](https://gisco-services.ec.europa.eu/tercet/flat-files).
+
+**UPU Universal POST*CODE DataBase.**
+
+- What: "A world postcode database containing the postcodes of 192 member countries" ([UPU addressing solutions](https://www.upu.int/en/postal-solutions/programmes-services/addressing-solutions)). Update 2026.1 is dated 02.03.2026.
+- Licence: not open. It is supplied under UPU licence documents: a contract, a non-disclosure agreement, exhibits, a data use declaration and a rates document. No price is on the page, and the rates document was not opened.
+- Also listed on the same page: sample extracts for five regions (Africa, Asia, Central-America, Eastern-Europe, Western-Europe), Postal Addressing Systems (PAS) country sheets, the Addressing knowledge centre and "Standard S42: International postal address components and templates".
+
+**Other postcode or place files, in one line each.**
+
+- Geoapify: "You can download these Postcodes Dataset for Free!", with a licence per country, for example France "Compiled by Geoapify from Géoclip | ODbL" and Germany from OpenStreetMap under ODbL. The direct-download table lists only DE, FR, GB and US ([Geoapify downloads](https://www.geoapify.com/downloads/); [Geoapify postal code downloads](https://geoapify.com/download-postal-codes)).
+- Who's On First: administrative places (countries, regions, counties, localities, neighbourhoods), not addresses. "Crediting Who's On First is recommended and linking back to the License is required" ([Who's On First licences](https://whosonfirst.org/docs/licenses/); [Pelias data sources](https://github.com/pelias/documentation/blob/master/data-sources.md)).
+
+### What does not exist
+
+Each item is "none found" in the places named. None is a statement by the organisation concerned.
+
+**No free EuroGeographics address-point product was found.**
+
+- Searched: the [Open Maps for Europe page](https://eurogeographics.org/open-maps-for-europe/), EuroGeographics' licensing page `https://eurogeographics.org/activities/licensing/` (it covers paid licensing only), the front page of `https://www.mapsforeurope.org/`, and two trade-press reports.
+- The open products are EuroRegionalMap (1:250 000), EuroGlobalMap (1:1 million), EuroDEM, Pan-European Imagery, the Open Gazetteer and a prototype Open Cadastral Map, "released as open data under a single licence". The Open Gazetteer holds "authoritative multilingual geographical names" from 36 national authorities: place names, not addresses.
+- The Open Cadastral Map is the only product that touches addresses. It "takes INSPIRE open data and allows the user to find out what is available from national sources in one place before obtaining the data from the official provider". Its four data types are administrative units, cadastral parcels, buildings and addresses. It started with Poland, the Netherlands, the Czech Republic and Spain; by 29 July 2025 it had data from 15 national authorities after adding Belgium, Estonia, Ireland, Croatia and Switzerland ([GeoConnexion, 29 July 2025](https://www.geoconnexion.com/news/ome2-adds-five-new-countries-to-final-release-of-open-cadastral-map)).
+- The final large-scale prototype of 17 December 2025 covers 10 countries with "administrative boundary, transport and hydrographic data". Addresses are not among its themes ([GeoConnexion, 17 December 2025](https://www.geoconnexion.com/news/open-maps-for-europe-2-ome2-adds-five-new-countries-and-hydrography-theme-to-final-release-of-high-value-data-prototype)).
+- The funding project behind both (OME2) "runs until the end of 2025". Estimate: upkeep of the Open Cadastral Map after that date is uncertain. This rests only on the project end date and the "prototype" label.
+- A related licence note: Eurostat's administrative-boundary files are "© EuroGeographics", and "If you intend to use the data commercially, please contact EuroGeographics for information about their licence agreements" ([Eurostat GISCO, administrative units](https://ec.europa.eu/eurostat/web/gisco/geodata/administrative-units)).
+
+**No bulk download of the GISCO address database was found.** The API definition ([swagger.yaml](https://gisco-services.ec.europa.eu/addressapi/swagger.yaml)) has eleven paths and no bulk or download endpoint. The only GISCO bulk product seen in this area is the postal code point dataset.
+
+**No Europe-wide or per-country file in OpenAddresses.** The [collections list](https://batch.openaddresses.io/api/collections) holds only Global, four US regions and Canada.
+
+**No other free multi-country source of house-number address points was found** beyond OpenAddresses, Overture and OpenStreetMap. This is an estimate from the sources looked at; a lookup cannot prove it. The other projects seen reuse the same data:
+
+- Pelias, an open-source geocoder, imports OpenAddresses ("it only contains address data"), OpenStreetMap ("licensed under the ODbL"), Who's On First and GeoNames ([Pelias data sources](https://github.com/pelias/documentation/blob/master/data-sources.md)).
+- libpostal's training data is built from OSM addresses, "most of the address data sets from OpenAddresses" and Yahoo GeoPlanet postal codes. It is "over 100GB unzipped", and the examples are altered ("We also add abbreviations, drop out components at random, etc."), so it is not a clean address file ([libpostal README](https://github.com/openvenues/libpostal)).
+- Photon dumps: see the OpenStreetMap section.
+- Wikidata has address properties: P6375 "street address", P669 "located on street" with qualifier P670 "house number", P281 "postal code" ([Wikidata API](https://www.wikidata.org/w/api.php?action=wbgetentities&ids=P6375%7CP281%7CP669%7CP670&props=labels%7Cdescriptions&languages=en&format=json)). Its structured data is "released into the public domain under Creative Commons Zero" ([Wikidata:Licensing](https://www.wikidata.org/wiki/Wikidata:Licensing)). No per-country coverage of these properties was measured.
+
+**No maintained comparison list of open address data for the 27 countries was found.**
+
+- The OSM wiki page [Potential Datasources](https://wiki.openstreetmap.org/wiki/Potential_Datasources) (last edited 16 June 2026) carries the notices "This page is being considered for cleanup" and "may contain out-of-date information". The word "address" does not occur in it.
+- The Open Data Maturity Report 2025 gives only aggregate, self-reported HVD scores per country and no address-dataset table.
+- No Commission or JRC study comparing the openness of national address registers was found by web search.
+- No community-curated catalogue of European open address data was found. The search for one was not exhaustive.
+- The INSPIRE Geoportal's per-theme overview could serve as such a list, but it was unreachable.
+- Working substitutes, each a by-product of something else and each machine-readable:
+  - the OpenAddresses [source tree](https://github.com/openaddresses/openaddresses/tree/master/sources), organised by ISO country code, with data URL, licence and field mapping per source, and its [batch API](https://batch.openaddresses.io/api/data);
+  - Overture's per-country count table in the [addresses guide](https://docs.overturemaps.org/guides/addresses/) and source and licence table on the [attribution page](https://docs.overturemaps.org/attribution/), refreshed with each release;
+  - the GISCO Address API's [/countries](https://gisco-services.ec.europa.eu/addressapi/countries) and [/copyright](https://gisco-services.ec.europa.eu/addressapi/copyright);
+  - the data.europa.eu [HVD "Addresses" filter](https://data.europa.eu/api/hub/search/search?filter=dataset&limit=0&facets=%7B%22hvdCategory%22%3A%5B%22c_c3de25e4%22%5D%7D);
+  - the OSM wiki [Addresses](https://wiki.openstreetmap.org/wiki/Addresses) page, which links per-country import projects and quality tools (Nominatim Data Analyser, OSM Inspector).
+
+**No official record of compliance with the HVD Regulation for addresses was found.**
+
+- No per-country compliance table, dashboard or study from the Commission (web search; the Open Data Maturity Report 2025 was read and has none).
+- No published Article 5 report from a Member State (web search).
+- No infringement procedure about HVD publication. The searches returned only older cases on the transposition of the Open Data Directive.
+
+**Smaller negative findings.**
+
+- No address dump published by the Nominatim project was found.
+- No licence or terms of use for the GISCO Address API were found in its definition or documentation.
+
+### Could not be verified
+
+**INSPIRE Geoportal.**
+
+- The whole catalogue at [inspire-geoportal.ec.europa.eu](https://inspire-geoportal.ec.europa.eu/srv/eng/catalog.search#/home). Its TLS certificate was valid from 14 April 2026 to 30 October 2026 13:46:18 GMT and had not been renewed on 11 November 2026. Standard clients refuse the connection ("certificate has expired"). Consequences:
+  - no per-country list of working, downloadable INSPIRE address datasets and their licences could be compiled;
+  - whether the Geoportal has a view for high-value or priority datasets could not be checked;
+  - the record address form `https://inspire-geoportal.ec.europa.eu/srv/api/records/{id}` could not be tried.
+- Lithuania's INSPIRE address record, `https://inspire-geoportal.ec.europa.eu/srv/api/records/876e6fc9-827d-40e1-a479-f5365b3d9ea2` (said to offer a zip, WMS and ATOM from Centre of Registers data of November 2024): not fetched, same certificate.
+- Spain's record `https://inspire-geoportal.ec.europa.eu/srv/api/records/ES_SDGC_AD` and the statement that the DG Cadastre dataset covers every region except the Basque Country and Navarre: not fetched, same certificate. The separate datasets of Navarre, Gipuzkoa and Bizkaia are confirmed on data.europa.eu.
+- Sweden, Lantmäteriet's product "Address download, INSPIRE": the page `https://lantmateriet.se/en/geodata/geodata-products/product-list/address-download-inspire` and its parent product list both returned HTTP 404.
+- Whether any national INSPIRE address file actually lacks postcodes or restricts access: no source was found. The data model's constraints are quoted above; nothing more is established.
+- Which countries offer addresses through OGC API Features: not researched.
+
+**HVD compliance.**
+
+- An independent count of HVD records on data.europa.eu dated 3 October 2026 (EasyxLab study S17, `https://easybyte.es/lab/studies/s17/paper/`): the site returned HTTP 403, so none of its figures is used here.
+- The dates derived by arithmetic (end of exemptions and first Article 5 reports about 9 February 2025, next reports about February 2027) are stated in no source.
+
+**OpenAddresses.**
+
+- Whether a basic account is free: a self-service "Create An Account" form exists, and nothing seen contradicts it, but no account was created.
+- The age of the Czech cached file: the source page names the export of 2024-08-31; the cached file itself carries no date.
+- Address counts per country: the batch API gives file sizes only.
+- House-number null rates of 27.13 % (OpenAddresses) and 30.15 % (OSM) attributed to a 2023 paper (Sierra-Requena et al., ISPRS Int. J. Geo-Inf. 12(10):407, `https://www.mdpi.com/2220-9964/12/10/407`): the publisher returned HTTP 403 and the abstract has no such figures. The paper exists and proposes an ISO 19157-based quality check of address data.
+
+**Overture.**
+
+- How long old releases stay available: no policy text was seen. The STAC catalogue lists only three releases.
+- The licence for Estonia (CC0 at Overture, attribution required at OpenAddresses) and for Portugal (none named at Overture, CC BY 4.0 at OpenAddresses, "No restrictions" at INE): the labels disagree. OpenAddresses' licence link for Portugal points to the unreachable INSPIRE Geoportal.
+
+**GISCO.**
+
+- The licence of the Address API's data: not stated by the publisher.
+- Rate limits: none documented, none tested.
+- The limits of 1,000 results for `/search`, `/roads` and `/postcodes` and of five for `/reverse`: documented only by a third-party client.
+- Reference dates for 23 of the 26 Member States, total address counts, and why Ireland is absent: not published by the API.
+- The file list on the [TERCET flat files page](https://gisco-services.ec.europa.eu/tercet/flat-files): the page is a JavaScript shell and showed no list to a plain HTTP client.
+- The sources behind the GISCO postal code points ("various sources"): not identified.
+
+**EuroGeographics.**
+
+- The name and terms of the "single licence" for its open products: not on the pages read.
+- Whether the Open Cadastral Map serves address features itself or only displays them, and the full list of its 15 authorities: not confirmed.
+- Whether the services behind `https://www.mapsforeurope.org/` still work after the project end: only the front page was fetched (HTTP 200, a JavaScript shell).
+
+**Postcode sources.**
+
+- GeoNames and Greece: there is no country file, but `allCountries.zip` was not opened, so Greek rows inside it are not excluded.
+- UPU: the claim that some countries also require a national licence. The product sheet `https://www.upu.int/UPU/media/upu/documents/PostCode/UniversalPostcodesDatabaseProductSheetEnglish.pdf` exists (904,812 bytes) but was not read. Prices were not seen. Whether the S42 standard can be downloaded free was not checked.
+- Who's On First: whether the licence change proposed in 2018 (from CC BY to "Community Data License Agreement – Permissive, Version 1.0", [announcement](https://whosonfirst.org/blog/2018/08/21/license-change/)) took effect, and its postcode coverage per EU country.
+
+**OpenStreetMap tooling.**
+
+- What the "not available" flag on Photon's country pages means in practice (no database dump only, or no extract at all).
+- The German regio-osm house-number evaluation and the French BANO statistics: not checked.
+
+**Comparison studies.**
+
+- The content of the JRC report JRC109035, `https://publications.jrc.ec.europa.eu/repository/bitstream/JRC109035/jrc109035_jrc109035_jrc_inspire_eu_summaryreport_online.pdf`: the file exists (1,343,607 bytes) but was not read.
+- Outputs of the European Location Framework project and any UN-GGIM: Europe recommendation on addresses: not researched.

@@ -36,7 +36,7 @@
 
 ### Caveats and recent changes
 
-- The national SHP zip is a zip64 archive compressed with deflate64 (method 9), which some unzip tools cannot inflate. Its address `.dbf` is 7,068,317,904 bytes uncompressed. The national address layer has no `.cpg` file; the other three national layers and the Opolskie package have one (UTF-8).
+- The national SHP zip is a zip64 archive compressed with deflate64 (method 9), which some unzip tools cannot inflate. Its address `.dbf` is 7,068,317,904 bytes uncompressed. The national address layer has no `.cpg` file, although the other three national layers have one; the Opolskie package's `.cpg` says UTF-8.
 - The address points have no flat or unit field: the ten attributes listed above are all there is.
 - PRG addresses come from the municipalities (gminas) and are updated at source as municipalities change their records. GUGiK publishes no regeneration schedule for the download files; on 11 Nov 2026 every file checked was dated 10 Nov 2026.
 - Counts differ slightly by route: 8,640,975 points in the 10 Nov 2026 file, 8,641,300 from the live WFS and OGC API on 11 Nov 2026.

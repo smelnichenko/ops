@@ -14,7 +14,7 @@
 | ATOM feed for that CSV | ČÚZK | https://atom.cuzk.gov.cz/RUIAN-CSV-ADR-ST/RUIAN-CSV-ADR-ST.xml | Feed entry for the one national file; describes the service as public and free of charge | Anonymous | Feed says "žádné podmínky neplatí" (no conditions apply) | Feed updated 2026-11-01 | confirmed |
 | Address hierarchy file | ČÚZK | https://vdp.cuzk.gov.cz/vymenny_format/csv/20261031_strukt_ADR.csv.zip | Seven CSV files linking each address point to street, municipality part, municipality, district, region and other units. Codes only: no names, coordinates or postcodes | Anonymous download, 34,233,458 bytes | Not recorded for this file | File last modified 1 Nov 2026 | confirmed |
 | Full register in the VFR exchange format (GML 3.2) | ČÚZK | https://services.cuzk.gov.cz/vfr/ (monthly directories `https://services.cuzk.gov.cz/vfr/<YYYYMM>/`); request form at https://vdp.cuzk.gov.cz/vdp/ruian/vymennyformat | All RÚIAN elements: addresses, buildings, parcels, streets, boundaries. Each monthly directory has 6,258 per-municipality files and state files, for example `20260903_ST_UADS.xml.zip` (addresses, 87.0 MB) and `20260930_ST_UKSH.xml.zip` (34.1 MB). Monthly state files go back to August 2015 | Anonymous download; the form also offers increments since a date | CC BY 4.0 (ČÚZK conditions for open spatial data) | Monthly state files; newest directory 202609 on 11 Nov 2026 | corrected |
-| INSPIRE theme Addresses (AD) | ČÚZK | ATOM https://atom.cuzk.gov.cz/AD/AD.xml ; WFS https://services.cuzk.gov.cz/wfs/inspire-AD-wfs.asp | Addresses in the INSPIRE model. The only Czech dataset in the high-value category "Addresses" on data.europa.eu | Listed as public and free; the two endpoints were not requested | Not recorded | Not recorded | confirmed (catalogue record only) |
+| INSPIRE theme Addresses (AD) | ČÚZK | ATOM https://atom.cuzk.gov.cz/AD/AD.xml ; WFS https://services.cuzk.gov.cz/wfs/inspire-AD-wfs.asp | Addresses in the INSPIRE model. The only Czech dataset in the high-value category "Addresses" on data.europa.eu | Listed as public and free; the two endpoints were not requested | Not recorded | Catalogue record says files are created daily | confirmed (catalogue record only) |
 | Postcode lists ("zákaznické výstupy", customer outputs) | Česká pošta | Page https://www.ceskaposta.cz/ke-stazeni/zakaznicke-vystupy ; files https://www.ceskaposta.cz/documents/d/guest/db_pcobc-zip?download=true and https://www.ceskaposta.cz/documents/d/guest/csv_psc_a-zip?download=true ; third file `csv_cobce_psc-zip` linked from the page | `zv_pcobc.csv`: 16,152 rows, municipality part to postcode, delivering post office and district. `zv_psc_adr.csv`: 20,135 rows, postcode and type. `zv_cobce_psc.csv`: 16,205 rows, with RÚIAN codes of municipality part and municipality. No streets, house numbers or coordinates | Anonymous download, zipped CSV | None stated | Monthly, first working day; files dated 1 Nov 2026 | confirmed |
 | Register of census districts and buildings (RSO) | Český statistický úřad (ČSÚ) | https://csu.gov.cz/rso/registr_scitacich_obvodu | Page exists; content and downloads not examined | Not examined | Not recorded | Not recorded | confirmed (page exists only) |
 | GISCO Address API | Eurostat | https://gisco-services.ec.europa.eu/addressapi | Address lookup for Czechia | No key; lookup only, 1,000-row cap, no bulk download | None stated | Some country snapshots date from 2021-2022 | confirmed |
@@ -52,7 +52,6 @@
 ### Not free or not available
 
 - **Česká pošta postcode files:** free to download, but they carry no licence or terms. The "certificate" document that accompanies each file is a data dictionary, not a licence. They hold no addresses.
-- **Paid address products:** none identified.
 
 ### Could not be verified
 
@@ -63,3 +62,4 @@
 - The date of the copy OpenAddresses holds: the 31 Aug 2024 file name appears only in its "website" field.
 - Usage limits or terms for the ArcGIS services: none were found in a first search, and the search was not repeated.
 - Content and download options of the ČSÚ census-district and building register.
+- Web services reserved for public authorities and third-party APIs built on RÚIAN: they surfaced in searches and were not examined.

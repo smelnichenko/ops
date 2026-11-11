@@ -59,7 +59,7 @@
 
 ### Could not be verified
 
-- The live behaviour of adressevaelger.dk: the test request could not be made in the checking session. Everything stated about it comes from KDS documentation.
+- The live behaviour of adressevaelger.dk: no test request to it went through. Everything stated about it comes from KDS documentation.
 - The coordinate reference system and the file sizes of the DAR file downloads: these need a login. EPSG:25832 was seen only in the official metadata record and in the INSPIRE service.
 - How current the data in the keyless INSPIRE API is.
 - The listing text of the Dataforsyningen product page "INSPIRE - Adresser" (https://dataforsyningen.dk/data/3937): the page is a JavaScript shell and was not re-read.

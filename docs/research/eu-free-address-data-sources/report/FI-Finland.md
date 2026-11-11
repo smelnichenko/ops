@@ -35,7 +35,7 @@
 - Finland has no stand-alone address register in this data. Addresses are building addresses: "in the first phase, the addresses do not have their own location points, and are instead linked to building objects". The coordinates are building positions.
 - Addresses reach Ryhti with building permit data from the municipalities. Addresses created before Ryhti came from DVV's Population Information System. During a transition period (2025-2028) municipalities may still deliver permit data to the Population Information System, which forwards it to Ryhti.
 - No refresh interval and no rate limit are published for the Ryhti API. What was observed: modification stamps from the same day.
-- Deleted addresses have their own collection, `open_address_deleted`.
+- A collection named `open_address_deleted` sits beside `open_address`; its content was not examined.
 - Syke's data content description of 27 May 2026 (https://geoportal.ymparisto.fi/meta/julkinen/dokumentit/Ryhti_rakennustiedot_EN.pdf) lists four open interfaces, among them "Addresses of completed buildings" and "Addresses of project buildings", plus two contractual interfaces.
 - High-value datasets: the national portal record carries `highvalue: false`, and data.europa.eu shows `is_hvd: false` for the Ryhti address dataset.
 - The NLS geocoder's documentation still names the Population Information System as its building-address source.

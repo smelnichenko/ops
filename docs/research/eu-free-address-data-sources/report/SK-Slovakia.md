@@ -37,6 +37,7 @@
 - No coordinate reference system is stated in the CSV or its catalogue record. The values are degrees; the WFS declares EPSG:4258.
 - Per OpenAddresses' processing record: 973,318 rows (56%) have no street name, 401 have no postcode, 35,190 have no coordinates. Many municipalities have no named streets, so those addresses carry only the registration number (*súpisné číslo*).
 - `data.slovensko.sk` ignores HTTP `Range` requests and streams the whole file.
+- The catalogue declares the series "Register adries" as updated daily and the national CSV as quarterly; the CSV served in November 2026 is named for April 2026.
 - The old portal `data.gov.sk` redirects (302) to `data.slovensko.sk`.
 - The per-table registers (buildings, entrances, streets, flats and others) show no files at the series level; the files hang on child datasets of each series.
 - No change batch later than 31 January 2025 was found in a title search of the catalogue.

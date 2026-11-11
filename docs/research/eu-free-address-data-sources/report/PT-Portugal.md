@@ -22,7 +22,7 @@
 | GISCO Address API | Eurostat | https://gisco-services.ec.europa.eu/addressapi | Forward and reverse lookup of Portuguese addresses: door number, street, city, postcode, coordinates. Declared source: "© Instituto Nacional de Estatística" | No key. Lookup only, 1,000-row cap, no bulk download | None stated | Not stated | corrected |
 | OpenAddresses | OpenAddresses | https://batch.openaddresses.io ; source definition: https://github.com/openaddresses/openaddresses/blob/master/sources/pt/countrywide.json | Countrywide layer converted from the INE service, with postcodes | Free download, needs a logged-in account | CC BY 4.0, attribution "Instituto Nacional de Estatística, I.P." | Cached conversion dated 2026-02-23 | confirmed |
 | Overture Maps addresses, release 2026-10-21.0 | Overture Maps | https://docs.overturemaps.org/guides/addresses/ | 5,607,450 Portuguese addresses (publisher's figure), from INE as distributed by OpenAddresses | GeoParquet, no account | No licence named for Portugal | Source pulled 2026-10-15 | confirmed |
-| GeoNames postcodes | GeoNames | https://download.geonames.org/export/zip/ | Postcode centroids only, no addresses | Direct file download | CC BY 4.0 | Regenerated daily | confirmed |
+| GeoNames postcodes | GeoNames | https://download.geonames.org/export/zip/ | Postcode centroids only, no addresses | ZIP file per country | CC BY 4.0 | Regenerated daily | confirmed |
 
 ### Free APIs and services
 
@@ -36,7 +36,7 @@
 - The data are old. The Lisbon file carries `versionId` 2017, `validFrom` 2018-01-01, a generation timestamp of 2018-01-22 and a server date of 17 April 2018. Feed entries are dated 2017-05-17 and the feeds 2019-11-11. The portal record gives frequency "continuous" and last modification 2025-01-08, but the files did not change.
 - No newer BNM release and no other national address-point dataset: none found. Searched: data.europa.eu for "moradas" in Portugal (18 results, the BNM the only national address dataset).
 - Addresses are at unit level. Each locator carries a door number (`buildingIdentifier`), a floor (`floorIdentifier`) and a unit (`unitIdentifier`, for example "ESQ"); the point is placed at the building. An import that wants one record per door number has to collapse them.
-- Counts of "feature members" include postal descriptors, street names and administrative units alongside addresses, so they are not address counts.
+- Counts of "feature members" include component features such as postal descriptors alongside the addresses, so they are not address counts.
 - The feeds are not clean. In the Norte, Centro, Lisbon-area and Alentejo feeds, 139 EPSG:3035 entries link to `Addresses_1007_EPSG3035.zip` instead of their own municipality's file, so the EPSG:3035 links cannot be trusted; the EPSG:3763, 4258 and 4326 links are consistent. Municipality 0914 is listed in both the Norte and Centro feeds, and Madeira lists 12 entries per CRS for 11 codes.
 - CRS: mainland files come in EPSG:3763, 4258, 4326 and 3035. The islands replace 3763 with EPSG:5014 (Açores western group), 5015 (Açores central and eastern groups) or 5016 (Madeira).
 - In the EPSG:4326 files `gml:pos` is latitude first.
@@ -52,7 +52,7 @@
 - National geocoding API: none found. The GISCO Address API fills the gap for lookups.
 - Base Geográfica de Edifícios (buildings base): not open. Its metadata record declares "Acesso público limitado de acordo com o Artigo 13(1)(f) da Diretiva INSPIRE" (limited public access) and offers no download or service.
 - CTT postcode file: behind a login, and its terms of use could not be read. The only licence in circulation is a third party's presumption (PDDL), so it cannot be treated as open data.
-- Open postcode dataset on the national portal: none found. A search of dados.gov.pt for "códigos postais" returned zero datasets (https://dados.gov.pt/api/1/datasets/?q=moradas&page_size=12 for "moradas" returned three, of which only the BNM is an address dataset).
+- Open postcode dataset on the national portal: none found. A search of dados.gov.pt for "códigos postais" returned zero datasets. The same search for "moradas" (https://dados.gov.pt/api/1/datasets/?q=moradas&page_size=12) returned three, of which only the BNM is an address dataset.
 - Door-number datasets for the municipalities of Lisbon and Porto: none found. Searched: dados.gov.pt and data.europa.eu for "números de polícia"; the municipal portals themselves were not searched.
 
 ### Could not be verified
