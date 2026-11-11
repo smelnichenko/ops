@@ -51,8 +51,8 @@
       args:
         executable: /bin/bash
       loop:
-        - { name: off, flags: "" }
-        - { name: on, flags: "--set postgres.statStatements=true --set postgres.exporterMetrics=true" }
+        - { name: "off", flags: "" }
+        - { name: "on", flags: "--set postgres.statStatements=true --set postgres.exporterMetrics=true" }
       register: _render
       changed_when: false
       failed_when: _render.rc != 0 or _render.stdout != '1'
