@@ -279,6 +279,32 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
 - **Measured before it ships:** every open listing and every person in production judged by the old list and the new; the
   difference is listed in the PR (expected: only more kept, each one checked against its posting); `READING` raised.
 
+### One place from several address sources
+
+The operator, 2026-11-11: "we need to be smart in resolving address duplicates from several address data sources". A
+country's places come from more than one source (Estonia: EHAK, GeoNames' postal file, the Board's own postal codes;
+later each market's own). They are never stored as separate places that happen to share a name.
+- **One source is the country's authority** (Estonia: EHAK): its code is the place's identity (`place.country, code`).
+  Every other source only adds to a place - postal codes, a point, a name - through
+  `place_source_ref(place_id, source, source_code, method, score, seen_at)`, unique on `(source, source_code)`, so a
+  source's own record maps to one place and its next run finds the same one without matching again.
+- **Matching a record to a place, strongest first, and recorded:** (1) the authority's code when the record carries it
+  (GeoNames' admin3 = EHAK); (2) a code it carried before, through the place's history (a renumbered code: Saku); (3) the
+  searchable name without its type word ("Loo alevik" = "Loo") within the same municipality, else the same county;
+  (4) with points, the nearest place of that name within 5 km; (5) a postal code that place already holds. A step
+  decides only when it leaves exactly one place: two candidates are a tie, never a guess.
+- **Never merged:** two places with different authority codes (two villages named Mäeküla are two places); a record
+  that matches none is kept apart as a candidate (`place_candidate`, with the reason), never added as a place; a
+  former name stays a former place with its successor.
+- **Disagreements are kept, not overwritten:** a point or postal code from two sources that disagree keeps both with
+  their source; the place shows the authority's, else the more precise; a point more than 5 km from another source's
+  is listed in the run's note.
+- **Shown to the admin:** per country, the unmatched candidates and the ties, with the reason and the nearest places,
+  each resolvable by hand (link to a place, or dismiss); a hand resolution is a `place_source_ref` with method MANUAL,
+  which no run overwrites.
+- **Tests:** the same village from each source joined once; namesakes in two municipalities kept apart; a renumbered
+  code joined through history; a tie left unmatched; a hand link survives the next run.
+
 ### Country data and matching
 
 - **Per country, small and stable, in code:** its names (English and own language), ISO codes, regions (EU, EEA, Europe,
