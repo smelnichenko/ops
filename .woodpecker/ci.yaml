@@ -3,13 +3,30 @@
 # ONE run per change: the pull request's. With `push` listed too, every push to a branch that has an
 # open PR fired BOTH pipelines - two identical runs of the same sha, racing for the same agent.
 # Nothing lands here without a PR, so the PR run is the gate; deployment stays on cd.yaml's push.
+# A change of docs alone runs nothing: the suite reads no doc but plan 100's step table (unit/plan-steps), which stays
+# outside the list. Nine plan-doc pushes in an hour (2026-11-11) held masi's deploy 35 min behind ~15 min runs each in
+# the one slot.
 when:
   - event: pull_request
+    path: &docs_only
+      exclude:
+        - 'docs/*.md'
+        - 'docs/research/**'
+        - 'docs/runbooks/**'
+        - 'docs/plans/0*'
+        - 'docs/plans/0*/**'
+        - 'docs/plans/10[1-9]*'
+        - 'docs/plans/10[1-9]*/**'
+        - 'docs/plans/1[1-9]*'
+        - 'docs/plans/1[1-9]*/**'
+        - 'docs/plans/[2-9]*'
+        - 'docs/plans/[2-9]*/**'
   # AND the merge commit on main. Not a duplicate: the pull_request run tests the PR's own head, and two
   # PRs that were each green apart can still break main together. This repo has no other gate - Argo
   # applies main to the live cluster - so the tree that actually lands is checked here.
   - event: push
     branch: main
+    path: *docs_only
 
 clone:
   - name: git
