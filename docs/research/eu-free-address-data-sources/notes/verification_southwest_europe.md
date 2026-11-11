@@ -9,10 +9,98 @@ NOT DISPROVED = a negative claim I tried and failed to disprove.
 - Spain: checked (CNIG download-centre pages could not be read - host gives no HTTP response to curl)
 - Portugal: checked (three counts not recounted: total size, national feature sum, Lisbon locator count)
 - Italy: checked (national-file row counts not recounted - 336 MB file not downloaded; Lombardia, Umbria, Sardegna, Piemonte regional sources still unverified)
-- Malta: not started
-- Cross-country comparison: not started
+- Malta: checked (national portals portal.data.gov.mt / msdi.data.gov.mt answer 403 - their own pages unread)
+- Cross-country comparison: checked
 
-(Corrections and still-unverified claims will be listed here when all units are done.)
+## Result in short
+
+155 claims checked. By leading verdict: **CONFIRMED 117, UNVERIFIED 20, NOT DISPROVED 8, CORRECTED 6, WRONG 4.**
+14 rows are mixed (part confirmed, part not) and are counted under their first verdict; 18 CONFIRMED rows carry a
+smaller correction in their last column. All of these are listed below.
+
+| Unit | CONFIRMED | CORRECTED | WRONG | UNVERIFIED | NOT DISPROVED |
+|---|---|---|---|---|---|
+| Spain (58) | 43 | 1 | 1 | 11 | 2 |
+| Portugal (28) | 20 | 2 | 1 | 3 | 2 |
+| Italy (40) | 31 | 1 | 0 | 6 | 2 |
+| Malta (19) | 14 | 2 | 1 | 0 | 2 |
+| Cross-country (10) | 9 | 0 | 1 | 0 | 0 |
+
+### WRONG (negative claims that were disproved)
+
+- **PT-27 / MT-18 / XC-9 - "no free official geocoding API was found for Portugal or Malta".** Eurostat's GISCO Address API
+  (`https://gisco-services.ec.europa.eu/addressapi/`, no key) lists ES, IT, MT and PT and answered real forward and reverse
+  requests for all four today. Portugal: door number, street, postcode, coordinates (source INE). Malta: door number, street,
+  locality, coordinates, **no postcode**, and several doors share one coordinate (source NSO). What is missing in both countries
+  is a *national* geocoding API.
+- **ES-39 - "a direct bulk download URL for the Basque Country street directory was not found".** Eustat publishes the portals
+  per historical territory as CSV and XLSX, no registration: `https://es.eustat.eus/comun/ExtractorBlob.ashx?id=01_Atariak_Portales.csv`
+  (also `20_`, `48_`), with postcode, ETRS89 UTM and lat/lon columns. Linked from `https://es.eustat.eus/productosServicios/idioma_c/kale_formu.html`.
+
+### CORRECTED
+
+- **ES-27** - Catastro sample (Ajalvir): `specification` is not only "Entrance": 1,748 Entrance + 183 Parcel (parcel-centroid positions).
+- **PT-15** - INE's HVD page shows the National Address Base only; the "Geographic Base of Buildings" row is inside an HTML comment (not displayed).
+- **PT-18** - The BGE metadata record declares *limited* public access ("Acesso público limitado de acordo com o Artigo 13(1)(f) da Diretiva INSPIRE"), no download; it is not "public access".
+- **IT-21** - Alto Adige WFS returns 145,190 address points today (notes: 145,173).
+- **MT-10** - Malta Planning Authority buildings: distributions are WFS and WMS (no OGC API); the catalogue says CC BY 4.0 but the WFS capabilities say "Conditions apply - contact mappingshop@pa.org.mt to inquire regarding costs and licence of use".
+- **MT-15** - Legal Notice 205 of 2025 is readable (legislation.mt): regulation 10 says the Registrar "shall endeavour to make specific data elements from the Register and subsidiary registers available as open data" under a licence the Registrar specifies; the subsidiary registers include a Post Codes Register and a Buildings Register.
+- **IT-11 (part)** - The 19-column list is right for the CSV, but `metadata_indirizzario.json` documents only 18 fields: `LOCALITA'` is missing there.
+
+Smaller corrections attached to CONFIRMED rows:
+
+- **ES-1** - the publisher metadata also lists a national CSV distribution (four tables) through the download centre.
+- **ES-9** - IGN's licence document says use implies a CC-BY 4.0 licence, not merely one "compatible with" it.
+- **ES-11** - the scne.es attribution string on the CDAU record is a required mention for a CartoCiudad-derived layer, not a suggestion "used by reusers".
+- **ES-31** - Catastro carries three different rights statements: CC BY 4.0 (metadata), the 2016 licence PDF, and "all rights reserved" in the top ATOM feed.
+- **ES-34** - INE: licence is CC BY 4.0 per its legal notice; the footer link's tooltip says "CC BY-SA 4.0" (INE's own inconsistency).
+- **ES-42** - ICGC's page still says "Publication date: April 2026" although an October 2026 file is in the directory.
+- **ES-52** - "postcodes not downloadable" is the catalogue's wording; the per-address postcode attribute is downloadable (seen in the API and the geocoder). That it refers to postcode *areas* is the notes' interpretation.
+- **PT-3** - 308 municipalities is right, but the per-feed figures in the notes sum to 312: the feeds are not clean. In four mainland feeds 139 EPSG:3035 entries link to `Addresses_1007_EPSG3035.zip` instead of their own file; 0914 is listed in two feeds.
+- **PT-6** - in the EPSG:4326 files `gml:pos` is latitude first.
+- **PT-16** - a login is required for the CTT file; that the account is *free* was not verified.
+- **PT-19** - Cascais also offers GeoPackage and DXF.
+- **IT-12** - the query API's help gives an accuracy for method 5 ("≥ 2 m") that the metadata JSON omits.
+- **IT-15** - ANNCSU's own open data and download pages contain no licence statement; CC BY 4.0 is stated only in the catalogue metadata.
+- **IT-18** - the "4.9% with coordinates" slide (July 2025, third party, no reference date) conflicts with the official 67.0% at 31/03/2026, so the inferred "jump in 2025-2026" is not established.
+- **IT-26** - Liguria `civici.zip` is 0.4 MB and from 2017: too small for a region-wide file; content not inspected.
+- **IT-36** - Palermo: the CSV itself is dated 1 April 2026 (16.3 MB); 2026-04-14 is the catalogue record date.
+- **IT-40** - an official per-municipality georeferencing table exists (xlsx, 7,894 municipalities, 31/03/2026).
+- **MT-8** - the MCA sets the "full postcode database at no cost" as a condition for the amended regulation to apply; it does not "keep" an existing one.
+
+### Still UNVERIFIED, and why
+
+Spain - `centrodedescargas.cnig.es` gave my client no HTTP response (TLS handshake fine, connection closed after the request, 4 attempts); not worked around:
+
+- **ES-2** example GeoPackage sizes; **ES-4** road geometries excluded; **ES-5** `portalpk_publi` attribute list, spec v15 dated 2025-12-18, `cod_postal` mandatory; **ES-7** release log incl. "latest release 10-11-2026"; **ES-13** reCAPTCHA v3 / `navigator.webdriver` gate and optional login; **ES-55** GeoPackage switch dated 10-06-2024; parts of **ES-6** (full regeneration each cycle), **ES-9** (that the page cites the Orden), **ES-19** (`candidates` filters in leeme.txt); **XC-5** (reCAPTCHA detail).
+- **ES-17** `limit=10000` returning 10,000 features: the response is over my 2 MB cap; the server accepted the parameter (HTTP 200) but the count was not recounted.
+- **ES-29** Catastro WFS AD "HTTP 200": the endpoint answered HTTP 400 "No se puede procesar su petición" twice today.
+- **ES-36** Navarra 181,197 rows: only the first 2 MB read (about 183,600 rows by proportion).
+- **ES-37 (part)** Navarra's publisher-side licence: the dataset page timed out; CC-BY 4.0 is OpenAddresses' statement only.
+- **ES-44** Catalonia row counts (1,673,367 / 57,228) and column names: needs the 48.6 MB download; table names and sizes confirmed from the ZIP directory.
+- **ES-51 (part)** Bilbao: not in either cited search result.
+
+Portugal - counts that need hundreds of requests or a large download:
+
+- **PT-4** 471.7 MB total (feeds have no sizes, HEAD not answered); **PT-5 / XC-2** 6,475,977 feature members over 308 files (Lisbon's 336,033 spot-checked); **PT-7** 324,640 Lisbon addresses with a locator.
+- **PT-13 (part)** "does not include businesses and facilities": no such sentence found on the OSM wiki page.
+
+Italy:
+
+- **IT-8 / IT-9 / XC-3** national row count 27,413,752, 75.62% with coordinates, SNC, municipality and method counts: the 336 MB file was not downloaded. Structure, size, date and the Valle d'Aosta figures were confirmed; the official 31/03/2026 table (67.0%) is consistent with the trend.
+- **IT-24 (part)** Emilia-Romagna geoportal download page: HTTP 500 today.
+- **IT-27** Piemonte BDTRE licence: only OpenAddresses says CC BY 4.0; the RNDT record says "conditionsUnknown".
+- **IT-28** Lombardia package URL: timed out again (45 s).
+- **IT-29** Umbria ArcGIS service: TLS certificate does not match the host name; not bypassed.
+- **IT-30 (part)** Sardegna geoportal page: empty reply from server today.
+- **IT-32 (part)** Bologna licence: not in the API response, not checked further.
+
+Malta: nothing unverified; `portal.data.gov.mt` and `msdi.data.gov.mt` answer 403 to non-browser clients (MT-13), so the Maltese facts rest on address.gov.mt, legislation.mt and data.europa.eu.
+
+### NOT DISPROVED (negative claims I tried and failed to disprove)
+
+ES-22 (no rate limit or terms for the CartoCiudad geocoder), ES-57 (no open Correos download), PT-25 (no door-number dataset for Lisbon or Porto), PT-26 (no newer BNM / other national address-point dataset), IT-37 (no region-wide dataset for Veneto or the Province of Trento), IT-39 (no open bulk CAP data - weakened: the GISCO API returns a CAP per Italian address), MT-17 (no open downloadable address-point dataset for Malta - qualified by the GISCO API), MT-19 (MaltaPost database terms not published).
+
 
 ## Spain
 
@@ -167,4 +255,47 @@ Requests made 2026-11-11, 12:53-13:00 UTC, plain `curl`.
 | IT-38 | "not downloadable / no coordinates" does **not** apply to ANNCSU any more; it has no postcodes | CONFIRMED | IT-5, IT-6, IT-10, IT-11: bulk download works, coordinates are in the file, no CAP column. | |
 | IT-39 | Inference: "a full Italian address with postcode cannot be built from open official data alone" | NOT DISPROVED - but weakened | Eurostat's GISCO Address API serves Italy and returns a postcode per address: `.../addressapi/reverse?x=12.4894668&y=41.8997245` HTTP 200, e.g. `{"LD":"3","TF":"VIA PIACENZA","L2":"ROMA","PC":"184",...}` (CAP 00184 with leading zeros dropped). Its Italian source is given as "© Geoportale nazionale" (not ANNCSU, vintage unknown). It is a lookup API, not a bulk CAP file. | A free official (EU) API does return a CAP for Italian address points; no open **bulk** CAP dataset was found |
 | IT-40 | Gap: official list of municipalities with incomplete data - status page loads its figures by script and could not be read | CONFIRMED (script-loaded) - with an addition | Home page HTML: "COMUNI CHE NON HANNO COMPLETATO L'INSERIMENTO DELLE STRADE E NUMERI CIVICI - Caricamento in corso..." (filled by script; not read). But georeferencing completeness per municipality **is** published as a file: the xlsx in IT-8, linked from the georeferencing page, one row per municipality with "ACCESSI IN ANNCSU" and "DI CUI CON COORDINATE". | An official per-municipality georeferencing table exists (xlsx, 7,894 rows, as of 31/03/2026); the list of municipalities that have not finished loading streets/numbers stays unread |
+
+## Malta
+
+Requests made 2026-11-11, plain `curl` (second session, after the Italy unit).
+
+| # | Claim (notes) | Verdict | Evidence (2026-11-11) | Corrected statement |
+|---|---|---|---|---|
+| MT-1 | Office of the Address Registrar set up under Legal Notice 205 of 2025 (Address Register and related Location (Geospatial) Registers Regulations, 2025), published 23 September 2025; took over the Address Management Unit (Electoral Office, since 2016); register intended as authoritative registry of all streets and addresses, including spatial data | CONFIRMED | `https://address.gov.mt/` HTTP 200 (145,645 B): "established through Legal Notice 205 of 2025 ... published on the 23rd of September 2025 ... assumed the responsibilities previously assigned to the Address Management Unit within the Electoral Office ... set up in 2016 ... authoritative registry of all streets and addresses in the Maltese archipelago, including spatial data". `https://legislation.mt/eli/ln/2025/205/eng` HTTP 200: "205 of 2025 - Address Register and related Location (Geospatial) Registers Regulations, 2025, Government Gazette of Malta No. 21,509 - 23.09.2025". | |
+| MT-2 | Public services: "Research Spot" (publications from 1997), "Locate a Street", registers of local councils, localities, regions; no address-level download described | CONFIRMED | Same page: "Research Spot - Search for official door numbering or street naming publications from 1997 to date", "Locate a Street"; menu links `/local-council/`, `/localities/`, `/regions/`, `/locate-a-street/`, `/research-spot/`; the words "download", "open data", "licence" do not occur on the home page. | |
+| MT-3 | API namespace exposes exactly `/gov/v1/regions`, `/localities`, `/local-councils`, `/streets`, `/openapi.json`; `/addresses` and `/doors` return "rest_no_route" | CONFIRMED | `https://address.gov.mt/wp-json/gov/v1` HTTP 200: routes `/gov/v1`, `/gov/v1/local-councils`, `/gov/v1/localities`, `/gov/v1/openapi.json`, `/gov/v1/regions`, `/gov/v1/streets`. `/addresses` and `/doors`: HTTP 404 `{"code":"rest_no_route",...}`. OpenAPI document: "Government Registers API" v1.1.0, "All endpoints are GET, require no authentication and return JSON arrays"; it carries no licence field. | |
+| MT-4 | Streets endpoint: 8,502 records (1.38 MB) with `street_name`, `street_code`, `locality`, `region`, `local_council`; localities 85; regions 6; local councils 68; no coordinates, door numbers or postcodes; no key | CONFIRMED (recounted) | Streets HTTP 200, 1,384,892 B, 8,502 records, keys exactly those five. Localities 85 (keys `Locality_Name`, `local_council_name`, `locality_Code`, `region_Code`), regions 6, local councils 68. No coordinate, door or postcode key in any. No credentials sent. | |
+| MT-5 | Catalogue entries "Streets Dataset", "Localities Dataset", "Regions Dataset" (issued 2026-03-27, modified 2026-09-14) and "Local Councils of Malta" (issued 2026-06-23), one API distribution each, CC BY 4.0, none HVD | CONFIRMED | data.europa.eu search "Address Registrar" (country mt) HTTP 200, 11 results; the four datasets by "Office of the Address Registrar" (catalogue data-gov-mt), 1 distribution each, licence `https://creativecommons.org/licenses/by/4.0/`, HVD false, dates as stated (Local Councils modified 2026-09-16). | |
+| MT-6 | Streets Dataset definition | CONFIRMED | Record `0d102ee6-...` HTTP 200: "records of all streets which are publicly or privately-owned and which serve as thoroughfares or any other type of passageway and which are assigned a name by the Registrar"; distribution = the streets API, CC BY 4.0. The wording is that of regulation 4(b) of Legal Notice 205. | |
+| MT-7 | MaltaPost "Postcode Finder" (title, HTTP 200); `postcodes.maltapost.com` no longer resolves | CONFIRMED | `https://www.maltapost.com/PostCode/` HTTP 200, title "MaltaPost - Postcode Finder", meta description "Find the postcode of a residence or business in Malta using our free Postcode Finder application." `postcodes.maltapost.com`: `curl: (6) Could not resolve host`. | |
+| MT-8 | MCA decision of 14 May 2018: "Third parties (in particular bulk mail senders) requiring a full postcode database will be provided with one at no cost", unless another entity provides an equivalent; MaltaPost said it already gives access to the whole database; "custodian and originator" | CONFIRMED | PDF HTTP 200 (479,242 B, 10 pages, created 2018-05-14), section 3.2 "Decision - Condition on the universal service provider": exact sentence, footnote 2 "Unless the MCA is satisfied that any other entity ... makes available a database with equivalent functionality to third parties at no extra cost"; "already providing entities with access to the whole postcode database"; "As the custodian and originator of Malta's postcode system". | It is set as a condition that must be met before the amended regulation 15 applies (the notes say the decision "keeps" it) |
+| MT-9 | data.europa.eu search (country mt) "postcode" = 0 results | CONFIRMED | HTTP 200, `count` 0. | |
+| MT-10 | Planning Authority "Large Scale Topography Buildings": HVD, served by WFS/WMS and OGC API under CC BY 4.0; buildings, not addresses | CORRECTED | Search "buildings" (country mt): record `e77e55a8-...`, Planning Authority, HVD true (`c_ac64a52d`), licence CC BY 4.0, 3 distributions = **HTML page, WFS, WMS** - no OGC API. WFS GetCapabilities HTTP 200 (28,649 B), title "BU.Buildings_OverlaidArea0", but `<ows:Fees>` reads "**Conditions apply - contact mappingshop@pa.org.mt to inquire regarding costs and licence of use**". | Distributions are WFS and WMS (no OGC API listed). The catalogue says CC BY 4.0 while the service's own capabilities say conditions and costs apply - the licence is contradictory at the publisher |
+| MT-11 | INSPIRE Addresses: search "AD.Address" = 0; "Addresses INSPIRE" returns only unrelated layers | CONFIRMED | "AD.Address" (country mt): `count` 0. "Addresses INSPIRE": 45 results, the first 8 are orthoimagery, human health, elevation models. | |
+| MT-12 | Identità "Person Basic Details" and "Person Household Details" listed with no distributions | CONFIRMED | Search "address" (country mt): both records, publisher Identità, 0 distributions. | |
+| MT-13 | `portal.data.gov.mt` and `msdi.data.gov.mt` return HTTP 403 (Cloudflare challenge) to non-browser clients | CONFIRMED | Both HTTP 403, text/html, 5,654 B. Not bypassed; their own pages remain unread. | |
+| MT-14 | OpenAddresses has no `sources/mt` | CONFIRMED | `https://api.github.com/repos/openaddresses/openaddresses/contents/sources/mt` HTTP 404 "Not Found". | |
+| MT-15 | Gap: the text of Legal Notice 205 of 2025 (access and reuse provisions) was not read | CORRECTED (now read) | PDF `https://legislation.mt/getpdf/6a0c1054c86ffc41401d4b2d` HTTP 200 (1,574,856 B, 19 pages, 23 Sep 2025), made under the Re-Use of Public Sector Information Act (Cap. 546). Subsidiary registers: Buildings, Streets, Localities, **Post Codes**, Regions. Regulation 10: "The Registrar shall endeavour to make specific data elements from the Register and subsidiary registers available as open data: Provided that the Registrar shall specify the licence ... Provided further that such data shall not include any data that is of a personal nature." Regulation 11: publication of the Register on the national data portal. The definition of address includes "geographic coordinates" and a post code. | The regulations themselves foresee open-data publication of Register elements (best-effort, licence chosen by the Registrar) and a Post Codes Register fed by the postal provider - so a future open address release has a legal basis, not just plausibility |
+| MT-16 | Gap: EU INSPIRE Geoportal could not be consulted (expired TLS certificate) | CONFIRMED | `curl: (60) SSL certificate problem: certificate has expired` on inspire-geoportal.ec.europa.eu today (seen in the Portugal unit); not bypassed. | |
+| MT-17 | Takeaway: "Malta has no open address-point dataset" | NOT DISPROVED - with a qualification | No downloadable address-point dataset found in the national register's API, data.europa.eu (searches above) or OpenAddresses. But address-level records with coordinates **are** served by Eurostat's GISCO Address API (MT-18), source "© National Statistics Office (NSO)". No bulk download of that data was found. | No open **downloadable** address-point dataset; address-level lookups exist through the GISCO API |
+| MT-18 | "No free official geocoding API for Malta was found" | WRONG (disproved) | `https://gisco-services.ec.europa.eu/addressapi/countries` lists MT. `.../addressapi/reverse?x=14.5146&y=35.8989` HTTP 200: 5 results, e.g. `{"LD":"3","TF":"TRIQ SAN FEDERIKU","L2":"VALLETTA","L1":"SOUTHERN HARBOUR","PC":null,"XY":[14.5144699,35.8988398]}`. `.../addressapi/search?country=MT&city=VALLETTA` HTTP 200: 100 results. `.../addressapi/cities?country=MT`: 68 localities. `.../addressapi/copyright`: MT = "© National Statistics Office (NSO)". No key. Limits seen: `PC` (postcode) is null in every Maltese record; several door numbers share one identical coordinate, so positions are not door-precise; data vintage not stated. | A free, keyless official (EU, Eurostat GISCO) address API covers Malta with door number, street, locality and coordinates - without postcodes. No **national** Maltese geocoding API was found |
+| MT-19 | MaltaPost full database is request-based, not open data; licence/format/procedure not published | NOT DISPROVED | Nothing beyond the 2018 MCA decision found; MaltaPost's page is a JavaScript finder only. | |
+
+## Cross-country comparison
+
+No new sources here: each row is judged from the country tables above, plus one extra GISCO request for Spain.
+
+| # | Claim (notes) | Verdict | Evidence (2026-11-11) | Corrected statement |
+|---|---|---|---|---|
+| XC-1 | Spain: CartoCiudad, CC BY 4.0, 15,662,297 address features in the OGC API, four-monthly, postcodes included, HVD category Addresses | CONFIRMED | ES-8, ES-16, ES-6, ES-53. | |
+| XC-2 | Portugal: BNM, CC-BY-4.0, 308 municipal GML files with 6,475,977 feature members, files last modified April 2018, postcodes included, tagged HVD | CONFIRMED except the 6,475,977 sum (UNVERIFIED, not recounted) | PT-3, PT-5, PT-8, PT-9, PT-14. "Last modified April 2018" was seen on the one file probed (Lisbon), not on all 308. | |
+| XC-3 | Italy: ANNCSU, CC-BY-4.0, 27,413,752 rows in the 2 November 2026 file, monthly, 75.6% with coordinates, no postcodes, HVD | CONFIRMED (licence, file date, monthly, no postcodes, HVD) / UNVERIFIED (row count and 75.6%, not recounted) | IT-6, IT-8, IT-11, IT-15. Official statistic for 31/03/2026: 67.0% of 27,487,263 accesses georeferenced. | |
+| XC-4 | Malta: street list only (8,502 streets), CC BY 4.0, not HVD | CONFIRMED | MT-4, MT-5. | |
+| XC-5 | Registration: none for the Italian, Portuguese and Maltese downloads or the Spanish APIs and Catastro feed; CNIG file downloads require passing reCAPTCHA; CTT postcode file requires an account | CONFIRMED except the reCAPTCHA detail (UNVERIFIED) | No credentials were needed for IT-5/IT-10, PT-6/PT-10, MT-3/MT-4, ES-16/ES-18/ES-26. CTT login: PT-16. CNIG: ES-13 - the host gave my client no HTTP response at all, so the mechanism (reCAPTCHA v3) could not be read. | |
+| XC-6 | Takeaway: "Postcodes come with the open data only in Spain and Portugal" | CONFIRMED for the national bulk datasets, with exceptions to note | ANNCSU has no CAP column (IT-11); the Maltese API has no postcodes (MT-4). Exceptions seen today: Bologna's municipal file has `cap` (IT-32); the GISCO Address API returns a postcode for Italian addresses (IT-39) and none for Maltese ones (MT-18). | |
+| XC-7 | Takeaway: Spain and Italy offer current countrywide open address points; Portugal an open but 2018-vintage one; Malta none | CONFIRMED / NOT DISPROVED (Malta) | ES-16, IT-6, PT-8, MT-17. | |
+| XC-8 | Inference: Regulation (EU) 2023/138 had a visible effect in Italy (ANNCSU opened in response, per its own page) and Spain, labelling-only in Portugal, none on addresses in Malta | CONFIRMED (Italy, Portugal as facts) / NOT DISPROVED (Malta) / opinion (Spain) | IT-2 (ANNCSU page cites the Regulation as the reason), PT-14 + PT-8 (HVD tag, 2018 files). Malta: no HVD-flagged address dataset found (MT-5); but Legal Notice 205 of 2025 now foresees open publication (MT-15). | |
+| XC-9 | Inference: free official geocoding APIs exist for Spain (CartoCiudad, ICGC) and in limited lookup form for Italy (ANNCSU querydata); "none was found for Portugal or Malta" | WRONG for Portugal and Malta | ES-18, ES-46, IT-17 confirmed. Eurostat's GISCO Address API (`https://gisco-services.ec.europa.eu/addressapi/`, no key) lists ES, IT, MT, PT and answered real requests for all four today: PT-27, MT-18, IT-39, and for Spain `.../reverse?x=-3.7176821&y=40.3958317` HTTP 200 -> `{"LD":"5","TF":"CL IGLESIA","L2":"MADRID","PC":"28019",...}`. Declared sources: ES "© Dirección General del Catastro", IT "© Geoportale nazionale", MT "© National Statistics Office (NSO)", PT "© Instituto Nacional de Estatística". | A free official EU address API (forward search and reverse) covers all four countries, including Portugal and Malta; what is missing in Portugal and Malta is a **national** geocoding API |
+| XC-10 | Gap note: counts are not like-for-like (Spain address points; Portugal GML feature members at dwelling-unit level; Italy civic-number rows incl. those without coordinates) | CONFIRMED | PT-6 (feature members include PostalDescriptor etc.; addresses are `unitLevel`), IT-10 (rows without coordinates are in the file), ES-16. | |
 
