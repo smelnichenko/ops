@@ -9,5 +9,6 @@ deploy/ansible/venv
 deploy/ansible/collections
 # DR drill run logs (task dr:drill)
 .dr/
+.cnpg-stats/
 __pycache__/
 .upgrade/

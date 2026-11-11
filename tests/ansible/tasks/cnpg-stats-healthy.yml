@@ -1,0 +1,31 @@
+---
+# Wait until the test's CNPG Cluster is healthy: its phase, and every instance ready.
+# Required vars: kc, cluster
+
+- name: "Wait for {{ cluster }} healthy"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    echo "$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.phase}')|$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.readyInstances}')|$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.spec.instances}')"
+  args:
+    executable: /bin/bash
+  register: _healthy
+  until: >-
+    _healthy.stdout.split('|')[0] == 'Cluster in healthy state'
+    and _healthy.stdout.split('|')[1] == _healthy.stdout.split('|')[2]
+  retries: 120
+  delay: 5
+  changed_when: false
+  failed_when: false   # judged below, after the diagnosis
+
+- name: "Diagnose {{ cluster }} - not healthy in 10 minutes"
+  when: >-
+    _healthy.stdout.split('|')[0] != 'Cluster in healthy state'
+    or _healthy.stdout.split('|')[1] != _healthy.stdout.split('|')[2]
+  ansible.builtin.shell: |
+    {{ kc }} get cluster {{ cluster }} -o yaml | tail -60
+    {{ kc }} get pods -o wide
+    {{ kc }} get events --sort-by=.lastTimestamp | tail -30
+  args:
+    executable: /bin/bash
+  changed_when: false
+  failed_when: true

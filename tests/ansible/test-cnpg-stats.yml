@@ -1,0 +1,404 @@
+---
+# Statement statistics and exporter metrics on production's Postgres, rehearsed
+#
+# The schnappy-data chart's two switches (platform helm/schnappy-data: postgres.statStatements, postgres.exporterMetrics)
+# each restart Postgres: CNPG preloads pg_stat_statements and creates it in every database once one of its parameters is
+# set, and the Istio sidecar reads the prometheus.io annotations only when a pod is created. Here, on production's
+# Cluster as Argo CD renders it (the platform chart in this tree, infra's production values; the backup off, the volume
+# small), before production:
+#   - the Cluster comes up as production's does, every database of production's list, masi's with pgvector
+#   - both switched on: one rolling update (the standby, then a switchover), the writes through -rw measured across it
+#   - every instance preloads pg_stat_statements, every database holds the extension, and a service role (masi's, not a
+#     superuser) reads its own statements with their text and rows
+#   - the exporter's metrics (cnpg_collector_up, cnpg_pg_database_size_bytes) in the endpoint Prometheus scrapes (15020)
+#   - both switched off again: the Cluster healthy, the data kept
+#
+# Usage: task test:cnpg-stats
+
+- name: Vagrant VMs only
+  ansible.builtin.import_playbook: vagrant-only-play.yml
+
+# ─── Render production's Cluster on the controller ──────────────────────────
+- name: Render production's Postgres Cluster (platform chart, infra's production values)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    src: "{{ playbook_dir }}/../../.."
+    render_dir: "{{ playbook_dir }}/../../.cnpg-stats"
+    # the test's own: no backup store, a small volume and footprint - the rest is production's
+    overrides: >-
+      --set cnpg.backup=false --set postgres.storage.size=2Gi --set postgres.storage.storageClass=local-path
+      --set postgres.resources.requests.cpu=100m --set postgres.resources.requests.memory=512Mi
+      --set postgres.resources.limits.cpu=1000m --set postgres.resources.limits.memory=1Gi
+      --set postgres.sharedBuffers=128MB --set postgres.effectiveCacheSize=512MB
+
+  tasks:
+    - name: Render dir
+      ansible.builtin.file:
+        path: "{{ render_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Render the Cluster and its Databases, the switches off and on
+      ansible.builtin.shell: |
+        set -euo pipefail
+        helm template schnappy-production {{ src }}/platform/helm/schnappy-data -n pgstats \
+          -f {{ src }}/infra/clusters/production/schnappy-production-data/values.yaml {{ overrides }} {{ item.flags }} \
+          --show-only templates/cnpg-cluster.yaml --show-only templates/cnpg-databases.yaml > {{ render_dir }}/{{ item.name }}.yaml
+        grep -c 'kind: Cluster$' {{ render_dir }}/{{ item.name }}.yaml
+      args:
+        executable: /bin/bash
+      loop:
+        - { name: off, flags: "" }
+        - { name: on, flags: "--set postgres.statStatements=true --set postgres.exporterMetrics=true" }
+      register: _render
+      changed_when: false
+      failed_when: _render.rc != 0 or _render.stdout != '1'
+
+    - name: The two renders differ only by the switches
+      ansible.builtin.shell: |
+        set -euo pipefail
+        diff {{ render_dir }}/off.yaml {{ render_dir }}/on.yaml | grep '^[<>]' | sed 's/^. *//' | sort
+      args:
+        executable: /bin/bash
+      register: _diff
+      changed_when: false
+      failed_when: false
+
+    - name: Assert only the switches differ
+      vars:
+        switched:
+          - '# Istio merges the exporter''s metrics into its scraped endpoint (15020) when the pod is created with these'
+          - '# setting one makes CNPG preload the library and create the extension in every database'
+          - 'pg_stat_statements.max: "5000"'
+          - 'pg_stat_statements.track: "top"'
+          - 'prometheus.io/path: /metrics'
+          - 'prometheus.io/port: "9187"'
+          - 'prometheus.io/scrape: "true"'
+      ansible.builtin.assert:
+        that: _diff.stdout_lines | sort == switched | sort
+        fail_msg: "the renders differ by more than the switches: {{ _diff.stdout_lines }}"
+        quiet: true
+
+# ─── On the cluster ─────────────────────────────────────────────────────────
+- name: Statement statistics and exporter metrics, switched on and off
+  hosts: target
+  become: true
+  gather_facts: false
+
+  vars:
+    ns: pgstats
+    cluster: schnappy-production-postgres
+    render_dir: "{{ playbook_dir }}/../../.cnpg-stats"
+    kc: kubectl --kubeconfig /etc/kubernetes/admin.conf -n pgstats
+    databases: [monitor, admin, chat, chess, masi]
+    test_pw: pgstats-test-pass
+    # the writes through -rw may stop for the switchover: this long at most
+    max_write_gap_s: 60
+
+  environment:
+    KUBECONFIG: /etc/kubernetes/admin.conf
+
+  tasks:
+    - name: Namespace, Istio-injected as production's
+      ansible.builtin.shell: |
+        set -euo pipefail
+        kubectl create namespace {{ ns }} --dry-run=client -o yaml | kubectl apply -f -
+        kubectl label namespace {{ ns }} istio.io/rev=default --overwrite
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: The Cluster's secrets (production's come from Vault)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for s in superuser:postgres app:monitor; do
+          kubectl -n {{ ns }} create secret generic {{ cluster }}-${s%%:*} --type=kubernetes.io/basic-auth \
+            --from-literal=username=${s#*:} --from-literal=password={{ test_pw }} --dry-run=client -o yaml | kubectl apply -f -
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+      no_log: true
+
+    - name: Copy the renders
+      ansible.builtin.copy:
+        src: "{{ render_dir }}/{{ item }}.yaml"
+        dest: "/root/cnpg-stats-{{ item }}.yaml"
+        mode: '0600'
+      loop: ["off", "on"]
+
+    - name: Apply production's Cluster, the switches off
+      ansible.builtin.command: kubectl apply -n {{ ns }} -f /root/cnpg-stats-off.yaml
+      changed_when: true
+
+    - name: Wait for the Cluster healthy
+      ansible.builtin.include_tasks: tasks/cnpg-stats-healthy.yml
+
+    - name: masi's role (production's init-users Job makes it), its database's owner
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -v ON_ERROR_STOP=1 -At -c \
+          "do \$\$ begin if not exists (select 1 from pg_roles where rolname = 'masi') then create role masi login password '{{ test_pw }}'; end if; end \$\$"
+        {{ kc }} exec "$p" -c postgres -- psql -v ON_ERROR_STOP=1 -At -c "alter database masi owner to masi"
+      args:
+        executable: /bin/bash
+      changed_when: true
+      no_log: true
+
+    - name: Wait for masi's pgvector (its Database)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -At -d masi -c "select count(*) from pg_extension where extname = 'vector'"
+      args:
+        executable: /bin/bash
+      register: _vector
+      until: _vector.stdout == '1'
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: The switches off - no statement statistics, no exporter annotations
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -At -c "show shared_preload_libraries"
+        {{ kc }} get pod "$p" -o jsonpath='{.metadata.annotations.prometheus\.io/port}'
+      args:
+        executable: /bin/bash
+      register: _before
+      changed_when: false
+
+    - name: Assert the baseline
+      ansible.builtin.assert:
+        that:
+          - "'pg_stat_statements' not in _before.stdout"
+          - "'9187' not in _before.stdout"
+        fail_msg: "already on before the switch: {{ _before.stdout_lines }}"
+        quiet: true
+
+    # a writer through -rw, as a service writes: one row each half second, its own timestamp - the gaps between rows
+    # are what the switchover cost a writer
+    - name: Writer table
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -v ON_ERROR_STOP=1 -At -d monitor -c \
+          "create table if not exists pgstats_writes (at timestamptz primary key default clock_timestamp())"
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Writer pod
+      ansible.builtin.shell: |
+        set -euo pipefail
+        image=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.spec.imageName}')
+        cat <<POD_WRITER | kubectl apply -n {{ ns }} -f -
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: pgstats-writer
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: writer
+              image: $image
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ cluster }}-superuser, key: password } }
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  while true; do
+                    psql "host={{ cluster }}-rw user=postgres dbname=monitor connect_timeout=2" -qAt \
+                      -c "insert into pgstats_writes default values" >/dev/null 2>&1 || true
+                    sleep 0.5
+                  done
+        POD_WRITER
+        kubectl -n {{ ns }} wait pod/pgstats-writer --for=condition=Ready --timeout=300s
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Writes arriving
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -At -d monitor -c "select count(*) from pgstats_writes where at > now() - interval '10 seconds'"
+      args:
+        executable: /bin/bash
+      register: _writes
+      until: _writes.stdout | int >= 5
+      retries: 30
+      delay: 2
+      changed_when: false
+
+    - name: The primary before
+      ansible.builtin.command: "{{ kc }} get cluster {{ cluster }} -o jsonpath={.status.currentPrimary}"
+      register: _primary_before
+      changed_when: false
+
+    - name: Switch both on (as infra's production values would)
+      ansible.builtin.command: kubectl apply -n {{ ns }} -f /root/cnpg-stats-on.yaml
+      changed_when: true
+
+    - name: Wait for the rolling update to begin
+      ansible.builtin.command: "{{ kc }} get cluster {{ cluster }} -o jsonpath={.status.phase}"
+      register: _phase
+      until: _phase.stdout != 'Cluster in healthy state'
+      retries: 60
+      delay: 2
+      changed_when: false
+
+    - name: Wait for the Cluster healthy again
+      ansible.builtin.include_tasks: tasks/cnpg-stats-healthy.yml
+
+    - name: Every instance preloads pg_stat_statements and carries the exporter's annotations
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for p in $({{ kc }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o name); do
+          echo "${p#pod/} $({{ kc }} exec "${p#pod/}" -c postgres -- psql -At -c 'show shared_preload_libraries' | tr -d ' ') \
+            $({{ kc }} get "$p" -o jsonpath='{.metadata.annotations.prometheus\.io/port}')"
+        done
+      args:
+        executable: /bin/bash
+      register: _instances
+      changed_when: false
+
+    - name: Assert every instance
+      ansible.builtin.assert:
+        that:
+          - _instances.stdout_lines | length == 2
+          - _instances.stdout_lines | select('search', 'pg_stat_statements') | list | length == 2
+          # Istio rewrites the port to its own merged endpoint and keeps the application's for the agent
+          - _instances.stdout_lines | select('search', ' (9187|15020)$') | list | length == 2
+        fail_msg: "{{ _instances.stdout_lines }}"
+        quiet: true
+
+    - name: The extension in every database of production's list
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        for d in {{ databases | join(' ') }}; do
+          echo "$d $({{ kc }} exec "$p" -c postgres -- psql -At -d "$d" -c "select count(*) from pg_extension where extname = 'pg_stat_statements'")"
+        done
+      args:
+        executable: /bin/bash
+      register: _ext
+      until: _ext.stdout_lines | select('search', ' 1$') | list | length == databases | length
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    # masi reads its own statements' rows per call: a service role sees its own queries' text, not only their counts
+    - name: masi's role reads its own statement, with its text and rows
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- env PGPASSWORD={{ test_pw }} psql -v ON_ERROR_STOP=1 -At \
+          "host=localhost user=masi dbname=masi" -c "select g from generate_series(1, 1234) g" >/dev/null
+        {{ kc }} exec "$p" -c postgres -- env PGPASSWORD={{ test_pw }} psql -v ON_ERROR_STOP=1 -At \
+          "host=localhost user=masi dbname=masi" -c \
+          "select rows, calls from pg_stat_statements where query like 'select g from generate_series%'"
+      args:
+        executable: /bin/bash
+      register: _own
+      changed_when: false
+      no_log: false
+
+    - name: Assert masi's own statement
+      ansible.builtin.assert:
+        that: _own.stdout_lines == ['1234|1']
+        fail_msg: "masi's role does not read its own statement: {{ _own.stdout_lines }}"
+        quiet: true
+
+    - name: The exporter's metrics in the endpoint Prometheus scrapes (15020, through the API server)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for p in $({{ kc }} get pods -l cnpg.io/cluster={{ cluster }},cnpg.io/podRole=instance -o name); do
+          m=$(kubectl get --raw "/api/v1/namespaces/{{ ns }}/pods/${p#pod/}:15020/proxy/stats/prometheus")
+          echo "${p#pod/} $(echo "$m" | grep -c '^cnpg_collector_up') $(echo "$m" | grep -c '^cnpg_pg_database_size_bytes{')"
+        done
+      args:
+        executable: /bin/bash
+      register: _metrics
+      until: _metrics.stdout_lines | select('search', ' [1-9][0-9]* [1-9][0-9]*$') | list | length == 2
+      retries: 20
+      delay: 6
+      changed_when: false
+
+    - name: The writer's longest gap across the switchover
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -At -d monitor -c \
+          "select round(coalesce(max(extract(epoch from at - prev)), 0)::numeric, 1), count(*)
+             from (select at, lag(at) over (order by at) as prev from pgstats_writes) w"
+      args:
+        executable: /bin/bash
+      register: _gap
+      changed_when: false
+
+    - name: The primary after
+      ansible.builtin.command: "{{ kc }} get cluster {{ cluster }} -o jsonpath={.status.currentPrimary}"
+      register: _primary_after
+      changed_when: false
+
+    - name: Report the switchover
+      ansible.builtin.debug:
+        msg: >-
+          primary {{ _primary_before.stdout }} -> {{ _primary_after.stdout }}; writes: longest gap
+          {{ _gap.stdout.split('|')[0] }} s over {{ _gap.stdout.split('|')[1] }} rows
+
+    - name: Assert the writes came back within the bound
+      ansible.builtin.assert:
+        that: _gap.stdout.split('|')[0] | float <= max_write_gap_s
+        fail_msg: "a writer through -rw stopped {{ _gap.stdout.split('|')[0] }} s (bound {{ max_write_gap_s }} s)"
+        quiet: true
+
+    - name: Switch both off again (the undo)
+      ansible.builtin.command: kubectl apply -n {{ ns }} -f /root/cnpg-stats-off.yaml
+      changed_when: true
+
+    - name: Wait for the rolling update to begin
+      ansible.builtin.command: "{{ kc }} get cluster {{ cluster }} -o jsonpath={.status.phase}"
+      register: _phase_off
+      until: _phase_off.stdout != 'Cluster in healthy state'
+      retries: 60
+      delay: 2
+      changed_when: false
+
+    - name: Wait for the Cluster healthy after the undo
+      ansible.builtin.include_tasks: tasks/cnpg-stats-healthy.yml
+
+    - name: After the undo - not preloaded, the writes and masi's pgvector kept
+      ansible.builtin.shell: |
+        set -euo pipefail
+        p=$({{ kc }} get cluster {{ cluster }} -o jsonpath='{.status.currentPrimary}')
+        {{ kc }} exec "$p" -c postgres -- psql -At -c "show shared_preload_libraries"
+        {{ kc }} exec "$p" -c postgres -- psql -At -d monitor -c "select count(*) > 0 from pgstats_writes"
+        {{ kc }} exec "$p" -c postgres -- psql -At -d masi -c "select count(*) from pg_extension where extname = 'vector'"
+      args:
+        executable: /bin/bash
+      register: _undo
+      changed_when: false
+
+    - name: Assert the undo
+      ansible.builtin.assert:
+        that:
+          - "'pg_stat_statements' not in _undo.stdout_lines[0]"
+          - _undo.stdout_lines[1:] == ['t', '1']
+        fail_msg: "{{ _undo.stdout_lines }}"
+        quiet: true
+
+    - name: Writer pod gone
+      ansible.builtin.command: "{{ kc }} delete pod pgstats-writer --wait=false"
+      changed_when: true
+
+    - name: PASS
+      ansible.builtin.debug:
+        msg: "PASS: statement statistics and exporter metrics on production's Cluster, on and off ({{ _gap.stdout.split('|')[0] }} s longest write gap)"
