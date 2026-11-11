@@ -5,12 +5,57 @@ Checked on 11 November 2026 by an independent fact-checker. Client: plain `curl/
 ## Status
 
 - France: checked (37 rows; 1 unverified claim, 1 open point)
-- Belgium: partly checked (41 rows; Brussels publisher hosts unreachable, row counts not recounted)
+- Belgium: partly checked (42 rows; Brussels publisher hosts unreachable, row counts not recounted)
 - Netherlands: checked (28 rows; PostNL page refused the plain client)
 - Luxembourg: checked (16 rows)
-- Ireland: not started
+- Ireland: checked (28 rows; two Oireachtas pages refused the plain client, one Finder request declined by the session permission system)
 
 Verdicts: CONFIRMED = seen today by me; CORRECTED = partly right, right value given; WRONG = contradicted by what I saw; UNVERIFIED = could not be checked (reason given); NOT DISPROVED = negative claim I tried and failed to disprove.
+
+## Result (all five countries done)
+
+151 rows: CONFIRMED 119, CORRECTED 12, WRONG 1, UNVERIFIED 15, NOT DISPROVED 4.
+
+| Country | CONFIRMED | CORRECTED | WRONG | UNVERIFIED | NOT DISPROVED |
+|---|---|---|---|---|---|
+| France | 34 | 1 | 0 | 2 | 0 |
+| Belgium | 30 | 5 | 1 | 5 | 1 |
+| Netherlands | 24 | 1 | 0 | 2 | 1 |
+| Luxembourg | 14 | 0 | 0 | 2 | 0 |
+| Ireland | 17 | 5 | 0 | 4 | 2 |
+
+### Corrections (WRONG and CORRECTED)
+
+1. B14b WRONG - transportdata.be does not list the NGI "Address points Belgium - BeST Address" as CC BY 4.0. It says "License: Creative Commons Non-Commercial (Any)"; "CC-BY 4.0" there applies only to the Walloon part for commercial use. So there is no contradiction with BOSA's "non-commercial only" (B38).
+2. B4a - the BOSA regional CSV zips were regenerated on 11 Nov 2026 about 10:40 GMT (not "Last-Modified 8 Nov"). Wallonia is now 59,408,159 bytes (CSV 312,521,293); Flanders 153,229,244 and Brussels 18,162,025 are unchanged. The notes' Wallonia figures and the 7,181,913 total come from the previous weekly run.
+3. B17 - the metadata record cited for Flanders (`9c8b57a1-...`, product 10145) is the old product "adressen in afbouw". The current record is `ba7351f0-2a69-403f-9833-6be00ee93a54` (product 11065). Both carry `modellicentie-gratis-hergebruik/v1.0`.
+4. B34 - Flanders' full register download needs no login or key: `https://api.basisregisters.vlaanderen.be/v2/extract` redirects to a 1,659,876,794-byte zip dated 11 Nov 2026 (daily). Download app product 11065: GeoPackage and Shapefile, each in Lambert 72 and Lambert 2008, 286-386 MB.
+5. B37 - Belgium HVD status: BOSA's own DCAT-AP file flags the BeSt API and the full XML download as High-Value Datasets (category Geospatial, Regulation 2023/138). No HVD flag found on the regional records.
+6. F33 - BAN PLUS is not unknown: IGN's catalogue record says Licence Ouverte, quarterly, link tables between BAN addresses and buildings/parcels/roads, flagged HVD.
+7. N24 - Kadaster BAG API limits are published: at most 50,000 requests per day and 50 per second.
+8. I16 - Eircode Finder limit is 15 searches a day, non-commercial (Eircode's FAQ). The 50 in the notes was a Christmas 2019 promotion.
+9. I15 / I26 / I27 - the Tailte Valuation API returns address text, Eircode and ITM X/Y for rateable (mostly commercial) properties in every county (Cork with fewer fields), free under CC BY 4.0. So the Eircode Finder is not the only free official access, and coverage is not limited to a few council areas.
+10. I21 - the March 2015 price list is the document Eircode's product page links as its current "Pricing and Licensing Information" (PDF file last modified 15 Nov 2022).
+
+Smaller updates inside CONFIRMED rows (values that drift daily or weekly, or details): F5 (use the listing path without trailing slash; the slash form 308-redirects), F6/F7/F8/F13 (today's BAN file sizes and counts: 945,276,393 bytes; 26,122,628 addresses), F17 ("bi-hebdomadaire" = twice a week), F28 (RNB national export about 11.7 GB), F36 (overseas x/y are local UTM, not Lambert-93: a Réunion row has x 338805.95, y 7690488.36), B3/B6 (BeSt XML zip now 310,469,883 bytes, 11 Nov 2026), B8 (the page's "Full Download XML (07/10/2026)" link points to the Flanders CSV by mistake), B16 (Flanders download is offered in Lambert 72 and Lambert 2008), B22 (ICAR last update 10/11/2026), N2 (Kadaster page URL is now `.../bag-extract`), N8 (the one-time EUR 219 also applies to the daily-mutation subscription), N13 (the PDOK WFS has no `adres` type), N16 (10,085,895 addresses), L5 (CSV starts with a BOM), L11 (INSPIRE layer has 187,942 addresses against 179,784 in BD-Adresses), I2 (pricing PDF file dated 15 Nov 2022), I8 (one HVD set was issued in 2023).
+
+### Still unverified, and why
+
+1. F20 - heading in the CNIG PDF of June 2026: the PDF exists (200, 5,009,213 bytes) but is over the 2 MB probe cap, so it was not read.
+2. F32 (part) - meaning of `x-ratelimit-limit-second: 1` next to `ratelimit-limit: 50` on both French geocoding hosts: both headers confirmed, the publisher documents only 50 requests per second per IP, and I did not send a burst to test.
+3. F35, N26, L15, I28 - "did the HVD regulation change anything", the 2014 Esri covenant date, CBS files, CACLR data model, why Irish addresses are absent from HVD: not pursued.
+4. B4b - BeSt row counts (4,223,588 / 849,246 / 2,109,079): counting needs the full 18-153 MB files, over the cap. Flanders and Brussels CSV byte sizes still equal the notes'.
+5. B26, B27, B28, B36 (and the Brussels part of B33) - every Brussels host (`datastore.brussels`, `urbisdownload.datastore.brussels`, `geoservices-urbis.irisnet.be`, `geobru-geonetwork.irisnet.be`, `be.brussels`) timed out after 30 s from this machine. UrbIS licence name, WFS and download links are unverified on the publisher's side. The data.europa.eu copy of the record lists GPKG/XML/JSON zips, ATOM feeds and a geocoding API, says "freely downloadable for private individuals", and states no licence.
+6. B14a (part) - geo.be's own record for the NGI derivative is a JavaScript page; only BOSA's and transportdata.be's wording was read.
+7. B34 (part) - Flanders API-key rules and rate limits: the "Gebruik API key" guide (Atlassian wiki) answered 202 with an empty body. Whether the download app's order flow needs a login: not exercised (no order created).
+8. B35 (part) - Statbel "address files and statistical sectors 2024" page and bosa.belgium.be: CAPTCHA.
+9. N22 - PostNL Postcodetabel page: HTTP/2 stream error for the plain client.
+10. L14 - geoportail.lu geocoding API terms and rate limits: the terms page says nothing specific.
+11. I18, I19 - two Oireachtas pages: 405 for the plain client.
+12. I23 - "Eircode operated by Capita" and Tailte's predecessors: not on the publisher pages read.
+13. I16 (part) - the live lookup allowance the Finder app receives: the request to its session endpoint was declined by this session's permission system.
+
+Not disproved (negative claims I tried to break): I24 Ireland has no free national address register (data.gov.ie, Tailte portal, data.europa.eu, OpenAddresses and the GISCO Address API all checked; GISCO serves FR, BE, NL, LU and not IE - I25); I22 GeoDirectory prices only on request; B39 no documented rate limit on the BOSA endpoint; N25 no stated fair-use limit on the PDOK Locatieserver.
 
 ## France
 
@@ -58,7 +103,7 @@ All requests 11 Nov 2026, 15:45-15:50 UTC, plain curl, no key.
 
 ## Belgium
 
-All requests 11 Nov 2026, 15:49-16:00 UTC, plain curl, no key.
+All requests 11 Nov 2026, about 15:50-16:20 UTC, plain curl, no key.
 
 | # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
 |---|---|---|---|---|
@@ -107,7 +152,7 @@ All requests 11 Nov 2026, 15:49-16:00 UTC, plain curl, no key.
 
 ## Netherlands
 
-All requests 11 Nov 2026, 16:02-16:10 UTC, plain curl, no key.
+All requests 11 Nov 2026, about 16:20-16:40 UTC, plain curl, no key.
 
 | # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
 |---|---|---|---|---|
@@ -142,7 +187,7 @@ All requests 11 Nov 2026, 16:02-16:10 UTC, plain curl, no key.
 
 ## Luxembourg
 
-All requests 11 Nov 2026, 16:11-16:16 UTC, plain curl, no key.
+All requests 11 Nov 2026, about 16:40-16:50 UTC, plain curl, no key.
 
 | # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
 |---|---|---|---|---|
@@ -162,4 +207,40 @@ All requests 11 Nov 2026, 16:11-16:16 UTC, plain curl, no key.
 | L14 | Gap: terms of use and rate limits of the geoportail.lu geocoding API not checked | UNVERIFIED | `https://www.geoportail.lu/en/about-us/terms-conditions/` 200 but says nothing specific on the geocoding API or limits; API responses carry no rate-limit headers. No publisher statement found in one attempt | - |
 | L15 | Gap: HVD change in 2024; meaning of every CACLR file | UNVERIFIED | Not pursued (data-model PDF not read) | - |
 | L16 | Inference: no unit (apartment) level in the CSV columns | CONFIRMED | Header has no unit/box column (L5) | - |
+
+## Ireland
+
+All requests 11 Nov 2026, about 16:50-17:30 UTC, plain curl, no key.
+
+| # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
+|---|---|---|---|---|
+| I1 | Eircode sells ECAF ("over 2.2 million address points with their Eircode and USP Postal Address") and ECAD; "The purchase of the ECAF is a prerequisite for purchase of the ECAD"; Direct End User internal use only; approved Eircode Providers | CONFIRMED | `https://www.eircode.ie/business/products-and-services` 200: all four quotes present ("a Direct End User can only use the Eircode data products for internal use; they cannot sell or share these products or services with other companies") | - |
+| I2 | Eircode price document still served, headed "Pricing effective from March 2015"; two licence types; one-year contracts; monthly returns | CONFIRMED | `https://www.eircode.ie/files/eircode-pricing-information.pdf` 200, application/pdf, 552,121 bytes, `Last-Modified: Tue, 15 Nov 2022 10:21:53 GMT`; text extracted (file deleted after): line 1 "Pricing effective from March 2015"; "two licence types, the Eircode Provider Licence or Direct End User Licence. All licences and data fees are on a one year contract"; monthly returns required | The PDF file itself was last modified 15 Nov 2022 but still states March 2015 prices |
+| I3 | Prices: ECAF EUR 60 per user (1-83), EUR 5,000 single fee (84+); EUR 4 per 100 transactions; website EUR 3,000; group EUR 25,000. ECAD: annual fee EUR 1,000 (Provider) / EUR 500 (Direct End User); EUR 180 per user (1-10) down to EUR 100 (101-262), cap EUR 30,000; EUR 0.050 down to EUR 0.010 per transaction | CONFIRMED | Same PDF: "1 - 83 €60 Per User", "84 - ∞ €5,000 Single Fee", "€4 per block of 100 Transactions", "€3,000 Single Fee", "€25,000 Single Fee"; "Eircode Provider €1,000 ... Direct End User €500"; per user 1-10 €180, 11-50 €150, 51-100 €120, 101-262 €100, 263+ €0, "Maximum Per User data fee is €30,000"; per transaction €0.050 ... €0.010. ECAD website fee €30,000 and group fee €50,000 are also listed | - |
+| I4 | GeoDirectory: "Ireland's most authoritative electronic register of addresses", "jointly developed by An Post and Tailte Éireann", "over 1.9 million buildings and 2.3 million addresses", "We do not currently offer a free trial"; prices on request | CONFIRMED | `https://www.geodirectory.ie/knowledge-centre/faqs` 200: all quotes present; pricing only as "Contact us today to learn more about our various pricing packages". "operated by An Post GeoDirectory DAC" was not seen on this page | - |
+| I5 | Eircode Finder is a web lookup; Dec 2019 news: daily limit raised "from 15 lookups per day to 50", "Terms and conditions apply" | CONFIRMED (the 2019 text); the current limit is CORRECTED in I16 | `https://www.eircode.ie/news/2019/12/03/christmas-cheer-from-eircode` 200, dated 03 Dec 2019: "With the festive season approaching, we have increased the daily limit on our Eircode Finder tool from 15 lookups per day to 50 ... To celebrate this promotion ..." | The 50 was a Christmas 2019 promotion, see I16 |
+| I6 | GeoFindIT app is free | CONFIRMED | Same GeoDirectory page: "Get there first time with the FREE GeoFindIT app" | - |
+| I7 | Tailte Éireann open data at `data-osi.opendata.arcgis.com`: "free to use" with attribution, "A standard Creative Commons licence applies to this data." | CONFIRMED | `https://tailte.ie/services/open-data/` 200: "Any data released by Tailte Éireann will be free to use as long as Tailte Éireann are attributed as the content creator. A standard Creative Commons licence applies to this data."; link to `https://data-osi.opendata.arcgis.com/` | - |
+| I8 | Portal DCAT feed: 178 datasets, all `https://creativecommons.org/licenses/by/4.0`; fifteen titled "High Value Dataset - ..."; none is an address dataset | CONFIRMED | `https://data-osi.opendata.arcgis.com/api/feed/dcat-us/1.1.json` 200 (846,555 bytes): 178 datasets, 178 with that licence URL; 15 HVD titles exactly as listed in the notes. A search of all titles, keywords and descriptions for address / eircode / geodirectory / postal / postcode matches only the four "Small Areas" boundary sets (their text mentions GeoDirectory) | 14 of the 15 were issued 2026-01-09; "National Land Cover 2018" was issued 2023-05-25 |
+| I9 | "High Value Dataset - Buildings" issued 9 Jan 2026; CSV, GeoJSON, KML, File Geodatabase, GeoPackage | CONFIRMED | DCAT feed entry: `issued 2026-01-09T15:46:13Z`; distributions CSV, GeoJSON, KML, GDB, GPKG, XLSX, ZIP, TXT, REST API (the HTML dataset page itself was not opened) | - |
+| I10 | Buildings layer: 3,785,414 polygons; fields GUID, OBJECTID, Shape__Area, Shape__Length only; "© Tailte Éireann" | CONFIRMED | Layer definition 200: fields `['GUID','OBJECTID','Shape__Area','Shape__Length']`, `copyrightText "© Tailte Éireann"`, polygon. Count query 200: `{"count":3785414}` | - |
+| I11 | Valuation Office API on data.gov.ie: Tailte Éireann, CC BY 4.0, continuous, HVD (Statistics) under Regulation 2023/138 | CONFIRMED | `https://data.gov.ie/api/3/action/package_show?id=valuation-office-api` 200: `license_id CC-BY-4.0`, `frequency Continuous`, `high_value_dataset: true`, `applicable_legislation [.../reg_impl/2023/138/oj]`, `hvd_category http://data.europa.eu/bna/c_e1da4e07` (the record gives the code, not its label), resource `https://tailte.ie/home/api/` | - |
+| I12 | "Locales", "Sites", "Cadastral Parcels Freehold" descriptions | CONFIRMED | DCAT feed descriptions: "named bays, mountain ranges and districts"; "A Site is a large contiguous area encompassing multiple objects that are related"; "boundaries of each individual title to land" | - |
+| I13 | data.gov.ie search for "eircode" finds 17 datasets, all small POI lists | CONFIRMED | `https://data.gov.ie/api/3/action/package_search?q=eircode` 200: `count 17` (enterprise centres, Garda/fire stations, schools, recycling centres, polling stations ...) | - |
+| I14 | Tailte asks to report errors in a property's "X&Y or Eircode"; "some property categories are not assigned an Eircode" | CONFIRMED | Tailte open data page: "If you discover an error with our property record's X&Y or Eircode please contact us at opendata@tailte.ie ... Note: some property categories are not assigned an Eircode as properties must have a postal address" | - |
+| I15 | Gap: field content of the Valuation Office API not confirmed | CORRECTED (gap closed, from the publisher's page; no API call made) | `https://tailte.ie/home/api/` 200: API Explorer fields "County / Local Authority, Category, Use, Area Per Floor, Floor Use, Address, Eircode, Publication Date, Nav Total, Rateable Valuation, Level, Car Park, Property Number, X ITM & Y ITM"; output CSV, JSON or GeoJSON; covers all post-Revaluation rating authority areas (28 named) plus limited data for Cork City and County | The Valuation API returns address text, Eircode and ITM X/Y per rateable property, nationwide (Cork with fewer fields). It is a free CC BY 4.0 source of commercial-property addresses with Eircodes, not a full address register |
+| I16 | Gap: current Eircode Finder daily limit unverified; a snippet says 50 was seasonal over a standing 15 | CORRECTED (gap closed) | Eircode's own FAQ, `https://www.eircode.ie/faqs` 200: "Why is the Eircode Finder limited to only 15 searches a day? The Eircode Finder is for the public who occasionally need to look up an address; it is not for commercial use which is why a daily limit has been set." The Finder app's own allowance value comes from its session endpoint; my request to that endpoint was declined by this session's permission system, so the live number was not read | Eircode Finder: 15 searches a day, non-commercial use (publisher's FAQ, 11 Nov 2026) |
+
+| I17 | OpenAddresses has no Ireland source (`sources/ie` 404) | CONFIRMED | `https://api.github.com/repos/openaddresses/openaddresses/contents/sources/ie` 404 | - |
+| I18 | April 2025 parliamentary answer: new Eircodes published on the free Eircode Finder, licensed businesses get the database files | UNVERIFIED | `https://www.oireachtas.ie/en/debates/question/2025-04-29/257` answered 405 to the plain client; not worked around | - |
+| I19 | December 2023 parliamentary answer: three-year extension of the Eircode contract with Capita notified March 2023 | UNVERIFIED | `https://www.oireachtas.ie/en/debates/question/2023-12-12/122/` answered 405 | - |
+| I20 | data.gov.ie holds user suggestions asking for the Eircode database as open data; none led to a release | CONFIRMED for the one cited suggestion; "several" not counted | `https://data.gov.ie/ga/dataset/suggest/40acc585-4ca5-4b4f-9332-f2d954c935ab` 200: "Database of valid Eircodes and / or a validation API", status "Dúnta" (closed); its text: "the only means to validate an Eircode is either manually via finder.eircode.ie (limited to 15 uses per day!) or by purchasing access to either the ECAF or ECA..." | - |
+| I21 | Gap: current ECAF/ECAD prices unverified, only price list dated March 2015 | CORRECTED (gap closed as far as the publisher states) | The live product page (`https://www.eircode.ie/business/products-and-services`, 200) links exactly this PDF under "Pricing and Licensing Information" (`https://www.eircode.ie/files/eircode-pricing-information.pdf`); no other price document is linked | The March 2015 price list is the one Eircode publishes as current on 11 Nov 2026. Prices actually quoted to a customer were not tested |
+| I22 | GeoDirectory prices are on request | NOT DISPROVED | GeoDirectory FAQ gives no figures, only "Contact us today to learn more about our various pricing packages at info@geodirectory.ie". Other GeoDirectory pages were not searched | - |
+| I23 | Eircode is "operated by Capita"; Tailte Éireann is the successor of OSi, the Valuation Office and the Property Registration Authority | UNVERIFIED | Neither statement appears on the publisher pages I read (eircode.ie product, FAQ and news pages have no "Capita"; the Tailte open data page does not name its predecessors). Not searched further | - |
+| I24 | Negative claim: Ireland has no open national address register / no free address dataset | NOT DISPROVED | Tried: (a) data.gov.ie catalogue API: "eircode" 17, "geodirectory" 8, "address register" 16, "addresses" 188, "address points" 79, "postal address" 1 - every hit is a POI list, a statistical boundary set, a licence register or environmental data; (b) Tailte portal feed: 178 datasets, none with addresses (I8); (c) data.europa.eu, country Ireland: "address register", "eircode" (16), "address points", "INSPIRE addresses" - no address dataset, no INSPIRE AD download; (d) OpenAddresses: no `ie` folder; (e) GISCO Address API: Ireland absent (I25). Partial free official sources that do carry addresses: the Valuation API (I15: address + Eircode + ITM X/Y for rateable, mostly commercial, properties, CC BY 4.0) and the Property Price Register (sale records with addresses; on data.gov.ie only a Dublin extract, CC-BY-4.0, not examined) | Still true that no free national address register exists. Add that the Valuation API is a free official source of commercial-property addresses with Eircodes and coordinates |
+| I25 | Pan-European notes: GISCO Address API covers every EU country except Ireland (check for the five) | CONFIRMED for these five | `https://gisco-services.ec.europa.eu/addressapi/countries` 200: 31 codes (AT BE BG CH CY CZ DE DK EE EL ES FI FO FR HR HU IS IT LI LT LU LV MT NL NO PL PT RO SE SI SK) - FR, BE, NL, LU present, IE absent. `.../provinces?country=FR` 101 results, `BE` 11, `NL` 12, `LU` 12, `IE` `{"count":0,"results":[]}` | - |
+| I26 | Takeaway: "the only free official access is the Eircode Finder web lookup with a daily cap" | CORRECTED | I15 and I16 | Free official access: Eircode Finder (15 searches a day, non-commercial) and, for rateable properties only, the Tailte Valuation API with address, Eircode and ITM coordinates |
+| I27 | Inference: Valuation data covers "listed council areas only" | CORRECTED | `https://tailte.ie/home/api/`: 28 post-Revaluation rating authority areas are named, plus limited data for Cork City and County - that is every county | Coverage is national for rateable property; Cork returns fewer fields |
+| I28 | Gap: no official statement on why addresses are absent from the HVD release; Property Price Register, Logainm, CSO not checked | UNVERIFIED | Not pursued beyond I24 | - |
 

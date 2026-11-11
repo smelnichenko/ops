@@ -53,7 +53,7 @@ Luxembourg publishes everything free, without registration and under CC0 on data
 
 **Source section: Luxembourg**
 
-All requests 11 Nov 2026, 16:11-16:16 UTC, plain curl, no key.
+All requests 11 Nov 2026, about 16:40-16:50 UTC, plain curl, no key.
 
 | # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
 |---|---|---|---|---|

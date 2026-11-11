@@ -69,7 +69,7 @@ The Netherlands publishes the whole BAG (Basisregistratie Adressen en Gebouwen) 
 
 **Source section: Netherlands**
 
-All requests 11 Nov 2026, 16:02-16:10 UTC, plain curl, no key.
+All requests 11 Nov 2026, about 16:20-16:40 UTC, plain curl, no key.
 
 | # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
 |---|---|---|---|---|

@@ -19,7 +19,7 @@ Verdict counts are counted by the script from the check tables (first verdict wo
 | GR | [Greece](GR-Greece.md) | `southeast_europe` | 53 | yes | 25 | 0 | 0 | 2 | 0 |
 | HR | [Croatia](HR-Croatia.md) | `southeast_europe` | 65 | yes | 32 | 0 | 0 | 3 | 0 |
 | HU | [Hungary](HU-Hungary.md) | `central_europe` | 44 | yes | 19 | 0 | 1 | 3 | 0 |
-| IE | [Ireland](IE-Ireland.md) | `western_europe` | 45 | **no** | - | - | - | - | - |
+| IE | [Ireland](IE-Ireland.md) | `western_europe` | 45 | yes | 17 | 5 | 0 | 4 | 2 |
 | IT | [Italy](IT-Italy.md) | `southwest_europe` | 57 | yes | 31 | 1 | 0 | 6 | 2 |
 | LT | [Lithuania](LT-Lithuania.md) | `nordics_baltics` | 50 | yes | 19 | 1 | 0 | 5 | 0 |
 | LU | [Luxembourg](LU-Luxembourg.md) | `western_europe` | 37 | yes | 14 | 0 | 0 | 2 | 0 |

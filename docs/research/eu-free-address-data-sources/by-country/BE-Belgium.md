@@ -85,7 +85,7 @@ Belgium has a free federal aggregate, BeSt Address (BOSA), built from the three 
 
 **Source section: Belgium**
 
-All requests 11 Nov 2026, 15:49-16:00 UTC, plain curl, no key.
+All requests 11 Nov 2026, about 15:50-16:20 UTC, plain curl, no key.
 
 | # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
 |---|---|---|---|---|
