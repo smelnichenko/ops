@@ -6,7 +6,7 @@ Verdict counts are counted by the script from the check tables (first verdict wo
 | Code | Country | Region file | Research lines | Checked | Confirmed | Corrected | Wrong | Unverified | Not disproved |
 |---|---|---|---|---|---|---|---|---|---|
 | AT | [Austria](AT-Austria.md) | `germany_austria` | 58 | yes | 22 | 3 | 0 | 5 | 0 |
-| BE | [Belgium](BE-Belgium.md) | `western_europe` | 69 | **no** | - | - | - | - | - |
+| BE | [Belgium](BE-Belgium.md) | `western_europe` | 69 | yes | 30 | 5 | 1 | 5 | 1 |
 | BG | [Bulgaria](BG-Bulgaria.md) | `southeast_europe` | 56 | yes | 27 | 2 | 0 | 6 | 0 |
 | CY | [Cyprus](CY-Cyprus.md) | `southeast_europe` | 45 | yes | 22 | 1 | 0 | 1 | 0 |
 | CZ | [Czechia](CZ-Czechia.md) | `central_europe` | 63 | yes | 27 | 3 | 0 | 1 | 0 |
@@ -25,7 +25,7 @@ Verdict counts are counted by the script from the check tables (first verdict wo
 | LU | [Luxembourg](LU-Luxembourg.md) | `western_europe` | 37 | **no** | - | - | - | - | - |
 | LV | [Latvia](LV-Latvia.md) | `nordics_baltics` | 44 | yes | 13 | 0 | 0 | 7 | 0 |
 | MT | [Malta](MT-Malta.md) | `southwest_europe` | 37 | yes | 14 | 2 | 1 | 0 | 2 |
-| NL | [Netherlands](NL-Netherlands.md) | `western_europe` | 53 | **no** | - | - | - | - | - |
+| NL | [Netherlands](NL-Netherlands.md) | `western_europe` | 53 | yes | 24 | 1 | 0 | 2 | 1 |
 | PL | [Poland](PL-Poland.md) | `central_europe` | 68 | yes | 28 | 4 | 0 | 2 | 0 |
 | PT | [Portugal](PT-Portugal.md) | `southwest_europe` | 51 | yes | 20 | 2 | 1 | 3 | 2 |
 | RO | [Romania](RO-Romania.md) | `southeast_europe` | 53 | yes | 23 | 1 | 0 | 3 | 0 |
