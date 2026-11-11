@@ -293,6 +293,15 @@ to the activity log with who and when.
   market list**, computed at read time; their saved choice is never rewritten, so the country comes back to everyone who had
   it when it is turned on again. One whose effective list is empty sees the list's first country until they choose.
 - At least one country stays on.
+- **Each country's address source, on the same page** (the operator, 2026-11-11: "admin should have settings in ui for
+  configuring address collector recurrency and triggering manual update and reset", "per country"): per market country
+  its places source's schedule (how often: monthly by default, a day of the month and a time, shown in words and saved as
+  the source's cron, Tallinn time), its last run (when, what changed, the note), **Run now** (one run at once, through the
+  same runner and claims as any run - never two at a time), and **Reset**. Proposed meaning of Reset, for the operator to
+  confirm: the source's failure state cleared and one full read run with the "far fewer places" and "mass rename" guards
+  bypassed once, after the admin confirms what it would change (the plan of the diff shown first) - for a real large
+  change a guard refused (a municipal reform). Nothing is deleted by a reset either. Endpoints under `/admin/countries/
+  {code}/places` (`MANAGE_USERS`), each action written to the activity log with who and when.
 Rendered sample to the operator before either page ships.
 
 **Who has a scope:** a missing row is the default. `user_scope` keys on `user_uuid` (no FK to `users`: a JOBS user not yet
