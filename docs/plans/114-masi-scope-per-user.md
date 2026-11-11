@@ -201,21 +201,22 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   without it, compounds like "Mäeküla" whole), 394 names in more than one parish; the DBF is cp1257, not UTF-8.
 - **Kept current by masi itself:** a source `places:ee` (a collector like any other: a cron, runs on the Sources page,
   its failures alerted) reads the downloads monthly, after the Board's beginning-of-month release, and updates table
-  `place (country, code, kind, municipality_code, county_code, postal_codes, source_date, superseded_by)` - keyed by the
+  `place (country, code, kind, name, municipality_code, county_code, successor_id, source_date, retired_on)` - keyed by the
   source's own code (EHAK's `AKOOD`), never by a name - diff-only, every run's added, renamed, merged and removed places on
   its run row.
-- **Renames and merges keep every name:** `place_name (place_id, name, valid_from, valid_to)` holds each name a place has
+- **Renames and merges keep every name:** `place_name (place_id, name, search, valid_from, valid_to)` and `place_postal (place_id, code, valid_to)` holds each name a place has
   had. A rename adds the new name and closes the old one's validity, and **the old name still matches**, to the same place:
-  boards and people write old names for years. A merged or abolished settlement gets `superseded_by` its successor (ADS's
-  history extract, nr 9, gives both), and its names match the successor. So an update never drops a posting or a person
+  boards and people write old names for years. A merged or abolished settlement is a FORMER place with `successor_id` its successor
+  (today: the settlement of the same name in its municipality, else in its county, from GeoNames' stale entries; ADS's
+  history extract nr 9 when it can be fetched by script), and its names match it. So an update never drops a posting or a person
   by a rename; a name that leaves Estonia's places entirely (none expected) stays as a former name, so it still matches.
-  Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, the ADS service for postal codes).
+  Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, `download.geonames.org` for postal codes; production allows any host, the chart's default list needs both).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing, or far fewer places than the table
   holds, changes nothing and fails (guards fail closed).
 - **Searchable, in Postgres:** nothing like Elasticsearch runs on the platform (logs moved to ClickHouse, an analytics
   store); masi's own database already has `pg_trgm`, and `unaccent` is available. `place_name.search` = the name
-  lower-cased and without diacritics (`unaccent`), with a GIN trigram index (`gin_trgm_ops`); postal codes indexed too.
+  lower-cased and without diacritics (folded in Java, `Places.searchable`, so the index needs no `unaccent`), with a GIN trigram index (`gin_trgm_ops`); postal codes indexed too.
   `GET /places/search?q=&country=&limit=` answers by trigram similarity, a prefix first ("parnu" finds Pärnu, "tallin"
   Tallinn, "10148" its settlement), a former name shown with the current one ("Kohtla-Nõmme -> Toila vald"). One query, in
   the same transaction as everything else, no copy kept in sync. Budget as the lists: p95 under 50 ms, EXPLAIN on the
@@ -314,8 +315,9 @@ mirrored can still save). Only users with masi access ever write one.
 | # | What | Visible change |
 |---|---|---|
 | 0a | Tables `place` and `place_name` (trigram index built concurrently), the snapshot seed, the monthly source `places:ee` (EHAK + GeoNames postal codes, diff-only, renames kept), `/places/search` | place search; a new run row each month |
+| 0a' | The source row `places:ee` (disabled, the 12th of each month) and its collector bean - one deploy after 0a, so every pod knows `SourceScope.PLACES` (an older build cannot load a row of an unknown scope); the chart's allow-list default; alerts `MasiPlacesEmpty` and `MasiPlacesNotChecked` with a runbook; then Estonia's postal codes from the Board's own `sihtnumbrid.zip` (streamed; joined by settlement and municipality name), GeoNames kept for former names | the source on the Sources page |
 | 0b | The gate reads the places in place fields (postings and people), the places' version in the sweep stamp, `READING` raised; the old-vs-new verdict difference over production listed and checked in the PR | postings in Estonian villages no longer dropped |
-| 1 | `market_country` (seeded `EE`) and `user_scope` (changeset 121), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
+| 1 | `market_country` (seeded `EE`) and `user_scope` (the next changeset), `GET/PUT /me/scope`, `GET /admin/countries`, `PUT /admin/countries/{code}` (`MANAGE_USERS`; turning on refused until phase 4), refusal of a country that is off | none |
 | 2 | Site pages: Settings (every user) and Admin (admins only), samples first | the pages |
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
