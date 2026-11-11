@@ -7,7 +7,7 @@ Checked on 11 November 2026 by an independent fact-checker. Client: plain `curl/
 - France: checked (37 rows; 1 unverified claim, 1 open point)
 - Belgium: partly checked (41 rows; Brussels publisher hosts unreachable, row counts not recounted)
 - Netherlands: checked (28 rows; PostNL page refused the plain client)
-- Luxembourg: not started
+- Luxembourg: checked (16 rows)
 - Ireland: not started
 
 Verdicts: CONFIRMED = seen today by me; CORRECTED = partly right, right value given; WRONG = contradicted by what I saw; UNVERIFIED = could not be checked (reason given); NOT DISPROVED = negative claim I tried and failed to disprove.
@@ -139,4 +139,27 @@ All requests 11 Nov 2026, 16:02-16:10 UTC, plain curl, no key.
 | N26 | Gap: Esri document dating a covenant to 2014; whether HVD changed BAG distribution; CBS files | UNVERIFIED | Not pursued | - |
 | N27 | Inference: Kadaster's "about 2.8 GB" is out of date, file is 3.66 GB | CONFIRMED | N5 and N7 | - |
 | N28 | Takeaway: "about 10.09 million addresses"; XML extract monthly | CONFIRMED | N16 (10,085,895 address documents in the Locatieserver index, which is a BAG-derived index, not a count of the extract itself); N6 | - |
+
+## Luxembourg
+
+All requests 11 Nov 2026, 16:11-16:16 UTC, plain curl, no key.
+
+| # | Claim | Verdict | Evidence (URL, HTTP status, what I saw) | Corrected statement |
+|---|---|---|---|---|
+| L1 | "Registre national des localités et des rues" (CACLR): publisher ACT, CC0, weekly, last modified 9 Nov 2026; resources caclr.zip (1,956,389 bytes), caclr.xlsx (43,103,641 bytes), data-model description, online lookup | CONFIRMED | `https://data.public.lu/api/1/datasets/registre-national-des-localites-et-des-rues/` 200: `license: "cc-zero"`, organization "Administration du cadastre et de la topographie", `frequency: weekly`, `last_modified 2026-11-09T03:32:44`; resources `caclr.zip` filesize 1956389, `caclr.xlsx` 43103641, "Description du modèle de données" (act.public.lu), "Service de consultation en ligne" `https://www.services-publics.lu/caclr/index.action`, plus a "Webservices 'CACLR'" link. HEAD on caclr.xlsx: 200, 43,103,641 bytes | - |
+| L2 | `caclr.zip` holds 13 fixed-width files; IMMEUBLE 248,702 lines, RUE 9,964, CODEPT 4,430 | CONFIRMED | File downloaded whole (1,956,389 bytes, under the cap) and deleted after: 13 members (ALIAS.LOCALITE, ALIAS.RUE, CANTON, CODEPT, COMMUALL, CPTCH, DISTRICT, IMMDESIG, IMMEUBLE, LOCALITE, QUARTIER, RUE, TR.DICACOLO.RUCP), all dated 2026-11-09; line counts IMMEUBLE 248,702, RUE 9,964, CODEPT 4,430 | - |
+| L3 | BD-Adresses: publisher ACT, "Creative Commons Zero (CC0)", weekly, last update 9 Nov 2026, "un sous-ensemble des adresses figurant dans le registre national ..." | CONFIRMED | `https://data.public.lu/api/1/datasets/adresses-georeferencees-bd-adresses/` 200: `license: "cc-zero"`, `frequency: weekly`, `last_modified 2026-11-09T03:31:49`; description: "La BD-Adresses est un sous-ensemble des adresses figurant dans le registre national des localités et des rues, enrichi par des coordonnées géographiques" | - |
+| L4 | Resources: addresses.csv 28,212,250 bytes, addresses.geojson 80,908,855, addresses-shp.zip 19,703,541; dated folders change weekly | CONFIRMED | HEAD 200 on all three: `content-length` 28212250, 80908855, 19703541; Last-Modified Mon 09 Nov 2026 03:31 GMT; URLs carry the folder `20261109-03311x` | - |
+| L5 | CSV has 179,784 data rows; 13-column header `rue;numero;...;lau2` | CONFIRMED | First 1.5 KB of addresses.csv (206): header identical (file starts with a UTF-8 BOM). Row count not counted from the CSV (28 MB, over the cap) but the same weekly export's shapefile index gives it: `addresses.shx` uncompressed 1,438,372 bytes -> (1,438,372 - 100) / 8 = 179,784 records (ZIP directory read by a 4 KB tail range) | Note the BOM at the start of the CSV |
+| L6 | ACT caveats: parcel/PCN basis with possible LUREF offset; manual or automatic centroid; "les points d'adresses ne représentent pas l'entrée réelle des bâtiments"; shared coordinates; not all addresses georeferenced; "l'exhaustivité des données ne peut être garantie" | CONFIRMED | Dataset description in the API record contains each statement | - |
+| L7 | Badges `spd` and `pivotal-data` | CONFIRMED | `badges: [{kind: spd}, {kind: pivotal-data}]` on both ACT datasets | - |
+| L8 | INSPIRE Addresses dataset: organisation Géoportail, CC0, tagged `hvd` and `inspire`, last modified 9 Nov 2026; ad.address.gml 469,407,600 bytes, ad.address.zip 13,220,811, WMS | CONFIRMED | `https://data.public.lu/api/1/datasets/inspire-annex-i-theme-addresses-addresses/` 200: `license cc-zero`, organization "Géoportail", tags include `hvd`, `inspire`, `last_modified 2026-11-09T23:04:24`; HEAD 200: gml 469,407,600 bytes, zip 13,220,811 bytes; WMS resource URL as stated. `frequency: unknown` in the record | - |
+| L9 | BD-Adresses record lists Geocode REST API `apiv3.geoportail.lu/geocode/search` and reverse | CONFIRMED | Resources "Geocode REST API" and "Reverse geocode REST API" with those URLs | - |
+| L10 | apiv3 and apiv4 answer keyless 200 (search v3 and v4, reverse v4) | CONFIRMED | apiv3 search 200 ("1, Rue du Fort Thüngen 1499 Luxembourg"); apiv4 search 200; apiv4 reverse 200 ("Avenue Gaston Diderich 54, 1420", contributor ACT) | - |
+| L11 | INSPIRE WFS for addresses answers GetCapabilities 200 | CONFIRMED | `https://wms.inspire.geoportail.lu/geoserver/ad/wfs?service=WFS&request=GetCapabilities` 200 (101,447 bytes), feature type `ad:AD_Address`; a `resultType=hits` request returns `numberMatched="187942"` | The INSPIRE layer holds 187,942 address features, 8,158 more than the BD-Adresses CSV |
+| L12 | apiv4 search result has LUREF easting/northing, lon/lat geometry, postcode, id_caclr_street/building/locality | CONFIRMED | Response: easting 75980.1187, northing 75098.0004, `geomlonlat [6.112502581, 49.610497716]`, zip 1420, `id_caclr_street 19`, `id_caclr_building 1088`, `id_caclr_locality 1` | - |
+| L13 | OpenAddresses `sources/lu/countrywide.json` reads a data.public.lu resource, "CC 0", attribution not required | CONFIRMED | raw.githubusercontent.com 200: `"data": "https://data.public.lu/fr/datasets/r/2a17ddc2-b961-45ce-83a2-be751d3af9b8"`, licence text "CC 0", `"attribution": false` | - |
+| L14 | Gap: terms of use and rate limits of the geoportail.lu geocoding API not checked | UNVERIFIED | `https://www.geoportail.lu/en/about-us/terms-conditions/` 200 but says nothing specific on the geocoding API or limits; API responses carry no rate-limit headers. No publisher statement found in one attempt | - |
+| L15 | Gap: HVD change in 2024; meaning of every CACLR file | UNVERIFIED | Not pursued (data-model PDF not read) | - |
+| L16 | Inference: no unit (apartment) level in the CSV columns | CONFIRMED | Header has no unit/box column (L5) | - |
 

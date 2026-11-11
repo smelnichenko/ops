@@ -22,7 +22,7 @@ Verdict counts are counted by the script from the check tables (first verdict wo
 | IE | [Ireland](IE-Ireland.md) | `western_europe` | 45 | **no** | - | - | - | - | - |
 | IT | [Italy](IT-Italy.md) | `southwest_europe` | 57 | yes | 31 | 1 | 0 | 6 | 2 |
 | LT | [Lithuania](LT-Lithuania.md) | `nordics_baltics` | 50 | yes | 19 | 1 | 0 | 5 | 0 |
-| LU | [Luxembourg](LU-Luxembourg.md) | `western_europe` | 37 | **no** | - | - | - | - | - |
+| LU | [Luxembourg](LU-Luxembourg.md) | `western_europe` | 37 | yes | 14 | 0 | 0 | 2 | 0 |
 | LV | [Latvia](LV-Latvia.md) | `nordics_baltics` | 44 | yes | 13 | 0 | 0 | 7 | 0 |
 | MT | [Malta](MT-Malta.md) | `southwest_europe` | 37 | yes | 14 | 2 | 1 | 0 | 2 |
 | NL | [Netherlands](NL-Netherlands.md) | `western_europe` | 53 | yes | 24 | 1 | 0 | 2 | 1 |
