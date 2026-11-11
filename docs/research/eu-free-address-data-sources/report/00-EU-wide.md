@@ -85,3 +85,101 @@ National INSPIRE address downloads that were confirmed at their source (details 
 - The Commission's Data Union Strategy of 19 November 2025 says: "In 2026, the Commission will propose to expand the list of high-value datasets to cover legal, judicial, administrative and other data", scheduled for Q4 2026 ([EUR-Lex, COM(2025) 835 final](https://eur-lex.europa.eu/legal-content/EN/TXT/PDF/?uri=CELEX:52025DC0835)).
 - The Digital Omnibus proposal COM(2025) 837 (CELEX:52025PC0837) would repeal Directive (EU) 2019/1024 and consolidate its rules in Regulation (EU) 2023/2854 (Data Act).
 - It is not adopted. On 11 November 2026 the Parliament's file 2025/0360(COD) shows "Status: Awaiting committee decision" ([Legislative Observatory](https://oeil.europarl.europa.eu/oeil/en/procedure-file?reference=2025/0360(COD))). "At the end of June 2026, Member States did not adopt the Council's compromise text." ([EDRi](https://edri.org/our-work/the-digital-omnibus-is-going-on-summer-break-your-rights-are-not/)).
+
+### Cross-border sources compared
+
+Country codes are ISO codes. GISCO writes Greece as EL.
+
+| Source | Link | What it holds | EU countries covered (and which are missing) | Access (account, key, bulk or lookup) | Licence | Freshness | Check |
+|---|---|---|---|---|---|---|---|
+| OpenAddresses | [batch.openaddresses.io](https://batch.openaddresses.io/); source definitions: [sources/](https://github.com/openaddresses/openaddresses/tree/master/sources) | Address points gathered from public sources, one output file per source. Also parcel, building and centerline layers. | 24 of 27. Missing: HU, IE, MT. Partial: DE (15 of 16 Länder, no Bavaria), SE (18 municipalities), RO (Bucharest and four nearby towns, no output since 2020), CY (no house numbers). Stale: SI. | Free account and login needed; anonymous download returns HTTP 403. Bulk, per source, as GeoJSON. No Europe file: about 200 files (estimate) or the global collection of 19.4 GB. | Each source keeps its own licence; nothing is relicensed. | Weekly batch run. 11 national EU sources are cached copies, not live reads; the oldest dated upload is 2025-01-07 (BG). | confirmed; Romania corrected |
+| Overture Maps, addresses theme | [addresses guide](https://docs.overturemaps.org/guides/addresses/); [attribution and licensing](https://docs.overturemaps.org/attribution/) | "over 475 million" address points, 41 countries, one schema. The theme is "currently in Alpha". | 19 of 27. Missing: BG, CY, GR, HU, IE, MT, RO, SE. Partial: DE (15 Länder, no Bavaria). | No account, no key. Bulk GeoParquet on public S3 and Azure storage. | Per country, mostly CC BY 4.0 or CC0; no single licence. | Monthly. Latest release 2026-10-21.0; every EU source "Accessed: 2026-10-15". | confirmed; three details corrected |
+| GISCO Address API (Eurostat) | [swagger.yaml](https://gisco-services.ec.europa.eu/addressapi/swagger.yaml); [docs](https://gisco-services.ec.europa.eu/addressapi/docs/) | Geocoding and reverse geocoding over "a pan-european address database" from "authoritative data sources in the participating countries". | 26 of 27. Missing: IE. | No account, no key. Lookup only: no bulk endpoint; a 1,000 house-number limit per call. | None stated. | Dated for three countries only: AT 05.05.2022, DE 2021, HR 2022. | confirmed |
+| OpenStreetMap, Geofabrik extracts | [download.geofabrik.de/europe.html](https://download.geofabrik.de/europe.html) | The whole OSM database per country, including objects tagged `addr:housenumber`. | All 27 (Ireland in one file with Northern Ireland). House-number coverage very uneven. | No account. Bulk `.osm.pbf`. | "License: ODbL 1.0" | Change files (`.osc.gz`) per region. Tag statistics dated 2026-11-10. | confirmed |
+| INSPIRE Geoportal | [inspire-geoportal.ec.europa.eu](https://inspire-geoportal.ec.europa.eu/srv/eng/catalog.search#/home) | Central catalogue of national INSPIRE datasets and services. | Not established. | Not usable: TLS certificate expired on 30 October 2026. | Set per dataset by each country. | - | unverified |
+| data.europa.eu, HVD "Addresses" filter | [search API](https://data.europa.eu/api/hub/search/search?filter=dataset&limit=0&facets=%7B%22hvdCategory%22%3A%5B%22c_c3de25e4%22%5D%7D) | Catalogue records that link to national datasets. Metadata only. | 8 of 27 have a tagged record: AT, BE, CZ, ES, HR, LT, LU, SK. | No account, no key. Search API. | Per dataset. | Live catalogue. | confirmed |
+| EuroGeographics, Open Cadastral Map (prototype) | [Open Maps for Europe](https://eurogeographics.org/open-maps-for-europe/) | A map that shows national INSPIRE open data (administrative units, parcels, buildings, addresses) and links to the national download. No address download of its own was found. | 15 national authorities by July 2025, among them PL, NL, CZ, ES, BE, EE, IE, HR. Full list not confirmed. | Links "for direct download from national geoportals". | "a single licence", not named on the page. | The funding project ran "until the end of 2025". | confirmed; licence unverified |
+| GeoNames postal codes | [download.geonames.org/export/zip/](https://download.geonames.org/export/zip/) | Postcode, place name, estimated centre point. No streets, no house numbers. | 26 of 27 have a country file. Missing: GR. Partial codes: IE, MT. | No account. Bulk, one zip per country. | CC BY 4.0 | Regenerated daily; files dated 2026-11-11. | confirmed; date corrected |
+| GISCO postal code points (Eurostat) | [Postal codes](https://ec.europa.eu/eurostat/web/gisco/geodata/administrative-units/postal-codes) | One point per postcode with NUTS code and degree of urbanisation. No addresses. | "EU, EFTA and candidate countries"; no per-country list was collected. | Bulk: GeoPackage, SHP or CSV. | CC-BY-SA-4.0 | Versions 2024 and 2020. | confirmed |
+| UPU Universal POST*CODE DataBase | [UPU addressing solutions](https://www.upu.int/en/postal-solutions/programmes-services/addressing-solutions) | "A world postcode database containing the postcodes of 192 member countries". | Not listed per country. | Licence contract, non-disclosure agreement, data use declaration and a rates document. Sample extracts by region are on the page. | UPU's own licence contract. | Update 2026.1, dated 02.03.2026. | confirmed; price not seen |
+
+#### OpenAddresses in detail
+
+- It describes itself as "The free and open global address collection": "All data is openly licensed. Most sources only require attribution." ([openaddresses.io](https://openaddresses.io/)).
+- The data "is not relicensed from the original sources. Individual sources will have their own licenses". The source definitions in `sources/` are CC0 and the code is BSD 3-Clause ([repository README](https://github.com/openaddresses/openaddresses)).
+- Size: 5,329 source layers from 3,231 sources worldwide, of which 3,148 are address layers ([batch.openaddresses.io/api/data](https://batch.openaddresses.io/api/data)). That API lists each source and layer with the date of its last successful run and its output size. It gives no record counts.
+- Login: an anonymous request for [a job output](https://batch.openaddresses.io/api/job/946822/output/source.geojson.gz) returns HTTP 403 "Authentication Required". The site says: "Only logged in users can perform downloads." A self-service registration form exists.
+- Account levels: basic ("GeoJSON Format", "CDN Data Access"); Backer, >= $5 a month ("300 Custom Format Exports per Month"); Sponsor, >= $100 a month ("Direct AWS S3 Access", "Validated Data"). Payments run through [OpenCollective](https://opencollective.com/openaddresses/contribute).
+- Collections ([api/collections](https://batch.openaddresses.io/api/collections)): Global (76.8 GB raw, 19.4 GB processed, built 2026-11-09), four US regions and Canada. There is no Europe or per-country collection.
+- Estimate: an EU import needs about 200 source files. The repository holds 279 EU address-layer definitions, 241 of them not marked `skip`; that count includes city files and stale ones, so "about 200" is a round figure for the national and regional files.
+- Freshness: the run date is not the data date. These national sources are cached uploads, as old as the upload: AT (register date 01.04.2026), BG (2025-01-07), CY (2026-09-29), CZ (age of the cached file not known; the source page names the 2024-08-31 export), DK (2026-03-27), FI (2026-09-30; the Swedish-language file 2026-06-03), GR (2026-09-29), IT (file dated 2026-07-03; last successful run 2026-08-14), NL (2026-06-03), PT (2026-02-23), ES (2026-06-03; last successful run 2026-09-18). These read the publisher's live URL: BE, HR, FR, LV, LT, LU, PL, SK, and EE through a third-party mirror. SI also reads a live URL, but its address run has failed since 2024-06-14. The German Länder last ran between 2026-10-16 and 2026-10-30.
+- Postcodes: mapped for AT, BE, HR, CZ, DK, FI, FR, LV, LT, LU, NL, PL, PT, SK, SI, ES and nine German Länder (BB, Berlin, HB, HH, RP, SH, SL, SN, TH). Not mapped for BG, CY, EE, GR, the Italian countrywide file and six German Länder (BW, HE, MV, NI, NW, ST). Mixed in SE.
+- Licences as recorded per source: CC BY 4.0 for AT, BE, CY, CZ, DK, FI, GR, IT, LV, LT, PT, SI, ES; CC0 for LU, NL, SK; Licence Ouverte Etalab 2.0 for FR; the Estonian open-data licence (attribution required) for EE; "Polish Law on Geodesy and Cartography of 17 May 1989", no attribution, for PL; "no limitations to public access" for HR. Germany: DL-DE BY 2.0 (BB, BW, HH, RP, SL, SN, ST, TH), DL-DE Zero 2.0 (Berlin, HE, NW), CC BY 4.0 (HB, MV, NI, SH). No licence is recorded for the Bulgarian countrywide source, for Romania and for several Swedish municipalities. No EU address source is flagged share-alike (0 of 279; many leave the flag unset).
+- At national level only Croatia and Portugal are built from the INSPIRE address download. Portugal's file is a cached upload derived from the INE service, not a live read.
+
+#### Overture addresses in detail
+
+- Built "from over 175 sources. Most address points are distributed through community aggregators — chiefly OpenAddresses and AddressForAll — supplemented by authoritative open datasets published by public agencies" ([addresses guide](https://docs.overturemaps.org/guides/addresses/)).
+- 15 of the 19 EU countries are labelled "Distributed by OpenAddresses". Belgium, Czechia, the Netherlands and Slovenia are not. Slovenia shows the difference: OpenAddresses last built it on 2024-06-14, while Overture lists 580,213 Slovenian addresses accessed 2026-10-15.
+- The access date is the day Overture pulled the source. It is not the register's own reference date.
+- Schema: "street number, street name, unit, address levels, postal code, and/or country"; the query examples use `number`, `street`, `unit`, `postcode`, `country`.
+- Paths for release 2026-10-21.0: `s3://overturemaps-us-west-2/release/2026-10-21.0/theme=addresses/type=address/*.parquet` and `https://overturemapswestus2.blob.core.windows.net/release/2026-10-21.0/theme=addresses/type=address/*`. An unsigned S3 listing and an unsigned HEAD on one part file (396,310,089 bytes) both returned HTTP 200. The Azure path was not requested.
+- Releases are listed in the [STAC catalogue](https://stac.overturemaps.org/catalog.json): 2026-09-23.0, 2026-09-23.1 and 2026-10-21.0 (latest).
+- Tools ([Getting data](https://docs.overturemaps.org/getting-data/)): `pip install overturemaps`, then `overturemaps download --bbox=... -f geojson --type=...`; or DuckDB with `LOAD spatial; LOAD httpfs; SET s3_region = 'us-west-2'`.
+- Licence, from the [attribution page](https://docs.overturemaps.org/attribution/): "All carry permissive open licenses. Some have special terms or require attribution." Per country: CC BY 4.0 for AT, BE, CZ, FI, IT, LV, LT, SI, ES; CC0 for EE, LU, NL, SK; Licence Ouverte 2.0 for FR; "Open License" for HR; "Terms of use for free geographic data" for DK; "No conditions to access and use" for PL; no licence named for PT. Germany as in OpenAddresses: DL-DE BY 2.0 (BW, BB, HH, RP, SL, SN, ST, TH), DL-DE Zero 2.0 (Berlin, HE, NW), CC BY 4.0 (HB, MV, NI, SH).
+- Two licence labels need a check at the national source. Estonia: Overture says CC0, OpenAddresses records the Estonian open-data licence with attribution required. Portugal: Overture names no licence, OpenAddresses records CC BY 4.0, and INE's own download page says "No restrictions".
+
+#### GISCO Address API in detail
+
+- Endpoints: `/search`, `/reverse`, `/bbox`, `/most-populated-cell`, `/countries`, `/provinces`, `/cities`, `/roads`, `/housenumbers`, `/postcodes`, `/copyright`. The definition contains no bulk or download endpoint.
+- [/countries](https://gisco-services.ec.europa.eu/addressapi/countries) returns 31 codes: 26 Member States plus CH, FO, IS, LI, NO.
+- A worked call: [5 Rue Alcide de Gasperi, Luxembourg](https://gisco-services.ec.europa.eu/addressapi/search?country=LU&city=Luxembourg&road=Rue%20Alcide%20de%20Gasperi&housenumber=5) returns house number, street, city, province, postcode 1615, NUTS codes, coordinates and an Open Location Code.
+- Limits: the publisher's own documentation shows only a 1,000 house-number limit. A third-party R client documents more: `/search` at most 1,000 addresses; `/roads`, `/housenumbers`, `/postcodes` 1,000 each; `/reverse` five ([giscoR reference](https://ropengov.github.io/giscoR/reference/gisco_address_api.html)). No rate limit is documented; none was tested.
+- Licence: no licence, terms of use or rate limit appear in the API definition or its documentation. Eurostat's general reuse notice (CC BY 4.0 for Commission-owned content, with exceptions for third-party content) says nothing specific about this API ([copy in the giscoR package](https://stat.ethz.ch/CRAN/web/packages/giscoR/COPYRIGHTS)).
+- Data owners named by [/copyright](https://gisco-services.ec.europa.eu/addressapi/copyright): AT Österreichisches Adressregister; BE National Geographic Institute; BG АГКК; CY Department of Lands and Surveys; CZ State Administration of Land Surveying and Cadastre; DE GeoBasis-DE / BKG; DK Styrelsen for Dataforsyning og Effektivisering; EE Land Board; EL Hellenic Cadastre; ES Dirección General del Catastro; FI Digi- ja väestötietovirasto; FR Direction interministérielle du numérique; HR State Geodetic Administration; HU Lechner Tudásközpont; IT Geoportale nazionale; LT Registrų centras and Lietuvos automobilių kelių direkcija; LU Administration du cadastre et de la topographie; LV Valsts zemes dienests; MT National Statistics Office; NL Basisregistraties Adressen en Gebouwen; PL "Urzędy centralne"; PT Instituto Nacional de Estatística; RO ANCPI; SE Lantmäteriet; SI Surveying and Mapping Authority; SK Národná agentúra pre sieťové a elektronické služby. Ireland is listed with no copyright entry.
+- A copyright entry shows whose data the API serves. It does not show that the same data can be downloaded openly in that country.
+- The documentation front end is version 2.2.1, built 28/04/2026. One oddity: [/postcodes?country=LU](https://gisco-services.ec.europa.eu/addressapi/postcodes?country=LU) returns an empty list although Luxembourg search results carry postcodes.
+
+### Coverage by country
+
+"yes" means the source holds a countrywide set for that country. It does not mean the set is current or complete; the words in brackets say what is known. Overture figures are the publisher's address counts for release 2026-10-21.0. Dates in the OpenAddresses column are the age of the cached copy it serves.
+
+| Country | OpenAddresses | Overture addresses | GISCO Address API | GeoNames postcodes |
+|---|---|---|---|---|
+| AT Austria | yes (register date 01.04.2026) | yes (2,523,030) | yes (data of 05.05.2022) | yes |
+| BE Belgium | yes (three regional sets, live) | yes (7,001,489) | yes | yes |
+| BG Bulgaria | yes (no postcodes; no licence recorded; copy of 2025-01-07) | no | yes | yes |
+| CY Cyprus | partial - no house numbers; about 4 % coverage by the source's own note | no | yes | yes |
+| CZ Czechia | yes (cached copy, age not known) | yes (3,021,471) | yes | yes |
+| DE Germany | partial - 15 of 16 Länder; Bavaria has building footprints only | partial - the same 15 Länder (19,299,493) | yes (data of 2021) | yes |
+| DK Denmark | yes (copy of 2026-03-27) | yes (3,933,282) | yes | yes |
+| EE Estonia | yes (no postcodes; live, through a mirror) | yes (2,277,177) | yes | yes |
+| ES Spain | yes (copy of 2026-06-03) | yes (15,627,615) | yes | yes |
+| FI Finland | yes (copy of 2026-09-30) | yes (3,670,323) | yes | yes |
+| FR France | yes (104 files, live) | yes (26,052,116) | yes | yes |
+| GR Greece | yes (no postcodes; copy of 2026-09-29) | no | yes (as EL) | no - no country file |
+| HR Croatia | yes (live) | yes (1,682,868) | yes (data of 2022) | yes |
+| HU Hungary | no | no | yes | yes |
+| IE Ireland | no | no | no | partial - first letters of the codes only |
+| IT Italy | yes (no postcodes; file of 2026-07-03; last good run 2026-08-14) | yes (26,841,754) | yes | yes |
+| LT Lithuania | yes (live) | yes (1,130,062) | yes | yes |
+| LU Luxembourg | yes (live) | yes (179,635) | yes | yes |
+| LV Latvia | yes (live) | yes (550,686) | yes | yes |
+| MT Malta | no | no | yes | partial - first letters of the codes only |
+| NL Netherlands | yes (copy of 2026-06-03) | yes (9,988,169) | yes | yes (full codes only in `NL_full.csv.zip`) |
+| PL Poland | yes (16 regional files, live) | yes (8,628,514) | yes | yes |
+| PT Portugal | yes (copy of 2026-02-23) | yes (5,607,450) | yes | yes |
+| RO Romania | partial - Bucharest and four nearby towns; no output since 2020 | no | yes | yes |
+| SE Sweden | partial - 18 municipalities, five of them stale | no | yes | yes |
+| SI Slovenia | partial - stale, last built 2024-06-14 | yes (580,213) | yes | yes |
+| SK Slovakia | yes (live) | yes (1,704,346) | yes | yes |
+
+Notes on the table:
+
+- Romania in OpenAddresses: two source definitions and no licence. `ro/bucharest.json` (Bucharest, with postcode) has no batch output at all. `ro/bucharest-metro.json` covers "Otopeni, Sinaia, Voluntari, and Chitila"; its last update is 2020-08-21, with no output size.
+- Sweden in OpenAddresses: 18 municipal sources, no countrywide one. Gislaved, Kristinehamn, Vaxholm and Växjö last succeeded on 2020-08-21. Helsingborg last succeeded on 2025-02-07.
+- Cyprus in OpenAddresses, from the source definition: "Current source data contains no house numbers."
+- Germany: OpenAddresses and Overture list the same 15 Länder (BB, Berlin, BW, HB, HE, HH, MV, NI, NW, RP, SH, SL, SN, ST, TH). Overture's guide names Germany among the countries with "only partial coverage".
+- Greece in GeoNames: the download directory holds no `GR.zip` and no `EL.zip`. The combined file `allCountries.zip` was not opened.
+- Estimate of where a national check matters most. GISCO serves 26 countries and Overture 19. The seven in GISCO but not in Overture are BG, CY, GR, HU, MT, RO and SE; Ireland is in neither. For these eight, Overture has nothing and OpenAddresses has nothing or a limited set, so open availability has to be established at the national register. This rests on comparing the two country lists, both confirmed.
+- The table shows what the aggregators carry. A country missing from an aggregator can still publish open address data; the country sections answer that.

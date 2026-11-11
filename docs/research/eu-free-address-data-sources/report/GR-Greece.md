@@ -40,7 +40,7 @@
 
 ### Not free or not available
 
-- National address register: none found. Searched: data.gov.gr for "διευθύνσεις" (2,430 hits) and "αρίθμηση οδών" (8 hits), which list only municipal layers and the Cadastre file; data.europa.eu for Greek "INSPIRE Addresses"; one web search in Greek for a national address register or a project to build one. Not searched: geodata.gov.gr (connection timed out) and ELSTAT, the statistics office.
+- National address register: none found. Searched: data.gov.gr for "διευθύνσεις" (2,430 hits) and "αρίθμηση οδών" (8 hits), which list only municipal layers and the Cadastre file; data.europa.eu for Greek "INSPIRE Addresses"; one web search in Greek for a national address register or a project to build one. Not searched: geodata.gov.gr (connection timed out) and ELSTAT (census building data).
 - INSPIRE Addresses dataset: none found in the same searches.
 - Open postcode file: none found. ELTA offers only the look-up form. OpenAddresses' maintainers report "no open national postal-code dataset" after checking GeoNames, DataHub and the Greek and EU catalogues; no further search for one was made. GeoNames (https://download.geonames.org/export/zip/) has no postcode file for Greece.
 - Overture Maps addresses (release 2026-10-21.0): no Greek data.
