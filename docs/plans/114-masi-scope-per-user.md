@@ -304,6 +304,20 @@ later each market's own). They are never stored as separate places that happen t
   (JTS in the service; nearest points only to pick the candidate polygons), never the nearest centre - a point near a
   boundary is often nearer the neighbour's. Each resolution keeps its method (`CODE`, `POSTAL`, `EXACT`, `FUZZY`,
   `POINT`, `MANUAL`) and score on the entity, so fuzzy and tied ones can be listed and fixed.
+- **Address levels with weights** (the operator, 2026-11-11: "we need like levels of address parts which have different
+  weights"). Each part of an address text gets a level - generic, mapped per country by its profile - and each level a
+  weight for agreeing and a penalty for contradicting a candidate place: macro-region (scope, out of scope = veto),
+  country 1 (contradiction = veto), region 3 (-6), municipality 4 (-6), **settlement 6** (the anchor), district 3 (-4),
+  postal code 4 (-3: codes get renumbered, sources lag), street 2 where streets are held (-1), house number 0. Times how the part
+  matched: exact 1.0, alias/form 0.95, stem 0.9, exonym 0.9, one edit 0.7, two 0.5 (fuzzy only for names of 5+ letters).
+  Plus priors: kind for a bare name (city 1.0, alev 0.6, alevik 0.5, küla 0.3), the source's market +1, the company's
+  own place agreeing +2, on the market list +0.5. Accepted when the best scores at least 6 and leads the next by 2;
+  else a tie for review with every candidate and its breakdown. OpenSearch finds the candidates (a boosted clause per
+  level); masi scores them with these explicit weights and stores level, score, margin and breakdown with the
+  resolution. Weights are data in the country profile (Estonia's many namesake villages weigh the municipality more),
+  tuned on the hand-checked set (precision, review share); a change bumps the resolver version and re-resolves the
+  cached strings. The deepest level resolved is the location's precision: shown ("Jüri, Rae vald" or "Harju maakond"),
+  and only settlement or finer has a point for the distance filter.
 - **Never merged:** two places with different authority codes (two villages named Mäeküla are two places); a record
   that matches none is kept apart as a candidate (`place_candidate`, with the reason), never added as a place; a
   former name stays a former place with its successor.
