@@ -2,7 +2,7 @@
 name: test-quality-reviewer
 description: MANDATORY adversarial audit of the tests in a diff — runs in every review, before anything ships. Reverts each mechanism and re-runs to show which tests actually bite. A diff with no tests is precisely the case this reports on.
 tools: Read, Grep, Glob, Bash
-model: inherit
+model: sonnet
 color: yellow
 ---
 
