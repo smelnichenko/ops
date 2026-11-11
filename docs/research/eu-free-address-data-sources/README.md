@@ -4,7 +4,7 @@ Question: for every EU member state, which address data sources (house-number le
 coordinates and postcodes) are available online for free? Feeds masi plan 114 (places per market
 country, one `PlacesFeed` per country).
 
-**State, 2026-11-11 18:30 (Europe/Tallinn): complete. Research and the independent check are done
+**State, 2026-11-11 18:18 (Europe/Tallinn): complete. Research and the independent check are done
 for all 27 countries and the EU-wide layer (1,205 claims: 966 confirmed, 78 corrected, 10 wrong,
 126 unverified, 17 negative claims not disproved, 8 other). The report is
 [../../eu-free-address-data-sources.md](../../eu-free-address-data-sources.md).
