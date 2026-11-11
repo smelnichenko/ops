@@ -147,9 +147,10 @@ stated place); remote and virtual locations are untouched by it and follow the r
   or a point picked on a map. No street addresses are kept and no address leaves the cluster: no outside geocoder.
   Never shown to another user.
 - **Computed once per user, never at read time** (the operator, 2026-11-11: "we will need to cache distances for users if
-  they use such filter, not to recalculate anything"): `user_reach(user_uuid, place_id, mode, km, minutes, origin_of)`,
-  PK `(user_uuid, mode, place_id)` and an index `(user_uuid, mode, km)` / `(user_uuid, mode, minutes)`; ~5,000 rows a user
-  and mode, written only for a user who sets a reach (lazily, on saving it, in one batch), for the modes they use. A list's
+  they use such filter, not to recalculate anything"): `user_reach_origin(user_uuid, mode, origin_of, computed_at)` (what
+  the rows were computed from) and `user_reach(user_uuid, mode, place_id, km real, minutes smallint)`, PK `(user_uuid,
+  mode, place_id)`, indexes `(user_uuid, mode, km) include (place_id)`, `(user_uuid, mode, minutes) include (place_id)` and
+  `(place_id)`; on `job`, `(loc_place_id) where status = 'OPEN'`; ~5,000 rows (about 1 MB with indexes) a user and mode, written only for a user who sets a reach (lazily, on saving it, in one batch), for the modes they use. A list's
   filter and its sort by distance are then a join on `loc_place_id` with a range on the cached value - no distance or
   route is computed while reading. The cache is rewritten only when its inputs change: the user's origin (all their rows,
   `origin_of` = the origin's digest), a place added or its point moved (that place's rows for every user, nothing else),
@@ -360,7 +361,7 @@ mirrored can still save). Only users with masi access ever write one.
 | 3a | location columns and `loc_sort` on the root entities; `job_listing` place columns; reach arrays on listings, jobs, companies and people with GIN indexes, written at ingest, registration, close and merge only when changed; batched idempotent backfill of every row (open, closed, manual); gauge `masi_rows_without_reach{kind}` with an alert and runbook; EXPLAIN on the standby | none |
 | 3b | a sortable `Location` column on every list (plan 112's header and server-side sort); read filters on every list path (jobs, similar, listings, companies and their figures and contacts, persons, contacts, dashboard, stats), scoped lanes (scoring, matching, tuning), match alerts owner-only; an architecture test that every `Job` list query goes through the scope spec. Only after 3a is fully rolled out and the gauge is 0 | remote `OFF`/`ONLY` work; nothing else while all scopes are `{EE}` |
 | 3c | Per-reader report figures and the scoped digest | each reader's own figures |
-| 3d | Points on every place (EHAK polygons, converted; GeoNames cross-check), `loc_place_id` on job, company, person; `cube` + `earthdistance`; `user_reach` (the per-user cache) and the reach filter by distance (km/mi) from a place or map point, with the coarse-place switch; Settings: the origin and radius | "within N km of ..." |
+| 3d | Points on every place (EHAK polygons, converted; GeoNames cross-check), `loc_place_id` on job, company, person; `cube` + `earthdistance`; `user_reach_origin` and `user_reach` (the per-user cache) and the reach filter by distance (km/mi) from a place or map point, with the coarse-place switch; Settings: the origin and radius | "within N km of ..." |
 | 3e | The routing engine as a cluster service (after its spike; the service OK'd 2026-11-11), its minutes in `user_reach`, the travel-time reach by mode | "within N min by transit/car/bike/walk" |
 | 4 | Country data, `CountryReach`, `ScopeGate` on the list for postings AND people; the EE verdict replay over production's open postings and people pinned against the merged gate; ScopeWatch closing only what reaches no country ever on the list, with the empty-list guard; off = filtered and not updated, never closed; list digest in the sweep stamp, snapshotted per run; the admin page may turn countries on | none until an admin turns a country on |
 | 5 | Every Estonia filter in collector code and config takes the list (ATS, SmartRecruiters, MeetFrank, GitHub people searches) | a new market's jobs and people from global sources |
