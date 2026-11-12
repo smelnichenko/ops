@@ -258,6 +258,21 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   the first run's cost in production, about), then production's 13,906 distinct registered addresses resolved in 2.2 s:
   13,439 at house level (26,879 of 27,349 companies, **98.3%**), 15 at an Estonian place, 12 a country, 440 foreign and
   unknown. Changeset 130 indexes `official_address (country, full_text)`.
+- **From A4a's review, for the steps after it:**
+  - A5's changeset: a `tied` column (a text two candidates answered: never guessed, listed for review) and
+    `resolved_country` (the resolver's country when no country row is held, a foreign one); `address.country` stays the
+    source's hint and part of the text's key, never the answer. `address.street/house` already widened to the official
+    widths (changeset 130).
+  - A5 re-resolves after each monthly `addresses:ee` / `places:ee` run - the rows below house level and the rows on a
+    retired place - not only on a version bump. Resolve outside the write transactions; one resolver snapshot per pod,
+    refreshed on a place stamp, for ingest.
+  - The ADS id: the register's open data in masi's fixtures carries only the normalised full text - confirm the id is
+    in the dump before A5 relies on step 1 (CODE). The resolver's `resolve` gains the code and the source's country hint.
+  - A4b: the county-last form masi itself writes when the register gives no normalised text ("Uusküla, Narva linn,
+    Ida-Viru maakond, ..."); its weighted score normalised to the same 0-1 scale (`AddressResolution.score`), the
+    margin kept apart (`tied`).
+  - The method list is CODE, OFFICIAL, POSTAL, EXACT, FUZZY, POINT, MANUAL, NONE (changeset 124); the text index is plain
+    (normalising added nothing, measured), partial on current rows.
 - **A4 in two PRs:** A4a - the official step (index, the rules above), the place-level fallback for the register's
   Estonian form, foreign text marked NONE (country only when it names one), the resolver version; measured on the real
   file by an env-gated test. A4b - free text (job locations, people's): the lexicon parser, case forms, levels with
