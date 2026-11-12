@@ -342,6 +342,13 @@ Postgres at will (a full rebuild of ~5,000 places and ~30,000 companies takes se
   (`estonian`, `finnish`, `swedish`, `latvian`, `lithuanian`, `german`, `russian`...) plus `asciifolding`, an edge
   n-gram field for typing, the synonym graph of the country profiles' forms ("Harju maakond" = "Harjumaa" = "Harju"),
   level, kind, parent codes, population prior, `geo_point` (the place's point) and `geo_shape` (its EHAK polygon).
+- **Inflected forms are data, not the stemmer's job** (measured in the Vagrant rehearsal, 2026-11-12, OpenSearch 3.9.0):
+  the `estonian` analyzer gives "Tallinnas" `tallinna` but "Tallinn" `tallinn` - a place's case forms do not meet its
+  name. So the places index carries each place's forms itself: the Estonian case forms of every name (inessive -s,
+  elative -st, illative, adessive -l, allative -le, genitive), generated offline from the names (EKI's Vabamorf
+  synthesizer, checked by hand on a sample) and stored as `place_name` rows of kind FORM, indexed like any name. The
+  language analyzers stay for free text; the rehearsal reports, per market language, whether its analyzer brings an
+  inflected form to the name's token.
 - **Sync:** an outbox table written in the same transaction as each place/entity change; a masi lane drains it in
   batches; a full rebuild into a new index behind an alias, switched atomically, on start when the alias is missing and
   on a mapping version change. A gauge of the outbox's age, alerted.
