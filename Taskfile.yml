@@ -994,6 +994,8 @@ tasks:
     desc: Rehearse statement statistics and exporter metrics on production's Postgres Cluster in Vagrant (the switchover's write gap, on and off)
     deps: [deploy:install]
     cmds:
+      # every task loads before a VM is built: a playbook that cannot load fails here, in seconds, not after the build
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-cnpg-stats.yml --list-tasks > /dev/null
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
@@ -1010,6 +1012,8 @@ tasks:
     desc: Rehearse OpenSearch (schnappy-data) in Vagrant as production would run it - meshed, read-only, analyzers, a places index, masi alone
     deps: [deploy:install]
     cmds:
+      # every task loads before a VM is built: a playbook that cannot load fails here, in seconds, not after the build
+      - cmd: cd deploy/ansible && venv/bin/ansible-playbook -i inventory/vagrant.yml ../../tests/ansible/test-opensearch.yml --list-tasks > /dev/null
       # from nothing: every VM destroyed, and proven gone, before the build
       - cmd: vagrant destroy -f
       - cmd: |
