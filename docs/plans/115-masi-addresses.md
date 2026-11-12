@@ -133,6 +133,16 @@ resolution keeps method, score and resolver version, so a new version re-resolve
 
 ## Phases (one PR each, in order; failing test first in each)
 
+**Status 2026-11-12 (evening, UTC):**
+- **A1 live:** masi #237 + #238, `c9da8e0` / `6fd7c90`. Estonia is one hierarchy, every path set.
+- **A2 live:** masi #239, `8a71b78`.
+- **Plan 114 phase 0a' live:** masi #240, `7067604`. The `places:ee` row and its collector bean.
+- **`places:ee` switched on and run once, 2026-11-12 17:11 UTC** (the operator's choice): run 16358 OK in 33 s; 4,800
+  places with a point and boundary (4,694 settlements, 13 districts, 78 municipalities, 15 counties). Monthly on the 12th
+  at 06:30 from then on.
+- **Production heap:** 3 GiB in a 5 GiB container (the run's heap peaked at 2.2 GiB).
+- **Next:** A2b.
+
 | # | What | Visible |
 |---|---|---|
 | A1 | Schema: `place` hierarchy columns (level, parent, path, NUTS/LAU codes, point, area) with CHECKs; `address`, `address_link` (with `since`/`until`), `search_outbox`; each feed's country row and its places linked into the hierarchy by their codes (diff-only, at each apply and at a start); an unknown kind fails closed; a former name under the place it is today | none |
