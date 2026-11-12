@@ -29,10 +29,12 @@ district, street, postal code - and by range from a point or an address. One add
 
 ## Decisions (the operator, 2026-11-12)
 
-1. **One level model for every country:** country -> level 1-3 (NUTS 1/2/3 in the EU) -> level 4 (LAU: the
-   municipality) -> settlement -> district -> street -> house. Each country maps its own units onto it (Estonia:
-   maakond -> NUTS 3 / level 3, vald or linn -> LAU, küla / alevik / alev / linn -> settlement, linnaosa -> district). Every
-   address carries a point or an area and its precision.
+1. **One level model for every country:** country -> regions (any depth: the EU's NUTS 1/2/3, then a country's own,
+   such as Estonia's maakond, which sit inside NUTS 3) -> municipality (the EU's LAU) -> settlement -> district -> street
+   -> house. Each country maps its own units onto it (Estonia: EE0 -> EE00 -> EE001..EE00A -> maakond -> vald or a city
+   that is its own municipality -> küla / alevik / alev / linn -> linnaosa). A place's path holds every ancestor, so any
+   level is one containment test. Every address carries a point or an area and its precision. (Refined 2026-11-12 while
+   building A1: Estonia's five NUTS 3 regions are groups of counties, so regions take any depth.)
 2. **Data sources per country** as researched in masi's `docs/places-feeds.md` (GeoNames where no official route
    works); Eurostat GISCO for the NUTS / LAU frame and boundaries.
 3. **Estonia's house level** from the Land Board's official address file (`sihtnumbrid.zip`: every valid address, its
@@ -52,7 +54,7 @@ district, street, postal code - and by range from a point or an address. One add
 ## Model (Postgres)
 
 ### Places become a hierarchy
-- `place` gains `level` (COUNTRY, L1, L2, L3, LAU, SETTLEMENT, DISTRICT), `parent_id`, `path` (`bigint[]` of every
+- `place` gains `level` (COUNTRY, REGION, MUNICIPALITY, SETTLEMENT, DISTRICT), `parent_id`, `path` (`bigint[]` of every
   ancestor's id, the place's own last; GIN-indexed - "anywhere in Harju" is `path @> {harju}`), `nuts_code`, `lau_code`,
   and its location: `lat`, `lon` (its representative point) and `area` (its boundary as GeoJSON text, simplified;
   no PostGIS - the CNPG image has none, and OpenSearch does the geometry).
