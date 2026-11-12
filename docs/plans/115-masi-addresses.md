@@ -155,11 +155,11 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   - Updated 2026-09-25, © EuroGeographics. masi is non-commercial; credit in NOTICE.
 - **Countries:** the EU 27 (`EU_STAT = 'T'`). GISCO's `EL` is stored as ISO `GR`.
 - **Read:** streamed feature by feature (Jackson), never parsed whole; only the EU countries' features are kept.
-- **The source row:** `places:nuts`, seeded off, monthly; kind DETERMINISTIC, scope PLACES; its own collector.
+- **The source row:** `places:eu` (`"frame": "eu"` in its config), seeded off, monthly on the 13th; kind DETERMINISTIC, scope PLACES. It goes through the places collector to its frame reader, not a collector of its own. masi's architecture rules keep one source package from using another, and name a collector's package by its key.
 - **Rows:**
   - each country gets its COUNTRY row (named by Locale), with its level-0 boundary;
   - NUTS 1/2/3 become places of kinds `NUTS1`/`NUTS2`/`NUTS3` at level REGION, coded by `NUTS_ID`, named by `NAME_LATN`, with `nuts_code` set;
-  - boundaries are simplified per level as one coverage, at 100 m, since the file is already generalised to 1:1M.
+  - boundaries are simplified per level as one coverage across the EU, at 100 m, since the file is already generalised to 1:1M. Five rings in it cross themselves (German regions); they are fixed first.
 - **Parents:**
   - NUTS1 under the country, NUTS2 under its NUTS1, NUTS3 under its NUTS2, each by `NUTS_ID` prefix;
   - a country's own top regions (Estonia's counties) under the NUTS 3 that holds their point, written as the county's `nuts_code`.
