@@ -163,14 +163,20 @@
         fail_msg: "{{ _base.stdout_lines }}"
         quiet: true
 
-    - name: The analyzers masi's places need, by language
+    # what masi's place matching needs to know of each: does the analyzer bring a place's inflected form ("Tallinnas", in
+    # Tallinn) to the token of its name? Where it does not, the places index carries the forms itself (synonyms)
+    - name: The analyzers masi's places need - a name and its inflected form, by language
       ansible.builtin.shell: |
         set -euo pipefail
-        for pair in estonian:Tallinnas finnish:Helsingissä swedish:Göteborgs latvian:Rīgā lithuanian:Vilniuje german:Münchens russian:Таллине; do
-          a=${pair%%:*}; w=${pair#*:}
-          t=$({{ kc }} exec client-masi -c curl -- curl -s -H 'Content-Type: application/json' "{{ os_url }}/_analyze" \
-                -d "{\"analyzer\":\"$a\",\"text\":\"$w\"}" | sed -E 's/.*"token":"([^"]*)".*/\1/; s/.*"reason":"([^"]*)".*/NONE: \1/')
-          echo "$a $w $t"
+        tok() {
+          {{ kc }} exec client-masi -c curl -- curl -s -H 'Content-Type: application/json' "{{ os_url }}/_analyze" \
+            -d "{\"analyzer\":\"$1\",\"text\":\"$2\"}" | sed -E 's/.*"token":"([^"]*)".*/\1/; s/.*"reason":"([^"]*)".*/NONE: \1/'
+        }
+        for row in estonian:Tallinn:Tallinnas estonian:Pärnu:Pärnus finnish:Helsinki:Helsingissä swedish:Göteborg:Göteborgs \
+                   latvian:Rīga:Rīgā lithuanian:Vilnius:Vilniuje german:München:Münchens russian:Таллин:Таллине; do
+          IFS=: read -r a base inflected <<< "$row"
+          b=$(tok "$a" "$base"); i=$(tok "$a" "$inflected")
+          echo "$a $base=$b $inflected=$i $([ "$b" = "$i" ] && echo same || echo differs)"
         done
       args:
         executable: /bin/bash
@@ -181,12 +187,11 @@
       ansible.builtin.debug:
         var: _analyzers.stdout_lines
 
-    - name: Assert every analyzer exists and stems
+    - name: Assert every analyzer exists and answers
       ansible.builtin.assert:
         that:
-          - _analyzers.stdout_lines | length == 7
+          - _analyzers.stdout_lines | length == 8
           - _analyzers.stdout_lines | select('search', 'NONE:') | list | length == 0
-          - _analyzers.stdout_lines | select('search', '^estonian Tallinnas tallinn$') | list | length == 1
         fail_msg: "{{ _analyzers.stdout_lines }}"
         quiet: true
 
@@ -268,4 +273,4 @@
 
     - name: PASS
       ansible.builtin.debug:
-        msg: "PASS: OpenSearch one node, read-only root, analyzers {{ _analyzers.stdout_lines | map('split', ' ') | map('first') | join(',') }}, places index, data kept, masi alone"
+        msg: "PASS: OpenSearch one node, read-only root, places index, data kept, masi alone; a name and its inflected form: {{ _analyzers.stdout_lines | join('; ') }}"
