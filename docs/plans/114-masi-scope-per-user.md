@@ -14,6 +14,12 @@ of elasticsearch". Phase 0 (Estonia's official places, kept current by masi), th
 configurable per user account in app settings" (2026-11-11), after "we don't care about company location that posts
 remote or work from home positions" (2026-11-10).
 
+> **2026-11-12:** jobs', companies' and people's addresses and the search by address and by range moved to
+> [plan 115](115-masi-addresses.md): its address model (many addresses per entity with roles, a full level hierarchy,
+> Estonia's house level, OpenSearch as the search index) replaces this plan's "Every entity has a location"
+> (`loc_*` columns) and phase 3d's distance; travel time (3e) and the per-user reach cache for it stay here. Place
+> upkeep guards and self-healing are a later plan.
+
 ## Goal
 
 1. **Each user sets their scope in the app,** per kind of data: the countries for jobs (and how remote jobs count), for
