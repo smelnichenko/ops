@@ -58,8 +58,10 @@ district, street, postal code - and by range from a point or an address. One add
   ancestor's id, the place's own last; GIN-indexed - "anywhere in Harju" is `path @> {harju}`), `nuts_code`, `lau_code`,
   and its location: `lat`, `lon` (its representative point) and `area` (its boundary as GeoJSON text, simplified;
   no PostGIS - the CNPG image has none, and OpenSearch does the geometry).
-- Country rows (ISO-2) and Estonia's NUTS 1/2/3 rows are added; EHAK's county and municipality rows take their LAU and
-  NUTS 3 codes from GISCO's LAU table; settlements and districts hang under their municipality.
+- Each feed's country gets its own row (A1); every country's row and Estonia's NUTS 1/2/3 rows come in A2b, and EHAK's
+  county and municipality rows take their LAU and NUTS 3 codes from GISCO; settlements and districts hang under their
+  municipality. A city that is its own municipality (Keila, Narva, Tallinn) has no settlement row: a search by settlement
+  matches it at municipality level.
 - Points and areas: EHAK's own polygons (the shapefile beside the DBF the feed reads; L-EST97, EPSG:3301, converted to
   WGS84 in masi with a pinned transform) for settlements, municipalities and counties; GISCO's for NUTS.
 
@@ -133,7 +135,8 @@ resolution keeps method, score and resolver version, so a new version re-resolve
 
 | # | What | Visible |
 |---|---|---|
-| A1 | Schema: `place` hierarchy columns (level, parent, path, NUTS/LAU codes, point, area), countries and Estonia's NUTS rows; `address`, `address_link`, `search_outbox`; Estonia's places linked into the hierarchy by EHAK codes | none |
+| A1 | Schema: `place` hierarchy columns (level, parent, path, NUTS/LAU codes, point, area) with CHECKs; `address`, `address_link` (with `since`/`until`), `search_outbox`; each feed's country row and its places linked into the hierarchy by their codes (diff-only, at each apply and at a start); an unknown kind fails closed; a former name under the place it is today | none |
+| A2b | The EU frame: every country's row, NUTS 1/2/3 regions from GISCO (names, boundaries), a country's own regions hung under their NUTS 3 (the REGION parent rule takes any depth; the frame rows join the country row outside every feed's diff) | none |
 | A2 | Points and areas: EHAK polygons from the shapefile (converted, simplified), GISCO NUTS/LAU for Estonia; a place's point and area kept current by `places:ee` | none |
 | A3 | `official_address` from `sihtnumbrid.zip` (streamed, diff-only), its places joined; Estonia's postal codes from it | none |
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
