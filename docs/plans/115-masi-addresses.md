@@ -164,7 +164,21 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   - NUTS1 under the country, NUTS2 under its NUTS1, NUTS3 under its NUTS2, each by `NUTS_ID` prefix;
   - a country's own top regions (Estonia's counties) under the NUTS 3 that holds their point, written as the county's `nuts_code`.
 - **Outside every country feed's diff:** the NUTS kinds join COUNTRY in the rows a country feed never retires. A NUTS revision retires a code that GISCO no longer carries.
-- **LAU:** Estonia's municipality rows get `lau_code` = their EHAK code (GISCO's LAU 2023 codes are the EHAK codes). Other countries' LAU comes with their own feeds.
+- **LAU and placement, per feed:** a feed declares what holds for its country (`PlacesFeed.regionsInNuts3`, `lauIsOwnCode`).
+  - Estonia: its counties are NUTS 3 parts, placed by their point; its municipalities' codes are their LAU codes (GISCO's
+    LAU 2023 are the EHAK codes), and each takes its county's NUTS 3.
+  - A feed whose regions are NUTS regions or span several (a French région is a NUTS 1) declares nothing and maps its own.
+- **Names:** a NUTS region's names are searchable unless they only repeat its parent's (Estonia's NUTS 1 and 2 are both
+  "Eesti"). The country row also carries its own-language names, native scripts included.
+- **Rollback limit:** once `places:eu` has run, an image older than masi 27bdc3f crash-loops on start. Its start-time link
+  meets kinds it does not know. From 27bdc3f on, a failed start-time link is logged, shown on `masi_places_link_failed` and
+  alerted (`MasiPlacesNotLinked`); masi still starts. So switch `places:eu` on only once rolling back below 27bdc3f is off the table.
+- **Later:**
+  - A6: a place's change (a re-parent rewrites every place's flattened ancestors below it) must reach the indexes, by the
+    outbox or a rebuild.
+  - A8: where the site draws these boundaries, "© EuroGeographics for the administrative boundaries" in the map legend
+    (GISCO's condition).
+  - The guards plan: a NUTS code missing from one read is retired at once; retire it only after two misses, as there.
 | A3 | `official_address` from `sihtnumbrid.zip` (streamed, diff-only), its places joined; Estonia's postal codes from it | none |
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
 | A5 | Connections written: companies (REGISTERED from the register's ADS id), jobs (LOCATION per place named, reach apart) at ingest, register import and merge; people (OWN from GitHub's location, the register; WORK derived); batched backfill of every row; a gauge of entities without addresses | none |
