@@ -248,6 +248,15 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   changeset) and the file loaded (`addresses:ee` on). Levels, weights and fuzzy are for the rest: job locations (167
   distinct strings, mostly "Tallinn", "Tallinn, Harjumaa", and reach such as "Europe", "Remote, Global") and the
   repeated-component Estonian forms.
+- Two more rules for the official step, measured: a corner building's two addresses ("Kadaka tee 7 // Laki tn 20",
+  "Parda tn 3 // 5 // 7": each alternative tried, a bare number continuing the street before it) and a repeated
+  component collapsed ("Tartu linn, Tartu linn") recover 28; an apartment the file does not list falls to its house
+  ("Estonia pst 5-410a" -> "Estonia pst 5") for 6. Together **13,439 of 13,906 (96.6%) at house level**; 15 Estonian
+  texts fall to a place ("Harju maakond, Tallinn"; "..., Rõõmu küla"), 452 are foreign.
+- **A4 in two PRs:** A4a - the official step (index, the rules above), the place-level fallback for the register's
+  Estonian form, foreign text marked NONE (country only when it names one), the resolver version; measured on the real
+  file by an env-gated test. A4b - free text (job locations, people's): the lexicon parser, case forms, levels with
+  weights and margin, reach split off.
 | A5 | Connections written: companies (REGISTERED from the register's ADS id), jobs (LOCATION per place named, reach apart) at ingest, register import and merge; people (OWN from GitHub's location, the register; WORK derived); batched backfill of every row; a gauge of entities without addresses | none |
 | A6 | OpenSearch: masi's client, the gazetteer and entity indexes, the outbox indexer, the alias rebuild, its alerts | none |
 | A7 | Search API: `/jobs`, `/companies`, `/persons` take `place`, `postal`, `street`, `near` (a point or an address) and `km`; the address picker's `/addresses/suggest`; paging and sorting as every list | the API |
