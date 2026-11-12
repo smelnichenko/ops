@@ -257,8 +257,18 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   by a rename; a name that leaves Estonia's places entirely (none expected) stays as a former name, so it still matches.
   Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, `download.geonames.org` for postal codes; production allows any host, the chart's default list needs both).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
-  header and in `NOTICE`); the service brings it current. A run that reads nothing, or far fewer places than the table
-  holds, changes nothing and fails (guards fail closed).
+  header and in `NOTICE`); the service brings it current. A run that reads nothing changes nothing and fails.
+- **No guards (the operator, 2026-11-12: "drop guards"; "make sure we don't mass-retire after source issues").** The
+  "far fewer places", "postal codes" and "mass rename" guards and Force update go: they compared a read with the
+  database, so a hand edit looked like a mass rename and the guard protected the damage. Every run writes the source as
+  it is. Proposed in their place, no thresholds anywhere, **awaiting the operator's decision** (report of 2026-11-12):
+  (A) each place keeps what its source last gave - a source rename becomes a former name, a hand edit is overwritten and
+  never becomes history, a row no source gave is removed by masi (or kept retired: operator's choice); (B) a read is
+  accepted only when well formed - complete file (zip checksum, DBF record count) and every name in the Estonian
+  alphabet plus "å" and "/" (all 4,812 production names pass), so a changed charset fails the run; (C) a retired place
+  still counts for matching and the Estonia rule, so a source that misbehaves drops no posting and the next good read
+  brings the places back; (D) `TRUNCATE` refused on the place tables (row triggers do not fire on it); (E) rows stamped
+  "manual" counted hourly: an alert, or an alert and a Run now of the country's source (operator's choice).
 - **Searchable, in Postgres:** nothing like Elasticsearch runs on the platform (logs moved to ClickHouse, an analytics
   store); masi's own database already has `pg_trgm`, and `unaccent` is available. `place_name.search` = the name
   lower-cased and without diacritics (folded in Java, `Places.searchable`, so the index needs no `unaccent`), with a GIN trigram index (`gin_trgm_ops`); postal codes indexed too.
@@ -369,7 +379,7 @@ Postgres at will (a full rebuild of ~5,000 places and ~30,000 companies takes se
   attribution in `NOTICE` and on the settings page), monthly; a snapshot in masi's resources seeds a fresh database.
 - **Address sources follow the market list:** a country's places source (`places:ee`, later `places:lv`...) runs only for a
   country on the list or being turned on. Turning a market on is staged, on the admin page: (1) the admin picks the
-  country; its places source is enabled and loads; (2) when it has loaded (the "far fewer places" guard passed), the
+  country; its places source is enabled and loads; (2) when it has loaded (a complete, well-formed read applied), the
   country is ready; (3) only then is it on, and collectors ask for it. Turning a market off stops its places source; the
   places already loaded stay, and so do its postings and people, hidden by the filters and no longer updated. A country with no
   places source cannot be picked.
@@ -424,10 +434,8 @@ to the activity log with who and when.
   configuring address collector recurrency and triggering manual update and reset", "per country"): per market country
   its places source's schedule (how often: monthly by default, a day of the month and a time, shown in words and saved as
   the source's cron, Tallinn time), its last run (when, what changed, the note), **Run now** (one run at once, through the
-  same runner and claims as any run - never two at a time), and **Force update** (the operator: "let's just use forced
-  replace and mark instead of reset"): one run that replaces the country's places with what the feed carries now, the
-  "far fewer places", "postal codes" and "mass rename" guards bypassed once, after the admin confirms the plan of the diff
-  shown first - for a real large change a guard refused (a municipal reform). Replace and mark, never delete: a renamed
+  same runner and claims as any run - never two at a time). No Force update: with no guards (2026-11-12) every run
+  replaces and marks. Replace and mark, never delete: a renamed
   place keeps its old names, a place no longer carried is marked retired, a postal code no longer given is marked with
   the date it stopped. Endpoints under `/admin/countries/
   {code}/places` (`MANAGE_USERS`), each action written to the activity log with who and when.
