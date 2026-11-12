@@ -245,8 +245,15 @@
         set -euo pipefail
         {{ kc }} delete pod schnappy-opensearch-0 --wait=true
         {{ kc }} rollout status statefulset/schnappy-opensearch --timeout=600s
-        # ready is the node answering; the shard of the index recovers from the volume just after - wait for it
-        {{ kc }} exec client-masi -c curl -- curl -sf "{{ os_url }}/_cluster/health/places-test?wait_for_status=green&timeout=120s" >/dev/null
+        # ready is the node answering; the shard of the index recovers from the volume just after, and the client sidecar
+        # learns the new pod a few seconds later (503 meanwhile) - asked again until green, two minutes at most
+        code=000
+        for _ in $(seq 60); do
+          code=$({{ kc }} exec client-masi -c curl -- curl -s -o /dev/null -w '%{http_code}' "{{ os_url }}/_cluster/health/places-test?wait_for_status=green&timeout=5s" || true)
+          [ "$code" = 200 ] && break
+          sleep 2
+        done
+        [ "$code" = 200 ] || { echo "the index not green after the restart: last answer $code"; exit 1; }
         {{ kc }} exec client-masi -c curl -- curl -sf "{{ os_url }}/places-test/_count" | sed -E 's/.*"count":([0-9]+).*/\1/'
       args:
         executable: /bin/bash
