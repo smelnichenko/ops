@@ -141,7 +141,7 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   places with a point and boundary (4,694 settlements, 13 districts, 78 municipalities, 15 counties). Monthly on the 12th
   at 06:30 from then on.
 - **Production heap:** 3 GiB in a 5 GiB container (the run's heap peaked at 2.2 GiB).
-- **Next:** A2b.
+- **Next:** A2b (PR 242), then A3 (built, 119a0d8), A3b.
 
 | # | What | Visible |
 |---|---|---|
@@ -180,6 +180,27 @@ resolution keeps method, score and resolver version, so a new version re-resolve
     (GISCO's condition).
   - The guards plan: a NUTS code missing from one read is retired at once; retire it only after two misses, as there.
 | A3 | `official_address` from `sihtnumbrid.zip` (streamed, diff-only), its places joined; Estonia's postal codes from it | none |
+
+**A3 as built (2026-11-12, masi 119a0d8, after PR 242):**
+- **The file, measured whole** (masi `docs/places-feeds.md` §3): 1,369,879 addresses on 2026-11-05, every ADR_ID once,
+  every one with a postcode; `VIITEPUNKT_X` is the easting. 38% carry an apartment ("Luise tn 1-5"); 414k are a name
+  alone (a farm). Not in ADR_ID order.
+- **The source:** `addresses:ee` (collector `addresses`, scope PLACES), seeded off, monthly on the 6th at 07:00; deadline
+  1800 s. The zip is downloaded whole, then read a line at a time; each line is decoded strictly as UTF-8 and checked
+  (6 fields, numeric ADR_ID, 5-digit postcode, a point inside Estonia in L-EST97): a file of another shape fails at its line.
+- **`official_address`:** `ref` (ADR_ID, varchar for other countries' ids), `place_id` (the deepest place: settlement or
+  district, else municipality - one column, its `path` gives the levels), `street`/`house` (an address without a number
+  has its name as the house), `postcode`, `full_text`, point (1e-6°), `source_date`, `retired_on` (not a `valid` flag:
+  as `place`). The places' stamp and keep triggers. `address.official_address_id` added for A4.
+- **The join:** component 2 the municipality, component 3 the settlement or district when EHAK has one of that name
+  there, else the municipality; a name two current places share answers at the level above. On the real file every
+  address is placed (1,257,804 in a settlement or district).
+- **Writes:** batches of 1,000, each one transaction under the source's advisory lock, only what differs written. An
+  address a complete read no longer holds is retired; a failed read retires nothing. No thresholds (the operator,
+  2026-11-12): the deferred upkeep plan's missing-twice and retirement brake cover addresses too.
+- **Split out as A3b:** Estonia's postal codes from this file instead of GeoNames (`places:ee` reads `SIHTNUMBER` per
+  settlement; GeoNames stays for former names) - its own PR.
+- **Allow-list:** `geoportaal.maaruum.ee` on test's list (platform 9375f19); production's is `*`.
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
 | A5 | Connections written: companies (REGISTERED from the register's ADS id), jobs (LOCATION per place named, reach apart) at ingest, register import and merge; people (OWN from GitHub's location, the register; WORK derived); batched backfill of every row; a gauge of entities without addresses | none |
 | A6 | OpenSearch: masi's client, the gazetteer and entity indexes, the outbox indexer, the alias rebuild, its alerts | none |
