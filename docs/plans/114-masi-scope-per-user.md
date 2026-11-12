@@ -261,7 +261,7 @@ postings were dropped as abroad (2026-11-10). Replaced by the official data:
   (today: the settlement of the same name in its municipality, else in its county, from GeoNames' stale entries; ADS's
   history extract nr 9 when it can be fetched by script), and its names match it. So an update never drops a posting or a person
   by a rename; a name that leaves Estonia's places entirely (none expected) stays as a former name, so it still matches.
-  Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, `download.geonames.org` for postal codes; production allows any host, the chart's default list needs both).
+  Countries keep their former names the same way (`Countries` aliases: Turkey/Türkiye, Czech Republic/Czechia). Hosts on masi's egress allow-list (`s3.pilw.io` for EHAK, `geoportaal.maaruum.ee` for postal codes - the Land Board's address file, since plan 115 A3b - and `download.geonames.org` for former settlement names; production allows any host, the chart's default list needs all three).
 - **A fresh database and the tests** start from a snapshot in masi's resources (the same columns, its source dates in its
   header and in `NOTICE`); the service brings it current. A run that reads nothing changes nothing and fails.
 - **No guards (the operator, 2026-11-12: "drop guards"; "make sure we don't mass-retire after source issues") - DEFERRED

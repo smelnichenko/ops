@@ -199,8 +199,23 @@ resolution keeps method, score and resolver version, so a new version re-resolve
 - **Writes:** batches of 1,000, each one transaction under the source's advisory lock, only what differs written. An
   address a complete read no longer holds is retired; a failed read retires nothing. No thresholds (the operator,
   2026-11-12): the deferred upkeep plan's missing-twice and retirement brake cover addresses too.
-- **Split out as A3b:** Estonia's postal codes from this file instead of GeoNames (`places:ee` reads `SIHTNUMBER` per
-  settlement; GeoNames stays for former names) - its own PR.
+- **A3b (masi PR after 243): Estonia's postal codes from this file instead of GeoNames.**
+  - `places:ee` gains `addressesUrl` (changeset 129, which also updates the row's name and terms where they are still the
+    seeded texts). Each place gets every code its addresses carry, joined by the same rule as A3 (`EstoniaAddressJoin`,
+    one class for both). GeoNames only names former settlements.
+  - Measured: 4,715 places; 9,585 place-code pairs against GeoNames' 5,397; 5,436 distinct codes against production's
+    5,292, so the postal guard passes. Reading the file adds 18 s to the run.
+  - **The switch rewrites history, decided:** the first run expires 48 of today's 5,385 pairs (34 codes the file has
+    nowhere, 14 now another place's) and adds 4,248. Plan 114's "two sources that disagree keep both" does not apply: the
+    Board's file is the authority on which codes a place's addresses carry, and GeoNames was an approximation of it. An
+    expired code still matches, ranked after the current ones (`PlaceSearch`).
+  - A file that joins no address to any settlement is refused (a zero check, not a threshold). The file's date is said in
+    the run's note; a file over 45 days older than EHAK's export is said too.
+  - **The deploy switches a live source** (`places:ee` is on): run it once by hand right after the deploy and watch the
+    run time, the heap, and the note's "with other postal codes".
+  - The snapshot keeps GeoNames' codes: the 148 MB file cannot be a fixture. A fresh database gets the file's codes at
+    its first `places:ee` run. Test and fresh databases therefore differ from production until then - A4/A7 tests must not
+    depend on which.
 - **Allow-list:** `geoportaal.maaruum.ee` on test's list (platform 9375f19); production's is `*`.
 - **After the reviews (masi dad96ee, 85565d7):** the file is read and checked whole before a row is written (another
   grid of the region - UTM 34N - passes the box line by line; written as it came, batches 170 km off would have
