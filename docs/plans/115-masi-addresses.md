@@ -148,6 +148,23 @@ resolution keeps method, score and resolver version, so a new version re-resolve
 | A1 | Schema: `place` hierarchy columns (level, parent, path, NUTS/LAU codes, point, area) with CHECKs; `address`, `address_link` (with `since`/`until`), `search_outbox`; each feed's country row and its places linked into the hierarchy by their codes (diff-only, at each apply and at a start); an unknown kind fails closed; a former name under the place it is today | none |
 | A2b | The EU frame: every country's row, NUTS 1/2/3 regions from GISCO (names, boundaries; read in a metric grid, EPSG 3035 - the simplifier's tolerance is metres), Estonia's LAU/NUTS 3 codes on its county and municipality rows, a country's own regions hung under their NUTS 3 (the REGION parent rule takes any depth; the frame rows join the country row outside every feed's diff) | none |
 | A2 | Points and areas: EHAK's settlement, municipality and county polygons from their shapefiles (each file simplified as one coverage, converted, snapped valid; the `.prj` must be EPSG 3301); a place's point and area kept current by `places:ee`. GISCO NUTS/LAU codes and boundaries for Estonia moved to A2b. The snapshot carries no points: a fresh database has them after the first `places:ee` run (A4's tests may need points in the snapshot) | none |
+
+**A2b as built (design, 2026-11-12):**
+- **The source:** GISCO's NUTS 2024, `NUTS_RG_01M_2024_3035.geojson`.
+  - 61 MB; 1,798 features in 39 countries; 1.6M vertices; EPSG 3035, which is metric.
+  - Updated 2026-09-25, © EuroGeographics. masi is non-commercial; credit in NOTICE.
+- **Countries:** the EU 27 (`EU_STAT = 'T'`). GISCO's `EL` is stored as ISO `GR`.
+- **Read:** streamed feature by feature (Jackson), never parsed whole; only the EU countries' features are kept.
+- **The source row:** `places:nuts`, seeded off, monthly; kind DETERMINISTIC, scope PLACES; its own collector.
+- **Rows:**
+  - each country gets its COUNTRY row (named by Locale), with its level-0 boundary;
+  - NUTS 1/2/3 become places of kinds `NUTS1`/`NUTS2`/`NUTS3` at level REGION, coded by `NUTS_ID`, named by `NAME_LATN`, with `nuts_code` set;
+  - boundaries are simplified per level as one coverage, at 100 m, since the file is already generalised to 1:1M.
+- **Parents:**
+  - NUTS1 under the country, NUTS2 under its NUTS1, NUTS3 under its NUTS2, each by `NUTS_ID` prefix;
+  - a country's own top regions (Estonia's counties) under the NUTS 3 that holds their point, written as the county's `nuts_code`.
+- **Outside every country feed's diff:** the NUTS kinds join COUNTRY in the rows a country feed never retires. A NUTS revision retires a code that GISCO no longer carries.
+- **LAU:** Estonia's municipality rows get `lau_code` = their EHAK code (GISCO's LAU 2023 codes are the EHAK codes). Other countries' LAU comes with their own feeds.
 | A3 | `official_address` from `sihtnumbrid.zip` (streamed, diff-only), its places joined; Estonia's postal codes from it | none |
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
 | A5 | Connections written: companies (REGISTERED from the register's ADS id), jobs (LOCATION per place named, reach apart) at ingest, register import and merge; people (OWN from GitHub's location, the register; WORK derived); batched backfill of every row; a gauge of entities without addresses | none |
