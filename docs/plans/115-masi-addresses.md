@@ -66,10 +66,11 @@ district, street, postal code - and by range from a point or an address. One add
   WGS84 in masi with a pinned transform) for settlements, municipalities and counties; GISCO's for NUTS.
 
 ### Official addresses (Estonia's house level)
-- `official_address(id, country, source_id, adr_id, settlement_place_id, district_place_id, street, house, postcode,
-  full_text, lat, lon, valid)`, unique `(country, source_id, adr_id)`; ~1.5 million Estonian rows, read monthly from
-  `sihtnumbrid.zip` (streamed: 148 MB of CSV), diff-only by `adr_id`, never deleted (an address gone from the file is
-  marked invalid). Its components resolve to places by the join `places-feeds.md` section 3 describes (component 2 =
+- `official_address(id, country, source, ref, place_id, street, house, postcode, full_text, lat, lon, source_date,
+  retired_on)` (as built in A3: `source` a key of `source(key)`, `ref` the register's id - Estonia's ADR_ID - `place_id`
+  the deepest place, `retired_on` as `place`'s), unique `(country, source, ref)`; 1.37 million Estonian rows, read
+  monthly from `sihtnumbrid.zip` (148 MB of CSV), diff-only by `ref`, never deleted (an address gone from the file is
+  retired). Its components resolve to places by the join `places-feeds.md` section 3 describes (component 2 =
   municipality, component 3 = settlement when EHAK has it there).
 - Settlements' postal codes come from it too (replacing GeoNames' for Estonia, which stays for former names).
 
@@ -201,6 +202,23 @@ resolution keeps method, score and resolver version, so a new version re-resolve
 - **Split out as A3b:** Estonia's postal codes from this file instead of GeoNames (`places:ee` reads `SIHTNUMBER` per
   settlement; GeoNames stays for former names) - its own PR.
 - **Allow-list:** `geoportaal.maaruum.ee` on test's list (platform 9375f19); production's is `*`.
+- **After the reviews (masi dad96ee, 85565d7):** the file is read and checked whole before a row is written (another
+  grid of the region - UTM 34N - passes the box line by line; written as it came, batches 170 km off would have
+  stayed); an empty file is refused (an empty read never counts against an address); retiring goes a page at a time,
+  stopped by the run's deadline; `source` references `source(key)`; the source runs on the **13th at 07:30**, after
+  the month's places (`places:ee` on the 12th, `places:eu` on the 13th at 06:40), so addresses are placed among the
+  same month's settlements. Gauges `masi_official_addresses{state}` and `..._checked_timestamp_seconds`; alerts
+  `MasiAddressesNotChecked` (35 days, once read) and `MasiAddressesDropped` (a twentieth fewer in a day) - platform
+  0f98c6b, visibility only.
+- **"A renumbered settlement" (a test named above):** moot for this file - the join is by name (`ONIMI`, `ANIMI`), never
+  by EHAK code, so a renumbering changes nothing here; it matters to extract no. 9 (codes) if that is ever read.
+- **For the next plan's countries:** the run holds the refs it read in memory (Estonia: ~125 MB for 1.37 M). Austria's
+  2.5 M fit; France's BAN and the Netherlands' BAG (several times more) do not in a 3 GiB heap - decide a database-side
+  comparison (refs staged per run, a chunked anti-join to retire) before copying this design.
+- **Open for A4/A5:** OpenSearch comes in A6, after A4 - so A4's resolver finds an official address in Postgres: by
+  ADS id on `(country, source, ref)`, and by text on a normalised `full_text` (an expression index in A4's changeset;
+  only the monthly run writes the table). A5: an address resolved to an official one that is later retired keeps its
+  link (the row stays); a new resolver version re-resolves it.
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
 | A5 | Connections written: companies (REGISTERED from the register's ADS id), jobs (LOCATION per place named, reach apart) at ingest, register import and merge; people (OWN from GitHub's location, the register; WORK derived); batched backfill of every row; a gauge of entities without addresses | none |
 | A6 | OpenSearch: masi's client, the gazetteer and entity indexes, the outbox indexer, the alias rebuild, its alerts | none |
