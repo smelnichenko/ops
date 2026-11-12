@@ -235,6 +235,19 @@ resolution keeps method, score and resolver version, so a new version re-resolve
   only the monthly run writes the table). A5: an address resolved to an official one that is later retired keeps its
   link (the row stays); a new resolver version re-resolves it.
 | A4 | The resolver on all levels and the house; measured on production's 27k company addresses and the job location strings, the hand-checked set, precision and review share in the PR | none |
+
+**A4 measured first (2026-11-12, production's company addresses against the Land Board's file of 2026-11-05):**
+- The register's addresses are the Board's own full text plus `, <postcode>`. Stripping the postcode, an **exact** text
+  match finds the official address for **13,405 of 13,906 distinct addresses (96.4%)**, covering **26,515 of 27,349
+  companies (97%)**. 440 of those carry a postcode the file gives differently (the register's is stale: the file's
+  wins). Case and whitespace normalising adds nothing.
+- The 501 misses (834 companies) are mostly foreign addresses (e-residents' companies: Montréal, Plovdiv, Bratislava,
+  Tehran) - country, not house - and a few Estonian ones in an older form that repeats a component ("Tartu maakond,
+  Tartu linn, Tartu linn, Tamme pst 132").
+- So A4's first step - the official address by its text - needs an index on `official_address.full_text` (A4's
+  changeset) and the file loaded (`addresses:ee` on). Levels, weights and fuzzy are for the rest: job locations (167
+  distinct strings, mostly "Tallinn", "Tallinn, Harjumaa", and reach such as "Europe", "Remote, Global") and the
+  repeated-component Estonian forms.
 | A5 | Connections written: companies (REGISTERED from the register's ADS id), jobs (LOCATION per place named, reach apart) at ingest, register import and merge; people (OWN from GitHub's location, the register; WORK derived); batched backfill of every row; a gauge of entities without addresses | none |
 | A6 | OpenSearch: masi's client, the gazetteer and entity indexes, the outbox indexer, the alias rebuild, its alerts | none |
 | A7 | Search API: `/jobs`, `/companies`, `/persons` take `place`, `postal`, `street`, `near` (a point or an address) and `km`; the address picker's `/addresses/suggest`; paging and sorting as every list | the API |
